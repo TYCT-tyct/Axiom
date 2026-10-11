@@ -16,7 +16,7 @@
 | 格式 | 路径 | 主要使用者 |
 |---|---|---|
 | OpenAI Chat | `POST /v1/chat/completions` | 大多数 SDK、Cursor、OpenRouter 客户端 |
-| OpenAI Responses | `POST /v1/responses`，以及按 ID 查询、删除 | Codex |
+| OpenAI Responses | `POST /v1/responses`，以及按 ID 删除 | Codex |
 | Anthropic Messages | `POST /v1/messages`、`POST /v1/messages/count_tokens` | Claude Code |
 | 模型列表 | `GET /v1/models` | 所有客户端 |
 
@@ -119,7 +119,8 @@
 
 ### Responses 的会话状态
 
-- **单独保存**：会话状态是续接功能所需的数据，与对话内容的记录分开保存，不受对话内容开关的影响。保留时间由平台配置，默认 30 天，与 OpenAI 的默认一致（OpenAI《Conversation state》，2026-10）。
+- **单独保存**：会话状态是续接功能所需的内部数据，与对话内容的记录分开保存，不受对话内容开关的影响。保留时间由平台配置，默认 30 天，与 OpenAI 的默认一致（OpenAI《Conversation state》，2026-10）。它和对话内容一样按账户加密、按消息去重，销毁账户密钥时一并销毁（见[记录与告警的「加密与密钥」](observability.md#加密与密钥)）。
+- **不提供读取**：不支持按 ID 读回回复内容（OpenAI 的 `GET /v1/responses/{id}`），因为任何人都不能通过产品查看对话内容；续接不需要这个接口。
 - **按工作区隔离**：同一工作区的 key 可以凭回复 ID 续接，其他工作区不行。
 - **`store: false`** 的请求不保存状态，不能凭 ID 续接。
 - **删除**：`DELETE /v1/responses/{id}` 立即删除；用户注销时按注销规则处理（见[账户与租户的「停用与注销」](accounts.md#停用与注销)）。
@@ -146,7 +147,7 @@
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
-| Responses 会话状态由我们保存，偏离 OpenRouter | 负责人同意。OpenRouter 的 Responses 接口不保存状态，`store: true` 和 `previous_response_id` 都会返回 400（OpenRouter《Responses API》，2026-10）；我们默认保存对话内容，支持续接能让 Codex 少发重复内容、省钱 |
+| Responses 会话状态由我们保存，偏离 OpenRouter | 负责人同意。OpenRouter 的 Responses 接口不保存状态，`store: true` 和 `previous_response_id` 都会返回 400（OpenRouter《Responses API》，2026-10）；支持续接能让 Codex 少发重复内容、省钱。会话状态单独保存，内容保存关闭期间续接也可用 |
 | 会话状态按工作区隔离，单独保存 | 同一账户的不同工作区可能属于不同项目；负责人授权开发者按用户体验判断，单独保存让对话内容关闭期间续接仍然可用 |
 | 辅助请求走便宜端点作为预设可选规则，默认关闭 | 负责人同意。见[路由](routing.md#排序的先后) |
 
