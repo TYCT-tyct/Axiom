@@ -15,6 +15,7 @@
 | 模型目录：标准 ID 与别名、生命周期、名字映射、目录基线、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
 | 供应商：适配器、接入流程、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
+| 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 怎么参与开发：流程、提交、评审、文档规则 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 每个开发者（人或 AI）动手之前 |
 | AI 协作者的专属规则 | [AGENTS.md](../AGENTS.md) | AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 
