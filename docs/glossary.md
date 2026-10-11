@@ -63,7 +63,8 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 管理 key | api_key（kind = management） | 不能调用模型、只能在自己的范围内管理调用 key 的 API key |
 | 等级 | tier | 站点给账户定的档次，决定加价 |
 | 模型厂商 | author | 模型的出品方，如 Anthropic |
-| 模型 | model | 统一目录里的模型，有标准 ID 和若干别名 |
+| 模型 | model | 统一目录里的模型，有标准 ID 和若干别名，见[模型目录](domains/catalog.md) |
+| 别名 | model_alias | 模型的另一个名字，如厂商原生名字；中转站里的写法也作为别名用于映射 |
 | 目录基线 | baseline | 模型的官方规格，是端点属性的默认值 |
 | 供应商 | supplier | 进货对象，三种类型见[产品需求的「供给侧」](product.md#供给侧) |
 | 归属方 | owner_scope | 供应商属于平台、某个站点还是某个账户 |
@@ -75,9 +76,10 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 依据 | basis | 一个属性值的出处 |
 | 来源 | upstream_kind | 端点的上游从哪来；类别是后台数据 |
 | 指纹 | fingerprint | 识别来源的规则，如响应头、消息 ID 格式、用量特征 |
-| 检测 | probe | 我们主动发给端点的测试请求 |
+| 检测 | probe | 我们主动发给端点的测试请求，见[端点评估](domains/quality.md) |
 | 同步 | sync | 通过适配器拉取供应商的模型、分组、价格和余额 |
-| 适配器 | adapter | 对接某一类供应商系统的插件，如 new-api 适配器 |
+| 适配器 | adapter | 对接某一类供应商系统的插件，分管理面和调用面，见[供应商](domains/suppliers.md) |
+| 声明式适配器 | declarative_adapter | 用后台配置而不是代码描述的适配器，用于只是接口路径和字段名不同的自研中转站 |
 | 预设 | preset | 服务端保存的命名配置，第一版只含端点的筛选和排序规则，可挂在 API key 上；与 OpenRouter 的 Presets 是同一个概念，以后可以扩展到模型参数 |
 | 请求 / 尝试 | request / attempt | 用户的一次调用，保存下来就是调用记录 / 对上游的一次调用 |
 | 成本 / 售价 / 加价 | cost / price / markup | 付给上游的钱 / 向账户收的钱 / 两者之差 |
