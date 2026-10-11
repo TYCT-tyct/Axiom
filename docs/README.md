@@ -18,6 +18,7 @@
 | 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 接入与对外接口：路径与格式、转发规则、用量与费用、错误、路由参数、对接接口、会话状态、版本 | [domains/gateway.md](domains/gateway.md) | 改动 `gateway` 模块、对外接口或兼容行为之前 |
 | 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
+| 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 怎么参与开发：流程、提交、评审、文档规则 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 每个开发者（人或 AI）动手之前 |
 | AI 协作者的专属规则 | [AGENTS.md](../AGENTS.md) | AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 
