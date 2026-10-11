@@ -1,0 +1,25 @@
+name: 需求 / Feature
+description: 新功能或改进
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决什么问题
+      description: 谁、在什么情况下、遇到了什么问题
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望的结果
+      description: 做完之后是什么样子
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 可检验的条件，例如「用 curl 调 /v1/chat/completions 能收到流式回复，余额按 usage 扣减」
+    validations:
+      required: true

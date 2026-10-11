@@ -1,0 +1,31 @@
+name: 缺陷 / Bug
+description: 现有功能的行为不符合预期
+labels: [bug]
+body:
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际现象
+      description: 发生了什么；附上错误信息或日志（先去掉密钥）
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 最少几步能稳定复现
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: 版本或提交号、部署方式、相关配置
+    validations:
+      required: false
