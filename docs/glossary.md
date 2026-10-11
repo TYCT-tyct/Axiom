@@ -80,6 +80,8 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 同步 | sync | 通过适配器拉取供应商的模型、分组、价格和余额 |
 | 适配器 | adapter | 对接某一类供应商系统的插件，分管理面和调用面，见[供应商](domains/suppliers.md) |
 | 声明式适配器 | declarative_adapter | 用后台配置而不是代码描述的适配器，用于只是接口路径和字段名不同的自研中转站 |
+| 回退路线 | route_plan | 路由为一个请求排好的端点顺序，冻结前定死，见[路由](domains/routing.md) |
+| 会话粘性 | session_affinity | 同一会话优先走上一次的端点，以提高缓存命中 |
 | 预设 | preset | 服务端保存的命名配置，第一版只含端点的筛选和排序规则，可挂在 API key 上；与 OpenRouter 的 Presets 是同一个概念，以后可以扩展到模型参数 |
 | 请求 / 尝试 | request / attempt | 用户的一次调用，保存下来就是调用记录 / 对上游的一次调用 |
 | 成本 / 售价 / 加价 | cost / price / markup | 付给上游的钱 / 向账户收的钱 / 两者之差 |
