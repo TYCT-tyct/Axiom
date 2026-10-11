@@ -7,7 +7,8 @@
 | 我要知道 | 读 | 谁、什么时候读 |
 |---|---|---|
 | Axiom 是什么 | [README.md](../README.md) | 第一次接触项目的人 |
-| 产品需求：做什么、给谁、和 OpenRouter 有何不同、范围与待定问题 | [product.md](product.md) | 设计或开发任何功能之前 |
+| 产品需求：做什么、给谁、和 OpenRouter 有何不同、售卖形式、端点属性、范围与待定问题 | [product.md](product.md) | 设计或开发任何功能之前 |
+| 术语与核心概念：统一叫法、代码命名、概念之间的关系 | [glossary.md](glossary.md) | 写文档、写代码、给东西起名之前 |
 | 怎么参与开发：流程、提交、评审、文档规则 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 每个开发者（人或 AI）动手之前 |
 | AI 协作者的专属规则 | [AGENTS.md](../AGENTS.md) | AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 
