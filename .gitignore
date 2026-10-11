@@ -10,6 +10,9 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Python bytecode
+__pycache__/
+
 # Logs and scratch output
 *.log
 tmp/
