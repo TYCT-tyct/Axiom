@@ -10,6 +10,7 @@
 | 产品需求：做什么、给谁、和 OpenRouter 有何不同、售卖形式、端点属性、范围与待定问题 | [product.md](product.md) | 设计或开发任何功能之前 |
 | 术语与核心概念：统一叫法、代码命名、概念之间的关系 | [glossary.md](glossary.md) | 写文档、写代码、给东西起名之前 |
 | 总体架构：模块划分、部署拓扑、调用链路、技术选型、工程原则、底线指标 | [architecture.md](architecture.md) | 新建模块、跨模块改动、选依赖、做部署之前 |
+| 安全：威胁模型、安全基线、租户隔离、防滥用、账户安全、密钥管理、安全开发流程 | [security.md](security.md) | 改动鉴权、计费、出站请求或任何安全相关的代码之前 |
 | 账户与租户：登录、账户、工作区、授权、API key、等级、站点配置、配置链 | [domains/accounts.md](domains/accounts.md) | 改动 `accounts` 模块或涉及登录、权限、key 之前 |
 | 计费：钱的表示、汇率、额度批次、供应商成本、定价、冻结与结算、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
 | 模型目录：标准 ID 与别名、生命周期、名字映射、目录基线、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
@@ -31,6 +32,7 @@
 | 全局需求：定位、用户、市场、范围、质量目标 | `docs/product.md` |
 | 术语与核心概念：全项目统一的叫法和代码命名 | `docs/glossary.md` |
 | 全局设计：模块划分、请求链路、技术选型、部署、工程原则 | `docs/architecture.md` |
+| 跨模块的安全规则 | `docs/security.md` |
 | 单个领域的要求和设计，领域清单以架构文档的模块划分为准 | `docs/domains/<领域>.md`，固定分四节：要求、设计、决策与理由、待定问题 |
 | 对外接口、数据库结构等机器可读的契约 | 契约文件本身，位置由架构文档规定 |
 | 一个模块的代码结构、接口、必须遵守的规则、测试方法 | 模块目录下的 `README.md`，改该模块代码前必读 |
