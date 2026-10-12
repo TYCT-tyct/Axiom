@@ -104,6 +104,8 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
+| 收款渠道 | payment_channel | 充值用的收款插件，如支付宝、Stripe、USDT，见[支付](domains/payments.md) |
+| 订单 | order | 一次充值，记录金额、币种、渠道、手续费和锁定的汇率 |
 | 通知渠道 | notification_channel | 发送告警、审批、摘要的插件，如 Telegram、飞书、邮件、电话 |
 | 出口 | egress | 向上游发请求的位置：承担出口职责的节点，或外部代理 |
 
