@@ -35,7 +35,7 @@ modules:
 
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
-# without failing, and the list must be empty when a milestone closes (CONTRIBUTING「里程碑收尾」). Test-only
+# without failing, for the milestone's quality audit, by which time the program calls every module. Test-only
 # packages such as pgtest, like net/http/httptest, are left out of that list.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }

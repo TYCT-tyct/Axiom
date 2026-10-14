@@ -79,7 +79,7 @@
 
 ## 里程碑收尾
 
-- 关闭里程碑之前，做一次质量审计；对照代码通读文档；跑[性能](docs/performance.md#怎么验证)里的压测场景；做安全检查；`just deadcode` 列出的"只有测试在用"的函数清零。
+- 关闭里程碑之前，做一次质量审计；对照代码通读文档；跑[性能](docs/performance.md#怎么验证)里的压测场景；做安全检查。
 - 派一个独立的 agent 逐条核对文档要求和验收标准，有证据才算完成，缺的就是下一轮工作。
 - 除 `main` 和本地备份分支 `master` 外，`gh pr list`、`gh issue list`、`git branch -a`、`git worktree list` 里只剩进行中的工作；只清理自己创建的分支、worktree 和临时文件，不动别的会话正在用的；本地备份分支 `master` 不推送、不删除；完成的话题在跟踪 Issue 里勾掉，全部完成后关闭；里程碑的 Issue 全部关闭后关闭里程碑。
 - 复盘流程：只对本项目有效的改进写进本文，通用的提到 project-workflow。
