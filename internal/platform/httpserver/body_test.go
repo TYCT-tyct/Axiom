@@ -3,31 +3,55 @@ package httpserver
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestPublicCutsStalledBodies: a request that announces a body and never sends it loses its connection soon after
-// the body deadline, even when the handler never reads the body.
-func TestPublicCutsStalledBodies(t *testing.T) {
+// TestStalledBodiesLoseTheirConnection: a request that announces a body and never sends it loses its connection
+// soon after its limit, even when the handler never reads the body: behind Public and on the probe server.
+func TestStalledBodiesLoseTheirConnection(t *testing.T) {
+	t.Parallel()
 	node, _ := public(t, map[string]http.HandlerFunc{"GET /": func(http.ResponseWriter, *http.Request) {}})
-	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", node.Listener.Addr().String())
+	var health Health
+	probes := httptest.NewUnstartedServer(nil)
+	probes.Config = health.Server(slog.New(slog.DiscardHandler))
+	probes.Start()
+	t.Cleanup(probes.Close)
+	cases := []struct {
+		name, addr, path string
+		limit            time.Duration
+	}{
+		{"public", node.Listener.Addr().String(), "/", bodyTimeout},
+		{"probes", probes.Listener.Addr().String(), "/livez", probeTimeout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { stallBody(t, c.addr, c.path, c.limit) })
+	}
+}
+
+// stallBody announces a body to path and never sends it, and fails unless the server closes the connection soon
+// after limit.
+func stallBody(t *testing.T, addr, path string, limit time.Duration) {
+	t.Helper()
+	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { // before node.Close, which waits for this connection
+	defer func() { // before the server's Close, which waits for this connection
 		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			t.Error(err)
 		}
 	}()
-	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: node\r\nContent-Length: 1\r\n\r\n"); err != nil {
+	if _, err := io.WriteString(conn, "GET "+path+" HTTP/1.1\r\nHost: node\r\nContent-Length: 1\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if err := conn.SetReadDeadline(start.Add(10 * bodyTimeout)); err != nil {
+	if err := conn.SetReadDeadline(start.Add(limit + 3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := io.Copy(io.Discard, conn); err != nil {
