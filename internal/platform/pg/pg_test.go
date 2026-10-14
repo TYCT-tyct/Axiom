@@ -3,10 +3,12 @@ package pg_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
 
 	"axiom/internal/platform/pg"
@@ -75,8 +77,29 @@ func count(t *testing.T, db *pg.DB, scope pg.Scope) int {
 	return n
 }
 
+// visible lists, sorted, the accounts whose rows the scope can read.
+func visible(t *testing.T, db *pg.DB, scope pg.Scope) []string {
+	t.Helper()
+	var accounts string
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(),
+			"SELECT coalesce(string_agg(account_id::text, ',' ORDER BY account_id::text), '') FROM rlstest.items").Scan(&accounts)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return strings.FieldsFunc(accounts, func(r rune) bool { return r == ',' })
+}
+
+func sorted(ids ...uuid.UUID) []string {
+	texts := make([]string, len(ids))
+	for i, id := range ids {
+		texts[i] = id.String()
+	}
+	return slices.Sorted(slices.Values(texts))
+}
+
 // TestScopeIsASet: the scope is the union of every row, some sites' rows and some accounts' rows; owning a whole
-// site and one account of another site never widens to that other site's remaining accounts.
+// site and one account of another site sees exactly those rows, never that other site's remaining accounts.
 func TestScopeIsASet(t *testing.T) {
 	t.Parallel()
 	database := newDatabase(t)
@@ -85,17 +108,21 @@ func TestScopeIsASet(t *testing.T) {
 	cases := []struct {
 		name  string
 		scope pg.Scope
-		want  int
+		want  []string
 	}{
-		{"platform", pg.NewScope(true, nil, nil), 4},
-		{"one site", pg.NewScope(false, []uuid.UUID{site1}, nil), 2},
-		{"one account", pg.NewScope(false, nil, []uuid.UUID{account3}), 1},
-		{"a site and an account of another site", pg.NewScope(false, []uuid.UUID{site1}, []uuid.UUID{account3}), 3},
-		{"two accounts", pg.NewScope(false, nil, []uuid.UUID{account2, account4}), 2},
+		{"platform", pg.NewScope(true, nil, nil), sorted(account1, account2, account3, account4)},
+		{"one site", pg.NewScope(false, []uuid.UUID{site1}, nil), sorted(account1, account2)},
+		{"one account", pg.NewScope(false, nil, []uuid.UUID{account3}), sorted(account3)},
+		{
+			"a site and an account of another site",
+			pg.NewScope(false, []uuid.UUID{site1}, []uuid.UUID{account3}),
+			sorted(account1, account2, account3),
+		},
+		{"two accounts", pg.NewScope(false, nil, []uuid.UUID{account2, account4}), sorted(account2, account4)},
 	}
 	for _, c := range cases {
-		if got := count(t, db, c.scope); got != c.want {
-			t.Errorf("%s: %d rows, want %d", c.name, got, c.want)
+		if diff := cmp.Diff(c.want, visible(t, db, c.scope)); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", c.name, diff)
 		}
 	}
 }
@@ -136,6 +163,17 @@ func TestNoScopeNoRows(t *testing.T) {
 	}
 	if err := insert(pg.NewScope(false, nil, []uuid.UUID{account1}), account1); err != nil {
 		t.Errorf("inserting a row in scope: %v", err)
+	}
+	moved := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{account1}), func(tx pg.Tx) error {
+		var note string
+		return tx.QueryRow(t.Context(), "UPDATE rlstest.items SET account_id = $1 WHERE account_id = $2 RETURNING note",
+			account2, account1).Scan(&note)
+	})
+	if moved == nil {
+		t.Error("moved a row out of the scope")
+	}
+	if got := visible(t, db, pg.NewScope(false, nil, []uuid.UUID{account1})); len(got) != 2 {
+		t.Errorf("after the refused move, account1 has rows of %v, want its two", got)
 	}
 }
 
@@ -187,8 +225,8 @@ func TestScopeEndsWithTransaction(t *testing.T) {
 	}
 }
 
-// TestRowLevelSecurityBindsEveryone: the table's owner is filtered too (FORCE), and Check refuses a login that can
-// escape row-level security or a database that misses migrations.
+// TestRowLevelSecurityBindsEveryone: the table's owner is filtered too (FORCE), Check accepts the application's
+// login, and it refuses a database that misses migrations (logins that escape: check_test.go).
 func TestRowLevelSecurityBindsEveryone(t *testing.T) {
 	t.Parallel()
 	database := newDatabase(t)
@@ -213,9 +251,6 @@ func TestRowLevelSecurityBindsEveryone(t *testing.T) {
 
 	if err := open(t, database.App).Check(t.Context()); err != nil {
 		t.Errorf("Check refused the application role: %v", err)
-	}
-	if err := open(t, database.Superuser).Check(t.Context()); err == nil || !strings.Contains(err.Error(), "bypass") {
-		t.Errorf("Check accepted a superuser: %v", err)
 	}
 	if err := pgtest.Run(t.Context(), database.Superuser, "DELETE FROM platform.goose_platform WHERE version_id > 0"); err != nil {
 		t.Fatal(err)

@@ -73,7 +73,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		{
 			"a database login that escapes row-level security",
 			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
-			[]string{"database: the database login can act as roles that bypass row-level security"},
+			[]string{"database: the database login can act as roles that row-level security cannot hold"},
 		},
 	}
 	for _, c := range cases {

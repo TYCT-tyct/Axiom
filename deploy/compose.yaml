@@ -1,5 +1,6 @@
 # The program and its database on one machine (docs/architecture.md「部署」). Start it with `just up`, which also
-# writes the passwords this file reads to deploy/.env the first time.
+# writes the passwords this file reads to deploy/.env the first time. Both passwords go into URLs unencoded, so keep
+# them to letters and digits, as just up generates them.
 name: axiom
 
 x-hardened: &hardened
@@ -19,7 +20,8 @@ services:
       - postgres:/var/lib/postgresql
       - ./postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: [CMD, pg_isready, --username, postgres, --dbname, axiom]
+      # Over TCP: while it runs the init scripts, the image's temporary server listens only on its Unix socket.
+      test: [CMD, pg_isready, --host, 127.0.0.1, --username, postgres, --dbname, axiom]
       interval: 10s
       start_period: 30s
       start_interval: 1s
