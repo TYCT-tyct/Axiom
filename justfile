@@ -12,9 +12,9 @@ check: docs modules tidy generated lint deadcode test vuln
 generate:
     go generate ./...
 
-# Generated code matches its contracts: regenerating changes nothing
+# Generated code matches its contracts: regenerating changes, adds or removes nothing
 generated: generate
-    git diff --exit-code -- '*.gen.go' || { echo "generated code is stale: run just generate and commit the result"; exit 1; }
+    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
 
 # Format Go code in place
 fmt:
@@ -56,8 +56,7 @@ compose := "docker compose -f deploy/compose.yaml"
 # health-check output and logs. New passwords would not open a database created with the old ones, so a missing
 # deploy/.env next to an existing database volume stops it.
 up:
-    [ -f deploy/.env ] || ! docker volume inspect axiom_postgres > /dev/null 2>&1 || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }
-    [ -f deploy/.env ] || printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
+    [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^axiom_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 

@@ -21,19 +21,23 @@ func (c consoleAPI) GetVersion(context.Context, consoleapi.GetVersionRequestObje
 	}, nil
 }
 
-// publicRoutes are the public listener's routes: so far the console's API. A handler's error is logged and answered
-// with a bare 500; the generated default would send the error's text to the client.
+// publicRoutes are the public listener's routes: so far the console's API. Every error path of the generated code
+// is set here, none left at its default: a malformed request gets a 400 that describes only the request (the
+// client's own input), and a handler's failure is logged and answered with a bare 500; the default would send the
+// error's text, which may describe our internals, to the client.
 func publicRoutes(logger *slog.Logger) http.Handler {
-	mux := http.NewServeMux()
+	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
 	console := consoleapi.NewStrictHandlerWithOptions(consoleAPI{version: version()}, nil, consoleapi.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			http.Error(w, err.Error(), http.StatusBadRequest) // what was wrong with the client's own request
-		},
+		RequestErrorHandlerFunc: badRequest,
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error("console API handler failed", "err", err, "request_id", httpserver.RequestID(r.Context()))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		},
 	})
-	consoleapi.HandlerFromMux(console, mux)
-	return mux
+	return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
+		BaseRouter:       http.NewServeMux(),
+		ErrorHandlerFunc: badRequest,
+	})
 }

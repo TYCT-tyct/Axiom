@@ -14,6 +14,10 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+// bodyTimeout bounds how long a client may take to send a request body. Generous for large uploads over slow
+// links; the gateway sets size limits and per-route deadlines on top.
+const bodyTimeout = 2 * time.Minute
+
 // opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
 func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
 
@@ -48,7 +52,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	var health httpserver.Health
 	// The public listener comes first, so at shutdown it drains while the probes still answer.
 	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(publicRoutes(logger), logger), logger), nil},
+		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(publicRoutes(logger), logger, bodyTimeout), logger), nil},
 		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
 	}
 	if err := listen(ctx, servers); err != nil {
@@ -67,13 +71,19 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		stopped = fmt.Errorf("a listener stopped: %w", err)
 	case <-ctx.Done():
 	}
-	health.SetReady(false)
 	logger.Info("shutting down", "timeout", shutdownTimeout.String())
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	return errors.Join(stopped, shutdown(context.WithoutCancel(ctx), shutdownTimeout, &health, servers))
+}
+
+// shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
+// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains.
+func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
+	health.SetReady(false)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	errs := []error{stopped}
+	var errs []error
 	for _, s := range servers {
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
+		if err := s.server.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err))
 		}
 	}

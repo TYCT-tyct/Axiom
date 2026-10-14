@@ -10,7 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+// bodyTimeout is short in tests, so a stalled body is cut off quickly.
+const bodyTimeout = 300 * time.Millisecond
 
 // public serves routes behind Public and returns the server and what it logged.
 func public(t *testing.T, routes map[string]http.HandlerFunc) (*httptest.Server, *bytes.Buffer) {
@@ -20,7 +24,7 @@ func public(t *testing.T, routes map[string]http.HandlerFunc) (*httptest.Server,
 		mux.HandleFunc(pattern, handler)
 	}
 	var logs bytes.Buffer
-	node := httptest.NewServer(Public(mux, slog.New(slog.NewJSONHandler(&logs, nil))))
+	node := httptest.NewServer(Public(mux, slog.New(slog.NewJSONHandler(&logs, nil)), bodyTimeout))
 	t.Cleanup(node.Close)
 	return node, &logs
 }
@@ -72,9 +76,10 @@ func write(t *testing.T, w http.ResponseWriter, text string) {
 	}
 }
 
-// TestPublicRequestID: every response carries a fresh request ID, never the one a client sent.
+// TestPublicRequestID: every response carries a fresh request ID, never the one a client sent; a handler that
+// writes nothing is logged with the 200 the server sends.
 func TestPublicRequestID(t *testing.T) {
-	node, _ := public(t, map[string]http.HandlerFunc{"GET /": func(http.ResponseWriter, *http.Request) {}})
+	node, logs := public(t, map[string]http.HandlerFunc{"GET /": func(http.ResponseWriter, *http.Request) {}})
 	forged := http.Header{}
 	forged.Set("X-Request-ID", "forged")
 	ids := map[string]bool{}
@@ -87,6 +92,9 @@ func TestPublicRequestID(t *testing.T) {
 	}
 	if len(ids) != 2 || ids["forged"] || ids[""] {
 		t.Errorf("request IDs %v: want two fresh ones", ids)
+	}
+	if records, _ := logged(t, logs); len(records) != 2 || records[0]["status"] != 200.0 {
+		t.Errorf("access log %v, want status 200", records)
 	}
 }
 
@@ -133,22 +141,32 @@ func TestPublicPanicBeforeResponse(t *testing.T) {
 	}
 }
 
-// TestPublicPanicMidResponse: once a response has started, a panic aborts the connection, so the client sees a
-// broken response rather than one that ends as if complete; the request is still logged.
+// TestPublicPanicMidResponse: once a response has started, by writing or by only flushing the headers, a panic
+// aborts the connection, so the client sees a broken response rather than one that ends as if complete; the
+// request is still logged.
 func TestPublicPanicMidResponse(t *testing.T) {
+	flush := func(w http.ResponseWriter) {
+		if err := http.NewResponseController(w).Flush(); err != nil { // the wrapper must let streams flush
+			t.Error(err)
+		}
+	}
 	node, logs := public(t, map[string]http.HandlerFunc{
-		"GET /": func(w http.ResponseWriter, _ *http.Request) {
+		"GET /written": func(w http.ResponseWriter, _ *http.Request) {
 			write(t, w, "partial")
-			if err := http.NewResponseController(w).Flush(); err != nil { // the wrapper must let streams flush
-				t.Error(err)
-			}
+			flush(w)
+			panic("bug")
+		},
+		"GET /flushed": func(w http.ResponseWriter, _ *http.Request) {
+			flush(w)
 			panic("bug")
 		},
 	})
-	if _, err := get(t, node.URL, nil); err == nil {
-		t.Error("the response looked complete")
+	for _, path := range []string{"/written", "/flushed"} {
+		if _, err := get(t, node.URL+path, nil); err == nil {
+			t.Errorf("%s: the response looked complete", path)
+		}
 	}
-	if _, counts := logged(t, logs); counts["handler panicked"] != 1 || counts["request"] != 1 {
+	if _, counts := logged(t, logs); counts["handler panicked"] != 2 || counts["request"] != 2 {
 		t.Errorf("logged %v", counts)
 	}
 }

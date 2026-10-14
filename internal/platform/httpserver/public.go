@@ -11,22 +11,39 @@ import (
 )
 
 // Public wraps the public listener's routes with what every request gets: a request ID of our own (a client's
-// X-Request-Id is ignored, so it cannot forge or collide with ours), one access-log line, and a recovered panic.
-// The log names the route pattern, never the path, which may hold identifiers or secrets.
-func Public(routes http.Handler, logger *slog.Logger) http.Handler {
+// X-Request-Id is ignored, so it cannot forge or collide with ours), a bound on sending the request body, one
+// access-log line, and a recovered panic. The log names the route pattern, never the path, which may hold
+// identifiers or secrets.
+//
+// A request with a body must deliver it within bodyTimeout. Without that, a client that announces a body and never
+// sends it holds the connection forever: the server waits to drain the body, and neither the header nor the idle
+// timeout covers that wait. net/http clears the read deadline itself once the body ends, so a long streamed
+// response is not cut by it (TestPublicLongRequestsOutliveTheBodyDeadline holds it to that); a request without a
+// body has nothing to stall on and gets none.
+func Public(routes http.Handler, logger *slog.Logger, bodyTimeout time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := uuid.NewV7().String()
 		w.Header().Set("X-Request-ID", id)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
+		log := logger.With("request_id", id)
+		if r.Body != http.NoBody {
+			if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyTimeout)); err != nil {
+				log.Warn("cannot bound the request body", "err", err)
+			}
+		}
 		recorder := &recorder{ResponseWriter: w}
 		start := time.Now()
 		defer func() {
 			abort := false
 			if v := recover(); v != nil {
-				abort = recovered(recorder, v, logger.With("request_id", id))
+				abort = recovered(recorder, v, log)
 			}
-			logger.Info("request", "method", r.Method, "route", r.Pattern, "status", recorder.status,
-				"bytes", recorder.bytes, "duration", time.Since(start), "request_id", id)
+			status := recorder.status
+			if status == 0 && !abort {
+				status = http.StatusOK // the handler wrote nothing; the server sends an empty 200
+			}
+			log.Info("request", "method", r.Method, "route", r.Pattern, "status", status,
+				"bytes", recorder.bytes, "duration", time.Since(start))
 			if abort {
 				panic(http.ErrAbortHandler) // net/http closes the connection without logging it again
 			}
@@ -58,8 +75,9 @@ func recovered(w *recorder, v any, logger *slog.Logger) (abort bool) {
 	return false
 }
 
-// recorder notes the status and size of a response for the access log. Unwrap lets http.ResponseController reach
-// the connection underneath, so streams can flush and set deadlines through it.
+// recorder notes the status and size of a response for the access log and for panic handling. Its FlushError is
+// what http.ResponseController calls, so a flush that sends the headers counts as the response having started;
+// Unwrap lets the controller reach the connection underneath for deadlines.
 type recorder struct {
 	http.ResponseWriter
 	status int
@@ -80,6 +98,13 @@ func (r *recorder) Write(p []byte) (int, error) {
 	n, err := r.ResponseWriter.Write(p)
 	r.bytes += int64(n)
 	return n, err
+}
+
+func (r *recorder) FlushError() error {
+	if r.status == 0 {
+		r.status = http.StatusOK // flushing sends an implicit 200
+	}
+	return http.NewResponseController(r.ResponseWriter).Flush()
 }
 
 func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
