@@ -1,0 +1,5 @@
+{
+  "format": ["typescript", "tsx", "javascript", "css"],
+  "ignore": ["**/*.gen.ts", "**/*.test.ts", "e2e/**/*.spec.ts"],
+  "exitCode": 1
+}

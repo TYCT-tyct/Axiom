@@ -13,7 +13,7 @@ const listeners = new Set<() => void>();
 
 export function currentTheme(): Theme {
   if (current === undefined) {
-    const stored = readStored(() => localStorage, themeKey);
+    const stored = readStored(themeKey);
     current = themes.find((theme) => theme === stored) ?? "system";
   }
   return current;
@@ -35,7 +35,7 @@ export function chooseTheme(theme: Theme) {
   } else {
     document.documentElement.dataset.theme = theme;
   }
-  writeStored(() => localStorage, themeKey, theme);
+  writeStored(themeKey, theme);
   for (const listener of listeners) {
     listener();
   }

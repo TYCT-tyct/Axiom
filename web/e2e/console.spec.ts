@@ -127,9 +127,16 @@ test("the theme chosen in the drawer is the one the sidebar shows once the windo
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
 });
 
-test("an address no page answers says so in its title and heading", async ({ page }) => {
+test("an address no page answers says so and leads to the console's home", async ({ page }) => {
   await answerVersion(page, built);
   await page.goto("/console/no-such-page");
   await expect(page.getByRole("heading", { level: 1, name: "找不到这个页面" })).toBeVisible();
   await expect(page).toHaveTitle("找不到这个页面 · Axiom");
+  await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
+
+  // The console's own home, not the website's: the preview server would redirect "/" to the console and hide it.
+  const home = page.getByRole("link", { name: "回到首页" });
+  await expect(home).toHaveAttribute("href", "/console/");
+  await home.click();
+  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
 });

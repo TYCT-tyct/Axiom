@@ -3,11 +3,9 @@ import {
   focusPage,
   Icon,
   type IconName,
-  LoadingState,
   Logo,
-  NotFoundState,
-  PageFailedState,
   PreferenceSwitches,
+  routerDefaults,
   SideNavItem,
 } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, Link, lazyRouteComponent, Outlet } from "@tanstack/react-router";
@@ -45,22 +43,10 @@ function Layout() {
   );
 }
 
-function NotFound() {
-  const { t } = useTranslation("common");
-  return (
-    <NotFoundState
-      action={
-        <Link to="/" className="text-accent underline-offset-4 hover:underline">
-          {t("state.home")}
-        </Link>
-      }
-    />
-  );
-}
+const root = createRootRoute({ component: Layout });
 
-const root = createRootRoute({ component: Layout, notFoundComponent: NotFound });
-
-// Every page but the first is its own chunk, loaded when the user is about to open it.
+// Every page is its own chunk, loaded when the user is about to open it; the first screen loads the page of the address
+// it opens (scripts/budget.ts counts it).
 const routeTree = root.addChildren([
   createRoute({
     getParentRoute: () => root,
@@ -79,16 +65,7 @@ const routeTree = root.addChildren([
   }),
 ]);
 
-// While the next page loads the current one stays; past a short wait the layout stays and the page area shows a
-// skeleton, so navigating never blanks the screen.
-export const router = createRouter({
-  routeTree,
-  basepath: import.meta.env.BASE_URL,
-  defaultPreload: "intent",
-  defaultPendingMs: 150,
-  defaultPendingComponent: LoadingState,
-  defaultErrorComponent: PageFailedState,
-});
+export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
 
 router.subscribe("onResolved", focusPage);
 

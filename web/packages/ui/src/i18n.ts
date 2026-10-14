@@ -32,16 +32,16 @@ export function initialLanguage(stored: string | null, preferred: readonly strin
   return "zh";
 }
 
+// The shared messages' type, which each app declares as its namespace "common" (i18next.d.ts).
+export type CommonMessages = typeof zh;
+
 // A namespace's messages: the Chinese ones are the source, and the English ones must have exactly the same keys.
 export type Messages<T> = { [K in keyof T]: T[K] extends string ? string : Messages<T[K]> };
 
 // startI18n starts translation with the shared messages (namespace "common") and the app's own (namespace ns), which is
 // the default namespace in the app's code. Every visible string comes from these files.
 export function startI18n<T extends object>(ns: string, messages: { zh: T; en: Messages<T> }) {
-  const language = initialLanguage(
-    readStored(() => localStorage, languageKey),
-    navigator.languages,
-  );
+  const language = initialLanguage(readStored(languageKey), navigator.languages);
   i18next.use(initReactI18next).init({
     lng: language,
     fallbackLng: false,
@@ -58,7 +58,7 @@ export function startI18n<T extends object>(ns: string, messages: { zh: T; en: M
 }
 
 export function chooseLanguage(language: Language) {
-  writeStored(() => localStorage, languageKey, language);
+  writeStored(languageKey, language);
   document.documentElement.lang = locales[language];
   void i18next.changeLanguage(language);
 }
