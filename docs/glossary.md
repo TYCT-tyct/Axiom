@@ -63,9 +63,15 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 管理 key | api_key（kind = management） | 不能调用模型、只能在自己的范围内管理调用 key 的 API key |
 | 等级 | tier | 站点给账户定的档次，决定加价 |
 | 模型厂商 | author | 模型的出品方，如 Anthropic |
-| 模型 | model | 统一目录里的模型，有标准 ID 和若干别名，见[模型目录](domains/catalog.md) |
-| 别名 | model_alias | 模型的另一个名字，如厂商原生名字；中转站里的写法也作为别名用于映射 |
+| 模型 | model | 统一目录里的模型，有标准 ID 和若干名字，见[模型目录](domains/catalog.md) |
+| 公开名字 | name（visibility = public） | 用户可以调用的模型名字：标准 ID，或不带日期的厂商原生名字 |
+| 版本依据 | version_basis | 模型的名字是否对应一个不变的版本：固定版本（dated），即带日期或页面写明版本号的名字，模型不可变；移动名字（floating），名字背后的版本会变 |
+| 内部名字 | name（visibility = internal） | 只用于识别、用户不能调用的模型名字，如带日期的厂商原生名字 |
+| 供应商别名 | supplier_alias | 某个供应商或分组里对模型的写法，只在该范围内有效，用于映射，见[供应商](domains/suppliers.md#供应商别名与待映射) |
 | 目录基线 | baseline | 模型的官方规格，是端点属性的默认值 |
+| 价格来源 | price_source | 模型的参考价从哪来：LiteLLM、OpenRouter、官方价格页或手填，每个模型选一个，见[模型目录的「目录基线」](domains/catalog.md#目录基线) |
+| 参考价 | reference_price | 模型选定的价格来源给出的标准档原价，每个模型、每个币种一条历史；历史里的每一行有自己的版本号（`reference_price.id`），叫"参考价的版本"，与计费的价格版本不是一回事 |
+| 价目表 | schedule | 计费项、分档条件和单价组成的结构；参考价、成本计划、价格版本共用 |
 | 供应商 | supplier | 进货对象，三种类型见[产品需求的「供给侧」](product.md#供给侧) |
 | 归属方 | owner_scope | 供应商属于平台、某个站点还是某个账户 |
 | 分组 | supplier_group | 供应商内的一条进货线路，有自己的价格倍率 |
