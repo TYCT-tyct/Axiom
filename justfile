@@ -33,11 +33,13 @@ lint:
 modules:
     go run -C tools ./checkmodules ..
 
-# Every function is reachable from a program; code only tests reach is dead. The one exception is pgtest, which,
-# like net/http/httptest, exists only for tests: every function in it must be reachable from them instead.
+# Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
+# bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
+# without failing, and the list must be empty when a milestone closes (CONTRIBUTING「里程碑收尾」). Test-only
+# packages such as pgtest, like net/http/httptest, are left out of that list.
 deadcode:
-    out="$({{ tool }} deadcode ./...)" || exit 1; out="$(printf '%s' "$out" | grep -v '^internal[/\\]platform[/\\]pgtest[/\\]' || true)"; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode -test -filter '^axiom/internal/platform/pgtest$' ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
+    out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
+    out="$({{ tool }} deadcode ./...)" || exit 1; printf '%s' "$out" | grep -v '^internal[/\\]platform[/\\]pgtest[/\\]' | sed 's/^/only tests reach: /' || true
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
