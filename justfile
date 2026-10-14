@@ -39,6 +39,14 @@ test:
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
 
+# Build the program for Linux and start every node role on this machine; returns once the health check passes
+up:
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
+    docker compose -f deploy/compose.yaml up --detach --build --wait || { docker compose -f deploy/compose.yaml logs; exit 1; }
+
+down:
+    docker compose -f deploy/compose.yaml down
+
 vuln:
     {{ tool }} govulncheck ./...
 
