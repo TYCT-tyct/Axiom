@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { check } from "./limits.ts";
 
 const repeat = (count: number, line: string) => Array.from({ length: count }, () => line).join("\n");
-const fn = (body: string) => `function f(x: number) {\n${body}\n}\n`;
+const fn = (body: string) => `function f(x) {\n${body}\n}\n`;
 const ifs = (count: number) => repeat(count, "  if (x > 0) x--;");
 
 describe("check", () => {
@@ -12,7 +12,9 @@ describe("check", () => {
     {
       name: "a JSX comment",
       path: "a.tsx",
-      text: fn(`  return (\n    <div>\n${repeat(56, "      <br />")}\n${repeat(3, "      {/* note */}")}\n    </div>\n  );`),
+      text: fn(
+        `  return (\n    <div>\n${repeat(56, "      <br />")}\n${repeat(3, "      {/* note */}")}\n    </div>\n  );`,
+      ),
       want: [],
     },
     {
