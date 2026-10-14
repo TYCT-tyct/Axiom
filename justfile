@@ -19,23 +19,25 @@ tidy:
 
 lint:
     {{ tool }} golangci-lint run
+    cd tools && go tool golangci-lint run ./...
 
 # Module imports follow the dependency table in docs/architecture.md
 modules:
-    {{ python }} scripts/check_modules.py
+    go run -C tools ./checkmodules ..
 
 # Every function is reachable from a program; code only tests reach is dead
 deadcode:
     out="$({{ tool }} deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
+    cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
 test:
     go test -race -bench . -benchtime 1x ./...
+    go test -C tools -race ./...
 
 vuln:
     {{ tool }} govulncheck ./...
 
 docs:
-    {{ python }} -m unittest discover -s scripts
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py

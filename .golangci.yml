@@ -107,7 +107,7 @@ linters:
       # Table-driven tests are long by nature and repeat a shape on purpose.
       - path: _test\.go
         linters: [funlen, dupl]
-      - path: ^cmd/
+      - path: ^(cmd|tools)/ # programs, which print their results
         linters: [forbidigo]
 
 formatters:
