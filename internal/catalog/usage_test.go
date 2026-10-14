@@ -10,13 +10,13 @@ func TestNewUsage(t *testing.T) {
 	if _, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 0, catalog.ItemWebSearch: 1e10}); err != nil {
 		t.Errorf("NewUsage with 0 and 10¹⁰: %v", err)
 	}
-	for name, counts := range map[string]map[catalog.Item]int64{
+	for name, bad := range map[string]map[catalog.Item]int64{
 		"negative":     {catalog.ItemOutput: -1},
 		"above 10¹⁰":   {catalog.ItemCacheRead: 1e10 + 1},
-		"unknown item": {catalog.Item(200): 1},
+		"unknown item": {catalog.ItemWebSearch + 1: 1},
 	} {
-		if u, err := catalog.NewUsage(counts); err == nil {
-			t.Errorf("%s: NewUsage(%v) = %v, want an error", name, counts, u)
+		if u, err := catalog.NewUsage(bad); err == nil {
+			t.Errorf("%s: NewUsage(%v) = %v, want an error", name, bad, u)
 		}
 	}
 }

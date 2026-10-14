@@ -201,7 +201,7 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 ## 测试
 
 - 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
-- 计价对照 `math/big` 做性质测试。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
+- 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、0 到 1000 的单价）和 0 到 10¹⁰ 的用量，与独立的模型比较选档、沿用基础价、推理按输出价、缺价报错和总额。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
 - `ResolvePublic`（包括需要归一化的名字，如 `claude-sonnet-4.5`）和 `Cost` 有零分配的基准测试：归一化写进栈上的缓冲区，用 `m[string(buf)]` 查 map，Go 对这种写法不分配。
 - 名字解析的用例：含 `:` 的名字（包括 `:free`）返回"模型不存在"，不落到基础模型；下线模型的公开名字返回 `ErrRetired`，它也不出现在 `Models()` 里；绑定到固定版本模型的不带日期名字，`Recognize` 得到 `Exact=false`，`ResolvePublic` 仍得到原来的版本。
 - 数据集数字的用例：`3e-06` 与 `0.000003` 得到同一个 `UnitPrice`，全程不经 float64；指数超出 ±30、展开后超过 15 位小数的条目被拒。

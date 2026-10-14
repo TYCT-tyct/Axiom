@@ -36,6 +36,9 @@ func TestCost(t *testing.T) {
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"2"}},{"above":20,"rates":{"input":"3"}}]}}`
 	all := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"1000","cache_read":"1000","cache_write":"1000",
 		"cache_write_1h":"1000","output":"1000","reasoning":"1000","web_search":"1000"}}`
+	smallest := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"0.000000000000001"}}`
+	free := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"1","cache_read":"0","output":"1"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"output":"0"}}]}}`
 	for _, tc := range []struct {
 		name, schedule string
 		usage          counts
@@ -55,6 +58,9 @@ func TestCost(t *testing.T) {
 		{"the highest tier exceeded", steps, counts{in: 25}, "75"},
 		{"a lower tier", steps, counts{in: 15}, "30"},
 		{"no usage", haiku, counts{}, "0"},
+		{"the smallest price", smallest, counts{in: 1}, "0.000000000000001"},
+		{"a zero price is a price", free, counts{cacheRead: 5}, "0"},
+		{"a tier's zero price replaces the base price", free, counts{in: 11, out: 3}, "11"},
 		{"the largest cost", all, counts{in: 1e10, cacheRead: 1e10, cacheWrite: 1e10, cacheWrite1h: 1e10, out: 1e10, reasoning: 1e10, webSearch: 1e10}, "70000000000000"},
 	} {
 		got, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
@@ -69,9 +75,21 @@ func TestCost(t *testing.T) {
 // schedule without a write price is an error, not an input token.
 func TestCostUnpriced(t *testing.T) {
 	inputOnly := mustParse(t, `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"0.000001"}}`)
-	for _, it := range []catalog.Item{cacheRead, cacheWrite, cacheWrite1h, out, reasoning, webSearch} {
-		if got, err := inputOnly.Cost(mustUsage(t, counts{in: 5, it: 1})); !errors.Is(err, catalog.ErrUnpriced) {
-			t.Errorf("Cost with unpriced %s = %v, %v; want ErrUnpriced", it, got.Rat(), err)
+	outputOnly := mustParse(t, `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"output":"0.000001"}}`)
+	for _, tc := range []struct {
+		schedule catalog.Schedule
+		usage    counts
+	}{
+		{outputOnly, counts{out: 5, in: 1}},
+		{inputOnly, counts{in: 5, cacheRead: 1}},
+		{inputOnly, counts{in: 5, cacheWrite: 1}},
+		{inputOnly, counts{in: 5, cacheWrite1h: 1}},
+		{inputOnly, counts{in: 5, out: 1}},
+		{inputOnly, counts{in: 5, reasoning: 1}},
+		{inputOnly, counts{in: 5, webSearch: 1}},
+	} {
+		if got, err := tc.schedule.Cost(mustUsage(t, tc.usage)); !errors.Is(err, catalog.ErrUnpriced) {
+			t.Errorf("Cost of %v = %v, %v; want ErrUnpriced", tc.usage, got.Rat(), err)
 		}
 	}
 }
