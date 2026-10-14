@@ -98,6 +98,10 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 成本计划 | cost_schedule | 适配器为端点生成的"用量 → 成本"计算表 |
 | 价格版本 | price_version | 一次发布的全部售价及其成本，请求开始时锁定 |
 | 汇率 | fx_rate | 两种货币之间的换算值，交易时锁定 |
+| 币种 | currency（`platform.Currency`） | 一种货币，用三个大写字母的代码表示，如 USD、CNY |
+| 单价 | unit_price（`platform.UnitPrice`） | 每个计费单位（每个 token 或每次）的价格，十进制定点数，最多 15 位小数，见[计费的「钱的表示」](domains/billing.md#钱的表示) |
+| 精确金额 | exact（`platform.Exact`） | 单价乘用量得到的未取整金额，单位与单价相同；记账前转成金额时才取整一次，见[计费的「钱的表示」](domains/billing.md#钱的表示) |
+| 金额 | amount | 记账用的钱数，最小单位是十亿分之一额度；由精确金额向上取整得到 |
 | 免单 | waiver | 符合条件时不向用户收费，上游成本记为损失 |
 | 操作者 | actor | 做出改动的一方：管理员、站长、成员、管理 key、运营 agent、系统任务 |
 | 权限 | permission | 一件具体能做的事，由代码定义 |
