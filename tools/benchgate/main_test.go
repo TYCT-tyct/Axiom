@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -82,6 +83,49 @@ func TestBenchmarksKeepCompileErrors(t *testing.T) {
 	_, err := benchmarks(t.Context(), dir, "the probe module")
 	if err == nil || !strings.Contains(err.Error(), "undefinedName") {
 		t.Fatalf("the compile error is lost: %v", err)
+	}
+}
+
+// TestRemoveWorktree runs git: the gate's own worktree goes away, also when its directory is already gone, and no other
+// worktree is touched. (A registration that git itself fails to remove, the error path, needs a failing git to happen.)
+func TestRemoveWorktree(t *testing.T) {
+	root := t.TempDir()
+	list := func() []byte {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), "git", "-C", root, "worktree", "list", "--porcelain").Output() // #nosec G204 -- fixed arguments
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...) // #nosec G204 -- the test's own arguments
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+	scratch := t.TempDir()
+	own, stale := filepath.Join(scratch, "own"), filepath.Join(scratch, "stale")
+	git("worktree", "add", "-q", "--detach", own)
+	git("worktree", "add", "-q", "--detach", stale)
+	if err := os.RemoveAll(stale); err != nil { // another session's worktree whose directory vanished
+		t.Fatal(err)
+	}
+
+	if err := removeWorktree(t.Context(), root, own); err != nil {
+		t.Fatalf("removing the gate's own worktree: %v", err)
+	}
+	if _, statErr := os.Stat(own); listed(list(), own) || !os.IsNotExist(statErr) {
+		t.Errorf("the gate's worktree survived: stat %v", statErr)
+	}
+	if !listed(list(), stale) {
+		t.Error("another worktree's registration was removed")
+	}
+	if err := removeWorktree(t.Context(), root, stale); err != nil || listed(list(), stale) {
+		t.Errorf("a worktree whose directory is gone keeps its registration: %v", err)
 	}
 }
 
