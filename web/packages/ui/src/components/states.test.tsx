@@ -2,7 +2,13 @@ import { isValidElement, type ReactNode } from "react";
 import { expect, it } from "vitest";
 import { DataState, EmptyState } from "./states";
 
-const loaded = (data: string[]) => ({ status: "success" as const, data, error: null, errorUpdatedAt: 0, refetch: () => {} });
+const loaded = (data: string[]) => ({
+  status: "success" as const,
+  data,
+  error: null,
+  errorUpdatedAt: 0,
+  refetch: () => {},
+});
 const show = (data: string[]) => `${data.length} rows`;
 const isEmpty = (data: string[]) => data.length === 0;
 
