@@ -58,6 +58,16 @@ jobs:
           built="$(just axiom-version)"
           [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
           [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
+      # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
+      # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.
+      - run: |
+          docker compose -f deploy/compose.yaml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d axiom -c 'DROP OWNED BY axiom_migrator' -c 'DROP ROLE axiom_migrator'
+          kept="$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)"
+          printf '%s' "$kept" > deploy/.env && chmod 644 deploy/.env
+          just up
+          [ "$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)" = "$kept" ] && [ "$(grep -c '^AXIOM_MIGRATOR_PASSWORD=.' deploy/.env)" = 1 ] || { echo "::error::upgrading deploy/.env changed a password or did not add one"; exit 1; }
+          [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::upgrading left deploy/.env readable by others"; exit 1; }
+        timeout-minutes: 5
       - if: always()
         run: just down
       - if: github.event_name == 'pull_request'
