@@ -12,16 +12,3 @@ CREATE FUNCTION platform.in_scope(site uuid, account uuid) RETURNS boolean
     RETURN coalesce(current_setting('axiom.scope_platform', true), '') = 'on'
         OR site = ANY (coalesce(nullif(current_setting('axiom.scope_sites', true), '')::uuid[], '{}'))
         OR account = ANY (coalesce(nullif(current_setting('axiom.scope_accounts', true), '')::uuid[], '{}'));
-
--- protect_account_table puts a table of account data, with non-null site_id and account_id, under row-level
--- security: forced, so the table's owner is filtered too, with one scope check for reading and writing.
--- +goose StatementBegin
-CREATE PROCEDURE platform.protect_account_table(t regclass)
-    LANGUAGE plpgsql
-AS $$
-BEGIN
-    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY', t);
-    EXECUTE format('CREATE POLICY tenant ON %s USING (platform.in_scope(site_id, account_id))', t);
-END
-$$;
--- +goose StatementEnd

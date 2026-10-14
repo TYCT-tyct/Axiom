@@ -52,8 +52,8 @@
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
-- 账户数据表用 `platform.protect_account_table` 启用行级安全。
-- **待定（负责人确认）**：账户数据的表直接存 `site_id` 和 `account_id`。
+- 表强制启用行级安全（`FORCE`，所有者也受限），读写用同一条 `platform.in_scope` 检查。
+- **待定（负责人确认）**：账户数据的表是否直接存 `site_id` 和 `account_id`。确认后由 #23 加入生成策略的模板；在那之前不写进迁移，因为合并后的迁移不能再改。
 
 ### 迁移
 

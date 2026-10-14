@@ -13,13 +13,14 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// testSchema is a table of account data as a module would declare it, protected the way modules protect theirs; its
-// schema is created by the administrator, as migrate creates every schema.
+// testSchema is a table of account data under row-level security: forced, so its owner is filtered too, with one
+// scope check for reading and writing. Its schema is created by the administrator, as migrate creates every schema.
 const testSchema = `
 CREATE SCHEMA rlstest AUTHORIZATION axiom_owner;
 SET ROLE axiom_owner;
 CREATE TABLE rlstest.items (site_id uuid NOT NULL, account_id uuid NOT NULL, note text NOT NULL);
-CALL platform.protect_account_table('rlstest.items');
+ALTER TABLE rlstest.items ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON rlstest.items USING (platform.in_scope(site_id, account_id));
 GRANT USAGE ON SCHEMA rlstest TO axiom_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items TO axiom_app;
 RESET ROLE;`
