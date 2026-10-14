@@ -1,4 +1,4 @@
-# One machine running every node role (docs/architecture.md「部署」). Start it with `just up`.
+# The program on one machine (docs/architecture.md「部署」). Start it with `just up`.
 name: axiom
 services:
   axiom:
