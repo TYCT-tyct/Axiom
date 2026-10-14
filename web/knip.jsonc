@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  // The packages are the apps' own, not published: an export no app imports is unused, entry files included.
+  "includeEntryExports": true,
+  "workspaces": {
+    // vite.shared.ts reads theme.js as text and serves it, which knip cannot follow.
+    ".": { "entry": ["theme.js"] }
+  },
+  "ignore": ["**/*.gen.ts"]
+}

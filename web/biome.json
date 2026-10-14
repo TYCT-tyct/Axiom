@@ -10,6 +10,9 @@
   },
   "linter": {
     "rules": {
+      "complexity": {
+        "noExcessiveCognitiveComplexity": { "level": "error", "options": { "maxAllowedComplexity": 15 } }
+      },
       "style": {
         "noJsxLiterals": "error"
       }

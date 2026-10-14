@@ -14,6 +14,7 @@
 | `packages/api/` | 由 `api/console.yaml` 生成的类型（`*.gen.ts`）和调用它的客户端 | — |
 | `e2e/` | Playwright 端到端测试 | — |
 | `scripts/budget.ts` | 体积预算检查 | — |
+| `scripts/length.ts` | 函数和文件长度检查 | — |
 
 共用的 Vite 配置在 `vite.shared.ts`，各应用的 `vite.config.ts` 只写端口和路径。
 
@@ -25,7 +26,7 @@
 |---|---|
 | `just web-dev` | 开发服务器：官网 `:5173`，控制台 `:5174/console/`（官网的 `/console/` 也转给它，和线上一样从官网点进去），后台 `:5175`；接口请求转给 `just up` 起的程序（`:8080`） |
 | `just web-build` | 构建三个应用到各自的 `dist/`，控制台带上同一棵代码树构建出的程序的版本号 |
-| `just web` | 前端的全部检查：类型、lint、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
+| `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
 
 ## 规则
@@ -44,6 +45,9 @@
 | 数字和时间按页面语言格式化，时间注明时区 | `packages/ui/src/format.ts` 的 `useFormat` |
 | 接口只经 `@axiom/api` 调用，错误统一成带状态码和请求编号的 `ApiError` | 生成的类型不手改；`just generated` 检查 |
 | 依赖用精确版本，发布满 7 天才能装上；依赖的安装脚本不运行 | `pnpm-workspace.yaml` 的 `minimumReleaseAge` 和 `strictDepBuilds`：需要安装脚本的依赖让安装失败，必须明确决定；目前没有放行任何依赖 |
+| 认知复杂度不超过 15，函数不超过 60 行，文件不超过 500 行，与 Go 一侧相同 | Biome 的 `noExcessiveCognitiveComplexity`（`biome.json`）；长度由 `scripts/length.ts` 数，不计空行和注释，测试不限函数长度。理由见[前端的「决策与理由」](../docs/frontend.md#决策与理由) |
+| 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
+| 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试不查 |
 | 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按 brotli 压缩后的大小计；首屏算入口页加载的每个脚本和它们的静态依赖 |
 
 ## 测试
