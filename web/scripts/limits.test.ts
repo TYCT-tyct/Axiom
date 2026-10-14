@@ -3,6 +3,8 @@ import { check } from "./limits.ts";
 
 const repeat = (count: number, line: string) => Array.from({ length: count }, () => line).join("\n");
 const fn = (body: string) => `function f(x) {\n${body}\n}\n`;
+const arrow = (body: string) => `const f = (x) => ${body};\n`;
+const ors = (count: number) => Array(count + 1).fill("x").join(" || ");
 const ifs = (count: number) => repeat(count, "  if (x > 0) x--;");
 
 describe("check", () => {
@@ -65,6 +67,20 @@ describe("check", () => {
       path: "a.ts",
       text: fn(`${ifs(6)}\n  return () => {\n${ifs(7)}\n  };`),
       want: [],
+    },
+    // An arrow without braces returns a single expression, which is itself a branch when it is a condition.
+    { name: "an arrow returning eleven conditions", path: "a.ts", text: arrow(ors(11)), want: [] },
+    {
+      name: "an arrow returning twelve conditions",
+      path: "a.ts",
+      text: arrow(ors(12)),
+      want: ["a.ts:1: a function of complexity 13, more than 12"],
+    },
+    {
+      name: "an arrow returning twelve choices",
+      path: "a.ts",
+      text: arrow(`${Array(12).fill("x ? 0 :").join(" ")} 0`),
+      want: ["a.ts:1: a function of complexity 13, more than 12"],
     },
     {
       name: "a complex test",

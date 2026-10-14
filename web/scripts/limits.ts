@@ -48,7 +48,7 @@ function complexity(body: ts.Node) {
       ts.forEachChild(node, visit);
     }
   };
-  ts.forEachChild(body, visit);
+  visit(body);
   return paths;
 }
 
