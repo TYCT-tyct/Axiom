@@ -52,6 +52,7 @@ jobs:
       - run: just check
       - run: just up # one command deploys this machine and waits for a ready node
         timeout-minutes: 5
+      - run: '[ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }'
       - if: always()
         run: just down
       - if: github.event_name == 'pull_request'
