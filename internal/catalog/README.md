@@ -54,17 +54,17 @@
 
 | Item | 单位 | OpenAI（Chat / Responses） | Anthropic Messages | Gemini |
 |---|---|---|---|---|
-| `input` | token | `prompt_tokens − cached_tokens − cache_write_tokens − audio_tokens`（缺的字段按 0） | `input_tokens`（含图片） | `promptTokenCount − cachedContentTokenCount` − 音频 |
+| `input` | token | `prompt_tokens − cached_tokens − cache_write_tokens − audio_tokens`（缺的字段按 0） | `input_tokens`（含图片） | `promptTokenCount − cachedContentTokenCount` − 单独定价的模态 |
 | `cache_read` | token | `cached_tokens` | `cache_read_input_tokens` | `cachedContentTokenCount` |
 | `cache_write` | token | `cache_write_tokens` | `cache_creation.ephemeral_5m_input_tokens` | — |
 | `cache_write_1h` | token | — | `cache_creation.ephemeral_1h_input_tokens` | — |
 | `output` | token | `completion_tokens − reasoning_tokens − audio_tokens` | `output_tokens`（含思考，不单列） | `candidatesTokenCount` |
 | `reasoning` | token | `reasoning_tokens` | 0 | `thoughtsTokenCount` |
 | `audio_in` / `audio_out` | token | 输入、输出详情里的 `audio_tokens` | — | `promptTokensDetails` 里模态为 `AUDIO` 的数量 / — |
-| `image_in` / `image_out` | token | — / 图片生成的输出 token | — | — |
+| `image_in` / `image_out` | token | — / 图片生成的输出 token | — | 单独定价时，`promptTokensDetails` 里模态为 `IMAGE`、`VIDEO` 的数量 / — |
 | `web_search` | 次 | 待核对 | `server_tool_use.web_search_requests` | 待核对 |
 
-- 只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。
+- 只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。视频没有自己的计费项，计入 `image_in`。例如 Gemini 2.5 Flash 的音频输入每百万 $1.00、文本 $0.30，Gemini 3.6 Flash 的图片和视频每百万 $1.00、文本 $0.75（Gemini 定价页，2026-10-14）。
 - 守恒：输入侧各项之和等于上游报告的提示词总量；输出侧各项之和等于上游报告的输出总量。测试断言这两条。Anthropic 没有单独的提示词总量字段，按 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 算（Anthropic《Prompt caching》）。
 - OpenAI 的总输入同时包含缓存读和缓存写，写入价替代普通输入价而不是叠加（OpenAI《Prompt caching》）。例：`input_tokens=12000, cached_tokens=0, cache_write_tokens=12000` → `input` 0、`cache_write` 12,000，分档门槛求和 12,000，费用只含写入价。没有写入计费的模型不报这个字段，按 0。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
