@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | `author` | `slug`、`name` | PK `slug` | 公开 | 增、改名 |
 | `model` | `id`、`author`、`slug`、`status`（draft / listed / retired）、`version_basis`（dated / floating）、`price_source`（litellm / openrouter / official / manual）、`spec` jsonb、`rev` | PK `id`；UNIQUE `slug`；`split_part(slug, '/', 1) = author` | 公开，draft 行只有平台可见 | 列级授权只许改 `status`、`price_source`、`spec`、`rev` |
-| `name` | `name`（原样）、`norm`、`visibility`（public / internal）、`model_id` | PK `name`；UNIQUE `norm`；public 时 `norm !~ '(-\d{8}\|-\d{4}\|-\d{2}-\d{2}\|-latest)$' AND norm !~ '[:~@]'`；所有名字 `norm !~ '[:~]'` | 公开，只含 listed 模型的名字，其余只有平台可见 | 只追加 |
+| `name` | `name`（原样）、`norm`、`visibility`（public / internal）、`model_id` | PK `name`；UNIQUE `norm`；public 时 `norm !~ '-latest$' AND norm !~ '[:~@]'`；所有名字 `norm !~ '[:~]'` | 公开，只含 listed 模型的名字，其余只有平台可见 | 只追加 |
 | `reference_price` | `id`、`model_id`、`currency`、`source`、`schedule` jsonb、`schedule_sha256`、`published_at`、`supersedes` | PK `id`；UNIQUE `supersedes`；部分唯一索引 `(model_id, currency) WHERE supersedes IS NULL`；UNIQUE `(id, model_id, currency)`，外键 `(supersedes, model_id, currency)` 引用它，只能替代同一条时间线上的行；`supersedes <> id`；`currency ~ '^[A-Z]{3}$'` 且等于 `schedule` 里的币种 | 公开，只含 listed 模型的参考价，其余只有平台可见 | 只追加 |
 | `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
 | `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
@@ -129,7 +129,7 @@
 |---|---|
 | 名字归一化后全局唯一 | `name.norm` UNIQUE；测试：只差大小写或 `.`、`-` 的第二个名字被拒 |
 | 名字上架后不改指向（切换与迁移在 M1 之后）；带日期的名字不会被合并到别的模型 | `name` 只追加；`Normalize` 不增删数字，所以保留日期。模糊测试：输入和输出各自只留 ASCII 数字后完全相同 |
-| 用户只能调用公开名字 | `ResolvePublic` 只查 public；CHECK 拒绝带日期、`-latest`、含 `:` `~` `@` 的 public 名字；调用、模型列表、回退列表三处入口用同一个函数，测试覆盖 |
+| 用户只能调用公开名字 | `ResolvePublic` 只查 public；CHECK 拒绝 `-latest` 结尾、含 `:` `~` `@` 的 public 名字；调用、模型列表、回退列表三处入口用同一个函数，测试覆盖 |
 | 快照是数据库某一时刻的一致状态，新快照不会被旧快照覆盖 | 只读 Repeatable Read 加载、比较后替换；测试：两表读取之间插入并发提交，结果仍属同一时刻；两次构建逆序完成，留下的是新的 |
 | 快照陈旧超过上限就不再解析 | 见「快照」的陈旧上限；测试：revision 查询一直成功、全量加载一直失败，超过上限后返回 `ErrStale`、不就绪，成功发布后恢复 |
 | 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |

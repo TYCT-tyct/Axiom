@@ -64,9 +64,9 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 等级 | tier | 站点给账户定的档次，决定加价 |
 | 模型厂商 | author | 模型的出品方，如 Anthropic |
 | 模型 | model | 统一目录里的模型，有标准 ID 和若干名字，见[模型目录](domains/catalog.md) |
-| 公开名字 | name（visibility = public） | 用户可以调用的模型名字：标准 ID，或不带日期的厂商原生名字 |
+| 公开名字 | name（visibility = public） | 用户可以调用的模型名字：标准 ID，或厂商原生的名字（带日期或不带日期） |
 | 版本依据 | version_basis | 模型的名字是否对应一个不变的版本：固定版本（dated），即带日期或页面写明版本号的名字，模型不可变；移动名字（floating），名字背后的版本会变 |
-| 内部名字 | name（visibility = internal） | 只用于识别、用户不能调用的模型名字，如带日期的厂商原生名字 |
+| 内部名字 | name（visibility = internal） | 只用于识别、用户不能调用的模型名字，如 `-latest` 结尾的写法 |
 | 供应商别名 | supplier_alias | 某个供应商或分组里对模型的写法，只在该范围内有效，用于映射，见[供应商](domains/suppliers.md#供应商别名与待映射) |
 | 目录基线 | baseline | 模型的官方规格，是端点属性的默认值 |
 | 价格来源 | price_source | 模型的参考价从哪来：LiteLLM、OpenRouter、官方价格页或手填，每个模型选一个，见[模型目录的「目录基线」](domains/catalog.md#目录基线) |
