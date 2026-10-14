@@ -60,3 +60,22 @@ func Unmarshal(data []byte, v any) error {
 	}
 	return json.Unmarshal(data, v)
 }
+
+// UnmarshalStrict decodes b into v and refuses invalid UTF-8, duplicate member names and members v has no field for:
+// what we decode is what any other strict reader would decode, and a member we do not know is an error rather than
+// silently ignored.
+func UnmarshalStrict(b []byte, v any) error {
+	return json.Unmarshal(b, v, json.RejectUnknownMembers(true))
+}
+
+// MarshalCanonical encodes v in RFC 8785 member order and spelling, so equal values give equal bytes. Integers stay as
+// written instead of passing through float64 as RFC 8785 would have them, because a count or threshold above 2⁵³
+// would otherwise change.
+func MarshalCanonical(v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	t := jsontext.Value(b)
+	return t, t.Canonicalize(jsontext.CanonicalizeRawInts(false))
+}

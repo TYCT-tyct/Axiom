@@ -1,13 +1,12 @@
 package catalog
 
 import (
-	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 )
 
 // Modality is a kind of input content.
@@ -97,7 +96,7 @@ const (
 // MarshalJSON writes the canonical form.
 func ParseSchedule(b []byte) (Schedule, error) {
 	var w scheduleJSON
-	err := json.Unmarshal(b, &w, json.RejectUnknownMembers(true))
+	err := jsonx.UnmarshalStrict(b, &w)
 	var s Schedule
 	if err == nil {
 		s, err = w.schedule()
@@ -208,8 +207,8 @@ func lookup[T ~uint8](names []string, name string) (T, error) {
 	return T(i), nil
 }
 
-// MarshalJSON writes the canonical form: RFC 8785 member order and spelling, prices in UnitPrice's canonical text,
-// lists in enumeration order. Integers stay as written rather than pass through float64 as RFC 8785 would have them.
+// MarshalJSON writes the canonical form (jsonx.MarshalCanonical): prices in UnitPrice's canonical text, lists in
+// enumeration order.
 func (s Schedule) MarshalJSON() ([]byte, error) {
 	w := scheduleJSON{
 		Currency:        s.currency.String(),
@@ -223,12 +222,7 @@ func (s Schedule) MarshalJSON() ([]byte, error) {
 			w.ContextTiers.Tiers = append(w.ContextTiers.Tiers, tierJSON{Above: &t.above, Rates: t.rates.json()})
 		}
 	}
-	b, err := json.Marshal(w)
-	if err != nil {
-		return nil, err
-	}
-	v := jsontext.Value(b)
-	return v, v.Canonicalize(jsontext.CanonicalizeRawInts(false))
+	return jsonx.MarshalCanonical(w)
 }
 
 func (s set[T]) names(all []string) []string {
