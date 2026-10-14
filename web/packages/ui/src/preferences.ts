@@ -3,7 +3,7 @@ import { readStored, writeStored } from "./storage";
 export const themes = ["system", "light", "dark"] as const;
 export type Theme = (typeof themes)[number];
 
-// public/theme.js reads the same key to apply the saved choice before the first paint.
+// web/theme.js reads the same key to apply the saved choice before the first paint.
 const themeKey = "axiom.theme";
 
 // The theme is one value for the whole page, so every switch that shows it agrees: the console has one in the sidebar

@@ -1,9 +1,11 @@
 // The Vite configuration every app shares; an app's vite.config.ts names only its dev server port, the path it is
 // served under, and the apps served under paths of its listener.
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type UserConfig } from "vite";
+import { defineConfig, type Plugin, type UserConfig } from "vite";
 
 // An app's preview server listens this far above its dev server.
 const previewOffset = 1000;
@@ -27,6 +29,42 @@ export const contentSecurityPolicy = [
 // The program from `just up` answers the API, so the dev and preview servers talk to a real one.
 const api = { "/api": "http://127.0.0.1:8080" };
 
+// themeScript serves theme.js to every app and loads it at the start of <head>: a classic script, so it runs before the
+// first paint, from the page's own origin, because the policy above forbids inline scripts. Vite bundles only module
+// scripts, so the build emits it here, under a name carrying a hash of its content like every other asset, so it can be
+// cached long and a new version is never hidden behind the old one's name. The file is read on each use, so an edit
+// shows on the dev server without a restart.
+function themeScript(): Plugin {
+  let base = "/";
+  const asset = () => {
+    const source = readFileSync(join(import.meta.dirname, "theme.js"), "utf8");
+    const hash = createHash("sha256").update(source).digest("base64url").slice(0, 8);
+    return { source, fileName: `assets/theme-${hash}.js` };
+  };
+  return {
+    name: "axiom:theme-script",
+    configResolved(config) {
+      base = config.base;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const { source, fileName } = asset();
+        if (req.url?.split("?")[0] !== base + fileName) {
+          return next();
+        }
+        res.setHeader("Content-Type", "text/javascript");
+        res.end(source);
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: "asset", ...asset() });
+    },
+    transformIndexHtml() {
+      return [{ tag: "script", attrs: { src: base + asset().fileName }, injectTo: "head-prepend" }];
+    },
+  };
+}
+
 // mounts maps a path to the dev server port of the app production serves there on the same listener, such as the
 // console under the website's /console/, so following a link between them works on the dev and preview servers too.
 export function appConfig({
@@ -44,9 +82,8 @@ export function appConfig({
     );
   return defineConfig({
     base,
-    // Files every app serves as they are, at its root: theme.js must run before the bundle, as a classic script.
-    publicDir: join(import.meta.dirname, "public"),
-    plugins: [react(), tailwindcss()],
+    publicDir: false,
+    plugins: [react(), tailwindcss(), themeScript()],
     define: {
       // The version of the program this build ships in, exactly as `axiom version` prints it; `just web-build` sets it.
       // Empty when an app is built or served on its own, which turns the new-version prompt off.

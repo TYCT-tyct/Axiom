@@ -3,6 +3,7 @@
 // size, the transfer size; fonts are already compressed. Run after `pnpm build`.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { brotliCompressSync, constants } from "node:zlib";
 
 const kB = 1000;
@@ -43,11 +44,24 @@ function measure(what: string, size: number, budget: number) {
   }
 }
 
+// scriptFiles returns the files, relative to dist, of the scripts the built entry page names: the module entry and the
+// classic ones the manifest does not list, such as theme.js (vite.shared.ts).
+function scriptFiles(dist: string, base: string) {
+  const html = readFileSync(join(dist, "index.html"), "utf8");
+  return [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(([, src = ""]) => {
+    if (!src.startsWith(base)) {
+      throw new Error(`${dist}: the entry page loads ${src}, which is not under ${base}`);
+    }
+    return src.slice(base.length);
+  });
+}
+
 for (const [app, budget] of Object.entries(budgets)) {
   const dist = join(import.meta.dirname, "..", app, "dist");
   const manifest: Record<string, Chunk> = JSON.parse(readFileSync(join(dist, ".vite", "manifest.json"), "utf8"));
-  const size = (keys: Iterable<string>) =>
-    [...keys].reduce((total, key) => total + brotliSize(join(dist, (manifest[key] as Chunk).file)), 0);
+  const { base = "/" } = (await import(pathToFileURL(join(dist, "..", "vite.config.ts")).href)).default;
+  const files = (keys: Iterable<string>) => [...keys].map((key) => (manifest[key] as Chunk).file);
+  const size = (paths: Iterable<string>) => [...paths].reduce((total, file) => total + brotliSize(join(dist, file)), 0);
 
   const firstScreen = new Set<string>();
   for (const [key, chunk] of Object.entries(manifest)) {
@@ -58,13 +72,18 @@ for (const [app, budget] of Object.entries(budgets)) {
   if (budget.firstPage && !manifest[budget.firstPage]) {
     failures.push(`${app}: the first page ${budget.firstPage} is not in the build; update its name`);
   }
-  measure(`${app}: first screen script`, size(firstScreen), budget.firstScreen);
+  // A file both the manifest and the entry page name counts once.
+  measure(
+    `${app}: first screen script`,
+    size(new Set([...files(firstScreen), ...scriptFiles(dist, base)])),
+    budget.firstScreen,
+  );
 
   if (budget.perPage) {
     for (const [key, chunk] of Object.entries(manifest)) {
       if (chunk.isDynamicEntry && key !== budget.firstPage) {
         const added = [...closure(manifest, key)].filter((page) => !firstScreen.has(page));
-        measure(`${app}: page ${chunk.file.replace(/^assets\//, "")}`, size(added), budget.perPage);
+        measure(`${app}: page ${chunk.file.replace(/^assets\//, "")}`, size(files(added)), budget.perPage);
       }
     }
   }
