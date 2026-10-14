@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -27,19 +28,54 @@ func TestServe(t *testing.T) {
 		}
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("shutdown: %v", err)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the node did not shut down")
 	}
 	if _, err := get(t, "http://"+ops+"/livez"); err == nil {
 		t.Error("the ops listener still answers after shutdown")
 	}
 }
 
+// TestServeRejectsBadConfiguration: the node does not start, names every wrong variable, and quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
-	err := serve(t.Context(), []string{"AXIOM_SHUTDOWN_TIMEOUT=soon", "AXIOM_OPS_ADRR=:1"}, slog.New(slog.DiscardHandler))
-	for _, want := range []string{"AXIOM_SHUTDOWN_TIMEOUT", "AXIOM_OPS_ADRR: unknown variable"} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("error %v does not name %s", err, want)
+	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := taken.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	cases := []struct {
+		name    string
+		environ []string
+		want    []string
+	}{
+		{
+			"invalid and unknown variables",
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT=sk-secret", "AXIOM_OPS_ADDR=sk-secret", "AXIOM_OPS_ADRR=sk-secret"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_OPS_ADDR: want", "AXIOM_OPS_ADRR: unknown variable"},
+		},
+		{"a taken address", []string{"AXIOM_OPS_ADDR=" + taken.Addr().String()}, []string{"AXIOM_OPS_ADDR: "}},
+	}
+	for _, c := range cases {
+		err := serve(t.Context(), c.environ, slog.New(slog.DiscardHandler))
+		if err == nil {
+			t.Fatalf("%s: the node started", c.name)
+		}
+		for _, want := range c.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not say %q", c.name, err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "sk-secret") || strings.Contains(err.Error(), taken.Addr().String()) {
+			t.Errorf("%s: error %q quotes a value", c.name, err)
 		}
 	}
 }
@@ -70,6 +106,8 @@ func servingAddr(t *testing.T, logs records, done <-chan error) string {
 			}
 		case err := <-done:
 			t.Fatalf("the node stopped before serving: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the node did not start")
 		}
 	}
 }

@@ -17,17 +17,20 @@ import (
 // and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
-	opsAddr := env.String("AXIOM_OPS_ADDR", "127.0.0.1:8081") // probes and metrics; loopback unless deployed otherwise
+	opsAddr := env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") // the probes; loopback unless a deployment needs otherwise
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
 
 	var health httpserver.Health
-	ops := httpserver.New(opsAddr, health.Handler(), logger)
-	// Listening before reporting ready turns a taken or malformed address into a startup failure.
+	ops := health.Server(logger)
+	// Listening before reporting ready turns a taken address into a startup failure.
 	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", opsAddr)
 	if err != nil {
+		if opErr := (*net.OpError)(nil); errors.As(err, &opErr) {
+			err = opErr.Err // the cause, such as "bind: address already in use", without the address
+		}
 		return fmt.Errorf("AXIOM_OPS_ADDR: %w", err)
 	}
 	served := make(chan error, 1)
