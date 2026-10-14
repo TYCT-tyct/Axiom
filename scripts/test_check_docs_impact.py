@@ -35,7 +35,8 @@ class Explained(unittest.TestCase):
         cases = [
             ("full-width punctuation", docs("文档影响：无，因为只改了内部变量名。"), True),
             ("half-width punctuation and spaces", docs("文档影响: 无, 因为 renamed a local variable"), True),
-            ("reason on the next line", docs("文档影响：无，因为\n只改了内部变量名。"), True),
+            ("the reason belongs on the same line", docs("文档影响：无，因为\n只改了内部变量名。"), False),
+            ("not the first line of the section", docs("说明如下。\n\n文档影响：无，因为只改了内部变量名。"), False),
             ("placeholder ellipsis", docs("文档影响：无，因为……"), False),
             ("placeholder dots", docs("文档影响:无,因为..."), False),
             ("inside a closed comment", docs("<!-- 文档影响：无，因为只改了内部变量名。 -->"), False),
@@ -51,6 +52,10 @@ class Explained(unittest.TestCase):
             ("a backtick fence", docs("```\n文档影响：无，因为这是旧 PR 的示例。\n```"), False),
             ("double-backtick inline code", docs("``文档影响：无，因为这是旧 PR 的示例。``"), False),
             ("a real declaration after a fenced example", docs("```\n文档影响：无，因为示例\n```\n\n文档影响：无，因为只改了内部变量名。"), True),
+            ("the whole Docs section inside a fence",
+             "## Approach / 做法\n\n```\n## Docs / 文档影响\n\n文档影响：无，因为这是示例。\n```\n", False),
+            ("inline code spanning lines", docs("`说明\n文档影响：无，因为这是示例。`"), False),
+            ("a placeholder followed by a quote", docs("文档影响：无，因为……\n> 这是旧 PR 的示例。"), False),
         ]
         for name, body, expected in cases:
             with self.subTest(name):

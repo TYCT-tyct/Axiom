@@ -98,19 +98,15 @@ func benchmarksAt(ctx context.Context, root, commit, tree string) (run measureme
 	return benchmarks(ctx, tree, "base commit "+commit)
 }
 
-// removeWorktree deletes the temporary worktree and its registration, also after a cancelled run, and fails if git
-// still lists it.
+// removeWorktree deletes the temporary worktree and its registration, touching no other worktree, also after a
+// cancelled run, and fails if git still lists it.
 func removeWorktree(ctx context.Context, root, tree string) error {
 	ctx = context.WithoutCancel(ctx)
-	// Removal fails when add never created the worktree or created only part of it; the steps after it finish the job,
-	// and its error matters only if git still lists the worktree at the end. The second --force also removes a worktree
-	// that an interrupted add left locked.
+	// Removal fails when add never created the worktree; its error matters only if git still lists the worktree at the
+	// end. The second --force also removes a worktree that an interrupted add left locked.
 	removed, removeErr := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", "--force", "--force", "--end-of-options", tree).CombinedOutput() // #nosec G204 G702 -- as in benchmarksAt
 	if err := os.RemoveAll(tree); err != nil {
 		return fmt.Errorf("remove the base worktree: %w", err)
-	}
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "prune").CombinedOutput(); err != nil { // #nosec G204 G702 -- as in benchmarksAt
-		return fmt.Errorf("prune the base worktree: %w\n%s", err, out)
 	}
 	list, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output() // #nosec G204 G702 -- as in benchmarksAt
 	if err != nil {

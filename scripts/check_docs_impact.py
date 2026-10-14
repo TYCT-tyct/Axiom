@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail when a pull request changes a module's code but neither that module's domain doc nor its README.
 
-A pull request that really leaves the docs untouched says why in the Docs section of its description, on a line of its
-own: 文档影响：无，因为<reason>, the reason in the same paragraph. Only plain paragraph text counts: HTML comments (an
-unclosed one up to the end), fenced and inline code, block quotes, indented code and <placeholders> do not, so neither
-the template's hint nor a quoted example of the format passes.
+A pull request that really leaves the docs untouched says why as the first line of the Docs section of its
+description: 文档影响：无，因为<reason>, the reason on the same line. The rule is about a line, not about Markdown, so
+nothing has to be parsed beyond it: HTML comments (an unclosed one up to the end) and fenced code blocks are removed
+first, and a first line that is quoted, indented, code or a <placeholder> does not start with the declaration or has no
+reason, so it does not pass.
 Reads PR_BODY from the environment and the changed files from git, with renames split into a deletion and an addition
 so that the module code moves out of is checked too.
 usage: check_docs_impact.py <base commit>   (run from the repository root)
@@ -17,46 +18,35 @@ import sys
 
 MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$).+")
 COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
-DOCS_SECTION = re.compile(r"^## Docs / 文档影响[ \t]*$(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE)
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-INLINE_CODE = re.compile(r"(`+).+?\1")
-PLACEHOLDER = re.compile(r"<[^>\n]*>")
-# At the start of the line, so a quoted (>) or indented (code) declaration does not match.
+DOCS_HEADING = "## Docs / 文档影响"
 DECLARATION = re.compile(r"文档影响\s*[：:]\s*无\s*[，,]\s*因为(.*)")
+NOT_A_REASON = re.compile(r"`+[^`]*`+|<[^>]*>")  # code and <placeholders> on the line
 REASON = re.compile(r"\w")  # a reason has words in it; "……" or "..." is the template's placeholder, not a reason
 
 
-def prose_lines(text):
-    """The lines of text outside fenced code blocks, with inline code removed."""
+def outside_fences(lines):
+    """The lines that are not inside a fenced code block."""
     fence = None
-    for line in text.split("\n"):
+    for line in lines:
         if fence:
             if re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$", line):
                 fence = None
-            continue
-        opening = FENCE.match(line)
-        if opening:
+        elif opening := FENCE.match(line):
             fence = opening.group(1)
-            continue
-        yield INLINE_CODE.sub("", line)
+        else:
+            yield line
 
 
 def explained(body):
-    """Whether the Docs section of the description says why the docs did not change."""
-    section = DOCS_SECTION.search(COMMENT.sub("", body.replace("\r\n", "\n")))
-    lines = list(prose_lines(section.group(1))) if section else []
-    for index, line in enumerate(lines):
-        declared = DECLARATION.match(line)
-        if not declared:
-            continue
-        paragraph = [declared.group(1)]
-        for following in lines[index + 1:]:
-            if not following.strip():
-                break
-            paragraph.append(following)
-        if REASON.search(PLACEHOLDER.sub("", " ".join(paragraph))):
-            return True
-    return False
+    """Whether the first line of the Docs section declares, with a reason, that the docs did not change."""
+    lines = list(outside_fences(COMMENT.sub("", body.replace("\r\n", "\n")).split("\n")))
+    headings = [index for index, line in enumerate(lines) if line.rstrip() == DOCS_HEADING]
+    if not headings:
+        return False
+    first = next((line for line in lines[headings[-1] + 1:] if line.strip()), "")
+    declared = DECLARATION.match(first)
+    return bool(declared and REASON.search(NOT_A_REASON.sub("", declared.group(1))))
 
 
 def problems(changed, body):
@@ -65,7 +55,7 @@ def problems(changed, body):
         return []
     modules = {found.group(1) for path in changed if (found := MODULE_CODE.match(path))}
     return [f"{module}: code changed, but neither docs/domains/{module}.md nor internal/{module}/README.md; "
-            "update the doc, or write 文档影响：无，因为<reason> in the Docs section of the description"
+            "update the doc, or start the Docs section of the description with 文档影响：无，因为<reason>"
             for module in sorted(modules) if not {f"docs/domains/{module}.md", f"internal/{module}/README.md"} & set(changed)]
 
 
