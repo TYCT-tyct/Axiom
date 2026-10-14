@@ -84,7 +84,7 @@ for (const storage of ["available", "blocked"] as const) {
 
     // A deployment removed every page chunk this build knows.
     await page.route(/\/assets\/(keys|logs|placeholder)-[\w-]+\.js$/, (route) => route.fulfill({ status: 404 }));
-    const logs = page.getByRole("link", { name: "调用日志" });
+    const logs = page.getByRole("link", { name: "调用记录" });
     const preloaded = page.waitForResponse(/\/assets\/logs-/);
     await logs.hover();
     await preloaded;
@@ -113,8 +113,8 @@ test("the theme chosen in the drawer is the one the sidebar shows once the windo
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
   // Following a link closes the drawer, names the new page and moves focus to it, so a screen reader announces it.
-  await drawer.getByRole("link", { name: "调用日志" }).click();
-  await expect(page).toHaveTitle("调用日志 · Axiom");
+  await drawer.getByRole("link", { name: "调用记录" }).click();
+  await expect(page).toHaveTitle("调用记录 · Axiom");
   await expect(page.locator("#main")).toBeFocused();
 
   await page.getByRole("button", { name: "打开菜单" }).click();

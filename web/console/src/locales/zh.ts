@@ -3,7 +3,7 @@ export default {
   nav: {
     overview: "概览",
     keys: "API key",
-    logs: "调用日志",
+    logs: "调用记录",
   },
   overview: {
     description: "余额、本月花费和最近的报错会显示在这里。",
