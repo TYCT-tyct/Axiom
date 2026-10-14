@@ -107,6 +107,9 @@ func TestCheck(t *testing.T) {
 			"internal/catalog/a.go":                     "package catalog\n\nimport _ \"axiom/internal/catalog/node_modules/bridge\"\n",
 			"internal/catalog/node_modules/bridge/b.go": "package bridge\n\nimport _ \"axiom/internal/billing\"\n",
 		}, []string{"axiom/internal/catalog imports axiom/internal/catalog/node_modules/bridge: this check does not read vendor or node_modules, so nothing may import from them"}},
+		{"the composition root cannot import skipped code either", map[string]string{
+			"cmd/axiom/main.go": "package main\n\nimport _ \"axiom/internal/catalog/node_modules/bridge\"\n",
+		}, []string{"axiom/cmd/axiom imports axiom/internal/catalog/node_modules/bridge: this check does not read vendor or node_modules, so nothing may import from them"}},
 		{"files the go command ignores", map[string]string{
 			"internal/catalog/_sample.go": "package catalog\n\nimport _ \"axiom/internal/billing\"\n",
 			"internal/catalog/.hidden.go": "not Go at all",

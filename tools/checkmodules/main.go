@@ -214,11 +214,10 @@ func importProblems(table, packages map[string]map[string]bool) []string {
 }
 
 func packageProblems(table map[string]map[string]bool, pkg string, imports map[string]bool) []string {
-	if strings.HasPrefix(pkg, modulePath+"/cmd/") {
-		return nil // the composition root wires every module together
-	}
+	root := strings.HasPrefix(pkg, modulePath+"/cmd/") // the composition root wires every module together
 	module := moduleOf(pkg)
 	switch {
+	case root:
 	case module == "":
 		return []string{pkg + ": Go code belongs under cmd/ or internal/<module>/"}
 	case table[module] == nil:
@@ -226,19 +225,30 @@ func packageProblems(table map[string]map[string]bool, pkg string, imports map[s
 	}
 	var problems []string
 	for imported := range imports {
-		if imported != modulePath && !strings.HasPrefix(imported, modulePath+"/") {
-			continue
-		}
-		target := moduleOf(imported)
-		if slices.ContainsFunc(strings.Split(imported, "/"), func(part string) bool { return excluded[part] }) {
-			problems = append(problems, fmt.Sprintf("%s imports %s: this check does not read vendor or node_modules, so nothing may import from them", pkg, imported))
-		} else if target == "" {
-			problems = append(problems, fmt.Sprintf("%s imports %s: only cmd/ may import packages outside internal/<module>/", pkg, imported))
-		} else if target != module && !table[module][target] {
-			problems = append(problems, fmt.Sprintf("%s imports %s: %s may not import %s", pkg, imported, module, target))
+		if problem := importProblem(table, root, module, imported); problem != "" {
+			problems = append(problems, pkg+" imports "+imported+": "+problem)
 		}
 	}
 	return problems
+}
+
+// importProblem says why a package of module (or of the composition root) may not import imported, or returns "".
+func importProblem(table map[string]map[string]bool, root bool, module, imported string) string {
+	if imported != modulePath && !strings.HasPrefix(imported, modulePath+"/") {
+		return ""
+	}
+	target := moduleOf(imported)
+	switch {
+	case slices.ContainsFunc(strings.Split(imported, "/"), func(part string) bool { return excluded[part] }):
+		return "this check does not read vendor or node_modules, so nothing may import from them"
+	case root:
+		return ""
+	case target == "":
+		return "only cmd/ may import packages outside internal/<module>/"
+	case target != module && !table[module][target]:
+		return fmt.Sprintf("%s may not import %s", module, target)
+	}
+	return ""
 }
 
 // moduleOf returns the module an axiom/internal/<module>/... package belongs to, or "" for any other package.
