@@ -42,8 +42,9 @@ func mustParse(tb testing.TB, s string) catalog.Schedule {
 // Equal schedules must be equal bytes: stored schedules are compared and deduplicated byte for byte.
 func TestScheduleCanonicalJSON(t *testing.T) {
 	// 2⁵³ + 1 has no float64, so a threshold that passed through one would come back as 2⁵³.
-	bigThreshold := `{"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":9007199254740993,` +
-		`"rates":{"input":"2"}}]},"currency":"USD","input_modalities":["text"],"rates":{"input":"1"},"v":1}`
+	bigThreshold := `{"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"2"}},` +
+		`{"above":9007199254740993,"rates":{"input":"3"}}]},"currency":"USD","input_modalities":["text"],` +
+		`"rates":{"input":"1"},"v":1}`
 	for text, want := range map[string]string{messy: haiku, haiku: haiku, bigThreshold: bigThreshold} {
 		got, err := mustParse(t, text).MarshalJSON()
 		if err != nil || string(got) != want {
