@@ -182,7 +182,8 @@ OpenRouter 的页面构成（openrouter.ai 页脚与 llms.txt，OpenRouter 文�
 
 ### 前端工程
 
-- 代码在 `web/`，是一个 pnpm 工作区；结构、命令和必须遵守的规则见 [web/README.md](../web/README.md)。
+- 代码在 `web/`，是一个 pnpm 工作区；结构、命令和必须遵守的规则见 [web/README.md](../web/README.md)。设计系统的变量和组件以那里的代码为准。
+- 西文和数字用自己托管的 Inter（只带字重轴，拉丁子集 48KB），数字用它的等宽数字对齐；中文和代码用系统字体。
 
 ## 决策与理由
 
@@ -202,6 +203,9 @@ OpenRouter 的页面构成（openrouter.ai 页脚与 llms.txt，OpenRouter 文�
 | 未登录时显示站点给新账户的默认等级的价格 | 负责人在对话中授权开发者按推荐决定（2026-10-13）。访客注册后付的就是看到的价，不会注册后才发现变了；新账户进入哪个等级由账户与租户的设计写明（Issue #23） |
 | 官网是单独的应用，与控制台、管理后台共享设计系统和模型价格组件 | 负责人在对话中授权开发者按推荐决定（2026-10-13）。理由和放弃的方案见[总体架构](architecture.md#技术选型)「前端交付」 |
 | 页面文字的检查用 Biome 的 `noJsxLiterals` | 架构已选 Biome，这条规则移植自 eslint-plugin-react 的 `jsx-no-literals`；它不查属性里的文字，由评审补上。不选 eslint-plugin-i18next：为一条规则要再引入 ESLint 和它的解析器，依赖多出约百个包 |
+| 西文字体只托管 Inter 的字重轴；不托管 Geist Mono，等宽文字用系统字体 | 实测拉丁子集：只带字重轴 48KB，再带光学尺寸轴 73KB，加上 Geist Mono 再多 23KB，后两种都超过 60KB 的预算。数字的对齐用 Inter 的等宽数字 |
+| 颜色变量用 `light-dark()` 一次写出浅、深两个值 | 每个颜色只写在一处，强制浅色或深色时只切换 `color-scheme`。不选设计稿的写法：浅色值在系统偏好和手动选择两处各写一遍 |
+| 手机上的侧栏抽屉用原生 `<dialog>` | 自带焦点限制和 Esc 关闭；Radix Dialog 锁定滚动时会插入 `<style>` 元素，被内容安全策略拦下 |
 | TypeScript 用 5.9，不用 7 | 架构选定的 openapi-typescript 调用 TypeScript 的编译器接口，7.0 没有提供（2026-10） |
 
 ## 待定问题
