@@ -11,8 +11,8 @@ import (
 // id; a choice gets no delta after its finish_reason; a tool call's first delta, the one that raises its index by
 // one, carries its id and function name; the usage chunk, when asked for, comes after every choice has finished and
 // has no choices; [DONE] ends the stream once every choice has finished. A chunk with a top-level error, the way
-// OpenRouter reports a failure after the stream started ("Errors", read 2026-10-14), ends it too, and only [DONE]
-// may follow.
+// OpenRouter reports a failure after the stream started ("Errors", read 2026-10-14), ends it too: OpenRouter closes
+// the stream right after it, and only a [DONE] may follow.
 func Chat(src io.Reader) error { return check(src, &chat{choices: map[int64]*choice{}}) }
 
 type chat struct {
@@ -136,7 +136,7 @@ func (c *chat) allFinished() bool {
 }
 
 func (c *chat) end() error {
-	if !c.ended {
+	if !c.ended && !c.failed {
 		return invalid("the stream ends before [DONE]")
 	}
 	return nil

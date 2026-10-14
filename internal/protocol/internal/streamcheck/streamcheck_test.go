@@ -197,6 +197,8 @@ func TestResponses(t *testing.T) {
 const (
 	chunk = `{"id":"c1","object":"chat.completion.chunk","choices":[%s]}`
 	usage = `{"id":"c1","object":"chat.completion.chunk","choices":[],"usage":{"total_tokens":3}}`
+	// failure is OpenRouter's mid-stream error chunk ("Errors", read 2026-10-14).
+	failure = `{"id":"c1","object":"chat.completion.chunk","error":{"code":502,"message":"upstream failed"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}`
 )
 
 func choice(format string, args ...any) string {
@@ -215,7 +217,8 @@ func TestChat(t *testing.T) {
 	run(t, streamcheck.Chat, []checkCase{
 		{"interleaved tool calls and usage", stream(callStart(0), callStart(1), callArgs(0), callArgs(1), finish, usage, "[DONE]"), ""},
 		{"two choices", stream(text, choice(`{"index":1,"delta":{},"finish_reason":"length"}`), finish, "[DONE]"), ""},
-		{"an error chunk ends it", stream(text, `{"error":{"code":502,"message":"upstream failed"}}`, "[DONE]"), ""},
+		{"an error chunk, then [DONE]", stream(text, failure, "[DONE]"), ""},
+		{"an error chunk ends it", stream(text, failure), ""},
 		{"another object", stream(strings.Replace(text, ".chunk", "", 1)), `object "chat.completion"`},
 		{"another id", stream(text, strings.Replace(finish, "c1", "c2", 1)), `id "c2"`},
 		{"choice without index", stream(choice(`{"delta":{}}`)), "without an index"},
