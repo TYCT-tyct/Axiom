@@ -1,0 +1,126 @@
+# Lint for all Go code. Every enabled linter catches a class of bug or decay the others miss; settings list only
+# departures from the defaults, and thresholds are never loosened to make a change pass.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # correctness
+    - bodyclose
+    - errcheck
+    - errorlint
+    - exhaustive
+    - gochecksumtype
+    - govet
+    - ineffassign
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - staticcheck
+    - unused
+    # concurrency and context
+    - containedctx
+    - contextcheck
+    - fatcontext
+    # security
+    - bidichk
+    - gosec
+    # size and complexity
+    - cyclop
+    - dupl
+    - funlen
+    - gocognit
+    # explicitness and module rules
+    - depguard
+    - forbidigo
+    - gochecknoinits
+    - nolintlint
+    # idiom
+    - canonicalheader
+    - modernize
+    - recvcheck
+    - revive
+    - sloglint
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+  settings:
+    cyclop:
+      max-complexity: 12
+    gocognit:
+      min-complexity: 15
+    dupl:
+      threshold: 100
+    errcheck:
+      # `_ = f()` and `v, _ := f()` drop errors too; an error that truly may be ignored gets a nolint with a reason.
+      check-blank: true
+    gochecksumtype:
+      # A default branch does not count: adding a variant must force every switch on it to be revisited
+      # (exhaustive already behaves this way by default).
+      default-signifies-exhaustive: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # layout is tuned where a benchmark says so, not everywhere
+        - shadow # shadowing err in nested scopes is idiomatic Go
+    revive:
+      rules:
+        - name: file-length-limit
+          arguments:
+            - max: 500
+              skipComments: true
+              skipBlankLines: true
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: receiver-naming
+        - name: early-return
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: unnecessary-stmt
+        - name: unused-receiver
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    sloglint:
+      static-msg: true
+      key-naming-case: snake
+      forbidden-keys: [time, level, msg, source]
+    depguard:
+      rules:
+        all:
+          deny:
+            - pkg: log$
+              desc: "log with log/slog: structured, and secrets stay out (docs/architecture.md「工程原则」)"
+            - pkg: github.com/stretchr/testify
+              desc: "use the standard testing package; compare values with github.com/google/go-cmp"
+    forbidigo:
+      analyze-types: true # so an import alias of fmt cannot hide a call
+      forbid:
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+          msg: "write output through log/slog; only cmd/ prints to stdout"
+  exclusions:
+    generated: strict
+    rules:
+      # Table-driven tests are long by nature and repeat a shape on purpose.
+      - path: _test\.go
+        linters: [funlen, dupl]
+      - path: ^(cmd|tools)/ # programs, which print their results
+        linters: [forbidigo]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [axiom]
+
+issues:
+  # Show every problem: the defaults cap findings per linter and per line, which hid an exhaustive finding behind
+  # another linter's finding on the same line.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
