@@ -6,7 +6,15 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 
 # Run every check the CI build job runs
-check: docs modules tidy lint deadcode test vuln
+check: docs modules tidy generated lint deadcode test vuln
+
+# Regenerate code from its contracts (api/*.yaml)
+generate:
+    go generate ./...
+
+# Generated code matches its contracts: regenerating changes, adds or removes nothing
+generated: generate
+    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
 
 # Format Go code in place
 fmt:
@@ -45,14 +53,16 @@ compose := "docker compose -f deploy/compose.yaml"
 
 # Build the program for Linux and start it with its database on this machine, writing random local passwords to
 # deploy/.env the first time; returns once it reports ready, or within a minute fails with the containers' state,
-# health-check output and logs
+# health-check output and logs. New passwords would not open a database created with the old ones, so a missing
+# deploy/.env next to an existing database volume stops it.
 up:
-    [ -f deploy/.env ] || printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
+    [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^axiom_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
-down:
-    {{ compose }} down
+# Stop everything; `just down -v` also deletes the local database. By project name, so it works without deploy/.env.
+down *flags:
+    docker compose --project-name axiom down {{ flags }}
 
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion)
