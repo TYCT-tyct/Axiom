@@ -1,43 +1,30 @@
 import unittest
 
-from check_modules import TABLE_HEADING, import_problems, read_table, table_problems
+from check_modules import TABLE_HEADING, import_problems, read_table
 
-DOC = f"""# 总体架构
 
-{TABLE_HEADING}
-
-| 模块 | 可以引用 |
-|---|---|
-| `platform` | — |
-| `catalog` | `platform` |
-| `billing` | `catalog`、`platform` |
-
-## 下一节
-
-| `gateway` | `billing` |
-"""
+def doc(*rows):
+    return "\n".join([f"# 总体架构\n\n{TABLE_HEADING}\n\n| 模块 | 可以引用 | 为什么 |\n|---|---|---|", *rows, "\n## 下一节\n\n| `gateway` | `billing` | |\n"])
 
 
 class ReadTable(unittest.TestCase):
-    def test_reads_rows_until_the_next_heading(self):
-        self.assertEqual(read_table(DOC), {"platform": set(), "catalog": {"platform"}, "billing": {"catalog", "platform"}})
-
-    def test_missing_heading_fails(self):
-        with self.assertRaises(SystemExit):
-            read_table("# 总体架构\n")
-
-
-class TableProblems(unittest.TestCase):
     def test_cases(self):
         cases = [
-            ("valid", {"a": {"b"}, "b": set()}, []),
-            ("unknown target", {"a": {"zz"}}, ["a may import zz, which has no row"]),
-            ("self edge", {"a": {"a"}}, ["a lists itself", "the table has a cycle: a -> a"]),
-            ("cycle", {"a": {"b"}, "b": {"c"}, "c": {"a"}}, ["the table has a cycle: a -> b -> c -> a"]),
+            ("rows up to the next heading; the first row is shared",
+             doc("| `platform` | — | |", "| `catalog` | — | |", "| `billing` | `catalog` | |"),
+             {"platform": set(), "catalog": {"platform"}, "billing": {"catalog", "platform"}}, []),
+            ("a row lists a module below it", doc("| `platform` | — | |", "| `catalog` | `billing` | |", "| `billing` | — | |"),
+             None, ["catalog may import billing, which is not a row above it"]),
+            ("a row lists itself", doc("| `platform` | — | |", "| `catalog` | `catalog` | |"),
+             None, ["catalog may import catalog, which is not a row above it"]),
+            ("no heading", "# 总体架构\n", None, [f"docs/architecture.md: no heading {TABLE_HEADING!r}"]),
         ]
-        for name, table, expected in cases:
+        for name, text, table, problems in cases:
             with self.subTest(name):
-                self.assertEqual(table_problems(table), expected)
+                found_table, found_problems = read_table(text)
+                self.assertEqual(found_problems, problems)
+                if table is not None:
+                    self.assertEqual(found_table, table)
 
 
 class ImportProblems(unittest.TestCase):
@@ -48,7 +35,6 @@ class ImportProblems(unittest.TestCase):
             ("allowed edge", {"axiom/internal/billing": {"axiom/internal/catalog", "fmt"}}, []),
             ("own implementation", {"axiom/internal/billing": {"axiom/internal/billing/internal/ledger"}}, []),
             ("composition root imports anything", {"axiom/cmd/axiom": {"axiom/internal/billing"}}, []),
-            ("every module may import platform", {"axiom/internal/catalog": {"axiom/internal/platform/ids"}}, []),
             ("platform imports a module", {"axiom/internal/platform/db": {"axiom/internal/catalog"}},
              ["axiom/internal/platform/db imports axiom/internal/catalog: platform may not import catalog"]),
             ("upward edge", {"axiom/internal/catalog/x": {"axiom/internal/billing"}},

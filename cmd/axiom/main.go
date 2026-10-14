@@ -7,32 +7,21 @@ import (
 	"runtime/debug"
 )
 
-const usage = "usage: axiom version"
-
 func main() {
 	if len(os.Args) != 2 || os.Args[1] != "version" {
-		fmt.Fprintln(os.Stderr, usage)
+		fmt.Fprintln(os.Stderr, "usage: axiom version")
 		os.Exit(2)
 	}
 	fmt.Println(version())
 }
 
-// version names the build by the commit it was built from, so a running node can be matched to its source.
+// version names the build by the commit it came from, so a running node can be matched to its source. The Go
+// toolchain stamps the main module's version from VCS: a pseudo-version with the commit time and hash, plus
+// "+dirty" when the tree had uncommitted changes.
 func version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "unknown"
+		return "axiom (no build info)"
 	}
-	vcs := map[string]string{}
-	for _, setting := range info.Settings {
-		vcs[setting.Key] = setting.Value
-	}
-	revision := vcs["vcs.revision"]
-	if revision == "" {
-		revision = "unknown"
-	}
-	if vcs["vcs.modified"] == "true" {
-		revision += "+dirty"
-	}
-	return fmt.Sprintf("axiom %s (%s, %s)", revision, vcs["vcs.time"], info.GoVersion)
+	return fmt.Sprintf("axiom %s (%s)", info.Main.Version, info.GoVersion)
 }

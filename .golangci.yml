@@ -1,5 +1,5 @@
-# Lint for all Go code. Every enabled linter must catch a class of bug or decay we care about; thresholds are
-# deliberate (see CONTRIBUTING.md「代码质量标准」) and are never loosened to make a change pass.
+# Lint for all Go code. Every enabled linter catches a class of bug or decay the others miss; settings list only
+# departures from the defaults, and thresholds are never loosened to make a change pass.
 version: "2"
 
 linters:
@@ -12,14 +12,12 @@ linters:
     - exhaustive
     - gochecksumtype
     - govet
-    - ineffassign
     - nilerr
     - nilnesserr
     - nilnil
     - noctx
     - staticcheck
     - unused
-    - wastedassign
     # concurrency and context
     - containedctx
     - contextcheck
@@ -32,7 +30,6 @@ linters:
     - dupl
     - funlen
     - gocognit
-    - nestif
     # explicitness and module rules
     - depguard
     - forbidigo
@@ -53,18 +50,11 @@ linters:
       max-complexity: 12
     gocognit:
       min-complexity: 15
-    nestif:
-      min-complexity: 4
-    funlen:
-      lines: 60
-      statements: 40
-      ignore-comments: true
     dupl:
       threshold: 100
-    exhaustive:
-      # A default branch does not count: adding a value must force every switch on it to be revisited.
-      default-signifies-exhaustive: false
     gochecksumtype:
+      # A default branch does not count: adding a variant must force every switch on it to be revisited
+      # (exhaustive already behaves this way by default).
       default-signifies-exhaustive: false
     govet:
       enable-all: true
@@ -91,7 +81,6 @@ linters:
       require-explanation: true
       require-specific: true
     sloglint:
-      no-mixed-args: true
       static-msg: true
       key-naming-case: snake
       forbidden-keys: [time, level, msg, source]
@@ -105,7 +94,7 @@ linters:
               desc: "use the standard testing package; compare values with github.com/google/go-cmp"
     forbidigo:
       forbid:
-        - pattern: ^fmt\.Print
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
           msg: "write output through log/slog; only cmd/ prints to stdout"
   exclusions:
     generated: strict
@@ -125,7 +114,8 @@ formatters:
       local-prefixes: [axiom]
 
 issues:
-  # Show every problem: one finding per line or per linter would hide the rest.
+  # Show every problem: the defaults cap findings per linter and per line, which hid an exhaustive finding behind
+  # another linter's finding on the same line.
   max-issues-per-linter: 0
   max-same-issues: 0
   uniq-by-line: false
