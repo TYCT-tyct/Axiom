@@ -10,16 +10,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"axiom/internal/platform/pgtest"
 )
 
 // TestServe runs a node on a free port: it reports ready, and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
+	environ := []string{"AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_DATABASE_URL=" + pgtest.New(t).App}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() {
-		done <- serve(ctx, []string{"AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s"}, slog.New(slog.NewJSONHandler(logs, nil)))
-	}()
+	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
 	ops := servingAddr(t, logs, done)
 
 	for _, path := range []string{"/livez", "/readyz"} {
@@ -41,8 +42,10 @@ func TestServe(t *testing.T) {
 	}
 }
 
-// TestServeRejectsBadConfiguration: the node does not start, names every wrong variable, and quotes no value.
+// TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
+// quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
+	database := pgtest.New(t)
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +63,18 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		{
 			"invalid and unknown variables",
 			[]string{"AXIOM_SHUTDOWN_TIMEOUT=planted-value", "AXIOM_OPS_ADDR=planted-value", "AXIOM_OPS_ADRR=planted-value"},
-			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_OPS_ADDR: want", "AXIOM_OPS_ADRR: unknown variable"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_OPS_ADDR: want", "AXIOM_OPS_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
 		},
-		{"a taken address", []string{"AXIOM_OPS_ADDR=" + taken.Addr().String()}, []string{"AXIOM_OPS_ADDR: "}},
+		{
+			"a taken address",
+			[]string{"AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_OPS_ADDR: "},
+		},
+		{
+			"a database login that escapes row-level security",
+			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
+			[]string{"database: the database login can act as roles that row-level security cannot hold"},
+		},
 	}
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
@@ -76,7 +88,8 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 				t.Errorf("%s: error %q does not say %q", c.name, err, want)
 			}
 		}
-		if strings.Contains(err.Error(), "planted-value") || strings.Contains(err.Error(), taken.Addr().String()) {
+		if strings.Contains(err.Error(), "planted-value") || strings.Contains(err.Error(), taken.Addr().String()) ||
+			strings.Contains(err.Error(), database.Superuser) {
 			t.Errorf("%s: error %q quotes a value", c.name, err)
 		}
 	}

@@ -11,19 +11,30 @@ import (
 
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/pg"
 )
 
 // opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
 func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
-// and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish.
+// and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
+// login escapes row-level security or that lacks this program's migrations.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
 	addr := opsAddr(env)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
+	databaseURL := env.Required("AXIOM_DATABASE_URL")
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
+	}
+	db, err := pg.Open(ctx, databaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close() // after the listeners close: requests in flight may still need it
+	if err := db.Check(ctx); err != nil {
+		return fmt.Errorf("database: %w", err)
 	}
 
 	var health httpserver.Health

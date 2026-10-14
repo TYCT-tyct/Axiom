@@ -45,6 +45,10 @@ jobs:
       - if: always()
         run: just down
       - if: github.event_name == 'pull_request'
+        run: just migrations "$BASE"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+      - if: github.event_name == 'pull_request'
         run: just bench-compare "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha }}

@@ -96,6 +96,13 @@ linters:
               desc: "log with log/slog: structured, and secrets stay out (docs/architecture.md「工程原则」)"
             - pkg: github.com/stretchr/testify
               desc: "use the standard testing package; compare values with github.com/google/go-cmp"
+        database:
+          files: ["!**/internal/platform/**"]
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
+            - pkg: database/sql
+              desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
     forbidigo:
       analyze-types: true # so an import alias of fmt cannot hide a call
       forbid:

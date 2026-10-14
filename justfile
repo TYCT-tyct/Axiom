@@ -25,9 +25,11 @@ lint:
 modules:
     go run -C tools ./checkmodules ..
 
-# Every function is reachable from a program; code only tests reach is dead
+# Every function is reachable from a program; code only tests reach is dead. The one exception is pgtest, which,
+# like net/http/httptest, exists only for tests: every function in it must be reachable from them instead.
 deadcode:
-    out="$({{ tool }} deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
+    out="$({{ tool }} deadcode ./...)" || exit 1; out="$(printf '%s' "$out" | grep -v '^internal[/\\]platform[/\\]pgtest[/\\]' || true)"; [ -z "$out" ] || { echo "$out"; exit 1; }
+    out="$({{ tool }} deadcode -test -filter '^axiom/internal/platform/pgtest$' ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
@@ -41,14 +43,21 @@ bench-compare base:
 
 compose := "docker compose -f deploy/compose.yaml"
 
-# Build the program for Linux and start it on this machine; returns once it reports ready, or within a minute fails
-# with the containers' state, health-check output and logs
+# Build the program for Linux and start it with its database on this machine, writing random local passwords to
+# deploy/.env the first time; returns once it reports ready, or within a minute fails with the containers' state,
+# health-check output and logs
 up:
+    [ -f deploy/.env ] || printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
 down:
     {{ compose }} down
+
+# Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
+# counts as a deletion)
+migrations base:
+    changed="$(git diff --name-only --no-renames --diff-filter=a {{ quote(base) }}...HEAD -- '*/migrations/*')"; [ -z "$changed" ] || { echo "merged migrations were changed or removed:"; echo "$changed"; exit 1; }
 
 vuln:
     {{ tool }} govulncheck ./...

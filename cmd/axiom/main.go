@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-const usage = "usage: axiom serve | healthcheck | version"
+const usage = "usage: axiom serve | migrate | healthcheck | version"
 
 func main() {
 	if len(os.Args) != 2 {
@@ -27,6 +27,11 @@ func main() {
 		logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("version", version())
 		if err := serve(ctx, os.Environ(), logger); err != nil {
 			logger.Error("serve failed", "err", err)
+			os.Exit(1)
+		}
+	case "migrate":
+		if err := migrate(context.Background(), os.Environ()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	case "healthcheck":
