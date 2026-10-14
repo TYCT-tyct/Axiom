@@ -49,11 +49,12 @@ func main() {
 
 // version names the build by the commit it came from, so a running node can be matched to its source. The Go
 // toolchain stamps the main module's version from VCS: a pseudo-version with the commit time and hash, plus
-// "+dirty" when the tree had uncommitted changes.
+// "+dirty" when the tree had uncommitted changes. The console API answers with it publicly, so it leaves out the Go
+// toolchain's version, which would tell an attacker which known vulnerabilities to try; go version -m shows it.
 func version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "axiom (no build info)"
 	}
-	return fmt.Sprintf("axiom %s (%s)", info.Main.Version, info.GoVersion)
+	return "axiom " + info.Main.Version
 }

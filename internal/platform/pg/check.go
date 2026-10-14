@@ -10,12 +10,13 @@ import (
 )
 
 // unsafeRoles lists the roles the login can become or inherit from that row-level security cannot hold: a superuser,
-// a role with BYPASSRLS, one that can create roles or databases (and so grant itself more), the tables' owner, and
-// the predefined roles that read or write the server's files or run programs on it. It starts from session_user,
+// a role with BYPASSRLS, one with REPLICATION (logical decoding reads every tenant's changes, a base backup copies
+// the cluster), one that can create roles or databases (and so grant itself more), the tables' owner, and the
+// predefined roles that read or write the server's files or run programs on it. It starts from session_user,
 // the login itself: a connection that logs in as an administrator and switches to axiom_app can switch back.
 const unsafeRoles = `SELECT coalesce(string_agg(rolname, ', ' ORDER BY rolname), '') FROM pg_roles
 	WHERE pg_has_role(session_user, oid, 'MEMBER')
-	AND (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolname IN
+	AND (rolsuper OR rolbypassrls OR rolreplication OR rolcreaterole OR rolcreatedb OR rolname IN
 		('axiom_owner', 'pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program'))`
 
 const appliedVersion = `SELECT coalesce(max(version_id), 0) FROM ` + versionTable + ` WHERE is_applied`

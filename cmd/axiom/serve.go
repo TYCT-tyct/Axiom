@@ -30,24 +30,23 @@ type listening struct {
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
 // and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
-// login escapes row-level security or that lacks this program's migrations.
+// login escapes row-level security, that lacks this program's migrations, or that does not answer within
+// AXIOM_STARTUP_TIMEOUT.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
 	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080") // model calls, the console, payment callbacks
 	probesAddr := opsAddr(env)
+	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", 30*time.Second)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
 	databaseURL := env.Required("AXIOM_DATABASE_URL")
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := pg.Open(ctx, databaseURL)
+	db, err := openDatabase(ctx, databaseURL, startupTimeout)
 	if err != nil {
 		return err
 	}
 	defer db.Close() // after the listeners close: requests in flight may still need it
-	if err := db.Check(ctx); err != nil {
-		return fmt.Errorf("database: %w", err)
-	}
 
 	var health httpserver.Health
 	// The public listener comes first, so at shutdown it drains while the probes still answer.
@@ -75,8 +74,30 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	return errors.Join(stopped, shutdown(context.WithoutCancel(ctx), shutdownTimeout, &health, servers))
 }
 
+// openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
+// answers would otherwise hold the node before its listeners open, where no probe or log reports it.
+func openDatabase(ctx context.Context, url string, timeout time.Duration) (*pg.DB, error) {
+	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
+	defer cancel()
+	db, err := pg.Open(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Check(ctx); err != nil {
+		db.Close()
+		if errors.Is(context.Cause(ctx), noAnswer) {
+			return nil, noAnswer // pgx reports only that the context ended
+		}
+		return nil, fmt.Errorf("database: %w", err)
+	}
+	return db, nil
+}
+
 // shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
-// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains.
+// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains. Past timeout
+// a server's remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and
+// leave them running, and closing the database pool would then wait for every connection they hold.
 func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
 	health.SetReady(false)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -84,7 +105,7 @@ func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Hea
 	var errs []error
 	for _, s := range servers {
 		if err := s.server.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err))
+			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err), s.server.Close())
 		}
 	}
 	return errors.Join(errs...)

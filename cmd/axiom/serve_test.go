@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,8 @@ func TestServe(t *testing.T) {
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
 	database := pgtest.New(t)
+	// taken is bound but never accepts: the system still completes connections to it, which then hear nothing, as
+	// from a database server that has stalled.
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +87,11 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
 			[]string{"database: the database login can act as roles that row-level security cannot hold"},
 		},
+		{
+			"a database server that never answers",
+			[]string{"AXIOM_STARTUP_TIMEOUT=1s", "AXIOM_DATABASE_URL=postgres://planted-value:planted-value@" + taken.Addr().String() + "/planted-value"},
+			[]string{"database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT"},
+		},
 	}
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
@@ -112,7 +120,8 @@ func (r records) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// checkVersion: the console's version endpoint answers through the whole public stack, uncached, with a request ID.
+// checkVersion: the console's version endpoint answers through the whole public stack, uncached, with a request ID,
+// and does not tell which Go toolchain built the program.
 func checkVersion(t *testing.T, url string) {
 	t.Helper()
 	resp, err := get(t, url)
@@ -120,7 +129,7 @@ func checkVersion(t *testing.T, url string) {
 		t.Fatal(err)
 	}
 	var body struct{ Version string }
-	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() ||
+	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() || strings.Contains(body.Version, runtime.Version()) ||
 		resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Request-ID") == "" {
 		t.Errorf("GET %s: %d %v %s (%v)", url, resp.StatusCode, resp.Header, resp.body, err)
 	}

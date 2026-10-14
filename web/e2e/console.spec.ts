@@ -26,7 +26,7 @@ function chooseTheme(within: Locator, name: string) {
 test("the console offers a reload after a deployment, in either language", async ({ page }) => {
   const errors = collectErrors(page);
   // The program answering is not the one this build ships in.
-  await answerVersion(page, "axiom v0.0.0-20991231000000-000000000000 (go1.27.2)");
+  await answerVersion(page, "axiom v0.0.0-20991231000000-000000000000");
   await page.setViewportSize({ width: 1440, height: 900 });
 
   await page.goto("/console/");
