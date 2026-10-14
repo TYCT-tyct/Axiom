@@ -34,3 +34,10 @@ updates:
     groups:
       web:
         patterns: ["*"]
+    ignore:
+      # openapi-typescript needs the compiler API TypeScript 7 removed (docs/frontend.md); lift this when it supports 7.
+      - dependency-name: typescript
+        versions: [">=6"]
+      # The types follow the Node release web/.node-version pins; move both together on purpose.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
