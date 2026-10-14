@@ -39,7 +39,7 @@ modules:
 # packages such as pgtest, like net/http/httptest, are left out of that list.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; printf '%s' "$out" | grep -v '^internal[/\\]platform[/\\]pgtest[/\\]' | sed 's/^/only tests reach: /' || true
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
