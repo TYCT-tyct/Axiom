@@ -139,11 +139,32 @@ func TestReaderLongLine(t *testing.T) {
 	}
 }
 
+// dataThenErr returns all its data together with err in a single read, as a reader may when a connection breaks.
+type dataThenErr struct {
+	data string
+	err  error
+}
+
+func (d *dataThenErr) Read(p []byte) (int, error) {
+	n := copy(p, d.data)
+	d.data = d.data[n:]
+	return n, d.err
+}
+
+// TestReaderReadError: the events complete before a read fails are returned whether the failure comes with the last
+// bytes or in a later read; the unfinished event after them is not.
 func TestReaderReadError(t *testing.T) {
-	src := io.MultiReader(strings.NewReader("data: 1\n\ndata: 2"), iotest.ErrReader(errRead))
-	events, err := readAll(src, 1<<10)
-	if !cmp.Equal(events, []string{"1"}) || !errors.Is(err, errRead) {
-		t.Fatalf("readAll = %q, %v; want [1], %v", events, err, errRead)
+	const stream = "data: 1\n\ndata: 2\n\ndata: 3"
+	for name, src := range map[string]io.Reader{
+		"separate read": io.MultiReader(strings.NewReader(stream), iotest.ErrReader(errRead)),
+		"same read":     &dataThenErr{stream, errRead},
+	} {
+		t.Run(name, func(t *testing.T) {
+			events, err := readAll(src, 1<<10)
+			if !cmp.Equal(events, []string{"1", "2"}) || !errors.Is(err, errRead) {
+				t.Fatalf("readAll = %q, %v; want [1 2], %v", events, err, errRead)
+			}
+		})
 	}
 }
 

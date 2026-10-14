@@ -45,7 +45,10 @@ type Reader struct {
 	data  []byte // the current event's data values, each followed by LF
 	size  int    // bytes of the current event so far: its lines with their line endings
 	eof   bool
-	err   error
+	// readErr is a read failure held back until the bytes that came with it are parsed, so that events complete
+	// before the failure are returned however the reads were split.
+	readErr error
+	err     error
 
 	bomChecked bool
 }
@@ -170,6 +173,8 @@ func (r *Reader) more() error {
 	switch {
 	case r.size+pending > r.limit:
 		return ErrTooLarge
+	case r.readErr != nil:
+		return r.readErr
 	case r.eof && len(r.data) > 0:
 		return io.ErrUnexpectedEOF
 	case r.eof:
@@ -186,7 +191,7 @@ func (r *Reader) more() error {
 	case errors.Is(err, io.EOF):
 		r.eof = true
 	case err != nil:
-		return fmt.Errorf("sse: read: %w", err)
+		r.readErr = fmt.Errorf("sse: read: %w", err)
 	}
 	return nil
 }
