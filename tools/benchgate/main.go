@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -55,9 +56,10 @@ func main() {
 
 // measurements is what one run of every benchmark produced.
 type measurements struct {
-	text    []byte               // the benchmark lines, for benchstat
-	allocs  map[string][]float64 // allocs/op samples by package and full benchmark name
-	skipped []string
+	text        []byte               // the benchmark lines, for benchstat
+	diagnostics []byte               // what the build printed, such as compile errors
+	allocs      map[string][]float64 // allocs/op samples by package and full benchmark name
+	skipped     []string             // skipped benchmarks, and benchmarks that measured no iterations
 }
 
 func run(ctx context.Context, root, base string) (problems []string, err error) {
@@ -87,25 +89,56 @@ func run(ctx context.Context, root, base string) (problems []string, err error) 
 // benchmarksAt runs the benchmarks of commit in a temporary worktree, which is removed even when a step fails.
 func benchmarksAt(ctx context.Context, root, commit, tree string) (run measurements, err error) {
 	defer func() { err = errors.Join(err, removeWorktree(ctx, root, tree)) }()
-	add := exec.CommandContext(ctx, "git", "-C", root, "worktree", "add", "--detach", tree, commit) //nolint:gosec // G204: git with this program's own arguments, no shell
+	// The arguments reach git directly, without a shell, and --end-of-options keeps a commit or path that starts with a
+	// dash from being read as an option, so neither command nor option injection is possible.
+	add := exec.CommandContext(ctx, "git", "-C", root, "worktree", "add", "--detach", "--end-of-options", tree, commit) // #nosec G204 G702 -- see above
 	if out, err := add.CombinedOutput(); err != nil {
 		return measurements{}, fmt.Errorf("check out the base commit %s: %w\n%s", commit, err, out)
 	}
 	return benchmarks(ctx, tree, "base commit "+commit)
 }
 
-// removeWorktree deletes the temporary worktree and its registration, also after a cancelled run.
+// removeWorktree deletes the temporary worktree and its registration, also after a cancelled run, and fails if git
+// still lists it.
 func removeWorktree(ctx context.Context, root, tree string) error {
 	ctx = context.WithoutCancel(ctx)
-	// Fails when add never created the worktree; the two steps below finish the job either way.
-	_ = exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", "--force", tree).Run() //nolint:errcheck,gosec // see above; G204: no shell
+	// Removal fails when add never created the worktree or created only part of it; the steps after it finish the job,
+	// and its error matters only if git still lists the worktree at the end. The second --force also removes a worktree
+	// that an interrupted add left locked.
+	removed, removeErr := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", "--force", "--force", "--end-of-options", tree).CombinedOutput() // #nosec G204 G702 -- as in benchmarksAt
 	if err := os.RemoveAll(tree); err != nil {
 		return fmt.Errorf("remove the base worktree: %w", err)
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "prune").CombinedOutput(); err != nil { //nolint:gosec // G204: no shell
+	if out, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "prune").CombinedOutput(); err != nil { // #nosec G204 G702 -- as in benchmarksAt
 		return fmt.Errorf("prune the base worktree: %w\n%s", err, out)
 	}
+	list, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output() // #nosec G204 G702 -- as in benchmarksAt
+	if err != nil {
+		return fmt.Errorf("list worktrees: %w", err)
+	}
+	if listed(list, tree) {
+		return fmt.Errorf("git still lists the base worktree %s: %w\n%s", tree, removeErr, removed)
+	}
 	return nil
+}
+
+// listed reports whether `git worktree list --porcelain` output names dir.
+func listed(list []byte, dir string) bool {
+	for line := range strings.Lines(string(list)) {
+		path, ok := strings.CutPrefix(strings.TrimRight(line, "\r\n"), "worktree ")
+		if ok && sameDir(filepath.Clean(filepath.FromSlash(path)), filepath.Clean(dir)) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameDir compares two cleaned paths the way the operating system does: Windows ignores case.
+func sameDir(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // benchmarks runs every benchmark in dir; the go command's stderr goes straight to ours.
@@ -115,7 +148,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 	out, runErr := cmd.Output()
 	run, parseErr := parse(bytes.NewReader(out))
 	if runErr != nil {
-		return measurements{}, fmt.Errorf("run the benchmarks of %s: %w\n%s", label, runErr, run.text)
+		return measurements{}, fmt.Errorf("run the benchmarks of %s: %w\n%s%s", label, runErr, run.diagnostics, run.text)
 	}
 	if parseErr != nil {
 		return measurements{}, fmt.Errorf("read the benchmarks of %s: %w", label, parseErr)
@@ -144,32 +177,38 @@ func parse(r io.Reader) (measurements, error) {
 		switch {
 		case ev.Action == "output":
 			run.text = append(run.text, ev.Output...)
+		case ev.Action == "build-output":
+			run.diagnostics = append(run.diagnostics, ev.Output...)
 		case ev.Action == "skip" && strings.HasPrefix(ev.Test, "Benchmark"):
 			run.skipped = append(run.skipped, ev.Test)
 		}
 	}
-	var err error
-	run.allocs, err = allocations(run.text)
+	allocs, unmeasured, err := allocations(run.text)
+	run.allocs, run.skipped = allocs, append(run.skipped, unmeasured...)
 	return run, err
 }
 
 // allocations returns every allocs/op sample by package and full name (sub-benchmarks and the GOMAXPROCS suffix
-// included). A benchmark line benchfmt cannot read is an error: dropping it could hide a regression.
-func allocations(text []byte) (map[string][]float64, error) {
-	samples := map[string][]float64{}
+// included), and the benchmarks that reported no iterations: a benchmark that skips after its first, calibrating run
+// still prints a result line, with zero iterations and zero allocations. A benchmark line benchfmt cannot read is an
+// error: dropping it could hide a regression.
+func allocations(text []byte) (samples map[string][]float64, unmeasured []string, err error) {
+	samples = map[string][]float64{}
 	reader := benchfmt.NewReader(bytes.NewReader(text), "benchmarks")
 	for reader.Scan() {
 		switch record := reader.Result().(type) {
 		case *benchfmt.SyntaxError:
-			return nil, record
+			return nil, nil, record
 		case *benchfmt.Result:
-			if allocs, ok := record.Value(allocsUnit); ok {
-				key := record.GetConfig("pkg") + "." + string(record.Name)
+			key := record.GetConfig("pkg") + "." + string(record.Name)
+			if record.Iters <= 0 {
+				unmeasured = append(unmeasured, key+" (no iterations)")
+			} else if allocs, ok := record.Value(allocsUnit); ok {
 				samples[key] = append(samples[key], allocs)
 			}
 		}
 	}
-	return samples, reader.Err()
+	return samples, unmeasured, reader.Err()
 }
 
 // report prints benchstat's comparison of every metric, for people to read.
@@ -185,7 +224,7 @@ func report(ctx context.Context, scratch string, base, head []byte) error {
 	if err != nil {
 		return fmt.Errorf("find benchstat: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, strings.TrimSpace(string(tool)), "base.txt", "head.txt") //nolint:gosec // G204: the path the go command just printed, no shell
+	cmd := exec.CommandContext(ctx, strings.TrimSpace(string(tool)), "base.txt", "head.txt") // #nosec G204 -- the path the go command just printed, no shell
 	cmd.Dir, cmd.Stdout, cmd.Stderr = scratch, os.Stdout, os.Stderr                          // relative names label the columns
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("compare with benchstat: %w", err)
@@ -207,7 +246,7 @@ func gate(base, head measurements) (problems, removed []string) {
 			problems = append(problems, fmt.Sprintf("more allocations: %s: %g -> %g %s", name, median(before), median(samples), allocsUnit))
 		}
 	}
-	for _, name := range head.skipped {
+	for _, name := range slices.Compact(slices.Sorted(slices.Values(head.skipped))) { // each -count repeats a skip
 		problems = append(problems, "skipped benchmark: "+name+" (every benchmark must run in CI)")
 	}
 	if len(base.allocs) > 0 && compared == 0 {

@@ -45,6 +45,12 @@ class Explained(unittest.TestCase):
             ("a quoted example of the format", docs("格式是 `文档影响：无，因为只改了内部变量名`。"), False),
             ("an angle-bracket placeholder", docs("文档影响：无，因为<reason>"), False),
             ("words in a later paragraph do not count", docs("文档影响：无，因为……\n\n关联 Issue #20"), False),
+            ("a block quote", docs("> 文档影响：无，因为这是旧 PR 的示例。"), False),
+            ("indented code", docs("    文档影响：无，因为这是旧 PR 的示例。"), False),
+            ("a tilde fence", docs("~~~text\n文档影响：无，因为这是旧 PR 的示例。\n~~~"), False),
+            ("a backtick fence", docs("```\n文档影响：无，因为这是旧 PR 的示例。\n```"), False),
+            ("double-backtick inline code", docs("``文档影响：无，因为这是旧 PR 的示例。``"), False),
+            ("a real declaration after a fenced example", docs("```\n文档影响：无，因为示例\n```\n\n文档影响：无，因为只改了内部变量名。"), True),
         ]
         for name, body, expected in cases:
             with self.subTest(name):

@@ -3,8 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,29 +42,53 @@ func TestParse(t *testing.T) {
 	}
 }
 
-// TestBenchmarksSeeARealSkip runs the go command on a throwaway module: a b.Skip() is reported only as an event.
-func TestBenchmarksSeeARealSkip(t *testing.T) {
+// probeModule writes a throwaway module with the given test file and returns its directory.
+func probeModule(t *testing.T, test string) string {
+	t.Helper()
 	dir := t.TempDir()
-	files := map[string]string{
-		"go.mod": "module probe\n\ngo 1.27.2\n",
-		"b_test.go": "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n" +
-			"func BenchmarkKept(b *testing.B) {\n\tfor b.Loop() {\n\t\tsink = make([]byte, 8)\n\t}\n}\n\n" +
-			"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n",
-	}
+	files := map[string]string{"go.mod": "module probe\n\ngo 1.27.2\n", "b_test.go": test}
 	for name, src := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return dir
+}
+
+// TestBenchmarksSeeRealSkips runs the go command: a b.Skip() at the start is reported only as an event, and one after
+// the calibrating first run only as a result line with zero iterations.
+func TestBenchmarksSeeRealSkips(t *testing.T) {
+	t.Setenv("GOMAXPROCS", "2") // fixes the -2 suffix of the names; one CPU would print none
+	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n"+
+		"func BenchmarkKept(b *testing.B) {\n\tfor b.Loop() {\n\t\tsink = make([]byte, 8)\n\t}\n}\n\n"+
+		"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n\n"+
+		"func BenchmarkLate(b *testing.B) {\n\tif b.N > 1 {\n\t\tb.Skip(\"cannot run the calibrated workload\")\n\t}\n"+
+		"\tfor range b.N {\n\t\tsink = make([]byte, 8)\n\t}\n}\n")
 	run, err := benchmarks(t.Context(), dir, "the probe module")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diff := cmp.Diff([]string{"BenchmarkSkipped"}, run.skipped); diff != "" {
+	skipped := slices.Compact(slices.Sorted(slices.Values(run.skipped)))
+	if diff := cmp.Diff([]string{"BenchmarkSkipped", "probe.Late-2 (no iterations)"}, skipped); diff != "" {
 		t.Errorf("skipped (-want +got):\n%s", diff)
 	}
-	if samples := run.allocs["probe.Kept-"+strconv.Itoa(runtime.GOMAXPROCS(0))]; len(samples) != 6 {
+	if samples := run.allocs["probe.Kept-2"]; len(samples) != 6 {
 		t.Errorf("BenchmarkKept: %d samples, want 6 (%v)", len(samples), run.allocs)
+	}
+}
+
+func TestBenchmarksKeepCompileErrors(t *testing.T) {
+	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nfunc BenchmarkBroken(b *testing.B) { undefinedName() }\n")
+	_, err := benchmarks(t.Context(), dir, "the probe module")
+	if err == nil || !strings.Contains(err.Error(), "undefinedName") {
+		t.Fatalf("the compile error is lost: %v", err)
+	}
+}
+
+func TestListed(t *testing.T) {
+	list := []byte("worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/benchgate1/base\nHEAD def\ndetached\nlocked\n")
+	if !listed(list, filepath.FromSlash("/tmp/benchgate1/base")) || listed(list, filepath.FromSlash("/tmp/benchgate2/base")) {
+		t.Error("listed matches the wrong worktree")
 	}
 }
 

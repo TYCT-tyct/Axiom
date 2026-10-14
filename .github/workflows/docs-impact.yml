@@ -1,0 +1,22 @@
+# Rechecks docs-impact when a pull request's description is edited. The check that main requires is the docs-impact job
+# in ci.yml (manage.py protect reads only workflow.yml and ci.yml); this job has the same name, so its newer result on
+# the same commit is the one that counts. build and the other ci.yml jobs do not depend on the description, so an edit
+# reruns only this.
+name: docs-impact
+
+on:
+  pull_request:
+    types: [edited]
+
+permissions:
+  contents: read
+  pull-requests: read # the description, read when the job runs
+
+jobs:
+  docs-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/docs-impact
