@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -260,6 +262,65 @@ func TestTxRollsBackWhenItsContextEnds(t *testing.T) {
 	if n := count(t, db, platform); n != 4 {
 		t.Errorf("the cancelled transaction left %d of 4 rows", n)
 	}
+}
+
+// dbtx is the interface sqlc generates for pgx; generated queries take a Tx through it.
+type dbtx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+var _ dbtx = pg.Tx{}
+
+// TestRowsKeepTheConnection: Exec and Query run in the transaction's scope, and the rows Query returns offer
+// pgx.Rows' methods and nothing more, with Conn reporting no connection: holding the connection, a caller could run
+// queries the scope does not bind, or outlive the transaction on it.
+func TestRowsKeepTheConnection(t *testing.T) {
+	t.Parallel()
+	database := newDatabase(t)
+	seed(t, database)
+	db := open(t, database.App)
+	var (
+		tag   pgconn.CommandTag
+		notes []string
+	)
+	err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{account1}), func(tx pg.Tx) error {
+		var err error
+		if tag, err = tx.Exec(t.Context(), "UPDATE rlstest.items SET note = 'changed'"); err != nil {
+			return err
+		}
+		rows, err := tx.Query(t.Context(), "SELECT note FROM rlstest.items")
+		if err != nil {
+			return err
+		}
+		if rows.Conn() != nil {
+			t.Error("Query's rows handed out their connection")
+		}
+		if diff := cmp.Diff(methods(reflect.TypeFor[pgx.Rows]()), methods(reflect.TypeOf(rows))); diff != "" {
+			t.Errorf("Query's rows have methods beyond pgx.Rows (-want +got):\n%s", diff)
+		}
+		notes, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Errorf("Exec changed %d rows, want account1's one", tag.RowsAffected())
+	}
+	if diff := cmp.Diff([]string{"changed"}, notes); diff != "" {
+		t.Errorf("notes in account1's scope (-want +got):\n%s", diff)
+	}
+}
+
+// methods lists the exported methods of typ, sorted by name.
+func methods(typ reflect.Type) []string {
+	names := make([]string, typ.NumMethod())
+	for i := range names {
+		names[i] = typ.Method(i).Name
+	}
+	return names
 }
 
 // TestRowLevelSecurityBindsEveryone: the table's owner is filtered too (FORCE), Check accepts the application's

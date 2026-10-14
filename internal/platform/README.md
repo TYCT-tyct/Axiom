@@ -34,7 +34,7 @@
 | 密钥不出现在日志里 | 凭证明文用 `secret.Secret` 保存，格式化、slog、JSON 和文本序列化统一脱敏；只有显式 `Reveal()` 取出明文。主密钥加载错误只含变量名、行号和原因，不含文件内容或路径；调用方不得记录 `Reveal()` 的结果 |
 | JSON 只按一套策略读 | `jsonx` 用 v2 默认的严格模式（拒绝非法 UTF-8 和重复键：两个解析器各取一份时，我们计费的用量就不是客户端读到的用量），嵌套不超过 256 层；`jsontext` 自己的上限固定为 10000，所以逐个读记号时检查 `StackDepth`。模糊测试与 `jsontext` 自带的校验对照，只允许在超过 256 层时不同。depguard 禁止 `jsonx` 之外引入 `encoding/json` 及其子包；生成代码本来不在 lint 范围内，其余例外在引用处用 nolint 写明理由 |
 | 空值等于未设定 | Docker Compose 把未设定的 `${VAR}` 传成空串，按未设定处理才不会把默认值意外覆盖成空 |
-| 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 是唯一入口，先设范围再执行；`pg.Tx` 不暴露连接。目前只有 `QueryRow`，`Exec`、`Query` 随第一个用到它们的模块加入，届时查询结果也不能交出底层连接；depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql` |
+| 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 是唯一入口，先设范围再执行；`pg.Tx` 不暴露连接：`Exec`、`Query`、`QueryRow` 的签名与 sqlc 生成的代码要的一致，`Query` 的结果逐个转发 `pgx.Rows` 的方法，唯独 `Conn` 返回空，pgx 给 `Rows` 加方法时编译失败，不会悄悄转发出去；测试检查结果交不出连接、也没有 `pgx.Rows` 以外的方法。depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql` |
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
 | 范围只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config` 或范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）就失败，不分大小写；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；`pg` 里面靠评审 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |

@@ -11,6 +11,8 @@ import (
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,10 +51,46 @@ type Scope struct {
 // Tx is a transaction whose scope is already set.
 type Tx struct{ tx pgx.Tx }
 
+// The signatures of Exec, Query and QueryRow are the ones sqlc's generated code takes, so a Tx can be handed to it.
+
+// Exec runs a statement and reports what it did, such as how many rows it changed.
+func (t Tx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return t.tx.Exec(ctx, sql, args...)
+}
+
+// Query runs a query that returns any number of rows. The rows report no connection: holding it, a caller could run
+// queries the scope does not bind, or keep using it after the transaction.
+func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	r, err := t.tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return rows{r}, nil
+}
+
 // QueryRow runs a query that returns at most one row.
 func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return t.tx.QueryRow(ctx, sql, args...)
 }
+
+// rows forwards every method of pgx.Rows except Conn. Forwarding one by one instead of embedding means a method pgx
+// adds to Rows stops the build here, rather than reaching callers unreviewed.
+type rows struct{ inner pgx.Rows }
+
+var _ pgx.Rows = rows{}
+
+func (r rows) Close()                                       { r.inner.Close() }
+func (r rows) Err() error                                   { return r.inner.Err() }
+func (r rows) CommandTag() pgconn.CommandTag                { return r.inner.CommandTag() }
+func (r rows) FieldDescriptions() []pgconn.FieldDescription { return r.inner.FieldDescriptions() }
+func (r rows) Next() bool                                   { return r.inner.Next() }
+func (r rows) Scan(dest ...any) error                       { return r.inner.Scan(dest...) }
+func (r rows) Values() ([]any, error)                       { return r.inner.Values() }
+func (r rows) RawValues() [][]byte                          { return r.inner.RawValues() }
+func (r rows) TypeMap() *pgtype.Map                         { return r.inner.TypeMap() }
+
+// Conn is nil, which pgx allows for rows that do not come from a connection.
+func (rows) Conn() *pgx.Conn { return nil }
 
 // setScope sets the three settings platform.in_scope reads, local to the transaction.
 const setScope = `SELECT set_config('axiom.scope_platform', $1, true), set_config('axiom.scope_sites', $2, true),
