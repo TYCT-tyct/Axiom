@@ -7,6 +7,8 @@
 set -eu
 psql --set ON_ERROR_STOP=1 --username postgres --dbname "$POSTGRES_DB" \
 	--set app="$AXIOM_APP_PASSWORD" --set migrator="$AXIOM_MIGRATOR_PASSWORD" <<'SQL'
+-- Waiting for a lock counts too, so a session holding one makes `just up` fail with its diagnostics, not hang.
+SET statement_timeout = '10s';
 SELECT format('CREATE ROLE axiom_app LOGIN PASSWORD %L', :'app')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_app') \gexec
 SELECT format('CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD %L', :'migrator')
