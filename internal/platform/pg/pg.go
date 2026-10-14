@@ -48,6 +48,10 @@ type Scope struct {
 	sites, accounts []uuid.UUID
 }
 
+// PlatformScope is every row. Only cmd/ builds it, for the modules that maintain platform and public data; a lint rule
+// (forbidigo) refuses it elsewhere, because a module that could build it could read every tenant.
+func PlatformScope() Scope { return Scope{platform: true} }
+
 // Tx is a transaction whose scope is already set.
 type Tx struct{ tx pgx.Tx }
 

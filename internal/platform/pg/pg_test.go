@@ -18,19 +18,24 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// testSchema is a table of account data under row-level security: forced, so its owner is filtered too, with one
-// scope check for reading and writing. Its schema is created by the administrator, as migrate creates every schema.
+// testSchema has two tables under row-level security, forced so their owner is filtered too: items is account data,
+// with one scope check for reading and writing; shared is public data, which any scope reads and only the platform
+// scope writes. Their schema is created by the administrator, as migrate creates every schema.
 const testSchema = `
 CREATE SCHEMA rlstest AUTHORIZATION axiom_owner;
 SET ROLE axiom_owner;
 CREATE TABLE rlstest.items (site_id uuid NOT NULL, account_id uuid NOT NULL, note text NOT NULL);
 ALTER TABLE rlstest.items ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON rlstest.items USING (platform.in_scope(site_id, account_id));
+CREATE TABLE rlstest.shared (note text NOT NULL);
+ALTER TABLE rlstest.shared ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY read ON rlstest.shared FOR SELECT USING (platform.in_any_scope());
+CREATE POLICY write ON rlstest.shared USING (platform.in_platform_scope());
 GRANT USAGE ON SCHEMA rlstest TO axiom_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items TO axiom_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items, rlstest.shared TO axiom_app;
 RESET ROLE;`
 
-// newDatabase returns a fresh database holding the protected test table.
+// newDatabase returns a fresh database holding the protected test tables.
 func newDatabase(t *testing.T) pgtest.Database {
 	t.Helper()
 	db := pgtest.New(t)
@@ -262,6 +267,103 @@ func TestTxRollsBackWhenItsContextEnds(t *testing.T) {
 	if n := count(t, db, platform); n != 4 {
 		t.Errorf("the cancelled transaction left %d of 4 rows", n)
 	}
+}
+
+var tenants = map[string]pg.Scope{
+	"a site":     pg.NewScope(false, []uuid.UUID{site1}, nil),
+	"an account": pg.NewScope(false, nil, []uuid.UUID{account1}),
+}
+
+// publicData connects as the application to a fresh database whose public table holds one row, seed.
+func publicData(t *testing.T) *pg.DB {
+	t.Helper()
+	database := newDatabase(t)
+	if err := pgtest.Run(t.Context(), database.Superuser, "INSERT INTO rlstest.shared VALUES ('seed')"); err != nil {
+		t.Fatal(err)
+	}
+	return open(t, database.App)
+}
+
+// TestPublicDataReads: any non-empty scope reads public data and no scope reads none; a malformed scope fails rather
+// than counts as one.
+func TestPublicDataReads(t *testing.T) {
+	t.Parallel()
+	db := publicData(t)
+	seed := []string{"seed"}
+	for name, read := range map[string]struct {
+		scope pg.Scope
+		want  []string
+	}{
+		"no scope":           {pg.Scope{}, []string{}},
+		"a site's scope":     {tenants["a site"], seed},
+		"an account's scope": {tenants["an account"], seed},
+		"the platform scope": {pg.PlatformScope(), seed},
+	} {
+		if diff := cmp.Diff(read.want, sharedNotes(t, db, read.scope)); diff != "" {
+			t.Errorf("read in %s (-want +got):\n%s", name, diff)
+		}
+	}
+	malformed := "SELECT set_config('axiom.scope_sites', 'everything', true); SELECT count(*) FROM rlstest.shared"
+	if _, err := exec(t, db, pg.Scope{}, malformed); err == nil {
+		t.Error("a malformed scope did not fail the query")
+	}
+}
+
+// TestPublicDataWrites: only the platform scope, which production code builds with PlatformScope, writes public
+// data; in any other scope an insert fails and an update or a delete finds no row.
+func TestPublicDataWrites(t *testing.T) {
+	t.Parallel()
+	db := publicData(t)
+	writes := []string{
+		"INSERT INTO rlstest.shared VALUES ('added')",
+		"UPDATE rlstest.shared SET note = 'changed'",
+		"DELETE FROM rlstest.shared WHERE note = 'changed'",
+	}
+	for name, scope := range tenants {
+		for _, statement := range writes {
+			if n, err := exec(t, db, scope, statement); err == nil && n > 0 {
+				t.Errorf("%s in %s's scope changed %d rows", statement, name, n)
+			}
+		}
+	}
+	platform := pg.PlatformScope()
+	if diff := cmp.Diff([]string{"seed"}, sharedNotes(t, db, platform)); diff != "" {
+		t.Errorf("after the refused writes (-want +got):\n%s", diff)
+	}
+	for _, statement := range writes {
+		if n, err := exec(t, db, platform, statement); err != nil || n == 0 {
+			t.Errorf("%s in the platform scope: %d rows, %v", statement, n, err)
+		}
+	}
+}
+
+// sharedNotes lists, sorted, the public rows the scope can read.
+func sharedNotes(t *testing.T, db *pg.DB, scope pg.Scope) []string {
+	t.Helper()
+	var notes []string
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), "SELECT note FROM rlstest.shared ORDER BY note")
+		if err != nil {
+			return err
+		}
+		notes, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return notes
+}
+
+// exec runs statement in its own transaction and reports how many rows it touched.
+func exec(t *testing.T, db *pg.DB, scope pg.Scope, statement string) (int64, error) {
+	t.Helper()
+	var tag pgconn.CommandTag
+	err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		var err error
+		tag, err = tx.Exec(t.Context(), statement)
+		return err
+	})
+	return tag.RowsAffected(), err
 }
 
 // TestReadTxSeesOneMoment: every query of a ReadTx sees the database as it was at the transaction's start, so a

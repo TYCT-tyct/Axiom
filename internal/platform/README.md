@@ -40,6 +40,8 @@
 | 范围只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config` 或范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）就失败，不分大小写；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；`pg` 里面靠评审 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
+| 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
+| 只有 `cmd/` 能构造平台范围 | 能构造它的模块就能读写所有租户的数据。forbidigo 在 `cmd/` 和 `internal/platform/` 之外拒绝 `pg.PlatformScope` |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner` 不能是超级用户、带 BYPASSRLS 或能登录 |
 | 数据库缺少本程序的迁移就不启动 | `serve` 启动时比较已执行的版本；数据库比程序新可以运行，因为迁移只做扩展 |
 | 数据库不应答就不启动，不在监听之前无声地卡住 | `serve` 连接数据库和启动检查合计最多等 `AXIOM_STARTUP_TIMEOUT`，超时后报这两个变量名，不报地址；测试用只建立连接、从不应答的服务器 |
@@ -115,7 +117,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
-- 表强制启用行级安全（`FORCE`，所有者也受限），读写用同一条 `platform.in_scope` 检查。
+- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
+- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。账户和站点范围以后由授权（#23）算出。
 - **待定（负责人确认）**：账户数据的表是否直接存 `site_id` 和 `account_id`。确认后由 #23 加入生成策略的模板；在那之前不写进迁移，因为合并后的迁移不能再改。
 
 ### 迁移
