@@ -53,12 +53,22 @@ type rates struct {
 // set holds values of a small enumeration, one bit each.
 type set[T ~uint8] uint8
 
+// A ninth value would have no bit: has would report it absent and add would drop it. These fail to compile first.
+var (
+	_ [8 - numItems]struct{}
+	_ [8 - numModalities]struct{}
+)
+
 func (s set[T]) has(v T) bool { return s&(1<<v) != 0 }
 
 func (s *set[T]) add(v T) { *s |= 1 << v }
 
-// The stored form, README.md「存储」. Every member is required except context_tiers, and unknown members are refused, so
-// a condition M1 does not know is rejected rather than ignored.
+// inputSide are the items a prompt is made of, the only ones a tier's basis may add up.
+const inputSide set[Item] = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h
+
+// The stored form, README.md「存储」. Members are required except rates, which may price nothing, and context_tiers;
+// within a tier, above and a non-empty rates are required. Unknown members are refused, so a condition M1 does not
+// know is rejected rather than ignored.
 type (
 	scheduleJSON struct {
 		ContextTiers    *contextTiersJSON `json:"context_tiers,omitzero"`
@@ -73,7 +83,7 @@ type (
 		Tiers  []tierJSON `json:"tiers"`
 	}
 	tierJSON struct {
-		Above int64             `json:"above"`
+		Above *int64            `json:"above"` // nil when left out or null
 		Rates map[string]string `json:"rates"`
 	}
 )
@@ -130,17 +140,35 @@ func (w *contextTiersJSON) parse() (basis set[Item], tiers []contextTier, err er
 	if basis == 0 || len(w.Tiers) == 0 {
 		return 0, nil, errors.New("context tiers: want a basis and at least one tier")
 	}
+	if basis&^inputSide != 0 {
+		return 0, nil, errors.New("context tiers: basis: only input, cache_read, cache_write and cache_write_1h count")
+	}
 	tiers = make([]contextTier, len(w.Tiers))
 	for i, t := range w.Tiers {
-		if t.Above < 0 || i > 0 && t.Above <= w.Tiers[i-1].Above {
-			return 0, nil, errors.New("context tiers: thresholds must be non-negative and strictly increase")
-		}
-		tiers[i].above = t.Above
-		if tiers[i].rates, err = parseRates(t.Rates); err != nil {
+		if tiers[i], err = t.parse(); err != nil {
 			return 0, nil, fmt.Errorf("context tiers: %w", err)
+		}
+		if i > 0 && tiers[i].above <= tiers[i-1].above {
+			return 0, nil, errors.New("context tiers: thresholds must strictly increase")
 		}
 	}
 	return basis, tiers, nil
+}
+
+// parse refuses a tier without a threshold rather than read it as 0, which would price every prompt at the tier, and
+// a tier without prices, which changes nothing.
+func (t *tierJSON) parse() (tier contextTier, err error) {
+	if t.Above == nil || *t.Above < 0 {
+		return tier, errors.New("a tier's threshold must be given and non-negative")
+	}
+	if tier.rates, err = parseRates(t.Rates); err != nil {
+		return tier, err
+	}
+	if tier.rates.priced == 0 {
+		return tier, errors.New("a tier lists no price")
+	}
+	tier.above = *t.Above
+	return tier, nil
 }
 
 // parseRates needs no check for an item priced twice: the JSON decoder already refuses a duplicate member.
@@ -192,7 +220,7 @@ func (s Schedule) MarshalJSON() ([]byte, error) {
 	if len(s.tiers) > 0 {
 		w.ContextTiers = &contextTiersJSON{Basis: s.basis.names(itemNames[:]), Method: wholeRequest}
 		for _, t := range s.tiers {
-			w.ContextTiers.Tiers = append(w.ContextTiers.Tiers, tierJSON{Above: t.above, Rates: t.rates.json()})
+			w.ContextTiers.Tiers = append(w.ContextTiers.Tiers, tierJSON{Above: &t.above, Rates: t.rates.json()})
 		}
 	}
 	b, err := json.Marshal(w)
