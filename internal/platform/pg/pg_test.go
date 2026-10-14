@@ -303,9 +303,11 @@ func TestPublicDataReads(t *testing.T) {
 			t.Errorf("read in %s (-want +got):\n%s", name, diff)
 		}
 	}
-	malformed := "SELECT set_config('axiom.scope_sites', 'everything', true); SELECT count(*) FROM rlstest.shared"
-	if _, err := exec(t, db, pg.Scope{}, malformed); err == nil {
-		t.Error("a malformed scope did not fail the query")
+	for _, setting := range []string{"axiom.scope_sites", "axiom.scope_accounts"} {
+		malformed := "SELECT set_config('" + setting + "', 'everything', true); SELECT count(*) FROM rlstest.shared"
+		if _, err := exec(t, db, pg.Scope{}, malformed); err == nil {
+			t.Errorf("a malformed %s did not fail the query", setting)
+		}
 	}
 }
 
@@ -367,7 +369,8 @@ func exec(t *testing.T, db *pg.DB, scope pg.Scope, statement string) (int64, err
 }
 
 // TestReadTxSeesOneMoment: every query of a ReadTx sees the database as it was at the transaction's start, so a
-// commit between two of its reads shows only in the next transaction; and a ReadTx cannot write.
+// commit between two of its reads shows only in the next transaction; and a ReadTx, here in a tenant's scope, reads
+// that scope and cannot write.
 func TestReadTxSeesOneMoment(t *testing.T) {
 	t.Parallel()
 	database := newDatabase(t)
@@ -394,12 +397,17 @@ func TestReadTxSeesOneMoment(t *testing.T) {
 	if n := count(t, db, platform); n != 5 {
 		t.Errorf("the next transaction saw %d rows, want 5 with the concurrent commit", n)
 	}
-	err = db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+	var inSite int
+	err = db.ReadTx(t.Context(), tenants["a site"], func(tx pg.Tx) error {
+		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&inSite); err != nil {
+			return err
+		}
 		_, err := tx.Exec(t.Context(), "DELETE FROM rlstest.items")
 		return err
 	})
-	if err == nil {
-		t.Error("a ReadTx deleted rows")
+	var pgErr *pgconn.PgError
+	if inSite != 3 || !errors.As(err, &pgErr) || pgErr.Code != "25006" {
+		t.Errorf("a ReadTx in site1's scope read %d rows, want its 3, and deleting returned %v, want 25006 read-only", inSite, err)
 	}
 }
 
