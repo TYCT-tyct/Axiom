@@ -47,6 +47,11 @@ export function appConfig({
     // Files every app serves as they are, at its root: theme.js must run before the bundle, as a classic script.
     publicDir: join(import.meta.dirname, "public"),
     plugins: [react(), tailwindcss()],
+    define: {
+      // The version of the program this build ships in, exactly as `axiom version` prints it; `just web-build` sets it.
+      // Empty when an app is built or served on its own, which turns the new-version prompt off.
+      __AXIOM_VERSION__: JSON.stringify(process.env.AXIOM_VERSION ?? ""),
+    },
     build: {
       // Content-hashed names, so a deployment never serves a stale asset under a reused name; the manifest lets the
       // budget check find what the first screen loads.

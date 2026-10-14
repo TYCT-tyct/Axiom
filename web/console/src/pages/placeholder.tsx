@@ -2,7 +2,7 @@ import { EmptyState, PageHeader } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 
 // Placeholder stands in for a page that Issue #30 builds.
-export function Placeholder({ page }: { page: "overview" | "keys" | "logs" }) {
+export function Placeholder({ page }: { page: "keys" | "logs" }) {
   const { t } = useTranslation();
   return (
     <>

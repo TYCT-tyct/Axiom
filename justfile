@@ -10,12 +10,13 @@ web := "pnpm --dir web"
 check: docs modules tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml)
-generate:
+generate: web-install
     go generate ./...
+    {{ web }} --filter @axiom/api generate
 
 # Generated code matches its contracts: regenerating changes, adds or removes nothing
 generated: generate
-    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
+    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go' '*.gen.ts')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
 
 # Format Go code in place
 fmt:
@@ -97,15 +98,24 @@ web-install:
 web-dev: web-install
     {{ web }} dev
 
-# Build the website, console and admin into each app's dist/
+# Print the version of the program built from this tree, exactly as `axiom version` prints it
+[private]
+axiom-version:
+    dir="$(mktemp -d)"; bin="$dir/axiom$(go env GOEXE)"; go build -o "$bin" ./cmd/axiom && "$bin" version; status=$?; rm -rf "$dir"; exit "$status"
+
+axiom_version := quote(just_executable()) + " --justfile " + quote(justfile()) + " axiom-version"
+
+# Build the website, console and admin into each app's dist/. The console is stamped with the version of the program
+# built from this tree, to notice when the program answering is another one.
 web-build: web-install
-    {{ web }} build
+    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} build
 
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files;
-# unit tests; the build within its size budget; and the end-to-end tests against that build
+# unit tests; the build within its size budget; and the end-to-end tests against that build, which are told the
+# version it was stamped with
 web: web-build
     {{ web }} typecheck
     {{ web }} lint
     {{ web }} test
     {{ web }} budget
-    {{ web }} e2e
+    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} e2e

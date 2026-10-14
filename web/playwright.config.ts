@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { apps } from "./e2e/apps.ts";
 
 // End-to-end tests run against the production builds served by `vite preview` under the pages' content security
-// policy (vite.shared.ts), so a page that breaks the policy fails here. `just web` builds first.
+// policy (vite.shared.ts), so a page that breaks the policy fails here. `just web` builds first, stamped with a version.
 export default defineConfig({
   testDir: "e2e",
   forbidOnly: Boolean(process.env.CI),

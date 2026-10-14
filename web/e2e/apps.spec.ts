@@ -11,6 +11,8 @@ for (const app of apps) {
       }
     });
     page.on("pageerror", (error) => errors.push(error.message));
+    // The console asks for the running version; any answer will do here.
+    await page.route("**/api/console/v1/version", (route) => route.fulfill({ json: { version: "" } }));
 
     const response = await page.goto(app.url);
     const policy = response?.headers()["content-security-policy"];
@@ -31,6 +33,7 @@ for (const app of apps) {
 }
 
 test("the website's buttons open the console", async ({ page }) => {
+  await page.route("**/api/console/v1/version", (route) => route.fulfill({ json: { version: "" } }));
   await page.goto(apps[0].url);
   await page.getByRole("link", { name: "获取 API key" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();

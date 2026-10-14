@@ -12,6 +12,7 @@ import {
 } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, Link, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { NewVersionNotice } from "./version";
 
 const nav: { to: "/" | "/keys" | "/logs"; label: "nav.overview" | "nav.keys" | "nav.logs"; icon: IconName }[] = [
   { to: "/", label: "nav.overview", icon: "grid" },
@@ -23,6 +24,7 @@ function Layout() {
   const { t } = useTranslation();
   return (
     <AppShell
+      banner={<NewVersionNotice />}
       sidebar={
         <>
           <Logo className="mb-4 px-2 py-1" />
