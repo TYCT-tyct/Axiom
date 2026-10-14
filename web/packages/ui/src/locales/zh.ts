@@ -1,0 +1,33 @@
+// Messages the shared components show, in Chinese: the source every other language follows.
+export default {
+  brand: "Axiom",
+  preferences: {
+    theme: "外观",
+    themes: { system: "跟随系统", light: "浅色", dark: "深色" },
+    language: "语言",
+  },
+  shell: {
+    openMenu: "打开菜单",
+    closeMenu: "关闭菜单",
+    navigation: "主导航",
+    skipToContent: "跳到正文",
+  },
+  state: {
+    loading: "正在加载",
+    emptyTitle: "这里还没有内容",
+    errorTitle: "没能加载",
+    errorBody: "请稍后重试。如果一直失败，联系支持时附上下面的请求编号，便于查明原因。",
+    networkError: "连不上 Axiom，请检查网络后重试。",
+    requestId: "请求编号 {{id}}",
+    failedAt: "发生于 {{time}}",
+    retry: "重试",
+    forbiddenTitle: "没有权限",
+    forbiddenBody: "你的账户没有查看这里的权限。需要的话，请联系工作区的管理员。",
+    pageFailed: "页面没能加载",
+    pageFailedBody: "可能是网络中断，或 Axiom 刚刚更新。刷新页面再试一次。",
+    reload: "刷新页面",
+    notFoundTitle: "找不到这个页面",
+    notFoundBody: "链接可能有误，或页面已经移走。",
+    home: "回到首页",
+  },
+};

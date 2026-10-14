@@ -15,9 +15,9 @@ import (
 
 // Version defines model for Version.
 type Version struct {
-	// Version The build's module version, the same string the console was built with
+	// Version The program's version line exactly as `axiom version` prints it: the main module's version, which the Go toolchain stamps from version control (such as a pseudo-version with the commit time and hash, +dirty for uncommitted changes), and the Go toolchain's version. The console is stamped with the same line and only compares the two whole for equality.
 	//
-	// Example: v0.0.0-20261014044725-4daa4538fcac
+	// Example: axiom v0.0.0-20261014044725-4daa4538fcac (go1.27.2)
 	Version string `json:"version"`
 }
 

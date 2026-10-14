@@ -4,17 +4,19 @@ set windows-shell := ["bash", "-c"]
 
 python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
+web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules tidy generated lint deadcode test vuln secrets
+check: docs modules tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml)
-generate:
+generate: web-install
     go generate ./...
+    {{ web }} --filter @axiom/api generate
 
 # Generated code matches its contracts: regenerating changes, adds or removes nothing
 generated: generate
-    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
+    changed="$(git status --porcelain --untracked-files=all -- '*.gen.go' '*.gen.ts')"; [ -z "$changed" ] || { echo "generated code is stale or not committed: run just generate and commit the result"; echo "$changed"; exit 1; }
 
 # Format Go code in place
 fmt:
@@ -86,3 +88,34 @@ docs:
     {{ python }} -m unittest discover -s scripts
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py
+
+# Install the frontend's dependencies exactly as web/pnpm-lock.yaml pins them; dependencies' install scripts never run
+web-install:
+    {{ web }} install --frozen-lockfile
+
+# Serve the website on :5173 with the console under :5173/console/ (also on :5174/console/), and the admin on :5175,
+# reloading on every change; the console's API calls go to the program on :8080, which `just up` starts
+web-dev: web-install
+    {{ web }} dev
+
+# Print the version of the program built from this tree, exactly as `axiom version` prints it
+[private]
+axiom-version:
+    dir="$(mktemp -d)"; bin="$dir/axiom$(go env GOEXE)"; go build -o "$bin" ./cmd/axiom && "$bin" version; status=$?; rm -rf "$dir"; exit "$status"
+
+axiom_version := quote(just_executable()) + " --justfile " + quote(justfile()) + " axiom-version"
+
+# Build the website, console and admin into each app's dist/. The console is stamped with the version of the program
+# built from this tree, to notice when the program answering is another one.
+web-build: web-install
+    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} build
+
+# The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files;
+# unit tests; the build within its size budget; and the end-to-end tests against that build, which are told the
+# version it was stamped with
+web: web-build
+    {{ web }} typecheck
+    {{ web }} lint
+    {{ web }} test
+    {{ web }} budget
+    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} e2e
