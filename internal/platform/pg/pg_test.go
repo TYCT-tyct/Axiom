@@ -412,45 +412,81 @@ type dbtx interface {
 
 var _ dbtx = pg.Tx{}
 
-// TestRowsKeepTheConnection: Exec and Query run in the transaction's scope, and the rows Query returns offer
-// pgx.Rows' methods and nothing more, with Conn reporting no connection: holding the connection, a caller could run
-// queries the scope does not bind, or outlive the transaction on it.
-func TestRowsKeepTheConnection(t *testing.T) {
+// TestTxHidesTheConnection: nothing a Tx hands out or calls back reports the connection: not the rows of Query, not
+// a RowScanner that Rows.Scan or Row.Scan gives the row, not a QueryRewriter that Exec, Query or QueryRow run.
+// Holding the connection, a caller could run queries the scope does not bind, or outlive the transaction on it. The
+// rows and the row offer pgx's methods and nothing more.
+func TestTxHidesTheConnection(t *testing.T) {
 	t.Parallel()
 	database := newDatabase(t)
 	seed(t, database)
 	db := open(t, database.App)
-	var (
-		tag   pgconn.CommandTag
-		notes []string
-	)
-	err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{account1}), func(tx pg.Tx) error {
-		var err error
-		if tag, err = tx.Exec(t.Context(), "UPDATE rlstest.items SET note = 'changed'"); err != nil {
+	ctx := t.Context()
+	const query = "SELECT note FROM rlstest.items"
+	uses := map[string]func(pg.Tx, *connSpy) error{
+		"a RowScanner of Rows.Scan": func(tx pg.Tx, spy *connSpy) error {
+			rows, err := tx.Query(ctx, query)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			if rows.Conn() != nil {
+				t.Error("Query's rows handed out their connection")
+			}
+			sameMethods[pgx.Rows](t, rows)
+			if !rows.Next() {
+				return fmt.Errorf("no rows: %w", rows.Err())
+			}
+			return rows.Scan(spy)
+		},
+		"a RowScanner of Row.Scan": func(tx pg.Tx, spy *connSpy) error {
+			row := tx.QueryRow(ctx, query)
+			sameMethods[pgx.Row](t, row)
+			return row.Scan(spy)
+		},
+		"a QueryRewriter of Exec": func(tx pg.Tx, spy *connSpy) error {
+			_, err := tx.Exec(ctx, query, pgx.QueryExecModeSimpleProtocol, spy)
 			return err
-		}
-		rows, err := tx.Query(t.Context(), "SELECT note FROM rlstest.items")
-		if err != nil {
-			return err
-		}
-		if rows.Conn() != nil {
-			t.Error("Query's rows handed out their connection")
-		}
-		if diff := cmp.Diff(methods(reflect.TypeFor[pgx.Rows]()), methods(reflect.TypeOf(rows))); diff != "" {
-			t.Errorf("Query's rows have methods beyond pgx.Rows (-want +got):\n%s", diff)
-		}
-		notes, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
+		},
+		"a QueryRewriter of Query": func(tx pg.Tx, spy *connSpy) error {
+			rows, err := tx.Query(ctx, query, spy)
+			if err != nil {
+				return err
+			}
+			rows.Close()
+			return rows.Err()
+		},
+		"a QueryRewriter of QueryRow": func(tx pg.Tx, spy *connSpy) error {
+			var note string
+			return tx.QueryRow(ctx, query, spy).Scan(&note)
+		},
 	}
-	if tag.RowsAffected() != 1 {
-		t.Errorf("Exec changed %d rows, want account1's one", tag.RowsAffected())
+	for name, use := range uses {
+		spy := new(connSpy)
+		if err := db.Tx(ctx, pg.NewScope(true, nil, nil), func(tx pg.Tx) error { return use(tx, spy) }); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if !spy.called || spy.conn != nil {
+			t.Errorf("%s: called %t, handed the connection %v", name, spy.called, spy.conn)
+		}
 	}
-	if diff := cmp.Diff([]string{"changed"}, notes); diff != "" {
-		t.Errorf("notes in account1's scope (-want +got):\n%s", diff)
-	}
+}
+
+// connSpy records the connection pgx hands it, as a RowScanner or a QueryRewriter.
+type connSpy struct {
+	called bool
+	conn   *pgx.Conn
+}
+
+func (s *connSpy) ScanRow(rows pgx.Rows) error {
+	s.called, s.conn = true, rows.Conn()
+	var note string
+	return rows.Scan(&note)
+}
+
+func (s *connSpy) RewriteQuery(_ context.Context, conn *pgx.Conn, sql string, args []any) (string, []any, error) {
+	s.called, s.conn = true, conn
+	return sql, args, nil
 }
 
 // TestFailedQueryRows: as pgx promises, a failed Query still returns rows, closed and carrying the error, so a caller
@@ -474,13 +510,20 @@ func TestFailedQueryRows(t *testing.T) {
 	}
 }
 
-// methods lists the exported methods of typ, sorted by name.
-func methods(typ reflect.Type) []string {
-	names := make([]string, typ.NumMethod())
-	for i := range names {
-		names[i] = typ.Method(i).Name
+// sameMethods reports whether got has exactly the exported methods of the interface I, so pg forwards nothing
+// unreviewed.
+func sameMethods[I any](t *testing.T, got any) {
+	t.Helper()
+	methods := func(typ reflect.Type) []string {
+		names := make([]string, typ.NumMethod())
+		for i := range names {
+			names[i] = typ.Method(i).Name
+		}
+		return names
 	}
-	return names
+	if diff := cmp.Diff(methods(reflect.TypeFor[I]()), methods(reflect.TypeOf(got))); diff != "" {
+		t.Errorf("%T's methods differ from %v's (-want +got):\n%s", got, reflect.TypeFor[I](), diff)
+	}
 }
 
 // TestRowLevelSecurityBindsEveryone: the table's owner is filtered too (FORCE), Check accepts the application's

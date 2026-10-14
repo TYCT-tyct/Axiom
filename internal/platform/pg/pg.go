@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"uuid"
 
@@ -57,23 +58,68 @@ type Tx struct{ tx pgx.Tx }
 
 // The signatures of Exec, Query and QueryRow are the ones sqlc's generated code takes, so a Tx can be handed to it.
 
+// Nothing a Tx hands out or calls back reports the connection: holding it, a caller could run queries the scope does
+// not bind, or keep using it after the transaction. pgx hands it out in three places: Rows.Conn, the rows given to a
+// RowScanner that is the sole destination of Scan, and RewriteQuery of a QueryRewriter among the leading arguments.
+
 // Exec runs a statement and reports what it did, such as how many rows it changed.
 func (t Tx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return t.tx.Exec(ctx, sql, args...)
+	return t.tx.Exec(ctx, sql, hideFromRewriters(args)...)
 }
 
-// Query runs a query that returns any number of rows. The rows report no connection: holding it, a caller could run
-// queries the scope does not bind, or keep using it after the transaction. pgx returns rows even with an error, which
-// they also carry, so callers may defer Close before checking it; Query keeps that promise.
+// Query runs a query that returns any number of rows. pgx returns rows even with an error, which they also carry, so
+// callers may defer Close before checking it; Query keeps that promise.
 func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	r, err := t.tx.Query(ctx, sql, args...)
+	r, err := t.tx.Query(ctx, sql, hideFromRewriters(args)...)
 	return rows{r}, err
 }
 
 // QueryRow runs a query that returns at most one row.
 func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return t.tx.QueryRow(ctx, sql, args...)
+	return row{t.tx.QueryRow(ctx, sql, hideFromRewriters(args)...)}
 }
+
+// hideFromRewriters wraps each QueryRewriter among the options pgx reads from the front of args so that it is given
+// no connection; pgx's own rewriters, such as NamedArgs, do not use it. The caller's slice is left alone.
+func hideFromRewriters(args []any) []any {
+	for i, arg := range args {
+		switch arg := arg.(type) {
+		case pgx.QueryExecMode, pgx.QueryResultFormats, pgx.QueryResultFormatsByOID:
+		case pgx.QueryRewriter:
+			args = slices.Clone(args)
+			args[i] = rewriter{arg}
+		default:
+			return args
+		}
+	}
+	return args
+}
+
+type rewriter struct{ inner pgx.QueryRewriter }
+
+func (r rewriter) RewriteQuery(ctx context.Context, _ *pgx.Conn, sql string, args []any) (string, []any, error) {
+	return r.inner.RewriteQuery(ctx, nil, sql, args)
+}
+
+// hideFromScanner replaces a sole RowScanner destination with one that hands it rows without their connection. pgx
+// still makes the call, so a failing ScanRow closes the rows with its error as before.
+func hideFromScanner(dest []any) []any {
+	if len(dest) == 1 {
+		if s, ok := dest[0].(pgx.RowScanner); ok {
+			return []any{scanner{s}}
+		}
+	}
+	return dest
+}
+
+type scanner struct{ inner pgx.RowScanner }
+
+func (s scanner) ScanRow(r pgx.Rows) error { return s.inner.ScanRow(rows{r}) }
+
+// row is pgx's row, whose Scan hands a RowScanner rows without their connection.
+type row struct{ inner pgx.Row }
+
+func (r row) Scan(dest ...any) error { return r.inner.Scan(hideFromScanner(dest)...) }
 
 // rows forwards every method of pgx.Rows except Conn. Forwarding one by one instead of embedding means a method pgx
 // adds to Rows stops the build here, rather than reaching callers unreviewed.
@@ -86,7 +132,7 @@ func (r rows) Err() error                                   { return r.inner.Err
 func (r rows) CommandTag() pgconn.CommandTag                { return r.inner.CommandTag() }
 func (r rows) FieldDescriptions() []pgconn.FieldDescription { return r.inner.FieldDescriptions() }
 func (r rows) Next() bool                                   { return r.inner.Next() }
-func (r rows) Scan(dest ...any) error                       { return r.inner.Scan(dest...) }
+func (r rows) Scan(dest ...any) error                       { return r.inner.Scan(hideFromScanner(dest)...) }
 func (r rows) Values() ([]any, error)                       { return r.inner.Values() }
 func (r rows) RawValues() [][]byte                          { return r.inner.RawValues() }
 func (r rows) TypeMap() *pgtype.Map                         { return r.inner.TypeMap() }
