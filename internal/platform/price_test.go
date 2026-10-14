@@ -88,8 +88,9 @@ func FuzzUnitPriceString(f *testing.F) {
 }
 
 func FuzzMul(f *testing.F) {
-	f.Add(uint64(1), uint64(1))
-	f.Add(uint64(maxUnitPrice), uint64(math.MaxInt64))
+	// The count is the fuzzed value shifted right by one, so these seeds are counts 1 and math.MaxInt64.
+	f.Add(uint64(1), uint64(2))
+	f.Add(uint64(maxUnitPrice), uint64(math.MaxUint64))
 	f.Fuzz(func(t *testing.T, price, count uint64) {
 		p, q := UnitPrice{int64(price % (maxUnitPrice + 1))}, int64(count>>1) //nolint:gosec // both fit in int64
 		want := new(big.Rat).SetFrac(new(big.Int).Mul(big.NewInt(p.n), big.NewInt(q)), big.NewInt(1e15))
