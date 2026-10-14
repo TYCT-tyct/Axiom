@@ -4,9 +4,10 @@ set windows-shell := ["bash", "-c"]
 
 python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
+web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules tidy generated lint deadcode test vuln secrets
+check: docs modules tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml)
 generate:
@@ -86,3 +87,14 @@ docs:
     {{ python }} -m unittest discover -s scripts
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py
+
+# Install the frontend's dependencies exactly as web/pnpm-lock.yaml pins them; dependencies' install scripts never run
+web-install:
+    {{ web }} install --frozen-lockfile
+
+# The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files;
+# and unit tests
+web: web-install
+    {{ web }} typecheck
+    {{ web }} lint
+    {{ web }} test

@@ -1,0 +1,11 @@
+packages:
+  - site
+  - console
+  - admin
+  - packages/*
+
+# Supply chain (docs/security.md「安全基线」): dependencies' install scripts never run, and a release must be a week
+# old before it can be resolved, the same cooldown Dependabot keeps. strictDepBuilds turns a dependency that wants an
+# install script into a failed install, so a new one is noticed and decided on, never silently skipped.
+minimumReleaseAge: 10080
+strictDepBuilds: true
