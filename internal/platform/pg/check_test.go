@@ -132,19 +132,21 @@ func TestMigrateWaitsSecondsForLocks(t *testing.T) {
 			hold(t, fresh.Superuser, held.take, held.args...)
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
-			if err := pg.Migrate(ctx, fresh.Superuser); err == nil || !strings.Contains(err.Error(), held.want) {
+			if err := pg.Migrate(ctx, fresh.Migrator); err == nil || !strings.Contains(err.Error(), held.want) {
 				t.Errorf("Migrate under %s: %v, want %s", name, err, held.want)
 			}
 		})
 	}
 }
 
-// freshDatabase creates an empty database, with every migration pending.
+// freshDatabase creates an empty database, with every migration pending, that the migration administrator may
+// create schemas in.
 func freshDatabase(t *testing.T) pgtest.Database {
 	t.Helper()
 	template := pgtest.New(t)
 	name := strings.TrimPrefix(parse(t, template.Superuser).Path, "/") + "_fresh"
-	if err := pgtest.Run(t.Context(), template.Superuser, "CREATE DATABASE "+name); err != nil {
+	if err := pgtest.Run(t.Context(), template.Superuser, "CREATE DATABASE "+name,
+		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		t.Fatal(err)
 	}
 	at := func(databaseURL string) string {
@@ -152,7 +154,7 @@ func freshDatabase(t *testing.T) pgtest.Database {
 		u.Path = "/" + name
 		return u.String()
 	}
-	return pgtest.Database{App: at(template.App), Superuser: at(template.Superuser)}
+	return pgtest.Database{App: at(template.App), Migrator: at(template.Migrator), Superuser: at(template.Superuser)}
 }
 
 // TestCheckAllowsANewerDatabase: in a rolling deployment the nodes still on the old version run against a database
@@ -184,7 +186,7 @@ func TestMigrateRunsTakeTurns(t *testing.T) {
 	defer cancel()
 	errs := make(chan error, 2)
 	for range 2 {
-		go func() { errs <- pg.Migrate(ctx, fresh.Superuser) }()
+		go func() { errs <- pg.Migrate(ctx, fresh.Migrator) }()
 	}
 	for range 2 {
 		if err := <-errs; err != nil {
@@ -208,13 +210,13 @@ func TestMigrateResumesAfterAFailedRun(t *testing.T) {
 		"CREATE FUNCTION "+obstacle+" RETURNS boolean RETURN false"); err != nil {
 		t.Fatal(err)
 	}
-	if err := pg.Migrate(ctx, fresh.Superuser); err == nil {
+	if err := pg.Migrate(ctx, fresh.Migrator); err == nil {
 		t.Fatal("Migrate succeeded over an object it creates")
 	}
 	if err := pgtest.Run(ctx, fresh.Superuser, "DROP FUNCTION "+obstacle); err != nil {
 		t.Fatal(err)
 	}
-	if err := pg.Migrate(ctx, fresh.Superuser); err != nil {
+	if err := pg.Migrate(ctx, fresh.Migrator); err != nil {
 		t.Fatalf("the run after the failed one: %v", err)
 	}
 	if err := open(t, fresh.App).Check(ctx); err != nil {
@@ -254,7 +256,7 @@ func TestMigrateRefusesAnUnsafeOwner(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := pg.Migrate(t.Context(), database.Superuser); err == nil || !strings.Contains(err.Error(), "axiom_owner must not") {
+	if err := pg.Migrate(t.Context(), database.Migrator); err == nil || !strings.Contains(err.Error(), "axiom_owner must not") {
 		t.Errorf("Migrate accepted an owner with BYPASSRLS: %v", err)
 	}
 }

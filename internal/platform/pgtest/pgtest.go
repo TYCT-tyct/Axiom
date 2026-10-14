@@ -23,6 +23,7 @@ import (
 // Database is a fresh copy of the migrated template.
 type Database struct {
 	App       string // URL of the application's login role, axiom_app
+	Migrator  string // URL of the migration administrator, which may create schemas in this database
 	Superuser string // URL of the superuser, for seeding and inspecting from outside the application
 }
 
@@ -41,10 +42,12 @@ func New(t testing.TB) Database {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
 	name := fmt.Sprintf("test_%d", databases.Add(1))
-	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template"); err != nil {
+	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		t.Fatal(err)
 	}
-	return Database{App: at("axiom_app", "app", name), Superuser: at("postgres", "postgres", name)}
+	return Database{App: at("axiom_app", "app", name), Migrator: at("migrator", "migrator", name),
+		Superuser: at("postgres", "postgres", name)}
 }
 
 // Run executes statements one after another on a new connection to databaseURL.
