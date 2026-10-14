@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 // The running program's version, asked again every few minutes and whenever the tab regains focus.
 export const versionQuery = queryOptions({
   queryKey: ["version"],
-  queryFn: () => unwrap(consoleApi.GET("/api/console/v1/version")),
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/version", { signal })),
   refetchInterval: 5 * 60_000,
   refetchOnWindowFocus: "always",
 });
