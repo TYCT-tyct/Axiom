@@ -11,7 +11,7 @@
     "build": "pnpm --recursive build",
     "typecheck": "tsc && pnpm --recursive typecheck",
     "lint": "biome ci",
-    "length": "node scripts/length.ts",
+    "limits": "node scripts/limits.ts",
     "unused": "knip",
     "duplicates": "jscpd",
     "test": "vitest run",

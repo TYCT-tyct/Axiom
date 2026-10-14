@@ -112,13 +112,13 @@ web-build: web-install
     version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} build
 
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files
-# and functions too complex; functions and files too long; unused files, exports and dependencies; duplicated code;
-# unit tests; the build within its size budget; and the end-to-end tests against that build, which are told the
-# version it was stamped with
+# and functions too hard to follow; functions with too many paths or lines and files too long; unused files, exports
+# and dependencies; duplicated code; unit tests; the build within its size budget; and the end-to-end tests against
+# that build, which are told the version it was stamped with
 web: web-build
     {{ web }} typecheck
     {{ web }} lint
-    {{ web }} length
+    {{ web }} limits
     {{ web }} unused
     {{ web }} duplicates
     {{ web }} test
