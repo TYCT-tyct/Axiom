@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,9 +62,24 @@ func Run(ctx context.Context, databaseURL string, statements ...string) error {
 	return nil
 }
 
+// keepReaperAlive works around testcontainers/testcontainers-go#3867 until a release with its fix is in go.mod. All
+// test binaries of one `go test ./...` share one Ryuk reaper, which exits 10 seconds after its last client leaves;
+// v0.44.0 reuses a reaper that is exiting and waits out its 60-second startup timeout, so a package that starts after
+// such an idle gap fails. Keeping the reaper longer than any gap closes the window. It is also how long a finished
+// run's containers outlive it, since the reaper removes them, so the value stays short. An explicit setting wins.
+func keepReaperAlive() error {
+	if os.Getenv("RYUK_RECONNECTION_TIMEOUT") != "" || os.Getenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT") != "" {
+		return nil
+	}
+	return os.Setenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT", "2m")
+}
+
 // start runs the container and builds the template. Durability is off for speed; tests of durability, migrations
 // under load and performance run elsewhere with it on.
 func start(ctx context.Context) error {
+	if err := keepReaperAlive(); err != nil {
+		return err
+	}
 	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
 		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
 		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"))
