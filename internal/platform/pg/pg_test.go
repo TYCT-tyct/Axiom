@@ -319,7 +319,7 @@ func TestPublicDataWrites(t *testing.T) {
 	writes := []string{
 		"INSERT INTO rlstest.shared VALUES ('added')",
 		"UPDATE rlstest.shared SET note = 'changed'",
-		"DELETE FROM rlstest.shared WHERE note = 'changed'",
+		"DELETE FROM rlstest.shared",
 	}
 	for name, scope := range tenants {
 		for _, statement := range writes {
