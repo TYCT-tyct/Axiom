@@ -35,9 +35,14 @@ test:
     go test -race -bench . -benchtime 1x ./...
     go test -C tools -race ./...
 
+# Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
+bench-compare base:
+    {{ python }} scripts/bench_compare.py {{ base }}
+
 vuln:
     {{ tool }} govulncheck ./...
 
 docs:
+    {{ python }} -m unittest discover -s scripts
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py
