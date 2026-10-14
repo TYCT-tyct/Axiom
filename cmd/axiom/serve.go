@@ -95,7 +95,9 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration) (*pg.D
 }
 
 // shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
-// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains.
+// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains. Past timeout
+// a server's remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and
+// leave them running, and closing the database pool would then wait for every connection they hold.
 func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
 	health.SetReady(false)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -103,7 +105,7 @@ func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Hea
 	var errs []error
 	for _, s := range servers {
 		if err := s.server.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err))
+			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err), s.server.Close())
 		}
 	}
 	return errors.Join(errs...)

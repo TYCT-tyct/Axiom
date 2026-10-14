@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestShutdownDrainsPublicFirst: with a request in flight on the public listener, shutdown reports not ready while
@@ -70,6 +72,59 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 		if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 			t.Error(err)
 		}
+	}
+}
+
+// TestShutdownEndsRequestsPastTheLimit: a request still holding a database connection when the limit runs out is
+// ended, so the pool closes and the node stops within about the limit instead of waiting for the request.
+func TestShutdownEndsRequestsPastTheLimit(t *testing.T) {
+	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, ended := make(chan struct{}), make(chan error, 1)
+	stuck := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		ctx := r.Context()
+		ended <- db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
+			return tx.QueryRow(ctx, "SELECT 1 FROM pg_sleep(60)").Scan(new(int))
+		})
+	})
+	var health httpserver.Health
+	servers := []*listening{{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(stuck, slog.New(slog.DiscardHandler)), nil}}
+	if err := listen(t.Context(), servers); err != nil {
+		t.Fatal(err)
+	}
+	served, answered := make(chan error, 1), make(chan error, 1)
+	go func() { served <- servers[0].server.Serve(servers[0].listener) }()
+	// Unlike get, the client waits as long as the test does: only the server may end the request.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+servers[0].listener.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			err = resp.Body.Close()
+		}
+		answered <- err
+	}()
+	<-started
+
+	start := time.Now()
+	err = shutdown(t.Context(), time.Second, &health, servers)
+	db.Close()
+	if elapsed := time.Since(start); elapsed > 5*time.Second || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("shutdown and closing the pool took %v: %v", elapsed, err)
+	}
+	if err := <-ended; err == nil {
+		t.Error("the query outlived shutdown")
+	}
+	if err := <-answered; err == nil {
+		t.Error("the request past the limit was answered")
+	}
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		t.Error(err)
 	}
 }
 
