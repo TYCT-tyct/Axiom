@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -12,6 +13,9 @@ func doc(rows ...string) string {
 	return "# 总体架构\n\n" + tableHeading + "\n\n| 模块 | 可以引用 | 为什么 |\n|---|---|---|\n" +
 		strings.Join(rows, "\n") + "\n\n## 下一节\n\n| `gateway` | `billing` | |\n"
 }
+
+// symlink marks a test file that is a symbolic link rather than a regular file.
+const symlink = "<symbolic link>"
 
 var baseTable = doc("| `platform` | — | |", "| `catalog` | — | |", "| `billing` | `catalog` | |")
 
@@ -94,12 +98,31 @@ func TestCheck(t *testing.T) {
 			"tools/x/x.go":    "package x\n\nimport _ \"axiom/internal/billing\"\n",
 			"internal/c/c.go": "package c\n",
 		}, []string{`axiom/internal/c: module c has no row in the table under "### 模块之间的依赖"`}},
+		{"a directory named go.mod is not a module", map[string]string{
+			"internal/catalog/go.mod/keep.txt": "",
+			"internal/catalog/a.go":            "package catalog\n\nimport _ \"axiom/internal/billing\"\n",
+		}, []string{"axiom/internal/catalog imports axiom/internal/billing: catalog may not import billing"}},
+		{"vendored code is skipped and cannot be imported", map[string]string{
+			"vendor/example.com/lib/lib.go":             "package lib\n\nimport _ \"axiom/internal/billing\"\n",
+			"internal/catalog/a.go":                     "package catalog\n\nimport _ \"axiom/internal/catalog/node_modules/bridge\"\n",
+			"internal/catalog/node_modules/bridge/b.go": "package bridge\n\nimport _ \"axiom/internal/billing\"\n",
+		}, []string{"axiom/internal/catalog imports axiom/internal/catalog/node_modules/bridge: this check does not read vendor or node_modules, so nothing may import from them"}},
+		{"files the go command ignores", map[string]string{
+			"internal/catalog/_sample.go": "package catalog\n\nimport _ \"axiom/internal/billing\"\n",
+			"internal/catalog/.hidden.go": "not Go at all",
+		}, nil},
+		{"a symbolic link could hide code", map[string]string{
+			"internal/catalog/bridge": symlink,
+		}, []string{"internal/catalog/bridge: symbolic links are not allowed in the main module"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			repo := fstest.MapFS{"docs/architecture.md": {Data: []byte(baseTable)}}
 			for name, src := range c.files {
 				repo[name] = &fstest.MapFile{Data: []byte(src)}
+				if src == symlink {
+					repo[name] = &fstest.MapFile{Mode: fs.ModeSymlink}
+				}
 			}
 			problems, err := check(repo)
 			if err != nil {

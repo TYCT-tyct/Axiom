@@ -31,6 +31,10 @@ const (
 	shared       = "platform"
 )
 
+// excluded names directories that hold no code of the main module: .git is not code, vendor and node_modules hold
+// third-party code. Skipping them is safe because no package may import from them.
+var excluded = map[string]bool{".git": true, "vendor": true, "node_modules": true}
+
 var (
 	row  = regexp.MustCompile("^\\|\\s*`([a-z]+)`\\s*\\|([^|]*)\\|")
 	name = regexp.MustCompile("`([a-z]+)`")
@@ -63,11 +67,11 @@ func check(repo fs.FS) ([]string, error) {
 	if len(problems) > 0 {
 		return problems, nil
 	}
-	packages, err := packageImports(repo)
+	packages, links, err := packageImports(repo)
 	if err != nil {
 		return nil, err
 	}
-	return importProblems(table, packages), nil
+	return append(links, importProblems(table, packages)...), nil
 }
 
 type tableRow struct {
@@ -132,18 +136,22 @@ func tableRows(text string) ([]tableRow, bool) {
 	return rows, true
 }
 
-// packageImports returns the imports of every package in the main module, skipping nested modules.
-func packageImports(repo fs.FS) (map[string]map[string]bool, error) {
-	packages := map[string]map[string]bool{}
+// packageImports returns the imports of every package in the main module, skipping nested modules, and a problem for
+// every symbolic link: Go follows them on import but a directory walk does not, so they could hide code.
+func packageImports(repo fs.FS) (map[string]map[string]bool, []string, error) {
+	packages, links := map[string]map[string]bool{}, []string(nil)
 	fset := token.NewFileSet()
 	err := fs.WalkDir(repo, ".", func(file string, entry fs.DirEntry, err error) error {
-		switch {
+		switch base := path.Base(file); {
 		case err != nil:
 			return err
+		case entry.Type()&fs.ModeSymlink != 0:
+			links = append(links, file+": symbolic links are not allowed in the main module")
+			return nil
 		case entry.IsDir():
 			return skipDir(repo, file)
-		case !strings.HasSuffix(file, ".go"):
-			return nil
+		case !strings.HasSuffix(base, ".go") || strings.HasPrefix(base, "_") || strings.HasPrefix(base, "."):
+			return nil // the go command ignores files that start with _ or .
 		}
 		src, err := fs.ReadFile(repo, file)
 		if err != nil {
@@ -162,7 +170,7 @@ func packageImports(repo fs.FS) (map[string]map[string]bool, error) {
 		}
 		return nil
 	})
-	return packages, err
+	return packages, links, err
 }
 
 // fileImports returns the import paths of one Go file, decoded the way the compiler decodes them.
@@ -186,10 +194,10 @@ func skipDir(repo fs.FS, dir string) error {
 	if dir == "." {
 		return nil
 	}
-	if base := path.Base(dir); base == ".git" || base == "node_modules" {
+	if excluded[path.Base(dir)] {
 		return fs.SkipDir
 	}
-	if _, err := fs.Stat(repo, path.Join(dir, "go.mod")); err == nil {
+	if info, err := fs.Stat(repo, path.Join(dir, "go.mod")); err == nil && !info.IsDir() {
 		return fs.SkipDir // a nested module, such as tools/, has its own dependencies
 	}
 	return nil
@@ -222,7 +230,9 @@ func packageProblems(table map[string]map[string]bool, pkg string, imports map[s
 			continue
 		}
 		target := moduleOf(imported)
-		if target == "" {
+		if slices.ContainsFunc(strings.Split(imported, "/"), func(part string) bool { return excluded[part] }) {
+			problems = append(problems, fmt.Sprintf("%s imports %s: this check does not read vendor or node_modules, so nothing may import from them", pkg, imported))
+		} else if target == "" {
 			problems = append(problems, fmt.Sprintf("%s imports %s: only cmd/ may import packages outside internal/<module>/", pkg, imported))
 		} else if target != module && !table[module][target] {
 			problems = append(problems, fmt.Sprintf("%s imports %s: %s may not import %s", pkg, imported, module, target))
