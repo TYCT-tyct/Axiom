@@ -115,6 +115,8 @@ formatters:
     - gofumpt
     - goimports
   settings:
+    gofumpt:
+      module-path: axiom # without it, gofumpt takes the dotless "axiom/..." for the standard library
     goimports:
       local-prefixes: [axiom]
 
