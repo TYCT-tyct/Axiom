@@ -47,16 +47,23 @@ func Load(path string) (*Keyring, error) {
 
 func readKeys(reader io.Reader) (*Keyring, error) {
 	ring := &Keyring{keys: make(map[uint32]cipher.AEAD)}
+	// The random-nonce limit counts uses of the key material, not of a version, so a reused key must not hide behind a
+	// new version number.
+	versions := make(map[[32]byte]uint32)
 	scanner := bufio.NewScanner(reader)
 	for line := 1; scanner.Scan(); line++ {
-		version, master, err := parseKey(scanner.Text())
+		version, key, err := parseKey(scanner.Text())
 		if err != nil {
 			return nil, fmt.Errorf("%s: line %d: %w", keyFileVariable, line, err)
 		}
 		if _, exists := ring.keys[version]; exists {
 			return nil, fmt.Errorf("%s: line %d: duplicate version", keyFileVariable, line)
 		}
-		ring.keys[version] = master
+		if previous, exists := versions[key]; exists {
+			return nil, fmt.Errorf("%s: line %d: key already used by version %d", keyFileVariable, line, previous)
+		}
+		versions[key] = version
+		ring.keys[version] = newGCM(key[:])
 		ring.latest = max(ring.latest, version)
 	}
 	if err := scanner.Err(); err != nil {
@@ -68,23 +75,23 @@ func readKeys(reader io.Reader) (*Keyring, error) {
 	return ring, nil
 }
 
-func parseKey(line string) (uint32, cipher.AEAD, error) {
+func parseKey(line string) (uint32, [32]byte, error) {
 	label, encoded, ok := strings.Cut(line, ":")
 	if !ok {
-		return 0, nil, errors.New("want version:base64 key")
+		return 0, [32]byte{}, errors.New("want version:base64 key")
 	}
 	version, err := strconv.ParseUint(label, 10, 32)
 	if err != nil || version == 0 || strconv.FormatUint(version, 10) != label {
-		return 0, nil, errors.New("want a canonical positive uint32 version")
+		return 0, [32]byte{}, errors.New("want a canonical positive uint32 version")
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || strings.ContainsAny(encoded, "\r\n") {
-		return 0, nil, errors.New("want a padded standard base64 key")
+		return 0, [32]byte{}, errors.New("want a padded standard base64 key")
 	}
 	if len(key) != 32 {
-		return 0, nil, errors.New("key must decode to 32 bytes")
+		return 0, [32]byte{}, errors.New("key must decode to 32 bytes")
 	}
-	return uint32(version), newGCM(key), nil
+	return uint32(version), [32]byte(key), nil
 }
 
 func fileError(operation string, err error) error {

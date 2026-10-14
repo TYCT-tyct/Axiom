@@ -26,6 +26,7 @@ func TestInvalidKeyFiles(t *testing.T) {
 		{"long key", "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 33))), "32 bytes"},
 		{"missing key", "1:", "32 bytes"},
 		{"duplicate", keyLine(1, 1) + keyLine(1, 2), "duplicate"},
+		{"reused key", keyLine(1, 1) + keyLine(3, 2) + keyLine(2, 1), "line 3: key already used by version 1"},
 		{"zero", "0:" + key, "version"},
 		{"negative", "-1:" + key, "version"},
 		{"overflow", "4294967296:" + key, "version"},

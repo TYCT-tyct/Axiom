@@ -84,7 +84,7 @@ func checkFormat(t *testing.T, sealed secret.Sealed, latest uint32) {
 }
 
 func TestOpenRejectsTampering(t *testing.T) {
-	keys := loadKeys(t, keyLine(1, 1)+keyLine(2, 1))
+	keys := loadKeys(t, keyLine(1, 1)+keyLine(2, 2))
 	original := seal(keys, "planted-plaintext", here)
 	other := seal(keys, "planted-plaintext", here)
 	fields := []struct {
