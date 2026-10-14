@@ -8,13 +8,13 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://localhost:6174",
+    baseURL: apps[1].url,
     locale: "zh-CN",
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   // Never reuse a server already listening: it may be another worktree's build, and this one's tests would pass or fail
-  // on it. A busy port fails the run instead (the preview servers use strictPort).
+  // on it. A busy port fails the run instead (the preview servers use strictPort); AXIOM_WEB_PORT moves this run's.
   webServer: apps.map((app) => ({
     command: `pnpm --filter ${app.filter} preview`,
     url: app.url,

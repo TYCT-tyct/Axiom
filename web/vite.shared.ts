@@ -8,7 +8,15 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type UserConfig } from "vite";
 
 // An app's preview server listens this far above its dev server.
-const previewOffset = 1000;
+export const previewOffset = 1000;
+
+// The apps' dev server ports. AXIOM_WEB_PORT moves them all, and the preview servers with them, so another worktree can
+// run its servers and end-to-end tests at the same time.
+const firstPort = Number(process.env.AXIOM_WEB_PORT ?? 5173);
+if (!Number.isInteger(firstPort) || firstPort < 1 || firstPort + 2 + previewOffset > 65_535) {
+  throw new Error(`AXIOM_WEB_PORT must leave room for three ports and their preview ports, not ${firstPort}`);
+}
+export const ports = { site: firstPort, console: firstPort + 1, admin: firstPort + 2 };
 
 // The content security policy pages must work under (docs/security.md「网页与域名」): no inline script or style, nothing
 // loaded from another origin. The preview server sends it, so the end-to-end tests fail on any output that breaks it.

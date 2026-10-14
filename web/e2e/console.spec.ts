@@ -169,13 +169,13 @@ for (const storage of ["available", "blocked"] as const) {
     await logs.focus();
     // Pointing at a link only preloads its page; the current page stays, with whatever was typed into it.
     await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
-    expect(loads).toBe(1);
+    await expect.poll(() => loads).toBe(1);
 
     await logs.click();
     await expect(page.getByRole("heading", { level: 1, name: "页面没能加载" })).toBeVisible();
     // One reload fetches the new build; a chunk still missing after it shows the error instead of reloading again.
     // Without session storage the reload cannot be remembered, so there is none.
-    expect(loads).toBe(storage === "available" ? 2 : 1);
+    await expect.poll(() => loads).toBe(storage === "available" ? 2 : 1);
   });
 }
 
