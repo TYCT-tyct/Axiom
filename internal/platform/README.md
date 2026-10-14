@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
+| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥；供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查 |

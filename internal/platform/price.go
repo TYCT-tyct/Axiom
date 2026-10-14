@@ -1,6 +1,6 @@
 // Package platform holds the value types that every module shares and that the lowest module, catalog, already needs:
-// unit prices and the exact amounts computed from them. It has types and arithmetic only, no business rules; how prices
-// are rounded and converted between currencies is billing's (docs/domains/billing.md「钱的表示」).
+// unit prices, the exact amounts computed from them, and currencies. It has types and arithmetic only, no business
+// rules; how prices are rounded and converted between currencies is billing's (docs/domains/billing.md「钱的表示」).
 package platform
 
 import (
