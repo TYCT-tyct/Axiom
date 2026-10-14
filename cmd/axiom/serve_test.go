@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +120,8 @@ func (r records) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// checkVersion: the console's version endpoint answers through the whole public stack, uncached, with a request ID.
+// checkVersion: the console's version endpoint answers through the whole public stack, uncached, with a request ID,
+// and does not tell which Go toolchain built the program.
 func checkVersion(t *testing.T, url string) {
 	t.Helper()
 	resp, err := get(t, url)
@@ -127,7 +129,7 @@ func checkVersion(t *testing.T, url string) {
 		t.Fatal(err)
 	}
 	var body struct{ Version string }
-	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() ||
+	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() || strings.Contains(body.Version, runtime.Version()) ||
 		resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Request-ID") == "" {
 		t.Errorf("GET %s: %d %v %s (%v)", url, resp.StatusCode, resp.Header, resp.body, err)
 	}
