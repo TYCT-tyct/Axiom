@@ -104,7 +104,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 测试
 
-`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 在整次 `go test` 结束约 2 分钟后删除；这段等待绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
+`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
 
 ## 决策与理由
 
