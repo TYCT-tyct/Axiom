@@ -42,6 +42,8 @@ jobs:
           node-version-file: web/.node-version
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
+      # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs
+      - run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install --with-deps --only-shell chromium
       - run: |
           curl -sSfL --retry 3 -o "$RUNNER_TEMP/just.tar.gz" "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz"
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -

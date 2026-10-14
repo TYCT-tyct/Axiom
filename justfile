@@ -92,9 +92,20 @@ docs:
 web-install:
     {{ web }} install --frozen-lockfile
 
+# Serve the website on :5173 with the console under :5173/console/ (also on :5174/console/), and the admin on :5175,
+# reloading on every change; the console's API calls go to the program on :8080, which `just up` starts
+web-dev: web-install
+    {{ web }} dev
+
+# Build the website, console and admin into each app's dist/
+web-build: web-install
+    {{ web }} build
+
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files;
-# and unit tests
-web: web-install
+# unit tests; the build within its size budget; and the end-to-end tests against that build
+web: web-build
     {{ web }} typecheck
     {{ web }} lint
     {{ web }} test
+    {{ web }} budget
+    {{ web }} e2e
