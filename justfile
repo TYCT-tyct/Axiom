@@ -39,6 +39,17 @@ test:
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
 
+compose := "docker compose -f deploy/compose.yaml"
+
+# Build the program for Linux and start it on this machine; returns once it reports ready, or within a minute fails
+# with the containers' state, health-check output and logs
+up:
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
+    {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
+
+down:
+    {{ compose }} down
+
 vuln:
     {{ tool }} govulncheck ./...
 

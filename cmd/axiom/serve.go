@@ -13,11 +13,14 @@ import (
 	"axiom/internal/platform/httpserver"
 )
 
+// opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
+func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
+
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
 // and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
-	opsAddr := env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") // the probes; loopback unless a deployment needs otherwise
+	addr := opsAddr(env)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
@@ -26,7 +29,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	var health httpserver.Health
 	ops := health.Server(logger)
 	// Listening before reporting ready turns a taken address into a startup failure.
-	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", opsAddr)
+	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	if err != nil {
 		if opErr := (*net.OpError)(nil); errors.As(err, &opErr) {
 			err = opErr.Err // the cause, such as "bind: address already in use", without the address

@@ -1,0 +1,11 @@
+# The program on one machine (docs/architecture.md「部署」). Start it with `just up`.
+name: axiom
+services:
+  axiom:
+    build: .
+    image: axiom:local
+    restart: unless-stopped
+    stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
