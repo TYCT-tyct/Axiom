@@ -52,7 +52,12 @@ jobs:
       - run: just check
       - run: just up # one command deploys this machine and waits for a ready node
         timeout-minutes: 5
-      - run: '[ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }'
+      # The node answering runs the program built from this tree, not a stale image; the passwords are its owner's only
+      - run: |
+          deployed="$(curl -fsS http://127.0.0.1:8080/api/console/v1/version | jq -r .version)"
+          built="$(just axiom-version)"
+          [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
+          [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
       - if: always()
         run: just down
       - if: github.event_name == 'pull_request'
