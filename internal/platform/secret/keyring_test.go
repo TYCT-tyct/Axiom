@@ -1,0 +1,95 @@
+package secret_test
+
+import (
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"axiom/internal/platform/secret"
+)
+
+func TestInvalidKeyFiles(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
+	cases := []struct{ name, content, reason string }{
+		{"empty", "", "at least one"},
+		{"blank", "\n", "line 1"},
+		{"blank after key", keyLine(1, 1) + "\n", "line 2"},
+		{"missing separator", "planted-key", "version:base64"},
+		{"bad base64", "1:planted-key", "base64"},
+		{"extra separator", "1:" + key + ":", "base64"},
+		// The same 32 bytes with non-zero unused bits in the last character: not the canonical encoding.
+		{"non-canonical padding bits", "1:" + key[:42] + "h=", "base64"},
+		{"short key", "1:" + base64.StdEncoding.EncodeToString([]byte("planted-key")), "32 bytes"},
+		{"long key", "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 33))), "32 bytes"},
+		{"missing key", "1:", "32 bytes"},
+		{"duplicate", keyLine(1, 1) + keyLine(1, 2), "duplicate"},
+		{"zero", "0:" + key, "version"},
+		{"negative", "-1:" + key, "version"},
+		{"overflow", "4294967296:" + key, "version"},
+		{"text version", "planted-key:" + key, "version"},
+		{"leading zero", "01:" + key, "version"},
+		{"leading plus", "+1:" + key, "version"},
+		{"whitespace", "1: " + key, "base64"},
+		{"embedded carriage return", "1:" + key[:10] + "\r" + key[10:], "base64"},
+		{"oversized line", "1:" + strings.Repeat("x", 70000), "read"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := keyFile(t, c.content)
+			keys, err := secret.Load(path)
+			if keys != nil || err == nil || !strings.Contains(err.Error(), c.reason) {
+				t.Fatalf("want %q, got %v", c.reason, err)
+			}
+			if !strings.Contains(err.Error(), "AXIOM_MASTER_KEY_FILE") || strings.Contains(err.Error(), "planted-key") || strings.Contains(err.Error(), key) || strings.Contains(err.Error(), path) {
+				t.Fatal("error lacks context or reveals input")
+			}
+		})
+	}
+}
+
+func TestKeyFilePaths(t *testing.T) {
+	for _, c := range []struct{ path, reason string }{
+		{"", "required"},
+		{filepath.Join(t.TempDir(), "planted-key"), "not found"},
+		{t.TempDir(), "regular file"},
+	} {
+		keys, err := secret.Load(c.path)
+		if keys != nil || err == nil || !strings.Contains(err.Error(), c.reason) || strings.Contains(err.Error(), "planted-key") {
+			t.Fatalf("want %q, got %v", c.reason, err)
+		}
+	}
+}
+
+func TestKeyFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows mode bits do not represent NTFS ACLs")
+	}
+	for _, mode := range []os.FileMode{0o600, 0o400, 0o640, 0o604, 0o666, 0o620, 0o601} {
+		path := keyFile(t, keyLine(1, 1))
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := secret.Load(path)
+		if mode&0o077 == 0 {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "permissions") {
+			t.Fatalf("mode %o: want permissions error, got %v", mode, err)
+		}
+	}
+}
+
+func TestKeyFileLineEndings(t *testing.T) {
+	for _, content := range []string{
+		keyLine(^uint32(0), 1),
+		strings.TrimSuffix(keyLine(1, 1), "\n"),
+		keyLine(1, 1),
+		strings.ReplaceAll(keyLine(1, 1)+keyLine(2, 2), "\n", "\r\n"),
+	} {
+		loadKeys(t, content)
+	}
+}
