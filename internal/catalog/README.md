@@ -1,0 +1,217 @@
+# catalog
+
+模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
+
+## 包
+
+| 包 | 做什么 |
+|---|---|
+| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集同步、页面监测与核对 |
+| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog` |
+
+## 数据
+
+### 表（schema `catalog`）
+
+"只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
+
+| 表 | 主要列 | 键与约束 | 类别 | 写法 |
+|---|---|---|---|---|
+| `author` | `slug`、`name` | PK `slug` | 公开 | 增、改名 |
+| `model` | `id`、`author`、`slug`、`status`（draft / listed / retired）、`version_basis`（dated / floating）、`price_source`（litellm / openrouter / official / manual）、`spec` jsonb、`rev` | PK `id`；UNIQUE `slug`；`split_part(slug, '/', 1) = author` | 公开，draft 行只有平台可见 | 列级授权只许改 `status`、`price_source`、`spec`、`rev` |
+| `name` | `name`（原样）、`norm`、`visibility`（public / internal）、`model_id` | PK `name`；UNIQUE `norm`；public 时 `norm !~ '(-\d{8}\|-\d{4}\|-\d{2}-\d{2}\|-latest)$' AND norm !~ '[:~@]'`；所有名字 `norm !~ '[:~]'` | 公开，只含 listed 模型的名字，其余只有平台可见 | 只追加 |
+| `reference_price` | `id`、`model_id`、`currency`、`source`、`schedule` jsonb、`schedule_sha256`、`published_at`、`supersedes` | PK `id`；UNIQUE `supersedes`；部分唯一索引 `(model_id, currency) WHERE supersedes IS NULL`；UNIQUE `(id, model_id, currency)`，外键 `(supersedes, model_id, currency)` 引用它，只能替代同一条时间线上的行；`supersedes <> id`；`currency ~ '^[A-Z]{3}$'` 且等于 `schedule` 里的币种 | 公开，只含 listed 模型的参考价，其余只有平台可见 | 只追加 |
+| `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
+| `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
+| `watched_page` | `id`、`author`、`url`、`currency`、`section_start`、`section_end`（截取价格段的标记）、`interval`、`enabled`、`lease_owner`、`lease_gen`、`lease_until`、`last_ok_at`、`failures`、`current_snapshot_id` | PK `id`；`url ~ '^https://'` | 平台 | 改 |
+| `page_snapshot` | `id`、`page_id`、`first_seen_at`、`extractor_version`、`text`（截取并规范化的正文）、`text_sha256` | PK `id`；UNIQUE `(page_id, extractor_version, text_sha256)` | 平台 | 只追加 |
+| `page_observation` | `page_id`、`observed_at`、`snapshot_id` | PK `(page_id, observed_at)`；只在当前内容变化时追加 | 平台 | 只追加 |
+| `dataset` / `dataset_entry` | 数据集（litellm / openrouter / modelsdev）及其租约和健康状态；条目的 `external_id`、`model_id`（可空）、`schedule`、`spec`、`parser_version`、`fetch_id`、`seen_at` | PK `(dataset, external_id)` | 平台 | 改 |
+| `review` | `id`、`subject_key`、`kind`（page_changed / price_change / mismatch / new_model / parse_failed）、`content` jsonb、`content_sha256`、`content_seq`、`status`（open / done / dismissed）、`resolution` | PK `id`；部分唯一索引 `subject_key WHERE status = 'open'`；dismissed 的 `(subject_key, content_sha256)` 不再重开 | 平台 | 改 `content`、`content_seq`、`status`、`resolution` |
+
+- `model.id` 是 UUIDv7，Go 类型 `catalog.ModelID`。
+- `model.slug` 是后台和日志用的唯一标识：`<厂商>/<模型>`，厂商给出版本标识时加 `@<版本>`；厂商部分 `^[a-z0-9][a-z0-9-]{0,39}$`。它不是名字，不进 `name` 表。
+- 标准 ID 是用户调用的 `<厂商>/<模型>`，存成一个 public 的 `name`，格式 `^<厂商>/[a-z0-9][a-z0-9._-]{0,99}$`，不含 `@`。
+- `name` 上的 CHECK 只是兜底，上架审核时逐个确认可见性。改 `Normalize` 的规则要随迁移重算 `norm` 并重新检查唯一性。
+- 参考价的历史以 `supersedes` 串起；当前价是没有被替代的那一行。更正也是发布新的一行。`source` 记下这一行来自哪个价格来源，证据在对应的 `change` 里。
+- `spec` 原地更新，旧值在 `change` 里。它包括目录基线的全部规格和计费要用的模型数据，其中 `items`、`tiers` 是上游可能报告的计费项和服务等级（见「上架门槛与缺项」）。
+- `model.rev` 是改模型时的乐观并发令牌：`ListModel`、`Retire`、`UpdateSpec`、`SelectPriceSource` 带上审核时看到的 `rev`，锁模型行后比较，不同就拒绝，成功后加一。没有它，两个基于同一份规格的修改，后提交的会悄悄覆盖先提交的。测试：基于同一 `rev` 的两个 `UpdateSpec` 只成功一个。
+- `subject_key` 非空且稳定：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
+- `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:watch`、`system:sync`），#23 定义操作者类型后替换。
+
+### 行级安全与权限
+
+- **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `platform.in_any_scope()`（任意非空范围），写用 `platform.in_platform_scope()`。`model` 的读策略另加 `status <> 'draft' OR platform.in_platform_scope()`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
+- **平台数据**（其余各表）：读写都用 `platform.in_platform_scope()`。
+- 后台任务以 `axiom_catalog_job` 角色执行：由本模块的迁移建立，只授予它要写的表：平台数据表，以及自动发布要写的 `reference_price`、`revision`；任务的事务里 `SET LOCAL ROLE` 切过去。
+- `in_any_scope()`、`in_platform_scope()`、`SET LOCAL ROLE` 和生产代码可用的平台范围由 platform 提供。
+
+## 价目表
+
+### 计费项与用量
+
+`catalog.Item` 是封闭枚举，`ItemSet` 是它的位集合。各项互不重叠，同一个 token 只计一次；`protocol` 按下表把上游报告的用量折成 `Usage`：
+
+| Item | 单位 | OpenAI（Chat / Responses） | Anthropic Messages | Gemini |
+|---|---|---|---|---|
+| `input` | token | `prompt_tokens − cached_tokens − cache_write_tokens − audio_tokens`（缺的字段按 0） | `input_tokens`（含图片） | `promptTokenCount − cachedContentTokenCount` − 音频 |
+| `cache_read` | token | `cached_tokens` | `cache_read_input_tokens` | `cachedContentTokenCount` |
+| `cache_write` | token | `cache_write_tokens` | `cache_creation.ephemeral_5m_input_tokens` | — |
+| `cache_write_1h` | token | — | `cache_creation.ephemeral_1h_input_tokens` | — |
+| `output` | token | `completion_tokens − reasoning_tokens − audio_tokens` | `output_tokens`（含思考，不单列） | `candidatesTokenCount` |
+| `reasoning` | token | `reasoning_tokens` | 0 | `thoughtsTokenCount` |
+| `audio_in` / `audio_out` | token | 输入、输出详情里的 `audio_tokens` | — | `promptTokensDetails` 里模态为 `AUDIO` 的数量 / — |
+| `image_in` / `image_out` | token | — / 图片生成的输出 token | — | — |
+| `web_search` | 次 | 待核对 | `server_tool_use.web_search_requests` | 待核对 |
+
+- 只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。
+- 守恒：输入侧各项之和等于上游报告的提示词总量；输出侧各项之和等于上游报告的输出总量。测试断言这两条。Anthropic 没有单独的提示词总量字段，按 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 算（Anthropic《Prompt caching》）。
+- OpenAI 的总输入同时包含缓存读和缓存写，写入价替代普通输入价而不是叠加（OpenAI《Prompt caching》）。例：`input_tokens=12000, cached_tokens=0, cache_write_tokens=12000` → `input` 0、`cache_write` 12,000，分档门槛求和 12,000，费用只含写入价。没有写入计费的模型不报这个字段，按 0。
+- Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
+- 待核对：OpenAI 两种格式的确切字段路径（Chat 是 `prompt_tokens_details.*`、`completion_tokens_details.*`，Responses 是 `input_tokens_details.*`、`output_tokens_details.*`）、图片输出和联网搜索的计数字段，以及 Gemini 的 `promptTokenCount` 是否包含缓存、按模态的明细是否包含缓存（Gemini API《UsageMetadata》）。价目表的 PR 按原文核对后写进测试。
+- **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
+- **服务等级**：`Usage.ServiceTier` 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档。
+- 免单判断用 `Usage.OutputTotal()`（`output + reasoning`），只看 `output` 会把只有推理的回复误判为零输出。
+- Anthropic 联网搜索每千次 $10，搜索带回的内容按普通 token 计入输入（Anthropic Pricing 页，2026-10-14）。
+
+### 条件
+
+价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`，计法是整单按档：`TierBasis` 里各项用量之和严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。已知的两种：
+
+- Anthropic Haiku 5.5：超过 100,000 token，"prompt length counts all of its input tokens, including cache reads and cache writes"，`TierBasis` = {`input`, `cache_read`, `cache_write`, `cache_write_1h`}；Claude 4.6 及以后的其他模型 1M 内统一价（Anthropic Pricing 页，2026-10-14）。
+- Gemini：提示词超过 200k，`TierBasis` = {`input`, `cache_read`}，输出和缓存价同时换档（Gemini 定价页，2026-10-14）。
+
+服务等级用 `ServiceTierRates{Tier, Rates}` 给某个等级（如 flex、priority、快速模式）一套单价，没列出的项沿用标准档；价目表没列出的等级就是没有它的价格。
+
+「价目表的结构」里的超出部分按档和倍率型条件，随第一个需要它的价目表带着完整的规则加入；在那之前 `ParseSchedule` 拒绝它们和任何不认识的条件类型（所以没有分时段价格），也拒绝门槛不递增、有档位却没有 `TierBasis`。拒绝的是价目表，不是请求：需要它们的成本计划，端点不使用（见[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)）；需要它们的数据集条目，不能被选为价格来源。
+
+### 上架门槛与缺项
+
+- **上游可能报告什么**是模型数据 `spec.items` 和 `spec.tiers`，审核时确认：输入输出类型、工具和厂商提供的服务等级决定它，例如支持音频输入就有 `audio_in`，有联网搜索就有 `web_search`，OpenAI 有 flex、priority。`Model.Reportable()` 返回它。
+- **`Schedule.Missing(Reportable) Reportable`** 返回其中没有价格的项和等级，算上 `reasoning` 回退到 `output`。计费用它检查售价是否满足[计费的「定价」](../../docs/domains/billing.md#定价)里的上架门槛（已知的按次项目可以由站点默认单价补上）。门槛在 billing 检查，不在本模块：目录在模块依赖里位于 billing 之下，不知道售价。
+- **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage.ServiceTier` 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
+- **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
+
+### 数值域
+
+- `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（如成本计划里官方价乘分组倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
+- `Usage` 每项 0 … 10¹⁰，只能经 `NewUsage` 构造，负数或超限返回错误；`Cost` 开头再校验一次。门槛求和最多 `NumItems` × 10¹⁰，int64 不会溢出。
+- 单项乘积 ≤ 10²⁸，`NumItems`（少于 16）项之和 < 1.6 × 10²⁹，在 128 位有符号整数（约 1.7 × 10³⁸）之内。这个域里不可能溢出，仍逐步检查，溢出返回错误而不是截断。
+- `Cost` 返回 `platform.Exact`：128 位整数，单位 10⁻¹⁵，币种随价目表。汇率和加价倍率由 billing 转成 `math/big.Rat` 再乘，只在记账时取整一次；本模块不做币种换算。
+
+### 存储
+
+规范 JSON：键排序、单价写成十进制字符串、带 `"v":1`，另存 SHA-256。suppliers 和 billing 在各自的表里存同样的 jsonb，写入前都经 `catalog.ParseSchedule`；比较和幂等都是字节比较。
+
+## 快照
+
+- **加载**：`Load` 在一个只读的 Repeatable Read 事务里先读 `revision`，再读全部公开表。快照不可变，只含 listed 和 retired 模型、它们的名字和 listed 模型各币种的当前参考价；加载在平台范围执行，所以读得到 retired 模型的名字。retired 模型只用于两处：`ResolvePublic` 返回 `ErrRetired`，`Recognize` 仍认得出它的名字，供应商据此不把这个名字映射到别的模型。`Models()` 只给 listed 模型，`Model` 带 `Status`。快照大小随模型数增长，不随历史增长。
+- **发布**：比较后替换，只接受更大的 `revision`。
+- **传播**：写入的节点立即重建；其他节点每 5 秒读一次 `revision`，变了才全量加载。以后有 LISTEN/NOTIFY 时加一个触发源，接口不变。
+- **陈旧上限**：快照记下 `confirmed_at`，即最后一次确认"数据库的 `revision` 就是本快照的版本"的时刻，取那次读取开始的时间。读到相同的 revision 才续期；读到更高的版本不续期，必须成功加载并发布它，新快照以加载事务开始的时刻作为 `confirmed_at`；加载失败不续期旧快照。超过最大陈旧时间（默认 30 秒，启动配置，必须大于轮询周期）后 `Current()` 返回 `ErrStale`，gateway 对需要解析模型的新请求返回 503，节点不就绪，直到确认或发布了当前版本。首次加载成功前同样不就绪。
+- **影响有界**：快照里的参考价只用于展示和路由提示；售价由 billing 的价格版本决定并在请求开始时锁定，不读快照。下线的模型最多在陈旧上限内还能被新请求调用。
+- **解析**：`ResolvePublic` 遇到含 `:` 的名字一律返回"模型不存在"，不切后缀，所以带后缀的写法永远落不到基础模型；M1 没有任何变体，`:free`、`:batch` 是供应商别名，路由变体随路由支持它时再加。其余名字 `Normalize` 后查预建的 map。`Recognize` 公开和内部名字都查，带日期的名字和移动名字的模型的名字返回 `Exact=true`，绑定到固定版本模型的不带日期名字返回 `Exact=false`。
+- **billing 跟上改价**：billing 的价格版本记下所用参考价的版本号（`reference_price.id`），后台任务定期用 `CurrentPrices` 按站点币种重新选出该用的参考价，版本号不同就重算（选用规则见[计费的「定价」](../../docs/domains/billing.md#定价)）。
+
+## 参考价的录入
+
+- **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
+- **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。
+- **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。
+- **自动发布**：本轮取数成功后，对 `price_source` 等于这个数据集的每个 listed 或 draft 模型，把条目与当前参考价按整张价目表比较。不同就先过计费的参考价安全阀（合理性检查和变化阈值，见[计费的「定价」](../../docs/domains/billing.md#定价)；阈值是后台数据）：通过就以 `system:sync` 发布，证据是条目原文和 `fetch_id`；不通过、条目解析失败或少了当前参考价已有的档位，就开或更新 `price_change` 审核项，不发布，管理员确认后发布。
+- **核对**：其余数据集的条目与当前参考价按整张价目表比较，不一致开 `mismatch` 审核项，不改价。
+- **选价格来源**：`SelectPriceSource` 要求所选数据集的当前条目能解析成价目表，并且带有当前参考价的每一档，否则拒绝；改选不会立即改价，下一轮同步或下一次发布才写新行。选 `manual` 或 `official` 后，同步不再为它写行。
+- **发布**：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再 `SELECT … FOR UPDATE` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
+
+## 不变量
+
+| 不变量 | 靠什么保证 |
+|---|---|
+| 名字归一化后全局唯一 | `name.norm` UNIQUE；测试：只差大小写或 `.`、`-` 的第二个名字被拒 |
+| 名字上架后不改指向（切换与迁移在 M1 之后）；带日期的名字不会被合并到别的模型 | `name` 只追加；`Normalize` 不增删数字，所以保留日期。模糊测试：输入和输出各自只留 ASCII 数字后完全相同 |
+| 用户只能调用公开名字 | `ResolvePublic` 只查 public；CHECK 拒绝带日期、`-latest`、含 `:` `~` `@` 的 public 名字；调用、模型列表、回退列表三处入口用同一个函数，测试覆盖 |
+| 快照是数据库某一时刻的一致状态，新快照不会被旧快照覆盖 | 只读 Repeatable Read 加载、比较后替换；测试：两表读取之间插入并发提交，结果仍属同一时刻；两次构建逆序完成，留下的是新的 |
+| 快照陈旧超过上限就不再解析 | 见「快照」的陈旧上限；测试：revision 查询一直成功、全量加载一直失败，超过上限后返回 `ErrStale`、不就绪，成功发布后恢复 |
+| 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |
+| 参考价只来自模型选定的来源，手填不被同步覆盖 | 发布在锁住的模型行上比较 `price_source` 与发布的来源；测试：`manual` 模型在数据集改价后不变；同步与改选来源并发时，改选先提交则同步的发布被拒 |
+| 超过阈值的改价不自动生效 | 自动发布先过安全阀；测试：阈值内的变化发布，超过的只开审核项，参考价不变；取数失败时保留最后的价格并告警，不换来源 |
+| 管理操作重试不重复生效 | 每个操作带 `op_key`，`change.op_key` UNIQUE，重试返回第一次的结果；测试：提交成功、响应丢失后重试 |
+| 过期的取数者写不进数据 | 租约加代次，提交前校验；测试：A 取数期间租约被 B 接管，A 提交失败 |
+| 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
+| 单价精确、非负，计算不溢出 | 见「数值域」；性质测试对照 `math/big`，覆盖最小单价、最大乘积、负用量、门槛求和、转分数后取整 |
+| 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output` 是唯一的例外；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于去掉缺价项后的 `Cost` |
+| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`；测试：每家加一个虚构的用量字段、一个虚构的等级，都出现在 `Unknown()` 里 |
+| 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文和 `fetch_id`；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
+| 公开表里没有操作者、理由、证据 | 它们只在平台数据的 `change` 里；测试：查 `information_schema`，公开表没有 `actor`、`reason`、`evidence` 列；非平台范围读不到平台数据，读不到草稿模型和它的名字、参考价 |
+
+## 公开接口
+
+```go
+package catalog // internal/catalog
+
+type ModelID uuid.UUID
+type Item uint8                        // 封闭枚举
+type ItemSet uint16                    // Item 的位集合
+type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账户的等级
+type ServiceTierSet uint8              // ServiceTier 的位集合
+type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
+type Usage struct{ /* 各项数量、ServiceTier、不认识的用量 */ } // 只能经 NewUsage 构造
+func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
+func (u Usage) OutputTotal() int64
+func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级
+
+type Schedule struct{ /* 币种、基础价、TierBasis、ContextTier、ServiceTierRates */ }
+func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝还不支持的条件
+func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
+func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
+func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
+func Normalize(name string) string
+
+type Snapshot struct{ /* 不可变 */ }
+func (s *Snapshot) Revision() int64
+func (s *Snapshot) ResolvePublic(name string) (Resolution, error) // 用户请求、模型列表、回退列表
+func (s *Snapshot) Recognize(name string) (Recognition, bool)    // 给 suppliers 和数据集核对
+func (s *Snapshot) Model(id ModelID) (Model, bool)                // Model.Reportable() 给上架门槛
+func (s *Snapshot) ReferencePrice(id ModelID, currency string) (ReferencePrice, bool)
+func (s *Snapshot) Models() iter.Seq[Model]                       // 只有 listed 模型
+
+type Resolution struct{ Model ModelID; Floating bool }
+type Recognition struct{ Model ModelID; Exact bool } // Exact：名字本身就是版本证据
+
+type Catalog struct{ /* db、当前快照 */ }
+func New(db *pg.DB, scope pg.Scope, cfg Config) *Catalog    // 平台范围由 cmd/axiom 注入
+func (c *Catalog) Current() (*Snapshot, error)              // 超过陈旧上限返回 ErrStale；一个请求从头到尾用同一个快照
+func (c *Catalog) Ready() bool
+func (c *Catalog) Run(ctx context.Context) error            // 快照刷新、页面监测、数据集同步与核对
+func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对
+// 管理操作，平台范围，经 operations 的审批中间层：ListReviews、ResolveReview、ListModel（draft → listed 并加名字）、
+// Retire、UpdateSpec、SelectPriceSource（这四个带 rev）、PublishPrice（base、schedule、evidence、op_key）。管理接口落地前由运维节点上的
+// axiom catalog 子命令以平台范围执行，读 JSON 文件，同样经代码检查和 op_key。
+```
+
+## 测试
+
+- 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
+- 计价对照 `math/big` 做性质测试。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
+- `ResolvePublic`（包括需要归一化的名字，如 `claude-sonnet-4.5`）和 `Cost` 有零分配的基准测试：归一化写进栈上的缓冲区，用 `m[string(buf)]` 查 map，Go 对这种写法不分配。
+- 名字解析的用例：含 `:` 的名字（包括 `:free`）返回"模型不存在"，不落到基础模型；下线模型的公开名字返回 `ErrRetired`，它也不出现在 `Models()` 里；绑定到固定版本模型的不带日期名字，`Recognize` 得到 `Exact=false`，`ResolvePublic` 仍得到原来的版本。
+- 数据集数字的用例：`3e-06` 与 `0.000003` 得到同一个 `UnitPrice`，全程不经 float64；指数超出 ±30、展开后超过 15 位小数的条目被拒。
+- 每家的计价示例（缓存读 99,999 加输入 1 不换档、再加 1 换档；Gemini 缓存 200,000 加新输入 1 换档）写成用例。
+- 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
+
+## 决策与理由
+
+| 决策 | 理由 | 不选 |
+|---|---|---|
+| 公开和内部名字同表，`visibility` 区分，`norm` 唯一 | 唯一性对两类一起成立，内部名字不会和公开名字撞 | 两张表：唯一性要跨表检查 |
+| 价目表存规范 jsonb，结构和校验在 Go | 三个模块共用；规范编码让比较和幂等变成字节比较 | 拆成计费项、条件、档位三张表：每个模块都要三张表和重组代码 |
+| 单价是 int64 的 10⁻¹⁵ 定点，`Cost` 返回 128 位精确值；汇率和倍率在 billing 用分数 | 域有界时 128 位整数不会溢出、不分配内存，调用路径上快；10/71 这样的值有限小数表示不了，换算必须用分数 | 全程 `math/big`：每次都分配；全程十进制：汇率不精确 |
+| `Cost` 返回缺价的项，不返回错误 | 计费的红线是不会算不出钱：缺项要按已定价部分加兜底价收，返回错误就丢了已定价部分 | 缺价就返回错误，或调用前按请求特征拒绝：负责人否决了后者（Issue #24），计费的上架门槛按模型检查 |
+| 价格来源是模型上的一列，发布时在锁住的模型行上核对来源 | "手填不被覆盖""不自动换来源"变成一个比较，和发布同一个事务，没有竞态 | 每次同步时查一张来源配置表：同步与改选并发时可能写进旧来源的价格 |
+| 快照用只读 Repeatable Read 加载，只接受更大的 revision | Read Committed 下同一事务的两次查询可能看到不同的提交（PostgreSQL 文档《Transaction Isolation》） | 多表分别查询 |
+| 快照陈旧超限就拒绝新请求 | 刷新持续失败时，其他节点已下线的模型不能无限期地继续被调用 | 一直用旧快照 |
+| billing 定期比对当前参考价跟上改价 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
+| 审计写本模块的 `change` 表 | catalog 不能引用 operations；操作者、理由、证据不能让租户范围读到 | 公开表里带 `actor` 列 |
+| 页面监测用租约加代次，内容去重与当前指向分开 | 过期的执行者提交不了；页面 A→B→A 时当前指回 A，证据跟着页面现在的内容 | 没有代次的租约；按最晚入库的快照校验证据 |
+| 参考价的表和类型叫 `reference_price` | `price_version` 在术语表里是 billing 的售价版本，同名会让两个模块的概念混在一起；来源可能是数据集或手填，叫 `official_price` 名不副实 | `price_version`、`official_price` |
+| `ModelID` 定义在本模块，不放 platform | 只被上层模块引用；platform 只放被下层引用的实体 ID | 放进 platform |
