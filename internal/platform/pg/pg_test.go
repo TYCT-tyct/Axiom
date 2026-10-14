@@ -48,6 +48,18 @@ func open(t *testing.T, url string) *pg.DB {
 	return db
 }
 
+// TestOpenRefusesANonPositiveHealthCheckPeriod: pgx would panic on it in the background; Open names the variable and
+// the parameter instead, and quotes nothing else from the URL.
+func TestOpenRefusesANonPositiveHealthCheckPeriod(t *testing.T) {
+	t.Parallel()
+	for _, period := range []string{"0s", "-1s"} {
+		_, err := pg.Open(t.Context(), "postgres://planted-user:planted-password@planted-host/planted-db?pool_health_check_period="+period)
+		if err == nil || !strings.Contains(err.Error(), "AXIOM_DATABASE_URL: pool_health_check_period") || strings.Contains(err.Error(), "planted") {
+			t.Errorf("pool_health_check_period=%s: %v", period, err)
+		}
+	}
+}
+
 var (
 	site1, site2                           = uuid.NewV7(), uuid.NewV7()
 	account1, account2, account3, account4 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()

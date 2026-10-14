@@ -23,6 +23,12 @@ func Open(ctx context.Context, url string) (*DB, error) {
 	if err != nil {
 		return nil, errors.New("AXIOM_DATABASE_URL: not a PostgreSQL connection string")
 	}
+	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not
+	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
+	// or reads them as "never" or "at every check".
+	if config.HealthCheckPeriod <= 0 {
+		return nil, errors.New("AXIOM_DATABASE_URL: pool_health_check_period must be positive")
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("connect to the database: %w", err)
