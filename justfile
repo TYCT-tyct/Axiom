@@ -79,6 +79,7 @@ migrations base:
 
 vuln:
     {{ tool }} govulncheck ./...
+    cd tools && go tool govulncheck ./...
 
 # No secret in this branch's commits, checked before they are pushed: CI scans every commit of a pull request, and a
 # secret, or a test value that looks like one, stays in the history until the branch is replaced. The version
