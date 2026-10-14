@@ -99,7 +99,19 @@ const setScope = `SELECT set_config('axiom.scope_platform', $1, true), set_confi
 // Tx runs fn in a transaction limited to scope and commits if fn returns nil. An error, a panic or a cancelled
 // context rolls it back, and pgx drops a connection whose state is unknown instead of returning it to the pool.
 func (db *DB) Tx(ctx context.Context, scope Scope, fn func(Tx) error) error {
-	return pgx.BeginFunc(ctx, db.pool, func(tx pgx.Tx) error {
+	return db.begin(ctx, pgx.TxOptions{}, scope, fn)
+}
+
+// ReadTx is Tx for reading several queries as one consistent state, such as a snapshot built from many tables: every
+// query sees the database as it was at the transaction's first statement (REPEATABLE READ), and nothing can be
+// written. Both are set by BEGIN itself, because PostgreSQL refuses to change the isolation level once the scope's
+// query has run.
+func (db *DB) ReadTx(ctx context.Context, scope Scope, fn func(Tx) error) error {
+	return db.begin(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, scope, fn)
+}
+
+func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn func(Tx) error) error {
+	return pgx.BeginTxFunc(ctx, db.pool, options, func(tx pgx.Tx) error {
 		platform := ""
 		if scope.platform {
 			platform = "on"

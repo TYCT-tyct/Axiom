@@ -264,6 +264,43 @@ func TestTxRollsBackWhenItsContextEnds(t *testing.T) {
 	}
 }
 
+// TestReadTxSeesOneMoment: every query of a ReadTx sees the database as it was at the transaction's start, so a
+// commit between two of its reads shows only in the next transaction; and a ReadTx cannot write.
+func TestReadTxSeesOneMoment(t *testing.T) {
+	t.Parallel()
+	database := newDatabase(t)
+	seed(t, database)
+	db := open(t, database.App)
+	platform := pg.NewScope(true, nil, nil)
+	var first, second int
+	err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&first); err != nil {
+			return err
+		}
+		if err := pgtest.Run(t.Context(), database.Superuser,
+			fmt.Sprintf("INSERT INTO rlstest.items VALUES ('%s', '%s', 'concurrent')", site1, account1)); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&second)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 4 || second != 4 {
+		t.Errorf("the reads saw %d and %d rows, want the 4 from before the concurrent commit", first, second)
+	}
+	if n := count(t, db, platform); n != 5 {
+		t.Errorf("the next transaction saw %d rows, want 5 with the concurrent commit", n)
+	}
+	err = db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "DELETE FROM rlstest.items")
+		return err
+	})
+	if err == nil {
+		t.Error("a ReadTx deleted rows")
+	}
+}
+
 // dbtx is the interface sqlc generates for pgx; generated queries take a Tx through it.
 type dbtx interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
