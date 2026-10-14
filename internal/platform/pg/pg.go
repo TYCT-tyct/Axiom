@@ -63,13 +63,11 @@ func (t Tx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTa
 }
 
 // Query runs a query that returns any number of rows. The rows report no connection: holding it, a caller could run
-// queries the scope does not bind, or keep using it after the transaction.
+// queries the scope does not bind, or keep using it after the transaction. pgx returns rows even with an error, which
+// they also carry, so callers may defer Close before checking it; Query keeps that promise.
 func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	r, err := t.tx.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	return rows{r}, nil
+	return rows{r}, err
 }
 
 // QueryRow runs a query that returns at most one row.
@@ -96,7 +94,7 @@ func (r rows) TypeMap() *pgtype.Map                         { return r.inner.Typ
 // Conn is nil, which pgx allows for rows that do not come from a connection.
 func (rows) Conn() *pgx.Conn { return nil }
 
-// setScope sets the three settings platform.in_scope reads, local to the transaction.
+// setScope sets the three settings the platform schema's scope functions read, local to the transaction.
 const setScope = `SELECT set_config('axiom.scope_platform', $1, true), set_config('axiom.scope_sites', $2, true),
 	set_config('axiom.scope_accounts', $3, true)`
 

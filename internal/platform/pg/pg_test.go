@@ -453,6 +453,27 @@ func TestRowsKeepTheConnection(t *testing.T) {
 	}
 }
 
+// TestFailedQueryRows: as pgx promises, a failed Query still returns rows, closed and carrying the error, so a caller
+// may defer Close before checking it; they report no connection either.
+func TestFailedQueryRows(t *testing.T) {
+	t.Parallel()
+	db := open(t, newDatabase(t).App)
+	err := db.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), "SELECT FROM no_such_table")
+		if rows == nil {
+			t.Fatal("a failed Query returned no rows")
+		}
+		defer rows.Close()
+		if rows.Err() == nil || rows.Conn() != nil {
+			t.Errorf("rows of a failed Query: error %v, connection %v", rows.Err(), rows.Conn())
+		}
+		return err
+	})
+	if err == nil {
+		t.Error("a query of a missing table succeeded")
+	}
+}
+
 // methods lists the exported methods of typ, sorted by name.
 func methods(typ reflect.Type) []string {
 	names := make([]string, typ.NumMethod())
