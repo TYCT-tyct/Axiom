@@ -4,7 +4,7 @@ import { check } from "./limits.ts";
 const repeat = (count: number, line: string) => Array.from({ length: count }, () => line).join("\n");
 const fn = (body: string) => `function f(x) {\n${body}\n}\n`;
 const arrow = (body: string) => `const f = (x) => ${body};\n`;
-const ors = (count: number) => Array(count + 1).fill("x").join(" || ");
+const ors = (count: number) => `${"x || ".repeat(count)}x`;
 const ifs = (count: number) => repeat(count, "  if (x > 0) x--;");
 
 describe("check", () => {
@@ -79,7 +79,7 @@ describe("check", () => {
     {
       name: "an arrow returning twelve choices",
       path: "a.ts",
-      text: arrow(`${Array(12).fill("x ? 0 :").join(" ")} 0`),
+      text: arrow(`${"x ? 0 : ".repeat(12)}0`),
       want: ["a.ts:1: a function of complexity 13, more than 12"],
     },
     {
