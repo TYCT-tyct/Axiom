@@ -12,8 +12,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json/jsontext"
-	"encoding/json/v2"
+	"encoding/json/jsontext" //nolint:depguard // tools is its own module, which cannot import axiom/internal
+	"encoding/json/v2"       //nolint:depguard // tools is its own module, which cannot import axiom/internal
 	"errors"
 	"fmt"
 	"io"
