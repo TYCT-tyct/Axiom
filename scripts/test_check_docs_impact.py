@@ -41,6 +41,10 @@ class Explained(unittest.TestCase):
             ("inside a closed comment", docs("<!-- 文档影响：无，因为只改了内部变量名。 -->"), False),
             ("inside an unclosed comment", docs("<!-- 文档影响：无，因为只改了内部变量名。"), False),
             ("outside the Docs section", "## Approach / 做法\n\n文档影响：无，因为只改了内部变量名。\n", False),
+            ("CRLF line endings", docs("文档影响：无，因为只改了内部变量名。").replace("\n", "\r\n"), True),
+            ("a quoted example of the format", docs("格式是 `文档影响：无，因为只改了内部变量名`。"), False),
+            ("an angle-bracket placeholder", docs("文档影响：无，因为<reason>"), False),
+            ("words in a later paragraph do not count", docs("文档影响：无，因为……\n\n关联 Issue #20"), False),
         ]
         for name, body, expected in cases:
             with self.subTest(name):

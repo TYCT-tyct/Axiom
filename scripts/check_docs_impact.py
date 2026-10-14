@@ -2,7 +2,8 @@
 """Fail when a pull request changes a module's code but neither that module's domain doc nor its README.
 
 A pull request that really leaves the docs untouched says why in the Docs section of its description:
-文档影响：无，因为<reason>. HTML comments, such as the template's hints, are ignored, an unclosed one up to the end.
+文档影响：无，因为<reason>, the reason in the same paragraph. HTML comments (an unclosed one up to the end), code and
+<placeholders> do not count, so neither the template's hint nor a quoted example of the format passes.
 Reads PR_BODY from the environment and the changed files from git, with renames split into a deletion and an addition
 so that the module code moves out of is checked too.
 usage: check_docs_impact.py <base commit>   (run from the repository root)
@@ -15,16 +16,19 @@ import sys
 
 MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$).+")
 COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+CODE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`", re.DOTALL)
+PLACEHOLDER = re.compile(r"<[^>\n]*>")
 DOCS_SECTION = re.compile(r"^## Docs / 文档影响[ \t]*$(.*?)(?=^## |\Z)", re.DOTALL | re.MULTILINE)
-NO_IMPACT = re.compile(r"文档影响\s*[：:]\s*无\s*[，,]\s*因为(.*)", re.DOTALL)
+NO_IMPACT = re.compile(r"文档影响\s*[：:]\s*无\s*[，,]\s*因为(.*?)(?:\n[ \t]*\n|\Z)", re.DOTALL)
 REASON = re.compile(r"\w")  # a reason has words in it; "……" or "..." is the template's placeholder, not a reason
 
 
 def explained(body):
     """Whether the Docs section of the description says why the docs did not change."""
-    section = DOCS_SECTION.search(COMMENT.sub("", body))
+    visible = CODE.sub("", COMMENT.sub("", body.replace("\r\n", "\n")))
+    section = DOCS_SECTION.search(visible)
     declared = section and NO_IMPACT.search(section.group(1))
-    return bool(declared and REASON.search(declared.group(1)))
+    return bool(declared and REASON.search(PLACEHOLDER.sub("", declared.group(1))))
 
 
 def problems(changed, body):

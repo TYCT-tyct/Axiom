@@ -37,7 +37,7 @@ test:
 
 # Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
 bench-compare base:
-    go run -C tools ./benchgate .. {{ base }}
+    go run -C tools ./benchgate .. {{ quote(base) }}
 
 vuln:
     {{ tool }} govulncheck ./...

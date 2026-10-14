@@ -1,89 +1,123 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestAllocations(t *testing.T) {
-	out := []byte(`goos: linux
-pkg: axiom/internal/protocol
-BenchmarkScan-8            	  120000	      9876 ns/op	     512 B/op	       3 allocs/op
-BenchmarkScan-8            	  118000	     10021 ns/op	     512 B/op	       4 allocs/op
-BenchmarkScan/large-8      	    1000	   1234567 ns/op	    1000 allocs/op_total	   65536 B/op	      12 allocs/op
-pkg: axiom/internal/routing
-BenchmarkPick/case-1       	 5000000	       210 ns/op	       0 B/op	     100 allocs/op
-BenchmarkPick/case-2       	 5000000	       210 ns/op	       0 B/op	       0 allocs/op
---- SKIP: BenchmarkSlow
-    slow_test.go:9: needs a database
-PASS
-ok  	axiom/internal/routing	3.1s
-`)
-	samples, skips, err := allocations(out)
+// events is `go test -json` output as the go command writes it: config lines, a verbose name line, a result split
+// across two events, a custom metric printed before allocs/op, and a skipped benchmark.
+const events = `{"Action":"start","Package":"x"}
+{"Action":"output","Package":"x","Output":"pkg: axiom/internal/routing\n"}
+{"Action":"run","Package":"x","Test":"BenchmarkPick/case"}
+{"Action":"output","Package":"x","Test":"BenchmarkPick/case","Output":"BenchmarkPick/case\n"}
+{"Action":"output","Package":"x","Test":"BenchmarkPick/case","Output":"BenchmarkPick/case-16   \t"}
+{"Action":"output","Package":"x","Test":"BenchmarkPick/case","Output":"10\t200 ns/op\t1000 allocs/op_total\t64 B/op\t3 allocs/op\n"}
+{"Action":"output","Package":"x","Test":"BenchmarkPick/case#01","Output":"BenchmarkPick/case#01-16\t10\t120 ns/op\t0 B/op\t0 allocs/op\n"}
+{"Action":"output","Package":"x","Test":"BenchmarkSlow","Output":"--- SKIP: BenchmarkSlow\n"}
+{"Action":"skip","Package":"x","Test":"BenchmarkSlow"}
+{"Action":"output","Package":"x","Output":"PASS\n"}
+{"Action":"pass","Package":"x"}
+`
+
+func TestParse(t *testing.T) {
+	run, err := parse(strings.NewReader(events))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string][]float64{
-		"axiom/internal/protocol.Scan-8":       {3, 4},
-		"axiom/internal/protocol.Scan/large-8": {12}, // a custom metric before allocs/op is not mistaken for it
-		"axiom/internal/routing.Pick/case-1":   {100},
-		"axiom/internal/routing.Pick/case-2":   {0}, // without a GOMAXPROCS suffix, sub-benchmarks stay apart
+		"axiom/internal/routing.Pick/case-16":    {3}, // the custom metric is not mistaken for allocs/op
+		"axiom/internal/routing.Pick/case#01-16": {0}, // same-named sub-benchmarks stay apart
 	}
-	if diff := cmp.Diff(want, samples); diff != "" {
-		t.Errorf("samples (-want +got):\n%s", diff)
+	if diff := cmp.Diff(want, run.allocs); diff != "" {
+		t.Errorf("allocations (-want +got):\n%s", diff)
 	}
-	if diff := cmp.Diff([]string{"BenchmarkSlow"}, skips); diff != "" {
+	if diff := cmp.Diff([]string{"BenchmarkSlow"}, run.skipped); diff != "" {
 		t.Errorf("skipped (-want +got):\n%s", diff)
 	}
 }
 
+// TestBenchmarksSeeARealSkip runs the go command on a throwaway module: a b.Skip() is reported only as an event.
+func TestBenchmarksSeeARealSkip(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module probe\n\ngo 1.27.2\n",
+		"b_test.go": "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n" +
+			"func BenchmarkKept(b *testing.B) {\n\tfor b.Loop() {\n\t\tsink = make([]byte, 8)\n\t}\n}\n\n" +
+			"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n",
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run, err := benchmarks(t.Context(), dir, "the probe module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{"BenchmarkSkipped"}, run.skipped); diff != "" {
+		t.Errorf("skipped (-want +got):\n%s", diff)
+	}
+	if samples := run.allocs["probe.Kept-"+strconv.Itoa(runtime.GOMAXPROCS(0))]; len(samples) != 6 {
+		t.Errorf("BenchmarkKept: %d samples, want 6 (%v)", len(samples), run.allocs)
+	}
+}
+
+func TestParseRejectsUnreadableBenchmarkLines(t *testing.T) {
+	broken := `{"Action":"output","Output":"BenchmarkScan-8\t100\t10 ns/op\t9 allocs/op\ttrailing\n"}` + "\n"
+	if _, err := parse(strings.NewReader(broken)); err == nil {
+		t.Fatal("a benchmark line benchfmt cannot read was accepted")
+	}
+}
+
 func TestGate(t *testing.T) {
+	allocs := func(m map[string][]float64) measurements { return measurements{allocs: m} }
 	cases := []struct {
 		name              string
-		base, head        map[string][]float64
-		skipped           []string
+		base, head        measurements
 		problems, removed []string
 	}{
-		{"equal", map[string][]float64{"a": {3, 3}}, map[string][]float64{"a": {3, 3}}, nil, nil, nil},
-		{"fewer", map[string][]float64{"a": {3}}, map[string][]float64{"a": {2}}, nil, nil, nil},
+		{"equal", allocs(map[string][]float64{"a": {3, 3}}), allocs(map[string][]float64{"a": {3, 3}}), nil, nil},
+		{"fewer", allocs(map[string][]float64{"a": {3}}), allocs(map[string][]float64{"a": {2}}), nil, nil},
 		{
 			"more, by median",
-			map[string][]float64{"a": {3, 3, 9}},
-			map[string][]float64{"a": {4, 4, 1}},
-			nil,
+			allocs(map[string][]float64{"a": {3, 3, 9}}),
+			allocs(map[string][]float64{"a": {4, 4, 1}}),
 			[]string{"more allocations: a: 3 -> 4 allocs/op"},
 			nil,
 		},
-		{"new benchmarks have nothing to compare", nil, map[string][]float64{"b": {9}}, nil, nil, nil},
+		{"new benchmarks have nothing to compare", allocs(nil), allocs(map[string][]float64{"b": {9}}), nil, nil},
 		{
 			"removed benchmarks are listed for review",
-			map[string][]float64{"a": {1}, "b": {1}},
-			map[string][]float64{"a": {1}},
-			nil,
+			allocs(map[string][]float64{"a": {1}, "b": {1}}),
+			allocs(map[string][]float64{"a": {1}}),
 			nil,
 			[]string{"b"},
 		},
 		{
 			"a skipped benchmark fails",
-			map[string][]float64{"a": {1}},
-			map[string][]float64{"a": {1}},
-			[]string{"BenchmarkSlow"},
+			allocs(map[string][]float64{"a": {1}}),
+			measurements{allocs: map[string][]float64{"a": {1}}, skipped: []string{"BenchmarkSlow"}},
 			[]string{"skipped benchmark: BenchmarkSlow (every benchmark must run in CI)"},
 			nil,
 		},
 		{
-			"every measurement gone fails",
-			map[string][]float64{"a": {1}},
-			map[string][]float64{},
-			nil,
-			[]string{"no benchmark measurements left, but the base had some"},
-			[]string{"a"},
+			"nothing left to compare fails",
+			allocs(map[string][]float64{"a": {1}, "b": {1}}),
+			allocs(map[string][]float64{"c": {1}}),
+			[]string{"no benchmark of the base commit can be compared any more"},
+			[]string{"a", "b"},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			problems, removed := gate(c.base, c.head, c.skipped)
+			problems, removed := gate(c.base, c.head)
 			if diff := cmp.Diff(c.problems, problems); diff != "" {
 				t.Errorf("problems (-want +got):\n%s", diff)
 			}
