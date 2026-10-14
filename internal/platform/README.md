@@ -40,7 +40,7 @@
 
 `secret.New(string)` 包装明文，零值表示空明文。`Keyring.Seal(Secret, Location)` 返回 `Sealed`，每次生成独立随机 AES-256 数据密钥，用 AES-GCM 加密数据，再用当前主密钥的 AES-GCM 包裹数据密钥。`Open(Sealed, Location)` 返回 `Secret`，失败不返回明文。`secret.Location{Table, RowID, Purpose}` 指明密文存在哪张表、哪一行、作什么用；任一字段为空都会让密文在同样留空的位置也能打开，属于调用方的错误，`Seal` 和 `Open` 遇到时 panic。`Seal` 唯一可能的失败是这个 panic，因此不返回错误。密钥环加载后只读，可并发使用；不支持热加载。
 
-`Sealed` 包含 `Ciphertext`（含 16 字节认证标签）、`Nonce`（12 字节）、`WrappedDEK`（12 字节包裹 nonce + 32 字节加密数据密钥 + 16 字节标签）、`KeyVersion`（uint32）。两层 nonce 均由标准库随机生成。位置编码为固定域标识 `axiom/secret/location/v1`、一个零字节，再依次为 `Table`、`RowID`、`Purpose` 各写 4 字节大端字节长度和 UTF-8 字节；长度前缀保证不同位置编码不同（如 `{"ab","c"}` 与 `{"a","bc"}`）。数据层以位置编码为 AAD；包裹层认证固定域标识 `axiom/secret/dek/v1`、一个零字节、4 字节大端版本号和位置编码，防止主密钥相同的不同版本被互换。版本不绑定到数据层，后续轮换只需重新包裹数据密钥。
+`Sealed` 包含 `Ciphertext`（含 16 字节认证标签）、`Nonce`（12 字节）、`WrappedDEK`（12 字节包裹 nonce + 32 字节加密数据密钥 + 16 字节标签）、`KeyVersion`（uint32）。两层 nonce 均由标准库随机生成。位置编码为固定域标识 `axiom/secret/location/v1`、一个零字节，再依次为 `Table`、`RowID`、`Purpose` 各写 4 字节大端字节长度和字段的原始字节；长度前缀保证不同位置编码不同（如 `{"ab","c"}` 与 `{"a","bc"}`）。数据层以位置编码为 AAD；包裹层认证固定域标识 `axiom/secret/dek/v1`、一个零字节、4 字节大端版本号和位置编码，防止主密钥相同的不同版本被互换。版本不绑定到数据层，后续轮换只需重新包裹数据密钥。
 
 调用方读取时从预期的记录位置重新构造 `Location`，不能使用随密文一起存的位置。整条记录移到另一张表、另一行或另一用途，替换任何密文字段，都必须认证失败。比起一把主密钥直接加密所有凭证，独立数据密钥允许轮换时保留数据密文；比起自行管理随机 nonce，采用标准库 `NewGCMWithRandomNonce` 避免调用方复用 nonce。每个主密钥版本最多包裹 2³² 个数据密钥，部署应在达到限制前轮换；包不持久化计数。主密钥轮换命令另做。
 
