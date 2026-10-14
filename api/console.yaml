@@ -1,0 +1,33 @@
+# The console's API: what the user console calls on the public listener. Code on both sides is generated from this
+# file (docs/architecture.md「管理接口契约」); change the contract here first.
+openapi: 3.0.3
+info:
+  title: Axiom console API
+  version: v1
+paths:
+  /api/console/v1/version:
+    get:
+      operationId: getVersion
+      summary: The version of the running program
+      description: >-
+        The console compares it with the version it was built as and offers a reload when they differ, so a page
+        left open across a deployment does not keep calling an API it no longer matches.
+      responses:
+        "200":
+          description: The running version
+          headers:
+            Cache-Control:
+              schema: {type: string, enum: [no-store]}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Version"}
+components:
+  schemas:
+    Version:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+          description: The build's module version, the same string the console was built with
+          example: v0.0.0-20261014044725-4daa4538fcac

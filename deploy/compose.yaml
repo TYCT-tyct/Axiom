@@ -42,6 +42,8 @@ services:
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+    ports:
+      - 127.0.0.1:8080:8080 # the public listener, reachable from this machine only
     depends_on:
       migrate: {condition: service_completed_successfully}
     <<: *hardened
