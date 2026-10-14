@@ -55,15 +55,19 @@ CREATE SCHEMA IF NOT EXISTS platform AUTHORIZATION axiom_owner;`
 // axiom_owner on one connection that holds goose's session lock, so concurrent runs wait for each other, and a run
 // that dies leaves the lock with its connection; the next run continues from the recorded version. Every lock is
 // waited for at most about 5 seconds: a long transaction or another run makes this one fail instead of queueing the
-// application's queries behind it.
+// application's queries behind it. A failed connection, wherever it happens, is reported without the URL's parts.
 func Migrate(ctx context.Context, adminURL string) error {
+	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", migrate(ctx, adminURL))
+}
+
+func migrate(ctx context.Context, adminURL string) error {
 	config, err := pgx.ParseConfig(adminURL)
 	if err != nil {
 		return errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string")
 	}
 	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
 	if err := prepare(ctx, config); err != nil {
-		return redactConnect("AXIOM_MIGRATE_DATABASE_URL", err)
+		return err
 	}
 	db := stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
 		_, err := conn.Exec(ctx, "SET ROLE axiom_owner")
@@ -84,7 +88,7 @@ func Migrate(ctx context.Context, adminURL string) error {
 		return err
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		return redactConnect("AXIOM_MIGRATE_DATABASE_URL", fmt.Errorf("migrate platform: %w", err))
+		return fmt.Errorf("migrate platform: %w", err)
 	}
 	// The application reads the version to refuse a database this program is newer than.
 	if _, err := db.ExecContext(ctx, "GRANT SELECT ON "+versionTable+" TO axiom_app"); err != nil {

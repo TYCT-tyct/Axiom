@@ -57,19 +57,25 @@ func TestCheckRefusesLoginsThatEscape(t *testing.T) {
 	}
 }
 
-// TestCheckRedactsConnectionFailures: a failed connection names the variable, not the user, database or host,
-// any of which may hold a misplaced secret.
-func TestCheckRedactsConnectionFailures(t *testing.T) {
+// TestConnectionFailuresAreRedacted: a failed connection, at startup or in a migration, names the variable, not
+// the user, database or host, any of which may hold a misplaced secret.
+func TestConnectionFailuresAreRedacted(t *testing.T) {
 	t.Parallel()
 	planted := parse(t, pgtest.New(t).App)
 	planted.User, planted.Path = url.UserPassword("planted-user", "planted-password"), "/planted-db"
-	err := open(t, planted.String()).Check(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "AXIOM_DATABASE_URL") {
-		t.Fatalf("an unknown user: %v, want an error naming the variable", err)
+	failures := map[string]error{
+		"AXIOM_DATABASE_URL":         open(t, planted.String()).Check(t.Context()),
+		"AXIOM_MIGRATE_DATABASE_URL": pg.Migrate(t.Context(), planted.String()),
 	}
-	for _, part := range []string{"planted-user", "planted-password", "planted-db", planted.Host} {
-		if strings.Contains(err.Error(), part) {
-			t.Errorf("the error %q quotes %q", err, part)
+	for variable, err := range failures {
+		if err == nil || !strings.Contains(err.Error(), variable) {
+			t.Errorf("an unknown user: %v, want an error naming %s", err, variable)
+			continue
+		}
+		for _, part := range []string{"planted-user", "planted-password", "planted-db", planted.Host} {
+			if strings.Contains(err.Error(), part) {
+				t.Errorf("the error %q quotes %q", err, part)
+			}
 		}
 	}
 }
