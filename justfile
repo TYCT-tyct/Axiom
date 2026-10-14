@@ -38,10 +38,11 @@ modules:
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
 # without failing, for the milestone's quality audit, by which time the program calls every module. Test-only
-# packages such as pgtest, like net/http/httptest, are left out of that list.
+# packages such as pgtest and egresstest, like net/http/httptest, are left out of that list; egress.NewForTesting
+# lives in egress itself, so it stays listed.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
