@@ -115,9 +115,9 @@ linters:
       forbid:
         - pattern: ^(fmt\.Print(|f|ln)|print|println)$
           msg: "write output through log/slog; only cmd/ prints to stdout"
-        - pattern: ^pg\.PlatformScope$
+        - pattern: ^pg\.(PlatformScope|NewScope)$
           pkg: ^axiom/internal/platform/pg$
-          msg: "the platform scope reads every tenant's rows: only cmd/ builds it and hands it to the modules that need it (internal/platform/README.md)"
+          msg: "a scope decides which tenants' rows a module reads: only cmd/ builds the platform scope, and only tests build any other (internal/platform/README.md)"
   exclusions:
     generated: strict
     rules:
@@ -126,9 +126,9 @@ linters:
         linters: [funlen, dupl]
       - path: ^(cmd|tools)/ # programs, which print their results and build the platform scope
         linters: [forbidigo]
-      - path: ^internal/platform/ # pg defines the platform scope and tests it
+      - path: _test\.go # tests build whatever scope they test
         linters: [forbidigo]
-        text: pg\.PlatformScope
+        text: pg\.(PlatformScope|NewScope)
 
 formatters:
   enable:
