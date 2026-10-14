@@ -1,4 +1,4 @@
-// Package secret keeps credential plaintext out of ordinary output and binds encrypted values to their storage context.
+// Package secret keeps credential plaintext out of ordinary output and binds encrypted values to their storage location.
 package secret
 
 import (

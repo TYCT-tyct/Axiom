@@ -18,10 +18,30 @@ type Sealed struct {
 	KeyVersion uint32
 }
 
-// Seal uses a fresh data key per value so future master key rotation need not reencrypt the data. An empty aad would
-// let the value open in any location, so it is a caller bug and panics.
-func (k *Keyring) Seal(plaintext Secret, aad []byte) Sealed {
-	requireAAD(aad)
+// Location names where a sealed value is stored. Both encryption layers authenticate it, so a value moved to another
+// table, row or purpose fails to open. Every field is required: an empty one is a caller bug and panics.
+type Location struct {
+	Table, RowID, Purpose string
+}
+
+// encode is the only encoding of a location. Stored values depend on it, so it never changes; a new encoding would
+// need a new label. The label separates it from other uses of the keys, and the length prefixes make it injective:
+// without them, ("ab", "c") and ("a", "bc") would encode alike.
+func (l Location) encode() []byte {
+	encoded := []byte("axiom/secret/location/v1\x00")
+	for _, field := range []string{l.Table, l.RowID, l.Purpose} {
+		if field == "" {
+			panic("secret: every location field must be set")
+		}
+		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field))) // #nosec G115 -- An identifier is never 4 GiB.
+		encoded = append(encoded, field...)
+	}
+	return encoded
+}
+
+// Seal uses a fresh data key per value so future master key rotation need not reencrypt the data.
+func (k *Keyring) Seal(plaintext Secret, loc Location) Sealed {
+	aad := loc.encode()
 	dek := make([]byte, 32)
 	// Since Go 1.24 crypto/rand.Read never returns an error; it crashes the program instead.
 	rand.Read(dek)
@@ -34,10 +54,10 @@ func (k *Keyring) Seal(plaintext Secret, aad []byte) Sealed {
 	}
 }
 
-// Open authenticates both layers before exposing plaintext, which remains protected from accidental output. An empty
-// aad panics, as in Seal.
-func (k *Keyring) Open(sealed Sealed, aad []byte) (Secret, error) {
-	requireAAD(aad)
+// Open authenticates both layers before exposing plaintext, which remains protected from accidental output. The caller
+// rebuilds loc from where it read the row, never from data stored beside the ciphertext.
+func (k *Keyring) Open(sealed Sealed, loc Location) (Secret, error) {
+	aad := loc.encode()
 	master, ok := k.keys[sealed.KeyVersion]
 	if !ok {
 		return Secret{}, errors.New("secret: unknown master key version")
@@ -60,12 +80,6 @@ func (k *Keyring) Open(sealed Sealed, aad []byte) (Secret, error) {
 		return Secret{}, errors.New("secret: data authentication failed")
 	}
 	return New(string(plaintext)), nil
-}
-
-func requireAAD(aad []byte) {
-	if len(aad) == 0 {
-		panic("secret: aad must bind the value to where it is stored")
-	}
 }
 
 // newGCM only receives 32-byte keys: data keys from Seal, data keys whose wrap GCM authenticated, and master keys
