@@ -84,6 +84,8 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 会话粘性 | session_affinity | 同一会话优先走上一次的端点，以提高缓存命中 |
 | 预设 | preset | 服务端保存的命名配置，第一版只含端点的筛选和排序规则，可挂在 API key 上；与 OpenRouter 的 Presets 是同一个概念，以后可以扩展到模型参数 |
 | 请求 / 尝试 | request / attempt | 用户的一次调用，保存下来就是调用记录 / 对上游的一次调用 |
+| 请求 ID | request_id | 服务端为每个请求生成的唯一编号，放在 `X-Request-ID` 响应头里；日志和出错提示都带上它 |
+| 调用记录 | call_log | 一个请求保存下来的元数据，含它的每次尝试，不含对话内容，见[记录与告警](domains/observability.md) |
 | 成本 / 售价 / 加价 | cost / price / markup | 付给上游的钱 / 向账户收的钱 / 两者之差 |
 | 账本 | ledger | 余额每次变动的记录，只追加不修改 |
 | 冻结 | hold | 请求开始前按预估费用预留的余额；单独存放，不是账本分录 |
@@ -97,11 +99,13 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 权限 | permission | 一件具体能做的事，由代码定义 |
 | 角色 | role | 一组权限，是后台数据 |
 | 范围 | scope | 配置和授权所在的层级：平台、站点、账户、工作区；配置还可以细到单个 API key |
+| 租户范围 | tenant scope（`pg.Scope`） | 一个数据库事务能读写的站点和账户集合，由行级安全执行，见[安全的「租户隔离」](security.md#租户隔离) |
 | 节点 | node | 运行 Axiom 的一台机器 |
 | 节点角色 | node_role | 节点承担的职责，一个节点可兼任多个，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
 | 入口 | ingress | 节点角色之一 |
 | 核心 | core | 节点角色之一 |
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
+| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用和控制台 / 只在核心上的管理后台、管理接口和运营接口 / 只答健康检查，默认只听本机。见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
 | 收款渠道 | payment_channel | 充值用的收款插件，如支付宝、Stripe、USDT，见[支付](domains/payments.md) |
@@ -113,6 +117,7 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 
 - `provider` 只用作兼容 OpenRouter 的对外 API 字段，内部一律用 `supplier`。用户在 `provider` 里填的是官方 API 的名称或中转站分组的代号。
 - 分组的代码名用 `supplier_group`，不单用 `group`：它是数据库保留字，而 new-api 里的 group 指用户等级，容易混淆。
+- 「运维」只指节点角色；只答健康检查的监听叫探针监听。
 - "账号"只指我们在上游（官方 API、中转站、号池）的账号，"账户"只指我们这边的账户。
 
 ## 决策与理由
