@@ -13,6 +13,9 @@ Thumbs.db
 # Python bytecode
 __pycache__/
 
+# The program built for the container image
+deploy/bin/
+
 # Logs and scratch output
 *.log
 tmp/

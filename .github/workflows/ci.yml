@@ -1,0 +1,75 @@
+# Project checks; the base checks are in workflow.yml. Every job here is a check the ruleset protecting main
+# requires (manage.py protect reads this file), so keep the names, and add or rename jobs only as the skill says.
+name: ci
+
+on:
+  pull_request:
+    # edited: docs-impact reads the description. Every job reruns on an edit; build cannot be skipped instead, because
+    # a skipped required check counts as passed, and docs-impact cannot move to its own workflow, because a check
+    # must have one source. So keep description edits few: write it in full before asking for review.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer event on a pull request makes the run for the older one pointless; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Pinned with the release's own checksum (SHA256SUMS), so a swapped download fails.
+      JUST_VERSION: "1.58.0"
+      JUST_SHA256: "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
+        with:
+          fetch-depth: 0 # the benchmark comparison checks out the base commit
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: "**/go.sum"
+      - run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/just.tar.gz" "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: just check
+      - run: just up # one command deploys this machine and waits for a ready node
+        timeout-minutes: 5
+      - if: always()
+        run: just down
+      - if: github.event_name == 'pull_request'
+        run: just migrations "$BASE"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+      - if: github.event_name == 'pull_request'
+        run: just bench-compare "$BASE"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+
+  docs-impact:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # the description, read when the job runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: |
+          PR_BODY="$(gh api "repos/$REPO/pulls/$NUMBER" --jq .body)" # bash -e: a failed API call fails the step
+          export PR_BODY
+          python3 scripts/check_docs_impact.py "$BASE"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
