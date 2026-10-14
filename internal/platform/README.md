@@ -84,7 +84,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 |---|---|---|
 | `axiom_owner` | 否 | 拥有全部 schema 和对象，只在迁移时进入；没有 BYPASSRLS |
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
-| 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户。建好 `axiom_owner` 和 schema，再切成 `axiom_owner` 执行迁移 |
+| 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner` 由别的角色建好时，还要有它的 ADMIN 权限。建好 `axiom_owner` 和 schema，再切成 `axiom_owner` 执行迁移 |
 
 [安全](../../docs/security.md#租户隔离)角色表里的后台任务角色和 key 查询函数，随第一个用到它们的模块加入。
 
