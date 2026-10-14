@@ -29,19 +29,24 @@ func parse(t *testing.T, databaseURL string) *url.URL {
 func TestCheckRefusesLoginsThatEscape(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t)
-	// Role names are cluster-wide, so they carry the database's name.
-	risky := strings.TrimPrefix(parse(t, database.App).Path, "/") + "_risky"
-	if err := pgtest.Run(t.Context(), database.Superuser,
-		"CREATE ROLE "+risky+"_group IN ROLE pg_execute_server_program",
-		"CREATE ROLE "+risky+" LOGIN PASSWORD 'risky' IN ROLE "+risky+"_group"); err != nil {
-		t.Fatal(err)
+	// riskyLogin creates a login whose only way out of row-level security is the group it is in, created with
+	// groupOptions. Role names are cluster-wide, so they carry the database's name.
+	riskyLogin := func(name, groupOptions string) string {
+		t.Helper()
+		name = strings.TrimPrefix(parse(t, database.App).Path, "/") + "_" + name
+		if err := pgtest.Run(t.Context(), database.Superuser, "CREATE ROLE "+name+"_group "+groupOptions,
+			"CREATE ROLE "+name+" LOGIN PASSWORD 'risky' IN ROLE "+name+"_group"); err != nil {
+			t.Fatal(err)
+		}
+		login := parse(t, database.App)
+		login.User = url.UserPassword(name, "risky")
+		return login.String()
 	}
-	riskyURL := parse(t, database.App)
-	riskyURL.User = url.UserPassword(risky, "risky")
 	logins := map[string]string{
 		"a superuser": database.Superuser,
 		"a superuser that switched to axiom_app as it connected":   database.Superuser + "&role=axiom_app",
-		"a login that runs programs on the server through a group": riskyURL.String(),
+		"a login that runs programs on the server through a group": riskyLogin("runs", "IN ROLE pg_execute_server_program"),
+		"a login that replicates through a group":                  riskyLogin("replicates", "REPLICATION"),
 	}
 	for name, login := range logins {
 		db := open(t, login)
