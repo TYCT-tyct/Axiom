@@ -1,10 +1,13 @@
 package egress
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -171,26 +174,71 @@ type failingReader struct{}
 func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 func TestRequestDeadlineCoversBody(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if err := http.NewResponseController(w).Flush(); err != nil {
-			t.Error(err)
-		}
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	client := NewForTesting(egresstest.Loopback(t))
-	defer client.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
-	defer cancel()
-	resp, err := client.Do(request(t, server.URL).WithContext(ctx))
+	for _, major := range []int{1, 2} {
+		t.Run(fmt.Sprintf("HTTP/%d", major), func(t *testing.T) {
+			client, url := serve(t, major, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				if err := http.NewResponseController(w).Flush(); err != nil {
+					t.Error(err)
+				}
+				<-r.Context().Done()
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			resp, err := client.Do(request(t, url).WithContext(ctx))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mustClose(t, resp.Body)
+			if _, err := ReadBody(resp.Body, 1); !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("body did not respect deadline: %v", err)
+			}
+		})
+	}
+}
+
+// Without the refusal Do returns the 101 and ReadBody on its body blocks past the request deadline.
+func TestRefusesProtocolSwitch(t *testing.T) {
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mustClose(t, resp.Body)
-	if _, err := ReadBody(resp.Body, 1); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("body did not respect deadline: %v", err)
+	closed := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			closed <- err
+			return
+		}
+		closed <- errors.Join(switchAndWait(conn), conn.Close())
+	}()
+	client := NewForTesting(egresstest.Loopback(t))
+	defer client.CloseIdleConnections()
+	err = requestFailure(t, client, request(t, "http://"+listener.Addr().String()))
+	mustClose(t, listener)
+	if !errors.Is(err, errProtocolSwitch) {
+		t.Errorf("101 response not refused: %v", err)
 	}
+	if err := <-closed; !errors.Is(err, io.EOF) {
+		t.Errorf("connection left open after the refused 101: %v", err)
+	}
+}
+
+// switchAndWait answers one request with 101 and then stays silent; only the client closing the connection ends the
+// read early, with io.EOF.
+func switchAndWait(conn net.Conn) error {
+	reader := bufio.NewReader(conn)
+	if _, err := http.ReadRequest(reader); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"); err != nil {
+		return err
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	_, err := reader.ReadByte()
+	return err
 }
 
 func redirectServer(t *testing.T, followed *atomic.Int32) *httptest.Server {

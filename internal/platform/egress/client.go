@@ -26,6 +26,8 @@ var ErrDeadlineRequired = errors.New("egress: request context requires a deadlin
 // ErrInvalidURL rejects URLs whose user information would become a Basic Authorization header or leak into errors.
 var ErrInvalidURL = errors.New("egress: expected an HTTP(S) URL with a host and without user information or opaque data")
 
+var errProtocolSwitch = errors.New("egress: upstream answered 101 Switching Protocols; protocol upgrades are not supported")
+
 // Client owns its transport so callers cannot replace address validation or enable proxies.
 type Client struct{ transport *http.Transport }
 
@@ -91,6 +93,11 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.transport.RoundTrip(out)
 	if err != nil {
 		return nil, fmt.Errorf("egress request: %w", err)
+	}
+	// After a 101 the body is the raw connection, which the request context no longer closes, so a silent upstream
+	// could hold a reader past its deadline. Axiom never asks for an upgrade; closing the body closes the connection.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return nil, errors.Join(errProtocolSwitch, resp.Body.Close())
 	}
 	return resp, nil
 }

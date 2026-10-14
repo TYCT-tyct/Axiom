@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -38,12 +39,9 @@ func TestTLSKeepsHostnameAndVerifiesCertificate(t *testing.T) {
 	if err := requestFailure(t, client, request(t, target)); !errors.As(err, &untrusted) {
 		t.Fatalf("expected certificate verification failure: %v", err)
 	}
-	roots := x509.NewCertPool()
-	roots.AddCert(server.Certificate())
-	// Only the trust roots differ from production; the dialer and the rest of the transport are the real ones.
 	trusted := &Client{transport: client.transport.Clone()}
 	defer trusted.CloseIdleConnections()
-	trusted.transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	trust(trusted, server.Certificate())
 	resp, err := trusted.Do(request(t, target))
 	if err != nil {
 		t.Fatal(err)
@@ -54,15 +52,49 @@ func TestTLSKeepsHostnameAndVerifiesCertificate(t *testing.T) {
 	}
 }
 
-func TestResponseHeaderSizeLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("X-Padding", strings.Repeat("a", maxResponseHeaderBytes))
+// trust must run before the client's first request. Only the trust roots differ from production; the dialer and the
+// rest of the transport, including ForceAttemptHTTP2, are the real ones.
+func trust(client *Client, cert *x509.Certificate) {
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	client.transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+}
+
+// serve starts handler over plain HTTP/1.1 or, for major 2, over TLS negotiating HTTP/2 as production upstreams do.
+func serve(t *testing.T, major int, handler http.HandlerFunc) (*Client, string) {
+	t.Helper()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != major {
+			t.Errorf("request used HTTP/%d, want HTTP/%d", r.ProtoMajor, major)
+		}
+		handler(w, r)
 	}))
-	defer server.Close()
 	client := NewForTesting(egresstest.Loopback(t))
-	defer client.CloseIdleConnections()
-	if err := requestFailure(t, client, request(t, server.URL)); !strings.Contains(err.Error(), "header") {
-		t.Fatalf("oversized response header accepted: %v", err)
+	if major == 2 {
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		trust(client, server.Certificate())
+	} else {
+		server.Start()
+	}
+	t.Cleanup(server.Close)
+	t.Cleanup(client.CloseIdleConnections)
+	return client, server.URL
+}
+
+func TestResponseHeaderSizeLimit(t *testing.T) {
+	for _, major := range []int{1, 2} {
+		t.Run(fmt.Sprintf("HTTP/%d", major), func(t *testing.T) {
+			// HTTP/2 counts 32 bytes per field on top of Go's room for ten such fields, so exceed the limit by more. Two
+			// fields keep each one short enough for the HPACK decoder, so the list limit, not a string limit, refuses them.
+			half := strings.Repeat("a", maxResponseHeaderBytes/2+1<<9)
+			client, url := serve(t, major, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header()["X-Padding"] = []string{half, half}
+			})
+			if err := requestFailure(t, client, request(t, url)); !strings.Contains(err.Error(), "header") {
+				t.Fatalf("oversized response header accepted: %v", err)
+			}
+		})
 	}
 }
 
@@ -141,4 +173,41 @@ func TestLoopbackIPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mustClose(t, resp.Body)
+}
+
+// Go pools connections by host and port today. This guards a future change that reuses an HTTP/2 connection for
+// another host its certificate also covers, which would skip validating that host's addresses.
+func TestHTTP2ConnectionIsNotReusedForAnotherHost(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Host, "a.example.com:") {
+			t.Errorf("request for %s reached the server", r.Host)
+		}
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS() // the test certificate covers example.com and *.example.com
+	defer server.Close()
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newClient(egresstest.Loopback(t), func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		if host == "a.example.com" {
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("10.0.0.1")}, nil
+	})
+	trust(client, server.Certificate())
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(request(t, "https://"+net.JoinHostPort("a.example.com", port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, resp.Body) // HTTP/2 pools the connection for further streams while this one is open
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("negotiated HTTP/%d, want HTTP/2", resp.ProtoMajor)
+	}
+	err = requestFailure(t, client, request(t, "https://"+net.JoinHostPort("b.example.com", port)))
+	if !errors.Is(err, ErrAddressDenied) {
+		t.Fatalf("host resolving to a private address was not refused: %v", err)
+	}
 }
