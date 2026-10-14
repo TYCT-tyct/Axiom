@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules tidy generated lint deadcode test vuln secrets web
+check: docs modules scope tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml)
 generate: web-install
@@ -34,6 +34,12 @@ lint:
 # Module imports follow the dependency table in docs/architecture.md
 modules:
     go run -C tools ./checkmodules ..
+
+# Only internal/platform/pg sets the tenant scope. Row-level security catches a forgotten condition, not SQL that
+# widens its own transaction's scope, which any role may do; so the settings' names and set_config fail anywhere
+# else, in any case and spacing SQL accepts, in committed files or new ones.
+scope:
+    found="$(git grep --untracked -n -I -i -E 'set_config|axiom[[:space:]"]*\.[[:space:]"]*scope_' -- '*.go' '*.sql' ':!internal/platform/pg/')"; [ $? -le 1 ] || exit 1; [ -z "$found" ] || { echo "only internal/platform/pg may set the tenant scope:"; echo "$found"; exit 1; }
 
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
