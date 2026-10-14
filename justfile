@@ -25,9 +25,10 @@ lint:
 modules:
     go run -C tools ./checkmodules ..
 
-# Every function is reachable from a program; code only tests reach is dead
+# Every function is reachable from a program; code only tests reach is dead. The one exception: packages named
+# *test, like net/http/httptest, exist only to serve tests.
 deadcode:
-    out="$({{ tool }} deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
+    out="$({{ tool }} deadcode ./...)" || exit 1; out="$(printf '%s' "$out" | grep -vE '[/\\][a-z]+test[/\\][a-z_]+\.go:' || true)"; [ -z "$out" ] || { echo "$out"; exit 1; }
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
@@ -49,6 +50,11 @@ up:
 
 down:
     {{ compose }} down
+
+# Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
+# counts as a deletion)
+migrations base:
+    changed="$(git diff --name-only --no-renames --diff-filter=a {{ quote(base) }}...HEAD -- '*/migrations/*')"; [ -z "$changed" ] || { echo "merged migrations were changed or removed:"; echo "$changed"; exit 1; }
 
 vuln:
     {{ tool }} govulncheck ./...

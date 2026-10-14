@@ -46,6 +46,15 @@ func (e *Env) String(name, def string) string {
 	return def
 }
 
+// Required returns the variable's value; unset is a problem.
+func (e *Env) Required(name string) string {
+	value := e.String(name, "")
+	if value == "" {
+		e.errs = append(e.errs, fmt.Errorf("%s: required", name))
+	}
+	return value
+}
+
 // Duration returns the variable as a positive duration in Go's notation, such as 30s or 1m30s, or def when it is unset.
 func (e *Env) Duration(name string, def time.Duration) time.Duration {
 	value := e.String(name, "")
