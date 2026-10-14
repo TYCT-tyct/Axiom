@@ -29,15 +29,15 @@ type Health struct{ ready atomic.Bool }
 // SetReady records whether the node takes new work.
 func (h *Health) SetReady(ready bool) { h.ready.Store(ready) }
 
-// probeTimeout bounds a whole probe exchange, request body included. Probes never stream, and without it a client
-// that announces a body and never sends it holds the connection forever: the server waits to drain the body, and
-// neither the header nor the idle timeout covers that wait.
+// probeTimeout bounds each phase of a probe: reading the headers, reading the whole request, writing the response.
+// Probes never stream, and without the read bound a client that announces a body and never sends it holds the
+// connection forever: the server waits to drain the body, and neither the header nor the idle timeout covers that.
 const probeTimeout = 2 * time.Second
 
 // Server returns the ops listener's server, which serves only the probes.
 func (h *Health) Server(logger *slog.Logger) *http.Server {
 	server := New(h.Handler(), logger)
-	server.ReadTimeout, server.WriteTimeout = probeTimeout, probeTimeout
+	server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout = probeTimeout, probeTimeout, probeTimeout
 	return server
 }
 

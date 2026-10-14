@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -24,6 +25,11 @@ func TestProbeServerDropsStalledBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { // before node.Close, which waits for this connection
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Error(err)
+		}
+	}()
 	if _, err := io.WriteString(conn, "GET /livez HTTP/1.1\r\nHost: probe\r\nContent-Length: 1\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -33,9 +39,6 @@ func TestProbeServerDropsStalledBodies(t *testing.T) {
 	}
 	if _, err := io.Copy(io.Discard, conn); err != nil {
 		t.Fatalf("the connection stayed open %v after the probe stalled: %v", time.Since(start), err)
-	}
-	if err := conn.Close(); err != nil {
-		t.Error(err)
 	}
 }
 

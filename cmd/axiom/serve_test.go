@@ -65,7 +65,9 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		{"a taken address", []string{"AXIOM_OPS_ADDR=" + taken.Addr().String()}, []string{"AXIOM_OPS_ADDR: "}},
 	}
 	for _, c := range cases {
-		err := serve(t.Context(), c.environ, slog.New(slog.DiscardHandler))
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
+		err := serve(ctx, c.environ, slog.New(slog.DiscardHandler))
+		cancel()
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
 		}
