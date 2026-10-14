@@ -29,10 +29,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	})
 	var health httpserver.Health
 	health.SetReady(true)
-	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(slow, logger), nil},
-		{"AXIOM_OPS_ADDR", "127.0.0.1:0", health.Server(logger), nil},
-	}
+	servers := node("127.0.0.1:0", slow, "127.0.0.1:0", &health, logger)
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +37,11 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	for _, s := range servers {
 		go func() { served <- s.server.Serve(s.listener) }()
 	}
-	public, ops := "http://"+servers[0].listener.Addr().String(), "http://"+servers[1].listener.Addr().String()
+	urls := map[string]string{}
+	for _, s := range servers {
+		urls[s.variable] = "http://" + s.listener.Addr().String()
+	}
+	public, ops := urls["AXIOM_PUBLIC_ADDR"], urls["AXIOM_OPS_ADDR"]
 
 	inFlight := make(chan response, 1)
 	go func() {

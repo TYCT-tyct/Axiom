@@ -7,11 +7,11 @@ import { Icon, type IconName } from "./icon";
 import { usePageTitle } from "./page-title";
 
 // Every view of data has four states besides showing it: loading, empty, failed, and not allowed (docs/frontend.md).
-// DataState picks the right one from a query; the views are exported for screens that are not a single query.
+// DataState picks the right one from a query.
 
 // A failure that carries what the server said about it; the API client's errors have this shape. Status 0 means no
 // response arrived.
-export type Failure = { status: number; requestId: string | null };
+type Failure = { status: number; requestId: string | null };
 
 function isFailure(error: unknown): error is Failure {
   return typeof error === "object" && error !== null && "status" in error && "requestId" in error;
@@ -70,7 +70,7 @@ export function EmptyState({ title, children, action }: { title?: string; childr
   );
 }
 
-export function ForbiddenState() {
+function ForbiddenState() {
   const { t } = useTranslation("common");
   return (
     <StateFrame icon="lock" title={t("state.forbiddenTitle")}>
@@ -79,7 +79,7 @@ export function ForbiddenState() {
   );
 }
 
-export function ErrorState({ error, at, onRetry }: { error: unknown; at?: Date; onRetry?: () => void }) {
+function ErrorState({ error, at, onRetry }: { error: unknown; at?: Date; onRetry?: () => void }) {
   const { t } = useTranslation("common");
   const format = useFormat();
   const failure = isFailure(error) ? error : null;
@@ -162,11 +162,21 @@ export function PageFailedState() {
   );
 }
 
-// NotFoundState is shown for an address no page answers; action leads back, usually a link home.
-export function NotFoundState({ action }: { action?: ReactNode }) {
+// NotFoundState is shown for an address no page answers. Its link home is a plain link, so it needs no router and
+// serves every app; loading the app afresh also picks up a newer build, if the address came from one.
+export function NotFoundState() {
   const { t } = useTranslation("common");
   return (
-    <StateFrame icon="search" title={t("state.notFoundTitle")} action={action} page>
+    <StateFrame
+      icon="search"
+      title={t("state.notFoundTitle")}
+      action={
+        <a href={import.meta.env.BASE_URL} className="text-accent underline-offset-4 hover:underline">
+          {t("state.home")}
+        </a>
+      }
+      page
+    >
       <p>{t("state.notFoundBody")}</p>
     </StateFrame>
   );

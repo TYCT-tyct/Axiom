@@ -1,6 +1,7 @@
 package pg_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -48,14 +49,20 @@ func open(t *testing.T, url string) *pg.DB {
 	return db
 }
 
-// TestOpenRefusesANonPositiveHealthCheckPeriod: pgx would panic on it in the background; Open names the variable and
-// the parameter instead, and quotes nothing else from the URL.
-func TestOpenRefusesANonPositiveHealthCheckPeriod(t *testing.T) {
+// TestOpenRefusesBadURLs: Open names the variable and the problem, and quotes nothing from the URL. A non-positive
+// health check period is one pgx would panic on in the background.
+func TestOpenRefusesBadURLs(t *testing.T) {
 	t.Parallel()
-	for _, period := range []string{"0s", "-1s"} {
-		_, err := pg.Open(t.Context(), "postgres://planted-user:planted-password@planted-host/planted-db?pool_health_check_period="+period)
-		if err == nil || !strings.Contains(err.Error(), "AXIOM_DATABASE_URL: pool_health_check_period") || strings.Contains(err.Error(), "planted") {
-			t.Errorf("pool_health_check_period=%s: %v", period, err)
+	const planted = "postgres://planted-user@planted-host/planted-db"
+	urls := map[string]string{
+		planted + "?pool_health_check_period=0s":  "AXIOM_DATABASE_URL: pool_health_check_period",
+		planted + "?pool_health_check_period=-1s": "AXIOM_DATABASE_URL: pool_health_check_period",
+		planted + "%zz": "AXIOM_DATABASE_URL: not a PostgreSQL connection string",
+	}
+	for url, want := range urls {
+		_, err := pg.Open(t.Context(), url)
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "planted") {
+			t.Errorf("%s: %v", url, err)
 		}
 	}
 }
@@ -234,6 +241,24 @@ func TestScopeEndsWithTransaction(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("a malformed scope did not fail the query")
+	}
+}
+
+// TestTxRollsBackWhenItsContextEnds: a transaction whose context ends before it commits leaves no writes behind.
+func TestTxRollsBackWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+	database := newDatabase(t)
+	seed(t, database)
+	db, platform := open(t, database.App), pg.NewScope(true, nil, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := db.Tx(ctx, platform, func(tx pg.Tx) error {
+		defer cancel()
+		return tx.QueryRow(ctx, "WITH gone AS (DELETE FROM rlstest.items RETURNING 1) SELECT count(*) FROM gone").Scan(new(int))
+	}); err == nil {
+		t.Error("the transaction committed after its context ended")
+	}
+	if n := count(t, db, platform); n != 4 {
+		t.Errorf("the cancelled transaction left %d of 4 rows", n)
 	}
 }
 

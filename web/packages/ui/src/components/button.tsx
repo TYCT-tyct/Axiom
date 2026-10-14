@@ -5,7 +5,7 @@ import { cn } from "../cn";
 
 // Button in the shadcn/ui pattern: variants by class-variance-authority, asChild to style a link as a button. At most
 // one primary per screen; an icon-only button must carry an aria-label.
-export const buttonVariants = cva(
+const buttonVariants = cva(
   "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-btn font-medium whitespace-nowrap transition-[background-color,color,scale] duration-150 ease-out select-none active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {

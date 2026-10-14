@@ -4,12 +4,10 @@ import {
   focusPage,
   Icon,
   type IconName,
-  LoadingState,
   Logo,
-  NotFoundState,
-  PageFailedState,
   PageHeader,
   PreferenceSwitches,
+  routerDefaults,
   SideNavItem,
 } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, Link, Outlet } from "@tanstack/react-router";
@@ -62,20 +60,7 @@ function Placeholder({ page }: { page: Page }) {
   );
 }
 
-function NotFound() {
-  const { t } = useTranslation("common");
-  return (
-    <NotFoundState
-      action={
-        <Link to="/" className="text-accent underline-offset-4 hover:underline">
-          {t("state.home")}
-        </Link>
-      }
-    />
-  );
-}
-
-const root = createRootRoute({ component: Layout, notFoundComponent: NotFound });
+const root = createRootRoute({ component: Layout });
 
 const routeTree = root.addChildren(
   pages.map(({ page, path }) =>
@@ -83,12 +68,6 @@ const routeTree = root.addChildren(
   ),
 );
 
-export const router = createRouter({
-  routeTree,
-  defaultPreload: "intent",
-  defaultPendingMs: 150,
-  defaultPendingComponent: LoadingState,
-  defaultErrorComponent: PageFailedState,
-});
+export const router = createRouter({ ...routerDefaults, routeTree });
 
 router.subscribe("onResolved", focusPage);
