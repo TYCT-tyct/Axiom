@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json/v2"
+	"encoding/json/v2" //nolint:depguard // decodes the program's own log records and console response; jsonx guards input from outside
 	"errors"
 	"io"
 	"log/slog"

@@ -2,8 +2,8 @@ package secret_test
 
 import (
 	"bytes"
-	"encoding/json"
-	jsonv2 "encoding/json/v2"
+	"encoding/json"           //nolint:depguard // generated code encodes with v1: a Secret must redact under it too
+	jsonv2 "encoding/json/v2" //nolint:depguard // jsonx is built on v2: a Secret must redact under it
 	"fmt"
 	"log/slog"
 	"strings"

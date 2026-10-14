@@ -2,7 +2,7 @@ package httpserver
 
 import (
 	"bytes"
-	"encoding/json/v2"
+	"encoding/json/v2" //nolint:depguard // decodes the access log this package writes; jsonx guards input from outside
 	"io"
 	"log/slog"
 	"maps"
