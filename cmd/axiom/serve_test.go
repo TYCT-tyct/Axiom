@@ -55,6 +55,8 @@ func TestServe(t *testing.T) {
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
 	database := pgtest.New(t)
+	// taken is bound but never accepts: the system still completes connections to it, which then hear nothing, as
+	// from a database server that has stalled.
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +85,11 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			"a database login that escapes row-level security",
 			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
 			[]string{"database: the database login can act as roles that row-level security cannot hold"},
+		},
+		{
+			"a database server that never answers",
+			[]string{"AXIOM_STARTUP_TIMEOUT=1s", "AXIOM_DATABASE_URL=postgres://planted-value:planted-value@" + taken.Addr().String() + "/planted-value"},
+			[]string{"database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT"},
 		},
 	}
 	for _, c := range cases {
