@@ -42,9 +42,11 @@ bench-compare base:
 
 compose := "docker compose -f deploy/compose.yaml"
 
-# Build the program for Linux and start it on this machine; returns once it reports ready, or within a minute fails
-# with the containers' state, health-check output and logs
+# Build the program for Linux and start it with its database on this machine, writing random local passwords to
+# deploy/.env the first time; returns once it reports ready, or within a minute fails with the containers' state,
+# health-check output and logs
 up:
+    [ -f deploy/.env ] || printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 

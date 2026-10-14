@@ -1,11 +1,48 @@
-# The program on one machine (docs/architecture.md「部署」). Start it with `just up`.
+# The program and its database on one machine (docs/architecture.md「部署」). Start it with `just up`, which also
+# writes the passwords this file reads to deploy/.env the first time.
 name: axiom
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
 services:
+  postgres:
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: axiom
+      POSTGRES_PASSWORD: ${AXIOM_POSTGRES_PASSWORD:?set it in deploy/.env}
+      AXIOM_APP_PASSWORD: ${AXIOM_APP_PASSWORD:?set it in deploy/.env} # read by the init script on a new database
+    volumes:
+      - postgres:/var/lib/postgresql
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [CMD, pg_isready, --username, postgres, --dbname, axiom]
+      interval: 10s
+      start_period: 30s
+      start_interval: 1s
+
+  migrate:
+    image: axiom:local
+    command: [migrate]
+    environment:
+      AXIOM_MIGRATE_DATABASE_URL: postgres://postgres:${AXIOM_POSTGRES_PASSWORD}@postgres/axiom?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+    <<: *hardened
+
   axiom:
     build: .
     image: axiom:local
     restart: unless-stopped
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    environment:
+      AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    <<: *hardened
+
+volumes:
+  postgres:
