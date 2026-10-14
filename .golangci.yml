@@ -109,6 +109,9 @@ linters:
         linters: [funlen, dupl]
       - path: ^(cmd|tools)/ # programs, which print their results
         linters: [forbidigo]
+      - path: ^tools/ # developer tools run git and go with arguments from their own command line
+        linters: [gosec]
+        text: "G204|G702"
 
 formatters:
   enable:
