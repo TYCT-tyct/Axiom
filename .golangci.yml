@@ -12,6 +12,7 @@ linters:
     - exhaustive
     - gochecksumtype
     - govet
+    - ineffassign
     - nilerr
     - nilnesserr
     - nilnil
@@ -52,6 +53,9 @@ linters:
       min-complexity: 15
     dupl:
       threshold: 100
+    errcheck:
+      # `_ = f()` and `v, _ := f()` drop errors too; an error that truly may be ignored gets a nolint with a reason.
+      check-blank: true
     gochecksumtype:
       # A default branch does not count: adding a variant must force every switch on it to be revisited
       # (exhaustive already behaves this way by default).
@@ -93,6 +97,7 @@ linters:
             - pkg: github.com/stretchr/testify
               desc: "use the standard testing package; compare values with github.com/google/go-cmp"
     forbidigo:
+      analyze-types: true # so an import alias of fmt cannot hide a call
       forbid:
         - pattern: ^(fmt\.Print(|f|ln)|print|println)$
           msg: "write output through log/slog; only cmd/ prints to stdout"
