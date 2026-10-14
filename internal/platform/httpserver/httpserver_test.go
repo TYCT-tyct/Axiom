@@ -22,8 +22,9 @@ func TestServerLimits(t *testing.T) {
 		{"the probes", health.Server(logger), false},
 	}
 	for _, s := range servers {
-		streams := s.server.ReadTimeout == 0 && s.server.WriteTimeout == 0
-		if s.server.ReadHeaderTimeout <= 0 || s.server.IdleTimeout <= 0 || streams != s.streams {
+		unbounded := s.server.ReadTimeout == 0 && s.server.WriteTimeout == 0
+		bounded := s.server.ReadTimeout > 0 && s.server.WriteTimeout > 0
+		if s.server.ReadHeaderTimeout <= 0 || s.server.IdleTimeout <= 0 || s.streams && !unbounded || !s.streams && !bounded {
 			t.Errorf("%s: header %v, idle %v, read %v, write %v", s.name, s.server.ReadHeaderTimeout,
 				s.server.IdleTimeout, s.server.ReadTimeout, s.server.WriteTimeout)
 		}
