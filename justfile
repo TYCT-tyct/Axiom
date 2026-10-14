@@ -8,7 +8,7 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 
 # Run every check the CI build job runs
-check: tidy lint deadcode test bench-smoke vuln docs
+check: tidy lint modules deadcode test bench-smoke vuln docs
 
 # Format Go code in place
 fmt:
@@ -21,6 +21,10 @@ tidy:
 
 lint:
     {{ tool }} golangci-lint run
+
+# Module imports follow the dependency table in docs/architecture.md
+modules:
+    {{ python }} scripts/check_modules.py
 
 # Every function is reachable from a program; code only tests reach is dead
 deadcode:
