@@ -23,7 +23,7 @@
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 支付：收款渠道、充值流程、加密货币、手续费、退款与拒付、防欺诈、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
 | 通用开发规则：谁拍板、一次改动的流程、文档、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
-| 本项目的补充和例外：负责人、谁拍板的补充、产品设计基线、发布 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
+| 本项目的补充和例外：负责人、谁拍板的补充、产品设计基线、一个 PR 的流程、评审、代码质量标准、检查清单、质量审计、里程碑收尾、发布 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
 
 ## 文档怎么组织
 
