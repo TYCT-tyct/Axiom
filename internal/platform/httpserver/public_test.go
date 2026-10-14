@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,17 +17,36 @@ import (
 // bodyTimeout is short in tests, so a stalled body is cut off quickly.
 const bodyTimeout = 300 * time.Millisecond
 
+// logs is the sink the server's goroutines write to while the test reads it. The race detector does not see the
+// ordering a closed connection gives, so the lock makes it explicit.
+type logs struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logs) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logs) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
 // public serves routes behind Public and returns the server and what it logged.
-func public(t *testing.T, routes map[string]http.HandlerFunc) (*httptest.Server, *bytes.Buffer) {
+func public(t *testing.T, routes map[string]http.HandlerFunc) (*httptest.Server, *logs) {
 	t.Helper()
 	mux := http.NewServeMux()
 	for pattern, handler := range routes {
 		mux.HandleFunc(pattern, handler)
 	}
-	var logs bytes.Buffer
-	node := httptest.NewServer(Public(mux, slog.New(slog.NewJSONHandler(&logs, nil)), bodyTimeout))
+	sink := new(logs)
+	node := httptest.NewServer(Public(mux, slog.New(slog.NewJSONHandler(sink, nil)), bodyTimeout))
 	t.Cleanup(node.Close)
-	return node, &logs
+	return node, sink
 }
 
 // reply is what a test needs of a response it read in full.
@@ -55,7 +75,7 @@ func get(t *testing.T, url string, header http.Header) (reply, error) {
 }
 
 // logged decodes the JSON log lines and counts them by message.
-func logged(t *testing.T, logs *bytes.Buffer) (records []map[string]any, counts map[string]int) {
+func logged(t *testing.T, logs *logs) (records []map[string]any, counts map[string]int) {
 	t.Helper()
 	counts = map[string]int{}
 	for line := range strings.Lines(logs.String()) {
