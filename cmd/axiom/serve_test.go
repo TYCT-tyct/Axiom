@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,20 +16,25 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// TestServe runs a node on a free port: it reports ready, and once the context ends it shuts down and stops listening.
+// TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
+// and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
-	environ := []string{"AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_DATABASE_URL=" + pgtest.New(t).App}
+	environ := []string{
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
+		"AXIOM_DATABASE_URL=" + pgtest.New(t).App,
+	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
-	ops := servingAddr(t, logs, done)
+	addrs := servingAddrs(t, logs, done)
 
 	for _, path := range []string{"/livez", "/readyz"} {
-		if code, err := get(t, "http://"+ops+path); err != nil || code != http.StatusOK {
-			t.Errorf("GET %s = %d, %v; want 200", path, code, err)
+		if resp, err := get(t, "http://"+addrs.Ops+path); err != nil || resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s: %v; want 200", path, err)
 		}
 	}
+	checkVersion(t, "http://"+addrs.Public+"/api/console/v1/version")
 	cancel()
 	select {
 	case err := <-done:
@@ -37,8 +44,10 @@ func TestServe(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the node did not shut down")
 	}
-	if _, err := get(t, "http://"+ops+"/livez"); err == nil {
-		t.Error("the ops listener still answers after shutdown")
+	for _, addr := range []string{addrs.Public, addrs.Ops} {
+		if _, err := get(t, "http://"+addr+"/"); err == nil {
+			t.Errorf("%s still answers after shutdown", addr)
+		}
 	}
 }
 
@@ -67,7 +76,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		},
 		{
 			"a taken address",
-			[]string{"AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
 			[]string{"AXIOM_OPS_ADDR: "},
 		},
 		{
@@ -103,21 +112,38 @@ func (r records) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// servingAddr reads log records until the node reports the address it listens on.
-func servingAddr(t *testing.T, logs records, done <-chan error) string {
+// checkVersion: the console's version endpoint answers through the whole public stack, uncached, with a request ID.
+func checkVersion(t *testing.T, url string) {
+	t.Helper()
+	resp, err := get(t, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct{ Version string }
+	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() ||
+		resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Request-ID") == "" {
+		t.Errorf("GET %s: %d %v %s (%v)", url, resp.StatusCode, resp.Header, resp.body, err)
+	}
+}
+
+// addresses are where a node listens, as it logs them.
+type addresses struct {
+	Msg         string `json:"msg"`
+	Public, Ops string `json:",case:ignore"`
+}
+
+// servingAddrs reads log records until the node reports the addresses it listens on.
+func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 	t.Helper()
 	for {
 		select {
 		case line := <-logs:
-			var record struct {
-				Msg string `json:"msg"`
-				Ops string `json:"ops"`
-			}
+			var record addresses
 			if err := json.Unmarshal(line, &record); err != nil {
 				t.Fatalf("log record %q: %v", line, err)
 			}
 			if record.Msg == "serving" {
-				return record.Ops
+				return record
 			}
 		case err := <-done:
 			t.Fatalf("the node stopped before serving: %v", err)
@@ -127,7 +153,13 @@ func servingAddr(t *testing.T, logs records, done <-chan error) string {
 	}
 }
 
-func get(t *testing.T, url string) (int, error) {
+// response is a response read in full.
+type response struct {
+	*http.Response
+	body []byte
+}
+
+func get(t *testing.T, url string) (response, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -137,7 +169,8 @@ func get(t *testing.T, url string) (int, error) {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return 0, err
+		return response{}, err
 	}
-	return resp.StatusCode, resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return response{resp, body}, errors.Join(err, resp.Body.Close())
 }

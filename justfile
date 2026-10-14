@@ -6,7 +6,15 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 
 # Run every check the CI build job runs
-check: docs modules tidy lint deadcode test vuln
+check: docs modules tidy generated lint deadcode test vuln
+
+# Regenerate code from its contracts (api/*.yaml)
+generate:
+    go generate ./...
+
+# Generated code matches its contracts: regenerating changes nothing
+generated: generate
+    git diff --exit-code -- '*.gen.go' || { echo "generated code is stale: run just generate and commit the result"; exit 1; }
 
 # Format Go code in place
 fmt:
