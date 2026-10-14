@@ -22,8 +22,8 @@
 | 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 支付：收款渠道、充值流程、加密货币、手续费、退款与拒付、防欺诈、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
-| 怎么参与开发：流程、提交、评审、文档规则 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 每个开发者（人或 AI）动手之前 |
-| AI 协作者的专属规则 | [AGENTS.md](../AGENTS.md) | AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
+| 通用开发规则：谁拍板、一次改动的流程、文档、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
+| 本项目的补充和例外：负责人、谁拍板的补充、产品设计基线、发布 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
 
 ## 文档怎么组织
 
@@ -42,4 +42,4 @@
 | 部署、发布、监控、故障处理 | `docs/ops/` |
 | 给客户看的使用文档 | `docs/guides/` |
 
-文档写什么、怎么维护，见 [CONTRIBUTING.md 的文档规则](../CONTRIBUTING.md#文档规则)。
+文档写什么、怎么维护，见 [AGENTS.md 的「文档」](../AGENTS.md#文档)；细则在 project-workflow skill 的文档写法（`references/docs.md`）。
