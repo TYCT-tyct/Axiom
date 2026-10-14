@@ -1,2 +1,4 @@
 # Normalize line endings to LF so Windows and Linux checkouts produce identical diffs.
 * text=auto eol=lf
+# Recorded upstream streams are kept byte for byte: a stream whose lines end in CRLF must stay that way.
+*.sse -text

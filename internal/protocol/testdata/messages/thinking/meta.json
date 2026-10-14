@@ -1,0 +1,5 @@
+{
+  "source": "https://platform.claude.com/docs/en/build-with-claude/streaming.md",
+  "date": "2026-10-14",
+  "note": "Streaming request with thinking, as published: the signature is cut short and the usage objects are left out."
+}

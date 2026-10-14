@@ -1,0 +1,5 @@
+{
+  "source": "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+  "date": "2026-10-14",
+  "note": "The Streaming example as published: a comment line stands for events 5 to 9, so sequence_number jumps from 4 to 10 and the deltas do not add up to the final text."
+}
