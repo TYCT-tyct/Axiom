@@ -31,7 +31,7 @@
 | 空值等于未设定 | Docker Compose 把未设定的 `${VAR}` 传成空串，按未设定处理才不会把默认值意外覆盖成空 |
 | 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 是唯一入口，先设范围再执行；`pg.Tx` 不暴露连接。目前只有 `QueryRow`，`Exec`、`Query` 随第一个用到它们的模块加入，届时查询结果也不能交出底层连接；depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql` |
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
-| 范围只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config` 或范围参数名就失败，不分大小写，SQL 允许的空格和引号也认得；`pg` 里面靠评审 |
+| 范围只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config` 或范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）就失败，不分大小写；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；`pg` 里面靠评审 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner` 不能是超级用户、带 BYPASSRLS 或能登录 |

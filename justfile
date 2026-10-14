@@ -36,10 +36,11 @@ modules:
     go run -C tools ./checkmodules ..
 
 # Only internal/platform/pg sets the tenant scope. Row-level security catches a forgotten condition, not SQL that
-# widens its own transaction's scope, which any role may do; so the settings' names and set_config fail anywhere
-# else, in any case and spacing SQL accepts, in committed files or new ones.
+# widens its own transaction's scope, which any role may do; so set_config and the settings' bare names fail anywhere
+# else, in any case, in committed files or new ones. Matching the names alone, not axiom.<name>, keeps quoting, escapes
+# and line breaks around the dot from hiding them.
 scope:
-    found="$(git grep --untracked -n -I -i -E 'set_config|axiom[[:space:]"]*\.[[:space:]"]*scope_' -- '*.go' '*.sql' ':!internal/platform/pg/')"; [ $? -le 1 ] || exit 1; [ -z "$found" ] || { echo "only internal/platform/pg may set the tenant scope:"; echo "$found"; exit 1; }
+    found="$(git grep --untracked -n -I -i -E 'set_config|scope_(platform|sites|accounts)' -- '*.go' '*.sql' ':!internal/platform/pg/')"; [ $? -le 1 ] || exit 1; [ -z "$found" ] || { echo "only internal/platform/pg may set the tenant scope:"; echo "$found"; exit 1; }
 
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
