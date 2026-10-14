@@ -38,6 +38,7 @@
 | `ReadTx` 的各条查询看到同一时刻的数据库，而且不能写 | 隔离级别 REPEATABLE READ 和只读由 `BEGIN` 本身设定：设范围的查询执行后 PostgreSQL 不再允许改隔离级别。测试在两次读取之间从另一条连接提交插入，第二次读取看不到，下一个事务看得到；`ReadTx` 里删除失败 |
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
 | 范围只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config` 或范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）就失败，不分大小写；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；`pg` 里面靠评审 |
+| 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
@@ -112,7 +113,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner` 由别的角色建好时，还要有它的 ADMIN 权限。建好 `axiom_owner` 和 schema，再切成 `axiom_owner` 执行迁移 |
 
-[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色和 key 查询函数，随第一个用到它们的模块加入。
+[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。key 查询函数随第一个用到它的模块加入。
 
 ### 范围
 

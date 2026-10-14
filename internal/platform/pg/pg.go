@@ -79,6 +79,17 @@ func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return row{t.tx.QueryRow(ctx, sql, hideFromRewriters(args)...)}
 }
 
+// SetRole runs the rest of the transaction as role, which the login role must be a member of, like SET LOCAL ROLE:
+// the transaction's end returns the connection to the login role, where a plain SET ROLE would stay on the pooled
+// connection. A background job uses it to act as a role granted only the tables it writes (docs/security.md「租户隔离」).
+// The scope still binds.
+func (t Tx) SetRole(ctx context.Context, role string) error {
+	if _, err := t.tx.Exec(ctx, "SELECT set_config('role', $1, true)", role); err != nil {
+		return fmt.Errorf("set the role %s: %w", role, err)
+	}
+	return nil
+}
+
 // hideFromRewriters wraps each QueryRewriter among the options pgx reads from the front of args so that it is given
 // no connection; pgx's own rewriters, such as NamedArgs, do not use it. The caller's slice is left alone.
 func hideFromRewriters(args []any) []any {
