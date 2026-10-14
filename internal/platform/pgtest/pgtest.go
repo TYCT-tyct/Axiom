@@ -46,8 +46,11 @@ func New(t testing.TB) Database {
 		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		t.Fatal(err)
 	}
-	return Database{App: at("axiom_app", "app", name), Migrator: at("migrator", "migrator", name),
-		Superuser: at("postgres", "postgres", name)}
+	return Database{
+		App:       at("axiom_app", "app", name),
+		Migrator:  at("migrator", "migrator", name),
+		Superuser: at("postgres", "postgres", name),
+	}
 }
 
 // Run executes statements one after another on a new connection to databaseURL.
