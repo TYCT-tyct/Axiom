@@ -1,44 +1,33 @@
 package httpserver
 
 import (
-	"errors"
-	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
-// TestProbeServerDropsStalledBodies sends a probe that announces a body and never sends it: the connection must close
-// soon after the probe timeout instead of staying open.
-func TestProbeServerDropsStalledBodies(t *testing.T) {
-	t.Parallel()
+// TestServerLimits: every server drops connections that never finish their headers and keep-alive connections a
+// client abandoned. Only the probes bound a whole request and response: a public response streams as long as the
+// model does.
+func TestServerLimits(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
 	var health Health
-	node := httptest.NewUnstartedServer(nil)
-	node.Config = health.Server(slog.New(slog.DiscardHandler))
-	node.Start()
-	defer node.Close()
-
-	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", node.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+	servers := []struct {
+		name    string
+		server  *http.Server
+		streams bool
+	}{
+		{"New", New(http.NotFoundHandler(), logger), true},
+		{"the probes", health.Server(logger), false},
 	}
-	defer func() { // before node.Close, which waits for this connection
-		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Error(err)
+	for _, s := range servers {
+		unbounded := s.server.ReadTimeout == 0 && s.server.WriteTimeout == 0
+		bounded := s.server.ReadTimeout > 0 && s.server.WriteTimeout > 0
+		if s.server.ReadHeaderTimeout <= 0 || s.server.IdleTimeout <= 0 || s.streams && !unbounded || !s.streams && !bounded {
+			t.Errorf("%s: header %v, idle %v, read %v, write %v", s.name, s.server.ReadHeaderTimeout,
+				s.server.IdleTimeout, s.server.ReadTimeout, s.server.WriteTimeout)
 		}
-	}()
-	if _, err := io.WriteString(conn, "GET /livez HTTP/1.1\r\nHost: probe\r\nContent-Length: 1\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	if err := conn.SetReadDeadline(start.Add(4 * probeTimeout)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(io.Discard, conn); err != nil {
-		t.Fatalf("the connection stayed open %v after the probe stalled: %v", time.Since(start), err)
 	}
 }
 

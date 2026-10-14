@@ -49,11 +49,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	defer db.Close() // after the listeners close: requests in flight may still need it
 
 	var health httpserver.Health
-	// The public listener comes first, so at shutdown it drains while the probes still answer.
-	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(publicRoutes(logger), logger, bodyTimeout), logger), nil},
-		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
-	}
+	servers := node(publicAddr, publicRoutes(consoleAPI{version: version()}, logger), probesAddr, &health, logger)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -72,6 +68,15 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	logger.Info("shutting down", "timeout", shutdownTimeout.String())
 	return errors.Join(stopped, shutdown(context.WithoutCancel(ctx), shutdownTimeout, &health, servers))
+}
+
+// node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
+// it drains while the probes still answer.
+func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger) []*listening {
+	return []*listening{
+		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout), logger), nil},
+		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
+	}
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never

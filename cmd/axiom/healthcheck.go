@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"time"
 
@@ -33,10 +32,8 @@ func healthcheck(ctx context.Context, environ []string) error {
 	if err != nil {
 		return err
 	}
-	if ip, err := netip.ParseAddr(host); host == "" || err == nil && ip.IsUnspecified() {
-		host = "127.0.0.1" // a listener on every address answers on loopback too
-	}
-	// url.URL escapes an IPv6 zone such as %eth0, which a plain string would turn into an invalid escape.
+	// Go dials an empty or unspecified host on the local system (net.Dial), so a listener on every address is probed
+	// as configured. url.URL escapes an IPv6 zone such as %eth0, which a plain string would turn into an invalid escape.
 	target := url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: "/readyz"}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {

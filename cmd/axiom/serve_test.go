@@ -79,7 +79,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		},
 		{
 			"a taken address",
-			[]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
 			[]string{"AXIOM_OPS_ADDR: "},
 		},
 		{
@@ -95,7 +95,9 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	}
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
-		err := serve(ctx, c.environ, slog.New(slog.DiscardHandler))
+		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
+		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0"}, c.environ...)
+		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
@@ -112,11 +114,15 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	}
 }
 
-// records receives log records: the JSON handler writes each record with a single Write.
+// records receives log records: the JSON handler writes each record with a single Write. Once the buffer is full,
+// records are dropped rather than blocking the node: the test reads only up to "serving", the first record.
 type records chan []byte
 
 func (r records) Write(p []byte) (int, error) {
-	r <- bytes.Clone(p)
+	select {
+	case r <- bytes.Clone(p):
+	default:
+	}
 	return len(p), nil
 }
 
