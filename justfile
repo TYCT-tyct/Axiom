@@ -74,8 +74,10 @@ vuln:
 
 # No secret in this branch's commits, checked before they are pushed: CI scans every commit of a pull request, and a
 # secret, or a test value that looks like one, stays in the history until the branch is replaced. The version
-# matches GITLEAKS_VERSION in .github/workflows/workflow.yml.
+# matches GITLEAKS_VERSION in .github/workflows/workflow.yml. Without origin/main, gitleaks would scan nothing and
+# still pass, so a missing base fails instead.
 secrets:
+    git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null || { echo "origin/main is missing, so the branch cannot be scanned: run git fetch origin main"; exit 1; }
     go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --log-opts=origin/main..HEAD .
 
 docs:
