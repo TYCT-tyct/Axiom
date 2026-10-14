@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,7 +44,11 @@ func TestHealthcheck(t *testing.T) {
 // TestHealthcheckTrustsOnlyTheNode: a redirect to a page that answers 200 is not readiness, and a node that accepts
 // the connection but never answers fails the check within its own limit.
 func TestHealthcheckTrustsOnlyTheNode(t *testing.T) {
-	redirecting := httptest.NewServer(http.RedirectHandler("/elsewhere", http.StatusFound))
+	var followed atomic.Bool
+	mux := http.NewServeMux()
+	mux.Handle("/readyz", http.RedirectHandler("/elsewhere", http.StatusFound))
+	mux.HandleFunc("/elsewhere", func(http.ResponseWriter, *http.Request) { followed.Store(true) }) // answers 200
+	redirecting := httptest.NewServer(mux)
 	defer redirecting.Close()
 	silent, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -69,5 +74,8 @@ func TestHealthcheckTrustsOnlyTheNode(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > 2*probeTimeout {
 			t.Errorf("%s: the check took %v", name, elapsed)
 		}
+	}
+	if followed.Load() {
+		t.Error("the check followed the redirect")
 	}
 }
