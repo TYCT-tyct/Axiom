@@ -42,6 +42,24 @@ class DescribeTest(unittest.TestCase):
                          ["description: fill in the section ## Verification / 验证"])
         self.assertEqual(describe("Bump requests from 2.31.0 to 2.32.3", "Bumps requests.", "dependabot[bot]", TEMPLATE), [])
 
+    def test_closing_keywords_only_start_a_line(self):
+        cases = {
+            "Closes #12. Adds the check.": True,
+            "- fixes owner/repo#12": True,
+            "> Resolved: #3": True,
+            "1. closes #4": True,
+            "Refs #12. It does not close #12.": False,
+            "This Fixes: #3 as well": False,
+            "No longer resolves owner/repo#7": False,
+            "`It does not` close #12.": False,
+            "Code counts: `does not close #24`": False,
+            "<!-- does not close #24 -->": False,
+            "disclosed #5, unfixed #6, closes #N": True,
+        }
+        for text, ok in cases.items():
+            with self.subTest(text):
+                self.assertEqual(describe("docs: x y", BODY + text + "\n", "someone", TEMPLATE) == [], ok)
+
 
 class ReviewTest(unittest.TestCase):
     def test_the_head_commit_needs_a_passing_answered_review(self):

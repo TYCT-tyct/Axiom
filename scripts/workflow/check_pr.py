@@ -19,6 +19,10 @@ TYPES = ("feat", "fix", "docs", "refactor", "test", "chore", "ci")
 TITLE = re.compile(rf"^(?:{'|'.join(TYPES)})(?:\([^()\s]+\))?!?: [^A-Z\s](?:.*[^.\s])?$")
 TITLE_CHARS = 72
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# GitHub closes an issue on merge wherever a keyword precedes a reference to it, even in "does not close #12". The check
+# reads the raw text: GitHub skips code and comments, but telling them apart takes a Markdown parser, and quoting is rare.
+CLOSING =re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+(?:[\w.-]+/[\w.-]+)?#[0-9]+", re.IGNORECASE)
+LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|[0-9]+[.)])[ \t]*)*")  # indentation and list or quote markers
 SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
 TEMPLATE = Path(__file__).resolve().parents[2] / ".github" / "pull_request_template.md"
 REVIEW = re.compile(r"^独立评审 · 提交 ([0-9a-f]{7,40}) · .*阻断 ([0-9]+) · 应修 ([0-9]+)")
@@ -35,6 +39,11 @@ def describe(title, body, author, template):
     if len(title) > TITLE_CHARS or not TITLE.match(title):
         problems.append(f"title {title!r}: write type(scope): summary — type one of {', '.join(TYPES)}, lowercase start, "
                         f"no trailing period, at most {TITLE_CHARS} characters")
+    for match in CLOSING.finditer(body):
+        if not LINE_START.fullmatch(body, body.rfind("\n", 0, match.start()) + 1, match.start()):
+            problems.append(f"description: {match.group(0)!r}: a closing keyword may only start a line, in code and comments too "
+                            "(elsewhere GitHub closes the issue on merge, negated or not); write Refs #N, or start a line with "
+                            "Closes #N when this PR completes the issue")
     body = COMMENT.sub("", body)  # the template's hints alone must not pass
     sections = dict((match.group(1), match) for match in SECTION.finditer(body))
     for heading in SECTION.findall(template):
