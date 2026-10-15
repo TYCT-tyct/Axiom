@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,8 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		"queue longer than StartBy":                    {func(c *Config) { c.QueueWait = c.StartBy + time.Second }, "QueueWait"},
 		"StartBy reaches the longest call":             {func(c *Config) { c.StartBy = c.MaxCall }, "StartBy"},
 		"TTL under three heartbeats":                   {func(c *Config) { c.HolderTTL = 3*c.HolderHeartbeat - 1 }, "HolderTTL"},
+		"heartbeat so large that 3x overflows":         {func(c *Config) { c.HolderHeartbeat = 1 << 62 }, "HolderTTL"},
+		"heartbeat at the duration maximum":            {func(c *Config) { c.HolderHeartbeat = math.MaxInt64 }, "HolderTTL"},
 		"reclaim grace under the TTL":                  {func(c *Config) { c.ReclaimGrace = c.HolderTTL - 1 }, "ReclaimGrace"},
 		"settle grace not above the background retry":  {func(c *Config) { c.SettleGrace = c.SettleBackground }, "SettleGrace"},
 		"batch writers do not fit outside the reserve": {func(c *Config) { c.BatchConnections = c.PoolSize - c.PoolReserve + 1 }, "BatchConnections"},

@@ -79,7 +79,8 @@ func (c Config) Validate() error {
 		"LockTimeout %v and StatementTimeout %v must be below AdmissionBudget %v", c.LockTimeout, c.StatementTimeout, c.AdmissionBudget)
 	relation(c.QueueWait <= c.StartBy && c.StartBy < c.MaxCall,
 		"QueueWait %v <= StartBy %v < MaxCall %v must hold", c.QueueWait, c.StartBy, c.MaxCall)
-	relation(c.HolderTTL >= 3*c.HolderHeartbeat, "HolderTTL %v must be at least 3 x HolderHeartbeat %v", c.HolderTTL, c.HolderHeartbeat)
+	// Divided, not multiplied: 3*HolderHeartbeat overflows to a negative number for a huge heartbeat and would pass.
+	relation(c.HolderHeartbeat <= c.HolderTTL/3, "HolderTTL %v must be at least 3 x HolderHeartbeat %v", c.HolderTTL, c.HolderHeartbeat)
 	relation(c.ReclaimGrace >= c.HolderTTL, "ReclaimGrace %v must be at least HolderTTL %v", c.ReclaimGrace, c.HolderTTL)
 	relation(c.SettleGrace > c.SettleBackground, "SettleGrace %v must exceed SettleBackground %v", c.SettleGrace, c.SettleBackground)
 	return errors.Join(errs...)

@@ -118,7 +118,7 @@ func TestQueueSurvivesCancellationsRacingWakes(t *testing.T) {
 	q := newQueue(time.Hour, waiters, waiters)
 	for round := range 100 {
 		var woken atomic.Int64
-		cancels, wg := parkWaiters(q, waiters, &woken)
+		cancels, wg := parkWaiters(t, q, waiters, &woken)
 		go func() {
 			for i := 0; i < waiters; i += 2 {
 				cancels[i]()
@@ -137,9 +137,13 @@ func TestQueueSurvivesCancellationsRacingWakes(t *testing.T) {
 	}
 }
 
-// parkWaiters starts n waiters of one key, counts those that proceed in woken, and returns when all n are queued.
-func parkWaiters(q *Queue, n int, woken *atomic.Int64) ([]context.CancelFunc, *sync.WaitGroup) {
+// parkWaiters starts n waiters of one key, counts those that proceed in woken, and returns when all n are queued. If
+// they do not all queue within the watchdog's time, it cancels the waiters and fails with how many queued and how
+// many returned.
+func parkWaiters(t *testing.T, q *Queue, n int, woken *atomic.Int64) ([]context.CancelFunc, *sync.WaitGroup) {
+	t.Helper()
 	var wg sync.WaitGroup
+	var returned atomic.Int64
 	cancels := make([]context.CancelFunc, n)
 	for i := range cancels {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -149,10 +153,16 @@ func parkWaiters(q *Queue, n int, woken *atomic.Int64) ([]context.CancelFunc, *s
 			if q.Wait(ctx, "k", epoch) == nil {
 				woken.Add(1)
 			}
+			returned.Add(1)
 		})
 	}
-	for q.queued() < n {
-		runtime.Gosched()
+	if !eventually(func() bool { return q.queued() == n }) {
+		queued, back := q.queued(), returned.Load()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		wg.Wait()
+		t.Fatalf("%d of %d waiters queued and %d returned within the watchdog's time", queued, n, back)
 	}
 	return cancels, &wg
 }
@@ -165,4 +175,29 @@ func eventually(cond func() bool) bool {
 		}
 	}
 	return true
+}
+
+// A client that has already gone gets its own error from every way out of Wait, not a retry (nil) and not a 429.
+func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		q := newQueue(20*time.Second, 1, 1)
+		stale := q.Epoch()
+		q.Wake()                      // nobody waits: the epoch moves on, so stale would return nil
+		wait(ctx, q, "a").mustWait(t) // fills the queue and the share of key a
+
+		gone, cancel := context.WithCancel(ctx)
+		cancel()
+		for name, tc := range map[string]struct {
+			key   string
+			epoch uint64
+		}{
+			"stale epoch":    {"b", stale},
+			"queue full":     {"b", q.Epoch()},
+			"key share full": {"a", q.Epoch()},
+		} {
+			if err := q.Wait(gone, tc.key, tc.epoch); !errors.Is(err, context.Canceled) {
+				t.Errorf("%s: Wait = %v, want context.Canceled", name, err)
+			}
+		}
+	})
 }

@@ -37,6 +37,9 @@ func (q *Queue) Epoch() uint64 {
 // found nobody to wake, so Wait returns at once instead of sleeping until the wait limit with capacity free. Only
 // releases that found the queue empty count, so a newcomer never overtakes the waiters.
 func (q *Queue) Wait(parent context.Context, key string, epoch uint64) error {
+	if err := parent.Err(); err != nil {
+		return err // before the fast paths: a client that has gone is not told to retry or that the queue is full
+	}
 	q.mu.Lock()
 	if q.unclaimed != epoch {
 		q.mu.Unlock()
