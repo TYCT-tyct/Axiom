@@ -14,9 +14,10 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_app') \gexec
 SELECT format('CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD %L', :'migrator')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_migrator') \gexec
 GRANT CREATE ON DATABASE :"DBNAME" TO axiom_migrator;
--- A database the superuser migrated has an owner role the migrator did not create, so the migrator lacks the admin
--- option on it, which the migration bootstrap needs to grant the role to itself. This is the grant PostgreSQL 16+
--- gives a role that creates another.
-SELECT 'GRANT axiom_owner TO axiom_migrator WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'
-WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_owner') \gexec
+-- The migration bootstrap grants the roles it manages (to itself, and axiom_lookup to axiom_owner), which needs the
+-- admin option on them. A database migrated by the superuser, or by an earlier migrator that was dropped and created
+-- again, has those roles without the current migrator holding that option. This is the grant PostgreSQL 16+ gives a
+-- role that creates another.
+SELECT format('GRANT %I TO axiom_migrator WITH ADMIN TRUE, INHERIT FALSE, SET FALSE', rolname)
+FROM pg_roles WHERE rolname IN ('axiom_owner', 'axiom_lookup') \gexec
 SQL
