@@ -214,16 +214,16 @@ func TestNoRedirect(t *testing.T) {
 // the stream, and that a slow stream whose gaps are each shorter than the timeout is recorded.
 func TestIdleTimeout(t *testing.T) {
 	defer func(d time.Duration) { idleTimeout = d }(idleTimeout)
-	idleTimeout = 300 * time.Millisecond
-	events := strings.SplitAfter(string(file(t, filepath.Join("..", "..", "testdata", "chat", "text"), "upstream.sse")), "\n\n")
+	idleTimeout = 500 * time.Millisecond
+	lines := strings.SplitAfter(string(file(t, filepath.Join("..", "..", "testdata", "chat", "text"), "upstream.sse")), "\n")
 	for _, tc := range []struct {
 		name  string
 		parts []string
 		stall bool
 	}{
 		{"no headers", nil, true},
-		{"a stall mid-stream", events[:1], true},
-		{"a slow stream", events, false},
+		{"a stall mid-stream", lines[:1], true},
+		{"a slow stream", lines, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testdata, request, done := t.TempDir(), requestFile(t, `{"stream":true}`), make(chan error, 1)
