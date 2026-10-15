@@ -1,7 +1,6 @@
 package streamcheck_test
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -10,9 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/streamcheck"
 )
 
@@ -34,27 +31,36 @@ func TestSamples(t *testing.T) {
 			t.Fatalf("no samples for %s: %v", format, err)
 		}
 		for _, dir := range dirs {
-			t.Run(dir, func(t *testing.T) { checkSample(t, dir, check) })
+			t.Run(dir, func(t *testing.T) {
+				err := streamcheck.Sample(check, read(t, dir+"/request.json"), read(t, dir+"/upstream.sse"), read(t, dir+"/meta.json"))
+				if err != nil {
+					t.Error(err)
+				}
+			})
 		}
 	}
 }
 
-func checkSample(t *testing.T, dir string, check func(io.Reader) error) {
-	var meta struct {
-		Source string `json:"source"`
-		Date   string `json:"date"`
-	}
-	if err := jsonx.Unmarshal(read(t, dir+"/meta.json"), &meta); err != nil || meta.Source == "" {
-		t.Fatalf("meta.json: %v, or no source", err)
-	}
-	if _, err := time.Parse(time.DateOnly, meta.Date); err != nil {
-		t.Errorf("meta.json date: %v", err)
-	}
-	if err := jsonx.Validate(read(t, dir+"/request.json")); err != nil {
-		t.Errorf("request.json: %v", err)
-	}
-	if err := check(bytes.NewReader(read(t, dir+"/upstream.sse"))); err != nil {
-		t.Errorf("upstream.sse: %v", err)
+func TestSample(t *testing.T) {
+	const (
+		request = `{"stream":true}`
+		meta    = `{"source":"s","date":"2026-10-14"}`
+	)
+	valid := stream(msgStart, msgDelta, msgStop)
+	for _, tc := range []struct{ name, request, stream, meta, want string }{
+		{"valid", request, valid, meta, ""},
+		{"meta not JSON", request, valid, `{"source":"s"`, "meta.json"},
+		{"no source", request, valid, `{"date":"2026-10-14"}`, "no source"},
+		{"no date", request, valid, `{"source":"s"}`, "meta.json date"},
+		{"request not JSON", `{"stream":true,"stream":true}`, valid, meta, "request.json"},
+		{"broken stream", request, stream(msgStart), meta, "upstream.sse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := streamcheck.Sample(streamcheck.Messages, []byte(tc.request), []byte(tc.stream), []byte(tc.meta))
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want an error saying %q", err, tc.want)
+			}
+		})
 	}
 }
 

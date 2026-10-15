@@ -2,14 +2,15 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读上游 SSE 的 `internal/sse` 和检查流结构的 `internal/streamcheck`；请求摘要、改写、转换、用量按 Issue #27 的计划逐个 PR 加入，加入时改写本文。
+目前有读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；请求摘要、改写、转换、用量按 Issue #27 的计划逐个 PR 加入，加入时改写本文。
 
 ## 包
 
 | 包 | 做什么 |
 |---|---|
 | `internal/sse` | 把上游的 SSE 字节流读成完整事件，逐个严格校验后交出事件的 data |
-| `internal/streamcheck` | 按格式检查一路流的结构：事件顺序、把增量挂到部件上的序号、恰好一个结尾；不看内容 |
+| `internal/streamcheck` | 按格式检查一路流的结构：事件顺序、把增量挂到部件上的序号、恰好一个结尾；不看内容。`Sample` 按下文「录制样本」的约定检查一个样本的三个文件 |
+| `internal/record` | 开发用的命令（`just record`）：向真实上游发一个请求，把流存成样本，见下文「录制」 |
 
 ## 读 SSE
 
@@ -43,11 +44,21 @@
 |---|---|
 | `request.json` | 发给上游的请求体 |
 | `upstream.sse` | 上游返回的流，原样的字节；`.gitattributes` 让 `*.sse` 不做换行转换，所以 CRLF 的流也原样保存 |
-| `meta.json` | `source`：来源的网址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
+| `meta.json` | `source`：官方样本是来源的网址，录制的是 `recorded from a live upstream: POST <官方端点>`，不写上游的地址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
 
 - 只收两种来源：官方文档里的完整流，以及用合成提示词录制的真实上游。官方示例常把中间事件省略成一行注释（`:` 开头），读 SSE 时注释本来就跳过，所以原样保留，在 `note` 里写明省略了什么；网页渲染改动过的空白按接口的原样还原，同样写进 `note`。
-- 样本里不能有密钥、服务器地址、用户数据；`just secrets` 在推送前扫描。样本只存请求体和流，不存头；录制真实上游时，上游生成的标识（`msg_`、`resp_`、`chatcmpl-` 等开头的 ID）换成占位值，在 `note` 里写明。官方示例里的 ID 本来就是示例值，原样保留。
-- `streamcheck` 的 `TestSamples` 检查每个场景三个文件齐全、`meta.json` 有来源和合法日期、`request.json` 是合规的 JSON，并用对应格式的检查通过 `upstream.sse`。官方文档没有给出完整流的情形（Chat 的工具调用和用量块、各格式的出错结尾），只在测试里构造，不放进样本目录。
+- 样本里不能有密钥、服务器地址、用户数据；`just secrets` 在推送前扫描。样本只存请求体和流，不存头；录制真实上游时，上游生成的标识换成占位值，在 `note` 里写明（规则见「录制」）。官方示例里的 ID 本来就是示例值，原样保留。
+- `streamcheck.Sample` 检查 `meta.json` 有来源和合法日期、`request.json` 是合规的 JSON，并用对应格式的检查通过 `upstream.sse`；`TestSamples` 对每个场景读齐三个文件后调用它，录制工具写盘前也调用它，所以写下的样本一定通过样本测试。官方文档没有给出完整流的情形（Chat 的工具调用和用量块、各格式的出错结尾），只在测试里构造，不放进样本目录。
+
+### 录制
+
+`just record <格式> <场景> <请求文件>`：把请求文件原样发给上游，流读完后在 `testdata/<格式>/<场景>/` 写下三个文件。请求文件的路径从仓库根目录算起，写进 `request.json` 前同样替换 ID。
+
+- **上游**：地址和 key 取自环境变量，没设的再从仓库根目录的 `.env` 读（git 忽略它，变量见 `.env.example`）。变量名和地址写法与两家 SDK 相同：`messages` 用 `ANTHROPIC_BASE_URL`（主机，路径补 `/v1/messages`）、`ANTHROPIC_API_KEY`；`responses`、`chat` 用 `OPENAI_BASE_URL`（以 `/v1` 结尾，路径补 `/responses`、`/chat/completions`）、`OPENAI_API_KEY`。
+- **发出前拒绝**：格式不认识、场景名不合规、样本目录已存在（从不覆盖）、没有地址或 key、请求不是严格 JSON 或没有 `"stream": true`、请求里有 key。
+- **ID 替换**：两个文件里整个 JSON 字符串是上游 ID 的（前缀 `chatcmpl-`、`msg_`、`toolu_`、`srvtoolu_`、`req_`、`resp_`、`rs_`、`fc_`、`call_`、`ws_`），按出现顺序换成前缀加序号，如 `msg_1`；同一个 ID 在两个文件里换成同一个占位值，不同的 ID 不会撞上。只替换整个字符串，所以正文里提到的 ID、工具参数里转义过的字符串不动，其余字节原样。录到新前缀的 ID 时，把前缀加进 `upstreamID`。签名、`encrypted_content` 是要测的不透明数据，不替换。
+- **key**：配置的 key 原文，或词首的 `sk-` 加 20 个以上 key 字符（两家 key 的格式；base64url 中间偶然出现的 `sk-` 不算），出现在请求里就不发，出现在要写的任何文件里就不写。
+- **写盘**：上游返回非 200、流读不完或超过 64 MiB、`Sample` 不通过，都不写；写到一半失败就删掉样本目录。录完把上游是谁（官方或哪家中转站）、用的模型版本补进 `note`。
 
 ## 不变量
 
@@ -60,6 +71,7 @@
 | 每个事件的内存分配次数有常数上界 | 基准测试 1 KiB 和 1 MiB 的事件，CI 与 `main` 对比分配次数 |
 | 官方样本都通过检查，每条结构规则都有违反它的流被拒 | `TestSamples`；表驱动的坏流按错误里的说法区分规则，所以去掉任何一条规则，它的用例就失败 |
 | 上游给的序号再离谱，检查也只报错 | 序号只与已见到的部件个数比较，从不用来分配或下标越界；模糊测试以全部样本和极端序号为种子 |
+| 录制的样本要么完整、通过样本测试、不含 key 和原始 ID，要么不存在 | 本地 httptest 上游回放三种格式的已提交样本（含 CRLF 的流），比较写下的字节；每种拒绝一个用例，断言没有发出请求（发出前的拒绝）且目录为空；每条规则都经过变异验证 |
 
 ## 决策与理由
 
@@ -71,3 +83,6 @@
 | `sequence_number` 只要求递增 | OpenAI 自己的流式示例省略了 5 到 9 号事件，中转站也可能不转发某些事件 | 要求逐一加 1 |
 | Chat 的顶层 `error` 块算结尾 | OpenRouter 在已开始输出后用它报错，本站给 Chat 客户端的出错结尾也用这种写法 | 只认 `[DONE]`：把已报告的失败当成截断 |
 | 严格校验每个完整事件 | 宽松读入会让原文搬运写出非法 JSON；重复键会让我们读到的用量与客户端读到的不同 | 按 WHATWG 把非法 UTF-8 替换成 U+FFFD：改动签名绑定的文本 |
+| 录制命令放在 protocol 的 `internal/record`，不放 `tools/` | 写盘前要用 `streamcheck` 检查，Go 只允许 `internal/protocol` 之下的包引用它；它只用标准库和本模块，`tools/` 单独成模块是为了锁定第三方工具的版本，这里用不上 | 放 `tools/`：只能另起进程跑测试来检查，或者为它把检查提前做成 protocol 的公开接口 |
+| ID 按"整个 JSON 字符串、已知前缀"在原始字节上替换 | 流的其余字节原样保留（CRLF、空白、键序都是样本要测的）；整串匹配不会碰正文和转义过的工具参数 | 解析再重写：改变原样的字节；按键名替换：同一个 ID 出现在 `id`、`item_id`、`call_id`、`tool_use_id`、`previous_response_id` 等多种键下，键名表比前缀表长，也更容易漏 |
+| 两个文件共用一张替换表，并替换请求里的 ID | 多轮请求里的工具调用 ID、`previous_response_id` 会出现在流里，替换后两边仍对得上 | 只替换流：请求里留下真实 ID，两边也对不上 |
