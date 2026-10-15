@@ -28,7 +28,7 @@ generate_command := quote(just_executable()) + " --justfile " + quote(justfile()
 # misses a header the linter reads. A generator that fails leaves the files deleted: git restore brings them back.
 generated generator=generate_command:
     pending="$(git status --porcelain --untracked-files=all -- '*.gen.go' '*.gen.ts')" || exit 1; [ -z "$pending" ] || { echo "generated files with uncommitted changes would be deleted and written again: commit or discard them, then run this again:"; echo "$pending"; exit 1; }
-    files="$(git ls-files -- '*.gen.go' '*.gen.ts')" || exit 1; [ -z "$files" ] || printf '%s\n' "$files" | xargs -I{} rm -f -- {}
+    list="$(mktemp)" && git ls-files -z -- '*.gen.go' '*.gen.ts' > "$list" && xargs -0 rm -f -- < "$list"; status=$?; rm -f "$list"; exit "$status"
     {{ generator }}
     changed="$(git status --porcelain --untracked-files=all -- '*.gen.go' '*.gen.ts')" || exit 1; [ -z "$changed" ] || { echo "generated code is stale or not committed, or a hand-written file is named like generated code: run just generate and commit the result"; echo "$changed"; exit 1; }
     found="$(git grep --untracked -l -E '^(.*\*/)?[[:space:]]*// Code generated .* DO NOT EDIT\.[[:space:]]*$' -- '*.go' ':!*.gen.go')"; [ $? -le 1 ] || exit 1; [ -z "$found" ] || { echo "only generated files carry the generated-code header, and they are named *.gen.go (output_files_suffix in sqlc.yaml):"; echo "$found"; exit 1; }

@@ -82,6 +82,12 @@ class GeneratedNames(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(" D web/forged.gen.ts", result.stdout)
 
+    def test_a_name_git_would_quote_is_deleted_too(self):
+        """git ls-files prints non-ASCII names in quotes unless told to use NUL separators."""
+        result, _ = generated({"internal/plant/forgé.gen.go": HEADER})
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(" D", result.stdout)
+
     def test_uncommitted_generated_files_are_refused_not_deleted(self):
         path = "internal/plant/plant.gen.go"
         cases = [
