@@ -11,10 +11,10 @@ import (
 	"syscall"
 )
 
-const usage = "usage: axiom serve | migrate | healthcheck | version"
+const usage = "usage: axiom serve | migrate | healthcheck | version | catalog <operation> <file>"
 
 func main() {
-	if len(os.Args) != 2 {
+	if !validArgs(os.Args) {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
@@ -34,6 +34,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "catalog":
+		exitOn(catalogCommand(context.Background(), os.Environ(), os.Args[2:], os.Stdout))
 	case "healthcheck":
 		if err := healthcheck(context.Background(), os.Environ()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -44,6 +46,19 @@ func main() {
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
+	}
+}
+
+// validArgs accepts a command, and for catalog its operation and file.
+func validArgs(args []string) bool {
+	return len(args) == 2 || len(args) > 2 && args[1] == "catalog"
+}
+
+// exitOn reports a failed command and ends the program with its failure status.
+func exitOn(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
 

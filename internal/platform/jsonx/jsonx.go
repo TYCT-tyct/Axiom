@@ -18,6 +18,10 @@ import (
 // three call formats produce, and bounds the recursion of any code, ours or a library's, that walks a value.
 const MaxDepth = 256
 
+// Raw is a JSON value kept as written, for a field a module stores without interpreting it. Unmarshal checks it
+// like any other input; a module that keeps it canonical passes it through MarshalCanonical.
+type Raw = jsontext.Value
+
 var (
 	errTooDeep  = fmt.Errorf("jsonx: nesting deeper than %d levels", MaxDepth)
 	errEmpty    = errors.New("jsonx: no JSON value")
