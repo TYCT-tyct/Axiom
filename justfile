@@ -38,15 +38,10 @@ lint:
 modules:
     go run -C tools ./checkmodules ..
 
-# Only internal/platform/pg sets the tenant scope or switches the role. Row-level security catches a forgotten
-# condition, not SQL that widens its own transaction's scope, which any role may do, and a role switched for the
-# session stays on a pooled connection; so set_config, the scope settings' bare names and SET or RESET ROLE, with
-# the role bare, quoted, or quoted as a Go string escapes it (\"role\"), fail
-# anywhere else, tests and migrations included, in any case, in committed files or new ones. Matching the names alone,
-# not axiom.<name>, keeps quoting, escapes and line breaks around the dot from hiding them; SQL assembled at run time
-# is left to review.
+# Only internal/platform/pg sets the tenant scope or switches the role, in Go and SQL, tests and migrations included;
+# scripts/check_scope.py holds the rule and its reasons
 scope:
-    found="$(git grep --untracked -n -I -i -E 'set_config|scope_(platform|sites|accounts)|(^|[^[:alnum:]_])(re)?set[[:space:]]+((local|session)[[:space:]]+)?(\\"|")?role([^[:alnum:]_]|$)' -- '*.go' '*.sql' ':!internal/platform/pg/')"; [ $? -le 1 ] || exit 1; [ -z "$found" ] || { echo "only internal/platform/pg may set the tenant scope or the role:"; echo "$found"; exit 1; }
+    {{ python }} {{ quote(justfile_directory() / "scripts/check_scope.py") }}
 
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,

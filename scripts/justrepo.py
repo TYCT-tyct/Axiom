@@ -41,3 +41,9 @@ def just(repo, *args):
     return subprocess.run([shutil.which("just"), "--justfile", str(JUSTFILE), "--working-directory", str(repo), *args],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
 
+
+def just_with_broken_git(*args):
+    """Run a recipe where every git command fails: the directory has a .git that points nowhere."""
+    with tempfile.TemporaryDirectory() as repo:
+        (Path(repo) / ".git").write_text("gitdir: nowhere\n")
+        return just(repo, *args)

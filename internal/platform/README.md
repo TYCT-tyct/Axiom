@@ -39,7 +39,7 @@
 | 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 和只读的 `pg.DB.ReadTx` 是仅有的入口，先设范围再执行；`pg.Tx` 不暴露连接：`Exec`、`Query`、`QueryRow` 的签名与 sqlc 生成的代码要的一致，`Query` 的结果逐个转发 `pgx.Rows` 的方法，唯独 `Conn` 返回空，pgx 给 `Rows` 加方法时编译失败，不会悄悄转发出去；pgx 另外两处交出连接的回调也拦下：作为唯一扫描目标的 `RowScanner` 拿到的是这种不带连接的结果，参数开头的 `QueryRewriter` 拿到的连接是空。测试检查结果，以及经 `Rows.Scan`、`Row.Scan`、`Exec`、`Query`、`QueryRow` 的回调，都交不出连接，结果也没有 `pgx.Rows`、`pgx.Row` 以外的方法。depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql` |
 | `ReadTx` 的各条查询看到同一时刻的数据库，而且不能写 | 隔离级别 REPEATABLE READ 和只读由 `BEGIN` 本身设定：设范围的查询执行后 PostgreSQL 不再允许改隔离级别。测试在两次读取之间从另一条连接提交插入，第二次读取看不到，下一个事务看得到；`ReadTx` 里删除失败 |
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
-| 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；运行时拼出的 SQL 和 `pg` 里面靠评审 |
+| 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope`（规则和理由写在 `scripts/check_scope.py`，用例在 `scripts/test_scope.py`）在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；角色语句按数据库读到的样子匹配（`.sql` 文件和 Go 字符串，先解开 Go 转义），`SET` 与 `ROLE` 之间的空白、换行和 `--`、`/* */`（可嵌套）注释都藏不住它，注释里的语句不会执行，不算；运行时拼出的 SQL、相邻字符串字面量拼成的 SQL 和 `pg` 里面靠评审 |
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
@@ -202,6 +202,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | sqlc 生成的方法把 `tx` 作为参数（`emit_methods_with_db_argument`），`Queries` 是空的 | 事务由 `pg.DB.Tx` 开关，持有 `New(tx)` 的对象会让人把它留到事务之外；空结构体没有状态，也就没有 `WithTx`（调用不到，`just deadcode` 也过不了） | `New(tx)`：多一个可以逃出事务的对象，还带一个没人调用的 `WithTx` |
 | sqlc 一个根配置、每个有查询的模块一项，由 `just generate` 运行 | 一条命令生成全部，`generated` 一次检查全部 | 每个包里一条 `//go:generate`：每个包都跑一遍完整配置，或者各有一份配置 |
 | 生成物一律 `.gen.go` | `just generated` 只看这个后缀，别的名字过期了也没人发现 | 默认的 `*.sql.go`：不被检查 |
+| 角色语句的匹配写成 Python 脚本，不用 `git grep` 或 Go 工具 | `git grep` 逐行匹配，`SET` 与 `ROLE` 隔行或隔注释就漏；Go 工具的测试里要写 `SET ROLE` 字符串，会被 `just scope` 当成违规，Python 文件不在检查范围内 | `git grep -P` 加 `-z`：仍不会剥注释，也不会解开 Go 转义；`tools/` 里的 Go 程序：测试自己触发规则 |
 | 审计日志在平台，所有模块经 `audit.Record` 写同一张表 | 要留审计的 accounts、billing、catalog、payments 都不能引用 `operations`；一张表让运营按操作者、对象、时间检索全部改动 | 由 `operations` 提供写接口：违反依赖方向；各模块各建审计表：同样的列写好几份，检索要拼多张表 |
 | 审计在改动自己的事务里同步写 | 改动和条目一起成败，没有不留审计的改动，也没有记了却没发生的改动 | 提交后发事件再写：两者之间崩溃就丢条目；单独的事务写：改动回滚后留下没发生的条目 |
 | 写入时不接哈希链 | 链头要在每个写审计的事务里加锁，所有模块的管理操作排成一队，锁持有到各自提交；接链和异地留存放在提交之后 | 在 `Record` 里接链 |
