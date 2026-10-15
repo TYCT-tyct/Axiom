@@ -316,10 +316,28 @@ func TestAdmissionStaysInTheKeysAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	errUndo := errors.New("undo")
-	var seen string
-	var foreign error
-	var admitted accounts.Admission
+	admitted, seen, foreign, err := probe(t, s, c)
+	if !errors.Is(err, errUndo) {
+		t.Fatalf("Admit: %v", err)
+	}
+	if seen != a1.String() || state(foreign) != "42501" {
+		t.Errorf("fn saw workspaces of %v and wrote to a2: %v; want only a1's, refused", seen, foreign)
+	}
+	if got := texts(t, db, platform, ids.Replace("SELECT id::text FROM accounts.workspaces WHERE id = :x")); len(got) != 0 {
+		t.Errorf("fn's error left its workspace behind")
+	}
+	if got := tenants(t, db, admitted.Scope(), "SELECT account_id::text FROM accounts.workspaces"); len(got) != 1 || got[0] != "a1" {
+		t.Errorf("Admission.Scope sees %v, want a1", got)
+	}
+	checkAdmission(t, admitted, c)
+}
+
+var errUndo = errors.New("undo")
+
+// probe admits c, and in fn reads which accounts' workspaces it sees, tries to write a workspace of a2 (the error,
+// kept) and one of a1, then fails with errUndo.
+func probe(t *testing.T, s *accounts.Service, c accounts.Caller) (admitted accounts.Admission, seen string, foreign, err error) {
+	t.Helper()
 	err = s.Admit(t.Context(), c, accounts.AdmitRequest{Domain: "API.Main.Example", ClientIP: client}, func(tx pg.Tx, a accounts.Admission) error {
 		admitted = a
 		if err := tx.QueryRow(t.Context(), "SELECT string_agg(account_id::text, ',') FROM accounts.workspaces").Scan(&seen); err != nil {
@@ -337,19 +355,7 @@ func TestAdmissionStaysInTheKeysAccount(t *testing.T) {
 		}
 		return errUndo
 	})
-	if !errors.Is(err, errUndo) {
-		t.Fatalf("Admit: %v", err)
-	}
-	if seen != a1.String() || state(foreign) != "42501" {
-		t.Errorf("fn saw workspaces of %v and wrote to a2: %v; want only a1's, refused", seen, foreign)
-	}
-	if got := texts(t, db, platform, ids.Replace("SELECT id::text FROM accounts.workspaces WHERE id = :x")); len(got) != 0 {
-		t.Errorf("fn's error left its workspace behind")
-	}
-	if got := tenants(t, db, admitted.Scope(), "SELECT account_id::text FROM accounts.workspaces"); len(got) != 1 || got[0] != "a1" {
-		t.Errorf("Admission.Scope sees %v, want a1", got)
-	}
-	checkAdmission(t, admitted, c)
+	return admitted, seen, foreign, err
 }
 
 // checkAdmission expects what a1's new key in its default workspace gets: the account's tier, no preset, model list or
