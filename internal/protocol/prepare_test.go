@@ -3,11 +3,13 @@ package protocol_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -146,22 +148,26 @@ func TestPrepareSamples(t *testing.T) {
 	}
 }
 
+var prepareRejects = []struct {
+	name      string
+	format    protocol.Format
+	continues bool
+	body      string
+	want      string // the error's text
+	invalid   bool   // the client's to fix, not the gateway's
+}{
+	{"chat", protocol.Chat, false, `{"model":"m"}`, "does not rewrite format 2 yet", false},
+	{"continues without a history", protocol.Responses, false, `{"model":"m","previous_response_id":"r"}`, "disagree", false},
+	{"history without continuing", protocol.Responses, true, `{"model":"m"}`, "disagree", false},
+	{"end user not a string", protocol.Responses, false, `{"model":"m","user":1}`, "user is not a string", true},
+	{"include not an array", protocol.Responses, false, `{"model":"m","include":"x"}`, "include is not an array", true},
+	{"include holds a number", protocol.Responses, false, `{"model":"m","include":["x",1]}`, "include is not a string", true},
+	{"metadata not an object", protocol.Messages, false, `{"model":"m","metadata":"x"}`, "metadata is not an object", true},
+	{"input a number", protocol.Responses, true, `{"model":"m","previous_response_id":"r","input":1}`, "input is not", true},
+}
+
 func TestPrepareRejects(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		format    protocol.Format
-		continues bool
-		body      string
-		want      string // the error's text
-		invalid   bool   // the client's to fix, not the gateway's
-	}{
-		{"chat", protocol.Chat, false, `{"model":"m"}`, "does not rewrite format 2 yet", false},
-		{"continues without a history", protocol.Responses, false, `{"model":"m","previous_response_id":"r"}`, "disagree", false},
-		{"history without continuing", protocol.Responses, true, `{"model":"m"}`, "disagree", false},
-		{"end user not a string", protocol.Responses, false, `{"model":"m","user":1}`, "user is not a string", true},
-		{"metadata not an object", protocol.Messages, false, `{"model":"m","metadata":"x"}`, "metadata is not an object", true},
-		{"input a number", protocol.Responses, true, `{"model":"m","previous_response_id":"r","input":1}`, "input is not", true},
-	} {
+	for _, c := range prepareRejects {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := prepare(c.format, []byte(c.body), true, c.continues)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
@@ -184,6 +190,9 @@ func FuzzPrepare(f *testing.F) {
 	for _, c := range prepareCases {
 		f.Add(uint8(c.format), []byte(c.body))
 	}
+	for _, c := range prepareRejects {
+		f.Add(uint8(c.format), []byte(c.body))
+	}
 	f.Fuzz(func(t *testing.T, format uint8, body []byte) {
 		fm := protocol.Format(format % 2)
 		r, err := protocol.Inspect(fm, body)
@@ -191,8 +200,11 @@ func FuzzPrepare(f *testing.F) {
 			return
 		}
 		out, err := prepare(fm, body, true, r.Previous != "")
+		if want := rejects(t, fm, body); errors.Is(err, protocol.ErrInvalid) != want {
+			t.Fatalf("%s: got %v, want ErrInvalid %t", body, err, want)
+		}
 		if errors.Is(err, protocol.ErrInvalid) {
-			return // a member Inspect does not read has the wrong type
+			return
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -206,6 +218,27 @@ func FuzzPrepare(f *testing.F) {
 			t.Fatalf("%s:\n%s", out, diff)
 		}
 	})
+}
+
+// rejects reports whether Prepare must refuse a body Inspect accepted, decoding it whole to tell: a member only Prepare
+// reads is neither null nor of the type README.md「同格式改写」 rewrites. Include is read as for an encrypting model.
+func rejects(t *testing.T, f protocol.Format, body []byte) bool {
+	t.Helper()
+	var top map[string]any
+	if err := jsonx.Unmarshal(body, &top); err != nil {
+		t.Fatal(err)
+	}
+	notString := func(v any) bool {
+		_, ok := v.(string)
+		return v != nil && !ok
+	}
+	if f == protocol.Messages {
+		metadata, ok := top["metadata"].(map[string]any)
+		return top["metadata"] != nil && !ok || notString(metadata["user_id"])
+	}
+	include, ok := top["include"].([]any)
+	return top["include"] != nil && !ok || slices.ContainsFunc(include, notString) ||
+		slices.ContainsFunc([]any{top["user"], top["prompt_cache_key"], top["safety_identifier"]}, notString)
 }
 
 func BenchmarkPrepare(b *testing.B) {
