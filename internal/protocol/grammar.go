@@ -35,7 +35,7 @@ var grammars = [...]grammar{
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 		},
 		part: fields{
-			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
+			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
 			"source": func(s *scanner) error { return s.object(sourceFields) },
 		},
 		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
@@ -52,11 +52,11 @@ var grammars = [...]grammar{
 			"previous_response_id": (*scanner).previous,
 		},
 		part: fields{
-			"type": (*scanner).partType, "content": (*scanner).content, "output": (*scanner).content,
+			"type": (*scanner).partType, "content": (*scanner).result, "output": (*scanner).result,
 			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
 		},
 		tool:    fields{"type": (*scanner).toolType},
-		parts:   map[string]Capabilities{"input_image": Images, "input_file": Documents},
+		parts:   map[string]Capabilities{"input_image": Images, "computer_screenshot": Images, "input_file": Documents},
 		servers: []serverTool{{"web_search", WebSearch}, {"code_interpreter", CodeExecution}},
 		tiers:   openAITiers,
 		input:   openAIInput,
@@ -165,6 +165,16 @@ func (s *scanner) content() error {
 		return s.skip()
 	}
 	return s.array((*scanner).contentPart)
+}
+
+// result reads a Messages or Responses part's content or output, which may also be one part, as a server tool's
+// result or a computer call's screenshot is. Members come in any order, so the value's shape tells which, not the
+// enclosing type.
+func (s *scanner) result() error {
+	if s.dec.PeekKind() == '{' {
+		return s.contentPart()
+	}
+	return s.content()
 }
 
 func (s *scanner) contentPart() error {

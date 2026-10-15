@@ -76,6 +76,19 @@ var inspectCases = []struct {
 		},
 	},
 	{
+		"messages server tool results of one part", protocol.Messages, `{"model":"m","messages":[{"role":"assistant","content":[
+			{"type":"code_execution_tool_result","tool_use_id":"a","content":{"type":"code_execution_result","stdout":"",
+				"stderr":"","return_code":0,"content":[{"type":"code_execution_output","file_id":"f"}]}},
+			{"type":"web_search_tool_result","tool_use_id":"b","content":{"type":"web_search_tool_result_error",
+				"error_code":"too_many_requests"}},
+			{"type":"web_fetch_tool_result","tool_use_id":"c","content":{"type":"web_fetch_result","url":"https://example.com/a.pdf",
+				"content":{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":` + pdfData + `}}}}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Documents, r.Needs = "m", 1, protocol.Documents
+			r.TextBytes -= int64(len(pdfData))
+		},
+	},
+	{
 		"messages client data is not read", protocol.Messages, `{"model":"m",
 		"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{},"max_uses":{},"type":{}}}}],
 		"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"t",
@@ -157,6 +170,14 @@ var inspectCases = []struct {
 			r.ServiceTiers = 1 << catalog.ServiceTierPriority
 			r.Needs = protocol.Images | protocol.Documents | protocol.WebSearch | protocol.CodeExecution | protocol.Tools |
 				protocol.Reasoning | protocol.StructuredOutput
+		},
+	},
+	{
+		"responses computer screenshot", protocol.Responses, `{"model":"m","input":[{"type":"computer_call_output",
+		"call_id":"c","output":{"type":"computer_screenshot","image_url":` + pngURL + `}}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Images, r.Needs = "m", 1, protocol.Images
+			r.TextBytes -= int64(len(pngURL))
 		},
 	},
 	{

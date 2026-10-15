@@ -22,7 +22,7 @@
 | `Model`、`Stream` | 路由认模型；gateway 定回答方式 | `model`、`stream` | 同左 | 同左 |
 | `MaxOutput`：0 是没给，用模型的默认值 | [计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)的首段输出；路由的上下文过滤 | `max_tokens` | `max_output_tokens` | `max_tokens`、`max_completion_tokens` 取大 |
 | `Choices`：每个回答各有一份输出上限 | 同上 | 1 | 1 | `n` |
-| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据 | `input_image` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
+| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据 | `input_image`、`computer_screenshot` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
 | `InputItems`：输入可能按哪些计费项收费 | 输入按其中最贵的单价预留 | `input`；有 `cache_control` 加 `cache_write`，其 `ttl` 是 `1h` 再加 `cache_write_1h` | `input`、`cache_write`：不写标记也会隐式缓存，GPT-5.6 起写入按输入价的 1.25 倍收，模型收不收由价目表定 | 同 Responses，再按 OpenRouter 写法的 `cache_control` 加 |
 | `ServiceTiers`：可能以哪些等级服务 | 按其中最贵的等级预留；路由排除没有这些等级的端点 | `service_tier` 的 `auto` 或不写 → standard、priority（有 Priority Tier 容量时就用），`standard_only` → standard；`speed: "fast"` → fast，优先于前者 | `auto` 或不写 → standard、priority（项目设置的等级），`default` → standard，`flex`、`priority` | 同 Responses |
 | `WebSearches`、`CodeExecutions`：0 是没给，用模型的默认最大次数 | 按次项目的最大次数 | 各 `web_search_*` 工具的 `max_uses` 相加 | `max_tool_calls`，只给请求启用了的那种工具 | 不限 |
@@ -32,7 +32,7 @@
 
 `Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是推理设置（Messages 的 `thinking`，Responses、Chat 的 `reasoning`）没有说关（`type: "disabled"`、`effort: "none"`、`enabled: false`），或 Chat 的 `reasoning_effort` 不是 `none`；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
 
-- **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件，工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
+- **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。
 
 ## 读 SSE
