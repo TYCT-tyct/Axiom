@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"cmp"
 	"errors"
 	"math/big"
 	"math/bits"
@@ -96,6 +97,15 @@ func (e Exact) Add(f Exact) (Exact, error) {
 		return Exact{}, errOverflow
 	}
 	return Exact{hi, lo}, nil
+}
+
+// Cmp returns -1, 0 or +1 as e is less than, equal to or greater than f. The high words carry the sign, the low words
+// are unsigned.
+func (e Exact) Cmp(f Exact) int {
+	if c := cmp.Compare(e.hi, f.hi); c != 0 {
+		return c
+	}
+	return cmp.Compare(e.lo, f.lo)
 }
 
 // Rat returns the amount as an exact fraction of a currency unit. Exchange rates and markups such as 10/71 have no
