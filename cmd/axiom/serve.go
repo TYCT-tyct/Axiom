@@ -89,7 +89,7 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration) (*pg.D
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Check(ctx); err != nil {
+	if err := db.Check(ctx, modules()...); err != nil {
 		db.Close()
 		if errors.Is(context.Cause(ctx), noAnswer) {
 			return nil, noAnswer // pgx reports only that the context ended
