@@ -16,16 +16,19 @@ CREATE TABLE platform.audit_log (
     target_kind text NOT NULL CHECK (target_kind ~ '^[a-z][a-z0-9_]*$'),
     target_id text NOT NULL CHECK (target_id <> ''),
     -- The tenant the target belongs to, if any: both for account data, the site alone for site data, neither for
-    -- platform and public data. Row-level security reads them as it reads any tenant table's.
+    -- platform and public data. Row-level security reads them as it reads any tenant table's, but unlike a tenant
+    -- table's, nothing yet ties the two to one tenant (internal/platform/README.md「审计日志」).
     site_id uuid,
     account_id uuid CHECK (account_id IS NULL OR site_id IS NOT NULL),
     reason text CHECK (char_length(reason) BETWEEN 1 AND 1000),
-    -- Small and structured: room for IDs, names and before/after values, not for content (8 KiB as text).
+    -- Small and structured: IDs, names and before/after values. The 8 KiB cap (as text) bounds an entry's size; it
+    -- cannot tell content from other strings, so keeping content out is the caller's choice of fields.
     detail jsonb NOT NULL CHECK (jsonb_typeof(detail) = 'object' AND octet_length(detail::text) <= 8192)
 );
 
 -- One policy reads and appends: a transaction sees and writes the entries of the tenants in its scope, and only the
--- platform scope those of no tenant, so a tenant's change cannot be recorded against another tenant or the platform.
+-- platform scope those of no tenant, so a tenant's change cannot be recorded against the platform or a tenant wholly
+-- outside its scope.
 ALTER TABLE platform.audit_log ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON platform.audit_log USING (platform.in_scope(site_id, account_id));
 

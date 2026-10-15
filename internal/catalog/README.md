@@ -237,7 +237,7 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 | 快照用只读 Repeatable Read 加载，只接受更大的 revision | Read Committed 下同一事务的两次查询可能看到不同的提交（PostgreSQL 文档《Transaction Isolation》） | 多表分别查询 |
 | 快照陈旧超限就拒绝新请求 | 刷新持续失败时，其他节点已下线的模型不能无限期地继续被调用 | 一直用旧快照 |
 | billing 定期比对当前参考价跟上改价 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
-| 审计写本模块的 `change` 表 | catalog 不能引用 operations；操作者、理由、证据不能让租户范围读到 | 公开表里带 `actor` 列 |
+| 改动历史写本模块的 `change` 表 | 改前改后的值、证据和 `op_key` 是目录自己要读回的领域数据：发布核对证据，重试靠 `op_key` 返回第一次的结果；操作者、理由、证据是平台数据，不能让租户范围读到。它不是平台的[审计日志](../platform/README.md#审计日志)，管理操作是否另调 `audit.Record` 待定，随 catalog 的管理接口 PR 定下 | 公开表里带 `actor` 列；只写平台的审计日志：它不存证据、不管幂等，补充信息最多 8 KiB |
 | 页面监测用租约加代次，内容去重与当前指向分开 | 过期的执行者提交不了；页面 A→B→A 时当前指回 A，证据跟着页面现在的内容 | 没有代次的租约；按最晚入库的快照校验证据 |
 | 参考价的表和类型叫 `reference_price` | `price_version` 在术语表里是 billing 的售价版本，同名会让两个模块的概念混在一起；来源可能是数据集或手填，叫 `official_price` 名不副实 | `price_version`、`official_price` |
 | 服务等级各带一整套单价和同样的门槛，先选等级再选档，不跨等级继承 | 每个（等级、档位、计费项）只有一个价，`Cost`、`Missing` 和计费的保本线读法相同；缺的价被报告而不是按标准价少收 | 等级只列差价、其余沿用标准档：长上下文的 priority 价无从表达，覆盖顺序不同就得出不同的价 |

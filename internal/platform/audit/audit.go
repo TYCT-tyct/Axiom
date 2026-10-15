@@ -1,6 +1,6 @@
 // Package audit records who changed what in the audit log, platform.audit_log (internal/platform/README.md「审计日志」).
-// Every module records its changes here rather than in a table of its own, because each must and none may import
-// operations, which reads the log.
+// It lives in platform because every module must record its changes and none may import operations, which reads the
+// log. A module's own change history, such as catalog's change table, is its domain data and does not replace it.
 package audit
 
 import (
