@@ -1,0 +1,217 @@
+# accounts
+
+站点、用户、账户、成员、工作区、API key、等级、登录与会话、授权，以及租户范围的构造。要求和业务设计见[账户与租户](../../docs/domains/accounts.md)，这里写代码结构、数据、不变量和接口。
+
+> 本文先于代码写成，是 [Issue #23](https://github.com/TYCT-tyct/Axiom/issues/23) 的设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。
+
+## 范围
+
+| 本模块管 | 不归本模块，归谁 |
+|---|---|
+| 站点、域名、key 前缀、注册策略、默认等级、站点的安全与会话参数 | 收款渠道（`payments` 声明为站点配置项） |
+| 用户、密码、TOTP、恢复码、会话、邀请关系 | 发邮件（M2） |
+| 账户、成员、工作区及其停用 | 余额、在途预留、额度、账本，以及「余额不足」「暂停」（`billing`） |
+| 等级本身、账户在哪个等级 | 等级的加价（`billing` 的定价规则） |
+| key 的设置：花费上限与重置、工作区预算、过期、预设 ID、可用模型、IP 白名单 | 花费计数与准入时的检查（`billing`，设置作参数传入）；预设内容（`routing`）；限流计数（`gateway`） |
+| 权限、角色、授予；构造账户和站点的租户范围 | 资金上限、审批、审计的哈希链与回放（`operations`） |
+
+## 数据
+
+### 表（schema `accounts`）
+
+- 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
+- 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 套 `platform.in_scope`；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
+- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，任何表都没有 `DELETE` 权限。
+
+| 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
+|---|---|---|---|---|
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`name`、`status`、`key_prefix`、`registration`（invite / closed；open 等人机验证）、`default_tier_id` | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | | 站点 | `disabled_at` |
+| `site_settings` | `site_id`（主键）；可空的会话时长、尝试上限、新 key 的每日花费上限 | 每列有上下界；空表示用代码里的默认值 | 站点 | 全部参数列 |
+| `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
+| `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；默认角色由迁移写入 | 平台 | `permissions`（M1 只经迁移） |
+| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)` | 账户 | `name`、`status`、`tier_id` |
+| `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空 | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
+| `users` | `site_id`、`account_id`（个人账户）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_sealed`、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、`totp_sealed`、`totp_last_step`、`mfa_enabled_at` |
+| `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`；部分唯一 `(account_id) WHERE account_kind = 'personal'`；`role_id → roles` | 账户 | 无（移除成员随企业账户加 `removed_at`） |
+| `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
+| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
+| `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`revoked_at`（终态） |
+| `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键 | 账户 | `used_at`（终态） |
+
+- **租户列直接存在行上**：账户数据的每张表都有 `site_id`、`account_id`，都不为空。被引用的父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用它，所以两列不可能与"key → 工作区 → 账户 → 站点"不一致；两列不在可改的列里，写入后不变。外键检查不受行级安全影响。理由见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由)。
+- **授予每种目标一张表**：账户角色在 `members.role_id`，平台角色在 `platform_grants`；站点员工、工作区角色以后各加一张。每张表的外键都直接，不需要一张多态表靠条件约束拼归属。
+- `members` 在 M1 只有个人账户的主人一行，按所属账户归类即可。企业账户的成员要读到自己在别的账户里的成员关系，怎么分类随企业账户确定（待定）。
+- 新账户的 `tier_id` 取 `invite_tenant` 在库里读出的 `default_tier_id`（M2 的开放注册同样在库里读出），之后与默认等级无关。不取快照：快照可能晚 30 秒，而写进账户的等级以后不会再改。
+- 新 key 的 `spend_limit` 取 `site_settings` 的每日上限（空则用代码默认值），`limit_reset = daily`；用户可以改成别的值或不设。
+
+### 行级安全的写法
+
+所有表 `ENABLE` 并 `FORCE ROW LEVEL SECURITY`。每条命令一条策略，不用 `FOR ALL`：多条宽松策略按 OR 合并，一条 `FOR ALL` 就能绕过终态的限制。
+
+- `FOR SELECT USING (范围)`；`FOR INSERT WITH CHECK (范围)`。
+- 有终态列（`revoked_at`、`deleted_at`、`used_at`）的表：`FOR UPDATE USING (范围 AND 终态列 IS NULL) WITH CHECK (范围)`。旧行必须还没进终态，新行可以进入；进入后整行不能再改，包括清除终态列，平台范围也一样。
+- 其他表：`FOR UPDATE USING (范围) WITH CHECK (范围)`。
+- `platform_grants` 的 `INSERT`、`UPDATE` 另加 `platform.in_platform_scope()`。比类别更严，不更宽。
+- 测试：首次撤销或删除成功，之后清除终态列、改其他列都影响 0 行；迁移测试查 `pg_policies`，有终态列的表上没有 `FOR ALL`，也没有第二条 `UPDATE` 策略。
+
+## ID
+
+- 库里和 Go 里都是 `uuid.UUID`；每种实体一个命名类型（`SiteID`、`AccountID`、`WorkspaceID`、`UserID`、`KeyID`…），不能互相赋值。
+- 对外用 TypeID 规范 v0.3.0（github.com/jetify-com/typeid，2026-10 查）：`前缀_` 加 26 个小写的 Crockford base32 字符。前缀 `site`、`tier`、`acct`、`ws`、`user`、`key`、`sess`。编解码在 `platform/typeid`，前缀由各实体的所属模块定义。
+- 只在 HTTP 边界转换：ID 类型不实现 `TextMarshaler`，pgx 和 JSON 都不会意外用到另一种写法。格式不对与不存在返回同样的 404。
+
+## 授权与租户范围
+
+本模块是生产代码里唯一构造账户和站点范围的地方：`pg` 加按账户、按站点构造范围的函数，forbidigo 只允许 `internal/accounts` 调用（`pg.NewScope` 仍只给测试）。平台范围照[平台的规则](../platform/README.md#范围)由 `cmd/axiom` 构造，交给 `accounts.New`，本模块只在授权通过后交出；后台任务的数据库角色照平台的 `pg.Tx.SetRole` 做法，不经本模块。
+
+| 操作者 | 本次事务的范围 |
+|---|---|
+| 登录前（注册、登录、认会话、认 key） | 无范围，只能调用下文「登录前的查找」的函数；注册另见下文 |
+| 控制台用户 | 用个人账户的范围读出自己的成员关系，再按请求的目标账户给该账户的范围，前提是他在该账户的角色含这项权限 |
+| 平台管理员（管理后台） | 平台范围；要求会话的监听面是管理后台、`level = mfa`，且未撤销的平台授予含这项权限 |
+| 调用 key | `Admit` 打开的事务里是 key 所属账户的范围 |
+| 快照加载 | 平台范围的 `ReadTx` |
+
+- `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
+- `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
+- 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
+
+## 登录前的查找
+
+登录前还不知道租户，事务没有范围，什么表都读不到。几个 `SECURITY DEFINER` 函数把秘密或名字换成标识：
+
+| 函数 | 输入 | 输出 |
+|---|---|---|
+| `accounts.key_tenant(site, hashes bytea[])` | 请求站点、key 在各哈希版本下的哈希（最多 2 个） | `key_id`、`account_id`、`workspace_id` |
+| `accounts.session_tenant(domain, surface, token_hash)` | 请求的域名、监听面、令牌哈希 | `session_id`、`user_id`、`account_id` |
+| `accounts.login_tenant(domain, email)` | 请求的域名、规范化的邮箱 | `user_id`、`account_id` |
+| `accounts.invite_tenant(domain, code)` | 请求的域名、邀请码 | 邀请人的 `user_id`、站点当前的 `default_tier_id`；注册策略不是 invite 时无结果 |
+| `accounts.domain_site(domain, surface)` | 请求的域名、监听面 | `site_id`；供 `Admit` 在账户范围里核对域名 |
+
+- 域名或站点停用、域名不属于这个监听面时都无结果；都在库里判定，不看快照。都以请求的域名为条件，所以别站的 key、别站的会话令牌和不存在的走同一条路径。配置和密码哈希在拿到账户后用账户范围再读。
+- **函数的所有者是专用角色 `axiom_lookup`**，不用平台范围：它不能登录，不拥有任何表，`axiom_app` 不是它的成员（不能 `SetRole` 过去）。这几张表上只为它加 `FOR SELECT TO axiom_lookup USING (true)` 的策略，只授予函数要读的列。函数固定 `search_path = pg_catalog, pg_temp`，名字全部带 schema，只有 `axiom_app` 能执行。
+- 不在函数里设范围：`just scope` 禁止平台的 `pg` 之外出现范围参数，迁移也一样；按角色加策略不需要范围，也没有"函数返回后范围留在调用方事务里"的风险。
+- `serve` 启动时检查：Axiom 自己的 schema（`platform` 和各模块的）里每个 `SECURITY DEFINER` 函数的所有者都是 `axiom_lookup`，`search_path` 是上面的固定值，执行权限只有 `axiom_app`；`axiom_app` 不能成为 `axiom_lookup`；`axiom_lookup` 不拥有表。任一不满足就不启动。测试分别构造这几种情况。
+- `axiom_lookup` 怎么建、迁移怎么把函数交给它，在模块迁移的 PR 里对着非超级用户的迁移管理员验证。
+
+## API key
+
+### 格式与哈希
+
+- `sk-ax-v1-`（主站；二级站点自配，`[a-z0-9-]{2,16}` 且以 `-` 结尾）+ 43 个 base62 字符（32 字节随机）+ 6 个 base62 校验字符（前缀加随机串的 CRC32）。前缀复制到 `api_keys.prefix`，站点改前缀不影响已发出的 key。格式或校验位不对，直接拒绝，不算哈希、不查库。
+- 哈希是 `HMAC-SHA256(版本 v 的密钥, 整个 key)`。密钥放在受保护的文件里，格式和权限要求同[主密钥文件](../platform/README.md#凭证加密)；同时最多 2 个版本，数值大的是当前版本，不合法就不启动。旧版本可以退役的条件：未删除的 key 里没有用它的（后台显示计数）。
+
+### 认出与准入
+
+**缓存只存不会变的东西；能被改的（停用、删除、过期、IP 白名单、可用模型、预设、上限、等级）每次调用都在准入事务里读库，判定能否使用、定规则和路由都只用读出的值。** 所以缓存陈旧、并发的缓存填充交出旧结果、提交确认丢失、多个核心节点，都不会让停用后的 key 通过，也不会按旧预设路由，不需要失效协议。
+
+1. **认出**（`AuthenticateKey`，内存）：解析并核对校验位，用 `(site_id, 当前版本的哈希)` 查缓存。条目里只有 `key_id`、`account_id`、`workspace_id`、`site_id`，建后永不改变。未命中时按 `(site, 哈希)` 合并并发的查找：无范围调用 `key_tenant`，无结果写负缓存、返回 401；有结果写入缓存。
+2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。不满足就回滚，返回与"key 不存在"相同的 401。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流、会话粘性和端点负载计数在 `Admit` 之前的一次缓存往返里取好，作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后重做缓存往返、重新调 `Admit`，权限、预设、可用模型、等级都重新读库，路线也重新计算。
+3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。
+
+- **为什么停用立即生效**：停用的提交被确认之后开始的调用，其准入查询都在提交之后执行，读到的就是停用（Read Committed 每条语句取新快照），与缓存内容、节点数、提交确认是否送达都无关。改预设、可用模型、等级同理：下一次调用就按新值路由和计价，最高价也按新等级的售价比较。
+- **路由在准入事务里，不在它之前**：路由要的预设、可用模型、等级都会被改，在准入之前路由就只能用缓存里的旧值，收紧的预设会被绕过，放宽的会被旧值一直拒在准入之前。事务里的路由只读内存快照和事务外取好的缓存结果，不加锁、不查库、不访问缓存，所以不增加[总体架构](../../docs/architecture.md#模块边界规则)调用路径上的查库例外，只让事务多开着路由计算那一段时间。
+- **满载排队不占数据库连接**：等待放在事务里，一个满载模型的排队请求每个都占着一条连接，能把连接池占满，别的模型的准入和结算都拿不到连接；在事务外等，排队的请求不占连接，醒来重新准入还顺带读到等待期间的停用和改动。重新准入的次数受路由的排队时间上限约束，到期返回 429。
+- **停用的 key 在准入之前能看到什么**：解析和名字解析在准入之前，所以停用的 key 仍可能收到请求格式类的错误（400、模型不存在），但不会调用上游、读不到租户数据、不产生费用。准入的拒绝不缓存：拒绝可能与请求有关（IP），缓存它会误拒同一把 key 的合法请求。
+- **防枚举只承诺到这里**：不存在、属于别的站点、停用、过期、删除、IP 不允许，状态码和正文完全相同。剩余的时间差：本站真实存在的 key 多一次准入查询；缓存命中与未命中不同。只有持有这把 key 的人能利用。
+- 创建 key 不做幂等键：提交后响应丢失，用户在列表里看到一把从未用过的 key，删掉即可，不为重试保存明文。
+- 以后的二级站点：`Admit` 的范围并上站长账户，同一事务里一起预留（见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)「二级站点的请求」）。
+
+| 缓存 | 内容 | 容量与过期 |
+|---|---|---|
+| 正缓存 | 不变的标识 | 默认 20 万条，LRU |
+| 负缓存 | 不存在的 `(site, 哈希)` | 默认 20 万条，60 秒；256 位随机串不会先被猜中再被创建 |
+
+**代价**：命中是一次 HMAC 加一次查表，基准测试进分配门槛。准入在预留的事务里多一条查询，计入[性能](../../docs/performance.md#延迟预算)准入那一格的 5ms；路由移进事务后，事务多开着路由计算的那段时间（"认站点和 key、读取请求、定规则、路由"那一格的预算），不持锁、不等待；缓存往返在事务之前，计入"限流和会话粘性"那一格，超时见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)。实现 `Admit` 的 PR 测出它相对空事务的增量，全程 p95 在 gateway 和 billing 接上后验收。冷的未命中另有一个事务，只在未命中时发生。
+
+### 快照
+
+- 站点、域名、站点设置、角色各是一份不可变的值，用 `atomic.Pointer` 整体替换。只有一个后台循环重载：本进程写过这些表后标记"需要重载"，另外每 30 秒无条件重载一次，覆盖别的节点和命令行的修改；循环串行，旧值不会覆盖新值。平台的变更通知（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）做好后也触发重载，30 秒的兜底仍保留：快照不决定能否访问，滞后只影响价格页和参数。
+- **快照不决定能否访问**：域名和站点的启用、注册策略在库里判定，平台授予每个请求读库。快照只用来预筛没登记的域名（快照里没有就直接拒，省一次查库）、匿名价格页用哪个等级、尝试上限等参数、角色的权限集合。
+- 超过 90 秒（3 个周期）没有成功重载，所有请求返回 503，直到重载成功；启动时第一次加载失败就不启动。
+
+## 注册、登录与会话
+
+| 能力 | M1 | M2 |
+|---|---|---|
+| 注册 | 邀请码；邮箱不验证 | 开放注册（要人机验证）、邮箱验证 |
+| 登录 | 邮箱 + 密码，开了 TOTP 的再过 TOTP 或恢复码 | 第三方登录、通行密钥、邮箱验证码 |
+| 找回密码 | `axiom user set-password`（从标准输入读） | 邮件链接 |
+| 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform` | — |
+| 认证因素 | 开启 TOTP、重建恢复码 | 关闭或更换 TOTP、改密码（M1 只经命令行 `reset-mfa`、`set-password`） |
+| 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
+
+- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。不用站点或平台范围包住注册。
+- **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，第一条语句都是 `SELECT … FROM users WHERE id = $u FOR UPDATE`，在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
+- **密码登录**：argon2id，参数写进 PHC 串；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
+- **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交 → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
+- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认；重建恢复码要一个当前的 TOTP 码。两者都加版本，并为当前设备签发新的 `mfa` 会话。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID, totp}`；恢复码 10 个、各 80 位，只存 SHA-256。
+- **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
+- **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PATCH /admin/v1/sites/{site}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
+
+| 登录前的资源 | 默认上限（进程内计数，多节点时按节点数放大） |
+|---|---|
+| 客户端 IP | 只认 `RemoteAddr`；`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信的地址；默认不信任任何代理 |
+| 每 IP 的登录、注册、两步验证 | 令牌桶，突发 20 次、每分钟 10 次 |
+| 每邮箱的登录失败 | 每 15 分钟 10 次，超出后先等待，不锁账户 |
+| 每用户的 TOTP、恢复码失败 | 每小时 10 次 |
+| 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` |
+| argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 503 |
+| key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` |
+| 计数器本身 | 有容量上限的 LRU |
+
+## 不变量
+
+| 不变量 | 靠什么保证 |
+|---|---|
+| 账户数据的 `site_id`、`account_id` 与"key → 工作区 → 账户 → 站点"一致 | 两列不为空、复合外键、不在可改的列里；测试插入混合的组合失败 |
+| 成员是账户所在站点的用户；个人账户只有主人一个成员 | `members` 的复合外键、部分唯一索引和生成列外键 |
+| 每个账户恰好一个默认工作区，不能删 | 注册事务建；部分唯一索引、`is_default` 不可改、约束、无 DELETE |
+| 平台角色只授予主站用户 | `platform_grants` 对 `sites(id, is_main)` 的外键 |
+| 撤销和删除是终态 | 「行级安全的写法」；`pg_policies` 检查 |
+| key 只存哈希，明文只在创建响应里出现一次 | 表里没有明文列；创建响应是唯一带明文的类型 |
+| key 能否使用每次调用以库为准 | `Admit` 在准入事务里读库；缓存只存不变的标识。测试：两个 `Service` 共用一个库，一个停用，另一个下一次 `Admit` 被拒；客户端先超时、服务端随后提交停用，之后的 `Admit` 被拒；禁止的 IP 先请求，允许的紧接着成功 |
+| 定规则和路由只用库里的当前值 | `Admission` 带当前的 `preset_id`、`models`、`tier_id`，缓存条目里没有这几项；测试：两个 `Service` 共用一个库，各认出同一把 key 并预热缓存后，一个改预设、可用模型（从 A 改成 A+B）、等级，另一个下一次 `Admit` 交给 `fn` 的是新值；`fn` 里的路由与最高价检查用 `Admission` 的值，接线的证明在 #27 |
+| 准入事务里不等待，满载排队不占数据库连接 | `fn` 只做内存计算和预留，满载时返回"需要等待"、在事务外等；本模块测试：`fn` 返回"需要等待"后事务已回滚、连接已归还池子。接线的验收在 #27：连接池设为 N，模型 A 只有一个并发名额且有多于 N 个请求在排队，期间模型 B 的准入和另一个调用的结算照常完成、在预算之内，排队中的 A 请求占用的连接数为 0 |
+| 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `accounts_key_cache_misses_total` |
+| 登录前拿不到租户数据 | 无范围的事务 + 「登录前的查找」的函数和启动检查 |
+| 范围和认证结果不可伪造 | 生产代码只有本模块能构造账户和站点范围（forbidigo）；`Caller`、`Principal`、`Admission` 的字段不导出 |
+| 敏感权限只给本次做过两步验证的会话 | `level = mfa`；测试：先登录的密码会话后来被授予管理员，仍被拒 |
+| 一次性因素只能用一次，一个挑战只换出一个会话 | 用户行锁 + 条件更新 + 影响行数；测试：两条连接同时提交同一个码、同一挑战的两个码，都只有一个成功 |
+| 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
+| 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
+
+## 公开接口（草图）
+
+```go
+func New(db *pg.DB, cfg Config) (*Service, error)        // cfg: 平台范围、哈希密钥、Keyring、时钟
+func (s *Service) Load(ctx context.Context) error         // 站点、域名、设置、角色的快照；核对权限名；启动重载循环
+func (s *Service) SiteForHost(host string) (Site, Surface, bool)
+func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) (Caller, error) // 只认出，不判定能否使用
+func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest,
+	fn func(tx pg.Tx, a Admission) error) error              // fn 由 gateway 组装：定规则、路由、billing 的准入
+func (s *Service) Authenticate(r *http.Request, site SiteID, surface Surface) (Principal, error)
+func (s *Service) Authorize(p Principal, perm Permission, t Target) (pg.Scope, error)
+```
+
+控制台和管理接口：本模块实现 `consoleapi` 和管理接口里属于自己的方法，`cmd/axiom` 组装。gateway 和 billing 的准入必须经 `Admit` 打开事务，billing 的预留只接受 `Admission`；本模块的测试只证明 `Admit` 本身，接线的证明在 #27、#28。
+
+## 决策与理由
+
+| 决策 | 理由 | 不选 |
+|---|---|---|
+| 登录前的查找用专用角色拥有的定义者函数 | 只把秘密或名字换成标识；角色只读几列，`axiom_app` 进不去 | 不受行级安全的查找表：破坏"全部 FORCE"；调用路径用平台范围：漏一个条件就跨租户；函数里设平台范围：`just scope` 禁止，而且要另外证明范围不会留在调用方事务里 |
+| 定义者函数按所有者统一检查，不另建登记表 | 函数的配置只有固定的 `search_path`，所有者唯一，规则对所有函数相同；新迁移加函数，旧程序照样能启动 | 库里或程序里的函数清单：要多维护一份数据，程序里的清单还会让旧程序在新迁移后无法启动 |
+| 准入时读库判定 key 能否使用 | 见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由) | 缓存状态 + 失效协议 + 单核心锁：两轮评审都找到反例；LISTEN/NOTIFY：同样有提交不确定和断线的窗口 |
+| 定规则和路由放进准入事务，用 `Admission` 的预设、可用模型、等级 | 能被改的路由依据只有一个来源，没有过时的副本可用 | 缓存路由依据、准入时比较、不同就重新路由：要补过期时间让在路由阶段就被拒的请求也能刷新，多三个机制，过期之前仍会误拒；缓存只靠准入刷新：收紧的预设被绕过，被拒在准入之前的请求永远刷新不到 |
+| 满载时结束准入事务，在事务外等待，醒来重新 `Admit` | 等待时不占数据库连接，一个模型满载拖不垮别的模型的准入和结算；重新读库也就看到等待期间的停用 | 在事务里排队：排队的请求占满连接池；在事务外等完后沿用旧的 `Admission`：等待期间的停用和改动不生效 |
+| 缓存键是 `(站点, 哈希)` | 错站点的请求不会污染负缓存 | 只用哈希 |
+| 认证因素的事务先锁用户行，会话和恢复码绑定 `factor_version` | 锁让核对与签发之间插不进重置；版本让旧会话不用逐条吊销 | 只在签发前核对版本：Read Committed 下核对与插入之间仍能插入重置；逐条吊销：漏一条就留后门 |
+| 会话级的 `level` | 证明这条会话做过两步验证 | 用户级的 `mfa_enabled_at`：证明不了 |
+| key 哈希用 HMAC-SHA256，最多 2 个版本一起查，版本记在行上 | key 文本与密钥轮换无关 | 版本写进 key：key 文本跟着轮换走；argon2：调用路径太慢，256 位随机串也不需要 |
+| 哈希密钥放受保护的文件 | 与主密钥同样的保管方式，环境变量会出现在 `docker inspect` 和子进程里 | 环境变量 |
+| 登录的 CSRF 用精确 Origin + JSON + 会话令牌 | 不多一种登录前状态 | 预会话令牌：多一种状态；只靠 SameSite：同站的子域仍能发起 |
+| 注册用只覆盖新账户的范围 | 注册拿不到别人的数据 | 用站点范围包住注册：能读写全站用户 |
+| 安全参数默认值在代码，按站点的运行值在 `site_settings`，按节点的在环境变量 | 安全措施要能配置（[安全的「要求」](../../docs/security.md#要求)），M1 就能改 | 写死到以后：违反要求；通用配置链：M1 用不到它的分层合并 |
+| 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |

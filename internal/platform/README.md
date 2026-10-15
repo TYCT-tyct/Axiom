@@ -113,14 +113,14 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner` 由别的角色建好时，还要有它的 ADMIN 权限。建好 `axiom_owner` 和 schema，再切成 `axiom_owner` 执行迁移 |
 
-[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。key 查询函数随第一个用到它的模块加入。
+[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。登录前查找用的定义者函数和拥有它们的 `axiom_lookup` 角色属于 accounts，`axiom_app` 不能成为这个角色，见 [accounts 的「登录前的查找」](../accounts/README.md#登录前的查找)。
 
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
 - 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
 - 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。账户和站点范围以后由授权（#23）算出。各模块的测试用 `pg.NewScope` 构造任意范围。
-- **待定（负责人确认）**：账户数据的表是否直接存 `site_id` 和 `account_id`。确认后由 #23 加入生成策略的模板；在那之前不写进迁移，因为合并后的迁移不能再改。
+- 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移
 
