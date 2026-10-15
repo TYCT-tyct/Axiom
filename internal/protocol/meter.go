@@ -8,13 +8,21 @@ import (
 	"axiom/internal/catalog"
 )
 
-// usageReport is a usage object mapped onto billing items (catalog README.md「计费项与用量」).
+// usageReport is a usage object mapped onto billing items (catalog README.md「计费项与用量」). tierSet tells a tier the
+// object reports from one it leaves out.
 type usageReport struct {
 	counts  [catalog.NumItems]int64
 	seen    catalog.ItemSet
 	tier    catalog.ServiceTier
+	tierSet bool
 	unknown []catalog.UnknownUsage
 }
+
+// maxCount bounds a count as catalog.NewUsage does, checked before any arithmetic on counts, so none overflows.
+const maxCount = 1e10
+
+// countOK reports whether n is a count a report may hold.
+func countOK(n int64) bool { return 0 <= n && n <= maxCount }
 
 func (r *usageReport) set(it catalog.Item, n int64) {
 	r.counts[it] = n
@@ -26,8 +34,10 @@ func (r *usageReport) sortUnknown() {
 	slices.SortFunc(r.unknown, func(a, b catalog.UnknownUsage) int { return strings.Compare(a.Field, b.Field) })
 }
 
-// meter keeps the reply's usage as reported so far. Counts only go up: a later 0 leaves the earlier count, as some
-// relays clear the input in later events, and a smaller count makes the usage invalid (README.md「转发」).
+// meter keeps the reply's usage as reported so far, merged field by field: what a report leaves out keeps its earlier
+// value, so a tier or an unknown count reported once stays. Counts only go up: a later 0 leaves the earlier count, as
+// some relays clear the input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier
+// starts as the request's.
 type meter struct {
 	usageReport
 	compactions []Segment
@@ -42,22 +52,48 @@ const finalOnSight = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCache
 
 // report takes a usage object: the reply's counts, and the compactions it lists, each its own segment.
 func (m *meter) report(r usageReport, compactions []usageReport) {
-	if m.invalid != nil {
+	if m.invalid != nil || !m.takeCounts(r) {
 		return
 	}
+	if r.tierSet {
+		m.tier = r.tier
+	}
+	for _, u := range r.unknown {
+		if i := slices.IndexFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }); i >= 0 {
+			m.unknown[i] = u
+		} else {
+			m.unknown = append(m.unknown, u)
+		}
+	}
+	m.sortUnknown()
+	if compactions != nil {
+		m.compact(compactions)
+	}
+}
+
+// takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid.
+func (m *meter) takeCounts(r usageReport) bool {
 	for it := range catalog.NumItems {
 		n := r.counts[it]
 		switch {
 		case !r.seen.Has(it), n == 0 && m.counts[it] > 0:
 		case n < m.counts[it]:
 			m.invalid = fmt.Errorf("usage: %s went down from %d to %d", it, m.counts[it], n)
-			return
+			return false
 		default:
 			m.set(it, n)
 		}
 	}
-	m.tier, m.unknown, m.compactions = r.tier, r.unknown, m.compactions[:0]
+	return true
+}
+
+// compact replaces the compactions with the ones a report lists, at the reply's tier unless they name their own.
+func (m *meter) compact(compactions []usageReport) {
+	m.compactions = m.compactions[:0]
 	for _, c := range compactions {
+		if !c.tierSet {
+			c.tier = m.tier
+		}
 		u, err := m.usage(c)
 		if err != nil {
 			m.invalid = err

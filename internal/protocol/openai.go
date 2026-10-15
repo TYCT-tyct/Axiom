@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go
 	"fmt"
+	"slices"
 
 	"axiom/internal/catalog"
 )
@@ -41,7 +42,7 @@ type openAIDetails struct {
 }
 
 // items maps the usage as catalog README.md「计费项与用量」 tabulates, at the service tier the reply names, if any.
-func (u *openAIUsage) items(ctx UsageContext, tier *string) (r usageReport, err error) {
+func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	in, inDetails, inName := u.Input, u.InputDetails, "input_tokens_details"
 	if u.Prompt != nil {
 		in, inDetails, inName = u.Prompt, u.PromptDetails, "prompt_tokens_details"
@@ -67,26 +68,31 @@ func (u *openAIUsage) items(ctx UsageContext, tier *string) (r usageReport, err 
 		unknownCounts(&r, "usage."+outName, d.Unknown)
 	}
 	unknownCounts(&r, "usage", u.Unknown)
-	r.tier = ctx.Tier
 	if tier != nil {
-		r.tier = openAITier(*tier, &r)
+		r.tier, r.tierSet = openAITier(*tier, &r), true
 	}
 	r.sortUnknown()
 	return r, nil
 }
 
-// split sets the parts of a total, and the rest of it as rest, failing when the parts add up to more. An audio part
-// is set only when reported, as only audio models report it.
+// split sets the parts of a total, and the rest of it as rest. The total and every part must be counts, checked
+// before subtracting, and the parts may not add up to more than the total. An audio part is set only when reported,
+// as only audio models report it.
 func (r *usageReport) split(total int64, rest catalog.Item, parts []catalog.Item, counts []int64) error {
+	if !countOK(total) || slices.ContainsFunc(counts, func(n int64) bool { return !countOK(n) }) {
+		return fmt.Errorf("usage: %s or a part of it is not from 0 to 10¹⁰", rest)
+	}
 	left := total
-	for i, it := range parts {
-		left -= counts[i]
-		if counts[i] > 0 || it != catalog.ItemAudioIn && it != catalog.ItemAudioOut {
-			r.set(it, counts[i])
-		}
+	for _, n := range counts {
+		left -= n // no overflow: every count is at most 10¹⁰
 	}
 	if left < 0 {
 		return fmt.Errorf("usage: the parts of %s add up to more than its total %d", rest, total)
+	}
+	for i, it := range parts {
+		if counts[i] > 0 || it != catalog.ItemAudioIn && it != catalog.ItemAudioOut {
+			r.set(it, counts[i])
+		}
 	}
 	r.set(rest, left)
 	return nil

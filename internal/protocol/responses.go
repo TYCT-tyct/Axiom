@@ -29,9 +29,10 @@ type responsesStream struct {
 	items []int64
 }
 
-func newResponsesStream(u UsageContext, o RelayOptions) *responsesStream {
+func newResponsesStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	s := &responsesStream{seq: -1}
-	s.init(u, o, keep("input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens"))
+	s.init(u, o, keep("input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens"),
+		charge)
 	return s
 }
 
@@ -55,7 +56,7 @@ var (
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
 	responsesRewrites = formatRules{members: map[string]rule{
-		"response": object(map[string]rule{"id": (*rewriter).identity, "model": (*rewriter).model, "usage": (*rewriter).usage}),
+		"response": object(map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "usage": (*rewriter).usage}),
 		"axiom":    (*rewriter).drop,
 	}}
 )
@@ -197,7 +198,7 @@ func (s *responsesStream) meter(m *meter) {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
 	}
-	r, err := s.report.items(s.ctx, s.tier)
+	r, err := s.report.items(s.tier)
 	if err != nil {
 		m.invalid = err
 		return

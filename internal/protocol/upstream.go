@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"axiom/internal/catalog"
+	"axiom/internal/protocol/internal/sse"
 )
 
 // upstream reads the events of one upstream format for the relay, and writes the endings the relay adds in that
@@ -18,6 +19,9 @@ type upstream interface {
 	// usageEvent appends a usage event with u, cost and top, members for the usage and for the event; only a format
 	// whose relayFormat says rendersUsage is asked.
 	usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte
+	// dropBuffers lets go of what the reader holds for reading events, once no more are read: only what failure
+	// writes stays.
+	dropBuffers()
 }
 
 // role is what an upstream event is to the relay.
@@ -30,17 +34,19 @@ const (
 	withheld              // a success signal, such as a Chat choice's finish_reason: held until the normal end
 	ending                // carries the final usage; held until the settlement
 	end                   // the upstream's normal end
+	skipped               // nothing the client needs, such as a Chat chunk left empty once its finish signals are out
 )
 
 // event is one upstream event as the relay sees it.
 type event struct {
 	role role
 	name string
-	// data is what the client gets in place of the event, but for edits, at most two replacements in place, ordered
-	// by position; for an ending, usageAt is where its usage object closes, or -1 without one.
+	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
+	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
+	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.
 	data              []byte
-	edits             [2]edit
-	nEdits            int
+	edits             []edit
+	withheld          []byte
 	usageAt           int
 	content, searches int64
 	usage             bool // it reported usage, which the meter has taken
@@ -55,19 +61,23 @@ type edit struct {
 }
 
 // eventReader is what the readers of the three formats share: one decoder for every event, read in place, and the
-// rewriter for the events whose identity and usage the client must not see as the upstream wrote them.
+// rewriter for the events whose identity and usage the client must not see as the upstream wrote them, which
+// writes into buf, charged as the relay's own buffers are and reused.
 type eventReader struct {
 	reader
-	src bytes.Buffer
-	ctx UsageContext
-	rw  rewriter
-	e   event
+	src    bytes.Buffer
+	ctx    UsageContext
+	rw     rewriter
+	e      event
+	buf    []byte
+	pre    []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
+	charge func(n int) error
 	// id and model are the call ID and the client's model name as JSON strings, for edits.
 	id, model string
 }
 
-func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule) {
-	s.ctx = u
+func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
+	s.ctx, s.charge = u, charge
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.Model
 	s.rw.usageMembers = usageMembers
@@ -82,7 +92,12 @@ func (s *eventReader) start(data []byte) {
 	} else {
 		s.dec.Reset(&s.src)
 	}
-	s.e = event{role: passive, data: data, usageAt: -1}
+	s.e = event{role: passive, data: data, usageAt: -1, edits: s.e.edits[:0]}
+}
+
+func (s *eventReader) dropBuffers() {
+	s.src, s.dec, s.buf, s.pre, s.e = bytes.Buffer{}, nil, nil, nil, event{}
+	s.rw.dec, s.rw.body, s.rw.out = nil, nil, nil
 }
 
 // text counts a string member, unquoted, as content.
@@ -100,26 +115,63 @@ func (s *eventReader) rawContent() error {
 	return err
 }
 
-// replace reads a string member and edits it to with, a JSON string; null stays.
+// replace reads a member and edits it to with, a JSON string, whatever the upstream wrote but null.
 func (s *eventReader) replace(with string) error {
-	v, err := s.raw()
-	if v != nil && err == nil && s.e.nEdits < len(s.e.edits) {
-		to := int(s.dec.InputOffset())
-		s.e.edits[s.e.nEdits] = edit{to - len(v), to, with}
-		s.e.nEdits++
+	v, err := s.dec.ReadValue()
+	if err == nil && v.Kind() != 'n' {
+		s.edit(len(v), with)
 	}
 	return err
 }
 
-// rewrite rewrites the event by rules into a new array, which the relay copies before the next event.
+// edit replaces the n bytes just read with with.
+func (s *eventReader) edit(n int, with string) {
+	to := int(s.dec.InputOffset())
+	s.e.edits = append(s.e.edits, edit{to - n, to, with})
+}
+
+// rewrite rewrites the event, its edits applied, by rules into buf, which the relay copies before the next event. Its
+// room is charged first: a rewrite replaces two strings at most, the id and the model, with ours, and only drops the
+// rest.
 func (s *eventReader) rewrite(rules formatRules) (event, error) {
+	data, err := s.apply()
+	if err != nil {
+		return event{}, err
+	}
+	if s.buf, err = sse.Grow(s.buf[:0], len(data)+len(s.id)+len(s.model), s.charge); err != nil {
+		return event{}, err
+	}
 	p := &s.rw
-	p.dec, p.body, p.out, p.at, p.usageAt = jsontext.NewDecoder(bytes.NewBuffer(s.e.data)), s.e.data, nil, 0, -1
+	p.body, p.out, p.at, p.usageAt = data, s.buf[:0], 0, -1
+	if p.dec == nil {
+		p.dec = jsontext.NewDecoder(bytes.NewBuffer(data))
+	} else {
+		p.dec.Reset(bytes.NewBuffer(data))
+	}
 	if err := p.top(rules); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
-	s.e.data, s.e.usageAt, s.e.nEdits = p.out, p.usageAt, 0
+	if grown := cap(p.out) - cap(s.buf); grown > 0 { // the bound above failed: account for what append took
+		if err := s.charge(grown); err != nil {
+			return event{}, err
+		}
+	}
+	s.buf = p.out
+	s.e.data, s.e.usageAt, s.e.edits = p.out, p.usageAt, s.e.edits[:0]
 	return s.e, nil
+}
+
+// apply returns the event's data with its edits applied, in pre when there are any.
+func (s *eventReader) apply() ([]byte, error) {
+	if len(s.e.edits) == 0 {
+		return s.e.data, nil
+	}
+	var err error
+	if s.pre, err = sse.Grow(s.pre[:0], editedSize(&s.e), s.charge); err != nil {
+		return nil, err
+	}
+	s.pre = edited(s.pre, s.e.data, &s.e)
+	return s.pre, nil
 }
 
 // walk reads an object by fields, skipping the members fields does not name.
@@ -135,7 +187,7 @@ func walk[S any](r *reader, s S, fields map[string]func(S) error) error {
 // editedSize is the length of e's data with its edits applied.
 func editedSize(e *event) int {
 	n := len(e.data)
-	for _, ed := range e.edits[:e.nEdits] {
+	for _, ed := range e.edits {
 		n += len(ed.with) - (ed.to - ed.from)
 	}
 	return n
@@ -144,7 +196,7 @@ func editedSize(e *event) int {
 // edited appends data with the edits of e applied.
 func edited(dst, data []byte, e *event) []byte {
 	at := 0
-	for _, ed := range e.edits[:e.nEdits] {
+	for _, ed := range e.edits {
 		dst = append(append(dst, data[at:ed.from]...), ed.with...)
 		at = ed.to
 	}
@@ -206,6 +258,20 @@ func unknownCounts(r *usageReport, path string, members map[string]jsontext.Valu
 			r.unknown = append(r.unknown, catalog.UnknownUsage{Field: path + "." + name, Value: string(v)})
 		}
 	}
+}
+
+// ourID and ourModel put the call ID and the client's model name in place of whatever value but null the upstream
+// wrote: an id or a model of another type is still the upstream's, not the client's.
+func (p *rewriter) ourID() error { return p.ours(p.w.Identity("")) }
+
+func (p *rewriter) ourModel() error { return p.ours(p.t.Model) }
+
+func (p *rewriter) ours(s string) error {
+	v, err := p.dec.ReadValue()
+	if err != nil || v.Kind() == 'n' {
+		return err
+	}
+	return p.replaceString(len(v), s)
 }
 
 // keep is the rule set that keeps every member it names.

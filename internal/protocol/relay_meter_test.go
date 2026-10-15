@@ -182,6 +182,23 @@ func TestRelayCommitPoint(t *testing.T) {
 	}
 }
 
+// TestRelayUsageMerge: a later usage event that leaves out the tier, an unknown count or the iterations keeps what an
+// earlier one reported.
+func TestRelayUsageMerge(t *testing.T) {
+	start := messageStart(`{"input_tokens":5,"service_tier":"priority","audio_tokens":4,` +
+		`"iterations":[{"type":"compaction","input_tokens":100,"output_tokens":10}]}`)
+	got := relay(t, protocol.Messages, strings.NewReader(start+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop),
+		protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	want := []protocol.Segment{
+		segment(t, map[catalog.Item]int64{catalog.ItemInput: 5, catalog.ItemOutput: 2}, catalog.ServiceTierPriority,
+			[]catalog.UnknownUsage{{Field: "usage.audio_tokens", Value: "4"}}),
+		segment(t, map[catalog.Item]int64{catalog.ItemInput: 100, catalog.ItemOutput: 10}, catalog.ServiceTierPriority, nil),
+	}
+	if diff := cmp.Diff(want, got.r.Usage().Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" || got.err != nil {
+		t.Errorf("error %v; segments (-want +got):\n%s", got.err, diff)
+	}
+}
+
 // TestRelayUsage maps Messages usage onto billing items as catalog README.md「计费项与用量」 tabulates.
 func TestRelayUsage(t *testing.T) {
 	type counts = map[catalog.Item]int64
@@ -308,6 +325,60 @@ func TestRelayMemory(t *testing.T) {
 					committed, c.committed, mem.Left(), c.budget, drew)
 			}
 		})
+	}
+}
+
+// TestRelayMemoryRewrite: rewriting a snapshot draws on the budget for the copy it writes, and the next snapshot
+// reuses that copy, so what the relay holds after a large snapshot stays within what it has drawn.
+func TestRelayMemoryRewrite(t *testing.T) {
+	const size = 800 << 10
+	big := strings.Replace(responsesObject, `"output":[]`, `"output":[],"instructions":"`+strings.Repeat("x", size)+`"`, 1)
+	// After the commit point, so that the events held before it do not add up.
+	head := responsesEvent("response.created", 0, responsesObject) +
+		responsesEvent("response.output_text.delta", 1, `,"output_index":0,"content_index":0,"item_id":"m","delta":"Hi"`)
+	drawn := func(snapshots int) int64 {
+		stream := head
+		for i := range snapshots {
+			stream += responsesEvent("response.in_progress", 2+i, big)
+		}
+		stream += responsesEvent("response.completed", 2+snapshots, responsesObject)
+		mem := protocol.NewMemory(64 << 20)
+		o := options
+		o.Memory = mem
+		r := protocol.NewRelay(protocol.Responses, protocol.Responses, strings.NewReader(stream), protocol.UsageContext{}, o)
+		least := mem.Left()
+		for step, err := r.Next(); step.Kind != protocol.StepUpstreamDone; step, err = r.Next() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			least = min(least, mem.Left())
+		}
+		return 64<<20 - least
+	}
+	// The reader's buffer, its data, the held event and the rewritten copy each hold the snapshot.
+	if one, two := drawn(1), drawn(2); one < 4*size-64<<10 || two-one > 64<<10 {
+		t.Errorf("drew %d for one snapshot of %d, %d for two", one, size, two)
+	}
+}
+
+// TestRelayMemoryFailure: after a failure the relay still holds the events Fail writes, and keeps them charged while
+// the gateway settles; it gives back the rest at once, and all of it with Fail.
+func TestRelayMemoryFailure(t *testing.T) {
+	const budget, size = 8 << 20, 600 << 10
+	pad := strings.Replace(messageStart(`{}`), `"content":[]`, `"content":[],"pad":"`+strings.Repeat("x", size)+`"`, 1)
+	mem := protocol.NewMemory(budget)
+	o := options
+	o.Memory = mem
+	r := protocol.NewRelay(protocol.Messages, protocol.Messages, strings.NewReader(pad), protocol.UsageContext{}, o)
+	for _, err := r.Next(); err == nil; _, err = r.Next() {
+	}
+	// The settlement is pending: another stream draws on what is left, which is the budget less the held opening.
+	if held := budget - mem.Left(); held < size-64<<10 || held > 2*size {
+		t.Errorf("after the failure %d is still drawn for an opening of %d", held, size)
+	}
+	r.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil)
+	if mem.Left() != budget {
+		t.Errorf("after Fail %d of %d is left", mem.Left(), budget)
 	}
 }
 

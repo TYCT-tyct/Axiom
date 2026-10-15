@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,6 +44,13 @@ func TestRelayChat(t *testing.T) {
 		},
 		{"no usage chunk", chatHello, nil, []string{"role", "content", "finish", "usage", "done"}},
 		{"broken after the finish", chatRole + chatHi + chatStop, protocol.ErrUpstream, []string{"role", "content", "error"}},
+		{"[DONE] before a finish", chatRole + chatHi + chatDone, protocol.ErrUpstream, []string{"role", "content", "error"}},
+		{
+			"content, finish and usage in one chunk",
+			chatRole + chatHead + `[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":` + usage + "}\n\n" + chatDone,
+			nil,
+			[]string{"role", "content", "finish", "usage", "done"},
+		},
 		{
 			"error chunk", chatRole + chatHi + `data: {"error":{"code":502,"message":"x"}}` + "\n\n", protocol.ErrUpstream,
 			[]string{"role", "content", "error"},
@@ -64,6 +72,37 @@ func TestRelayChat(t *testing.T) {
 				t.Error(err)
 			}
 		})
+	}
+}
+
+// chatMixed has two choices: the first finishes in the chunk where the second starts a tool call, and the second
+// finishes in a chunk that also carries content and the usage.
+const chatMixed = chatHead + `[{"index":0,"delta":{"role":"assistant","content":"x"},"finish_reason":null},` +
+	`{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]}` + "\n\n" +
+	chatHead + `[{"index":0,"delta":{},"finish_reason":"stop"},{"index":1,"delta":{"content":"A","tool_calls":` +
+	`[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":null}]}` + "\n\n" +
+	chatHead + `[{"index":1,"delta":{"content":"B","tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},` +
+	`"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}` + "\n\n" + chatDone
+
+// TestRelayChatChoices: when one choice finishes in a chunk that carries another's content, the content goes on in
+// place and only the finish signal is held, so every choice keeps its order, tool calls included; a chunk with content
+// is the commit point even when it finishes a choice and carries the usage.
+func TestRelayChatChoices(t *testing.T) {
+	got := relay(t, protocol.Chat, strings.NewReader(chatMixed), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	want := map[string]string{"0/content": "x", "1/content": "AB", "1/tool0/name": "f", "1/tool0/arguments": "{}"}
+	if diff := cmp.Diff(want, contents(t, protocol.Chat, got.out)); diff != "" || got.err != nil {
+		t.Fatalf("error %v; contents (-want +got):\n%s\n%s", got.err, diff, got.out)
+	}
+	if err := streamcheck.Chat(bytes.NewReader(got.out)); err != nil {
+		t.Error(err)
+	}
+	if u := got.r.Usage().Segments[0].Usage; u.Count(catalog.ItemInput) != 3 || u.Count(catalog.ItemOutput) != 2 {
+		t.Errorf("usage taken from the content chunk: input %d, output %d", u.Count(catalog.ItemInput), u.Count(catalog.ItemOutput))
+	}
+	last := chatHead + `[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3}}` + "\n\n"
+	if got := relay(t, protocol.Chat, strings.NewReader(last+chatDone), protocol.UsageContext{}, protocol.NewMemory(0),
+		settled); !slices.Contains(got.kinds, protocol.StepCommit) {
+		t.Errorf("the one chunk with content did not commit: %v", got.kinds)
 	}
 }
 
@@ -223,6 +262,9 @@ func TestRelayOpenAIUsage(t *testing.T) {
 			want: counts{catalog.ItemInput: 9, catalog.ItemCacheRead: 0, catalog.ItemCacheWrite: 0, catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 		},
 		{name: "parts above the total", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":10}}`, invalid: true},
+		{name: "a negative part", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"audio_tokens":-1}}`, invalid: true},
+		{name: "a negative total", usage: `{"completion_tokens":-2}`, invalid: true},
+		{name: "parts that overflow", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":9223372036854775807,"cache_write_tokens":9223372036854775807}}`, invalid: true},
 		{
 			name: "unknown counts", usage: `{"completion_tokens":2,"image_tokens":4,"completion_tokens_details":{"accepted_prediction_tokens":1,"x_tokens":3}}`,
 			want:    counts{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},

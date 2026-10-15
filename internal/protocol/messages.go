@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -36,9 +37,9 @@ type messagesStream struct {
 	reportErr                        error // the usage object is not one messagesUsage can hold
 }
 
-func newMessagesStream(u UsageContext, o RelayOptions) *messagesStream {
+func newMessagesStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	s := &messagesStream{}
-	s.init(u, o, messagesUsageMembers)
+	s.init(u, o, messagesUsageMembers, charge)
 	return s
 }
 
@@ -190,12 +191,15 @@ func (s *messagesStream) meter(m *meter) {
 		m.invalid = err
 		return
 	}
-	var compactions []usageReport
+	var compactions []usageReport // nil unless the report lists iterations, so a report without keeps the earlier ones
+	if s.report.Iterations != nil {
+		compactions = []usageReport{}
+	}
 	for i, it := range s.report.Iterations {
 		switch it.Type {
 		case "message":
 		case "compaction":
-			c, err := it.items(UsageContext{CacheTTL1h: s.ctx.CacheTTL1h, Tier: reply.tier}, fmt.Sprintf("usage.iterations[%d]", i))
+			c, err := it.items(s.ctx, fmt.Sprintf("usage.iterations[%d]", i))
 			if err != nil {
 				m.invalid = err
 				return
@@ -221,7 +225,7 @@ func (u *messagesUsage) items(ctx UsageContext, path string) (r usageReport, err
 	}
 	u.serverTools(&r, path)
 	unknownCounts(&r, path, u.Unknown)
-	u.serviceTier(ctx, &r, path)
+	u.serviceTier(&r, path)
 	r.sortUnknown()
 	return r, nil
 }
@@ -242,13 +246,15 @@ func (u *messagesUsage) serverTools(r *usageReport, path string) {
 	}
 }
 
-// serviceTier is fast mode's when the reply says so, then the reply's service_tier, then the request's.
-func (u *messagesUsage) serviceTier(ctx UsageContext, r *usageReport, path string) {
-	r.tier = ctx.Tier
+// serviceTier is fast mode's when the reply says so, then the reply's service_tier; without either the report leaves
+// the tier out, and the request's or an earlier report's stands.
+func (u *messagesUsage) serviceTier(r *usageReport, path string) {
+	r.tierSet = true
 	switch {
 	case u.Speed != nil && *u.Speed == "fast":
 		r.tier = catalog.ServiceTierFast
 	case u.ServiceTier == nil:
+		r.tierSet = false
 	case *u.ServiceTier == "standard":
 		r.tier = catalog.ServiceTierStandard
 	case *u.ServiceTier == "priority":
@@ -265,6 +271,8 @@ func (u *messagesUsage) serviceTier(ctx UsageContext, r *usageReport, path strin
 func (u *messagesUsage) cacheWrite(ctx UsageContext, r *usageReport) error {
 	c := u.CacheCreation
 	switch {
+	case c != nil && (!countOK(c.FiveMinutes) || !countOK(c.OneHour)), u.CacheWrite != nil && !countOK(*u.CacheWrite):
+		return errors.New("usage: a cache write count is not from 0 to 10¹⁰")
 	case c != nil && u.CacheWrite != nil && c.FiveMinutes+c.OneHour != *u.CacheWrite:
 		return fmt.Errorf("usage: cache_creation adds up to %d, not cache_creation_input_tokens %d",
 			c.FiveMinutes+c.OneHour, *u.CacheWrite)
@@ -284,7 +292,7 @@ func (u *messagesUsage) cacheWrite(ctx UsageContext, r *usageReport) error {
 var (
 	// messageRules put the call ID and the client's model name in the message and keep its usage to
 	// messagesUsageMembers.
-	messageRules = map[string]rule{"id": (*rewriter).identity, "model": (*rewriter).model, "usage": (*rewriter).usage}
+	messageRules = map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "usage": (*rewriter).usage}
 	// messagesRewrites are the rewrites of message_start and of an ending, whose axiom member an upstream that is
 	// itself a gateway like ours may have written, and which our ending may need to write.
 	messagesRewrites = formatRules{members: map[string]rule{

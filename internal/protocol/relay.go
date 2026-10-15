@@ -178,7 +178,8 @@ type Relay struct {
 
 // relayFormat is what the relay needs to know of a format.
 type relayFormat struct {
-	newUpstream func(UsageContext, RelayOptions) upstream
+	// newUpstream returns the format's reader, which charges what it holds with charge.
+	newUpstream func(u UsageContext, o RelayOptions, charge func(int) error) upstream
 	// limit bounds one event: Messages and Chat send deltas and control events; Responses' snapshot events repeat
 	// the request and the whole output, and get streamcheck's ceiling (README.md「检查流结构」).
 	limit int
@@ -189,9 +190,9 @@ type relayFormat struct {
 }
 
 var relayFormats = [...]relayFormat{
-	Messages:  {func(u UsageContext, o RelayOptions) upstream { return newMessagesStream(u, o) }, 1 << 20, false},
-	Responses: {func(u UsageContext, o RelayOptions) upstream { return newResponsesStream(u, o) }, 32 << 20, false},
-	Chat:      {func(u UsageContext, o RelayOptions) upstream { return newChatStream(u, o) }, 1 << 20, true},
+	Messages:  {newMessagesStream, 1 << 20, false},
+	Responses: {newResponsesStream, 32 << 20, false},
+	Chat:      {newChatStream, 1 << 20, true},
 }
 
 // NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
@@ -203,7 +204,8 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		return r
 	}
 	r.format = &relayFormats[upstream]
-	r.up = r.format.newUpstream(u, o)
+	r.up = r.format.newUpstream(u, o, r.charge)
+	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
 	return r
@@ -246,7 +248,14 @@ func (r *Relay) event(data []byte) (Step, error) {
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
-	return r.route(e, data)
+	step := Step{Kind: StepBuffered} // what a skipped event takes
+	if e.role != skipped {
+		step, err = r.route(e, data)
+	}
+	if err == nil && e.withheld != nil {
+		_, err = r.withhold("", e.withheld)
+	}
+	return step, err
 }
 
 // route writes or holds an event by its role.
@@ -265,7 +274,7 @@ func (r *Relay) route(e event, data []byte) (Step, error) {
 		return r.end(e.name, nil)
 	case end:
 		return r.end(e.name, data)
-	case passive, content, withheld:
+	case passive, content, withheld, skipped:
 	}
 	switch {
 	case len(r.ending) > 0:
@@ -281,7 +290,7 @@ func (r *Relay) route(e event, data []byte) (Step, error) {
 
 // edit returns e's data with its edits applied, in a buffer the relay reuses.
 func (r *Relay) edit(e *event) ([]byte, error) {
-	if e.nEdits == 0 {
+	if len(e.edits) == 0 {
 		return e.data, nil
 	}
 	var err error
@@ -390,7 +399,9 @@ func (r *Relay) release() {
 }
 
 // fail ends the relay's reading. A stream that breaks off or breaks its format is the upstream's failure; a failed
-// read, such as the one the attempt's cancellation causes, is returned as it is.
+// read, such as the one the attempt's cancellation causes, is returned as it is. The gateway settles before it asks
+// for the failure ending, so the relay lives on meanwhile: it lets go of every buffer but out, which still holds the
+// events before the commit point, and gives back only what it no longer holds.
 func (r *Relay) fail(err error) error {
 	switch {
 	case errors.Is(err, io.EOF):
@@ -399,7 +410,12 @@ func (r *Relay) fail(err error) error {
 		err = fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	r.state, r.err = failed, err
-	r.release()
+	r.events, r.withheld, r.ending, r.stop, r.edited = nil, nil, nil, nil, nil
+	r.up.dropBuffers()
+	r.held = int64(cap(r.out))
+	keep := max(0, r.held-baseMemory)
+	r.o.Memory.left.Add(r.charged - keep)
+	r.charged = keep
 	return err
 }
 

@@ -386,7 +386,8 @@ func TestKeepAlive(t *testing.T) {
 }
 
 // FuzzRelay: whatever valid stream of a format the upstream sends, however it is split into reads, the client gets
-// the same valid stream of that format with exactly one ending.
+// the same valid stream of that format with exactly one ending; one that ends normally relays without an error, and
+// the client gets every block's, part's and choice's text, reasoning and tool calls as the upstream sent them.
 func FuzzRelay(f *testing.F) {
 	for i, format := range formats {
 		for _, dir := range must(fs.Glob(samples, format.dir+"/*")) {
@@ -396,18 +397,31 @@ func FuzzRelay(f *testing.F) {
 	f.Add(uint8(0), []byte(messageStart(`{"input_tokens":3}`)+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{1})
 	f.Add(uint8(0), []byte(messageStart(`{}`)+`data: {"type":"error","error":{"type":"api_error","message":"x"}}`+"\n\n"), []byte{9})
 	f.Add(uint8(2), []byte(chatHello), []byte{5})
+	f.Add(uint8(2), []byte(chatMixed), []byte{40, 9})
+	f.Add(uint8(2), []byte(`data:{"id":"0","object":"chat.completion.chunk","model":[]}`+"\n\ndata:[DONE]\n\n"), []byte{9})
+	f.Add(uint8(2), []byte(chatRole+chatHead+`[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],`+
+		`"usage":{"prompt_tokens":3}}`+"\n\n"+chatDone), []byte{2})
 	f.Fuzz(func(t *testing.T, which uint8, stream, cuts []byte) {
 		format := formats[int(which)%len(formats)]
 		if format.check(bytes.NewReader(stream)) != nil {
 			return
 		}
-		whole := relay(t, format.f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
-		split := relay(t, format.f, &chunks{stream, cuts}, protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
+		whole := relay(t, format.f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
+		split := relay(t, format.f, &chunks{stream, cuts}, protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 		if !bytes.Equal(whole.out, split.out) {
 			t.Fatalf("split %v:\n%s\nwhole:\n%s", cuts, split.out, whole.out)
 		}
 		if err := format.check(bytes.NewReader(whole.out)); err != nil {
 			t.Fatalf("client stream: %v\n%s", err, whole.out)
+		}
+		if !endsNormally(format.f, stream) {
+			return
+		}
+		if whole.err != nil {
+			t.Fatalf("a stream that ends normally failed: %v\n%s", whole.err, stream)
+		}
+		if diff := cmp.Diff(contents(t, format.f, stream), contents(t, format.f, whole.out)); diff != "" {
+			t.Fatalf("contents (-upstream +client):\n%s", diff)
 		}
 	})
 }
