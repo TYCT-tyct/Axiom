@@ -8,35 +8,61 @@ import "fmt"
 // upstream format's usage onto them as README.md「计费项与用量」 tabulates.
 type Item uint8
 
-// The billing items, in the order their prices are listed.
+// The billing items, in the order stored lists name them: the input side, then the output side, then counts.
 const (
 	ItemInput Item = iota
 	ItemCacheRead
 	ItemCacheWrite // a 5-minute cache write, and OpenAI's only kind
 	ItemCacheWrite1h
+	ItemAudioIn
+	ItemImageIn // images and video, when the vendor reports and prices them apart from text
 	ItemOutput
 	ItemReasoning
+	ItemAudioOut
+	ItemImageOut
 	ItemWebSearch // counted in searches, not tokens
-	numItems
+	NumItems
 )
 
 // itemNames are the items' names in stored price schedules, so they never change.
-var itemNames = [numItems]string{"input", "cache_read", "cache_write", "cache_write_1h", "output", "reasoning", "web_search"}
+var itemNames = [NumItems]string{
+	"input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in",
+	"output", "reasoning", "audio_out", "image_out", "web_search",
+}
 
 func (it Item) String() string { return itemNames[it] }
 
-// maxCount bounds every count, so a tier's sum of up to seven counts stays far inside int64.
+// ItemSet is a set of billing items.
+type ItemSet = set[Item]
+
+// set holds values of a small enumeration, one bit each.
+type set[T ~uint8] uint16
+
+// A seventeenth value would have no bit: Has would report it absent and add would drop it. This fails to compile
+// first.
+var _ [16 - NumItems]struct{}
+
+// Has reports whether v is in the set.
+func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
+
+func (s *set[T]) add(v T) { *s |= 1 << v }
+
+// inputSide are the items a prompt is made of, the only ones a context tier's threshold may add up.
+const inputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |
+	1<<ItemImageIn
+
+// maxCount bounds every count, so a tier's sum of up to NumItems counts stays far inside int64.
 const maxCount = 1e10
 
 // Usage is how much of each billing item a request used. Its counts are unexported so that NewUsage, which bounds
 // them, is the only way to make one.
-type Usage struct{ q [numItems]int64 }
+type Usage struct{ q [NumItems]int64 }
 
 // NewUsage checks each count is from 0 to 10¹⁰; an item left out counts 0.
 func NewUsage(counts map[Item]int64) (Usage, error) {
 	var u Usage
 	for it, n := range counts {
-		if it >= numItems {
+		if it >= NumItems {
 			return Usage{}, fmt.Errorf("usage: unknown billing item %d", uint8(it))
 		}
 		if n < 0 || n > maxCount {
@@ -47,6 +73,6 @@ func NewUsage(counts map[Item]int64) (Usage, error) {
 	return u, nil
 }
 
-// OutputTotal is everything the model generated, reasoning included: a reply that only reasoned is not an empty reply
-// to the zero-output waiver (docs/domains/billing.md「免单规则」).
+// OutputTotal is the output the zero-output waiver reads, output plus reasoning (docs/domains/billing.md「免单规则」):
+// a reply that only reasoned is not an empty reply.
 func (u Usage) OutputTotal() int64 { return u.q[ItemOutput] + u.q[ItemReasoning] }

@@ -21,6 +21,7 @@ type counts = map[catalog.Item]int64
 
 const (
 	in, cacheRead, cacheWrite, cacheWrite1h = catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h
+	audioIn, imageIn, audioOut, imageOut    = catalog.ItemAudioIn, catalog.ItemImageIn, catalog.ItemAudioOut, catalog.ItemImageOut
 	out, reasoning, webSearch               = catalog.ItemOutput, catalog.ItemReasoning, catalog.ItemWebSearch
 )
 
@@ -28,16 +29,24 @@ func TestCost(t *testing.T) {
 	// OpenAI's prompt caching sample: 12,000 input tokens, all of them written to the cache, map to cache_write alone
 	// (README.md「计费项与用量」); the write price replaces the input price and the write counts toward the threshold.
 	// The prices and the threshold are made up to put the sample right above it.
-	openAI := `{"v":1,"currency":"USD","input_modalities":["text"],
+	openAI := `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000005","cache_read":"0.0000005","cache_write":"0.00000625","output":"0.00003"},
 		"context_tiers":{"basis":["input","cache_read","cache_write"],"method":"whole",
 			"tiers":[{"above":11999,"rates":{"cache_write":"0.0000125"}}]}}`
-	steps := `{"v":1,"currency":"CNY","input_modalities":["text"],"rates":{"input":"1"},
+	steps := `{"v":1,"currency":"CNY","rates":{"input":"1"},
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"2"}},{"above":20,"rates":{"input":"3"}}]}}`
-	all := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"1000","cache_read":"1000","cache_write":"1000",
-		"cache_write_1h":"1000","output":"1000","reasoning":"1000","web_search":"1000"}}`
-	smallest := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"0.000000000000001"}}`
-	free := `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"1","cache_read":"0","output":"1"},
+	all := `{"v":1,"currency":"USD","rates":{"input":"1000","cache_read":"1000","cache_write":"1000",
+		"cache_write_1h":"1000","audio_in":"1000","image_in":"1000","output":"1000","reasoning":"1000","audio_out":"1000",
+		"image_out":"1000","web_search":"1000"}}`
+	// Gemini 2.5 Pro's tiers with an image price of its own, as Gemini 3.6 Flash prices images apart from text: the
+	// image tokens split out of the prompt still count toward the 200k threshold. The image prices are made up.
+	geminiImages := `{"v":1,"currency":"USD","rates":{"input":"0.00000125","image_in":"0.000002","output":"0.00001"},
+		"context_tiers":{"basis":["input","cache_read","audio_in","image_in"],"method":"whole",
+			"tiers":[{"above":200000,"rates":{"input":"0.0000025","image_in":"0.000004","output":"0.000015"}}]}}`
+	// Audio in and out at prices of their own, as OpenAI's audio models have; the prices are made up.
+	audio := `{"v":1,"currency":"USD","rates":{"input":"1","audio_in":"10","output":"2","audio_out":"20"}}`
+	smallest := `{"v":1,"currency":"USD","rates":{"input":"0.000000000000001"}}`
+	free := `{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"0","output":"1"},
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"output":"0"}}]}}`
 	for _, tc := range []struct {
 		name, schedule string
@@ -61,7 +70,13 @@ func TestCost(t *testing.T) {
 		{"the smallest price", smallest, counts{in: 1}, "0.000000000000001"},
 		{"a zero price is a price", free, counts{cacheRead: 5}, "0"},
 		{"a tier's zero price replaces the base price", free, counts{in: 11, out: 3}, "11"},
-		{"the largest cost", all, counts{in: 1e10, cacheRead: 1e10, cacheWrite: 1e10, cacheWrite1h: 1e10, out: 1e10, reasoning: 1e10, webSearch: 1e10}, "70000000000000"},
+		{"Gemini text and images within the threshold", geminiImages, counts{in: 180_000, imageIn: 20_000}, "0.265"},
+		{"Gemini images take the prompt over it", geminiImages, counts{in: 190_000, imageIn: 20_000}, "0.555"},
+		{"audio at its own prices", audio, counts{in: 1, audioIn: 2, out: 3, audioOut: 4}, "107"},
+		{"the largest cost", all, counts{
+			in: 1e10, cacheRead: 1e10, cacheWrite: 1e10, cacheWrite1h: 1e10, audioIn: 1e10,
+			imageIn: 1e10, out: 1e10, reasoning: 1e10, audioOut: 1e10, imageOut: 1e10, webSearch: 1e10,
+		}, "110000000000000"},
 	} {
 		got, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
 		want, _ := new(big.Rat).SetString(tc.want)
@@ -74,8 +89,8 @@ func TestCost(t *testing.T) {
 // reasoning falls back to output; nothing else falls back. In particular a cache write OpenAI reports against a
 // schedule without a write price is an error, not an input token.
 func TestCostUnpriced(t *testing.T) {
-	inputOnly := mustParse(t, `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"input":"0.000001"}}`)
-	outputOnly := mustParse(t, `{"v":1,"currency":"USD","input_modalities":["text"],"rates":{"output":"0.000001"}}`)
+	inputOnly := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000001"}}`)
+	outputOnly := mustParse(t, `{"v":1,"currency":"USD","rates":{"output":"0.000001"}}`)
 	for _, tc := range []struct {
 		schedule catalog.Schedule
 		usage    counts
@@ -87,6 +102,11 @@ func TestCostUnpriced(t *testing.T) {
 		{inputOnly, counts{in: 5, out: 1}},
 		{inputOnly, counts{in: 5, reasoning: 1}},
 		{inputOnly, counts{in: 5, webSearch: 1}},
+		{inputOnly, counts{in: 5, audioIn: 1}},
+		{inputOnly, counts{in: 5, imageIn: 1}},
+		{inputOnly, counts{in: 5, audioOut: 1}},
+		{inputOnly, counts{in: 5, imageOut: 1}},
+		{outputOnly, counts{out: 5, audioOut: 1}}, // audio output is not output
 	} {
 		if got, err := tc.schedule.Cost(mustUsage(t, tc.usage)); !errors.Is(err, catalog.ErrUnpriced) {
 			t.Errorf("Cost of %v = %v, %v; want ErrUnpriced", tc.usage, got.Rat(), err)

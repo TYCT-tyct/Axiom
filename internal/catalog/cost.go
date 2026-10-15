@@ -16,7 +16,7 @@ var ErrUnpriced = errors.New("price schedule: an item with usage has no price")
 func (s Schedule) Cost(u Usage) (platform.Exact, error) {
 	tier := s.tier(u)
 	var total platform.Exact
-	for it := range numItems {
+	for it := range NumItems {
 		if u.q[it] == 0 {
 			continue
 		}
@@ -37,9 +37,9 @@ func (s Schedule) Cost(u Usage) (platform.Exact, error) {
 
 // tier returns the highest tier whose threshold the prompt length exceeds, or nil for the base prices.
 func (s Schedule) tier(u Usage) *contextTier {
-	var length int64 // at most 7 × 10¹⁰
-	for it := range numItems {
-		if s.basis.has(it) {
+	var length int64 // at most NumItems × 10¹⁰
+	for it := range NumItems {
+		if s.basis.Has(it) {
 			length += u.q[it]
 		}
 	}
@@ -52,8 +52,8 @@ func (s Schedule) tier(u Usage) *contextTier {
 }
 
 func (s Schedule) price(tier *contextTier, it Item) (platform.UnitPrice, bool) {
-	if tier != nil && tier.rates.priced.has(it) {
+	if tier != nil && tier.rates.priced.Has(it) {
 		return tier.rates.price[it], true
 	}
-	return s.base.price[it], s.base.priced.has(it)
+	return s.base.price[it], s.base.priced.Has(it)
 }

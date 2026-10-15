@@ -13,7 +13,7 @@ func TestNewUsage(t *testing.T) {
 	for name, bad := range map[string]map[catalog.Item]int64{
 		"negative":     {catalog.ItemOutput: -1},
 		"above 10¹⁰":   {catalog.ItemCacheRead: 1e10 + 1},
-		"unknown item": {catalog.ItemWebSearch + 1: 1},
+		"unknown item": {catalog.NumItems: 1},
 	} {
 		if u, err := catalog.NewUsage(bad); err == nil {
 			t.Errorf("%s: NewUsage(%v) = %v, want an error", name, bad, u)

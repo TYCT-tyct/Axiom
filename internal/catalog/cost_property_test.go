@@ -32,7 +32,8 @@ func FuzzCost(f *testing.F) {
 	})
 }
 
-var items = [...]catalog.Item{in, cacheRead, cacheWrite, cacheWrite1h, out, reasoning, webSearch}
+// items lists every billing item, the input side first.
+var items = [...]catalog.Item{in, cacheRead, cacheWrite, cacheWrite1h, audioIn, imageIn, out, reasoning, audioOut, imageOut, webSearch}
 
 type (
 	prices   map[catalog.Item]*big.Rat
@@ -56,7 +57,7 @@ func randomCase(r *rand.Rand) costCase {
 		scale = 30
 	}
 	c := costCase{base: randomPrices(r), usage: counts{}}
-	for _, it := range items[:4] {
+	for _, it := range items[:6] {
 		if r.IntN(2) == 0 {
 			c.basis = append(c.basis, it)
 		}
@@ -106,7 +107,7 @@ func randomAmount(r *rand.Rand, limit int64) int64 {
 
 func (c costCase) json(tb testing.TB) string {
 	tb.Helper()
-	doc := map[string]any{"v": 1, "currency": "USD", "input_modalities": []string{"text"}, "rates": c.base.json()}
+	doc := map[string]any{"v": 1, "currency": "USD", "rates": c.base.json()}
 	if len(c.tiers) > 0 {
 		var tiers []map[string]any
 		for _, tier := range c.tiers {
