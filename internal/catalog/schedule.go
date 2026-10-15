@@ -70,7 +70,7 @@ const (
 // MarshalJSON writes the canonical form.
 func ParseSchedule(b []byte) (Schedule, error) {
 	var w scheduleJSON
-	err := jsonx.UnmarshalStrict(b, &w)
+	err := jsonx.UnmarshalKnown(b, &w)
 	var s Schedule
 	if err == nil {
 		s, err = w.schedule()

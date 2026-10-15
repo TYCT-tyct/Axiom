@@ -122,7 +122,7 @@
 
 - 成员：`v`（版本，现在是 1）、`currency`、`rates`（标准档的计费项 → 每计费单位的单价）、可选的 `context_tiers`（`basis`、`method`、按 `above` 严格递增的 `tiers`）、可选的 `service_tiers`（等级名 → 该等级的 `rates` 和 `context_tiers`，后者是与顶层门槛逐个相同的 `tiers`）。每一处的 `rates` 都必须写，可以是 `{}`；每一档都必须写 `above`。
 - 规范形式：由 `platform/jsonx.MarshalCanonical` 写出，成员按 RFC 8785 排序，整数原样；单价写成 `UnitPrice` 的规范文本（十进制字符串，不用 JSON 数字，免得经过浮点），列表按枚举顺序。
-- 拒绝未知成员和重复成员（`platform/jsonx.UnmarshalStrict`）：读到不认识的条件就报错，而不是忽略后按基础价算。
+- 拒绝未知成员和重复成员（`platform/jsonx.UnmarshalKnown`）：读到不认识的条件就报错，而不是忽略后按基础价算。
 
 ## 快照
 

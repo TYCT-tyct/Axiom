@@ -2,6 +2,7 @@ package jsonx
 
 import (
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,26 +48,56 @@ func TestUnmarshal(t *testing.T) {
 		Index int64  `json:"index"`
 	}
 	for _, tc := range []struct {
-		name, data string
-		want       event
-		err        error // as in TestValidate
+		name, data    string
+		want          event
+		err, knownErr error // of Unmarshal and UnmarshalKnown, as in TestValidate
 	}{
-		{"named members only", `{"type":"ping","index":2,"extra":[1]}`, event{"ping", 2}, nil},
-		{"names match case", `{"Type":"ping"}`, event{}, nil},
-		{"duplicate name", `{"type":"a","type":"b"}`, event{}, errSyntax},
-		{"too deep", `{"type":"a","x":` + nested(MaxDepth) + `}`, event{}, errTooDeep},
+		{"known members", `{"type":"ping","index":2}`, event{"ping", 2}, nil, nil},
+		{"unknown member", `{"type":"ping","index":2,"extra":[1]}`, event{"ping", 2}, nil, json.ErrUnknownName},
+		{"names match case", `{"Type":"ping"}`, event{}, nil, json.ErrUnknownName},
+		{"duplicate name", `{"type":"a","type":"b"}`, event{}, errSyntax, errSyntax},
+		{"too deep", `{"type":"a","x":` + nested(MaxDepth) + `}`, event{}, errTooDeep, errTooDeep},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var got event
-			err := Unmarshal([]byte(tc.data), &got)
-			var syntax *jsontext.SyntacticError
-			if errors.Is(tc.err, errSyntax) && !errors.As(err, &syntax) || !errors.Is(tc.err, errSyntax) && !errors.Is(err, tc.err) {
-				t.Fatalf("Unmarshal = %v, want %v", err, tc.err)
-			}
-			if tc.err == nil && got != tc.want {
-				t.Errorf("Unmarshal decoded %+v, want %+v", got, tc.want)
-			}
-		})
+		for _, f := range []struct {
+			name      string
+			unmarshal func([]byte, any) error
+			err       error
+		}{{"Unmarshal", Unmarshal, tc.err}, {"UnmarshalKnown", UnmarshalKnown, tc.knownErr}} {
+			t.Run(f.name+"/"+tc.name, func(t *testing.T) {
+				var got event
+				err := f.unmarshal([]byte(tc.data), &got)
+				var syntax *jsontext.SyntacticError
+				if errors.Is(f.err, errSyntax) && !errors.As(err, &syntax) || !errors.Is(f.err, errSyntax) && !errors.Is(err, f.err) {
+					t.Fatalf("%s = %v, want %v", f.name, err, f.err)
+				}
+				if f.err == nil && got != tc.want {
+					t.Errorf("%s decoded %+v, want %+v", f.name, got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestMarshalCanonical(t *testing.T) {
+	type doc struct {
+		Z     string            `json:"z"`
+		Big   int64             `json:"big"`
+		Float jsontext.Value    `json:"float"`
+		Map   map[string]string `json:"map"`
+		Text  string            `json:"text"`
+	}
+	v := doc{Z: "last", Big: 1<<53 + 1, Float: jsontext.Value(`1.50E2`), Map: map[string]string{"b": "2", "a": "1", "é": "3"}, Text: "<é>"}
+	const want = `{"big":9007199254740993,"float":150,"map":{"a":"1","b":"2","é":"3"},"text":"<é>","z":"last"}`
+	got, err := MarshalCanonical(v)
+	if err != nil || string(got) != want {
+		t.Fatalf("MarshalCanonical = %s, %v; want %s", got, err, want)
+	}
+	var back doc
+	if err := UnmarshalKnown(got, &back); err != nil {
+		t.Fatalf("UnmarshalKnown of %s: %v", got, err)
+	}
+	if again, err := MarshalCanonical(back); err != nil || string(again) != want {
+		t.Errorf("round trip writes %s, %v; want %s", again, err, want)
 	}
 }
 

@@ -55,17 +55,20 @@ func Validate(data []byte) error {
 // json.Unmarshal cannot, and once to decode, whose defaults are the rest of the policy. Members v does not name are
 // skipped, and names match exactly, case included.
 func Unmarshal(data []byte, v any) error {
+	return unmarshal(data, v)
+}
+
+// UnmarshalKnown is Unmarshal that refuses members v does not name, for stored forms we define ourselves: there a
+// member we do not know is a condition we cannot honour, and skipping it would silently change the meaning.
+func UnmarshalKnown(data []byte, v any) error {
+	return unmarshal(data, v, json.RejectUnknownMembers(true))
+}
+
+func unmarshal(data []byte, v any, opts ...json.Options) error {
 	if err := Validate(data); err != nil {
 		return err
 	}
-	return json.Unmarshal(data, v)
-}
-
-// UnmarshalStrict decodes b into v and refuses invalid UTF-8, duplicate member names and members v has no field for:
-// what we decode is what any other strict reader would decode, and a member we do not know is an error rather than
-// silently ignored.
-func UnmarshalStrict(b []byte, v any) error {
-	return json.Unmarshal(b, v, json.RejectUnknownMembers(true))
+	return json.Unmarshal(data, v, opts...)
 }
 
 // MarshalCanonical encodes v in RFC 8785 member order and spelling, so equal values give equal bytes. Integers stay as
@@ -77,5 +80,9 @@ func MarshalCanonical(v any) ([]byte, error) {
 		return nil, err
 	}
 	t := jsontext.Value(b)
-	return t, t.Canonicalize(jsontext.CanonicalizeRawInts(false))
+	// Canonicalize may replace t's backing array, so t is read only after it returns.
+	if err := t.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
+		return nil, err
+	}
+	return t, nil
 }

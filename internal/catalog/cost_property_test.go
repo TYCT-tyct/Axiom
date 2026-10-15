@@ -1,13 +1,13 @@
 package catalog_test
 
 import (
-	"encoding/json/v2"
 	"math/big"
 	"math/rand/v2"
 	"slices"
 	"testing"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 )
 
 // FuzzCost checks Cost against an independent math/big model of README.md「条件」 and「计费项与用量」: the service tier's
@@ -144,7 +144,7 @@ func (c costCase) json(tb testing.TB) string {
 		}
 	}
 	doc["service_tiers"] = levels
-	b, err := json.Marshal(doc)
+	b, err := jsonx.MarshalCanonical(doc)
 	if err != nil {
 		tb.Fatal(err)
 	}
