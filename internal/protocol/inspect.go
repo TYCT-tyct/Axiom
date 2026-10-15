@@ -109,14 +109,19 @@ func Inspect(f Format, body []byte) (Request, error) {
 // read 2026-10-14).
 const anyTier = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority)
 
+// reader reads a body token by token, holding every token to jsonx.MaxDepth. Inspect and Prepare share it.
+type reader struct {
+	dec  *jsontext.Decoder
+	name []byte // the member being read, unquoted; valid until the next read
+	buf  []byte // scratch for unquoting
+}
+
 // scanner reads one body. Members of an object may come in any order, so a part's meaning is gathered in p and
 // settled when the object ends.
 type scanner struct {
-	dec         *jsontext.Decoder
+	reader
 	g           *grammar
 	r           Request
-	name        []byte // the member being read, unquoted; valid until the next read
-	buf         []byte // scratch for unquoting
 	p           part
 	tiers, fast catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
 	callCap     int64                  // Responses' max_tool_calls
@@ -152,7 +157,7 @@ func (s *scanner) top() error {
 }
 
 // token reads one token, enforcing jsonx.MaxDepth: everything Inspect reads passes through it or is a scalar.
-func (s *scanner) token() error {
+func (s *reader) token() error {
 	_, err := s.dec.ReadToken()
 	if err == nil && s.dec.StackDepth() > jsonx.MaxDepth {
 		err = errTooDeep
@@ -161,7 +166,7 @@ func (s *scanner) token() error {
 }
 
 // skip reads one value token by token, so its depth is checked too.
-func (s *scanner) skip() error {
+func (s *reader) skip() error {
 	depth := s.dec.StackDepth()
 	for {
 		if err := s.token(); err != nil || s.dec.StackDepth() == depth {
@@ -171,7 +176,7 @@ func (s *scanner) skip() error {
 }
 
 // present reports whether the next value is of kind, reading it when it is null, which stands for an absent member.
-func (s *scanner) present(kind jsontext.Kind, want string) (bool, error) {
+func (s *reader) present(kind jsontext.Kind, want string) (bool, error) {
 	if k := s.dec.PeekKind(); k == 'n' {
 		return false, s.token()
 	} else if k != kind {
@@ -181,7 +186,7 @@ func (s *scanner) present(kind jsontext.Kind, want string) (bool, error) {
 }
 
 // open reads the start of an object or array, reporting false for null.
-func (s *scanner) open(kind jsontext.Kind, want string) (bool, error) {
+func (s *reader) open(kind jsontext.Kind, want string) (bool, error) {
 	if ok, err := s.present(kind, want); !ok {
 		return false, err
 	}
@@ -194,11 +199,7 @@ func (s *scanner) object(f fields) error {
 		return err
 	}
 	for s.dec.PeekKind() != '}' {
-		name, err := s.dec.ReadValue()
-		if err == nil {
-			s.name, err = s.unquote(name)
-		}
-		if err != nil {
+		if err := s.member(); err != nil {
 			return err
 		}
 		read := f[string(s.name)]
@@ -224,8 +225,17 @@ func (s *scanner) array(each func(*scanner) error) error {
 	return s.token()
 }
 
+// member reads a member's name into name.
+func (s *reader) member() error {
+	v, err := s.dec.ReadValue()
+	if err == nil {
+		s.name, err = s.unquote(v)
+	}
+	return err
+}
+
 // raw reads a string as written, quotes included, or nil for null. It is valid until the next read.
-func (s *scanner) raw() (jsontext.Value, error) {
+func (s *reader) raw() (jsontext.Value, error) {
 	if ok, err := s.present('"', "a string"); !ok {
 		return nil, err
 	}
@@ -233,7 +243,7 @@ func (s *scanner) raw() (jsontext.Value, error) {
 }
 
 // str reads a string, unquoted, or nil for null. It is valid until the next read.
-func (s *scanner) str() ([]byte, error) {
+func (s *reader) str() ([]byte, error) {
 	v, err := s.raw()
 	if v == nil || err != nil {
 		return nil, err
@@ -241,7 +251,7 @@ func (s *scanner) str() ([]byte, error) {
 	return s.unquote(v)
 }
 
-func (s *scanner) unquote(v jsontext.Value) (b []byte, err error) {
+func (s *reader) unquote(v jsontext.Value) (b []byte, err error) {
 	if bytes.IndexByte(v, '\\') < 0 {
 		return v[1 : len(v)-1], nil
 	}
@@ -250,13 +260,13 @@ func (s *scanner) unquote(v jsontext.Value) (b []byte, err error) {
 }
 
 // is reads a string and reports whether it is lit.
-func (s *scanner) is(lit string) (bool, error) {
+func (s *reader) is(lit string) (bool, error) {
 	v, err := s.str()
 	return v != nil && string(v) == lit, err
 }
 
 // flag reads a boolean; null reads as 'n'.
-func (s *scanner) flag() (jsontext.Kind, error) {
+func (s *reader) flag() (jsontext.Kind, error) {
 	if k := s.dec.PeekKind(); k == 't' || k == 'f' || k == 'n' {
 		return k, s.token()
 	}
@@ -264,7 +274,7 @@ func (s *scanner) flag() (jsontext.Kind, error) {
 }
 
 // count reads a non-negative integer, 0 for null.
-func (s *scanner) count() (int64, error) {
+func (s *reader) count() (int64, error) {
 	if ok, err := s.present('0', "an integer"); !ok {
 		return 0, err
 	}
@@ -279,7 +289,7 @@ func (s *scanner) count() (int64, error) {
 }
 
 // mismatch reports a value of the wrong type, or the syntax error that hid its type.
-func (s *scanner) mismatch(want string) error {
+func (s *reader) mismatch(want string) error {
 	if s.dec.PeekKind() == 0 {
 		return s.token()
 	}
