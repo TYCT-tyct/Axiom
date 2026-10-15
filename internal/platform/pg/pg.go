@@ -42,6 +42,10 @@ func Open(ctx context.Context, url string) (*DB, error) {
 // Close waits for borrowed connections to come back and closes the pool.
 func (db *DB) Close() { db.pool.Close() }
 
+// ErrNoRows is what a Row's Scan returns when its query found no row, for the modules that must tell "none" from a
+// failure; they may not import pgx.
+var ErrNoRows = pgx.ErrNoRows
+
 // Scope is the set of rows a transaction may see and write: every row, the rows of some sites, the rows of some
 // accounts, or any union of these. The zero value is the empty set.
 type Scope struct {
