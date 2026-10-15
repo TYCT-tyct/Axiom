@@ -43,7 +43,7 @@ GRANT SELECT, INSERT (author, slug, version_basis, price_source, spec),
 -- norm is Normalize(name), computed by the program; the checks are a backstop, the listing review confirms each
 -- name's visibility.
 CREATE TABLE catalog.name (
-    name text PRIMARY KEY CHECK (name <> '' AND char_length(name) <= 200),
+    name text PRIMARY KEY CHECK (octet_length(name) BETWEEN 1 AND 200),
     norm text NOT NULL UNIQUE CHECK (norm <> '' AND norm !~ '[:~]'),
     visibility text NOT NULL CHECK (visibility IN ('public', 'internal')),
     model_id uuid NOT NULL REFERENCES catalog.model,
@@ -99,7 +99,7 @@ GRANT SELECT, UPDATE (n) ON catalog.revision TO axiom_app;
 -- evidence are internal. op_key makes an operation idempotent: a retry finds the first run's row.
 CREATE TABLE catalog.change (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
-    op_key uuid NOT NULL UNIQUE,
+    op_key uuid NOT NULL UNIQUE CHECK (op_key <> '00000000-0000-0000-0000-000000000000'),
     at timestamptz NOT NULL DEFAULT now(),
     actor text NOT NULL CHECK (actor <> ''),
     reason text NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 1000),

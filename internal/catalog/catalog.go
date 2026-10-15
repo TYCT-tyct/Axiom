@@ -46,6 +46,9 @@ func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.MaxStale <= 0 || cfg.PollEvery <= 0 {
+		return nil, errors.New("catalog: the staleness limit and the polling period must be positive")
+	}
 	if cfg.MaxStale <= cfg.PollEvery {
 		return nil, fmt.Errorf("catalog: the staleness limit %s must exceed the polling period %s", cfg.MaxStale, cfg.PollEvery)
 	}
@@ -212,7 +215,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 	return Model{
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
-		Spec: row.Spec, Rev: row.Rev, reportable: spec.reportable,
+		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable,
 	}, nil
 }
 

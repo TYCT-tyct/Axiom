@@ -19,6 +19,8 @@ import (
 
 // The ways an admin operation is refused.
 var (
+	ErrNoOpKey       = errors.New("op_key is required and must not be the zero UUID")
+	ErrNameLength    = fmt.Errorf("a name is 1 to %d bytes", maxNameLen)
 	ErrReason        = errors.New("a reason of 1 to 1000 characters is required")
 	ErrOpKeyReused   = errors.New("op_key was already used by another kind of operation")
 	ErrAuthorMissing = errors.New("the author does not exist")
@@ -59,6 +61,9 @@ type outcome struct {
 func (c *Catalog) apply(ctx context.Context, op Op, kind string, do func(tx pg.Tx) (outcome, error)) (Result, error) {
 	if n := utf8.RuneCountInString(op.Reason); n == 0 || n > 1000 {
 		return Result{}, ErrReason
+	}
+	if op.Key == (uuid.UUID{}) {
+		return Result{}, ErrNoOpKey
 	}
 	var res Result
 	var raised bool
@@ -236,6 +241,9 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 		if Status(row.Status) == StatusRetired {
 			return outcome{}, fmt.Errorf("%w: it is retired", ErrWrongStatus)
 		}
+		if n := len(r.Name); n == 0 || n > maxNameLen {
+			return outcome{}, ErrNameLength
+		}
 		norm := Normalize(r.Name)
 		if taken, err := New().GetNameByNorm(ctx, tx, norm); err == nil {
 			return outcome{}, fmt.Errorf("%w: %q is %q", ErrNameTaken, norm, taken.Name)
@@ -276,6 +284,9 @@ func (c *Catalog) UpdateSpec(ctx context.Context, r UpdateSpecRequest) (Result, 
 			return outcome{}, fmt.Errorf("%w: it is retired", ErrWrongStatus)
 		}
 		if Status(row.Status) == StatusListed {
+			if err := requireDeclared(spec); err != nil {
+				return outcome{}, fmt.Errorf("%w: %w", ErrNotReady, err)
+			}
 			if err := requirePricedInFull(ctx, tx, row.ID, spec); err != nil {
 				return outcome{}, err
 			}
@@ -342,8 +353,8 @@ func requireListable(ctx context.Context, tx pg.Tx, row CatalogModel) error {
 	if err != nil {
 		return err
 	}
-	if !spec.declared {
-		return errors.New(`the spec must declare "items" and "tiers", even if empty: what the upstream may report`)
+	if err := requireDeclared(spec); err != nil {
+		return err
 	}
 	standard := Normalize(strings.SplitN(row.Slug, "@", 2)[0])
 	names, err := New().ListNamesOfModel(ctx, tx, row.ID)
@@ -361,6 +372,15 @@ func requireListable(ctx context.Context, tx pg.Tx, row CatalogModel) error {
 		return errors.New("it has no reference price")
 	}
 	return prices.cover(spec.reportable)
+}
+
+// requireDeclared refuses a spec that leaves out what the upstream may report: absent or null reads as nothing
+// declared, which would make every later coverage check pass vacuously. An explicit empty list is a declaration.
+func requireDeclared(s spec) error {
+	if !s.declared {
+		return errors.New(`the spec must declare "items" and "tiers", even if empty: what the upstream may report`)
+	}
+	return nil
 }
 
 func hasName(names []CatalogName, norm string) bool {

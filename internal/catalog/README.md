@@ -164,6 +164,7 @@
 
 每个操作是 `Catalog` 的一个方法，带 `Op{Actor, Key, Reason}`，在一个事务里依次：
 
+0. `Key` 不能缺省或全零（`ErrNoOpKey`，数据库也拒绝），否则不同的操作会被当成第一个的重试。
 1. 按 `Key` 查 `change`：已有就返回第一次的 `Result`（`Replayed`），不再执行；种类不同报 `ErrOpKeyReused`。同一个 `Key` 的两个并发请求，后一个在唯一约束上失败，重试即得第一次的结果。
 2. 锁模型行（`LockModel`），带 `rev` 的操作比较 `rev`，不同报 `ErrStaleRev`。
 3. 对着锁住的行检查，写入。
@@ -174,12 +175,12 @@
 |---|---|---|
 | `SaveAuthor` | 建厂商或改显示名 | 理由必填 |
 | `CreateModel` | 建草稿模型，厂商取自 `slug` 的前半 | 厂商存在；`spec` 是对象，`items`、`tiers` 若有则是已知的计费项和服务等级 |
-| `AddName` | 给模型加名字，归一化后全局唯一 | 模型未下线；`norm` 未被占用（`ErrNameTaken`）；公开名字的约束由数据库兜底 |
-| `UpdateSpec` | 原地改规格（带 `rev`） | 模型未下线；已上架的，新规格声明的东西每个当前参考价都定了价 |
+| `AddName` | 给模型加名字，归一化后全局唯一；名字长度 1 到 200 字节（入口、数据库 `octet_length`、解析器同一规则） | 模型未下线；`norm` 未被占用（`ErrNameTaken`）；公开名字的约束由数据库兜底 |
+| `UpdateSpec` | 原地改规格（带 `rev`） | 模型未下线；已上架的，新规格仍要声明 `items` 和 `tiers`（缺省或 null 不算，显式空列表算），且声明的东西每个当前参考价都定了价 |
 | `ListModel` | 草稿 → 上架（带 `rev`） | 上架门槛，见下 |
 | `Retire` | 上架 → 下线（带 `rev`） | 必须是上架状态 |
 | `PublishPrice` | 给一个币种追加一个参考价版本 | `base` 是审核时看到的当前行（没有历史时为空），否则 `ErrPriceChanged`；`source` 等于模型的 `price_source`；证据是非空对象；已上架的模型过上架门槛；`Lost` 为空，口径变化要操作确认（`ConfirmBasisChange`） |
-| `SelectPriceSource` | 改选来源（带 `rev`），同一个事务里为新来源的每个币种发布一行、撤下它没有的币种 | 同 `PublishPrice` 对每张新价目表；至少一个币种；现在只能选 `official` 和 `manual`，数据集来源随数据集的 PR |
+| `SelectPriceSource` | 改选来源（带 `rev`），同一个事务里为新来源的每个币种发布一行、撤下它没有的币种 | 请求带审核时每个币种的当前行（`bases`），在模型锁内与现在的逐一核对，多或少都是 `ErrPriceChanged`；每张新价目表对每个现有价格的币种（不只是同币种）都过 `Lost`，被撤下的币种的价格也不能丢；同 `PublishPrice` 的其余检查；至少一个币种；现在只能选 `official` 和 `manual`，数据集来源随数据集的 PR |
 
 - **上架门槛**：规格声明了 `items` 和 `tiers`（可以为空，但要写，免得漏写让门槛形同虚设）；标准 ID（`slug` 去掉 `@版本`）是它的一个公开名字；至少有一个币种的当前参考价；每个当前参考价对 `Model.Reportable()` 的 `Missing` 为空。这是目录自己的门槛，保证上架的模型的参考价覆盖它声明的一切；计费对售价的上架门槛另算。
 - **证据**：现在只检查是非空的 JSON 对象，原样记进 `change`；引用页面快照、摘录逐字出现在正文里的检查随页面监测。

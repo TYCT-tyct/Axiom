@@ -67,10 +67,13 @@ type Model struct {
 	Status       Status
 	VersionBasis VersionBasis
 	PriceSource  PriceSource
-	Spec         []byte // the baseline's JSON
 	Rev          int64
+	spec         string // the baseline's JSON, kept as a string so no caller can change what a snapshot holds
 	reportable   Reportable
 }
+
+// Spec is a copy of the baseline's JSON.
+func (m Model) Spec() []byte { return []byte(m.spec) }
 
 // Reportable is what the upstream may report for the model, from its spec, for the listing gate.
 func (m Model) Reportable() Reportable { return m.reportable }

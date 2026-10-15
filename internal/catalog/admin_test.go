@@ -102,7 +102,8 @@ func TestPriceLoss(t *testing.T) {
 		t.Errorf("%v is not ErrPriceLost", err)
 	}
 	_, err = s.c.SelectPriceSource(ctx, catalog.SelectPriceSourceRequest{
-		Op: op(), Model: id, Rev: 0, Source: catalog.SourceOfficial, Prices: []catalog.SourcePrice{{Schedule: raw(lossy), Evidence: raw(evidence)}},
+		Op: op(), Model: id, Rev: 0, Source: catalog.SourceOfficial, Bases: s.bases(ctx, id),
+		Prices: []catalog.SourcePrice{{Schedule: raw(lossy), Evidence: raw(evidence)}},
 	})
 	wantErr(t, err, "would lose")
 	if got := query[string](s, platformScope, "SELECT price_source FROM catalog.model WHERE id = $1", uuid.UUID(id)); got != "manual" {
@@ -152,7 +153,7 @@ func TestSelectPriceSource(t *testing.T) {
 	}
 	selectOfficial := func(schedule string, mutate ...func(*catalog.SelectPriceSourceRequest)) error {
 		r := catalog.SelectPriceSourceRequest{
-			Op: op(), Model: id, Rev: rev(), Source: catalog.SourceOfficial,
+			Op: op(), Model: id, Rev: rev(), Source: catalog.SourceOfficial, Bases: s.bases(ctx, id),
 			Prices: []catalog.SourcePrice{{Schedule: raw(schedule), Evidence: raw(evidence)}},
 		}
 		for _, m := range mutate {

@@ -228,6 +228,9 @@ type SelectPriceSourceRequest struct {
 	Model  ModelID     `json:"model"`
 	Rev    int64       `json:"rev"`
 	Source PriceSource `json:"source"`
+	// Bases are the current price row of each currency that has any history, as the request was decided on: the
+	// switch replaces or withdraws them all, so it is checked against all of them, as PublishPrice checks its base.
+	Bases map[string]uuid.UUID `json:"bases"`
 	// Prices are the new source's schedules, one per currency it has, each with its evidence.
 	Prices             []SourcePrice `json:"prices"`
 	ConfirmBasisChange bool          `json:"confirm_basis_change"`
@@ -253,34 +256,39 @@ func (c *Catalog) SelectPriceSource(ctx context.Context, r SelectPriceSourceRequ
 	if err != nil {
 		return Result{}, err
 	}
-	return c.apply(ctx, r.Op, "model.select_price_source", func(tx pg.Tx) (outcome, error) {
-		row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
-		if err != nil {
-			return outcome{}, err
-		}
-		if Status(row.Status) == StatusRetired {
-			return outcome{}, fmt.Errorf("%w: it is retired", ErrWrongStatus)
-		}
-		spec, err := parseSpec(row.Spec)
-		if err != nil {
-			return outcome{}, err
-		}
-		heads, err := currentPrices(ctx, tx, row.ID)
-		if err != nil {
-			return outcome{}, err
-		}
-		if err := checkSwitch(row, spec, heads, news, r.ConfirmBasisChange); err != nil {
-			return outcome{}, err
-		}
-		o := outcome{targetKind: "model", subject: r.Model.String(), before: summary(row), changesSnapshot: Status(row.Status) == StatusListed}
-		row.PriceSource = string(r.Source)
-		saved, err := saveModel(ctx, tx, row)
-		if err != nil {
-			return outcome{}, err
-		}
-		o.after, o.evidence, err = writeSwitch(ctx, tx, saved, r.Source, heads, news)
-		return o, err
-	})
+	return c.apply(ctx, r.Op, "model.select_price_source", func(tx pg.Tx) (outcome, error) { return switchIn(ctx, tx, r, news) })
+}
+
+func switchIn(ctx context.Context, tx pg.Tx, r SelectPriceSourceRequest, news map[string]pricedFrom) (outcome, error) {
+	row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
+	if err != nil {
+		return outcome{}, err
+	}
+	if Status(row.Status) == StatusRetired {
+		return outcome{}, fmt.Errorf("%w: it is retired", ErrWrongStatus)
+	}
+	spec, err := parseSpec(row.Spec)
+	if err != nil {
+		return outcome{}, err
+	}
+	heads, err := currentPrices(ctx, tx, row.ID)
+	if err != nil {
+		return outcome{}, err
+	}
+	if err := checkBases(heads, r.Bases); err != nil {
+		return outcome{}, err
+	}
+	if err := checkSwitch(row, spec, heads, news, r.ConfirmBasisChange); err != nil {
+		return outcome{}, err
+	}
+	o := outcome{targetKind: "model", subject: r.Model.String(), before: summary(row), changesSnapshot: Status(row.Status) == StatusListed}
+	row.PriceSource = string(r.Source)
+	saved, err := saveModel(ctx, tx, row)
+	if err != nil {
+		return outcome{}, err
+	}
+	o.after, o.evidence, err = writeSwitch(ctx, tx, saved, r.Source, heads, news)
+	return o, err
 }
 
 // pricedFrom is a new schedule with the evidence for it.
@@ -310,12 +318,35 @@ func parseSourcePrices(in []SourcePrice) (map[string]pricedFrom, error) {
 	return news, nil
 }
 
-// checkSwitch applies the gates to every new schedule, against the current heads.
+// checkBases refuses a switch decided on other price heads than the ones now current, in any currency.
+func checkBases(heads prices, bases map[string]uuid.UUID) error {
+	for currency, head := range heads {
+		if base, ok := bases[currency]; !ok || base != head.id {
+			return fmt.Errorf("%w: %s is %v", ErrPriceChanged, currency, head.id)
+		}
+	}
+	for currency := range bases {
+		if _, ok := heads[currency]; !ok {
+			return fmt.Errorf("%w: %s has no history", ErrPriceChanged, currency)
+		}
+	}
+	return nil
+}
+
+// checkSwitch applies the gates to every new schedule. Each is compared with every currency that has a price now, not
+// only its own: the currencies the new source lacks are withdrawn, so a price that only they had would be lost.
 func checkSwitch(row CatalogModel, spec spec, heads prices, news map[string]pricedFrom, confirmBasisChange bool) error {
 	for _, currency := range slices.Sorted(maps.Keys(news)) {
 		n := news[currency].newPrice
-		if err := checkPublish(row, spec, n, heads[currency], confirmBasisChange); err != nil {
-			return err
+		if Status(row.Status) == StatusListed {
+			if err := covers(currency, n.schedule, spec.reportable); err != nil {
+				return err
+			}
+		}
+		for _, old := range slices.Sorted(maps.Keys(heads)) {
+			if err := noLoss(n, heads[old], spec.reportable, confirmBasisChange); err != nil {
+				return fmt.Errorf("against the current %s price: %w", old, err)
+			}
 		}
 	}
 	return nil
