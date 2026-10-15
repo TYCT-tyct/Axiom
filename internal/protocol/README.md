@@ -159,7 +159,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 提交点之前不向客户端写字节；每路流恰好一个结尾，成功结尾只在上游正常结束后发出 | `TestRelaySteps` 逐步核对步骤的类型；`TestRelayCommitPoint` 核对哪些块的开头是提交点、计入多少内容和搜索；`TestRelayEndings` 每种结束方式一个用例：正常结束、提交前后的 `error` 事件、结尾前后断流、没有用量事件、结尾后又来内容、事件不是对象、没有内容、两个用量事件都写出；测试的驱动在结束后再调 `Finish`、`Fail`、`Next`，断言不再写出、返回 `ErrTerminated`。模糊测试 `FuzzRelay`：`streamcheck` 接受的上游流，客户端拿到的流也被它接受，并且与怎么分片无关 |
 | 客户端看到调用编号、自己请求的模型名，用量里只有官方的用量成员和本站的费用 | `TestRelayRewrites`：上游的 `cost`、`cost_details`、`axiom` 不出现，三种 `Final`（已结算、暂估、待结算）的结尾逐项比较，结尾没有 `usage`、`usage` 为 `null`、过滤后为空都得到合规的费用 |
 | 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples`；黄金输出也通过 `streamcheck.Messages` |
-| 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后 |
+| 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是 |
 | 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes` | `TestRelayProgress`；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
 | 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestChargeGrowth`；样本在预算为 0 时照常转发，说明基础额度够用 |
 | 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |

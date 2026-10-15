@@ -124,6 +124,25 @@ func TestRelayMeter(t *testing.T) {
 	}
 }
 
+// TestRelayMeterSample: the official text sample reports output_tokens 1 in message_start, a lower bound that the
+// message_delta's 15 replaces as the final count (internal/billing/README.md「接口草图」).
+func TestRelayMeterSample(t *testing.T) {
+	o := options
+	o.Memory = protocol.NewMemory(0)
+	r := protocol.NewRelay(protocol.Messages, protocol.Messages, bytes.NewReader(sample(t, "messages/text/upstream.sse")),
+		protocol.UsageContext{}, o)
+	for _, want := range []struct {
+		kind   protocol.StepKind
+		output int64
+		final  bool
+	}{{protocol.StepCommit, 1, false}, {protocol.StepUpstreamDone, 15, true}} {
+		stepTo(t, r, want.kind)
+		if p := r.Progress(); p.Reported.Usage.Count(catalog.ItemOutput) != want.output || p.Final.Has(catalog.ItemOutput) != want.final {
+			t.Errorf("at step %d: output %d, final %v", want.kind, p.Reported.Usage.Count(catalog.ItemOutput), p.Final)
+		}
+	}
+}
+
 // stepTo steps r until a step of kind.
 func stepTo(t *testing.T, r *protocol.Relay, kind protocol.StepKind) {
 	t.Helper()
@@ -346,8 +365,8 @@ func TestRelayAllocs(t *testing.T) {
 }
 
 func BenchmarkRelay(b *testing.B) {
-	for _, n := range []int{16, 1024} {
-		for _, size := range []int{1 << 10, 256 << 10} {
+	for _, n := range []int{16, 256} { // 256 64-KiB deltas is 16 MiB: enough to see growth with the count
+		for _, size := range []int{1 << 10, 64 << 10} {
 			stream := deltas(n, size)
 			b.Run(fmt.Sprintf("deltas=%d/size=%d", n, size), func(b *testing.B) {
 				b.ReportAllocs()
