@@ -450,11 +450,25 @@ func TestRowRules(t *testing.T) {
 	group := func(set string) string {
 		return fmt.Sprintf("UPDATE suppliers.supplier_groups SET %s WHERE id = '%s'", set, g)
 	}
+	supplierSet := func(set string) string {
+		return fmt.Sprintf("UPDATE suppliers.suppliers SET %s WHERE id = '%s'", set, s)
+	}
 	cases := []struct {
 		name       string
 		statements []string
 		want       string
 	}{
+		{"a negative balance", []string{supplierSet("balance_native = -13.0000000001")}, ""},
+		{"a balance of NaN", []string{supplierSet("balance_native = 'NaN'")}, checkViolation},
+		{"an infinite balance", []string{supplierSet("balance_native = 'Infinity'")}, checkViolation},
+		{"a balance of minus infinity", []string{supplierSet("balance_native = '-Infinity'")}, checkViolation},
+		{"a threshold of NaN", []string{supplierSet("low_balance_threshold = 'NaN'")}, checkViolation},
+		{"an infinite threshold", []string{supplierSet("low_balance_threshold = 'Infinity'")}, checkViolation},
+		{"a negative threshold", []string{supplierSet("low_balance_threshold = -1")}, checkViolation},
+		{"a ratio of NaN", []string{group("ratio = 'NaN'")}, checkViolation},
+		{"an infinite ratio", []string{group("ratio = 'Infinity'")}, checkViolation},
+		{"a negative ratio", []string{group("ratio = -0.1")}, checkViolation},
+		{"a ratio of zero", []string{group("ratio = 0")}, ""},
 		{"a group selected has a codename", []string{group("selected = true, codename = 'maple-{group}'")}, ""},
 		{"a group selected without one", []string{group("selected = true")}, checkViolation},
 		{"a codename once set stays", []string{group("codename = 'maple-{group}'"), group("codename = 'oak-{group}'")}, checkViolation},

@@ -42,9 +42,9 @@ CREATE TABLE suppliers.suppliers (
     -- Raised when credentials, pause or removal change, so a sync round that started before is discarded.
     config_gen bigint NOT NULL DEFAULT 0 CHECK (config_gen >= 0),
     -- Signed and in the supplier's native unit at its own precision: both systems let a balance go negative.
-    balance_native numeric,
+    balance_native numeric CHECK (balance_native NOT IN ('NaN', 'Infinity', '-Infinity')),
     balance_observed_at timestamptz,
-    low_balance_threshold numeric CHECK (low_balance_threshold >= 0),
+    low_balance_threshold numeric CHECK (low_balance_threshold >= 0 AND low_balance_threshold NOT IN ('NaN', 'Infinity')),
     UNIQUE (origin, upstream_account)
 );
 
@@ -68,7 +68,8 @@ CREATE TABLE suppliers.supplier_groups (
     supplier_id uuid NOT NULL REFERENCES suppliers.suppliers,
     upstream_ref text NOT NULL CHECK (upstream_ref <> ''),
     name text NOT NULL CHECK (name <> ''),
-    ratio numeric NOT NULL CHECK (ratio >= 0),
+    -- numeric admits NaN, which sorts above everything, and Infinity: neither is an amount.
+    ratio numeric NOT NULL CHECK (ratio >= 0 AND ratio NOT IN ('NaN', 'Infinity')),
     -- The supplier's raw facts about the group (platform, subscription type, peak pricing, long context).
     facts jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(facts) = 'object'),
     selected boolean NOT NULL DEFAULT false,

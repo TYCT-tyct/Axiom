@@ -34,26 +34,12 @@ func New(list ...adapter.Adapter) (*Registry, error) {
 		if _, dup := r.byKind[kind]; dup {
 			return nil, fmt.Errorf("adapter kind %q: registered twice", kind)
 		}
-		if err := checkBuckets(a.Buckets()); err != nil {
+		if err := adapter.ValidateBuckets(a.Buckets()); err != nil {
 			return nil, fmt.Errorf("adapter %q: %w", kind, err)
 		}
 		r.byKind[kind] = a
 	}
 	return r, nil
-}
-
-func checkBuckets(specs []adapter.BucketSpec) error {
-	seen := make(map[string]bool, len(specs))
-	for _, b := range specs {
-		if err := b.Validate(); err != nil {
-			return err
-		}
-		if seen[b.Name] {
-			return fmt.Errorf("bucket %q: declared twice", b.Name)
-		}
-		seen[b.Name] = true
-	}
-	return nil
 }
 
 // Has reports whether an adapter of kind is registered.

@@ -26,17 +26,49 @@ var adapters = []adapter.Adapter{
 
 func TestAdaptersAreReadFromTheList(t *testing.T) {
 	t.Parallel()
-	if diff := cmp.Diff([]string{"newapi", "sub2api"}, adapterNames(sampleRegistry)); diff != "" {
-		t.Errorf("names (-want +got):\n%s", diff)
+	got, err := adapterNames(sampleRegistry)
+	if diff := cmp.Diff([]string{"newapi", "sub2api"}, got); diff != "" || err != nil {
+		t.Errorf("names (-want +got):\n%s%v", diff, err)
 	}
-	if names := adapterNames("var adapters = []adapter.Adapter{}\n"); len(names) != 0 {
-		t.Errorf("an empty list names %v", names)
+	if names, err := adapterNames("package registry\n\nvar adapters = []adapter.Adapter{}\n"); len(names) != 0 || err != nil {
+		t.Errorf("an empty list names %v, %v", names, err)
+	}
+}
+
+// TestAnEntryTheCheckDoesNotUnderstandFails: a comment after an entry is fine, and anything else that is not
+// `pkg.New(),` on lines of its own is an error, so that no adapter goes unchecked without notice.
+func TestAnEntryTheCheckDoesNotUnderstandFails(t *testing.T) {
+	t.Parallel()
+	registry := func(entries string) string {
+		return "package registry\n\nimport (\n\t\"axiom/internal/suppliers/internal/newapi\"\n)\n\nvar adapters = []adapter.Adapter{\n" + entries + "}\n"
+	}
+	cases := []struct {
+		name, entries, want string
+	}{
+		{"a trailing comment", "\tnewapi.New(), // the main one\n", ""},
+		{"a comment line", "\t// first\n\tnewapi.New(),\n", ""},
+		{"an argument", "\tnewapi.New(true),\n", "without arguments"},
+		{"another constructor", "\tnewapi.Make(),\n", "pkg.New()"},
+		{"a value, not a call", "\tnewapi,\n", "pkg.New()"},
+		{"a method call", "\tx.y.New(),\n", "pkg.New()"},
+		{"two entries on one line", "\tnewapi.New(), newapi.New(),\n", "shares its line"},
+		{"a good entry and a bad one", "\tnewapi.New(),\n\tnewapi.New(1),\n", "without arguments"},
+	}
+	for _, c := range cases {
+		_, err := adapterNames(registry(c.entries))
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	if _, err := adapterNames("package registry\n"); err == nil {
+		t.Error("a registry without the list was accepted")
 	}
 }
 
 func TestRemovingAnAdapterEditsOnlyItsLines(t *testing.T) {
 	t.Parallel()
-	got, err := withoutAdapter(sampleRegistry, "newapi")
+	commented := strings.Replace(sampleRegistry, "\tnewapi.New(),", "\tnewapi.New(), // explained", 1)
+	got, err := withoutAdapter(commented, "newapi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +98,7 @@ import (
 )
 
 var adapters = []adapter.Adapter{
-	fake.New(),
+	fake.New(), // the only one
 }
 
 func List() []adapter.Adapter { return adapters }

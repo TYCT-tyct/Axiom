@@ -32,15 +32,8 @@ func declarationProblems(a adapter.Adapter) (problems []string) {
 	if !a.Kind().Valid() {
 		problems = append(problems, fmt.Sprintf("kind %q cannot be stored in suppliers.kind", a.Kind()))
 	}
-	seen := map[string]bool{}
-	for _, b := range a.Buckets() {
-		if err := b.Validate(); err != nil {
-			problems = append(problems, err.Error())
-		}
-		if seen[b.Name] {
-			problems = append(problems, fmt.Sprintf("bucket %q declared twice", b.Name))
-		}
-		seen[b.Name] = true
+	if err := adapter.ValidateBuckets(a.Buckets()); err != nil {
+		problems = append(problems, err.Error())
 	}
 	return problems
 }

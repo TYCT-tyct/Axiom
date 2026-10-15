@@ -57,10 +57,17 @@ type BucketSpec struct {
 	Limit  int
 }
 
-// Validate reports a spec that cannot work: no name, or no window or limit.
-func (b BucketSpec) Validate() error {
-	if b.Name == "" || b.Window <= 0 || b.Limit <= 0 {
-		return fmt.Errorf("bucket %q needs a name, a positive window and a positive limit", b.Name)
+// ValidateBuckets reports a declaration that cannot work: a bucket with no name, window or limit, or two with one name.
+func ValidateBuckets(specs []BucketSpec) error {
+	seen := make(map[string]bool, len(specs))
+	for _, b := range specs {
+		if b.Name == "" || b.Window <= 0 || b.Limit <= 0 {
+			return fmt.Errorf("bucket %q needs a name, a positive window and a positive limit", b.Name)
+		}
+		if seen[b.Name] {
+			return fmt.Errorf("bucket %q: declared twice", b.Name)
+		}
+		seen[b.Name] = true
 	}
 	return nil
 }

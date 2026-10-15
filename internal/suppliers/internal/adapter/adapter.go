@@ -136,12 +136,17 @@ type KeyState struct {
 // ChargeRef is the supplier's own id of a request, as it comes back in response headers and in the charge records.
 type ChargeRef string
 
-// Charge is one record of the supplier's charge list.
+// Charge is one record of the supplier's charge list. Usage is what the record says was used, on the billing items,
+// and Reported is the items it states: an item outside Reported was not reported, which differs from one reported as
+// zero, because only reported items correct an estimate (usage × the request's locked price,
+// docs/domains/billing.md「用量来源与暂估」) and the rest stay estimated. Amount alone cannot be split back into items.
 type Charge struct {
 	Ref        ChargeRef
 	Key        KeyRef
 	OccurredAt time.Time
 	Amount     Amount
+	Usage      catalog.Usage
+	Reported   catalog.ItemSet
 	Funding    Funding
 	Model      string
 }
