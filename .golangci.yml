@@ -97,7 +97,6 @@ linters:
             - pkg: github.com/stretchr/testify
               desc: "use the standard testing package; compare values with github.com/google/go-cmp"
         database:
-          files: ["!**/internal/platform/**"]
           deny:
             - pkg: github.com/jackc/pgx
               desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
@@ -105,9 +104,11 @@ linters:
               desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
         # Generated code is outside every linter (exclusions.generated below): consoleapi.gen.go encodes our own
         # types with encoding/json, and sqlc's *.gen.go in a module outside platform imports pgx for the types
-        # pg.Tx satisfies. Every other exception is a nolint comment on the import, with its reason.
+        # pg.Tx satisfies. Every other exception is a nolint comment on the import, with its reason. The packages
+        # that may import pgx and database/sql, and encoding/json, are exempted by path under exclusions below, not
+        # with `files` globs: those match absolute paths, so `**/internal/platform/**` would also exempt
+        # internal/<module>/internal/platform.
         json:
-          files: ["!**/internal/platform/jsonx/**"]
           deny:
             - pkg: encoding/json # a prefix: also encoding/json/v2 and encoding/json/jsontext
               desc: "handle JSON through platform/jsonx, which holds the strictness and depth policy (docs/architecture.md「技术选型」)"
@@ -137,6 +138,12 @@ linters:
       - path: _test\.go # tests build whatever scope they test
         linters: [forbidigo]
         text: pg\.(PlatformScope|NewScope|SiteScope|AccountScope)
+      - path: ^internal/platform/ # the platform opens the database
+        linters: [depguard]
+        text: from list 'database'
+      - path: ^internal/platform/jsonx/ # the one place that handles JSON
+        linters: [depguard]
+        text: from list 'json'
 
 formatters:
   enable:
