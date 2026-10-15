@@ -57,11 +57,8 @@ var (
 	// keyLike matches the keys of both providers, sk-ant-… and sk-…, where a token starts: inside a run of base64url,
 	// such as an encrypted reasoning item, "sk-" is chance, not a key.
 	keyLike = regexp.MustCompile(`(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}`)
-	// upstreamID matches a JSON string that is wholly an ID an upstream generates, by the prefixes the three formats'
-	// references use. Matching whole strings leaves text that merely mentions an ID alone, and an escaped quote inside
-	// a string, as in tool arguments, cannot open or close a match. Real IDs carry 24 or more characters after the
-	// prefix; the floor of 16 keeps names that merely start like one, such as a tool call_weather or a key msg_text.
-	upstreamID = regexp.MustCompile(`"(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)[A-Za-z0-9_-]{16,}"`)
+	// upstreamID matches the start of an ID an upstream generates, by the prefixes the three formats' references use.
+	upstreamID = regexp.MustCompile(`^(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)`)
 )
 
 // client never follows a redirect: Go drops only Authorization and cookies when one leaves the host, so X-Api-Key
@@ -217,15 +214,25 @@ func sample(up upstream, key string, request, stream []byte) (map[string][]byte,
 	return files, nil
 }
 
-// placeholders maps each upstream ID to its placeholder. Every match is replaced, including one that already looks
-// like a placeholder, and a counter per prefix numbers them, so distinct IDs never share a placeholder.
+// placeholders maps each upstream ID to its placeholder. Every ID is replaced, including one that already looks like
+// a placeholder, and a counter per prefix numbers them, so distinct IDs never share a placeholder.
 type placeholders struct {
 	ids   map[string][]byte
 	count map[string]int
 }
 
+// replace replaces each ID in data: a string with an upstream ID's prefix that is the value of a member named id or
+// ending in _id, the names under which the three formats carry IDs. Requiring the name leaves alone a tool or a schema
+// key that merely starts like an ID, and text that quotes one.
 func (p placeholders) replace(data []byte) []byte {
-	return upstreamID.ReplaceAllFunc(data, func(id []byte) []byte {
+	var out []byte
+	last := 0
+	strs := jsonStrings(data)
+	for i, s := range strs {
+		id := data[s.start+1 : s.end-1]
+		if i == 0 || !isIDMember(data, strs[i-1], s) || !upstreamID.Match(id) {
+			continue
+		}
 		placeholder, ok := p.ids[string(id)]
 		if !ok {
 			prefix := string(upstreamID.FindSubmatch(id)[1])
@@ -233,8 +240,42 @@ func (p placeholders) replace(data []byte) []byte {
 			placeholder = fmt.Appendf(nil, `"%s%d"`, prefix, p.count[prefix])
 			p.ids[string(id)] = placeholder
 		}
-		return placeholder
-	})
+		out = append(append(out, data[last:s.start]...), placeholder...)
+		last = s.end
+	}
+	return append(out, data[last:]...)
+}
+
+// isIDMember reports whether value is the value of the member name, and name is id or ends in _id.
+func isIDMember(data []byte, name, value span) bool {
+	n := string(data[name.start+1 : name.end-1])
+	return string(bytes.TrimSpace(data[name.end:value.start])) == ":" && (n == "id" || strings.HasSuffix(n, "_id"))
+}
+
+// span is where a JSON string lies in a file, its quotes included.
+type span struct{ start, end int }
+
+// jsonStrings returns the JSON strings in data in order, honoring escapes. A JSON string cannot hold a line break, so
+// a line break ends whatever a stray quote outside JSON, as in an SSE comment, opened.
+func jsonStrings(data []byte) []span {
+	var spans []span
+	start := -1
+	for i := 0; i < len(data); i++ {
+		switch c := data[i]; {
+		case c == '\n':
+			start = -1
+		case start < 0:
+			if c == '"' {
+				start = i
+			}
+		case c == '\\':
+			i++
+		case c == '"':
+			spans = append(spans, span{start, i + 1})
+			start = -1
+		}
+	}
+	return spans
 }
 
 // write creates dir under root, failing if it exists, with the files; if a write fails, it removes dir again.

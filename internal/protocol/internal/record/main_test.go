@@ -68,30 +68,32 @@ func requestFile(t *testing.T, request string) string {
 }
 
 // TestRecord records the committed samples from a local upstream: the files keep every byte but the IDs, IDs map to
-// the same placeholder across both files, and the result passes the samples test.
+// the same placeholder across both files, and the result passes the samples test. The requests hold what must stay:
+// names and text that look like IDs, a short ID next to a long one, escaped quotes, and a stray quote in a comment.
 func TestRecord(t *testing.T) {
 	samples := filepath.Join("..", "..", "testdata")
-	toolID, chatID := "toolu_01T1x1fJ34qAmk2tNTrN7Up6", "chatcmpl-"+strings.Repeat("A1", 12)
+	toolID, callID := "toolu_01T1x1fJ34qAmk2tNTrN7Up6", "call_"+strings.Repeat("A1", 12)
 	opaque := `"gAAsk-` + strings.Repeat("a", 24) + `"` // "sk-" inside base64url, as in encrypted reasoning
 	for _, tc := range []struct {
 		format, sample, request, ids string // ids: original and placeholder pairs, for both files
 		crlf                         bool
 	}{
 		{
-			"messages", "tool-use", `{"stream":true,"tools":[{"name":"call_weather","input_schema":{"properties":{"msg_text":{}}}}],` +
-				`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + toolID + `"}]}]}`,
+			"messages", "tool-use", `{"stream":true,"tools":[{"name":"call_weather","input_schema":{"properties":{"msg_text":{}},` +
+				`"required":["city_id","msg_text"]}},{"name":"call_get_weather_forecast"}],"messages":[{"role":"user","content":[` +
+				`{"type":"text","text":"\" mention \"msg_abcdefghijklmnopqrstuvwx\""},{"type":"tool_result","tool_use_id":"` + toolID + `"}]}]}`,
 			toolID + " toolu_1 msg_014p7gG3wDgGV9EUtLvnow3U msg_1", false,
 		},
 		{
-			"responses", "text", `{"stream":true,"input":"Hello!","metadata":{"blob":` + opaque + `}}`,
-			"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654 resp_1 msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654 msg_1", false,
+			"responses", "text", `{"stream":true,"metadata":{"blob":` + opaque + `,"user_id":"user_msg_1"},"input":[{"type":"function_call_output","call_id":"call_1",` +
+				`"output":""},{"type":"function_call_output","call_id":"` + callID + `","output":""}]}`,
+			"call_1 call_1 " + callID + " call_2 resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654 resp_1 " +
+				"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654 msg_1", false,
 		},
-		{"chat", "text", `{"stream":true,"messages":[]}`, chatID + " chatcmpl-1", true},
+		{"chat", "text", `{"stream":true,"messages":[]}`, "chatcmpl-123 chatcmpl-1", true},
 	} {
 		t.Run(tc.format, func(t *testing.T) {
-			stream := string(file(t, filepath.Join(samples, tc.format, tc.sample), "upstream.sse"))
-			// The official example's chatcmpl-123 is shorter than any real ID; give it a real one's length.
-			stream = strings.ReplaceAll(stream, "chatcmpl-123", chatID)
+			stream := `: a stray " in a comment` + "\n\n" + string(file(t, filepath.Join(samples, tc.format, tc.sample), "upstream.sse"))
 			if tc.crlf {
 				stream = strings.ReplaceAll(stream, "\n", "\r\n")
 			}
