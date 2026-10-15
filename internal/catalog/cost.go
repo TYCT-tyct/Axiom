@@ -72,19 +72,26 @@ func (l *level) rate(band int, it Item) (platform.UnitPrice, bool) {
 func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (ceiling platform.UnitPrice, ok bool) {
 	for st := range numServiceTiers {
 		for it := range NumItems {
-			if !tiers.Has(st) || !items.Has(it) {
-				continue
-			}
-			for band := range s.bandOf(length) + 1 {
-				p, ok := s.price(st, band, it)
-				if !ok {
+			if tiers.Has(st) && items.Has(it) {
+				if ceiling, ok = s.highest(st, it, s.bandOf(length), ceiling); !ok {
 					return platform.UnitPrice{}, false
-				}
-				if p.Cmp(ceiling) > 0 {
-					ceiling = p
 				}
 			}
 		}
 	}
 	return ceiling, true
+}
+
+// highest is the higher of floor and the item's prices at the service tier in bands 0 to last.
+func (s Schedule) highest(st ServiceTier, it Item, last int, floor platform.UnitPrice) (platform.UnitPrice, bool) {
+	for band := range last + 1 {
+		p, ok := s.price(st, band, it)
+		if !ok {
+			return platform.UnitPrice{}, false
+		}
+		if p.Cmp(floor) > 0 {
+			floor = p
+		}
+	}
+	return floor, true
 }
