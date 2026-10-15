@@ -85,6 +85,8 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 凭证 | credential | 调用某个分组用的 key，或号池里的一个上游账号 |
 | 端点 | endpoint | 分组 × 模型，是路由选择的单位 |
 | 端点属性 | attribute | 端点的各项属性，见[产品需求的「端点属性」](product.md#端点属性) |
+| 能力 | capability | 请求用到、端点可能不支持的功能，如工具、图片、PDF、推理；路由只留下支持请求全部能力的端点 |
+| 调用格式 | format | 模型调用接口的写法：OpenAI Chat、OpenAI Responses、Anthropic Messages |
 | 依据 | basis | 一个属性值的出处 |
 | 来源 | upstream_kind | 端点的上游从哪来；类别是后台数据 |
 | 指纹 | fingerprint | 识别来源的规则，如响应头、消息 ID 格式、用量特征 |
