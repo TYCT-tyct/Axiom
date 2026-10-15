@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
+	"strings"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -28,9 +28,9 @@ var (
 	ErrInvalid = errors.New("sse: invalid event data")
 )
 
-// minRead is the free space ensured before each read: about one TLS record, so a read rarely stops short for lack
-// of room.
-const minRead = 16 << 10
+// readSize is the most one read asks for, and the free space ensured before it: about one TLS record, so a read
+// rarely stops short for lack of room, and a caller that polls hears back after every 16 KiB at most.
+const readSize = 16 << 10
 
 var bom = []byte("\xef\xbb\xbf") // U+FEFF in UTF-8
 
@@ -51,6 +51,7 @@ type Reader struct {
 	err     error
 
 	bomChecked bool
+	charge     func(n int) error
 }
 
 // NewReader returns a Reader that fails with ErrTooLarge once an event, counting every byte of its lines and line
@@ -64,27 +65,47 @@ func NewReader(src io.Reader, limit int) *Reader {
 // value accepted by jsonx.Validate. The slice is valid until the next call. At the end of the stream it returns
 // io.EOF, or io.ErrUnexpectedEOF if the stream ends inside an event that has data. After any error, every later
 // call returns the same error.
-func (r *Reader) Next() ([]byte, error) {
+func (r *Reader) Next() ([]byte, error) { return r.call(-1) }
+
+// Poll is Next reading from src at most once: when that read leaves the next event unfinished, it returns no data
+// and no error, and Pending counts the bytes of the event that have arrived.
+func (r *Reader) Poll() ([]byte, error) { return r.call(1) }
+
+// Pending is the bytes read and not yet returned as an event: the lines of the unfinished event with their line
+// endings, and what follows them.
+func (r *Reader) Pending() int { return r.size + len(r.buf) - r.start }
+
+// ChargeGrowth has charge called before a buffer of the reader grows, with the bytes the new array adds to what the
+// reader holds; when it returns an error, the buffer does not grow and the reader fails with that error.
+func (r *Reader) ChargeGrowth(charge func(n int) error) { r.charge = charge }
+
+func (r *Reader) call(reads int) ([]byte, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	data, err := r.next()
+	data, err := r.next(reads)
 	r.err = err
 	return data, err
 }
 
-func (r *Reader) next() ([]byte, error) {
+// next returns the next event, reading from src at most reads times, or as often as it takes when reads is negative.
+func (r *Reader) next(reads int) ([]byte, error) {
 	for {
 		line, ok := r.line()
 		switch {
+		case !ok && reads == 0:
+			return nil, nil
 		case !ok:
+			reads--
 			if err := r.more(); err != nil {
 				return nil, err
 			}
 		case r.size > r.limit:
 			return nil, ErrTooLarge
 		case len(line) > 0:
-			r.field(line)
+			if err := r.field(line); err != nil {
+				return nil, err
+			}
 		case len(r.data) > 0:
 			return r.dispatch()
 		default: // a blank line ending an event without data, which is no event at all
@@ -159,12 +180,15 @@ func (r *Reader) skipBOM() bool {
 }
 
 // field applies one non-blank line to the current event.
-func (r *Reader) field(line []byte) {
+func (r *Reader) field(line []byte) (err error) {
 	name, value, _ := bytes.Cut(line, []byte(":"))
 	if string(name) == "data" {
-		r.data = append(r.data, bytes.TrimPrefix(value, []byte(" "))...)
-		r.data = append(r.data, '\n')
+		value = bytes.TrimPrefix(value, []byte(" "))
+		if r.data, err = Grow(r.data, len(value)+1, r.charge); err == nil {
+			r.data = append(append(r.data, value...), '\n')
+		}
 	}
+	return err
 }
 
 // more reads from src when no complete line is buffered, or reports why the stream cannot go on.
@@ -184,8 +208,11 @@ func (r *Reader) more() error {
 		r.buf = append(r.buf[:0], r.buf[r.start:]...)
 		r.start = 0
 	}
-	r.buf = slices.Grow(r.buf, minRead)
-	n, err := r.src.Read(r.buf[pending:cap(r.buf)])
+	var err error
+	if r.buf, err = Grow(r.buf, readSize, r.charge); err != nil {
+		return err
+	}
+	n, err := r.src.Read(r.buf[pending : pending+readSize])
 	r.buf = r.buf[:pending+n]
 	switch {
 	case errors.Is(err, io.EOF):
@@ -195,3 +222,38 @@ func (r *Reader) more() error {
 	}
 	return nil
 }
+
+// Grow returns b with room for n more bytes. A new array is at least twice as large, so appending costs amortized
+// constant time; charge, unless nil, is first asked for the bytes it adds, and an error from it is returned instead.
+func Grow(b []byte, n int, charge func(n int) error) ([]byte, error) {
+	if cap(b)-len(b) >= n {
+		return b, nil
+	}
+	size := max(2*cap(b), len(b)+n)
+	if charge != nil {
+		if err := charge(size - cap(b)); err != nil {
+			return b, err
+		}
+	}
+	return append(make([]byte, 0, size), b...), nil
+}
+
+// AppendEvent appends to dst an event whose data is data: an event line naming it, unless name is empty or holds
+// anything but letters, digits, '_' and '.', which could change the framing; a data line per line of data; a blank
+// line.
+func AppendEvent(dst []byte, name string, data []byte) []byte {
+	if name != "" && strings.Trim(name, eventNameChars) == "" {
+		dst = append(append(append(dst, "event: "...), name...), '\n')
+	}
+	for line := range bytes.SplitSeq(data, []byte("\n")) { // data joins its data lines with LF
+		dst = append(append(append(dst, "data: "...), line...), '\n')
+	}
+	return append(dst, '\n')
+}
+
+// EventSize is the most AppendEvent appends for an event named name whose data is data.
+func EventSize(name string, data []byte) int {
+	return len("event: \n") + len(name) + len(data) + len("data: \n")*(1+bytes.Count(data, []byte("\n"))) + len("\n")
+}
+
+const eventNameChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_."

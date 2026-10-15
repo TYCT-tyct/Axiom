@@ -115,6 +115,9 @@ func NewUsage(counts map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Us
 	return u, nil
 }
 
+// Count is how much of it was used.
+func (u Usage) Count(it Item) int64 { return u.q[it] }
+
 // Unknown returns what the upstream reported that protocol could not map, for billing to price at its fallback prices.
 func (u Usage) Unknown() []UnknownUsage { return slices.Clone(u.unknown) }
 

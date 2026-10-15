@@ -2,7 +2,7 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
 
 ## 包
 
@@ -175,7 +175,7 @@
 | 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序，经 `lock_models`）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
 | 单价精确、非负，计算不溢出 | 见「数值域」；性质测试对照 `math/big`，覆盖最小单价、最大乘积、负用量、门槛求和、转分数后取整 |
 | 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output` 是唯一的例外；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于参考计算的结果，参考计算用完整的用量选档、只对有价格的项求和（去掉缺价项的用量会改变档位）；用例：缺价的 `cache_read` 200,000 加有价的输入 1，输出按高档计 |
-| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。尚未实现：从各家响应识别未知字段和等级（protocol 的用量归一化），以及每家加一个虚构用量字段、一个虚构等级都出现在 `Unknown()` 里的测试 |
+| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。protocol 从 Anthropic Messages 的流里识别：`TestRelayUsage` 加虚构的用量字段、`server_tool_use` 计数和等级，都出现在 `Unknown()` 里。尚未实现：OpenAI 两种格式的识别和测试 |
 | 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文和 `fetch_id`；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
 | 公开表里没有操作者、理由、证据 | 它们只在平台数据的 `change` 里；测试：查 `information_schema`，公开表没有 `actor`、`reason`、`evidence` 列；非平台范围读不到平台数据，读不到草稿模型和它的名字、参考价 |
 
@@ -194,6 +194,7 @@ type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Abo
 type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
+func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲染客户端看到的用量
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
 

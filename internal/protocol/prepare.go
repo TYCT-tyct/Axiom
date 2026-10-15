@@ -64,7 +64,7 @@ type formatRules struct {
 
 var (
 	rewriteRules = [...]formatRules{
-		Messages: {members: withRouting(map[string]rule{"model": (*rewriter).model, "metadata": (*rewriter).metadata})},
+		Messages: {members: withRouting(map[string]rule{"model": (*rewriter).model, "metadata": object(metadataRules)})},
 		Responses: {
 			members: withRouting(map[string]rule{
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
@@ -99,6 +99,7 @@ type rewriter struct {
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool // the Responses members seen
+	usageAt                               int  // where the last usage object the relay rewrote closes in out
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }
@@ -119,7 +120,7 @@ func (p *rewriter) top(rules formatRules) error {
 	if err := p.token(); err != nil {
 		return err
 	}
-	if err := p.members(rules.members); err != nil {
+	if err := p.members(rules.members, (*rewriter).skip); err != nil {
 		return err
 	}
 	// Inspect accepts no body without a model, which is rewritten, never dropped, so a member precedes the added ones.
@@ -135,8 +136,8 @@ func (p *rewriter) top(rules formatRules) error {
 	return nil
 }
 
-// members rewrites the members of the object just opened by rules, and copies the rest.
-func (p *rewriter) members(rules map[string]rule) error {
+// members rewrites the members of the object just opened by rules, and the rest by other.
+func (p *rewriter) members(rules map[string]rule, other rule) error {
 	first, kept := p.offset(), false
 	p.copyTo(first)
 	for p.dec.PeekKind() != '}' {
@@ -149,7 +150,7 @@ func (p *rewriter) members(rules map[string]rule) error {
 		}
 		do := rules[string(p.name)]
 		if do == nil {
-			do = (*rewriter).skip
+			do = other
 		}
 		n := len(p.out)
 		if err := do(p); err != nil {
@@ -169,7 +170,7 @@ func (p *rewriter) drop() error {
 
 func (p *rewriter) model() error {
 	v, err := p.raw()
-	if err != nil {
+	if v == nil || err != nil {
 		return err
 	}
 	return p.replaceString(len(v), p.t.Model)
@@ -193,14 +194,17 @@ func (p *rewriter) replaceString(n int, s string) (err error) {
 	return err
 }
 
-func (p *rewriter) metadata() error {
-	if ok, err := p.open('{', "an object"); !ok {
-		return err
+// object rewrites an object's members by rules and copies the rest; null is copied too.
+func object(rules map[string]rule) rule {
+	return func(p *rewriter) error {
+		if ok, err := p.open('{', "an object"); !ok {
+			return err
+		}
+		if err := p.members(rules, (*rewriter).skip); err != nil {
+			return err
+		}
+		return p.token()
 	}
-	if err := p.members(metadataRules); err != nil {
-		return err
-	}
-	return p.token()
 }
 
 func (p *rewriter) previous() error {

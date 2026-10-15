@@ -1,0 +1,361 @@
+package protocol_test
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+
+	"axiom/internal/catalog"
+	"axiom/internal/protocol"
+	"axiom/internal/protocol/internal/sse"
+)
+
+// TestRelayProgress: Next returns after every read of at most 16 KiB, so an event larger than a read, or one that
+// keeps arriving and never finishes, is counted while it arrives.
+func TestRelayProgress(t *testing.T) {
+	head := messageStart(`{"input_tokens":3}`) +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`
+	for _, c := range []struct {
+		name string
+		src  io.Reader
+		err  error // nil: the event finishes and commits
+	}{
+		{"large event", strings.NewReader(head + strings.Repeat(`\u00e9`, 10<<10) + strings.Repeat("é", 10<<10) + "\"}}\n\n"), nil},
+		{"never finishes", io.MultiReader(strings.NewReader(head), endless{}), protocol.ErrUpstream},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := &largestRead{src: c.src}
+			o := options
+			o.Memory = protocol.NewMemory(4 << 20)
+			r := protocol.NewRelay(protocol.Messages, protocol.Messages, src, protocol.UsageContext{}, o)
+			steps, err := untilCommit(t, r)
+			if !errors.Is(err, c.err) || (c.err == nil) != (err == nil) {
+				t.Fatalf("error %v, want %v", err, c.err)
+			}
+			if steps < 2 || src.largest > 16<<10 {
+				t.Errorf("%d progress steps, largest read %d", steps, src.largest)
+			}
+			// é is two bytes whether written raw or escaped.
+			if p := r.Progress(); err == nil && p.ContentBytes != 40<<10 {
+				t.Errorf("content bytes %d, want the unquoted text's %d", p.ContentBytes, 40<<10)
+			}
+		})
+	}
+}
+
+// untilCommit steps r to its commit point or its first error, checking that each read that finishes no event counts
+// what arrived, and returns how many there were.
+func untilCommit(t *testing.T, r *protocol.Relay) (reads int, err error) {
+	t.Helper()
+	var partial int64
+	step, err := r.Next()
+	for ; err == nil && step.Kind != protocol.StepCommit; step, err = r.Next() {
+		p := r.Progress()
+		if step.Kind == protocol.StepProgress {
+			if p.PartialBytes <= partial || p.PartialBytes > partial+16<<10 {
+				t.Fatalf("partial bytes %d after %d", p.PartialBytes, partial)
+			}
+			reads++
+		}
+		partial = p.PartialBytes
+	}
+	return reads, err
+}
+
+// largestRead records the most a read asked for.
+type largestRead struct {
+	src     io.Reader
+	largest int
+}
+
+func (r *largestRead) Read(p []byte) (int, error) {
+	r.largest = max(r.largest, len(p))
+	return r.src.Read(p)
+}
+
+// endless is text that never ends.
+type endless struct{}
+
+func (endless) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+// TestRelayMeter: input counts are final once reported, output counts from the message_delta with the stop reason,
+// whatever the order of its members; Usage reports only final counts, so after a stream that broke off billing
+// estimates the output. Counts only go up: a later 0 keeps the earlier count and a smaller one makes the usage
+// invalid.
+func TestRelayMeter(t *testing.T) {
+	last := strings.Replace(messageDelta(`{"input_tokens":0,"output_tokens":15}`), `"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}`,
+		`"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta"`, 1)
+	stream := messageStart(`{"input_tokens":25,"output_tokens":1}`) + textBlock + last + messageStop
+	o := options
+	o.Memory = protocol.NewMemory(0)
+	r := protocol.NewRelay(protocol.Messages, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, o)
+	check := func(when string, output int64, final bool) {
+		t.Helper()
+		p := r.Progress()
+		u := p.Reported.Usage
+		if u.Count(catalog.ItemInput) != 25 || !p.Final.Has(catalog.ItemInput) || u.Count(catalog.ItemOutput) != output ||
+			!p.Reported.Reported.Has(catalog.ItemOutput) || p.Final.Has(catalog.ItemOutput) != final ||
+			r.Usage().Segments[0].Reported.Has(catalog.ItemOutput) != final {
+			t.Errorf("%s: input %d, output %d, reported %v, final %v", when, u.Count(catalog.ItemInput),
+				u.Count(catalog.ItemOutput), p.Reported.Reported, p.Final)
+		}
+	}
+	stepTo(t, r, protocol.StepCommit)
+	check("after message_start", 1, false)
+	stepTo(t, r, protocol.StepBuffered)
+	check("after the last message_delta", 15, true)
+
+	down := messageStart(`{"input_tokens":25,"output_tokens":9}`) + textBlock + messageDelta(`{"output_tokens":5}`) + messageStop
+	got := relay(t, strings.NewReader(down), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	u := got.r.Usage()
+	if u.Invalid == nil || u.Segments[0].Reported != 0 || got.r.Progress().Final != 0 {
+		t.Errorf("a count that went down: invalid %v, reported %v", u.Invalid, u.Segments[0].Reported)
+	}
+}
+
+// stepTo steps r until a step of kind.
+func stepTo(t *testing.T, r *protocol.Relay, kind protocol.StepKind) {
+	t.Helper()
+	for step, err := r.Next(); step.Kind != kind; step, err = r.Next() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRelayCommitPoint: a content block's start is the commit point when it already holds content, as a tool call
+// or a server tool's result does, and not when its text or thinking starts empty; it counts what it holds, and a web
+// search it starts.
+func TestRelayCommitPoint(t *testing.T) {
+	for _, c := range []struct {
+		block           string
+		kind            protocol.StepKind
+		bytes, searches int64
+	}{
+		{`{"type":"text","text":""}`, protocol.StepBuffered, 0, 0},
+		{`{"type":"thinking","thinking":"","signature":""}`, protocol.StepBuffered, 0, 0},
+		{`{"type":"text","text":"Hi"}`, protocol.StepCommit, 2, 0},
+		{`{"type":"tool_use","id":"t","name":"f","input":{"a":1}}`, protocol.StepCommit, int64(len(`{"a":1}`)), 0},
+		{`{"type":"server_tool_use","id":"s","name":"web_search","input":{}}`, protocol.StepCommit, 2, 1},
+		{`{"name":"web_fetch","type":"server_tool_use","id":"s","input":{}}`, protocol.StepCommit, 2, 0},
+		{`{"type":"web_search_tool_result","tool_use_id":"s","content":[]}`, protocol.StepCommit, 0, 0},
+	} {
+		start := `data: {"type":"content_block_start","index":0,"content_block":` + c.block + "}\n\n"
+		o := options
+		o.Memory = protocol.NewMemory(0)
+		r := protocol.NewRelay(protocol.Messages, protocol.Messages, strings.NewReader(messageStart(`{}`)+start), protocol.UsageContext{}, o)
+		stepTo(t, r, protocol.StepBuffered) // message_start
+		step, err := r.Next()
+		if p := r.Progress(); err != nil || step.Kind != c.kind || p.ContentBytes != c.bytes || p.Searches != c.searches {
+			t.Errorf("%s: step %d, %v; content %d, searches %d", c.block, step.Kind, err, p.ContentBytes, p.Searches)
+		}
+	}
+}
+
+// TestRelayUsage maps Messages usage onto billing items as catalog README.md「计费项与用量」 tabulates.
+func TestRelayUsage(t *testing.T) {
+	type counts = map[catalog.Item]int64
+	for _, c := range []struct {
+		name    string
+		usage   string // the ending's
+		ctx     protocol.UsageContext
+		want    counts
+		tier    catalog.ServiceTier
+		unknown []catalog.UnknownUsage
+		segs    []counts // compactions
+		invalid bool
+	}{
+		{
+			name: "tokens", usage: `{"input_tokens":5,"cache_read_input_tokens":6,"output_tokens":7}`,
+			want: counts{catalog.ItemInput: 5, catalog.ItemCacheRead: 6, catalog.ItemOutput: 7},
+		},
+		{
+			name: "cache write breakdown", usage: `{"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}}`,
+			want: counts{catalog.ItemCacheWrite: 10, catalog.ItemCacheWrite1h: 20},
+		},
+		{
+			name: "cache write breakdown that does not add up", usage: `{"cache_creation_input_tokens":31,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}}`,
+			invalid: true,
+		},
+		{
+			name: "cache write by a 5-minute breakpoint", usage: `{"cache_creation_input_tokens":30}`,
+			want: counts{catalog.ItemCacheWrite: 30, catalog.ItemCacheWrite1h: 0},
+		},
+		{
+			name: "cache write by a 1-hour breakpoint", usage: `{"cache_creation_input_tokens":30}`, ctx: protocol.UsageContext{CacheTTL1h: true},
+			want: counts{catalog.ItemCacheWrite: 0, catalog.ItemCacheWrite1h: 30},
+		},
+		{
+			name: "server tools", usage: `{"server_tool_use":{"web_search_requests":2,"code_execution_requests":1,"web_fetch_requests":3,"x_requests":0}}`,
+			want:    counts{catalog.ItemWebSearch: 2, catalog.ItemCodeExecution: 1},
+			unknown: []catalog.UnknownUsage{{Field: "usage.server_tool_use.web_fetch_requests", Value: "3"}},
+		},
+		{
+			name: "unknown count", usage: `{"output_tokens":1,"audio_tokens":4,"zero_tokens":0,"inference_geo":"us","output_tokens_details":{"thinking_tokens":1}}`,
+			want: counts{catalog.ItemOutput: 1}, unknown: []catalog.UnknownUsage{{Field: "usage.audio_tokens", Value: "4"}},
+		},
+		{
+			name: "a relay's cost is not usage", usage: `{"output_tokens":1,"cost":0.5,"cost_details":{"x":1},"is_byok":false}`,
+			want: counts{catalog.ItemOutput: 1},
+		},
+		{name: "tier from the request", usage: `{}`, ctx: protocol.UsageContext{Tier: catalog.ServiceTierPriority}, tier: catalog.ServiceTierPriority},
+		{name: "tier from the reply", usage: `{"service_tier":"standard"}`, ctx: protocol.UsageContext{Tier: catalog.ServiceTierPriority}},
+		{name: "priority", usage: `{"service_tier":"priority"}`, tier: catalog.ServiceTierPriority},
+		{name: "fast", usage: `{"service_tier":"standard","speed":"fast"}`, tier: catalog.ServiceTierFast},
+		{name: "unknown tier", usage: `{"service_tier":"batch"}`, unknown: []catalog.UnknownUsage{{Field: "usage.service_tier", Value: "batch"}}},
+		{
+			name: "compactions", usage: `{"input_tokens":5,"output_tokens":7,"iterations":[` +
+				`{"type":"compaction","input_tokens":100,"output_tokens":10},{"type":"message","input_tokens":5,"output_tokens":7}]}`,
+			want: counts{catalog.ItemInput: 5, catalog.ItemOutput: 7},
+			segs: []counts{{catalog.ItemInput: 100, catalog.ItemOutput: 10}},
+		},
+		{name: "unknown iteration", usage: `{"iterations":[{"type":"other","input_tokens":1}]}`, invalid: true},
+		{name: "not a count", usage: `{"input_tokens":1.5}`, invalid: true},
+		{name: "count too large", usage: `{"input_tokens":20000000000}`, invalid: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stream := messageStart(`{}`) + textBlock + messageDelta(c.usage) + messageStop
+			got := relay(t, strings.NewReader(stream), c.ctx, protocol.NewMemory(0), settled)
+			u := got.r.Usage()
+			if got.err != nil || (u.Invalid != nil) != c.invalid {
+				t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
+			}
+			if c.invalid {
+				return
+			}
+			want := []protocol.Segment{segment(t, c.want, c.tier, c.unknown)}
+			for _, q := range c.segs {
+				want = append(want, segment(t, q, c.tier, nil))
+			}
+			if diff := cmp.Diff(want, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
+				t.Errorf("segments (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// segment is the segment of counts, all of them reported.
+func segment(t *testing.T, counts map[catalog.Item]int64, st catalog.ServiceTier, unknown []catalog.UnknownUsage) protocol.Segment {
+	t.Helper()
+	s := protocol.Segment{Usage: must(catalog.NewUsage(counts, st, unknown))}
+	for it := range counts {
+		s.Reported.Add(it)
+	}
+	return s
+}
+
+// TestRelayMemory: what a stream holds past its base allowance is drawn from the node's budget as its buffers grow
+// and given back at its end; a budget that is spent ends the attempt before the commit point, writing nothing, and
+// with an error ending after it.
+func TestRelayMemory(t *testing.T) {
+	big := strings.Repeat("x", 100<<10)
+	bigDelta := `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + big + "\"}}\n\n"
+	start := messageStart(`{"input_tokens":3}`)
+	for _, c := range []struct {
+		name, stream string
+		budget       int64
+		err          error
+		committed    bool
+	}{
+		{
+			"spent before the commit point", strings.Replace(start, `"content":[]`, `"content":[],"pad":"`+big+`"`, 1) + textBlock,
+			0, protocol.ErrMemory, false,
+		},
+		{"spent after the commit point", start + blockStart + hiDelta + bigDelta, 0, protocol.ErrMemory, true},
+		{"within the budget", start + blockStart + bigDelta + blockStop + messageDelta(`{"output_tokens":2}`) + messageStop, 1 << 20, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			mem := protocol.NewMemory(c.budget)
+			var drew bool
+			src := &onRead{src: strings.NewReader(c.stream), read: func() { drew = drew || mem.Left() < c.budget }}
+			got := relay(t, src, protocol.UsageContext{}, mem, settled)
+			if !errors.Is(got.err, c.err) || (c.err == nil) != (got.err == nil) {
+				t.Fatalf("error %v, want %v", got.err, c.err)
+			}
+			committed := strings.Contains(string(got.out), "content_block_start")
+			if committed != c.committed || mem.Left() != c.budget || drew != (c.budget > 0) {
+				t.Errorf("committed %v, want %v; budget left %d of %d at the end; drawn on while reading: %v",
+					committed, c.committed, mem.Left(), c.budget, drew)
+			}
+		})
+	}
+}
+
+// onRead calls read before each read.
+type onRead struct {
+	src  io.Reader
+	read func()
+}
+
+func (r *onRead) Read(p []byte) (int, error) {
+	r.read()
+	return r.src.Read(p)
+}
+
+// deltas is a stream with n text deltas of size bytes each.
+func deltas(n, size int) []byte {
+	delta := `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + strings.Repeat("x", size) + "\"}}\n\n"
+	return []byte(messageStart(`{"input_tokens":3}`) + textBlock + strings.Repeat(delta, n) + messageDelta(`{"output_tokens":2}`) + messageStop)
+}
+
+// drain relays stream as the gateway does, writing nowhere, so it allocates only what the relay does.
+func drain(tb testing.TB, stream []byte) {
+	r := protocol.NewRelay(protocol.Messages, protocol.Messages, bytes.NewReader(stream), protocol.UsageContext{},
+		protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30)})
+	for {
+		step, err := r.Next()
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if step.Kind == protocol.StepUpstreamDone {
+			r.Finish(settled(r.Usage()))
+			return
+		}
+	}
+}
+
+// TestRelayAllocs: beyond what reading the events allocates, which has a constant bound per event (README.md「读
+// SSE」), relaying them allocates nothing once the buffers have grown, so a longer reply costs the relay no more
+// allocations (docs/performance.md「调用路径上的规则」).
+func TestRelayAllocs(t *testing.T) {
+	extra := func(stream []byte) float64 {
+		read := testing.AllocsPerRun(5, func() {
+			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
+			for _, err := r.Next(); err == nil; _, err = r.Next() {
+			}
+		})
+		return testing.AllocsPerRun(5, func() { drain(t, stream) }) - read
+	}
+	for _, size := range []int{1 << 10, 64 << 10} {
+		// 190 more events would add at least 190 allocations if each allocated; the race detector's own add a few.
+		if few, many := extra(deltas(10, size)), extra(deltas(200, size)); many-few > 5 {
+			t.Errorf("%d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 200", size, few, many)
+		}
+	}
+}
+
+func BenchmarkRelay(b *testing.B) {
+	for _, n := range []int{16, 1024} {
+		for _, size := range []int{1 << 10, 256 << 10} {
+			stream := deltas(n, size)
+			b.Run(fmt.Sprintf("deltas=%d/size=%d", n, size), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(stream)))
+				for b.Loop() {
+					drain(b, stream)
+				}
+			})
+		}
+	}
+}
