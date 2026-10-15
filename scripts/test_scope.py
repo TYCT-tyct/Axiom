@@ -1,25 +1,16 @@
-import shutil
-import subprocess
-import tempfile
 import unittest
-from pathlib import Path
 
-JUSTFILE = Path(__file__).resolve().parents[1] / "justfile"
-GIT = ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "core.autocrlf=false"]
+import justrepo
 
 
 def scope(files, commit):
     """Run the real `just scope` in a fresh repository holding files ({path: content}), committed or left untracked."""
-    with tempfile.TemporaryDirectory() as repo:
-        subprocess.run([*GIT, "init", "--quiet", repo], check=True)
-        for path, content in files.items():
-            (Path(repo) / path).parent.mkdir(parents=True, exist_ok=True)
-            (Path(repo) / path).write_text(content, encoding="utf-8", newline="\n")
+    with justrepo.repository() as repo:
         if commit:
-            subprocess.run([*GIT, "-C", repo, "add", "."], check=True)
-            subprocess.run([*GIT, "-C", repo, "commit", "--quiet", "-m", "plant"], check=True)
-        return subprocess.run([shutil.which("just"), "--justfile", str(JUSTFILE), "--working-directory", repo, "scope"],
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+            justrepo.commit(repo, files)
+        else:
+            justrepo.write(repo, files)
+        return justrepo.just(repo, "scope")
 
 
 class Scope(unittest.TestCase):

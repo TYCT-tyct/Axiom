@@ -92,9 +92,10 @@ down *flags:
     docker compose --project-name axiom down {{ flags }}
 
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
-# counts as a deletion)
+# counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the
+# check: an empty list from a failed diff would pass it.
 migrations base:
-    changed="$(git diff --name-only --no-renames --diff-filter=a {{ quote(base) }}...HEAD -- '*/migrations/*')"; [ -z "$changed" ] || { echo "merged migrations were changed or removed:"; echo "$changed"; exit 1; }
+    changed="$(git diff --name-only --no-renames --diff-filter=a {{ quote(base) }}...HEAD -- '*/migrations/*')" || exit 1; [ -z "$changed" ] || { echo "merged migrations were changed or removed:"; echo "$changed"; exit 1; }
 
 vuln:
     {{ tool }} govulncheck ./...
