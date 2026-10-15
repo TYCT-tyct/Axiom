@@ -15,8 +15,8 @@
 | 前端与设计：页面清单、验收门槛、可用性任务、前端性能指标、设计原则、主题与自由度、视觉方向 | [frontend.md](frontend.md) | 做任何页面、组件、主题或站点外观配置之前；调整前端性能预算之前 |
 | 账户与租户：登录、账户、工作区、授权、API key、等级、站点配置、配置链 | [domains/accounts.md](domains/accounts.md) | 改动 `accounts` 模块或涉及登录、权限、key 之前 |
 | 计费：钱的表示、汇率、资金来源、额度批次、供应商成本、定价、预留与结算、用量来源与暂估、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
-| 模型目录：标准 ID 与别名、生命周期、名字映射、目录基线、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
-| 供应商：适配器、接入流程、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
+| 模型目录：标准 ID、公开与内部名字、名字解析、生命周期、规格与参考价的来源、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
+| 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 接入与对外接口：路径与格式、转发规则、用量与费用、错误、路由参数、对接接口、会话状态、版本 | [domains/gateway.md](domains/gateway.md) | 改动 `gateway` 模块、对外接口或兼容行为之前 |

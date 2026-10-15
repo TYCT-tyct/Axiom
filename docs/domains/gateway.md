@@ -99,7 +99,7 @@
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；
-  - 模型名后缀 `:floor`、`:nitro`；
+  - 模型名后缀 `:floor`、`:nitro`：第一版不支持，带 `:` 的模型名返回"模型不存在"（见[模型目录的「名字解析」](catalog.md#名字解析)），同样的效果用 `provider.sort` 指定；
   - `@preset/名称`；
   - `session_id`、`prompt_cache_key`；
   - `user`：终端用户标识，用于防滥用和归因。
