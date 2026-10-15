@@ -1,0 +1,7 @@
+# 28-reveal-key
+POST /api/token/1/key
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"key":"<ALICE_KEY1_BARE>"},"message":"","success":true}
