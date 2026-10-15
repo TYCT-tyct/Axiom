@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,24 +12,30 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
-// testSchema is a table of account data under row-level security: forced, so its owner is filtered too, with one
-// scope check for reading and writing. Its schema is created by the administrator, as migrate creates every schema.
+// testSchema has two tables under row-level security, forced so their owner is filtered too: items is account data,
+// with one scope check for reading and writing; shared is public data, which any scope reads and only the platform
+// scope writes. Their schema is created by the administrator, as migrate creates every schema.
 const testSchema = `
 CREATE SCHEMA rlstest AUTHORIZATION axiom_owner;
 SET ROLE axiom_owner;
 CREATE TABLE rlstest.items (site_id uuid NOT NULL, account_id uuid NOT NULL, note text NOT NULL);
 ALTER TABLE rlstest.items ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON rlstest.items USING (platform.in_scope(site_id, account_id));
+CREATE TABLE rlstest.shared (note text NOT NULL);
+ALTER TABLE rlstest.shared ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY read ON rlstest.shared FOR SELECT USING (platform.in_any_scope());
+CREATE POLICY write ON rlstest.shared USING (platform.in_platform_scope());
 GRANT USAGE ON SCHEMA rlstest TO axiom_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items TO axiom_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items, rlstest.shared TO axiom_app;
 RESET ROLE;`
 
-// newDatabase returns a fresh database holding the protected test table.
+// newDatabase returns a fresh database holding the protected test tables.
 func newDatabase(t *testing.T) pgtest.Database {
 	t.Helper()
 	db := pgtest.New(t)
@@ -259,6 +266,271 @@ func TestTxRollsBackWhenItsContextEnds(t *testing.T) {
 	}
 	if n := count(t, db, platform); n != 4 {
 		t.Errorf("the cancelled transaction left %d of 4 rows", n)
+	}
+}
+
+var tenants = map[string]pg.Scope{
+	"a site":     pg.NewScope(false, []uuid.UUID{site1}, nil),
+	"an account": pg.NewScope(false, nil, []uuid.UUID{account1}),
+}
+
+// publicData connects as the application to a fresh database whose public table holds one row, seed.
+func publicData(t *testing.T) *pg.DB {
+	t.Helper()
+	database := newDatabase(t)
+	if err := pgtest.Run(t.Context(), database.Superuser, "INSERT INTO rlstest.shared VALUES ('seed')"); err != nil {
+		t.Fatal(err)
+	}
+	return open(t, database.App)
+}
+
+// TestPublicDataReads: any non-empty scope reads public data and no scope reads none; a malformed scope fails rather
+// than counts as one.
+func TestPublicDataReads(t *testing.T) {
+	t.Parallel()
+	db := publicData(t)
+	seed := []string{"seed"}
+	for name, read := range map[string]struct {
+		scope pg.Scope
+		want  []string
+	}{
+		"no scope":           {pg.Scope{}, []string{}},
+		"a site's scope":     {tenants["a site"], seed},
+		"an account's scope": {tenants["an account"], seed},
+		"the platform scope": {pg.PlatformScope(), seed},
+	} {
+		if diff := cmp.Diff(read.want, sharedNotes(t, db, read.scope)); diff != "" {
+			t.Errorf("read in %s (-want +got):\n%s", name, diff)
+		}
+	}
+	for _, setting := range []string{"axiom.scope_sites", "axiom.scope_accounts"} {
+		malformed := "SELECT set_config('" + setting + "', 'everything', true); SELECT count(*) FROM rlstest.shared"
+		if _, err := exec(t, db, pg.Scope{}, malformed); err == nil {
+			t.Errorf("a malformed %s did not fail the query", setting)
+		}
+	}
+}
+
+// TestPublicDataWrites: only the platform scope, which production code builds with PlatformScope, writes public
+// data; in any other scope an insert fails and an update or a delete finds no row.
+func TestPublicDataWrites(t *testing.T) {
+	t.Parallel()
+	db := publicData(t)
+	writes := []string{
+		"INSERT INTO rlstest.shared VALUES ('added')",
+		"UPDATE rlstest.shared SET note = 'changed'",
+		"DELETE FROM rlstest.shared",
+	}
+	for name, scope := range tenants {
+		for _, statement := range writes {
+			if n, err := exec(t, db, scope, statement); err == nil && n > 0 {
+				t.Errorf("%s in %s's scope changed %d rows", statement, name, n)
+			}
+		}
+	}
+	platform := pg.PlatformScope()
+	if diff := cmp.Diff([]string{"seed"}, sharedNotes(t, db, platform)); diff != "" {
+		t.Errorf("after the refused writes (-want +got):\n%s", diff)
+	}
+	for _, statement := range writes {
+		if n, err := exec(t, db, platform, statement); err != nil || n == 0 {
+			t.Errorf("%s in the platform scope: %d rows, %v", statement, n, err)
+		}
+	}
+}
+
+// sharedNotes lists, sorted, the public rows the scope can read.
+func sharedNotes(t *testing.T, db *pg.DB, scope pg.Scope) []string {
+	t.Helper()
+	var notes []string
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), "SELECT note FROM rlstest.shared ORDER BY note")
+		if err != nil {
+			return err
+		}
+		notes, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return notes
+}
+
+// exec runs statement in its own transaction and reports how many rows it touched.
+func exec(t *testing.T, db *pg.DB, scope pg.Scope, statement string) (int64, error) {
+	t.Helper()
+	var tag pgconn.CommandTag
+	err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		var err error
+		tag, err = tx.Exec(t.Context(), statement)
+		return err
+	})
+	return tag.RowsAffected(), err
+}
+
+// TestReadTxSeesOneMoment: every query of a ReadTx sees the database as it was at the transaction's start, so a
+// commit between two of its reads shows only in the next transaction; and a ReadTx, here in a tenant's scope, reads
+// that scope and cannot write.
+func TestReadTxSeesOneMoment(t *testing.T) {
+	t.Parallel()
+	database := newDatabase(t)
+	seed(t, database)
+	db := open(t, database.App)
+	platform := pg.NewScope(true, nil, nil)
+	var first, second int
+	err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&first); err != nil {
+			return err
+		}
+		if err := pgtest.Run(t.Context(), database.Superuser,
+			fmt.Sprintf("INSERT INTO rlstest.items VALUES ('%s', '%s', 'concurrent')", site1, account1)); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&second)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 4 || second != 4 {
+		t.Errorf("the reads saw %d and %d rows, want the 4 from before the concurrent commit", first, second)
+	}
+	if n := count(t, db, platform); n != 5 {
+		t.Errorf("the next transaction saw %d rows, want 5 with the concurrent commit", n)
+	}
+	var inSite int
+	err = db.ReadTx(t.Context(), tenants["a site"], func(tx pg.Tx) error {
+		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM rlstest.items").Scan(&inSite); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), "DELETE FROM rlstest.items")
+		return err
+	})
+	var pgErr *pgconn.PgError
+	if inSite != 3 || !errors.As(err, &pgErr) || pgErr.Code != "25006" {
+		t.Errorf("a ReadTx in site1's scope read %d rows, want its 3, and deleting returned %v, want 25006 read-only", inSite, err)
+	}
+}
+
+// dbtx is the interface sqlc generates for pgx; generated queries take a Tx through it.
+type dbtx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+var _ dbtx = pg.Tx{}
+
+// TestTxHidesTheConnection: nothing a Tx hands out or calls back reports the connection: not the rows of Query, not
+// a RowScanner that Rows.Scan or Row.Scan gives the row, not a QueryRewriter that Exec, Query or QueryRow run.
+// Holding the connection, a caller could run queries the scope does not bind, or outlive the transaction on it. The
+// rows and the row offer pgx's methods and nothing more.
+func TestTxHidesTheConnection(t *testing.T) {
+	t.Parallel()
+	database := newDatabase(t)
+	seed(t, database)
+	db := open(t, database.App)
+	ctx := t.Context()
+	const query = "SELECT note FROM rlstest.items"
+	uses := map[string]func(pg.Tx, *connSpy) error{
+		"a RowScanner of Rows.Scan": func(tx pg.Tx, spy *connSpy) error {
+			rows, err := tx.Query(ctx, query)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			if rows.Conn() != nil {
+				t.Error("Query's rows handed out their connection")
+			}
+			sameMethods[pgx.Rows](t, rows)
+			if !rows.Next() {
+				return fmt.Errorf("no rows: %w", rows.Err())
+			}
+			return rows.Scan(spy)
+		},
+		"a RowScanner of Row.Scan": func(tx pg.Tx, spy *connSpy) error {
+			row := tx.QueryRow(ctx, query)
+			sameMethods[pgx.Row](t, row)
+			return row.Scan(spy)
+		},
+		"a QueryRewriter of Exec": func(tx pg.Tx, spy *connSpy) error {
+			_, err := tx.Exec(ctx, query, pgx.QueryExecModeSimpleProtocol, spy)
+			return err
+		},
+		"a QueryRewriter of Query": func(tx pg.Tx, spy *connSpy) error {
+			rows, err := tx.Query(ctx, query, spy)
+			if err != nil {
+				return err
+			}
+			rows.Close()
+			return rows.Err()
+		},
+		"a QueryRewriter of QueryRow": func(tx pg.Tx, spy *connSpy) error {
+			var note string
+			return tx.QueryRow(ctx, query, spy).Scan(&note)
+		},
+	}
+	for name, use := range uses {
+		spy := new(connSpy)
+		if err := db.Tx(ctx, pg.NewScope(true, nil, nil), func(tx pg.Tx) error { return use(tx, spy) }); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if !spy.called || spy.conn != nil {
+			t.Errorf("%s: called %t, handed the connection %v", name, spy.called, spy.conn)
+		}
+	}
+}
+
+// connSpy records the connection pgx hands it, as a RowScanner or a QueryRewriter.
+type connSpy struct {
+	called bool
+	conn   *pgx.Conn
+}
+
+func (s *connSpy) ScanRow(rows pgx.Rows) error {
+	s.called, s.conn = true, rows.Conn()
+	var note string
+	return rows.Scan(&note)
+}
+
+func (s *connSpy) RewriteQuery(_ context.Context, conn *pgx.Conn, sql string, args []any) (string, []any, error) {
+	s.called, s.conn = true, conn
+	return sql, args, nil
+}
+
+// TestFailedQueryRows: as pgx promises, a failed Query still returns rows, closed and carrying the error, so a caller
+// may defer Close before checking it; they report no connection either.
+func TestFailedQueryRows(t *testing.T) {
+	t.Parallel()
+	db := open(t, newDatabase(t).App)
+	err := db.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), "SELECT FROM no_such_table")
+		if rows == nil {
+			t.Fatal("a failed Query returned no rows")
+		}
+		defer rows.Close()
+		if rows.Err() == nil || rows.Conn() != nil {
+			t.Errorf("rows of a failed Query: error %v, connection %v", rows.Err(), rows.Conn())
+		}
+		return err
+	})
+	if err == nil {
+		t.Error("a query of a missing table succeeded")
+	}
+}
+
+// sameMethods reports whether got has exactly the exported methods of the interface I, so pg forwards nothing
+// unreviewed.
+func sameMethods[I any](t *testing.T, got any) {
+	t.Helper()
+	methods := func(typ reflect.Type) []string {
+		names := make([]string, typ.NumMethod())
+		for i := range names {
+			names[i] = typ.Method(i).Name
+		}
+		return names
+	}
+	if diff := cmp.Diff(methods(reflect.TypeFor[I]()), methods(reflect.TypeOf(got))); diff != "" {
+		t.Errorf("%T's methods differ from %v's (-want +got):\n%s", got, reflect.TypeFor[I](), diff)
 	}
 }
 

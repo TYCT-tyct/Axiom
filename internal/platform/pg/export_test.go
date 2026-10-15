@@ -1,14 +1,6 @@
 package pg
 
-import (
-	"context"
-	"uuid"
-)
-
-// NewScope builds any scope; production code gets scopes only from authorization, which does not exist yet.
-func NewScope(platform bool, sites, accounts []uuid.UUID) Scope {
-	return Scope{platform, sites, accounts}
-}
+import "context"
 
 // SessionScope is what the connection carries outside any transaction; it must always be empty.
 func (db *DB) SessionScope(ctx context.Context) (string, error) {
