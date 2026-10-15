@@ -30,8 +30,8 @@ func TestNewUsage(t *testing.T) {
 // reported instead of being dropped or guessed (README.md「计费项与用量」); a Usage does not change once made.
 func TestUsageUnknown(t *testing.T) {
 	reported := []catalog.UnknownUsage{
-		{Field: "usage.server_tool_use.code_execution_requests", Value: "1"},
-		{Field: "usage.service_tier", Value: "scale"},
+		{Field: "usage.server_tool_use.future_tool_requests", Value: "1e0"},
+		{Field: "usage.service_tier", Value: `"scale"`},
 	}
 	want := slices.Clone(reported)
 	u, err := catalog.NewUsage(counts{in: 5}, catalog.ServiceTierStandard, reported)
@@ -43,7 +43,7 @@ func TestUsageUnknown(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("Unknown = %v, want %v", got, want)
 	}
-	got[1].Value = "flex"
+	got[1].Value = `"flex"`
 	if again := u.Unknown(); !slices.Equal(again, want) {
 		t.Errorf("Unknown after its result changed = %v, want %v", again, want)
 	}

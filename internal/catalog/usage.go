@@ -92,7 +92,7 @@ type Usage struct {
 // recognise, as the upstream reported it. Billing handles it by docs/domains/billing.md「价目表缺项」: never free, never
 // guessed into a known item.
 type UnknownUsage struct {
-	Field string // the upstream's own path, such as usage.server_tool_use.code_execution_requests
+	Field string // the upstream's own path, such as usage.server_tool_use.<a tool the item table does not know yet>_requests
 	Value string // the reported JSON value as written: a count may not be an integer, and a tier is a string
 }
 
