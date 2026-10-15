@@ -34,10 +34,10 @@ OpenRouter 的页面构成（openrouter.ai 页脚与 llms.txt，OpenRouter 文�
 
 | 分组 | 页面 | 内容 | 优先级 | 依据 |
 |---|---|---|---|---|
-| 入口 | 登录、注册、找回密码、邮箱验证 | 邮箱密码或验证码、GitHub、Google、LinuxDO、通行密钥；人机验证；注册策略 | M1 | [登录与会话](domains/accounts.md#登录与会话) |
-| 入口 | 两步验证 | 登录时验证；TOTP、通行密钥、恢复码 | M1 | [登录与会话](domains/accounts.md#登录与会话) |
+| 入口 | 登录、注册、找回密码、邮箱验证 | 邮箱密码或验证码、GitHub、Google、LinuxDO、通行密钥；人机验证；注册策略 | M1（邮箱密码登录、邀请码注册；其余 M2） | [登录与会话](domains/accounts.md#登录与会话) |
+| 入口 | 两步验证 | 登录时验证；TOTP、通行密钥、恢复码 | M1（TOTP 和恢复码） | [登录与会话](domains/accounts.md#登录与会话) |
 | 日常 | 概览 | 可用余额、本月花费、最近报错、key 状态、快速开始 | M1（简版） | [设计原则](#设计原则)「状态先于功能」 |
-| 日常 | API key | 列表；创建（只显示一次、复制、按工具给配置）；名称、花费上限与重置周期、过期、可用模型、预设、IP 白名单、速率限制、启停、删除 | M1 | [API key](domains/accounts.md#api-key) |
+| 日常 | API key | 列表；创建（只显示一次、复制、按工具给配置）；名称、花费上限与重置周期、过期、可用模型、预设、IP 白名单、速率限制、启停、删除 | M1（速率限制随限流器加入） | [API key](domains/accounts.md#api-key) |
 | 日常 | 调用记录 | 列表与筛选（模型、key、状态、时间）；游标翻页；导出 | M1 | [谁能看](domains/observability.md#谁能看)；[后台与数据](performance.md#后台与数据) |
 | 日常 | 调用详情 | 概览；每次尝试（代号、结果、耗时）；路由过程（被过滤的候选和原因）；费用明细（用量来源、暂估标记、校正记录）；免单标记；不含对话内容 | M1 | [用量与费用](domains/gateway.md#用量与费用)；[路由记录](domains/routing.md#路由记录) |
 | 日常 | 会话视图 | 按 Claude Code 等工具的会话聚合：请求数、总费用、主模型 | 第一版 | [写入时记全](domains/observability.md#写入时记全) |
