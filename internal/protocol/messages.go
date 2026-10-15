@@ -1,41 +1,14 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
-	"slices"
 	"strconv"
-	"strings"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
-
-// role is what an upstream event is to the relay (README.md「转发」).
-type role uint8
-
-const (
-	passive   role = iota // written in order, held until the commit point
-	content               // text, reasoning or a tool call: the first is the commit point
-	heartbeat             // the upstream's keep-alive
-	ending                // carries the final usage; held until the settlement
-	end                   // the upstream's normal end
-)
-
-// event is one upstream event as the relay sees it.
-type event struct {
-	role role
-	name string
-	// data is what the client gets in place of the event; for an ending, usageAt is where its usage object closes,
-	// or -1 without one.
-	data              []byte
-	usageAt           int
-	content, searches int64
-	usage             bool // it reported usage, which the meter has taken
-	final             bool // it is the format's last usage event
-}
 
 // messagesEvents are the event types of Anthropic《Streaming messages》(read 2026-10-14) and their roles. A
 // content_block_start is content only when the block has some; error ends the stream; other types are passive.
@@ -53,13 +26,9 @@ var messagesEvents = [...]struct {
 	{"error", passive},
 }
 
-// messagesStream reads one Messages stream's events in place, with one decoder for all of them.
+// messagesStream reads one Messages stream's events.
 type messagesStream struct {
-	reader
-	src bytes.Buffer
-	ctx UsageContext
-	rw  rewriter // for the events whose IDs and usage the client must not see as the upstream wrote them
-	e   event
+	eventReader
 	// The content block being read: whether its type holds text that may be empty, and whether it is a web search.
 	textBlock, serverTool, webSearch bool
 	failed                           bool // the event is the upstream's error
@@ -67,12 +36,18 @@ type messagesStream struct {
 	reportErr                        error // the usage object is not one messagesUsage can hold
 }
 
+func newMessagesStream(u UsageContext, o RelayOptions) *messagesStream {
+	s := &messagesStream{}
+	s.init(u, o, messagesUsageMembers)
+	return s
+}
+
 var (
 	messagesFields = map[string]func(*messagesStream) error{
 		"type":          (*messagesStream).eventType,
-		"delta":         func(s *messagesStream) error { return s.object(contentFields) },
-		"content_block": func(s *messagesStream) error { return s.object(blockFields) },
-		"message":       func(s *messagesStream) error { return s.object(messageFields) },
+		"delta":         func(s *messagesStream) error { return walk(&s.reader, s, contentFields) },
+		"content_block": func(s *messagesStream) error { return walk(&s.reader, s, blockFields) },
+		"message":       func(s *messagesStream) error { return walk(&s.reader, s, messageFields) },
 		"usage":         (*messagesStream).usage,
 	}
 	contentFields = map[string]func(*messagesStream) error{
@@ -81,22 +56,15 @@ var (
 	}
 	blockFields = map[string]func(*messagesStream) error{
 		"text": (*messagesStream).text, "thinking": (*messagesStream).text, "type": (*messagesStream).blockType,
-		"name": (*messagesStream).toolName, "input": (*messagesStream).input,
+		"name": (*messagesStream).toolName, "input": (*messagesStream).rawContent,
 	}
 	messageFields = map[string]func(*messagesStream) error{"usage": (*messagesStream).usage}
 )
 
-// event reads one event's data, giving any usage it reports to m.
 func (s *messagesStream) event(data []byte, m *meter) (event, error) {
-	s.src = *bytes.NewBuffer(data)
-	if s.dec == nil {
-		s.dec = jsontext.NewDecoder(&s.src)
-	} else {
-		s.dec.Reset(&s.src)
-	}
-	s.e = event{role: passive, data: data, usageAt: -1}
+	s.start(data)
 	s.textBlock, s.serverTool, s.webSearch, s.failed, s.report, s.reportErr = false, false, false, false, nil, nil
-	if err := s.object(messagesFields); err != nil {
+	if err := walk(&s.reader, s, messagesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
@@ -107,7 +75,7 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 		s.meter(m)
 	}
 	if s.e.name == "message_start" || s.e.role == ending {
-		return s.rewrite()
+		return s.rewrite(messagesRewrites)
 	}
 	return s.e, nil
 }
@@ -122,15 +90,6 @@ func (s *messagesStream) settle() {
 	if s.serverTool && s.webSearch {
 		s.e.searches = 1
 	}
-}
-
-func (s *messagesStream) object(f map[string]func(*messagesStream) error) error {
-	return s.eachMember(func() error {
-		if read := f[string(s.name)]; read != nil {
-			return read(s)
-		}
-		return s.skip()
-	})
 }
 
 func (s *messagesStream) eventType() error {
@@ -151,23 +110,11 @@ func (s *messagesStream) eventType() error {
 	return nil
 }
 
-func (s *messagesStream) text() error {
-	v, err := s.raw()
-	s.e.content += unquotedLen(v)
-	return err
-}
-
 // stopReason reads a message_delta's stop reason: the one that has it carries the final usage (Anthropic
 // 《Streaming messages》, read 2026-10-14).
 func (s *messagesStream) stopReason() error {
 	v, err := s.raw()
 	s.e.final = v != nil
-	return err
-}
-
-func (s *messagesStream) input() error {
-	v, err := s.dec.ReadValue()
-	s.e.content += int64(len(v))
 	return err
 }
 
@@ -194,40 +141,6 @@ func (s *messagesStream) usage() error {
 	s.e.usage = true
 	s.reportErr = jsonx.Unmarshal(v, s.report)
 	return nil
-}
-
-// unquotedLen is the length of the JSON string v once unquoted, without unquoting it; 0 for null. v is valid JSON,
-// so every escape is complete and every \u surrogate is half of a pair, which counts half of the pair's 4 bytes.
-func unquotedLen(v jsontext.Value) int64 {
-	if len(v) < 2 {
-		return 0
-	}
-	var n int64
-	for i := 1; i < len(v)-1; i++ {
-		if v[i] != '\\' {
-			n++
-			continue
-		}
-		i++
-		if v[i] != 'u' {
-			n++
-			continue
-		}
-		var r rune
-		for _, c := range v[i+1 : i+5] {
-			r = r<<4 | rune(c&0xf+c>>6*9) // a hex digit: '0'-'9' is 0x3_, 'A'-'F' and 'a'-'f' are 0x4_ and 0x6_
-		}
-		i += 4
-		switch {
-		case r < 0x80:
-			n++
-		case r < 0x800, 0xd800 <= r && r < 0xe000:
-			n += 2
-		default:
-			n += 3
-		}
-	}
-	return n
 }
 
 // messagesUsage is Messages' usage object: Usage in a message, MessageDeltaUsage in a message_delta, and their
@@ -260,12 +173,9 @@ type messagesUsage struct {
 
 // messagesUsageMembers are the members of a usage object the client sees: the ones messagesUsage reads but a relay's
 // cost, which never reaches it (docs/domains/gateway.md「用量与费用」).
-var messagesUsageMembers = map[string]rule{
-	"input_tokens": (*rewriter).skip, "cache_read_input_tokens": (*rewriter).skip,
-	"cache_creation_input_tokens": (*rewriter).skip, "cache_creation": (*rewriter).skip, "output_tokens": (*rewriter).skip,
-	"server_tool_use": (*rewriter).skip, "service_tier": (*rewriter).skip, "speed": (*rewriter).skip,
-	"iterations": (*rewriter).skip, "inference_geo": (*rewriter).skip, "output_tokens_details": (*rewriter).skip,
-}
+var messagesUsageMembers = keep("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+	"cache_creation", "output_tokens", "server_tool_use", "service_tier", "speed", "iterations", "inference_geo",
+	"output_tokens_details")
 
 // meter maps the usage just read onto billing items: the reply's, and each compaction's as its own segment, since
 // a compaction is a sampling of its own; message iterations are already in the totals (catalog README.md「计费项与
@@ -310,13 +220,9 @@ func (u *messagesUsage) items(ctx UsageContext, path string) (r usageReport, err
 		return r, err
 	}
 	u.serverTools(&r, path)
-	for name, v := range u.Unknown {
-		if v.Kind() == '0' && string(v) != "0" {
-			r.unknown = append(r.unknown, catalog.UnknownUsage{Field: path + "." + name, Value: string(v)})
-		}
-	}
+	unknownCounts(&r, path, u.Unknown)
 	u.serviceTier(ctx, &r, path)
-	slices.SortFunc(r.unknown, func(a, b catalog.UnknownUsage) int { return strings.Compare(a.Field, b.Field) })
+	r.sortUnknown()
 	return r, nil
 }
 
@@ -386,34 +292,10 @@ var (
 	}}
 )
 
-// rewrite rewrites the event by messagesRewrites into a new array, which the relay copies before the next event.
-func (s *messagesStream) rewrite() (event, error) {
-	p := &s.rw
-	p.dec, p.body, p.out, p.at, p.usageAt = jsontext.NewDecoder(bytes.NewBuffer(s.e.data)), s.e.data, nil, 0, -1
-	if err := p.top(messagesRewrites); err != nil {
-		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
-	}
-	s.e.data, s.e.usageAt = p.out, p.usageAt
-	return s.e, nil
-}
-
-// usage copies a usage object's messagesUsageMembers and drops the rest, null included, marking where it closes.
-func (p *rewriter) usage() error {
-	if ok, err := p.open('{', "an object"); !ok {
-		p.at = p.offset()
-		return err
-	}
-	if err := p.members(messagesUsageMembers, (*rewriter).drop); err != nil {
-		return err
-	}
-	p.usageAt = len(p.out)
-	return p.token()
-}
-
-// messagesError appends an error event (Anthropic《Streaming messages》"Error events") with our error type in
+// failure appends an error event (Anthropic《Streaming messages》"Error events") with our error type in
 // error.error_type and the usage of the reply, with cost, which is empty or a list of members each led by a comma
 // (docs/domains/gateway.md「错误」).
-func messagesError(dst []byte, e Error, u catalog.Usage, cost string) []byte {
+func (*messagesStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	data := fmt.Appendf(nil, `{"type":"error","error":{"type":%q,"message":`, messagesErrorTypes[e.Type])
 	data, _ = jsontext.AppendQuote(data, e.Message) //nolint:errcheck // invalid UTF-8 is written as U+FFFD, and that is all the error says
 	data = fmt.Appendf(data, `,"error_type":%q},"usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,`+
@@ -429,3 +311,6 @@ func messagesError(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 // messagesErrorTypes are the Messages error types for ours: a stream that stops for money says billing_error, as
 // before it starts; the others are the server's failures.
 var messagesErrorTypes = [...]string{"billing_error", "api_error", "api_error", "timeout_error"}
+
+// usageEvent is never needed: message_stop follows message_delta.
+func (*messagesStream) usageEvent(dst []byte, _ catalog.Usage, _, _ string) []byte { return dst }

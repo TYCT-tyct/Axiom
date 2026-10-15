@@ -157,38 +157,55 @@ const (
 // Relay turns one upstream stream into the client's stream. Only one goroutine calls it (README.md「转发」).
 type Relay struct {
 	events    *sse.Reader
-	m         messagesStream
+	up        upstream
+	format    *relayFormat
 	o         RelayOptions
 	state     state
 	committed bool
 	err       error
-	// out is what the current step writes, and before the commit point every event held until then. ending is the
-	// held ending event's data, ready for the client but for its cost, which goes at usageAt; stop is the data of the
-	// upstream's last event.
-	out, ending, stop    []byte
-	usageAt              int
-	endingName, stopName string
-	meter                meter
-	progress             Progress
+	// out is what the current step writes, and before the commit point every event held until then. withheld are the
+	// events held until the normal end, written; ending is the held ending event's data, ready for the client but for
+	// its cost, which goes at usageAt; stop is the data of the upstream's last event, nil when the ending ended the
+	// stream. edited is room for an event edited in place.
+	out, withheld, ending, stop, edited []byte
+	usageAt                             int
+	endingName, stopName                string
+	meter                               meter
+	progress                            Progress
 	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
 	held, charged int64
 }
 
-// relayEventLimit bounds one event: Messages sends deltas and control events, whose class limit this is (README.md
-// 「转发」).
-const relayEventLimit = 1 << 20
+// relayFormat is what the relay needs to know of a format.
+type relayFormat struct {
+	newUpstream func(UsageContext, RelayOptions) upstream
+	// limit bounds one event: Messages and Chat send deltas and control events; Responses' snapshot events repeat
+	// the request and the whole output, and get streamcheck's ceiling (README.md「检查流结构」).
+	limit int
+	// rendersUsage is set for a format whose usage event the relay writes itself, from the settlement: Chat's, which
+	// an upstream not asked for usage leaves out, and whose shape follows OpenRouter's (docs/domains/gateway.md「用量与
+	// 费用」).
+	rendersUsage bool
+}
 
-// NewRelay returns a Relay that reads the upstream stream body. Only same-format Messages streams are relayed yet;
-// for others the first step fails.
+var relayFormats = [...]relayFormat{
+	Messages:  {func(u UsageContext, o RelayOptions) upstream { return newMessagesStream(u, o) }, 1 << 20, false},
+	Responses: {func(u UsageContext, o RelayOptions) upstream { return newResponsesStream(u, o) }, 32 << 20, false},
+	Chat:      {func(u UsageContext, o RelayOptions) upstream { return newChatStream(u, o) }, 1 << 20, true},
+}
+
+// NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
+// yet; for others the first step fails.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
-	r := &Relay{events: sse.NewReader(body, relayEventLimit), o: o}
-	r.events.ChargeGrowth(r.charge)
-	r.m.ctx = u
-	r.m.rw.w.Identity = func(string) string { return o.ID }
-	r.m.rw.t.Model = o.Model
-	if client != Messages || upstream != Messages {
+	r := &Relay{o: o}
+	if client != upstream || int(upstream) >= len(relayFormats) {
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported yet", upstream, client)
+		return r
 	}
+	r.format = &relayFormats[upstream]
+	r.up = r.format.newUpstream(u, o)
+	r.events = sse.NewReader(body, r.format.limit)
+	r.events.ChargeGrowth(r.charge)
 	return r
 }
 
@@ -221,31 +238,58 @@ func (r *Relay) Next() (Step, error) {
 }
 
 func (r *Relay) event(data []byte) (Step, error) {
-	e, err := r.m.event(data, &r.meter)
+	e, err := r.up.event(data, &r.meter)
 	if err != nil {
 		return Step{}, err
 	}
 	r.observe(e)
+	if data, err = r.edit(&e); err != nil {
+		return Step{}, err
+	}
+	return r.route(e, data)
+}
+
+// route writes or holds an event by its role.
+func (r *Relay) route(e event, data []byte) (Step, error) {
 	switch e.role {
 	case heartbeat:
 		if !r.committed {
 			return Step{Kind: StepHeartbeat}, nil
 		}
-		return r.write(StepHeartbeat, e.name, e.data)
+		return r.write(StepHeartbeat, e.name, data)
 	case ending:
-		return r.hold(e)
+		step, err := r.hold(e.name, data, e.usageAt)
+		if err != nil || !e.ends {
+			return step, err
+		}
+		return r.end(e.name, nil)
 	case end:
-		return r.end(e)
-	case passive, content:
+		return r.end(e.name, data)
+	case passive, content, withheld:
 	}
 	switch {
 	case len(r.ending) > 0:
 		return Step{}, fmt.Errorf("%w: %s after the ending", ErrUpstream, e.name)
+	case e.role == withheld:
+		return r.withhold(e.name, data)
 	case e.role == content && !r.committed:
 		r.committed = true
-		return r.write(StepCommit, e.name, e.data)
+		return r.write(StepCommit, e.name, data)
 	}
-	return r.write(StepData, e.name, e.data)
+	return r.write(StepData, e.name, data)
+}
+
+// edit returns e's data with its edits applied, in a buffer the relay reuses.
+func (r *Relay) edit(e *event) ([]byte, error) {
+	if e.nEdits == 0 {
+		return e.data, nil
+	}
+	var err error
+	if r.edited, err = r.grow(r.edited[:0], editedSize(e)); err != nil {
+		return nil, err
+	}
+	r.edited = edited(r.edited, e.data, e)
+	return r.edited, nil
 }
 
 // observe adds what an event reports to the progress.
@@ -258,31 +302,43 @@ func (r *Relay) observe(e event) {
 	}
 }
 
-// hold keeps an ending event for Finish. An earlier one, which a stream may have, is written as it is, without a
+// hold keeps an ending event for Finish. An earlier one, which a stream may have, is withheld as it is, without a
 // cost.
-func (r *Relay) hold(e event) (step Step, err error) {
-	step.Kind = StepBuffered
+func (r *Relay) hold(name string, data []byte, usageAt int) (Step, error) {
 	if len(r.ending) > 0 {
-		if step, err = r.write(StepData, r.endingName, r.ending); err != nil {
+		if _, err := r.withhold(r.endingName, r.ending); err != nil {
 			return Step{}, err
 		}
 	}
-	r.endingName, r.usageAt = e.name, e.usageAt
-	r.ending, err = r.keep(r.ending, e.data)
-	return step, err
+	var err error
+	r.endingName, r.usageAt = name, usageAt
+	r.ending, err = r.keep(r.ending, data)
+	return Step{Kind: StepBuffered}, err
 }
 
-// end takes the upstream's normal end, which must follow an ending: the usage is final, and it ends no stream
-// before then.
-func (r *Relay) end(e event) (Step, error) {
-	if len(r.ending) == 0 {
-		return Step{}, fmt.Errorf("%w: the stream ended without its usage event", ErrUpstream)
-	}
+// withhold keeps an event until the normal end.
+func (r *Relay) withhold(name string, data []byte) (Step, error) {
 	var err error
-	if r.stop, err = r.keep(r.stop, e.data); err != nil {
+	if r.withheld, err = r.grow(r.withheld, sse.EventSize(name, data)); err != nil {
 		return Step{}, err
 	}
-	r.state, r.stopName, r.meter.final = upstreamDone, e.name, true
+	r.withheld = sse.AppendEvent(r.withheld, name, data)
+	return Step{Kind: StepBuffered}, nil
+}
+
+// end takes the upstream's normal end, whose last event is stop, or nil when the ending ended the stream. A format
+// whose usage is not optional must have sent its ending by then. The usage is final.
+func (r *Relay) end(name string, stop []byte) (Step, error) {
+	if len(r.ending) == 0 && !r.format.rendersUsage {
+		return Step{}, fmt.Errorf("%w: the stream ended without its usage event", ErrUpstream)
+	}
+	if stop != nil {
+		var err error
+		if r.stop, err = r.keep(r.stop, stop); err != nil {
+			return Step{}, err
+		}
+	}
+	r.state, r.stopName, r.meter.final = upstreamDone, name, true
 	r.progress.Reported, r.progress.Final = r.meter.progress()
 	return Step{Kind: StepUpstreamDone}, nil
 }
@@ -327,8 +383,10 @@ func (r *Relay) charge(n int) error {
 
 // release gives back what the relay drew on the node's budget, at its end: its buffers go with it.
 func (r *Relay) release() {
-	r.o.Memory.left.Add(r.charged)
-	r.charged = 0
+	if r.charged > 0 {
+		r.o.Memory.left.Add(r.charged)
+		r.charged = 0
+	}
 }
 
 // fail ends the relay's reading. A stream that breaks off or breaks its format is the upstream's failure; a failed
@@ -351,9 +409,10 @@ func (r *Relay) Progress() Progress { return r.progress }
 // Usage returns the attempt's usage by segment, with only the final counts reported.
 func (r *Relay) Usage() Usage { return r.meter.result() }
 
-// Finish returns the ending after the upstream's normal end: the held ending event with the cost of f, and the
-// upstream's last event. It returns nil unless Next returned StepUpstreamDone and no ending was written. Like Fail,
-// it builds the ending from bytes already charged and then gives them all back, so it charges nothing.
+// Finish returns the ending after the upstream's normal end: the withheld events, the held ending event with the
+// cost of f, or for a format whose usage event the relay writes, one with the usage and cost of f, and the
+// upstream's last event. It returns nil unless Next returned StepUpstreamDone and no ending was written. Like Fail, it builds the
+// ending from bytes already charged and then gives them all back, so it charges nothing.
 func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
@@ -362,6 +421,23 @@ func (r *Relay) Finish(f Final) []byte {
 	if f.Pending {
 		top = `,"axiom":{"billing_pending":true}`
 	}
+	out := append(r.endOut(), r.withheld...)
+	if r.format.rendersUsage {
+		out = r.up.usageEvent(out, reply(f.Usage), usage, top)
+	} else {
+		out = sse.AppendEvent(out, r.endingName, r.costed(usage, top))
+	}
+	if r.stop != nil {
+		out = sse.AppendEvent(out, r.stopName, r.stop)
+	}
+	r.state = ended
+	r.release()
+	return out
+}
+
+// costed is the held ending with the members usage added to its usage object and top to the event: an ending
+// without a usage object gets one.
+func (r *Relay) costed(usage, top string) []byte {
 	at := r.usageAt
 	if at < 0 { // no usage object: the ending gets one
 		at, usage = bytes.LastIndexByte(r.ending, '}'), `,"usage":{`+strings.TrimPrefix(usage, ",")+"}"
@@ -369,11 +445,15 @@ func (r *Relay) Finish(f Final) []byte {
 		usage = strings.TrimPrefix(usage, ",") // the usage object is empty
 	}
 	last := bytes.LastIndexByte(r.ending, '}') // the data is a JSON object, which ends with its brace
-	data := slices.Concat(r.ending[:at], []byte(usage), r.ending[at:last], []byte(top), r.ending[last:])
-	out := sse.AppendEvent(sse.AppendEvent(r.endOut(), r.endingName, data), r.stopName, r.stop)
-	r.state = ended
-	r.release()
-	return out
+	return slices.Concat(r.ending[:at], []byte(usage), r.ending[at:last], []byte(top), r.ending[last:])
+}
+
+// reply is the reply's segment of u.
+func reply(u Usage) catalog.Usage {
+	if len(u.Segments) == 0 {
+		return catalog.Usage{}
+	}
+	return u.Segments[0].Usage
 }
 
 // Fail returns an error ending with the usage and cost of f, or, when f is nil because the settlement was not
@@ -386,11 +466,10 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 	if f != nil {
 		u = f.Usage
 	}
-	var reply catalog.Usage
-	if len(u.Segments) > 0 {
-		reply = u.Segments[0].Usage
+	var out []byte
+	if r.up != nil { // nil for a pair of formats not relayed
+		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
 	}
-	out := messagesError(r.endOut(), e, reply, cost(f))
 	r.state = ended
 	r.release()
 	return out

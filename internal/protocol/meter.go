@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"axiom/internal/catalog"
 )
@@ -17,6 +19,11 @@ type usageReport struct {
 func (r *usageReport) set(it catalog.Item, n int64) {
 	r.counts[it] = n
 	r.seen.Add(it)
+}
+
+// sortUnknown orders the unknown usage by field, so a report does not depend on the order of a map.
+func (r *usageReport) sortUnknown() {
+	slices.SortFunc(r.unknown, func(a, b catalog.UnknownUsage) int { return strings.Compare(a.Field, b.Field) })
 }
 
 // meter keeps the reply's usage as reported so far. Counts only go up: a later 0 leaves the earlier count, as some

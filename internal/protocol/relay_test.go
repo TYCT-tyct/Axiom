@@ -60,13 +60,13 @@ type relayed struct {
 // relay runs a Relay over src as the gateway does: it writes what each step gives, settles with settle at the
 // upstream's normal end, and writes Fail's ending after a failed step. It checks that a step holding events writes
 // nothing and that the ending is written once.
-func relay(t testing.TB, src io.Reader, ctx protocol.UsageContext, mem *protocol.Memory,
+func relay(t testing.TB, f protocol.Format, src io.Reader, ctx protocol.UsageContext, mem *protocol.Memory,
 	settle func(protocol.Usage) protocol.Final,
 ) relayed {
 	t.Helper()
 	o := options
 	o.Memory = mem
-	res := relayed{r: protocol.NewRelay(protocol.Messages, protocol.Messages, src, ctx, o)}
+	res := relayed{r: protocol.NewRelay(f, f, src, ctx, o)}
 	for {
 		step, err := res.r.Next()
 		if err != nil {
@@ -92,30 +92,42 @@ func relay(t testing.TB, src io.Reader, ctx protocol.UsageContext, mem *protocol
 	return res
 }
 
-// TestRelaySamples relays every Messages sample, whole and byte by byte, and compares the client's stream with its
-// golden copy, client-messages.sse, which go test -update rewrites. Every client stream is a valid Messages stream.
+// formats are the call formats by their directory in testdata, with their stream checkers.
+var formats = []struct {
+	dir   string
+	f     protocol.Format
+	check func(io.Reader) error
+}{
+	{"messages", protocol.Messages, streamcheck.Messages},
+	{"responses", protocol.Responses, streamcheck.Responses},
+	{"chat", protocol.Chat, streamcheck.Chat},
+}
+
+// TestRelaySamples relays every sample to a client of its format, whole and byte by byte, and compares the client's
+// stream with its golden copy, client-<format>.sse, which go test -update rewrites. Every client stream passes the
+// format's stream check.
 func TestRelaySamples(t *testing.T) {
-	dirs, err := fs.Glob(samples, "messages/*")
-	if err != nil || len(dirs) == 0 {
-		t.Fatalf("no Messages samples: %v", err)
-	}
-	for _, dir := range dirs {
-		t.Run(dir, func(t *testing.T) {
-			stream := sample(t, dir+"/upstream.sse")
-			// The base allowance holds an ordinary stream: none of it is drawn from the node's budget.
-			got := relay(t, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-			if got.err != nil {
-				t.Fatal(got.err)
-			}
-			if bytewise := relay(t, iotest.OneByteReader(bytes.NewReader(stream)), protocol.UsageContext{},
-				protocol.NewMemory(0), settled); !bytes.Equal(bytewise.out, got.out) {
-				t.Errorf("byte by byte:\n%s\nwhole:\n%s", bytewise.out, got.out)
-			}
-			if err := streamcheck.Messages(bytes.NewReader(got.out)); err != nil {
-				t.Error(err)
-			}
-			golden(t, dir+"/client-messages.sse", got.out)
-		})
+	for _, format := range formats {
+		dirs, err := fs.Glob(samples, format.dir+"/*")
+		if err != nil || len(dirs) == 0 {
+			t.Fatalf("no %s samples: %v", format.dir, err)
+		}
+		for _, dir := range dirs {
+			t.Run(dir, func(t *testing.T) {
+				stream := sample(t, dir+"/upstream.sse")
+				// The base allowance holds an ordinary stream: none of it is drawn from the node's budget.
+				got := relay(t, format.f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+				bytewise := relay(t, format.f, iotest.OneByteReader(bytes.NewReader(stream)), protocol.UsageContext{},
+					protocol.NewMemory(0), settled)
+				if got.err != nil || !bytes.Equal(bytewise.out, got.out) {
+					t.Fatalf("error %v; byte by byte:\n%s\nwhole:\n%s", got.err, bytewise.out, got.out)
+				}
+				if err := format.check(bytes.NewReader(got.out)); err != nil {
+					t.Error(err)
+				}
+				golden(t, dir+"/client-"+format.dir+".sse", got.out)
+			})
+		}
 	}
 }
 
@@ -171,7 +183,7 @@ func events(t *testing.T, stream []byte) []map[string]any {
 func TestRelaySteps(t *testing.T) {
 	stream := ping + messageStart(`{"input_tokens":3,"output_tokens":1}`) + ping + textBlock + ping +
 		messageDelta(`{"output_tokens":2}`) + messageStop
-	got := relay(t, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	got := relay(t, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
 	var kinds []protocol.StepKind
 	for _, k := range got.kinds {
 		if k != protocol.StepProgress {
@@ -223,7 +235,7 @@ func TestRelayEndings(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := relay(t, strings.NewReader(c.stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+			got := relay(t, protocol.Messages, strings.NewReader(c.stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
 			if !errors.Is(got.err, c.err) || (c.err == nil) != (got.err == nil) {
 				t.Fatalf("error %v, want %v", got.err, c.err)
 			}
@@ -270,7 +282,7 @@ func TestRelayRewrites(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := relay(t, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0),
+			got := relay(t, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0),
 				func(protocol.Usage) protocol.Final { return c.final })
 			es := events(t, got.out)
 			message := es[0]["message"].(map[string]any)
@@ -287,7 +299,7 @@ func TestRelayRewrites(t *testing.T) {
 	// An ending without usage gets one, and an empty one takes the cost as its only members.
 	for _, usage := range []string{"", `,"usage":null`, `,"usage":{"cost":1}`} {
 		delta := `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}` + usage + "}\n\n"
-		got := relay(t, strings.NewReader(messageStart(`{}`)+textBlock+delta+messageStop), protocol.UsageContext{},
+		got := relay(t, protocol.Messages, strings.NewReader(messageStart(`{}`)+textBlock+delta+messageStop), protocol.UsageContext{},
 			protocol.NewMemory(0), settled)
 		es := events(t, got.out)
 		if u := es[len(es)-2]["usage"]; !cmp.Equal(u, map[string]any{"cost": 3.703701, "cost_currency": "USD"}) {
@@ -373,24 +385,28 @@ func TestKeepAlive(t *testing.T) {
 	}
 }
 
-// FuzzRelay: whatever valid Messages stream the upstream sends, however it is split into reads, the client gets the
-// same valid Messages stream with exactly one ending.
+// FuzzRelay: whatever valid stream of a format the upstream sends, however it is split into reads, the client gets
+// the same valid stream of that format with exactly one ending.
 func FuzzRelay(f *testing.F) {
-	for _, dir := range []string{"messages/text", "messages/thinking", "messages/tool-use"} {
-		f.Add(sample(f, dir+"/upstream.sse"), []byte{3, 200, 7})
+	for i, format := range formats {
+		for _, dir := range must(fs.Glob(samples, format.dir+"/*")) {
+			f.Add(uint8(i), sample(f, dir+"/upstream.sse"), []byte{3, 200, 7})
+		}
 	}
-	f.Add([]byte(messageStart(`{"input_tokens":3}`)+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{1})
-	f.Add([]byte(messageStart(`{}`)+`data: {"type":"error","error":{"type":"api_error","message":"x"}}`+"\n\n"), []byte{9})
-	f.Fuzz(func(t *testing.T, stream, cuts []byte) {
-		if streamcheck.Messages(bytes.NewReader(stream)) != nil {
+	f.Add(uint8(0), []byte(messageStart(`{"input_tokens":3}`)+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{1})
+	f.Add(uint8(0), []byte(messageStart(`{}`)+`data: {"type":"error","error":{"type":"api_error","message":"x"}}`+"\n\n"), []byte{9})
+	f.Add(uint8(2), []byte(chatHello), []byte{5})
+	f.Fuzz(func(t *testing.T, which uint8, stream, cuts []byte) {
+		format := formats[int(which)%len(formats)]
+		if format.check(bytes.NewReader(stream)) != nil {
 			return
 		}
-		whole := relay(t, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
-		split := relay(t, &chunks{stream, cuts}, protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
+		whole := relay(t, format.f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
+		split := relay(t, format.f, &chunks{stream, cuts}, protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
 		if !bytes.Equal(whole.out, split.out) {
 			t.Fatalf("split %v:\n%s\nwhole:\n%s", cuts, split.out, whole.out)
 		}
-		if err := streamcheck.Messages(bytes.NewReader(whole.out)); err != nil {
+		if err := format.check(bytes.NewReader(whole.out)); err != nil {
 			t.Fatalf("client stream: %v\n%s", err, whole.out)
 		}
 	})

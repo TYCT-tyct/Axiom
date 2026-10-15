@@ -2,7 +2,7 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、改写同格式请求的 `Prepare`、转发同格式 Messages 流的 `Relay`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；其余格式的转发、转换按 Issue #27 的计划逐个 PR 加入，加入时改写本文。
+目前有读请求摘要的 `Inspect`、改写同格式请求的 `Prepare`、转发同格式流的 `Relay`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；其余格式的转发、转换按 Issue #27 的计划逐个 PR 加入，加入时改写本文。
 
 ## 包
 
@@ -79,7 +79,7 @@
 
 ## 转发（草图）
 
-`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有同格式 Messages 的转发（P5），Responses、Chat 和 `RenderError` 是 #27 之后的 PR 要做的。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
+`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有三种格式的同格式转发（P5），跨格式、非流式聚合和 `RenderError` 是 #27 之后的 PR 要做的。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
 
 ```go
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) // *NotSupported → gateway 跳过这个条目
@@ -105,15 +105,26 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 - **`UsageContext`**：用量归一化要知道实际发往上游的请求里有没有 1 小时的缓存断点、明确写了哪个服务等级。Anthropic 没给 `cache_creation` 明细时按它归类，规则以 [catalog 的用量折算](../catalog/README.md)为准。
 - `Final.Pending` 为真时（结算写不进），结尾带 `axiom.billing_pending`、不带费用（[接入的「用量与费用」](../../docs/domains/gateway.md#用量与费用)）。
 
-已实现的同格式 Messages 转发（Anthropic《Streaming messages》，2026-10-14 读取）：
+已实现的同格式转发。状态机与格式无关（`relay.go`），每种格式一个读取器（`messages.go`、`responses.go`、`chat.go`）给每个事件定角色：
 
-- **提交点**：第一个 `content_block_delta`，或带内容的 `content_block_start`（文本、思考块开头是空的，不算；工具调用、服务端工具结果算）。之前的事件逐个暂存，`ping` 丢弃（[接入的「保活」](../../docs/domains/gateway.md#保活)：开始转发前不发任何东西）；提交后 `ping` 原样给出，类型是 `StepHeartbeat`。
-- **结尾**：`message_delta` 扣住，`message_stop` 到达返回 `StepUpstreamDone`，`Finish` 写出两者。多个 `message_delta` 时，较早的在下一个到来时原样写出。`message_stop` 之前没有 `message_delta`、`message_delta` 之后又来内容，都按上游出错。
-- **改写**：`message_start` 的 `message.id` 换成调用编号、`message.model` 换成客户端请求的名字；`message_start` 和 `message_delta` 的 `usage` 只留官方的用量成员（`input_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`、`cache_creation`、`output_tokens`、`output_tokens_details`、`server_tool_use`、`service_tier`、`speed`、`inference_geo`、`iterations`，Anthropic《Messages API reference》，2026-10-15 读取），中转站的 `cost` 之类删掉；结尾的 `usage` 末尾加 `cost`、`cost_currency`，暂估再加 `cost_estimated: true`，没有 `usage` 就加一个；上游写的顶层 `axiom` 删掉，免得与 `billing_pending` 重复。其余字节原样。
-- **出错结尾**：Messages 的 `error` 事件，`error.type` 是 Messages 的类型（`credits_insufficient` → `billing_error`，`timeout` → `timeout_error`，`billing_unavailable`、`upstream_error` → `api_error`），`error.error_type` 是本站的类型；顶层 `usage` 按 Messages 的字段从回复段渲染，结算提交了再加费用。提交前出错时，暂存的开头随出错事件一起写出。
-- **用量**：按 [catalog 的「计费项与用量」](../catalog/README.md#计费项与用量)折算；`message_start` 和各个 `message_delta` 的数按项取最新，后来的 0 不覆盖先前的正数，变小判为无效。`iterations` 里每个 `compaction` 条目是自己的一段，`message` 条目已含在顶层里；`speed: "fast"` 是快速模式，`service_tier` 认不出的取值和映射表外的非零计数进 `Unknown()`，含 `server_tool_use.web_fetch_requests`。无效时（变小、细项加不到总数、不是整数、超出范围、未知的 `iterations` 类型）不中断流，`Usage().Invalid` 写明原因，所有项都不算已报告。`Usage()` 只把最终值算作已报告：流在最后的用量事件之前断了，`message_start` 的 `output_tokens` 只是下界，按准数结算会少收。
-- **错误**：上游断流、流不合规、`error` 事件都包装 `ErrUpstream`；读失败（例如取消 `attemptCtx` 关掉响应体）原样返回；内存申请不到返回 `ErrMemory`。出错之后 `Next` 一直返回同一个错误，上游正常结束或写过结尾之后返回 `ErrTerminated`；`Finish`、`Fail` 只有第一次写结尾，之后返回空。
-- **内存**：每路流持有的缓冲（读 SSE 的两块、暂存与本步的输出、扣住的结尾）按容量计，前 64 KiB 是 gateway 每路记下的基础额度，超出的在缓冲增长之前向 `RelayOptions.Memory`（节点预算）申请；读失败、`Finish`、`Fail` 时全部归还。改写 `message_start`、结尾时的临时字节不持有，不计。单个事件上限 1 MiB（增量和控制事件的上限）。
+| 角色 | 处理 | Messages（Anthropic《Streaming messages》） | Responses（OpenAI《Responses streaming events》） | Chat（OpenAI《Chat Completions streaming events》） |
+|---|---|---|---|---|
+| 内容 | 第一个是提交点 | `content_block_delta`；带内容的 `content_block_start`（工具调用、服务端工具结果；空的文本、思考块开头不算） | 每个 `*.delta`；`response.output_item.done`（有的项一次给全，如只有密文的推理项） | 有正文、推理、拒答或工具调用的块；只有 `role` 的块不算 |
+| 心跳 | 提交前丢弃，之后原样给出（`StepHeartbeat`） | `ping` | — | — |
+| 扣住 | 留到正常结束，写在结尾之前 | 较早的 `message_delta` | — | 给出 `finish_reason` 的块：客户端据此认为回答完整 |
+| 结尾 | 扣住，结算后 `Finish` 带上费用 | 带 `stop_reason` 的 `message_delta` | `response.completed`、`response.incomplete`，同时是正常结束 | 用量块；由本站按结算重写，见下 |
+| 正常结束 | 返回 `StepUpstreamDone` | `message_stop`，之前必须有结尾 | 同上 | `[DONE]`，没有用量块也行 |
+| 上游出错 | 返回 `ErrUpstream` | `error` | `response.failed`、`error` | 顶层带 `error` 的块 |
+
+其余事件都按顺序写出，提交前暂存。日期：Messages 2026-10-14，OpenAI 两种 2026-10-14，OpenRouter《Streaming》2026-10-15。
+
+- **改写**：Messages 的 `message.id`、Responses 快照里 `response.id`、Chat 每块的 `id` 换成调用编号，对应的 `model` 换成客户端请求的名字。Chat 每块都有这两个成员，原地替换、不重新扫描；带 `provider`（OpenRouter 写上游是谁）或 `axiom` 的块才整块改写，删掉它们。`usage` 只留官方的用量成员（Messages：`input_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`、`cache_creation`、`output_tokens`、`output_tokens_details`、`server_tool_use`、`service_tier`、`speed`、`inference_geo`、`iterations`，Anthropic《Messages API reference》2026-10-15；Responses：`input_tokens`、`input_tokens_details`、`output_tokens`、`output_tokens_details`、`total_tokens`），中转站的 `cost` 之类删掉，`usage: null` 也删掉；上游写的顶层 `axiom` 删掉，免得与 `billing_pending` 重复。其余字节原样。
+- **结尾的费用**：Messages 和 Responses 在结尾的 `usage`（Responses 是 `response.usage`）末尾加 `cost`、`cost_currency`，暂估再加 `cost_estimated: true`，没有 `usage` 就在事件顶层加一个；Chat 的用量块由本站从结算写出：`usage` 按 Chat 的字段从回复段渲染再加费用，`choices` 与 OpenRouter 一样是一个不带内容、重复 `finish_reason` 的选项（很多客户端对每块都读 `choices[0]`），上游没发用量块也照样写。结算写不进时事件顶层加 `axiom.billing_pending`、不带费用。
+- **出错结尾**：Messages 是 `error` 事件，`error.type` 取 Messages 的类型（`credits_insufficient` → `billing_error`，`timeout` → `timeout_error`，`billing_unavailable`、`upstream_error` → `api_error`），`error.error_type` 是本站的类型；Responses 是 `response.failed`（`sequence_number` 接在上游最后一个之后，`response` 带调用编号、`status: "failed"`、`error.code` 为本站的类型），`error_type` 在事件顶层，`response.created` 之前出错时改写 `error` 事件，因为流只能以它们之一开头；Chat 是顶层带 `error`（`code` 是对应的 HTTP 状态：402、503、502、408，`metadata.error_type` 是本站的类型）、`finish_reason: "error"` 的块。三种都带按本格式字段从回复段渲染的 `usage`，结算提交了再加费用；扣住的块不写，提交前出错时暂存的开头随出错结尾一起写出。
+- **用量**：按 [catalog 的「计费项与用量」](../catalog/README.md#计费项与用量)折算。Messages：`message_start` 和各个 `message_delta` 的数按项取最新，后来的 0 不覆盖先前的正数，变小判为无效；`iterations` 里每个 `compaction` 条目是自己的一段，`message` 条目已含在顶层里；`speed: "fast"` 是快速模式；`server_tool_use.web_fetch_requests` 进 `Unknown()`。OpenAI 两种格式字段不同、含义相同：输入总量减去缓存读、缓存写、音频是 `input`，输出总量减去推理、音频是 `output`，细项加起来超过总量判为无效；`service_tier` 的 `default`、`flex`、`priority` 对应三档，其余进 `Unknown()`；用量只在结尾出现，所以一出现就是最终值。三种格式都把映射表外的非零计数放进 `Unknown()`，中转站的 `cost`、`cost_details`、`is_byok` 不是用量，不进。无效时（变小、细项超过总数、不是整数、超出范围、未知的 `iterations` 类型）不中断流，`Usage().Invalid` 写明原因，所有项都不算已报告。`Usage()` 只把最终值算作已报告：流在最后的用量事件之前断了，之前报告的输出只是下界，按准数结算会少收。
+- **字节上界**：正文、推理、工具参数按解码后的字节计；Chat 的 `reasoning_details` 和 Messages 的工具 `input` 按原文字节计。Responses 的项完成时（`response.output_item.done`）只加它比自己的增量多出的字节，所以同一段文字不计两次，没有增量、一次给全的项也计入；`web_search_call` 项计一次搜索。
+- **错误**：上游断流、流不合规、出错事件都包装 `ErrUpstream`；读失败（例如取消 `attemptCtx` 关掉响应体）原样返回；内存申请不到返回 `ErrMemory`。出错之后 `Next` 一直返回同一个错误，上游正常结束或写过结尾之后返回 `ErrTerminated`；`Finish`、`Fail` 只有第一次写结尾，之后返回空。
+- **内存**：每路流持有的缓冲（读 SSE 的两块、暂存与本步的输出、扣住的事件、结尾、原地替换用的一块）按容量计，前 64 KiB 是 gateway 每路记下的基础额度，超出的在缓冲增长之前向 `RelayOptions.Memory`（节点预算）申请；读失败、`Finish`、`Fail` 时全部归还。整块改写时的临时字节不持有，不计；Responses 每个输出项记一个计数，随项数增长，不计。单个事件上限：Messages、Chat 1 MiB（增量和控制事件的上限），Responses 32 MiB（快照事件回显请求和全部输出，取「检查流结构」的封顶值）。
 
 ## 录制样本
 
@@ -156,13 +167,13 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 一路流的缓冲受上限约束，不随上限本身预先分配 | 上限计入事件的全部字节；测试用一个永不换行的上游，确认在上限处失败；缓冲从 16 KiB 起按实际事件增长 |
 | 读一个长行的时间与行长成正比 | 记住已经扫描过、没有行尾的位置；只有缓冲前部有已消费的字节时才搬移 |
 | 每个事件的内存分配次数有常数上界 | 基准测试 1 KiB 和 1 MiB 的事件，CI 与 `main` 对比分配次数 |
-| 提交点之前不向客户端写字节；每路流恰好一个结尾，成功结尾只在上游正常结束后发出 | `TestRelaySteps` 逐步核对步骤的类型；`TestRelayCommitPoint` 核对哪些块的开头是提交点、计入多少内容和搜索；`TestRelayEndings` 每种结束方式一个用例：正常结束、提交前后的 `error` 事件、结尾前后断流、没有用量事件、结尾后又来内容、事件不是对象、没有内容、两个用量事件都写出；测试的驱动在结束后再调 `Finish`、`Fail`、`Next`，断言不再写出、返回 `ErrTerminated`。模糊测试 `FuzzRelay`：`streamcheck` 接受的上游流，客户端拿到的流也被它接受，并且与怎么分片无关 |
-| 客户端看到调用编号、自己请求的模型名，用量里只有官方的用量成员和本站的费用 | `TestRelayRewrites`：上游的 `cost`、`cost_details`、`axiom` 不出现，三种 `Final`（已结算、暂估、待结算）的结尾逐项比较，结尾没有 `usage`、`usage` 为 `null`、过滤后为空都得到合规的费用 |
-| 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples`；黄金输出也通过 `streamcheck.Messages` |
-| 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是 |
-| 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes` | `TestRelayProgress`；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
+| 提交点之前不向客户端写字节；每路流恰好一个结尾，成功结尾只在上游正常结束后发出；扣住的块不随出错结尾写出 | `TestRelaySteps` 逐步核对步骤的类型；`TestRelayChat` 覆盖 Chat 的用量块、没有用量块、给出 `finish_reason` 后断流、出错块；`TestRelayResponses` 覆盖 `response.created` 前后断流和 `response.incomplete`；`TestRelayCommitPoint` 核对哪些块的开头是提交点、计入多少内容和搜索；`TestRelayEndings` 每种结束方式一个用例：正常结束、提交前后的 `error` 事件、结尾前后断流、没有用量事件、结尾后又来内容、事件不是对象、没有内容、两个用量事件都写出；测试的驱动在结束后再调 `Finish`、`Fail`、`Next`，断言不再写出、返回 `ErrTerminated`。模糊测试 `FuzzRelay` 覆盖三种格式：`streamcheck` 接受的上游流，客户端拿到的流也被它接受，并且与怎么分片无关 |
+| 客户端看到调用编号、自己请求的模型名，用量里只有官方的用量成员和本站的费用 | 三种格式的黄金输出；`TestRelayChat` 核对每块的 `id`、`model`，`provider`、上游的 `cost` 和 `is_byok` 不出现；`TestRelayRewrites`：上游的 `cost`、`cost_details`、`axiom` 不出现，三种 `Final`（已结算、暂估、待结算）的结尾逐项比较，结尾没有 `usage`、`usage` 为 `null`、过滤后为空都得到合规的费用 |
+| 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples` 覆盖全部样本；黄金输出也通过本格式的 `streamcheck` |
+| 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是；`TestRelayOpenAIUsage` 覆盖 OpenAI 两种格式的细项、超出总数、未知计数和服务等级 |
+| 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes`；字节上界不漏不重 | `TestRelayProgress`；`TestRelayChatContent` 计入各方言的推理、拒答和工具调用；`TestRelayResponsesContent` 核对项完成时只加多出的字节、没有增量的项照样计入、`web_search_call` 计一次搜索；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
 | 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestChargeGrowth`；样本在预算为 0 时照常转发，说明基础额度够用 |
-| 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
+| 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
 | 官方样本都通过检查，每条结构规则都有违反它的流被拒 | `TestSamples`；表驱动的坏流按错误里的说法区分规则，所以去掉任何一条规则，它的用例就失败 |
 | 上游给的序号再离谱，检查也只报错 | 序号只与已见到的部件个数比较，从不用来分配或下标越界；模糊测试以全部样本和极端序号为种子 |
 | 录制的样本要么完整、通过样本测试、不含 key 和 ID 位置上的原值，要么不存在；ID 位置之外的数据原样保留 | 本地 httptest 上游回放三种格式的已提交样本，分别用 LF、单独 CR、CRLF 行尾，前面加一组评审找到的注释（落单引号、`"input": {`、行末反斜杠），断言写下的流就是样本的事件按规范形式重建、只换了 ID，请求里工具参数的 `input.id` 不动，同一个 ID 在请求里转义写、在流里原样写也对应同一个占位值；每种拒绝一个用例（含评审的注释反例后跟转义写出的 key），断言没有发出请求（发出前的拒绝）、错误里没有 key 且目录为空；重定向、空闲超时各有用例；模糊测试：任意流重建后读回的事件数相同，每个事件除 ID 位置外 JSON 值相同，占位值一一对应，不含 key；每条规则都经过变异验证 |
@@ -177,6 +188,11 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 用量无效时不中断流，`Invalid` 写明原因、全部按估算 | [计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)：不截到 0，按估算结算并标记；回答本身没有问题 | 返回错误：上游的一个用量瑕疵毁掉整个回答 |
 | 内存按缓冲的容量在增长之前记账 | 申请不到时在分配之前就拒绝；容量才是真实的占用 | 按事件字节数事后记：分配已经发生 |
 | 出错事件的用量放在事件顶层的 `usage` | 与 `message_delta` 的位置相同；官方的 `error` 事件没有用量字段 | `axiom` 对象：流里的结尾用 `usage`，同一条流两种位置 |
+| Chat 给出 `finish_reason` 的块扣到 `[DONE]` | 客户端见到 `finish_reason` 就认为回答完整；之后断流再报错，客户端已经当成功收下了；成功结尾只在上游正常结束后发出 | 原样转发：断流的回答被当成完整的 |
+| Chat 的用量块由本站从结算写出，形状同 OpenRouter | [接入的「用量与费用」](../../docs/domains/gateway.md#用量与费用)要求最后一块带一个空内容的选项，与 OpenRouter 一致（OpenRouter《Streaming》"The final usage chunk"，2026-10-15）；上游没发用量块（没有要 `include_usage` 的方言）时客户端照样看到用量和费用；`streamcheck.Chat` 相应接受这种用量块，OpenRouter 作上游时本来就发它 | 在上游的用量块里插费用：没有用量块的上游就没有费用，`choices: []` 让读 `choices[0]` 的客户端崩溃 |
+| Chat 每块的 `id`、`model` 原地替换，只有要删成员的块才整块改写 | 每块都有这两个成员，整块改写会让每个事件都分配一个解码器和一份拷贝 | 每块都用改写器 |
+| Responses 在 `response.created` 之前出错时写 `error` 事件 | 流只能以 `response.created` 或 `error` 开头；网关提交前出错本来换端点，不写结尾，这是防御 | 一律 `response.failed` |
+| Responses 的项完成时只加比增量多出的字节 | 增量和完成的项重复同一段文字，两次都计会让追加提前一倍；只计增量又漏掉一次给全的项 | 只计增量；增量和项都计 |
 | 步骤类型带 `Step` 前缀 | 草图里的 `Progress` 既是类型又是步骤类型，同一个包里不能重名 | 改名 `Progress` 类型：billing 的草图用这个名字 |
 | 拉取式：调用方循环调用 `Next` | 空闲超时只被真正的数据事件重置（[总体架构](../../docs/architecture.md#协议转换)）：注释在 `Next` 内部跳过，天然不算；`Next` 不认识数据里的事件类型，所以由认识格式的调用方先分出 Messages 的 `ping` 这类心跳，只在真正的数据事件上重置 | 回调或通道：取消和计时分散到两处 |
 | 截断的 JSON 报 `ErrInvalid`，不包装 JSON 的原始错误 | 原始错误包装着 `io.ErrUnexpectedEOF`，会被当成流提前结束 | 直接包装：两类错误分不开 |

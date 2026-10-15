@@ -117,7 +117,7 @@ func TestRelayMeter(t *testing.T) {
 	check("after the last message_delta", 15, true)
 
 	down := messageStart(`{"input_tokens":25,"output_tokens":9}`) + textBlock + messageDelta(`{"output_tokens":5}`) + messageStop
-	got := relay(t, strings.NewReader(down), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	got := relay(t, protocol.Messages, strings.NewReader(down), protocol.UsageContext{}, protocol.NewMemory(0), settled)
 	u := got.r.Usage()
 	if u.Invalid == nil || u.Segments[0].Reported != 0 || got.r.Progress().Final != 0 {
 		t.Errorf("a count that went down: invalid %v, reported %v", u.Invalid, u.Segments[0].Reported)
@@ -245,7 +245,7 @@ func TestRelayUsage(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stream := messageStart(`{}`) + textBlock + messageDelta(c.usage) + messageStop
-			got := relay(t, strings.NewReader(stream), c.ctx, protocol.NewMemory(0), settled)
+			got := relay(t, protocol.Messages, strings.NewReader(stream), c.ctx, protocol.NewMemory(0), settled)
 			u := got.r.Usage()
 			if got.err != nil || (u.Invalid != nil) != c.invalid {
 				t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
@@ -298,7 +298,7 @@ func TestRelayMemory(t *testing.T) {
 			mem := protocol.NewMemory(c.budget)
 			var drew bool
 			src := &onRead{src: strings.NewReader(c.stream), read: func() { drew = drew || mem.Left() < c.budget }}
-			got := relay(t, src, protocol.UsageContext{}, mem, settled)
+			got := relay(t, protocol.Messages, src, protocol.UsageContext{}, mem, settled)
 			if !errors.Is(got.err, c.err) || (c.err == nil) != (got.err == nil) {
 				t.Fatalf("error %v, want %v", got.err, c.err)
 			}
@@ -322,16 +322,27 @@ func (r *onRead) Read(p []byte) (int, error) {
 	return r.src.Read(p)
 }
 
-// deltas is a stream with n text deltas of size bytes each.
-func deltas(n, size int) []byte {
-	delta := `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + strings.Repeat("x", size) + "\"}}\n\n"
+// deltas is a stream of format f with n text deltas of size bytes each.
+func deltas(f protocol.Format, n, size int) []byte {
+	text := strings.Repeat("x", size)
+	switch f {
+	case protocol.Responses:
+		delta := `data: {"type":"response.output_text.delta","sequence_number":2,"output_index":0,"content_index":0,` +
+			`"item_id":"msg_1","delta":"` + text + "\"}\n\n"
+		return []byte(responsesEvent("response.created", 0, responsesObject) + strings.Repeat(delta, n) +
+			responsesEvent("response.completed", 3, strings.Replace(responsesObject, `"usage":null`, `"usage":{"input_tokens":3}`, 1)))
+	case protocol.Chat:
+		delta := chatHead + `[{"index":0,"delta":{"content":"` + text + `"},"finish_reason":null}]}` + "\n\n"
+		return []byte(chatRole + strings.Repeat(delta, n) + chatStop + chatUsage(`{"prompt_tokens":3}`) + chatDone)
+	case protocol.Messages:
+	}
+	delta := `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + "\"}}\n\n"
 	return []byte(messageStart(`{"input_tokens":3}`) + textBlock + strings.Repeat(delta, n) + messageDelta(`{"output_tokens":2}`) + messageStop)
 }
 
 // drain relays stream as the gateway does, writing nowhere, so it allocates only what the relay does.
-func drain(tb testing.TB, stream []byte) {
-	r := protocol.NewRelay(protocol.Messages, protocol.Messages, bytes.NewReader(stream), protocol.UsageContext{},
-		protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30)})
+func drain(tb testing.TB, f protocol.Format, stream []byte) {
+	r := protocol.NewRelay(f, f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30)})
 	for {
 		step, err := r.Next()
 		if err != nil {
@@ -345,36 +356,41 @@ func drain(tb testing.TB, stream []byte) {
 }
 
 // TestRelayAllocs: beyond what reading the events allocates, which has a constant bound per event (README.md「读
-// SSE」), relaying them allocates nothing once the buffers have grown, so a longer reply costs the relay no more
-// allocations (docs/performance.md「调用路径上的规则」).
+// SSE」), relaying them allocates nothing once the buffers have grown, in each format, so a longer reply costs the
+// relay no more allocations (docs/performance.md「调用路径上的规则」).
 func TestRelayAllocs(t *testing.T) {
-	extra := func(stream []byte) float64 {
+	extra := func(f protocol.Format, stream []byte) float64 {
 		read := testing.AllocsPerRun(5, func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
 			for _, err := r.Next(); err == nil; _, err = r.Next() {
 			}
 		})
-		return testing.AllocsPerRun(5, func() { drain(t, stream) }) - read
+		return testing.AllocsPerRun(5, func() { drain(t, f, stream) }) - read
 	}
-	for _, size := range []int{1 << 10, 64 << 10} {
-		// 190 more events would add at least 190 allocations if each allocated; the race detector's own add a few.
-		if few, many := extra(deltas(10, size)), extra(deltas(200, size)); many-few > 5 {
-			t.Errorf("%d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 200", size, few, many)
+	for _, format := range formats {
+		for _, size := range []int{1 << 10, 64 << 10} {
+			// 190 more events would add at least 190 allocations if each allocated; the race detector's own add a few.
+			if few, many := extra(format.f, deltas(format.f, 10, size)), extra(format.f, deltas(format.f, 200, size)); many-few > 5 {
+				t.Errorf("%s, %d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 200",
+					format.dir, size, few, many)
+			}
 		}
 	}
 }
 
 func BenchmarkRelay(b *testing.B) {
-	for _, n := range []int{16, 256} { // 256 64-KiB deltas is 16 MiB: enough to see growth with the count
-		for _, size := range []int{1 << 10, 64 << 10} {
-			stream := deltas(n, size)
-			b.Run(fmt.Sprintf("deltas=%d/size=%d", n, size), func(b *testing.B) {
-				b.ReportAllocs()
-				b.SetBytes(int64(len(stream)))
-				for b.Loop() {
-					drain(b, stream)
-				}
-			})
+	for _, format := range formats {
+		for _, n := range []int{16, 256} { // 256 64-KiB deltas is 16 MiB: enough to see growth with the count
+			for _, size := range []int{1 << 10, 64 << 10} {
+				stream := deltas(format.f, n, size)
+				b.Run(fmt.Sprintf("%s/deltas=%d/size=%d", format.dir, n, size), func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(len(stream)))
+					for b.Loop() {
+						drain(b, format.f, stream)
+					}
+				})
+			}
 		}
 	}
 }

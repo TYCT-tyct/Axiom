@@ -194,14 +194,7 @@ func (s *reader) open(kind jsontext.Kind, want string) (bool, error) {
 	return err == nil, err
 }
 
-func (s *scanner) object(f fields) error {
-	return s.eachMember(func() error {
-		if read := f[string(s.name)]; read != nil {
-			return read(s)
-		}
-		return s.skip()
-	})
-}
+func (s *scanner) object(f fields) error { return walk(&s.reader, s, f) }
 
 // eachMember reads an object, or null, calling read after reading each member's name into name; read reads the
 // value.
@@ -221,11 +214,16 @@ func (s *reader) eachMember(read func() error) error {
 }
 
 func (s *scanner) array(each func(*scanner) error) error {
+	return s.eachElement(func() error { return each(s) })
+}
+
+// eachElement reads an array, or null, calling read for each element; read reads it.
+func (s *reader) eachElement(read func() error) error {
 	if ok, err := s.open('[', "an array"); !ok {
 		return err
 	}
 	for s.dec.PeekKind() != ']' {
-		if err := each(s); err != nil {
+		if err := read(); err != nil {
 			return err
 		}
 	}

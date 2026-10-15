@@ -98,8 +98,9 @@ type rewriter struct {
 	at                                    int
 	t                                     Target
 	w                                     Rewrites
-	continues, stored, included, hasInput bool // the Responses members seen
-	usageAt                               int  // where the last usage object the relay rewrote closes in out
+	continues, stored, included, hasInput bool            // the Responses members seen
+	usageAt                               int             // where the last usage object the relay rewrote closes in out
+	usageMembers                          map[string]rule // the usage members the relay keeps
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }
