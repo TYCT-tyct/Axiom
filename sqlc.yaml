@@ -1,7 +1,7 @@
-# One entry per module that owns queries: its schema is that module's migrations (and those of the modules it
-# depends on, when its queries read their tables), its queries are in queries/ beside the Go package. Everything is
-# generated into the package as *.gen.go, so `just generated` sees a stale file. internal/platform/README.md
-# 「sqlc」 has the rules.
+# One entry per module that owns queries: its schema is sqlc/schemas.sql and that module's own migrations, nothing
+# else, so a query on another module's table fails to generate. Its queries are in queries/ beside the Go package,
+# and everything is generated into the package as *.gen.go, so `just generated` sees a stale file.
+# internal/platform/README.md「查询（sqlc）」 has the rules.
 version: "2"
 sql:
   - engine: postgresql
