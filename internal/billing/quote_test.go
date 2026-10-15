@@ -198,3 +198,40 @@ func amount(tb testing.TB, n int64) platform.Exact {
 	}
 	return p.Mul(n)
 }
+
+// BenchmarkQuote runs under the balance-row lock: one entry, and a three-entry route over a schedule with two context
+// tiers and two service tiers, with a server tool and cache reads. Only Kept allocates.
+func BenchmarkQuote(b *testing.B) {
+	tiered := entry(b, true, 3)
+	tiered.Price = mustSchedule(b, `{"v":1,"currency":"USD",
+		"rates":{"input":"1","cache_read":"0.1","cache_write":"2","output":"10","web_search":"100"},
+		"context_tiers":{"basis":["input","cache_read"],"method":"whole",
+			"tiers":[{"above":100,"rates":{"input":"4","output":"20"}},{"above":500,"rates":{"input":"5"}}]},
+		"service_tiers":{"priority":{"context_tiers":[{"above":100,"rates":{}},{"above":500,"rates":{}}],
+			"rates":{"input":"6","cache_read":"0.6","cache_write":"7","output":"30","web_search":"100"}}}}`)
+	tiered.Model.Reports = 1<<in | 1<<catalog.ItemCacheRead
+	full := tiered
+	full.Segmentable = false
+	d := Demand{
+		TextBytes: 5000, Images: 2, Documents: 1, ServerTools: []ServerTool{{Item: webSearch}},
+		InputItems: 1 << cacheWrite, ServiceTiers: 1 << catalog.ServiceTierPriority,
+	}
+	avail := []Available{{SourceBalance, amount(b, 1e9)}, {SourceKey, amount(b, 1e9)}}
+	for _, bc := range []struct {
+		name  string
+		d     Demand
+		route []Quotable
+	}{
+		{"one entry", Demand{TextBytes: 5000}, []Quotable{entry(b, true, 3)}},
+		{"three entries, tiers and tools", d, []Quotable{tiered, full, tiered}},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := Quote(bc.d, bc.route, segments, avail); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
