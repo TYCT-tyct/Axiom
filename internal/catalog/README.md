@@ -95,6 +95,7 @@
 
 - **上游可能报告什么**是模型数据 `spec.items` 和 `spec.tiers`，审核时确认：输入输出类型、工具和厂商提供的服务等级决定它，例如支持音频输入就有 `audio_in`，有联网搜索就有 `web_search`，OpenAI 有 flex、priority。`Model.Reportable()` 返回它。
 - **`Schedule.Missing(Reportable) Reportable`** 返回其中没有价格的项和等级，算上 `reasoning` 回退到 `output`：标准档在任何一档缺价的项，以及价目表没有、或任何一档缺任何一个可能报告的项的等级。计费用它检查售价是否满足[计费的「定价」](../../docs/domains/billing.md#定价)里的上架门槛（已知的按次项目可以由站点默认单价补上）。门槛在 billing 检查，不在本模块：目录在模块依赖里位于 billing 之下，不知道售价。
+- **`Schedule.Lost(prev Schedule, r Reportable) []PricePoint`** 返回 `prev` 有价格而本价目表没有的位置 `PricePoint{ServiceTier, Above, Item}`，只看 `r` 里的等级和项，两边都算上 `reasoning` 回退到 `output`。区间按两张价目表门槛的并集切分：每个区间里两边的价各自不变，所以逐个（等级、区间、计费项）比较就是精确的。替换参考价前用它防止价格覆盖退化；不用 `Missing` 比较，因为它把一个等级里的缺项合成一个等级，旧 priority 只缺 `web_search`、新 priority 连输入价都没有时两边的结果相同。
 - **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage.ServiceTier` 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
 
@@ -124,9 +125,9 @@
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。
-- **自动发布**：本轮取数成功后，对 `price_source` 等于这个数据集的每个 listed 或 draft 模型，把条目与当前参考价按整张价目表比较。不同就先过计费的参考价安全阀（合理性检查和变化阈值，见[计费的「定价」](../../docs/domains/billing.md#定价)；阈值是后台数据）：通过就以 `system:sync` 发布，证据是条目原文和 `fetch_id`；不通过、条目解析失败或少了当前参考价已有的档位，就开或更新 `price_change` 审核项，不发布，管理员确认后发布。
+- **自动发布**：本轮取数成功后，对 `price_source` 等于这个数据集的每个 listed 或 draft 模型，把条目与当前参考价按整张价目表比较。不同就先过计费的参考价安全阀（合理性检查和变化阈值，见[计费的「定价」](../../docs/domains/billing.md#定价)；阈值是后台数据）：通过就以 `system:sync` 发布，证据是条目原文和 `fetch_id`；不通过、条目解析失败、少了当前参考价已有的档位或对它的 `Lost` 不为空，就开或更新 `price_change` 审核项，不发布，管理员确认后发布。
 - **核对**：其余数据集的条目与当前参考价按整张价目表比较，不一致开 `mismatch` 审核项，不改价。
-- **选价格来源**：改选就是一次发布，在同一个事务里完成：改 `price_source`，为新来源的每个币种发布一行（价目表与旧行相同也发布，`source` 变了），为新来源没有的币种各写一行撤下。所以改选之后每个币种的当前价都来自新来源，旧来源的币种不会留下来继续生效，计费在站点币种没有当前价时按汇率换算（见[计费的「定价」](../../docs/domains/billing.md#定价)）。新的价目表来自所选数据集的当前条目（要能解析，并且带有当前参考价的每一档），或者选 `official`、`manual` 时由操作带上（每个币种的价目表和证据，与 `PublishPrice` 的检查相同），至少一个币种；每张新价目表缺的项和等级（对 `Model.Reportable()` 的 `Missing`），当前每个币种的参考价也都缺，否则拒绝，改选不会悄悄丢掉 priority 这类等级的价格。选 `manual` 或 `official` 后，同步不再为它写行。
+- **选价格来源**：改选就是一次发布，在同一个事务里完成：改 `price_source`，为新来源的每个币种发布一行（价目表与旧行相同也发布，`source` 变了），为新来源没有的币种各写一行撤下。所以改选之后每个币种的当前价都来自新来源，旧来源的币种不会留下来继续生效，计费在站点币种没有当前价时按汇率换算（见[计费的「定价」](../../docs/domains/billing.md#定价)）。新的价目表来自所选数据集的当前条目（要能解析，并且带有当前参考价的每一档），或者选 `official`、`manual` 时由操作带上（每个币种的价目表和证据，与 `PublishPrice` 的检查相同），至少一个币种；每张新价目表对当前每个币种的参考价的 `Lost`（`r` 取 `Model.Reportable()`）都为空，否则拒绝，改选不会悄悄丢掉 priority 这类等级里已有的价格。选 `manual` 或 `official` 后，同步不再为它写行。
 - **发布**：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再经 `lock_models` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
 
 ## 不变量
@@ -139,7 +140,7 @@
 | 快照是数据库某一时刻的一致状态，新快照不会被旧快照覆盖 | 只读 Repeatable Read 加载、比较后替换；测试：两表读取之间插入并发提交，结果仍属同一时刻；两次构建逆序完成，留下的是新的 |
 | 快照陈旧超过上限就不再解析 | 见「快照」的陈旧上限；测试：revision 查询一直成功、全量加载一直失败，超过上限后返回 `ErrStale`、不就绪，成功发布后恢复 |
 | 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |
-| 参考价只来自模型选定的来源，手填不被同步覆盖；每个币种的当前价的 `source` 都等于模型的 `price_source` | 发布在锁住的模型行上比较 `price_source` 与发布的来源；改选在同一事务里为每个币种发布或撤下；测试：`manual` 模型在数据集改价后不变；同步与改选来源并发时，改选先提交则同步的发布被拒；官方来源有 CNY 和 USD、改选只有 USD 的数据集后，`CurrentPrices` 里没有 CNY；当前价有 priority、所选数据集没有时改选被拒；同价改选后 USD 的当前行是新的 `id`、`source` 是新来源 |
+| 参考价只来自模型选定的来源，手填不被同步覆盖；每个币种的当前价的 `source` 都等于模型的 `price_source` | 发布在锁住的模型行上比较 `price_source` 与发布的来源；改选在同一事务里为每个币种发布或撤下；测试：`manual` 模型在数据集改价后不变；同步与改选来源并发时，改选先提交则同步的发布被拒；官方来源有 CNY 和 USD、改选只有 USD 的数据集后，`CurrentPrices` 里没有 CNY；当前价的 priority 有输入、输出价只缺 `web_search`，所选来源的 priority 只有输出价或没有 priority 时，改选被拒；同价改选后 USD 的当前行是新的 `id`、`source` 是新来源 |
 | 超过阈值的改价不自动生效 | 自动发布先过安全阀；测试：阈值内的变化发布，超过的只开审核项，参考价不变；取数失败时保留最后的价格并告警，不换来源 |
 | 管理操作重试不重复生效 | 每个操作带 `op_key`，`change.op_key` UNIQUE，重试返回第一次的结果；测试：提交成功、响应丢失后重试 |
 | 过期的取数者写不进数据 | 租约加代次，提交前校验；测试：A 取数期间租约被 B 接管，A 提交失败 |
@@ -161,6 +162,7 @@ type ItemSet uint16                    // Item 的位集合
 type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账户的等级
 type ServiceTierSet uint8              // ServiceTier 的位集合
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
+type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0
 type Usage struct{ /* 各项数量、ServiceTier、不认识的用量 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
@@ -171,6 +173,7 @@ func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝�
 func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
+func (s Schedule) Lost(prev Schedule, r Reportable) []PricePoint     // 替换参考价前防退化
 func Normalize(name string) string
 
 type Snapshot struct{ /* 不可变 */ }
@@ -205,6 +208,7 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 - 每家的计价示例（缓存读 99,999 加输入 1 不换档、再加 1 换档；Gemini 缓存 200,000 加新输入 1 换档；Gemini 文本 190,000 加单独计价的图片 20,000 换档）写成用例。
 - 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
 - 服务等级与档位交叉的用例：标准档输出 2、长上下文 4，priority 输出 3、长上下文 5，四种组合各得其价；priority 没录 `cache_read` 时，priority 请求的缓存读被报告缺价，标准档请求不受影响，`Missing` 返回 priority；priority 漏写长上下文档或门槛与顶层不同的价目表被拒。
+- `Lost` 的表驱动用例：旧 priority 有输入、输出价只缺 `web_search`，新 priority 只有输出价时返回 priority 的 `input`，新价目表没有 priority 时返回 priority 的 `input` 和 `output`；旧价有 `reasoning`、新价没有但有 `output` 时为空；新价目表多一道门槛、高区间缺 `output` 时只返回高区间；新价目表去掉旧门槛时为空（基础价覆盖高区间，档位的丢失由自动发布另查）。自动发布的条目让 `Lost` 不为空时只开审核项，参考价不变。
 
 ## 决策与理由
 
