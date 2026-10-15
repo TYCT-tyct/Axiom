@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,15 +35,20 @@ var (
 	databases atomic.Int64
 )
 
-// New returns a database of its own for one test.
-func New(t testing.TB) Database {
+// New returns a database of its own for one test, migrated for platform and for the modules given, which a test of a
+// module passes, as cmd/axiom does for the program.
+func New(t testing.TB, modules ...pg.Module) Database {
 	t.Helper()
 	once.Do(func() { startErr = start(context.Background()) })
 	if startErr != nil {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
+	template, err := templateFor(t.Context(), modules)
+	if err != nil {
+		t.Fatalf("test database template: %v", err)
+	}
 	name := fmt.Sprintf("test_%d", databases.Add(1))
-	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE "+template,
 		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +57,40 @@ func New(t testing.TB) Database {
 		Migrator:  at("migrator", "migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
+}
+
+var (
+	templatesMu sync.Mutex
+	templates   = map[string]string{} // the modules' names, in order, to the template migrated for them
+)
+
+// templateFor is the template that holds platform's migrations and those of modules, made once per set of modules
+// from the platform template: copying beats migrating in every test. Migrate grants roles cluster-wide, so the
+// templates are made one at a time.
+func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
+	if len(modules) == 0 {
+		return "axiom_template", nil
+	}
+	names := make([]string, len(modules))
+	for i, m := range modules {
+		names[i] = m.Name
+	}
+	key := strings.Join(names, ",")
+	templatesMu.Lock()
+	defer templatesMu.Unlock()
+	if name, ok := templates[key]; ok {
+		return name, nil
+	}
+	name := fmt.Sprintf("axiom_template_%d", len(templates))
+	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		return "", err
+	}
+	if err := pg.Migrate(ctx, at("migrator", "migrator", name), modules...); err != nil {
+		return "", err
+	}
+	templates[key] = name
+	return name, nil
 }
 
 // Run executes statements one after another on a new connection to databaseURL.

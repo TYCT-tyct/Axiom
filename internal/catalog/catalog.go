@@ -1,0 +1,262 @@
+package catalog
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync/atomic"
+	"time"
+
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
+)
+
+// Config departs from the defaults only deliberately: they live here.
+type Config struct {
+	MaxStale  time.Duration // how long a snapshot may go unconfirmed before the node stops resolving; default 30s
+	PollEvery time.Duration // how often a node asks the database for the revision; default 5s
+	Logger    *slog.Logger  // default slog.Default()
+}
+
+// ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
+// MaxStale: a model taken down elsewhere must not be called here for long.
+var ErrStale = errors.New("the catalog snapshot is missing or stale")
+
+// Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
+type Catalog struct {
+	db    *pg.DB
+	scope pg.Scope
+	cfg   Config
+	now   func() time.Time
+	state atomic.Pointer[state]
+}
+
+// state is the snapshot and when the database last confirmed that its revision was the current one.
+type state struct {
+	snap      *Snapshot
+	confirmed time.Time
+}
+
+// Open returns a catalog with no snapshot yet: it is not ready until Refresh or Run has loaded one. MaxStale must
+// exceed PollEvery, or a healthy node would go stale between two polls.
+func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) {
+	cfg.MaxStale = cmpOr(cfg.MaxStale, 30*time.Second)
+	cfg.PollEvery = cmpOr(cfg.PollEvery, 5*time.Second)
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	if cfg.MaxStale <= cfg.PollEvery {
+		return nil, fmt.Errorf("catalog: the staleness limit %s must exceed the polling period %s", cfg.MaxStale, cfg.PollEvery)
+	}
+	return &Catalog{db: db, scope: scope, cfg: cfg, now: time.Now}, nil
+}
+
+func cmpOr(d, fallback time.Duration) time.Duration {
+	if d == 0 {
+		return fallback
+	}
+	return d
+}
+
+// Current returns the snapshot, or ErrStale. A request takes it once and uses it throughout.
+func (c *Catalog) Current() (*Snapshot, error) {
+	st := c.state.Load()
+	if st == nil || c.now().Sub(st.confirmed) > c.cfg.MaxStale {
+		return nil, ErrStale
+	}
+	return st.snap, nil
+}
+
+// Ready reports whether Current would give a snapshot.
+func (c *Catalog) Ready() bool {
+	_, err := c.Current()
+	return err == nil
+}
+
+// Run keeps the snapshot current until ctx ends: it loads at once, then asks for the revision every PollEvery. A
+// failed refresh is logged and leaves the old snapshot, which goes stale on its own if the failures last.
+func (c *Catalog) Run(ctx context.Context) error {
+	tick := time.NewTicker(c.cfg.PollEvery)
+	defer tick.Stop()
+	for {
+		if err := c.Refresh(ctx); err != nil && ctx.Err() == nil {
+			c.cfg.Logger.Error("catalog refresh failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+	}
+}
+
+// Refresh asks the database for the revision and loads a new snapshot if it changed. The snapshot is confirmed as of
+// the moment the revision was read, which is only before the read's answer.
+func (c *Catalog) Refresh(ctx context.Context) error {
+	asked := c.now()
+	var revision int64
+	if err := c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
+		revision, err = New().GetRevision(ctx, tx)
+		return err
+	}); err != nil {
+		return fmt.Errorf("catalog: read the revision: %w", err)
+	}
+	if st := c.state.Load(); st != nil && st.snap.revision == revision {
+		c.publish(st.snap, asked)
+		return nil
+	}
+	snap, loaded, err := c.load(ctx)
+	if err != nil {
+		return err
+	}
+	c.publish(snap, loaded)
+	return nil
+}
+
+// publish replaces the state with snap confirmed at the given time, if that is newer: a snapshot of a lower revision
+// never replaces a higher one, and one of the same revision only renews it.
+func (c *Catalog) publish(snap *Snapshot, confirmed time.Time) {
+	for {
+		old := c.state.Load()
+		if old != nil {
+			switch {
+			case old.snap.revision > snap.revision:
+				return
+			case old.snap.revision == snap.revision:
+				snap = old.snap
+				if !confirmed.After(old.confirmed) {
+					return
+				}
+			}
+		}
+		if c.state.CompareAndSwap(old, &state{snap, confirmed}) {
+			return
+		}
+	}
+}
+
+// load builds a snapshot from one repeatable-read transaction, so its tables are one moment of the database, and
+// returns when that transaction began. The platform scope reads retired models' names too.
+func (c *Catalog) load(ctx context.Context) (*Snapshot, time.Time, error) {
+	began := c.now()
+	var snap *Snapshot
+	err := c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
+		snap, err = readSnapshot(ctx, tx)
+		return err
+	})
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("catalog: load the snapshot: %w", err)
+	}
+	return snap, began, nil
+}
+
+func readSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
+	q := New()
+	revision, err := q.GetRevision(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	snap := &Snapshot{
+		revision: revision, models: map[ModelID]Model{}, names: map[string]nameEntry{},
+		prices: map[priceKey]ReferencePrice{},
+	}
+	models, err := q.ListModelsForSnapshot(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range models {
+		m, err := modelFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		snap.models[m.ID] = m
+		if m.Status == StatusListed {
+			snap.listed = append(snap.listed, m.ID)
+		}
+	}
+	sortModels(snap.listed)
+	names, err := q.ListNamesForSnapshot(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range names {
+		m := snap.models[ModelID(n.ModelID)]
+		snap.names[n.Norm] = nameEntry{
+			model:    m.ID,
+			public:   Visibility(n.Visibility) == VisibilityPublic,
+			retired:  m.Status == StatusRetired,
+			floating: m.VersionBasis == VersionFloating,
+			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
+		}
+	}
+	prices, err := q.ListCurrentPricesForSnapshot(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range prices {
+		p, err := priceFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		snap.prices[priceKey{p.Model, p.Currency}] = p
+	}
+	return snap, nil
+}
+
+func modelFromRow(row CatalogModel) (Model, error) {
+	spec, err := parseSpec(row.Spec)
+	if err != nil {
+		return Model{}, fmt.Errorf("model %s: %w", row.Slug, err)
+	}
+	return Model{
+		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
+		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
+		Spec: row.Spec, Rev: row.Rev, reportable: spec.reportable,
+	}, nil
+}
+
+func priceFromRow(row CatalogReferencePrice) (ReferencePrice, error) {
+	schedule, err := ParseSchedule(row.Schedule)
+	if err != nil {
+		return ReferencePrice{}, fmt.Errorf("reference price %s: %w", row.ID, err)
+	}
+	return ReferencePrice{
+		ID: row.ID, Model: ModelID(row.ModelID), Currency: row.Currency, Source: PriceSource(row.Source),
+		Schedule: schedule, PublishedAt: row.PublishedAt,
+	}, nil
+}
+
+// specJSON is the part of a model's spec the catalog reads itself: what the upstream may report. The rest of the
+// baseline is the spec's own business. Nil lists are left out, not empty.
+type specJSON struct {
+	Items *[]string `json:"items"`
+	Tiers *[]string `json:"tiers"`
+}
+
+type spec struct {
+	reportable Reportable
+	declared   bool // both lists are present, possibly empty
+}
+
+// parseSpec checks a spec is a JSON object whose items and tiers, if present, name billing items and service tiers.
+func parseSpec(raw []byte) (spec, error) {
+	var w specJSON
+	if err := jsonx.Unmarshal(raw, &w); err != nil {
+		return spec{}, fmt.Errorf("spec: %w", err)
+	}
+	var s spec
+	var err error
+	if w.Items != nil {
+		if s.reportable.Items, err = parseSet[Item](itemNames[:], *w.Items); err != nil {
+			return spec{}, fmt.Errorf("spec items: %w", err)
+		}
+	}
+	if w.Tiers != nil {
+		if s.reportable.ServiceTiers, err = parseSet[ServiceTier](serviceTierNames[:], *w.Tiers); err != nil {
+			return spec{}, fmt.Errorf("spec tiers: %w", err)
+		}
+	}
+	s.declared = w.Items != nil && w.Tiers != nil
+	return s, nil
+}

@@ -13,8 +13,8 @@
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi` | 由 `api/console.yaml` 生成的控制台接口类型和服务端接口，除包说明外不手写 |
-| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查 |
+| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；`Raw` 是原样保存的 JSON 值，给模块不解读、只存取的字段；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`ErrNoRows` 让不能导入 pgx 的模块分得清"没有这一行"和失败 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
@@ -155,7 +155,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 谁在何时对什么做了什么改动，记在 `platform.audit_log`，由 `audit.Record` 写入。所有模块都写这一张表，[运营](../../docs/domains/operations.md#审计)读取、检索和回放。它在平台，是因为 accounts、billing、catalog、payments 都要留审计，又都不能引用 `operations`。
 
-- **什么时候记**：改后台数据（设置、价格、额度、角色、凭证等）和领域文档要求留审计的操作，由做改动的模块在改动自己的事务里调用 `Record`，并把它的错误当作改动的错误返回：审计写不进，改动也不成立。目前还没有模块调用 `Record`，第一个调用方是 accounts。模块自己的改动历史（如 catalog 的 `change` 表）是它的领域数据，与审计日志互不替代；catalog 的管理操作是否另记审计日志待定，见 [catalog 的「决策与理由」](../catalog/README.md#决策与理由)。
+- **什么时候记**：改后台数据（设置、价格、额度、角色、凭证等）和领域文档要求留审计的操作，由做改动的模块在改动自己的事务里调用 `Record`，并把它的错误当作改动的错误返回：审计写不进，改动也不成立。第一个调用方是 catalog 的管理操作（`actor` 是 `audit.System("catalog.cli")`，`Actor.String()` 给出 `change` 表存的 `system:catalog.cli`），accounts 随后。模块自己的改动历史（如 catalog 的 `change` 表）是它的领域数据，与审计日志互不替代，管理操作两个都写，见 [catalog 的「决策与理由」](../catalog/README.md#决策与理由)。
 - **记什么**：
 
   | 列 | 内容 |
@@ -177,7 +177,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 测试
 
-`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
+`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行 platform 的迁移，做成模板；每个测试复制一个独立的库，可以并行。测试模块的代码时，`pgtest.New(t, 模块的 pg.Module…)` 用对应的模板：每组模块在第一次用到时从 platform 的模板复制并迁移一次（一次一个，因为迁移会改集群级的角色授权），之后同样按副本给每个测试。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
 
 ## 决策与理由
 
