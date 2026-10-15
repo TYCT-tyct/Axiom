@@ -8,8 +8,10 @@ SQL files, tests and migrations included, committed or new:
   appear, in any case. Matching the names alone, not axiom.<name>, keeps quoting, escapes and line breaks around the
   dot from hiding them.
 - SET ROLE and RESET ROLE (also SET LOCAL ROLE and SET SESSION ROLE, the role bare or quoted) fail in SQL files and in
-  Go string literals, as the database would read them: Go escapes decoded, and comments, white space and line breaks
-  between the words ignored. A statement inside a comment does nothing, so it does not fail.
+  Go string literals, as the database would read them: Go escapes decoded (and carriage returns dropped from raw
+  strings), strings read before comments (a comment marker inside a quote, an escape string or a dollar quote is
+  text), and comments, white space and line breaks between the words ignored. A statement inside a comment does
+  nothing, so it does not fail.
 
 SQL assembled at run time, or from adjacent string literals, is left to review.
 
@@ -29,9 +31,13 @@ ROLE_SWITCH = re.compile(r'\b(re)?set\s+((local|session)\s+)?"?role\b', re.IGNOR
 # inside either does not start a string.
 GO_TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|'(?:\\.|[^'\\\n])+'|(?P<string>"(?:\\.|[^"\\\n])*"|`[^`]*`)""", re.DOTALL)
 
-# What can hide a word in SQL. Outside a comment: line comments, quotes (inside which comment markers are text) and
-# the opener of a block comment. Inside one, which Postgres nests: only its openers and closers.
-OUTSIDE_COMMENT = re.compile(r"""--[^\n]*|/\*|'(?:''|[^'])*'|"(?:""|[^"])*\"""")
+# What can hide a word in SQL. Outside a comment: line comments, the opener of a block comment, and the quotes inside
+# which comment markers are text: escape strings (backslash escapes a quote), plain strings and quoted names (a
+# doubled quote is a quote), and dollar-quoted strings ($$...$$, $tag$...$tag$; a tag is not part of a longer name).
+# Inside a block comment, which Postgres nests: only its openers and closers.
+OUTSIDE_COMMENT = re.compile(
+    r"""--[^\n]*|/\*|(?<![\w$])[eE]'(?:\\.|''|[^'\\])*'|'(?:''|[^'])*'|"(?:""|[^"])*\""""
+    r"""|(?<![\w$])(?:\$\$(?P<plain>.*?)\$\$|\$(?P<tag>[A-Za-z_]\w*)\$(?P<tagged>.*?)\$(?P=tag)\$)""", re.DOTALL)
 INSIDE_COMMENT = re.compile(r"/\*|\*/")
 
 
@@ -62,6 +68,9 @@ def blank_comments(sql):
                 blank(start, pos)
         elif text.startswith("--"):
             blank(match.start(), pos)
+        elif text.startswith("$"):  # its body may be a DO block: comments inside it are comments
+            body = "plain" if match.group("plain") is not None else "tagged"
+            chars[match.start(body):match.end(body)] = blank_comments(match.group(body))
     return "".join(chars)
 
 
@@ -70,7 +79,7 @@ def sql_texts(path, source):
     if path.endswith(".sql"):
         return [(1, source)]
     literals = [(token.start(), token.group("string")) for token in GO_TOKEN.finditer(source) if token.group("string")]
-    return [(source.count("\n", 0, start) + 1, literal[1:-1] if literal[0] == "`" else ast.literal_eval(literal))
+    return [(source.count("\n", 0, start) + 1, literal[1:-1].replace("\r", "") if literal[0] == "`" else ast.literal_eval(literal))
             for start, literal in literals]
 
 
