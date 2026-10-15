@@ -14,11 +14,8 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/suppliers"
 )
-
-// modules are the modules that own tables, in no particular order: pg runs their migrations in the order of the
-// dependency table. A module with migrations is listed here and nowhere else.
-func modules() []pg.Module { return []pg.Module{observability.Module()} }
 
 // The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
 // README「并发、背压与共享状态」), so a request waits for room only when the database is far behind; batches
@@ -124,6 +121,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 			return nil, noAnswer // pgx reports only that the context ended
 		}
 		return nil, fmt.Errorf("database: %w", err)
+	}
+	if err := suppliers.CheckAdapters(ctx, db, pg.PlatformScope()); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return db, nil
 }

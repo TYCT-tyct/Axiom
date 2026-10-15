@@ -62,6 +62,15 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 // Close waits for borrowed connections to come back and closes the pool.
 func (db *DB) Close() { db.pool.Close() }
 
+// SQLState is the SQLSTATE code of the PostgreSQL error in err's chain, or "" when there is none. Modules tell a
+// conflict or a refused row from other failures by it without importing pgx.
+func SQLState(err error) string {
+	if e, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return e.Code
+	}
+	return ""
+}
+
 // Scope is the set of rows a transaction may see and write: every row, the rows of some sites, the rows of some
 // accounts, or any union of these. The zero value is the empty set.
 type Scope struct {
@@ -241,6 +250,6 @@ func uuidArray(ids []uuid.UUID) string {
 // retries failures retries only the second kind: the first never succeeds, and retrying it would hold up every row
 // behind it.
 func IsDataError(err error) bool {
-	e, ok := errors.AsType[*pgconn.PgError](err)
-	return ok && (strings.HasPrefix(e.Code, "22") || strings.HasPrefix(e.Code, "23"))
+	code := SQLState(err)
+	return strings.HasPrefix(code, "22") || strings.HasPrefix(code, "23")
 }

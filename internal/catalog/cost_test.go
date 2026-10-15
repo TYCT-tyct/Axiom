@@ -167,6 +167,36 @@ func TestCostServiceTiers(t *testing.T) {
 	}
 }
 
+// Ceiling bounds the price of any split of a prompt of at most length tokens: every band up to length's, not only
+// its own, since a tier may be cheaper than the base; every requested service tier; reasoning at output's price.
+func TestCeiling(t *testing.T) {
+	tiers := mustParse(t, serviceTiers)
+	cheaper := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"3"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"1"}}]}}`)
+	standard, priority := catalog.ServiceTierSet(1<<catalog.ServiceTierStandard), catalog.ServiceTierSet(1<<catalog.ServiceTierPriority)
+	for _, tc := range []struct {
+		name   string
+		s      catalog.Schedule
+		items  catalog.ItemSet
+		tiers  catalog.ServiceTierSet
+		length int64
+		want   string // empty: no price
+	}{
+		{"at the threshold", tiers, 1 << out, standard, 10, "2"},
+		{"above it", tiers, 1 << out, standard, 11, "4"},
+		{"reasoning at output's price", tiers, 1 << reasoning, standard, 11, "4"},
+		{"the dearest item and service tier", tiers, 1<<in | 1<<out, standard | priority, 11, "5"},
+		{"a cheaper tier keeps the base price", cheaper, 1 << in, standard, 11, "3"},
+		{"an item the tier does not price", tiers, 1 << cacheRead, priority, 0, ""},
+		{"a tier the schedule does not offer", tiers, 1 << in, 1 << catalog.ServiceTierFlex, 0, ""},
+	} {
+		got, ok := tc.s.Ceiling(tc.items, tc.tiers, tc.length)
+		if want, _ := new(big.Rat).SetString(tc.want); ok != (tc.want != "") || ok && got.Mul(1).Rat().Cmp(want) != 0 {
+			t.Errorf("%s: Ceiling = %v, %v; want %q", tc.name, got, ok, tc.want)
+		}
+	}
+}
+
 func members(s catalog.ItemSet) []catalog.Item {
 	var items []catalog.Item
 	for it := range catalog.NumItems {

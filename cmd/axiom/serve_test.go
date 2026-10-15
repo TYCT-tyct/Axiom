@@ -92,6 +92,12 @@ func checkMetrics(t *testing.T, addrs addresses) {
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
 	database := pgtest.New(t, modules()...)
+	orphaned := pgtest.New(t, modules()...)
+	if err := pgtest.Run(t.Context(), orphaned.Superuser, `INSERT INTO suppliers.suppliers (owner_scope, name, kind,
+		origin, upstream_account, native_unit, settlement_currency, mgmt_egress_id)
+		VALUES ('platform', 'Orphan', 'ghost', 'https://ghost.example', 'a', 'usd', 'USD', 'direct')`); err != nil {
+		t.Fatal(err)
+	}
 	// taken is bound but never accepts: the system still completes connections to it, which then hear nothing, as
 	// from a database server that has stalled.
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -122,6 +128,11 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			"a database login that escapes row-level security",
 			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
 			[]string{"database: the database login can act as roles that row-level security cannot hold"},
+		},
+		{
+			"a supplier whose adapter this program lacks",
+			[]string{"AXIOM_DATABASE_URL=" + orphaned.App},
+			[]string{`"Orphan" (kind "ghost")`},
 		},
 		{
 			"a database server that never answers",
