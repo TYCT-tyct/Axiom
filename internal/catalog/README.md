@@ -69,7 +69,8 @@
 - 守恒：输入侧各项之和等于上游报告的提示词总量；输出侧各项之和等于上游报告的输出总量。测试断言这两条。Anthropic 没有单独的提示词总量字段，按 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 算（Anthropic《Prompt caching》）。
 - OpenAI 的总输入同时包含缓存读和缓存写，写入价替代普通输入价而不是叠加（OpenAI《Prompt caching》）。例：`input_tokens=12000, cached_tokens=0, cache_write_tokens=12000` → `input` 0、`cache_write` 12,000，分档门槛求和 12,000，费用只含写入价。没有写入计费的模型不报这个字段，按 0。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
-- 待核对：OpenAI 两种格式的确切字段路径（Chat 是 `prompt_tokens_details.*`、`completion_tokens_details.*`，Responses 是 `input_tokens_details.*`、`output_tokens_details.*`）、图片输出和联网搜索的计数字段，以及 Gemini 的 `promptTokenCount` 是否包含缓存、按模态的明细是否包含缓存（Gemini API《UsageMetadata》）。价目表的 PR 按原文核对后写进测试。
+- 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（Chat 的缓存写入和两种格式的音频字段路径、图片输出和联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
+- **代码执行不是计费项**：没有一家按次收费。Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14）；用量里也没有时长。所以上游报告的代码执行用量（如 Anthropic 的 `server_tool_use.code_execution_requests`）进 `Unknown()`，按「价目表缺项」处理，直到有一家的计法能从用量算出来。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage.ServiceTier` 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档。
 - 免单判断用 `Usage.OutputTotal()`（`output + reasoning`），只看 `output` 会把只有推理的回复误判为零输出。
@@ -89,7 +90,7 @@
 - **门槛一致**：每个等级的 `ContextTiers` 的门槛必须与顶层的门槛逐个相同，不换价的档位写空的 `Rates`。否则 `ParseSchedule` 拒绝：等级漏写长上下文档时，长请求会按该等级的基础价算低。
 - 价目表没列出的等级就是没有它的价格。例：标准档输出 2、200k 以上 4，priority 输出 3、200k 以上 5，priority 的长请求输出按 5 计。
 
-「价目表的结构」里的超出部分按档和倍率型条件，随第一个需要它的价目表带着完整的规则加入；在那之前 `ParseSchedule` 拒绝它们和任何不认识的条件类型（所以没有分时段价格），也拒绝门槛不递增、有档位却没有 `TierBasis`、服务等级的门槛与顶层不同、等级重复或写成标准档。拒绝的是价目表，不是请求：需要它们的成本计划，端点不使用（见[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)）；需要它们的数据集条目，不能被选为价格来源。
+「价目表的结构」里的超出部分按档和倍率型条件，随第一个需要它的价目表带着完整的规则加入；在那之前 `ParseSchedule` 拒绝它们和任何不认识的条件类型（所以没有分时段价格），也拒绝门槛不递增、有档位却没有 `TierBasis`、服务等级的门槛与顶层不同、等级重复或写成标准档。快速模式就是服务等级 `fast`，用一整套单价表达，不用倍率。计法在存储里写明（`"method":"whole"`），不靠默认。拒绝的是价目表，不是请求：需要它们的成本计划，端点不使用（见[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)）；需要它们的数据集条目，不能被选为价格来源。
 
 ### 上架门槛与缺项
 
@@ -108,7 +109,19 @@
 
 ### 存储
 
-规范 JSON：键排序、单价写成十进制字符串、带 `"v":1`，另存 SHA-256。suppliers 和 billing 在各自的表里存同样的 jsonb，写入前都经 `catalog.ParseSchedule`；比较和幂等都是字节比较。
+规范 JSON，另存 SHA-256。suppliers 和 billing 在各自的表里存同样的 jsonb，写入前都经 `catalog.ParseSchedule`；比较和幂等都是对 `MarshalJSON` 输出的字节比较。jsonb 不保留成员顺序和写法，从数据库读回的文本要先 `ParseSchedule` 再 `MarshalJSON`，不能直接比较。
+
+```json
+{"context_tiers":{"basis":["input","cache_read","audio_in","image_in"],"method":"whole","tiers":[{"above":200000,
+"rates":{"cache_read":"0.00000025","input":"0.0000025","output":"0.000015"}}]},"currency":"USD",
+"rates":{"cache_read":"0.000000125","input":"0.00000125","output":"0.00001"},"v":1}
+```
+
+（Gemini 2.5 Pro，2026-10-14；规范形式没有换行，这里为排版折行。）
+
+- 成员：`v`（版本，现在是 1）、`currency`、`rates`（标准档的计费项 → 每计费单位的单价）、可选的 `context_tiers`（`basis`、`method`、按 `above` 严格递增的 `tiers`）、可选的 `service_tiers`（等级名 → 该等级的 `rates` 和 `context_tiers`，后者是与顶层门槛逐个相同的 `tiers`）。每一处的 `rates` 都必须写，可以是 `{}`；每一档都必须写 `above`。
+- 规范形式：由 `platform/jsonx.MarshalCanonical` 写出，成员按 RFC 8785 排序，整数原样；单价写成 `UnitPrice` 的规范文本（十进制字符串，不用 JSON 数字，免得经过浮点），列表按枚举顺序。
+- 拒绝未知成员和重复成员（`platform/jsonx.UnmarshalStrict`）：读到不认识的条件就报错，而不是忽略后按基础价算。
 
 ## 快照
 
@@ -158,7 +171,7 @@ package catalog // internal/catalog
 
 type ModelID uuid.UUID
 type Item uint8                        // 封闭枚举
-type ItemSet uint16                    // Item 的位集合
+type ItemSet = set[Item]               // Item 的位集合（16 位），Has 判断成员；NumItems 是 Item 的个数
 type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账户的等级
 type ServiceTierSet uint8              // ServiceTier 的位集合
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
@@ -201,7 +214,7 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 ## 测试
 
 - 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
-- 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、0 到 1000 的单价）和 0 到 10¹⁰ 的用量，与独立的模型比较选档、沿用基础价、推理按输出价、缺价报错和总额。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
+- 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、每个服务等级随机有无价格、0 到 1000 的单价）、随机的服务等级和 0 到 10¹⁰ 的用量，与独立的模型比较选等级、选档、沿用该等级的基础价、推理按输出价、缺价的项和已定价部分的总额。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
 - `ResolvePublic`（包括需要归一化的名字，如 `claude-sonnet-4.5`）和 `Cost` 有零分配的基准测试：归一化写进栈上的缓冲区，用 `m[string(buf)]` 查 map，Go 对这种写法不分配。
 - 名字解析的用例：含 `:` 的名字（包括 `:free`）返回"模型不存在"，不落到基础模型；下线模型的公开名字返回 `ErrRetired`，它也不出现在 `Models()` 里；绑定到固定版本模型的不带日期名字，`Recognize` 得到 `Exact=false`，`ResolvePublic` 仍得到原来的版本。
 - 数据集数字的用例：`3e-06` 与 `0.000003` 得到同一个 `UnitPrice`，全程不经 float64；指数超出 ±30、展开后超过 15 位小数的条目被拒。
