@@ -28,6 +28,7 @@ const (
 	in, cacheRead, cacheWrite, cacheWrite1h = catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h
 	audioIn, imageIn, audioOut, imageOut    = catalog.ItemAudioIn, catalog.ItemImageIn, catalog.ItemAudioOut, catalog.ItemImageOut
 	out, reasoning, webSearch               = catalog.ItemOutput, catalog.ItemReasoning, catalog.ItemWebSearch
+	codeExec                                = catalog.ItemCodeExecution
 )
 
 func TestCost(t *testing.T) {
@@ -42,7 +43,7 @@ func TestCost(t *testing.T) {
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"2"}},{"above":20,"rates":{"input":"3"}}]}}`
 	all := `{"v":1,"currency":"USD","rates":{"input":"1000","cache_read":"1000","cache_write":"1000",
 		"cache_write_1h":"1000","audio_in":"1000","image_in":"1000","output":"1000","reasoning":"1000","audio_out":"1000",
-		"image_out":"1000","web_search":"1000"}}`
+		"image_out":"1000","web_search":"1000","code_execution":"1000"}}`
 	// Gemini 2.5 Pro's tiers with an image price of its own, as Gemini 3.6 Flash prices images apart from text: the
 	// image tokens split out of the prompt still count toward the 200k threshold. The image prices are made up.
 	geminiImages := `{"v":1,"currency":"USD","rates":{"input":"0.00000125","image_in":"0.000002","output":"0.00001"},
@@ -80,8 +81,8 @@ func TestCost(t *testing.T) {
 		{"audio at its own prices", audio, counts{in: 1, audioIn: 2, out: 3, audioOut: 4}, "107"},
 		{"the largest cost", all, counts{
 			in: 1e10, cacheRead: 1e10, cacheWrite: 1e10, cacheWrite1h: 1e10, audioIn: 1e10,
-			imageIn: 1e10, out: 1e10, reasoning: 1e10, audioOut: 1e10, imageOut: 1e10, webSearch: 1e10,
-		}, "110000000000000"},
+			imageIn: 1e10, out: 1e10, reasoning: 1e10, audioOut: 1e10, imageOut: 1e10, webSearch: 1e10, codeExec: 1e10,
+		}, "120000000000000"},
 	} {
 		got, missing, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
 		want, _ := new(big.Rat).SetString(tc.want)
@@ -118,6 +119,7 @@ func TestCostMissing(t *testing.T) {
 		{inputOnly, counts{in: 5, audioOut: 1}, "5", []catalog.Item{audioOut}},
 		{inputOnly, counts{in: 5, imageOut: 1}, "5", []catalog.Item{imageOut}},
 		{inputOnly, counts{in: 5, webSearch: 1}, "5", []catalog.Item{webSearch}},
+		{inputOnly, counts{in: 5, codeExec: 1}, "5", []catalog.Item{codeExec}},
 		{outputOnly, counts{out: 5, audioOut: 1}, "5", []catalog.Item{audioOut}}, // audio output is not output
 		{inputOnly, counts{in: 5, out: 1, webSearch: 2, cacheRead: 0}, "5", []catalog.Item{out, webSearch}},
 		{geminiNoCache, counts{cacheRead: 200_000, in: 1, out: 1000}, "0.0150025", []catalog.Item{cacheRead}},

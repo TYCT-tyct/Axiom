@@ -109,6 +109,7 @@ func TestParseScheduleRejects(t *testing.T) {
 		"no basis":                             {`"basis":["input"]`, `"basis":[]`},
 		"output in basis":                      {`"basis":["input"]`, `"basis":["input","output"]`},
 		"web search in basis":                  {`"basis":["input"]`, `"basis":["input","web_search"]`},
+		"code execution in basis":              {`"basis":["input"]`, `"basis":["input","code_execution"]`},
 		"audio out in basis":                   {`"basis":["input"]`, `"basis":["input","audio_out"]`},
 		"image out in basis":                   {`"basis":["input"]`, `"basis":["input","image_out"]`},
 		"no tiers":                             {`"tiers":[{"above":10,"rates":{"input":"0.000002"}},{"above":20,"rates":{"input":"0.000003"}}]`, `"tiers":[]`},

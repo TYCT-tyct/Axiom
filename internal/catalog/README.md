@@ -64,13 +64,14 @@
 | `audio_in` / `audio_out` | token | 输入、输出详情里的 `audio_tokens` | — | `promptTokensDetails` 里模态为 `AUDIO` 的数量 / — |
 | `image_in` / `image_out` | token | — / 图片生成的输出 token | — | 单独定价时，`promptTokensDetails` 里模态为 `IMAGE`、`VIDEO` 的数量 / — |
 | `web_search` | 次 | 待核对 | `server_tool_use.web_search_requests` | 待核对 |
+| `code_execution` | 次 | 待核对 | `server_tool_use.code_execution_requests` | 待核对 |
 
 - 只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。视频没有自己的计费项，计入 `image_in`。例如 Gemini 2.5 Flash 的音频输入每百万 $1.00、文本 $0.30，Gemini 3.6 Flash 的图片和视频每百万 $1.00、文本 $0.75（Gemini 定价页，2026-10-14）。
 - 守恒：输入侧各项之和等于上游报告的提示词总量；输出侧各项之和等于上游报告的输出总量。测试断言这两条。Anthropic 没有单独的提示词总量字段，按 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 算（Anthropic《Prompt caching》）。
 - OpenAI 的总输入同时包含缓存读和缓存写，写入价替代普通输入价而不是叠加（OpenAI《Prompt caching》）。例：`input_tokens=12000, cached_tokens=0, cache_write_tokens=12000` → `input` 0、`cache_write` 12,000，分档门槛求和 12,000，费用只含写入价。没有写入计费的模型不报这个字段，按 0。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
 - 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（Chat 的缓存写入和两种格式的音频字段路径、图片输出和联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
-- **代码执行不是计费项**：没有一家按次收费。Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14）；用量里也没有时长。所以上游报告的代码执行用量（如 Anthropic 的 `server_tool_use.code_execution_requests`）进 `Unknown()`，按「价目表缺项」处理，直到有一家的计法能从用量算出来。
+- **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是按这些计法折算的近似值。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage.ServiceTier` 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档。
 - 免单判断用 `Usage.OutputTotal()`（`output + reasoning`），只看 `output` 会把只有推理的回复误判为零输出。

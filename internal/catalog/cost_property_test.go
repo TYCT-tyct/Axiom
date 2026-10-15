@@ -36,7 +36,7 @@ func FuzzCost(f *testing.F) {
 }
 
 // items lists every billing item in enumeration order.
-var items = [...]catalog.Item{in, cacheRead, cacheWrite, cacheWrite1h, audioIn, imageIn, out, reasoning, audioOut, imageOut, webSearch}
+var items = [...]catalog.Item{in, cacheRead, cacheWrite, cacheWrite1h, audioIn, imageIn, out, reasoning, audioOut, imageOut, webSearch, codeExec}
 
 // allServiceTiers lists every service tier in enumeration order, so a seed draws the same case every run.
 var allServiceTiers = [...]catalog.ServiceTier{

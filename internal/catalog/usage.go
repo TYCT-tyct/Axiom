@@ -20,14 +20,15 @@ const (
 	ItemReasoning
 	ItemAudioOut
 	ItemImageOut
-	ItemWebSearch // counted in searches, not tokens
+	ItemWebSearch     // counted in searches, not tokens
+	ItemCodeExecution // counted in calls, not tokens
 	NumItems
 )
 
 // itemNames are the items' names in stored price schedules, so they never change.
 var itemNames = [NumItems]string{
 	"input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in",
-	"output", "reasoning", "audio_out", "image_out", "web_search",
+	"output", "reasoning", "audio_out", "image_out", "web_search", "code_execution",
 }
 
 func (it Item) String() string { return itemNames[it] }
