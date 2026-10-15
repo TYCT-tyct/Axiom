@@ -135,7 +135,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ### 迁移
 
-- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`，由它同样传给 `pg.Migrate` 和 `DB.Check`。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
+- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Migrations()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。

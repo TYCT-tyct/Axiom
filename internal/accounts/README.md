@@ -25,13 +25,13 @@
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
-| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`name`、`status`、`key_prefix`、`registration`（invite / closed；open 等人机验证）、`default_tier_id` | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
-| `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | | 站点 | `disabled_at` |
-| `site_settings` | `site_id`（主键）；可空的会话时长、尝试上限、新 key 的每日花费上限 | 每列有上下界；空表示用代码里的默认值 | 站点 | 全部参数列 |
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
+| `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`；尝试上限随登录加入 | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；空表示用代码里的默认值 | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
-| `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；默认角色由迁移写入 | 平台 | `permissions`（M1 只经迁移） |
-| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)` | 账户 | `name`、`status`、`tier_id` |
-| `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空 | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
+| `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`（M1 只经迁移） |
+| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id` |
+| `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_sealed`、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、`totp_sealed`、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`；部分唯一 `(account_id) WHERE account_kind = 'personal'`；`role_id → roles` | 账户 | 无（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
@@ -43,6 +43,7 @@
 - **授予每种目标一张表**：账户角色在 `members.role_id`，平台角色在 `platform_grants`；站点员工、工作区角色以后各加一张。每张表的外键都直接，不需要一张多态表靠条件约束拼归属。
 - `members` 在 M1 只有个人账户的主人一行，按所属账户归类即可。企业账户的成员要读到自己在别的账户里的成员关系，怎么分类随企业账户确定（待定）。
 - 新账户的 `tier_id` 取 `invite_tenant` 在库里读出的 `default_tier_id`（M2 的开放注册同样在库里读出），之后与默认等级无关。不取快照：快照可能晚 30 秒，而写进账户的等级以后不会再改。
+- 名字（站点、等级、角色、账户、工作区）1 到 100 个字符。
 - 新 key 的 `spend_limit` 取 `site_settings` 的每日上限（空则用代码默认值），`limit_reset = daily`；用户可以改成别的值或不设。
 
 ### 行级安全的写法
@@ -57,7 +58,7 @@
 
 ## ID
 
-- 库里和 Go 里都是 `uuid.UUID`；每种实体一个命名类型（`SiteID`、`AccountID`、`WorkspaceID`、`UserID`、`KeyID`…），不能互相赋值。
+- 库里是 `uuid`；Go 里每种实体一个以 `uuid.UUID` 为底层的命名类型（`SiteID`、`TierID`、`AccountID`、`WorkspaceID`，以后 `UserID`、`KeyID`…），不能互相赋值，pgx 直接按 `uuid` 读写。对外写成 `id.TypeID()`，读回用 `ParseSiteID` 等，别的种类的 ID 报 `typeid.ErrInvalid`。
 - 对外用 TypeID 规范 v0.3.0（github.com/jetify-com/typeid，2026-10 查）：`前缀_` 加 26 个小写的 Crockford base32 字符。前缀 `site`、`tier`、`acct`、`ws`、`user`、`key`、`sess`。编解码在 `platform/typeid`，前缀由各实体的所属模块定义。
 - 只在 HTTP 边界转换：ID 类型不实现 `TextMarshaler`，pgx 和 JSON 都不会意外用到另一种写法。格式不对与不存在返回同样的 404。
 
@@ -216,3 +217,4 @@ func (s *Service) Authorize(p Principal, perm Permission, t Target) (pg.Scope, e
 | 注册用只覆盖新账户的范围 | 注册拿不到别人的数据 | 用站点范围包住注册：能读写全站用户 |
 | 安全参数默认值在代码，按站点的运行值在 `site_settings`，按节点的在环境变量 | 安全措施要能配置（[安全的「要求」](../../docs/security.md#要求)），M1 就能改 | 写死到以后：违反要求；通用配置链：M1 用不到它的分层合并 |
 | 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |
+| 每种 ID 各写 `TypeID` 和 `Parse…ID`，不用泛型 | 每种只多一个类型和两个短函数，类型名和报错直接是 `SiteID`；前缀在本模块，一眼能对上 | `ID[K]` 加每种一个标记类型：省不了几行，读的人要多绕一层 |
