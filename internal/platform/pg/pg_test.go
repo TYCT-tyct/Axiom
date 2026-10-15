@@ -137,8 +137,8 @@ func TestScopeIsASet(t *testing.T) {
 		want  []string
 	}{
 		{"platform", pg.NewScope(true, nil, nil), sorted(account1, account2, account3, account4)},
-		{"one site", pg.NewScope(false, []uuid.UUID{site1}, nil), sorted(account1, account2)},
-		{"one account", pg.NewScope(false, nil, []uuid.UUID{account3}), sorted(account3)},
+		{"one site", pg.SiteScope(site1), sorted(account1, account2)},
+		{"one account", pg.AccountScope(account3), sorted(account3)},
 		{
 			"a site and an account of another site",
 			pg.NewScope(false, []uuid.UUID{site1}, []uuid.UUID{account3}),
