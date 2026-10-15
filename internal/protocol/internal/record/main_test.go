@@ -69,24 +69,27 @@ func requestFile(t *testing.T, request string) string {
 // the same placeholder across both files, and the result passes the samples test.
 func TestRecord(t *testing.T) {
 	samples := filepath.Join("..", "..", "testdata")
-	toolID := "toolu_01T1x1fJ34qAmk2tNTrN7Up6"
+	toolID, chatID := "toolu_01T1x1fJ34qAmk2tNTrN7Up6", "chatcmpl-"+strings.Repeat("A1", 12)
 	opaque := `"gAAsk-` + strings.Repeat("a", 24) + `"` // "sk-" inside base64url, as in encrypted reasoning
 	for _, tc := range []struct {
 		format, sample, request, ids string // ids: original and placeholder pairs, for both files
 		crlf                         bool
 	}{
 		{
-			"messages", "tool-use", `{"stream":true,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + toolID + `"}]}]}`,
+			"messages", "tool-use", `{"stream":true,"tools":[{"name":"call_weather","input_schema":{"properties":{"msg_text":{}}}}],` +
+				`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + toolID + `"}]}]}`,
 			toolID + " toolu_1 msg_014p7gG3wDgGV9EUtLvnow3U msg_1", false,
 		},
 		{
 			"responses", "text", `{"stream":true,"input":"Hello!","metadata":{"blob":` + opaque + `}}`,
 			"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654 resp_1 msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654 msg_1", false,
 		},
-		{"chat", "text", `{"stream":true,"messages":[]}`, "chatcmpl-123 chatcmpl-1", true},
+		{"chat", "text", `{"stream":true,"messages":[]}`, chatID + " chatcmpl-1", true},
 	} {
 		t.Run(tc.format, func(t *testing.T) {
 			stream := string(file(t, filepath.Join(samples, tc.format, tc.sample), "upstream.sse"))
+			// The official example's chatcmpl-123 is shorter than any real ID; give it a real one's length.
+			stream = strings.ReplaceAll(stream, "chatcmpl-123", chatID)
 			if tc.crlf {
 				stream = strings.ReplaceAll(stream, "\n", "\r\n")
 			}

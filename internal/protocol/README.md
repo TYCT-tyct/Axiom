@@ -56,7 +56,7 @@
 
 - **上游**：地址和 key 取自环境变量，没设的再从仓库根目录的 `.env` 读（git 忽略它，变量见 `.env.example`）。变量名和地址写法与两家 SDK 相同：`messages` 用 `ANTHROPIC_BASE_URL`（主机，路径补 `/v1/messages`）、`ANTHROPIC_API_KEY`；`responses`、`chat` 用 `OPENAI_BASE_URL`（以 `/v1` 结尾，路径补 `/responses`、`/chat/completions`）、`OPENAI_API_KEY`。
 - **发出前拒绝**：格式不认识、场景名不合规、样本目录已存在（从不覆盖）、没有地址或 key、请求不是严格 JSON 或没有 `"stream": true`、请求里有 key。
-- **ID 替换**：两个文件里整个 JSON 字符串是上游 ID 的（前缀 `chatcmpl-`、`msg_`、`toolu_`、`srvtoolu_`、`req_`、`resp_`、`rs_`、`fc_`、`call_`、`ws_`），按出现顺序换成前缀加序号，如 `msg_1`；同一个 ID 在两个文件里换成同一个占位值，不同的 ID 不会撞上。只替换整个字符串，所以正文里提到的 ID、工具参数里转义过的字符串不动，其余字节原样。录到新前缀的 ID 时，把前缀加进 `upstreamID`。签名、`encrypted_content` 是要测的不透明数据，不替换。
+- **ID 替换**：两个文件里整个 JSON 字符串是上游 ID 的（前缀 `chatcmpl-`、`msg_`、`toolu_`、`srvtoolu_`、`req_`、`resp_`、`rs_`、`fc_`、`call_`、`ws_`），前缀后至少 16 个字符（真实 ID 都在 24 个以上，`call_weather` 这类以前缀开头的名字因此不动），按出现顺序换成前缀加序号，如 `msg_1`；同一个 ID 在两个文件里换成同一个占位值，不同的 ID 不会撞上。只替换整个字符串，所以正文里提到的 ID、工具参数里转义过的字符串不动，其余字节原样。录到新前缀的 ID 时，把前缀加进 `upstreamID`。签名、`encrypted_content` 是要测的不透明数据，不替换。
 - **key**：配置的 key 原文，或词首的 `sk-` 加 20 个以上 key 字符（两家 key 的格式；base64url 中间偶然出现的 `sk-` 不算），出现在请求里就不发，出现在要写的任何文件里就不写。
 - **写盘**：上游返回非 200、流读不完或超过 64 MiB、`Sample` 不通过，都不写；写到一半失败就删掉样本目录。录完把上游是谁（官方或哪家中转站）、用的模型版本补进 `note`。
 

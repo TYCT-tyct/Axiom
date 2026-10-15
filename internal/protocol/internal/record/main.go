@@ -59,8 +59,9 @@ var (
 	keyLike = regexp.MustCompile(`(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}`)
 	// upstreamID matches a JSON string that is wholly an ID an upstream generates, by the prefixes the three formats'
 	// references use. Matching whole strings leaves text that merely mentions an ID alone, and an escaped quote inside
-	// a string, as in tool arguments, cannot open or close a match.
-	upstreamID = regexp.MustCompile(`"(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)[A-Za-z0-9_-]+"`)
+	// a string, as in tool arguments, cannot open or close a match. Real IDs carry 24 or more characters after the
+	// prefix; the floor of 16 keeps names that merely start like one, such as a tool call_weather or a key msg_text.
+	upstreamID = regexp.MustCompile(`"(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)[A-Za-z0-9_-]{16,}"`)
 )
 
 func main() {
