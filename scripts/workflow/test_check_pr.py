@@ -51,6 +51,8 @@ class DescribeTest(unittest.TestCase):
             "Refs #12. It does not close #12.": False,
             "This Fixes: #3 as well": False,
             "No longer resolves owner/repo#7": False,
+            "Closes https://github.com/owner/repo/issues/8": True,
+            "This does not close https://github.com/owner/repo/issues/8": False,
             "`It does not` close #12.": False,
             "Code counts: `does not close #24`": False,
             "<!-- does not close #24 -->": False,

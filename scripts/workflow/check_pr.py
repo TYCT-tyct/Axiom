@@ -21,7 +21,8 @@ TITLE_CHARS = 72
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # GitHub closes an issue on merge wherever a keyword precedes a reference to it, even in "does not close #12". The check
 # reads the raw text: GitHub skips code and comments, but telling them apart takes a Markdown parser, and quoting is rare.
-CLOSING =re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+(?:[\w.-]+/[\w.-]+)?#[0-9]+", re.IGNORECASE)
+CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+"
+                     r"(?:(?:[\w.-]+/[\w.-]+)?#[0-9]+|https?://github\.com/[\w.-]+/[\w.-]+/issues/[0-9]+)", re.IGNORECASE)
 LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|[0-9]+[.)])[ \t]*)*")  # indentation and list or quote markers
 SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
 TEMPLATE = Path(__file__).resolve().parents[2] / ".github" / "pull_request_template.md"
