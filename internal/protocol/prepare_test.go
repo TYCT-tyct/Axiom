@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"encoding/json/jsontext" //nolint:depguard // the oracle keeps members raw, which jsonx's Go values cannot; jsonx still decodes
 	"errors"
 	"fmt"
 	"slices"
@@ -163,6 +164,7 @@ var prepareRejects = []struct {
 	{"include not an array", protocol.Responses, false, `{"model":"m","include":"x"}`, "include is not an array", true},
 	{"include holds a number", protocol.Responses, false, `{"model":"m","include":["x",1]}`, "include is not a string", true},
 	{"metadata not an object", protocol.Messages, false, `{"model":"m","metadata":"x"}`, "metadata is not an object", true},
+	{"user id not a string", protocol.Messages, false, `{"model":"m","metadata":{"user_id":1}}`, "user_id is not a string", true},
 	{"input a number", protocol.Responses, true, `{"model":"m","previous_response_id":"r","input":1}`, "input is not", true},
 }
 
@@ -193,6 +195,9 @@ func FuzzPrepare(f *testing.F) {
 	for _, c := range prepareRejects {
 		f.Add(uint8(c.format), []byte(c.body))
 	}
+	// Numbers no float64 holds, which Prepare passes on as written.
+	f.Add(uint8(protocol.Messages), []byte(`{"model":"m","metadata":{"user_id":"u","n":1e1000}}`))
+	f.Add(uint8(protocol.Responses), []byte(`{"model":"m","include":["x"],"n":1e1000}`))
 	f.Fuzz(func(t *testing.T, format uint8, body []byte) {
 		fm := protocol.Format(format % 2)
 		r, err := protocol.Inspect(fm, body)
@@ -220,25 +225,38 @@ func FuzzPrepare(f *testing.F) {
 	})
 }
 
-// rejects reports whether Prepare must refuse a body Inspect accepted, decoding it whole to tell: a member only Prepare
-// reads is neither null nor of the type README.md「同格式改写」 rewrites. Include is read as for an encrypting model.
+// rejects reports whether Prepare must refuse a body Inspect accepted, decoding it to tell: a member only Prepare reads
+// is neither null nor of the type README.md「同格式改写」 rewrites. Include is read as for an encrypting model. Values
+// stay raw, as decoding them to Go values would refuse numbers no float64 holds, which Prepare passes on as written.
 func rejects(t *testing.T, f protocol.Format, body []byte) bool {
 	t.Helper()
-	var top map[string]any
-	if err := jsonx.Unmarshal(body, &top); err != nil {
-		t.Fatal(err)
+	decode := func(v jsontext.Value, into any) {
+		if err := jsonx.Unmarshal(v, into); err != nil {
+			t.Fatal(err)
+		}
 	}
-	notString := func(v any) bool {
-		_, ok := v.(string)
-		return v != nil && !ok
-	}
+	// is reports whether v is absent, null or of kind k; a null decodes to a nil map or slice.
+	is := func(v jsontext.Value, k jsontext.Kind) bool { return v == nil || v.Kind() == 'n' || v.Kind() == k }
+	notString := func(v jsontext.Value) bool { return !is(v, '"') }
+	var top map[string]jsontext.Value
+	decode(body, &top)
 	if f == protocol.Messages {
-		metadata, ok := top["metadata"].(map[string]any)
-		return top["metadata"] != nil && !ok || notString(metadata["user_id"])
+		var metadata map[string]jsontext.Value
+		if !is(top["metadata"], '{') {
+			return true
+		} else if top["metadata"] != nil {
+			decode(top["metadata"], &metadata)
+		}
+		return notString(metadata["user_id"])
 	}
-	include, ok := top["include"].([]any)
-	return top["include"] != nil && !ok || slices.ContainsFunc(include, notString) ||
-		slices.ContainsFunc([]any{top["user"], top["prompt_cache_key"], top["safety_identifier"]}, notString)
+	var include []jsontext.Value
+	if !is(top["include"], '[') {
+		return true
+	} else if top["include"] != nil {
+		decode(top["include"], &include)
+	}
+	return slices.ContainsFunc(include, notString) ||
+		slices.ContainsFunc([]jsontext.Value{top["user"], top["prompt_cache_key"], top["safety_identifier"]}, notString)
 }
 
 func BenchmarkPrepare(b *testing.B) {
