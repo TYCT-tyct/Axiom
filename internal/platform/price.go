@@ -67,6 +67,9 @@ func (p UnitPrice) String() string {
 	return whole + "." + strings.TrimRight(digits, "0")
 }
 
+// Cmp returns -1, 0 or +1 as p is less than, equal to or greater than q.
+func (p UnitPrice) Cmp(q UnitPrice) int { return cmp.Compare(p.n, q.n) }
+
 // Mul returns the exact cost of count billing units. It cannot overflow: the price is below 2⁶⁰ and the count below
 // 2⁶³, so the product is below 2¹²³. A negative count is a bug in the caller, which validates usage first.
 func (p UnitPrice) Mul(count int64) Exact {
