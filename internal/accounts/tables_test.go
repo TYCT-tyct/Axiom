@@ -18,20 +18,21 @@ import (
 // The tenants every test starts from: the main site s1 with its tier t1 and personal account a1, and the secondary
 // site s2, opened by a1, with its tier t2 and personal account a2. Each account has its default workspace (w1, w2),
 // user (u1, u2), API key (k1, k2), session (e1, e2) and recovery code (c1, c2); u1 holds the platform grant g1, and
-// u2 is a2's member. role is a role of the test's own.
+// u2 is a2's member. p is a personal account of s1 with no user yet, as registration leaves one before it adds
+// the user. role is a role of the test's own.
 var (
 	s1, s2, t1, t2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	a1, a2, w1, w2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	u1, u2, k1, k2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	e1, e2, c1, c2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	g1, role       = uuid.NewV7(), uuid.NewV7()
+	g1, role, p    = uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	x, y, z        = uuid.NewV7(), uuid.NewV7(), uuid.NewV7() // rows a test creates
 	platform       = pg.NewScope(true, nil, nil)
 
 	// names spells the IDs in SQL as :name, and reads them back by name.
 	names = map[string]uuid.UUID{
 		"s1": s1, "s2": s2, "t1": t1, "t2": t2, "a1": a1, "a2": a2, "w1": w1, "w2": w2, "u1": u1, "u2": u2,
-		"k1": k1, "k2": k2, "e1": e1, "e2": e2, "c1": c1, "c2": c2, "g1": g1, "role": role, "x": x, "y": y, "z": z,
+		"k1": k1, "k2": k2, "e1": e1, "e2": e2, "c1": c1, "c2": c2, "g1": g1, "role": role, "p": p, "x": x, "y": y, "z": z,
 	}
 	ids = func() *strings.Replacer {
 		var pairs []string
@@ -86,6 +87,7 @@ var seed = []string{
 		default_tier_id) VALUES (:s2, :s1, :a1, 'Second', 'active', 'sk-two-', 'closed', :t2)`,
 	`INSERT INTO accounts.tiers VALUES (:t2, :s2, 'Retail')`,
 	`INSERT INTO accounts.accounts VALUES (:a2, :s2, 'personal', 'A2', 'active', :t2)`,
+	`INSERT INTO accounts.accounts VALUES (:p, :s1, 'personal', 'P', 'active', :t1)`,
 	`INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default)
 		VALUES (:w1, :s1, :a1, 'Default', 'active', true), (:w2, :s2, :a2, 'Default', 'active', true)`,
 	`INSERT INTO accounts.site_domains VALUES ('main.example', :s1, 'console', 'https://main.example', NULL),
@@ -208,6 +210,7 @@ func TestScopesSeeAndWriteOnlyTheirRows(t *testing.T) {
 		"none": {}, "platform": platform,
 		"s1": pg.NewScope(false, []uuid.UUID{s1}, nil), "s2": pg.NewScope(false, []uuid.UUID{s2}, nil),
 		"a1": pg.NewScope(false, nil, []uuid.UUID{a1}), "a2": pg.NewScope(false, nil, []uuid.UUID{a2}),
+		"p": pg.NewScope(false, nil, []uuid.UUID{p}),
 	}
 	sites := map[string][]string{"platform": {"s1", "s2"}, "s1": {"s1"}, "s2": {"s2"}}
 	accountRows := map[string][]string{"platform": {"a1", "a2"}, "s1": {"a1"}, "s2": {"a2"}, "a1": {"a1"}, "a2": {"a2"}}
@@ -240,12 +243,18 @@ func TestScopesSeeAndWriteOnlyTheirRows(t *testing.T) {
 			[]string{"platform"},
 			nil,
 		},
-		{"accounts", "id", "name = name", accountRows, []string{newAccount}, []string{"s1", "platform"}, nil},
+		{
+			"accounts", "id", "name = name",
+			map[string][]string{"platform": {"a1", "a2", "p"}, "s1": {"a1", "p"}, "s2": {"a2"}, "a1": {"a1"}, "a2": {"a2"}, "p": {"p"}},
+			[]string{newAccount},
+			[]string{"s1", "platform"},
+			nil,
+		},
 		{"workspaces", "account_id", "name = name", accountRows, []string{newWorkspace}, tenantOf1, nil},
 		{
 			"users", "account_id", "status = status", accountRows,
-			[]string{newAccount, user(":z", ":s1", ":x", ":u1")},
-			[]string{"s1", "platform"},
+			[]string{user(":z", ":s1", ":p", ":u1")},
+			[]string{"s1", "p", "platform"},
 			nil,
 		},
 		{
