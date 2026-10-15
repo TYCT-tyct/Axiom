@@ -9,7 +9,8 @@ import (
 
 // grammar is what Inspect reads in one format (README.md「请求摘要」 has the sources). Messages, items and content parts
 // share the part members: a message or item holds its parts in content or output, and a Messages tool_result holds
-// more parts in its content, so following those members reaches every part and nothing else. Members such as a
+// more parts in its content, as does a document's source of type content, so following those members reaches every
+// part and nothing else. Members such as a
 // tool's input schema or a tool call's arguments are never entered, so a key there named cache_control or type is
 // the client's data, not ours.
 type grammar struct {
@@ -92,6 +93,8 @@ var (
 	sourceFields = fields{
 		"type": func(s *scanner) (err error) { s.p.binary, err = s.is("base64"); return err },
 		"data": (*scanner).data,
+		// A document whose source is of type content holds parts, which count as the request's own.
+		"content": (*scanner).content,
 	}
 	cacheFields = fields{"ttl": func(s *scanner) error {
 		long, err := s.is("1h")

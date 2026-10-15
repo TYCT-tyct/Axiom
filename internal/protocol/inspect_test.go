@@ -64,6 +64,18 @@ var inspectCases = []struct {
 		},
 	},
 	{
+		"messages document of parts", protocol.Messages, `{"model":"m","messages":[{"role":"user","content":[
+			{"type":"document","source":{"content":[
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":` + pngData + `}},
+				{"type":"text","text":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}],"type":"content"}}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Images, r.Documents = "m", 1, 1
+			r.TextBytes -= int64(len(pngData))
+			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h)
+			r.Needs = protocol.Images | protocol.Documents | protocol.PromptCache
+		},
+	},
+	{
 		"messages client data is not read", protocol.Messages, `{"model":"m",
 		"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{},"max_uses":{},"type":{}}}}],
 		"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"x","name":"t",
