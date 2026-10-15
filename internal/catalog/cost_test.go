@@ -1,8 +1,8 @@
 package catalog_test
 
 import (
-	"errors"
 	"math/big"
+	"slices"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -78,40 +78,62 @@ func TestCost(t *testing.T) {
 			imageIn: 1e10, out: 1e10, reasoning: 1e10, audioOut: 1e10, imageOut: 1e10, webSearch: 1e10,
 		}, "110000000000000"},
 	} {
-		got, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
+		got, missing, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
 		want, _ := new(big.Rat).SetString(tc.want)
-		if err != nil || got.Rat().Cmp(want) != 0 {
-			t.Errorf("%s: Cost = %s, %v; want %s", tc.name, got.Rat().FloatString(15), err, tc.want)
+		if err != nil || got.Rat().Cmp(want) != 0 || missing != 0 {
+			t.Errorf("%s: Cost = %s, missing %v, %v; want %s", tc.name, got.Rat().FloatString(15), members(missing), err, tc.want)
 		}
 	}
 }
 
-// reasoning falls back to output; nothing else falls back. In particular a cache write OpenAI reports against a
-// schedule without a write price is an error, not an input token.
-func TestCostUnpriced(t *testing.T) {
-	inputOnly := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000001"}}`)
-	outputOnly := mustParse(t, `{"v":1,"currency":"USD","rates":{"output":"0.000001"}}`)
+// reasoning falls back to output; nothing else falls back. Cost prices what it can and reports the rest, so billing
+// can price the missing items at its fallback prices instead of losing the priced part (README.md「上架门槛与缺项」). In
+// particular a cache write OpenAI reports against a schedule without a write price is reported, not priced as input.
+func TestCostMissing(t *testing.T) {
+	inputOnly := `{"v":1,"currency":"USD","rates":{"input":"1"}}`
+	outputOnly := `{"v":1,"currency":"USD","rates":{"output":"1"}}`
+	// Gemini 2.5 Pro without its cache prices: the unpriced cache reads still count toward the threshold.
+	geminiNoCache := `{"v":1,"currency":"USD","rates":{"input":"0.00000125","output":"0.00001"},
+		"context_tiers":{"basis":["input","cache_read"],"method":"whole",
+			"tiers":[{"above":200000,"rates":{"input":"0.0000025","output":"0.000015"}}]}}`
 	for _, tc := range []struct {
-		schedule catalog.Schedule
+		schedule string
 		usage    counts
+		want     string
+		missing  []catalog.Item
 	}{
-		{outputOnly, counts{out: 5, in: 1}},
-		{inputOnly, counts{in: 5, cacheRead: 1}},
-		{inputOnly, counts{in: 5, cacheWrite: 1}},
-		{inputOnly, counts{in: 5, cacheWrite1h: 1}},
-		{inputOnly, counts{in: 5, out: 1}},
-		{inputOnly, counts{in: 5, reasoning: 1}},
-		{inputOnly, counts{in: 5, webSearch: 1}},
-		{inputOnly, counts{in: 5, audioIn: 1}},
-		{inputOnly, counts{in: 5, imageIn: 1}},
-		{inputOnly, counts{in: 5, audioOut: 1}},
-		{inputOnly, counts{in: 5, imageOut: 1}},
-		{outputOnly, counts{out: 5, audioOut: 1}}, // audio output is not output
+		{outputOnly, counts{out: 5, in: 1}, "5", []catalog.Item{in}},
+		{inputOnly, counts{in: 5, cacheRead: 1}, "5", []catalog.Item{cacheRead}},
+		{inputOnly, counts{in: 5, cacheWrite: 1}, "5", []catalog.Item{cacheWrite}},
+		{inputOnly, counts{in: 5, cacheWrite1h: 1}, "5", []catalog.Item{cacheWrite1h}},
+		{inputOnly, counts{in: 5, audioIn: 1}, "5", []catalog.Item{audioIn}},
+		{inputOnly, counts{in: 5, imageIn: 1}, "5", []catalog.Item{imageIn}},
+		{inputOnly, counts{in: 5, out: 1}, "5", []catalog.Item{out}},
+		{inputOnly, counts{in: 5, reasoning: 1}, "5", []catalog.Item{reasoning}},
+		{inputOnly, counts{in: 5, audioOut: 1}, "5", []catalog.Item{audioOut}},
+		{inputOnly, counts{in: 5, imageOut: 1}, "5", []catalog.Item{imageOut}},
+		{inputOnly, counts{in: 5, webSearch: 1}, "5", []catalog.Item{webSearch}},
+		{outputOnly, counts{out: 5, audioOut: 1}, "5", []catalog.Item{audioOut}}, // audio output is not output
+		{inputOnly, counts{in: 5, out: 1, webSearch: 2, cacheRead: 0}, "5", []catalog.Item{out, webSearch}},
+		{geminiNoCache, counts{cacheRead: 200_000, in: 1, out: 1000}, "0.0150025", []catalog.Item{cacheRead}},
 	} {
-		if got, err := tc.schedule.Cost(mustUsage(t, tc.usage)); !errors.Is(err, catalog.ErrUnpriced) {
-			t.Errorf("Cost of %v = %v, %v; want ErrUnpriced", tc.usage, got.Rat(), err)
+		got, missing, err := mustParse(t, tc.schedule).Cost(mustUsage(t, tc.usage))
+		want, _ := new(big.Rat).SetString(tc.want)
+		if err != nil || got.Rat().Cmp(want) != 0 || !slices.Equal(members(missing), tc.missing) {
+			t.Errorf("Cost of %v under %s = %s, missing %v, %v; want %s, missing %v",
+				tc.usage, tc.schedule, got.Rat().FloatString(15), members(missing), err, tc.want, tc.missing)
 		}
 	}
+}
+
+func members(s catalog.ItemSet) []catalog.Item {
+	var items []catalog.Item
+	for it := range catalog.NumItems {
+		if s.Has(it) {
+			items = append(items, it)
+		}
+	}
+	return items
 }
 
 // Cost runs for every attempt of every request, so it must not allocate; the benchmark fails if it does.
@@ -119,7 +141,7 @@ func BenchmarkCost(b *testing.B) {
 	s := mustParse(b, haiku)
 	u := mustUsage(b, counts{in: 2_000, cacheRead: 99_000, cacheWrite: 500, out: 800, webSearch: 1})
 	cost := func() {
-		if _, err := s.Cost(u); err != nil {
+		if _, missing, err := s.Cost(u); err != nil || missing != 0 {
 			b.Fatal(err)
 		}
 	}

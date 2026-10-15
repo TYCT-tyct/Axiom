@@ -1,21 +1,14 @@
 package catalog
 
-import (
-	"errors"
-	"fmt"
+import "axiom/internal/platform"
 
-	"axiom/internal/platform"
-)
-
-// ErrUnpriced means the usage has an item the schedule has no price for. Only reasoning falls back, to output, the way
-// Gemini prices thinking; a cache write without a write price is an error rather than a guess, since guessing the
-// input price would undercharge an Anthropic schedule that left its write premium out (README.md「计费项与用量」).
-var ErrUnpriced = errors.New("price schedule: an item with usage has no price")
-
-// Cost is the exact price of the usage in the schedule's currency. It does not allocate: it runs for every attempt.
-func (s Schedule) Cost(u Usage) (platform.Exact, error) {
+// Cost is the exact price, in the schedule's currency, of the usage's priced items, and the items with usage that have
+// no price. It never fails for a missing price: billing prices the missing items at its fallback prices and keeps the
+// priced part (README.md「上架门槛与缺项」). Only reasoning falls back, to output, the way Gemini prices thinking; a
+// cache write without a write price is reported rather than guessed, since guessing the input price would undercharge
+// an Anthropic schedule that left its write premium out. It does not allocate: it runs for every attempt.
+func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err error) {
 	tier := s.tier(u)
-	var total platform.Exact
 	for it := range NumItems {
 		if u.q[it] == 0 {
 			continue
@@ -25,14 +18,14 @@ func (s Schedule) Cost(u Usage) (platform.Exact, error) {
 			price, ok = s.price(tier, ItemOutput)
 		}
 		if !ok {
-			return platform.Exact{}, fmt.Errorf("%w: %s", ErrUnpriced, it)
+			missing.add(it)
+			continue
 		}
-		var err error
 		if total, err = total.Add(price.Mul(u.q[it])); err != nil {
-			return platform.Exact{}, err
+			return platform.Exact{}, 0, err
 		}
 	}
-	return total, nil
+	return total, missing, nil
 }
 
 // tier returns the highest tier whose threshold the prompt length exceeds, or nil for the base prices.

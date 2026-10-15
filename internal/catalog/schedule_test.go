@@ -1,7 +1,6 @@
 package catalog_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -54,7 +53,7 @@ func TestScheduleCanonicalJSON(t *testing.T) {
 }
 
 // FuzzParseSchedule checks the boundary for entered prices: whatever parses has a canonical form that parses back to the
-// same bytes, and prices bounded usage with no error but ErrUnpriced.
+// same bytes, and prices bounded usage without an error.
 func FuzzParseSchedule(f *testing.F) {
 	for _, s := range []string{haiku, messy, gemini} {
 		f.Add(s)
@@ -72,7 +71,7 @@ func FuzzParseSchedule(f *testing.F) {
 		if again, err := mustParse(t, string(canonical)).MarshalJSON(); err != nil || string(again) != string(canonical) {
 			t.Fatalf("%s writes %s, which writes %s, %v", text, canonical, again, err)
 		}
-		if _, err := s.Cost(u); err != nil && !errors.Is(err, catalog.ErrUnpriced) {
+		if _, _, err := s.Cost(u); err != nil {
 			t.Fatalf("Cost under %s: %v", canonical, err)
 		}
 	})

@@ -2,9 +2,9 @@ package catalog_test
 
 import (
 	"encoding/json/v2"
-	"errors"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -12,7 +12,8 @@ import (
 
 // FuzzCost checks Cost against an independent math/big model of README.md「条件」 and「计费项与用量」: the highest tier
 // whose threshold the basis sum strictly exceeds, a tier's prices over the base prices, reasoning at the output price
-// when it has none of its own, ErrUnpriced for any other item with usage and no price, and the exact total. Each input
+// when it has none of its own, every other item with usage and no price reported as missing, and the exact total of
+// the priced items, whose tier the whole usage chose, missing items included. Each input
 // seeds a batch of random schedules and usages, so the committed seeds alone exercise thousands of cases.
 func FuzzCost(f *testing.F) {
 	for seed := range uint64(4) {
@@ -22,17 +23,17 @@ func FuzzCost(f *testing.F) {
 		r := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test data, not a secret
 		for range 500 {
 			c := randomCase(r)
-			got, err := mustParse(t, c.json(t)).Cost(mustUsage(t, c.usage))
-			want, priced := c.cost()
-			if !priced && !errors.Is(err, catalog.ErrUnpriced) || priced && (err != nil || got.Rat().Cmp(want) != 0) {
-				t.Fatalf("Cost of %v under %s = %s, %v; want %v, priced %v",
-					c.usage, c.json(t), got.Rat().FloatString(15), err, want, priced)
+			got, missing, err := mustParse(t, c.json(t)).Cost(mustUsage(t, c.usage))
+			want, wantMissing := c.cost()
+			if err != nil || got.Rat().Cmp(want) != 0 || !slices.Equal(members(missing), wantMissing) {
+				t.Fatalf("Cost of %v under %s = %s, missing %v, %v; want %s, missing %v",
+					c.usage, c.json(t), got.Rat().FloatString(15), members(missing), err, want.FloatString(15), wantMissing)
 			}
 		}
 	})
 }
 
-// items lists every billing item, the input side first.
+// items lists every billing item in enumeration order.
 var items = [...]catalog.Item{in, cacheRead, cacheWrite, cacheWrite1h, audioIn, imageIn, out, reasoning, audioOut, imageOut, webSearch}
 
 type (
@@ -134,8 +135,8 @@ func (p prices) json() map[string]string {
 	return m
 }
 
-// cost is the model: the exact cost, or false when an item with usage has no price.
-func (c costCase) cost() (*big.Rat, bool) {
+// cost is the model: the exact cost of the priced items and, in enumeration order, the items with usage and no price.
+func (c costCase) cost() (*big.Rat, []catalog.Item) {
 	var length int64
 	for _, it := range c.basis {
 		length += c.usage[it]
@@ -153,17 +154,19 @@ func (c costCase) cost() (*big.Rat, bool) {
 		return c.base[it]
 	}
 	total := new(big.Rat)
-	for it, n := range c.usage {
+	var missing []catalog.Item
+	for _, it := range items {
+		n := c.usage[it]
 		p := price(it)
 		if p == nil && it == reasoning {
 			p = price(out)
 		}
-		if p == nil && n > 0 {
-			return nil, false
-		}
-		if p != nil {
+		switch {
+		case p != nil:
 			total.Add(total, new(big.Rat).Mul(p, big.NewRat(n, 1)))
+		case n > 0:
+			missing = append(missing, it)
 		}
 	}
-	return total, true
+	return total, missing
 }
