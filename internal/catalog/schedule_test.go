@@ -140,7 +140,9 @@ func TestParseScheduleRejects(t *testing.T) {
 		"service tier prices an unknown item":  {`"input":"0.000004"`, `"pdf":"0.000004"`},
 		"service tier twice":                   {`"service_tiers":{`, `"service_tiers":{"priority":{"rates":{}},`},
 	} {
-		text := strings.Replace(valid, edit[0], edit[1], 1)
+		// Every occurrence, so that a threshold edit reaches the standard tier and the service tier alike and is refused by
+		// its own check rather than by the thresholds differing.
+		text := strings.ReplaceAll(valid, edit[0], edit[1])
 		if text == valid {
 			t.Fatalf("%s: %q is not in the valid schedule", name, edit[0])
 		}
