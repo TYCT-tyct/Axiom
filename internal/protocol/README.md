@@ -77,7 +77,7 @@
 
 ## 转发（草图）
 
-还没有实现，是 #27 的 P4–P10 要做的接口；gateway 怎么用它见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
+`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 及以下是 #27 的 P5–P10 要做的接口。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
 
 ```go
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) // *NotSupported → gateway 跳过这个条目
@@ -85,7 +85,7 @@ type UsageContext struct{ CacheTTL1h bool; Tier catalog.ServiceTier } // 实际�
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay
 func (r *Relay) Next() (Step, error) // 阻塞读；取消 attemptCtx 关闭 body 即返回
 type Step struct{ Out []byte; Kind StepKind } // Buffered | Commit（Out 含暂存的开头）| Data | Progress（未成事件，Out 为空）| Heartbeat | UpstreamDone
-func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、已报告的准数
+func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、已报告的数，以及其中哪些已是最终值（Final）
 func (r *Relay) Usage() Usage       // Segments []Segment{catalog.Usage; Reported catalog.ItemSet}，每段各自的已报告项
 func (r *Relay) Finish(f Final) []byte
 func (r *Relay) Fail(e Error, f *Final) []byte // f 为 nil：结算没提交，结尾不带费用
@@ -94,7 +94,10 @@ func RenderError(f Format, e Error, fin *Final) (status int, body []byte)
 type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency; Estimated, Pending bool }
 ```
 
+- **`Prepare` 的迁移**：现有的 `Prepare(f, body, t, w) ([]byte, error)` 改为 `Prepare(r *Request, body, t, w) (Upstream, error)`：`Upstream` 带改写后的请求体和 `UsageContext`。`ErrInvalid` 仍是客户端的错误（gateway 回 400），不换端点；新增的 `*NotSupported` 表示这个端点表达不了这个请求，gateway 跳过这个条目、不算尝试。改写沿用现有的实现和 `TestPrepare`、`TestPrepareSamples`、`FuzzPrepare`，不另写一份。
+- **`Inspect` 的后续**：billing 的 `Demand` 要请求里的事实来算内部采样次数：启用了哪些服务端工具、各自写没写最大次数，以及是否开启了服务端压缩或上下文管理（Anthropic 的 `context_management`、Responses 的 `compaction`）。`Request` 现在有工具次数，没有压缩这一项，由 protocol 的后续 PR 补上。
 - **拉取式**：调用方循环调用 `Next`。`Next` 每做一次底层读（至多 16 KiB）就返回；读到的字节还没凑成完整事件时返回 `Progress`，已到的原始字节记进 `Progress().PartialBytes`，所以调用方可以在每次读之后计量，一个越过当前段的大事件、一个持续到达却迟迟不结束的事件，都在读的过程中被看到。
+- **已报告的数是否最终**：输入侧（输入、缓存读写）一经报告就是最终值；输出侧（输出、推理、搜索）在格式规定的最后一个用量事件（Messages 带 `stop_reason` 的 `message_delta`、Chat 的用量块、Responses 的结尾快照）之前报告的只是下界，例如 Messages 在 `message_start` 里报 `output_tokens: 1`（`testdata/messages/text/upstream.sse`）。`Progress` 逐项标明哪些已是最终值，billing 据此决定是否还要按字节上界计量（[billing 的「接口」](../billing/README.md#接口草图)）。
 - **切片的有效期**：`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效；`Relay` 只由一个 goroutine 调用。
 - **保活**：`KeepAlive(format)` 返回预生成的字节（Messages 是 `event: ping`，Chat 和 Responses 是注释行），调用方在已提交之后自己写，不经过 `Relay`。
 - **`UsageContext`**：用量归一化要知道实际发往上游的请求里有没有 1 小时的缓存断点、明确写了哪个服务等级。Anthropic 没给 `cache_creation` 明细时按它归类，规则以 [catalog 的用量折算](../catalog/README.md)为准。

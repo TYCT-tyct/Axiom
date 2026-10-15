@@ -8,10 +8,13 @@
 
 ```go
 // 引用 catalog、suppliers、quality、accounts；不引用 protocol、routing
-type Demand struct { // gateway 由 protocol.Request 填写
-	TextBytes, Images, Documents, MaxOutput, Choices, WebSearches, CodeExecutions, Samplings int64
+type Demand struct { // gateway 由 protocol.Request 填写；只放请求里的事实，依赖模型的数由报价时按条目算
+	TextBytes, Images, Documents, MaxOutput, Choices int64
+	ServerTools []ServerTool // 请求启用的服务端工具（联网搜索、代码执行）
+	Compaction bool          // 开启了服务端压缩或上下文管理（Anthropic context_management、Responses compaction）
 	InputItems catalog.ItemSet; ServiceTiers catalog.ServiceTierSet
 }
+type ServerTool struct{ Item catalog.Item; MaxUses int64 } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数
 type Quotable struct{ Endpoint suppliers.EndpointID; Model catalog.ModelID; Price PriceRef; MaxOutput int64; Segmentable bool }
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, id platform.RequestID,
 	d Demand, q []Quotable) (*Hold, []int, error) // []int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}
@@ -23,12 +26,12 @@ func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error //
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 前提：无追加在途；*Permanent 不再重试
 func (b *Billing) SettleOrphan(a accounts.Admission, id platform.RequestID) // 非阻塞，进程内队列
 func (b *Billing) Run(ctx context.Context) error // 心跳、回收、截止时间清理、按 ChargeSettled 校正、到期释放保留
-type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported Segment } // gateway 从 protocol.Progress 复制
+type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported Segment; Final catalog.ItemSet } // gateway 从 protocol.Progress 复制；Final：已是最终值的已报告项
 type Segment struct{ Usage catalog.Usage; Reported catalog.ItemSet }
 type Outcome struct{ Attempts []AttemptResult; Cancelled bool } // 收费的是最后一个
 type AttemptResult struct {
 	Seq platform.AttemptSeq; Entry int; Receipt suppliers.AttemptReceipt; Segments []Segment
-	Result Result // NotExecuted | Unknown | FailedBeforeCommit | Aggregated | Committed
+	Result Result // NotExecuted | Unknown | FailedBeforeCommit | Aggregated | Committed；失败时前两种取自 Failure.Executed
 	Finish FinishReason; Failure *suppliers.Failure
 }
 type FinishReason uint8 // Stop | Length | ToolUse | Refusal | Error | Truncated | Timeout | Cancelled
@@ -38,7 +41,7 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 - 金额沿用 `platform.Exact`；`platform.RequestID`（即调用编号）、`platform.AttemptSeq`（从 1 起，进入 `Send` 时分配）由第一个用到它们的 PR 加进 `platform`。价格版本只追加、不删除，`PriceRef` 就是版本号。
 - 后续事务（追加、结算、`SettleOrphan`）的账户范围只能从 `accounts.Admission.Scope()` 取得。
 - `Reserve` 在 accounts 打开的准入事务里执行；`Settle` 在自己的事务里调用 `suppliers.RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`。这是[总体架构规则 5](../../docs/architecture.md#模块边界规则) 的两处跨模块同事务。
-- **输出上界**（`Observe` 用它）：已报告的项用准数；其余 = 已完整读到的事件里解码后的正文、推理、工具参数的 UTF-8 字节（不含 SSE、JSON 外壳和签名；token 不多于字节）+ 正在读的不完整事件已到的原始字节（`PartialBytes`）；搜索按事件计数。`Relay.Next` 每做一次至多 16 KiB 的底层读就返回，所以两次计量之间没计量的输出不超过一次读。
+- **输出上界**（`Observe` 用它）：字节上界 = 已完整读到的事件里解码后的正文、推理、工具参数的 UTF-8 字节（不含 SSE、JSON 外壳和签名；token 不多于字节）+ 正在读的不完整事件已到的原始字节（`PartialBytes`）；搜索按事件计数。已报告的输入侧项（输入、缓存读写）一经报告就是准数；输出侧的项（输出、推理、搜索）在最后的用量事件之前报告的只是下界（Anthropic `message_start` 里的 `output_tokens`、任何累计中的计数），所以在 `Final` 标明它之前，计量的输出 = max(已报告, 字节上界)。测试用已有的样本 `internal/protocol/testdata/messages/text/upstream.sse`：`message_start` 报 `output_tokens: 1`，之后的正文仍按字节计量、越过当前段时触发追加，`message_delta` 的 15 才是最终值。`Relay.Next` 每做一次至多 16 KiB 的底层读就返回，所以两次计量之间没计量的输出不超过一次读。
 - **`Segmentable`** 由 routing 按条目和请求算出（见 [routing 的「接口」](../routing/README.md#接口草图)）；不可分段的条目全额预留、不追加、不截断。
 
 ## 准入里的预留
@@ -46,7 +49,7 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 `Reserve` 最后执行，两条语句同批发出：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**，并以 `FOR KEY SHARE` 核对持有者（见下文）；后一条语句读余额、在途预留、工作区与 key 的计数和占用。READ COMMITTED 下后一条语句在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
 
 - 余额行是账户资金写入的唯一串行点（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)），锁两个账户时的顺序也在那里。没有余额行的账户按余额 0 处理，行在开户时由本模块建。
-- 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。
+- 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。采样次数和按次项目的最大次数在报价时逐条目算：请求没写某个服务端工具的最大次数，就取该条目模型在 catalog 里的默认值，所以跨模型路线的条目可以不同。报价的测试至少包括：请求没写工具的最大次数；路线里两个条目的模型默认次数不同；开启服务端压缩时采样次数乘 2。
 - 余额不足是正常结果（`*Insufficient`），不让事务出错。
 
 ## 追加与结算
@@ -72,9 +75,9 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 | 挂起 | 准入 | — |
 | 已结算 / 已释放 | `Settle`；`SettleOrphan`（含墓碑） | 返回已存的 `Final`，不再记账 |
 | 已暂估 | 暂估的 `Settle`，保留余额，`correct_by` = 结算时刻 + 1h | 返回已存的 `Final` |
-| 清理待定 | 清理：对账日志里有标了**已提交**且带对账键的尝试（已提交的必是最后一次），按日志写尝试行（用量未知）供对账匹配，保留余额，`correct_by` = 清理时刻 + 1h | 按真实用量正常结算，落"已结算"；尝试行只插入不改，成本差额经 `ChargeSettled` 调整 |
-| 清理结算 | 清理待定的尝试对上中转站记录：按记录用量 × 锁定价格收费，释放其余 | 只补差额或退差额 |
-| 清理释放 | 清理：日志里没有已提交的尝试，或已提交的没有对账键，或清理待定到 `correct_by` 仍无记录。日志里的尝试只记成本，从不据此向用户收费：看不到的后续尝试可能才是最后一次 | 补扣（只对已提交的尝试，最多到底线，其余平台承担）并 `ResolveLostRequest` |
+| 清理待定 | 清理：对账日志里有标了**已提交**且带对账键的尝试（已提交的必是最后一次），按日志写尝试行（用量未知）供对账匹配，保留余额，`correct_by` = 清理时刻 + 1h | 按完整的 `Outcome` 和正常规则结算，落"已结算"；尝试行只插入不改，成本差额经 `ChargeSettled` 调整 |
+| 清理结算 | 清理待定的尝试对上中转站记录：按记录用量 × 锁定价格收费，释放其余 | 按完整的 `Outcome` 和正常规则算出应收，与清理已收的多退少补 |
+| 清理释放 | 清理：日志里没有已提交的尝试，或已提交的没有对账键，或清理待定到 `correct_by` 仍无记录。只靠日志时，只有标了已提交的尝试会向用户收费，日志里其余的尝试只记成本：看不到的后续尝试可能才是最后一次 | 迟到的 `Settle` 带着完整的 `Outcome`，按正常规则收费（客户端取消、非流式聚合成功、免单规则都照常），补扣最多到底线、其余平台承担，并 `ResolveLostRequest` |
 
 - **校正**：`ChargeSettled{charge_record_id, revision}` 的处理在事务里 `UPDATE … SET applied_revision=$rev WHERE applied_revision < $rev`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放；对账记录先到就先释放。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
