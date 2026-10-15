@@ -31,14 +31,14 @@ func mustSchedule(tb testing.TB, s string) catalog.Schedule {
 	return schedule
 }
 
-// entry is a route entry on prices: a 1000-token context, 50 tokens an image, 200 a page, 100 tokens a second, and
-// by default three web searches and two code executions.
+// entry is a route entry on prices: a 1000-token context, 50 tokens an image, 200 a page and 3 pages a file, 100
+// tokens a second, and by default three web searches and two code executions.
 func entry(tb testing.TB, segmentable bool, searches int64) Quotable {
 	tb.Helper()
 	return Quotable{
 		Price: mustSchedule(tb, prices),
 		Model: Model{
-			ContextLength: 1000, ImageTokens: 50, PageTokens: 200, OutputSpeed: 100,
+			ContextLength: 1000, ImageTokens: 50, PageTokens: 200, FilePages: 3, OutputSpeed: 100,
 			MaxUses: map[catalog.Item]int64{webSearch: searches, codeExec: 2},
 		},
 		MaxOutput: 500, Segmentable: segmentable,
@@ -66,7 +66,7 @@ func TestQuoteEntry(t *testing.T) {
 		{"text, full: 80 input + 500 output at 10", text, false, "5080"},
 		{"text, first segment: 80 + 40 output + 150 allowance at 10", text, true, "1980"},
 		{"images take the prompt over the tier: 110 at 4 + 500 at 20", Demand{TextBytes: 10, Images: 2}, false, "10440"},
-		{"a page at 200 tokens: 200 at 4 + 500 at 20", Demand{Documents: 1}, false, "10800"},
+		{"a file of 3 pages at 200 tokens: 600 at 4 + 500 at 20", Demand{Documents: 1}, false, "12400"},
 		{"the context length caps the prompt: 1000 at 4 + 500 at 20", Demand{TextBytes: 5000}, false, "14000"},
 		{"the 1-hour write price bounds the input: 80 at 3", Demand{TextBytes: 80, InputItems: 1 << cacheWrite1h}, false, "5240"},
 		{"the dearer service tier: 80 at 6 + 500 at 30", Demand{TextBytes: 80, ServiceTiers: 1 << catalog.ServiceTierPriority}, false, "15480"},
@@ -92,6 +92,34 @@ func TestQuoteEntry(t *testing.T) {
 		},
 	} {
 		got, err := quoteEntry(tc.d, entry(t, tc.segmentable, 3), segments)
+		if err != nil || units(t, got) != tc.want {
+			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got), err, tc.want)
+		}
+	}
+}
+
+// TestQuoteEntryModel: what the model data adds to the bound. A file whose page limit is unknown takes the whole
+// context. A model that may report cache reads has its input bounded by the cache-read price as well: the review's
+// counter-example prices a cache read above input, so 80 tokens read from the cache plus 1 output token cost 161,
+// which a quote at the input price (81) would not cover.
+func TestQuoteEntryModel(t *testing.T) {
+	noPageLimit := entry(t, false, 3)
+	noPageLimit.Model.FilePages = 0
+	dearCache := Quotable{
+		Price:     mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","cache_write":"1","cache_read":"2","output":"1"}}`),
+		Model:     Model{ContextLength: 1000, Reports: 1<<in | 1<<catalog.ItemCacheRead | 1<<catalog.ItemOutput},
+		MaxOutput: 1,
+	}
+	for _, tc := range []struct {
+		name string
+		d    Demand
+		e    Quotable
+		want string
+	}{
+		{"a file without a page limit: 1000 at 4 + 500 at 20", Demand{Documents: 1}, noPageLimit, "14000"},
+		{"cache reads dearer than input: 80 at 2 + 1", Demand{TextBytes: 80}, dearCache, "161"},
+	} {
+		got, err := quoteEntry(tc.d, tc.e, segments)
 		if err != nil || units(t, got) != tc.want {
 			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got), err, tc.want)
 		}

@@ -16,11 +16,12 @@ import (
 
 // Demand is what the request itself says; what depends on the model is worked out per entry when quoting.
 type Demand struct {
-	TextBytes, Images, Documents, Choices int64
-	ServerTools                           []ServerTool // the server tools the request enables, such as web search
-	Compaction                            bool         // server-side compaction or context management is on
-	InputItems                            catalog.ItemSet
-	ServiceTiers                          catalog.ServiceTierSet
+	TextBytes, Images, Choices int64
+	Documents                  int64        // files, whatever their pages: protocol does not parse them
+	ServerTools                []ServerTool // the server tools the request enables, such as web search
+	Compaction                 bool         // server-side compaction or context management is on
+	InputItems                 catalog.ItemSet
+	ServiceTiers               catalog.ServiceTierSet
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -34,8 +35,10 @@ type ServerTool struct {
 type Model struct {
 	ContextLength           int64
 	ImageTokens, PageTokens int64                  // the most input tokens one image or one document page can take
+	FilePages               int64                  // the most pages one file can have; 0 when no limit is known
 	OutputSpeed             int64                  // the fastest output, in tokens per second
 	MaxUses                 map[catalog.Item]int64 // each server tool's default most uses
+	Reports                 catalog.ItemSet        // the items the upstream may report (catalog.Reportable)
 }
 
 // Quotable is one route entry as billing quotes it: its locked price schedule, its model, the output limit that
@@ -132,7 +135,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
 	tiers := d.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard)
 	uses, samplings := serverToolUses(d, e.Model)
-	first := min(window, add(d.TextBytes, add(mul(d.Images, e.Model.ImageTokens), mul(d.Documents, e.Model.PageTokens))))
+	first := min(window, add(d.TextBytes, add(mul(d.Images, e.Model.ImageTokens), mul(d.Documents, fileTokens(e.Model)))))
 	longest := first // the longest prompt any sampling can have, which bounds the band
 	if samplings > 1 {
 		longest = window // every later sampling rereads up to the whole context
@@ -148,7 +151,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
 	if max(samplings, rest, output, overshoot) == math.MaxInt64 {
 		return platform.Exact{}, errOverflow
 	}
-	in := d.InputItems
+	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
 	in.Add(catalog.ItemInput)
 	firstPrice, ok1 := e.Price.Ceiling(in, tiers, first)
 	restPrice, ok2 := e.Price.Ceiling(in, tiers, window)
@@ -168,6 +171,15 @@ func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
 		amount = sum(amount, price.Mul(n))
 	}
 	return amount, nil
+}
+
+// fileTokens bounds one file: Documents counts files, not pages (protocol does not parse PDFs), so a file takes its
+// pages at most at the page maximum, and the whole context when the model has no known page limit.
+func fileTokens(m Model) int64 {
+	if m.FilePages <= 0 || m.PageTokens <= 0 {
+		return m.ContextLength
+	}
+	return mul(m.FilePages, m.PageTokens)
 }
 
 // serverToolUses returns each server tool's most uses, the request's or else the model's default, totalled per item so

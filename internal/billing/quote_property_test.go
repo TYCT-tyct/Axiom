@@ -16,16 +16,16 @@ import (
 // prompt at most its bound and split at random between the input items the request may produce, each sampling
 // priced at its own band; the output up to the first segment plus the allowance, or up to the limit when the entry is
 // not segmentable, split between output and reasoning in any sampling; every server tool up to its most uses; one
-// service tier the request may be served at. Random prices make a dearer lower band, a cache write dearer than input
-// and a reasoning price above output's common. Each seed runs a batch, so the committed seeds alone check thousands.
+// service tier the request may be served at. Random prices make a dearer lower band, a cache write or read dearer
+// than input and a reasoning price above output's common; the review's counter-example, a cache read at twice the
+// input price, runs first every time. Each seed runs a batch, so the committed seeds alone check thousands.
 func FuzzQuoteCoversWorstCase(f *testing.F) {
 	for seed := range uint64(4) {
 		f.Add(seed, ^seed)
 	}
 	f.Fuzz(func(t *testing.T, seed1, seed2 uint64) {
 		r := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test data, not a secret
-		for range 200 {
-			c := randomQuoteCase(t, r, 4000)
+		check := func(c quoteCase) {
 			q, err := quoteEntry(c.d, c.e, c.s)
 			if err != nil {
 				t.Fatalf("quote of %+v: %v", c, err)
@@ -35,6 +35,15 @@ func FuzzQuoteCoversWorstCase(f *testing.F) {
 					t.Fatalf("quote %s below a call costing %s: %+v under %s", q.Rat().RatString(), cost.RatString(), c, c.json)
 				}
 			}
+		}
+		dearCache := `{"v":1,"currency":"USD","rates":{"input":"1","cache_write":"1","cache_read":"2","output":"1"}}`
+		check(quoteCase{
+			d: Demand{TextBytes: 80},
+			e: Quotable{Price: mustSchedule(t, dearCache), Model: Model{ContextLength: 1000, Reports: 1 << catalog.ItemCacheRead}, MaxOutput: 1},
+			s: segments, json: dearCache,
+		})
+		for range 200 {
+			check(randomQuoteCase(t, r, 4000))
 		}
 	})
 }
@@ -83,8 +92,11 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	}
 	c := quoteCase{json: randomPrices(r)}
 	c.e = Quotable{
-		Price:     mustSchedule(tb, c.json),
-		Model:     Model{ContextLength: max(n(), 1), ImageTokens: n(), PageTokens: n(), OutputSpeed: n() % 100_000, MaxUses: map[catalog.Item]int64{}},
+		Price: mustSchedule(tb, c.json),
+		Model: Model{
+			ContextLength: max(n(), 1), ImageTokens: n(), PageTokens: n(), FilePages: n() % 8, OutputSpeed: n() % 100_000,
+			MaxUses: map[catalog.Item]int64{},
+		},
 		MaxOutput: n(), Segmentable: r.IntN(2) == 0,
 	}
 	c.d = Demand{TextBytes: n(), Images: n() % 8, Documents: n() % 8, Choices: n() % 4, Compaction: r.IntN(3) == 0}
@@ -99,6 +111,9 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 			c.d.InputItems.Add(it)
 		}
 	}
+	if r.IntN(2) == 0 {
+		c.e.Model.Reports.Add(catalog.ItemCacheRead)
+	}
 	if strings.Contains(c.json, "priority") && r.IntN(2) == 0 {
 		c.d.ServiceTiers.Add(catalog.ServiceTierPriority)
 	}
@@ -110,7 +125,7 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 }
 
 // pricedItems are the items every random schedule prices at its base, so a quote never meets a missing price.
-var pricedItems = [...]string{"input", "cache_write", "cache_write_1h", "output", "reasoning", "web_search", "code_execution"}
+var pricedItems = [...]string{"input", "cache_read", "cache_write", "cache_write_1h", "output", "reasoning", "web_search", "code_execution"}
 
 // randomPrices is a schedule with one or two context tiers over a random basis, each overriding random prices, and
 // sometimes a priority tier; prices run up to 1000 with up to 15 decimals.
@@ -202,8 +217,15 @@ func (c quoteCase) prompts(samplings int64, upTo func(int64) int64) []map[catalo
 			inputs = append(inputs, it)
 		}
 	}
+	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
+		inputs = append(inputs, catalog.ItemCacheRead)
+	}
 	window := c.e.Model.ContextLength
-	first := min(window, c.d.TextBytes+c.d.Images*c.e.Model.ImageTokens+c.d.Documents*c.e.Model.PageTokens)
+	file := window // a file of unknown pages may fill the context
+	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
+		file = c.e.Model.FilePages * c.e.Model.PageTokens
+	}
+	first := min(window, c.d.TextBytes+c.d.Images*c.e.Model.ImageTokens+c.d.Documents*file)
 	counts := make([]map[catalog.Item]int64, samplings)
 	for j := range counts {
 		counts[j] = map[catalog.Item]int64{}
@@ -227,8 +249,12 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	tb.Helper()
 	b := big.NewInt
 	window := b(c.e.Model.ContextLength)
+	file := window
+	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
+		file = new(big.Int).Mul(b(c.e.Model.FilePages), b(c.e.Model.PageTokens))
+	}
 	first := new(big.Int).Add(b(c.d.TextBytes), new(big.Int).Mul(b(c.d.Images), b(c.e.Model.ImageTokens)))
-	first.Add(first, new(big.Int).Mul(b(c.d.Documents), b(c.e.Model.PageTokens)))
+	first.Add(first, new(big.Int).Mul(b(c.d.Documents), file))
 	if first.Cmp(window) > 0 {
 		first = window
 	}
@@ -237,6 +263,9 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	tiers.Add(catalog.ServiceTierStandard)
 	inputs := c.d.InputItems
 	inputs.Add(in)
+	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
+		inputs.Add(catalog.ItemCacheRead)
+	}
 	longest := first.Int64()
 	if samplings.Cmp(b(1)) > 0 {
 		longest = c.e.Model.ContextLength
