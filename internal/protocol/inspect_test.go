@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -90,6 +91,11 @@ var inspectCases = []struct {
 			r.Model, r.Needs = "m", protocol.WebSearch|protocol.PromptCache
 			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite)
 		},
+	},
+	{
+		"messages search limits adding up to the largest count", protocol.Messages, `{"model":"m",
+		"tools":[{"type":"web_search_20260209","max_uses":9223372036854775806},{"type":"web_search_20250305","max_uses":1}]}`,
+		func(r *protocol.Request) { r.Model, r.WebSearches, r.Needs = "m", math.MaxInt64, protocol.WebSearch },
 	},
 	{
 		"chat everything", protocol.Chat, `{"model":"m","n":3,"max_completion_tokens":200,"max_tokens":100,
@@ -204,6 +210,8 @@ func TestInspectRejects(t *testing.T) {
 		{"stream not a boolean", protocol.Chat, `{"model":"m","stream":"yes"}`},
 		{"negative cap", protocol.Chat, `{"model":"m","max_tokens":-1}`},
 		{"fractional cap", protocol.Responses, `{"model":"m","max_output_tokens":1.5}`},
+		{"search limits adding up past int64", protocol.Messages, `{"model":"m",
+			"tools":[{"type":"web_search_20260209","max_uses":9223372036854775807},{"type":"web_search_20250305","max_uses":1}]}`},
 		{"unknown service tier", protocol.Chat, `{"model":"m","service_tier":"scale"}`},
 		{"unknown speed", protocol.Messages, `{"model":"m","speed":"turbo"}`},
 		{"messages not an array", protocol.Messages, `{"model":"m","messages":{}}`},

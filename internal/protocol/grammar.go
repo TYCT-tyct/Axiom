@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"math"
 
 	"axiom/internal/catalog"
 )
@@ -228,24 +229,30 @@ func (s *scanner) tool() error {
 		return err
 	}
 	if s.p.kind&(WebSearch|CodeExecution) != 0 {
-		s.addCalls()
+		if err := s.addCalls(); err != nil {
+			return err
+		}
 	}
 	s.r.Needs |= s.p.kind
 	return nil
 }
 
 // addCalls adds a server tool's limit to its kind's total. Limits of two tools of a kind add up, and a tool without
-// one leaves the total to the model's default.
-func (s *scanner) addCalls() {
+// one leaves the total to the model's default. A total past int64 is refused: wrapped, it would bound nothing.
+func (s *scanner) addCalls() error {
 	n := &s.r.WebSearches
 	if s.p.kind == CodeExecution {
 		n = &s.r.CodeExecutions
 	}
-	if s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0) {
+	switch {
+	case s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0):
 		*n = 0
-	} else {
+	case s.p.max > math.MaxInt64-*n:
+		return fmt.Errorf("max_uses add up past %d", int64(math.MaxInt64))
+	default:
 		*n += s.p.max
 	}
+	return nil
 }
 
 func (s *scanner) toolType() error {
