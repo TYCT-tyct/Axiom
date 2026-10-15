@@ -22,7 +22,7 @@ import (
 func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
-		"AXIOM_DATABASE_URL=" + pgtest.New(t).App,
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -55,7 +55,13 @@ func TestServe(t *testing.T) {
 // TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
-	database := pgtest.New(t)
+	database := pgtest.New(t, modules()...)
+	orphaned := pgtest.New(t, modules()...)
+	if err := pgtest.Run(t.Context(), orphaned.Superuser, `INSERT INTO suppliers.suppliers (owner_scope, name, kind,
+		origin, upstream_account, native_unit, settlement_currency, mgmt_egress_id)
+		VALUES ('platform', 'Orphan', 'ghost', 'https://ghost.example', 'a', 'usd', 'USD', 'direct')`); err != nil {
+		t.Fatal(err)
+	}
 	// taken is bound but never accepts: the system still completes connections to it, which then hear nothing, as
 	// from a database server that has stalled.
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -86,6 +92,11 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			"a database login that escapes row-level security",
 			[]string{"AXIOM_DATABASE_URL=" + database.Superuser},
 			[]string{"database: the database login can act as roles that row-level security cannot hold"},
+		},
+		{
+			"a supplier whose adapter this program lacks",
+			[]string{"AXIOM_DATABASE_URL=" + orphaned.App},
+			[]string{`"Orphan" (kind "ghost")`},
 		},
 		{
 			"a database server that never answers",

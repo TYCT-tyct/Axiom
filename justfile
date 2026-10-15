@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules scope tidy generated lint deadcode test vuln secrets web
+check: docs modules adapters-removable scope tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -38,6 +38,11 @@ lint:
 modules:
     go run -C tools ./checkmodules ..
 
+# Every adapter can be removed: for each one in the registry, deleting its package and its line there leaves the rest of
+# the program building and passing go vet (internal/suppliers/internal/removable)
+adapters-removable:
+    go run ./internal/suppliers/internal/removable .
+
 # Only internal/platform/pg sets the tenant scope or switches the role. Row-level security catches a forgotten
 # condition, not SQL that widens its own transaction's scope, which any role may do, and a role switched for the
 # session stays on a pooled connection; so set_config, the scope settings' bare names and SET or RESET ROLE, with
@@ -51,11 +56,11 @@ scope:
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
 # without failing, for the milestone's quality audit, by which time the program calls every module. Test-only
-# packages such as pgtest and egresstest, like net/http/httptest, are left out of that list; egress.NewForTesting
-# lives in egress itself, so it stays listed.
+# packages such as pgtest, egresstest and suppliers' adaptertest, like net/http/httptest, are left out of that list;
+# egress.NewForTesting lives in egress itself, so it stays listed.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
