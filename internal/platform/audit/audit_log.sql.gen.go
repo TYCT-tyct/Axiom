@@ -10,9 +10,10 @@ import (
 )
 
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
-INSERT INTO platform.audit_log (actor_kind, actor_id, request_id, action, module, target_kind, target_id, reason, detail)
+INSERT INTO platform.audit_log (actor_kind, actor_id, request_id, action, module, target_kind, target_id, site_id,
+    account_id, reason, detail)
 VALUES ($1, $2, nullif($3::text, '')::uuid, $4, $5, $6, $7,
-    nullif($8::text, ''), $9)
+    nullif($8::text, '')::uuid, nullif($9::text, '')::uuid, nullif($10::text, ''), $11)
 `
 
 type InsertAuditEntryParams struct {
@@ -23,6 +24,8 @@ type InsertAuditEntryParams struct {
 	Module     string
 	TargetKind string
 	TargetID   string
+	SiteID     string
+	AccountID  string
 	Reason     string
 	Detail     []byte
 }
@@ -36,6 +39,8 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, db DBTX, arg InsertAudit
 		arg.Module,
 		arg.TargetKind,
 		arg.TargetID,
+		arg.SiteID,
+		arg.AccountID,
 		arg.Reason,
 		arg.Detail,
 	)
