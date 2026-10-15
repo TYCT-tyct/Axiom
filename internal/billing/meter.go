@@ -40,8 +40,10 @@ type Meter struct {
 	trigger int64 // per mille of a segment
 	seq     int
 	ceiling ceiling        // what the approved segments cover
-	next    ceiling        // what the extension in flight would cover
-	pending bool           // an extension is in flight
+	next    ceiling        // what segment seq+1 covers once approved
+	request ExtendRequest  // the request for segment seq+1, resent unchanged until it succeeds
+	asked   bool           // request is set
+	flying  bool           // request is in flight
 	stop    platform.Exact // spend past it exhausts the approved segments
 	ask     platform.Exact // spend past it asks for the next segment
 }
@@ -66,12 +68,18 @@ func (r *Reservation) Bind(entry int) *Meter {
 // the drawn share of the current segment or, once the output limit is covered, only searches beyond it.
 func (m *Meter) limits() {
 	c := m.ceiling
-	m.stop = sum(m.q.output.Mul(c.tokens), m.q.search.Mul(c.excess))
+	m.stop = sum(m.q.output.Mul(c.tokens), m.searchCost(c.excess))
 	point := add(c.start, mul(m.q.segment, m.trigger)/1000) // rounded down: early, never late
 	if c.tokens >= m.q.outputCap {
 		point = c.tokens
 	}
-	m.ask = sum(m.q.output.Mul(point), m.q.search.Mul(c.excess))
+	m.ask = sum(m.q.output.Mul(point), m.searchCost(c.excess))
+}
+
+// searchCost is what searches beyond the quote cost: each one's fee and the samplings it adds, each rereading up to
+// the whole context. A saturated count only arises far beyond any balance, where Exhausted stops the attempt anyway.
+func (m *Meter) searchCost(excess int64) platform.Exact {
+	return sum(m.q.search.Mul(excess), m.q.resample.Mul(mul(excess, m.q.rereads)))
 }
 
 // Observe meters the progress and returns what the owner must do. Input-side counts are exact once reported, but
@@ -83,17 +91,20 @@ func (m *Meter) Observe(p Progress) MeterStep {
 		return MeterStep{} // reserved in full: never extended, never truncated
 	}
 	out, excess := m.used(p)
-	spend := sum(m.q.output.Mul(out), m.q.search.Mul(excess))
+	spend := sum(m.q.output.Mul(out), m.searchCost(excess))
 	var step MeterStep
-	if !m.pending && spend.Cmp(m.ask) > 0 {
-		c := m.ceiling
-		start := max(c.tokens, out)
-		m.next = ceiling{tokens: min(add(start, m.q.segment), m.q.outputCap), start: start, excess: max(c.excess, excess)}
-		m.pending, step.Extend = true, true
-		step.Request = ExtendRequest{
-			Seq: m.seq + 1, Entry: m.entry,
-			Target: sum(m.q.fixed, m.q.allowance, m.q.output.Mul(m.next.tokens), m.q.search.Mul(m.next.excess)),
+	if !m.flying && (m.asked || spend.Cmp(m.ask) > 0) {
+		if !m.asked {
+			c := m.ceiling
+			start := max(c.tokens, out)
+			m.next = ceiling{tokens: min(add(start, m.q.segment), m.q.outputCap), start: start, excess: max(c.excess, excess)}
+			m.request = ExtendRequest{
+				Seq: m.seq + 1, Entry: m.entry,
+				Target: sum(m.q.fixed, m.q.allowance, m.q.output.Mul(m.next.tokens), m.searchCost(m.next.excess)),
+			}
+			m.asked = true
 		}
+		m.flying, step.Extend, step.Request = true, true, m.request
 	}
 	step.Exhausted = spend.Cmp(m.stop) > 0
 	return step
@@ -108,15 +119,17 @@ func (m *Meter) used(p Progress) (out, excess int64) {
 	return min(out, m.q.outputCap), max(searches-m.q.searches, 0)
 }
 
-// Extended applies the outcome of the extension the last ExtendNow asked for, seq being its Seq. A failure leaves
-// the approved segments as they were: the next Observe asks again, or reports Exhausted if the segment runs out first.
+// Extended applies the outcome of the extension the last step asked for, seq being its Seq. A failure leaves the
+// approved segments as they were, and the next Observe resends the same request: the failed one may have committed
+// with only its acknowledgement lost, and Extend then reports success for that segment number, so its target must not
+// have moved. Need beyond it waits for the next segment number.
 func (m *Meter) Extended(seq int, err error) {
-	if !m.pending || seq != m.seq+1 {
+	if !m.flying || seq != m.request.Seq {
 		panic("billing: Extended without that extension in flight")
 	}
-	m.pending = false
+	m.flying = false
 	if err == nil {
-		m.seq, m.ceiling = seq, m.next
+		m.seq, m.ceiling, m.asked = seq, m.next, false
 		m.limits()
 	}
 }

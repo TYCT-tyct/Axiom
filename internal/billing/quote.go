@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"axiom/internal/catalog"
@@ -97,6 +98,8 @@ type quote struct {
 	output    platform.UnitPrice // the dearest price an output or reasoning token can have
 	search    platform.UnitPrice // a web search's dearest price, when the request enables web search
 	searches  int64              // the web searches fixed covers
+	resample  platform.UnitPrice // the input price of the samplings a search beyond them adds
+	rereads   int64              // the input tokens those samplings may read: the context, twice with compaction
 	outputCap int64              // the most output tokens the upstream may produce
 	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
 }
@@ -153,9 +156,10 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	tiers.Add(catalog.ServiceTierStandard)
 	uses, samplings := serverToolUses(d, e.Model)
 	first := min(window, add(d.TextBytes, add(mul(d.Images, e.Model.ImageTokens), mul(d.Documents, fileTokens(e.Model)))))
+	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	longest := first // the longest prompt any sampling can have, which bounds the band
-	if samplings > 1 {
-		longest = window // every later sampling rereads up to the whole context
+	if samplings > 1 || searchable {
+		longest = window // every later sampling, and one a search beyond the quote adds, rereads the whole context
 	}
 	rest := mul(samplings-1, window)
 	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
@@ -166,7 +170,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	}
 	// A saturated count understates the quote, so one that reached math.MaxInt64 refuses the entry. Only the first
 	// prompt may saturate: the context length caps it anyway.
-	if max(samplings, rest, add(output, allowance), overshoot) == math.MaxInt64 {
+	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
 	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
@@ -179,22 +183,43 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	}
 	q.output = outPrice
 	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
+	if err := q.priceServerTools(d, e, tiers, uses, searchable, restPrice); err != nil {
+		return q, err
+	}
+	q.allowance = outPrice.Mul(allowance)
+	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
+	return q, nil
+}
+
+// priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
+// search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
+// context at the input price of the later samplings, twice with compaction.
+func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
+	searchable bool, resample platform.UnitPrice,
+) error {
+	window := e.Model.ContextLength
 	for it, n := range uses {
 		if n == 0 {
 			continue
 		}
 		price, ok := e.Price.Ceiling(1<<catalog.Item(it), tiers, window)
 		if !ok {
-			return q, errUnpriced
-		}
-		if catalog.Item(it) == catalog.ItemWebSearch {
-			q.search, q.searches = price, n
+			return errUnpriced
 		}
 		q.fixed = sum(q.fixed, price.Mul(n))
 	}
-	q.allowance = outPrice.Mul(allowance)
-	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
-	return q, nil
+	if !searchable {
+		return nil
+	}
+	var ok bool
+	if q.search, ok = e.Price.Ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
+		return errUnpriced
+	}
+	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
+	if d.Compaction {
+		q.rereads = mul(window, 2)
+	}
+	return nil
 }
 
 // fileTokens bounds one file: Documents counts files, not pages (protocol does not parse PDFs), so a file takes its

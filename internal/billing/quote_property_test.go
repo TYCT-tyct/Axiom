@@ -267,7 +267,7 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 		inputs.Add(catalog.ItemCacheRead)
 	}
 	longest := first.Int64()
-	if samplings.Cmp(b(1)) > 0 {
+	if samplings.Cmp(b(1)) > 0 || uses[webSearch] != nil {
 		longest = c.e.Model.ContextLength
 	}
 	price := func(items catalog.ItemSet, length int64) *big.Rat {
@@ -287,9 +287,9 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	for it, n := range uses {
 		term(price(1<<it, c.e.Model.ContextLength), n)
 	}
-	output, overshoot := c.referenceOutput()
+	output, limit, overshoot := c.referenceOutput()
 	term(price(1<<catalog.ItemOutput|1<<catalog.ItemReasoning, longest), output)
-	fits := overshoot.Cmp(b(math.MaxInt64)) < 0
+	fits := overshoot.Cmp(b(math.MaxInt64)) < 0 && limit.Cmp(b(math.MaxInt64)) < 0
 	for _, n := range counts[1:] { // the first prompt is capped by the context length
 		fits = fits && n.Cmp(b(math.MaxInt64)) < 0
 	}
@@ -315,17 +315,19 @@ func (c quoteCase) referenceUses() (map[catalog.Item]*big.Int, *big.Int) {
 	return uses, samplings
 }
 
-// referenceOutput is the output tokens to reserve, the allowance's rounded up, and the overshoot in token-nanoseconds.
-func (c quoteCase) referenceOutput() (output, overshoot *big.Int) {
+// referenceOutput is the output tokens to reserve, the allowance's rounded up; the output limit, which must be
+// representable even when the first segment is smaller; and the overshoot in token-nanoseconds.
+func (c quoteCase) referenceOutput() (output, limit, overshoot *big.Int) {
 	b := big.NewInt
-	output, overshoot = new(big.Int).Mul(b(c.e.MaxOutput), b(max(c.d.Choices, 1))), new(big.Int)
+	limit, overshoot = new(big.Int).Mul(b(c.e.MaxOutput), b(max(c.d.Choices, 1))), new(big.Int)
+	output = new(big.Int).Set(limit)
 	if !c.e.Segmentable {
-		return output, overshoot
+		return output, limit, overshoot
 	}
 	if output.Cmp(b(c.s.Output)) > 0 {
 		output = b(c.s.Output)
 	}
 	overshoot.Mul(b(int64(c.s.Overshoot)), b(c.e.Model.OutputSpeed))
 	allowance := new(big.Int).Neg(new(big.Int).Div(new(big.Int).Neg(overshoot), b(int64(time.Second)))) // Div floors
-	return output.Add(output, allowance), overshoot
+	return output.Add(output, allowance), limit, overshoot
 }

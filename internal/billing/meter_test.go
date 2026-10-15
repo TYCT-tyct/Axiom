@@ -144,8 +144,9 @@ func TestMeterLargeEvent(t *testing.T) {
 // extension leaves the approved segments alone and the next Observe asks for the same segment again.
 func TestMeterOneExtensionInFlight(t *testing.T) {
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
-	if step := m.Observe(Progress{ContentBytes: 5}); !step.Extend || step.Request.Seq != 2 {
-		t.Fatalf("Observe = %+v, want extension 2", step)
+	first := m.Observe(Progress{ContentBytes: 5})
+	if !first.Extend || first.Request.Seq != 2 || units(t, first.Request.Target) != target(t, 16) {
+		t.Fatalf("Observe = %+v, want extension 2 to %s", first, target(t, 16))
 	}
 	for _, n := range []int64{7, 9} {
 		if step := m.Observe(Progress{ContentBytes: n}); step.Extend || step.Exhausted != (n > 8) {
@@ -153,9 +154,42 @@ func TestMeterOneExtensionInFlight(t *testing.T) {
 		}
 	}
 	m.Extended(2, errors.New("database timeout"))
-	step := m.Observe(Progress{ContentBytes: 9})
-	if !step.Extend || !step.Exhausted || step.Request.Seq != 2 || units(t, step.Request.Target) != target(t, 17) {
-		t.Errorf("after a failure: Observe = %+v, want extension 2 to %s and exhausted", step, target(t, 17))
+	if step := m.Observe(Progress{ContentBytes: 9}); !step.Extend || !step.Exhausted || step.Request != first.Request {
+		t.Errorf("after a failure: Observe = %+v, want the same request %+v again and exhausted", step, first.Request)
+	}
+}
+
+// TestMeterLostAcknowledgement: the first request for segment 2 commits but its acknowledgement is lost while the
+// output grows past what it asked for. The resent request is the same, so Extend's "already segment 2" success
+// approves exactly what was committed; the further need goes to segment 3.
+func TestMeterLostAcknowledgement(t *testing.T) {
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	first := m.Observe(Progress{ContentBytes: 5})
+	m.Extended(2, errors.New("connection reset after commit"))
+	resent := m.Observe(Progress{ContentBytes: 13})
+	if !resent.Extend || resent.Request != first.Request {
+		t.Fatalf("resent = %+v, want %+v", resent, first.Request)
+	}
+	m.Extended(2, nil) // Extend found segment 2 already written
+	step := m.Observe(Progress{ContentBytes: 13})
+	if step.Exhausted || !step.Extend || step.Request.Seq != 3 || units(t, step.Request.Target) != target(t, 24) {
+		t.Errorf("after success: Observe = %+v, want extension 3 to %s", step, target(t, 24))
+	}
+}
+
+// TestMeterTriggerPoint: the drawn per mille maps to a point rounded down within the 8-token segment, so 40% (3.2)
+// extends past 3 tokens and 60% (4.8) past 4: early, never late.
+func TestMeterTriggerPoint(t *testing.T) {
+	for _, tc := range []struct{ trigger, last, first int64 }{{400, 3, 4}, {600, 4, 5}} {
+		m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+		m.trigger = tc.trigger
+		m.limits()
+		if step := m.Observe(Progress{ContentBytes: tc.last}); step.Extend {
+			t.Errorf("trigger %d at %d tokens: Observe = %+v, want to continue", tc.trigger, tc.last, step)
+		}
+		if step := m.Observe(Progress{ContentBytes: tc.first}); !step.Extend {
+			t.Errorf("trigger %d at %d tokens: Observe = %+v, want an extension", tc.trigger, tc.first, step)
+		}
 	}
 }
 
@@ -163,16 +197,38 @@ func TestMeterOneExtensionInFlight(t *testing.T) {
 // output, counted by event or by the reported count, whichever is higher.
 func TestMeterSearches(t *testing.T) {
 	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
-	m := meter(t, d, entry(t, true, 3))
+	e := entry(t, true, 3)
+	m := meter(t, d, e)
 	if step := m.Observe(Progress{Searches: 1}); step.Extend || step.Exhausted {
 		t.Fatalf("one search: Observe = %+v, want to continue", step)
 	}
-	reported := usage(t, map[catalog.Item]int64{webSearch: 3})
-	step := m.Observe(Progress{Searches: 2, Reported: reported})
-	// The fixed part also holds the second sampling's input (1000 at 4) and the quoted search (100); output at 20.
-	want := units(t, sum(amount(t, 80+4000+100+150*20+16*20), amount(t, 2*100)))
+	step := m.Observe(Progress{Searches: 2, Reported: usage(t, map[catalog.Item]int64{webSearch: 3})})
+	// The fixed part holds 80 + the quoted search's sampling (1000 at 4) + its fee (100), the allowance 150 at 20; the
+	// request adds 16 output tokens at 20 and, for each of the 2 searches beyond, a sampling (1000 at 4) and a fee.
+	want := units(t, amount(t, 80+4000+100+150*20+16*20+2*(4000+100)))
 	if !step.Extend || !step.Exhausted || units(t, step.Request.Target) != want {
-		t.Errorf("3 searches: Observe = %+v, want extension to %s and exhausted", step, want)
+		t.Fatalf("3 searches: Observe = %+v, want extension to %s and exhausted", step, want)
+	}
+	// The dearest call the approved segments allow, priced per sampling: the first prompt, one sampling per search
+	// rereading the whole context, the 3 searches and 16 output tokens.
+	samplings := []map[catalog.Item]int64{{in: 80}, {in: 1000, webSearch: 3}, {in: 1000}, {in: 1000, catalog.ItemOutput: 16}}
+	cost := sum()
+	for _, c := range samplings {
+		got, missing, err := e.Price.Cost(usage(t, c))
+		if err != nil || missing != 0 {
+			t.Fatal(missing, err)
+		}
+		cost = sum(cost, got)
+	}
+	if step.Request.Target.Cmp(cost) < 0 {
+		t.Errorf("target %s below the call's cost %s", want, units(t, cost))
+	}
+	// With compaction every search adds two samplings: the quote's fixed part rereads three contexts, each search
+	// beyond adds two more.
+	d.Compaction = true
+	step = meter(t, d, e).Observe(Progress{Searches: 3})
+	if want := units(t, amount(t, 80+3*4000+100+150*20+16*20+2*(2*4000+100))); units(t, step.Request.Target) != want {
+		t.Errorf("3 searches with compaction: Observe = %+v, want extension to %s", step, want)
 	}
 }
 
@@ -197,18 +253,13 @@ func TestBindDroppedEntry(t *testing.T) {
 	r.Bind(1)
 }
 
-// TestQuoteTrigger: the extension point is drawn once per request from 40% to 60% of a segment.
+// TestQuoteTrigger: the draw stays within 40% to 60% of a segment; where each value lands is TestMeterTriggerPoint's.
 func TestQuoteTrigger(t *testing.T) {
-	seen := map[int64]bool{}
-	for range 2000 {
+	for range 1000 {
 		r, err := Quote(Demand{}, []Quotable{entry(t, true, 3)}, segments, nil)
 		if err != nil || r.trigger < 400 || r.trigger > 600 {
 			t.Fatalf("Quote = %+v, %v; want a trigger from 400 to 600 per mille", r, err)
 		}
-		seen[r.trigger] = true
-	}
-	if !seen[400] || !seen[600] || len(seen) < 150 {
-		t.Errorf("2000 quotes drew %d distinct triggers, ends %v %v; want them spread from 400 to 600", len(seen), seen[400], seen[600])
 	}
 }
 

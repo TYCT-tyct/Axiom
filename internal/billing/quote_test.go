@@ -2,6 +2,7 @@ package billing
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -118,6 +119,11 @@ func TestQuoteEntryModel(t *testing.T) {
 	}{
 		{"a file without a page limit: 1000 at 4 + 500 at 20", Demand{Documents: 1}, noPageLimit, "14000"},
 		{"cache reads dearer than input: 80 at 2 + 1", Demand{TextBytes: 80}, dearCache, "161"},
+		{
+			"web search listed with no uses may still search, so output at the context's band: 80 + 500 at 20",
+			Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch}}},
+			entry(t, false, 0), "10080",
+		},
 	} {
 		got, err := quoteEntry(tc.d, tc.e, segments)
 		if err != nil || units(t, got.amount) != tc.want {
@@ -129,6 +135,8 @@ func TestQuoteEntryModel(t *testing.T) {
 func TestQuoteEntryRefuses(t *testing.T) {
 	noContext := entry(t, false, 3)
 	noContext.Model.ContextLength = 0
+	hugeOutput := entry(t, true, 3)
+	hugeOutput.MaxOutput = math.MaxInt64/2 + 1
 	for _, tc := range []struct {
 		name string
 		d    Demand
@@ -142,6 +150,7 @@ func TestQuoteEntryRefuses(t *testing.T) {
 			entry(t, false, 3),
 		},
 		{"a model without a context length", Demand{}, noContext},
+		{"an output limit past int64 behind a small first segment", Demand{Choices: 2}, hugeOutput},
 	} {
 		if got, err := quoteEntry(tc.d, tc.e, segments); err == nil {
 			t.Errorf("%s: quote = %s, want an error", tc.name, units(t, got.amount))
