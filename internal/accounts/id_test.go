@@ -36,6 +36,18 @@ func TestIDsReadOnlyTheirOwnKind(t *testing.T) {
 			v, err := accounts.ParseWorkspaceID(s)
 			return uuid.UUID(v), err
 		}},
+		{"user_", accounts.UserID(id).TypeID(), func(s string) (uuid.UUID, error) {
+			v, err := accounts.ParseUserID(s)
+			return uuid.UUID(v), err
+		}},
+		{"key_", accounts.KeyID(id).TypeID(), func(s string) (uuid.UUID, error) {
+			v, err := accounts.ParseKeyID(s)
+			return uuid.UUID(v), err
+		}},
+		{"sess_", accounts.SessionID(id).TypeID(), func(s string) (uuid.UUID, error) {
+			v, err := accounts.ParseSessionID(s)
+			return uuid.UUID(v), err
+		}},
 	}
 	for i, kind := range kinds {
 		if !strings.HasPrefix(kind.written, kind.prefix) {

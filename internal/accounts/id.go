@@ -15,6 +15,9 @@ var (
 	tierPrefix      = typeid.MustPrefix("tier")
 	accountPrefix   = typeid.MustPrefix("acct")
 	workspacePrefix = typeid.MustPrefix("ws")
+	userPrefix      = typeid.MustPrefix("user")
+	keyPrefix       = typeid.MustPrefix("key")
+	sessionPrefix   = typeid.MustPrefix("sess")
 )
 
 // SiteID is a site's ID.
@@ -63,4 +66,40 @@ func (id WorkspaceID) TypeID() string { return workspacePrefix.Encode(uuid.UUID(
 func ParseWorkspaceID(s string) (WorkspaceID, error) {
 	id, err := workspacePrefix.Decode(s)
 	return WorkspaceID(id), err
+}
+
+// UserID is a user's ID.
+type UserID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id UserID) TypeID() string { return userPrefix.Encode(uuid.UUID(id)) }
+
+// ParseUserID reads what TypeID writes; anything else, another kind's ID included, is typeid.ErrInvalid.
+func ParseUserID(s string) (UserID, error) {
+	id, err := userPrefix.Decode(s)
+	return UserID(id), err
+}
+
+// KeyID is an API key's ID.
+type KeyID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id KeyID) TypeID() string { return keyPrefix.Encode(uuid.UUID(id)) }
+
+// ParseKeyID reads what TypeID writes; anything else, another kind's ID included, is typeid.ErrInvalid.
+func ParseKeyID(s string) (KeyID, error) {
+	id, err := keyPrefix.Decode(s)
+	return KeyID(id), err
+}
+
+// SessionID is a session's ID.
+type SessionID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id SessionID) TypeID() string { return sessionPrefix.Encode(uuid.UUID(id)) }
+
+// ParseSessionID reads what TypeID writes; anything else, another kind's ID included, is typeid.ErrInvalid.
+func ParseSessionID(s string) (SessionID, error) {
+	id, err := sessionPrefix.Decode(s)
+	return SessionID(id), err
 }
