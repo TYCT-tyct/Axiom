@@ -2,7 +2,7 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、改写同格式请求的 `Prepare`、转发同格式流的 `Relay`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；其余格式的转发、转换按 Issue #27 的计划逐个 PR 加入，加入时改写本文。
+目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发同格式流的 `Relay`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；跨格式的流转换、非流式聚合和 `RenderError` 按 Issue #27 的计划随后加入，加入时改写本文。
 
 ## 包
 
@@ -51,7 +51,42 @@
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
 - **出错**：标识不是字符串、`metadata` 不是对象、要加 `include` 时它不是数组或含非字符串的元素、有历史时 `input` 不是字符串、数组或 `null`，返回 `ErrInvalid`；`previous_response_id` 非空与是否给了历史不一致是 gateway 的错，返回另一个错误，不当成客户端的 400。历史条目是本站存下的原样 JSON，不再校验。
 
-## 读 SSE
+## 跨格式转换
+
+M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；Messages、Responses 客户端只走原格式的端点，其他方向返回 `*NotSupported`。本节是请求一侧，流和非流式聚合随后一个 PR 加入。
+
+- **规范模型**：`canon` 用 jsonx 读 Chat 请求，形状就是 Chat 的：M1 只有 Chat 请求要转换，以后另两种格式的客户端要跨格式时，各自读进同一个模型。凡是原样搬运的字符串都存成原文（`jsontext.Value`），引号和转义照旧写出，所以上游读到的解码值与客户端写的完全相同，不经过解码再编码。
+- **先查形状，再查能不能表达**：工具和工具调用的名字、文本部件的 `text` 是字符串，调用的 `arguments` 是字符串，JSON schema 回复有名字和对象 schema，否则是客户端的错（`ErrInvalid`）；Chat 有而目标格式表达不了的，是这个端点的不足（`*NotSupported`），gateway 换端点。Chat 定义了而 `canon` 没读的成员，只有取默认值或 `null` 时才放过（`frequency_penalty` 0、`n` 1、`logprobs` false、`modalities` 只有文本等），否则 `*NotSupported`；路由参数和本站扩展读过就丢。工具调用要一一配对、ID 不重复不为空，否则 `*NotSupported`。
+- **`Target` 里的模型数据**：Messages 端点的 `MaxOutput`（请求没写输出上限时用它，Anthropic 必须有）、`Thinking`（`ThinkingAdaptive` 用 `thinking.type: adaptive` 和 `output_config.effort`，`ThinkingManual` 用 `budget_tokens`）、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`，由 gateway 从模型规格填，不按模型名猜。
+
+| Chat | → Messages（Anthropic《Messages API reference》，2026-10-14） | → Responses（OpenAI《Create a model response》，2026-10-14） |
+|---|---|---|
+| 开头的 `system`、`developer` 消息 | 顶层 `system` 的文本块 | 原位的 `message` 项，角色不变 |
+| 对话中的 `system`、`developer` 消息 | `MidSystem` 时原位的 `role: "system"`，须紧跟用户或工具结果、后面是助手或结尾；紧跟工具结果而模型不信任时、位置不合规时 `*NotSupported`（《Mid-conversation system messages》，2026-10-13） | 原位 |
+| 第一条非系统消息不是用户 | `*NotSupported` | 照写 |
+| 文本 | 文本块，带着 OpenRouter 写法的 `cache_control`；空文本不写 | `input_text`；助手的是 `output_text` |
+| 图片 | data URL 写成 base64，其余写成 URL；`detail: low` `*NotSupported` | `input_image`，`detail` 照写 |
+| 文件 | PDF 的 data URL 写成 `document`；其他文件、`file_id` `*NotSupported` | `input_file`；`file_id` `*NotSupported` |
+| 音频等其他部件 | `*NotSupported` | `*NotSupported` |
+| 工具调用 | `tool_use`，ID 见下；`arguments` 必须是 JSON 对象，空串当 `{}` | `function_call`，`call_id`、`arguments` 原样 |
+| 工具结果 | 连续的几条合成一条用户消息的 `tool_result` 块 | `function_call_output` |
+| 回放的推理（OpenRouter `reasoning_details`） | 只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文 |
+| 空的助手消息 | 不写（Anthropic 拒绝空内容，前后的用户消息由它合并） | 一个空的 `output_text` |
+| 函数工具 | `input_schema`，没有就是空对象；`strict: true` 只在 schema 属于 Anthropic 的子集时写，否则 `*NotSupported` | `strict` 总是写，Chat 没写就写 `false`：Responses 把没写当成 `true` 并改写 schema（OpenAI《Function calling》「Strict mode」） |
+| `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `DefaultSamplingOnly` 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |
+| 推理强度 | 自适应模型：`low` 到 `max` 照写，`none` 关闭，其余和推理预算 `*NotSupported`；手动模型：预算 = max(min(上限 × 比例, 128000), 1024)，比例按 OpenRouter（xhigh 0.95、high 0.8、medium 0.5、low 0.2、minimal 0.1），必须小于 `max_tokens`；最后一条助手消息调用了工具却没有可回放的推理时 `*NotSupported`（《Extended thinking》） | `reasoning.effort`，要看推理时加 `summary: "auto"`；推理预算 `*NotSupported` |
+| `response_format` | `json_schema` 在子集内时写进 `output_config.format`；`json_object` 和子集外的 `*NotSupported` | `text.format` |
+| `temperature`、`top_p` | 默认值 1 不写；其余在 0 到 1 之间照写，思考时或 `DefaultSamplingOnly` 时 `*NotSupported` | 照写 |
+| `stop` | `stop_sequences` | `*NotSupported` |
+| `verbosity` | `*NotSupported` | `text.verbosity` |
+| 输出上限 | `max_tokens`：`max_tokens`、`max_completion_tokens` 取大，都没有用 `Target.MaxOutput` | `max_output_tokens` |
+| `user`、`safety_identifier`、`prompt_cache_key` | `user` 的派生值写进 `metadata.user_id`，另两个不写 | 都换成派生值 |
+| `service_tier` | `auto` 照写，`default` 写成 `standard_only`，其余 `*NotSupported` | 照写 |
+| 存储 | — | `store: false`，加密推理的模型带 `include`，与同格式改写相同 |
+
+- **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`。合规且不以 `axid_` 开头的 ID 原样；其余写成 `axid_` 加原 ID 字节的十六进制。两类不相交、十六进制一一对应，所以不同的 ID 写出来仍不同；调用和结果用同一个函数，配得上。
+- **结构化输出的子集**（Anthropic《Structured outputs》「JSON Schema limitations」，2026-10-15）：没有数值、字符串约束，数组只有 `minItems` 0 或 1，每个对象都写 `additionalProperties: false`，枚举只含简单值，`format` 在它的列表里，`$ref` 只指向本 schema 的定义、不递归，`allOf` 里没有 `$ref`。不在子集内就换端点，不靠删约束凑。
+
 
 规则按 WHATWG《Server-sent events》的解析部分（2026-10-14 读取）：
 
@@ -134,6 +169,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 |---|---|
 | `request.json` | 发给上游的请求体 |
 | `upstream.sse` | 上游返回的流。官方样本是原样的字节，`.gitattributes` 让 `*.sse` 不做换行转换，所以 CRLF 的流也原样保存；录制的样本是按事件重建的规范形式，见「录制」 |
+| `to-<上游格式>.json` | 只在 Chat 样本里：`request.json` 转换给该格式端点的请求体，按测试里固定的模型名、输出上限和派生值；`go test ./internal/protocol -update` 重写 |
 | `client-<客户端格式>.sse` | `Relay` 把这个流转给该格式客户端的输出，按测试里固定的调用编号、模型名和费用；`go test ./internal/protocol -update` 重写，PR 里审差异 |
 | `meta.json` | `source`：官方样本是来源的网址，录制的是 `recorded from a live upstream: POST <官方端点>`，不写上游的地址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
 
@@ -174,6 +210,9 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes`；字节上界不漏不重 | `TestRelayProgress`；`TestRelayChatContent` 计入各方言的推理、拒答和工具调用；`TestRelayResponsesContent` 核对项完成时只加多出的字节、没有增量的项照样计入、`web_search_call` 计一次搜索；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
 | 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；样本在预算为 0 时照常转发，说明基础额度够用 |
 | 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
+| Chat 请求转换给 Messages、Responses 端点时，表里每一行都按表写，表达不了的返回 `*NotSupported`、类型不对的返回 `ErrInvalid` | `TestConvertToMessages`、`TestConvertToResponses` 每行至少一个用例，比较解码后的值；`TestConvertSamples` 把官方样本的请求与黄金输出逐字节比较；`TestToolUseIDs` 核对 ID 写出来仍不同、调用和结果配得上 |
+| 转换只取决于历史：第 n 轮的转换结果是第 n+1 轮的前缀（I11） | `TestConvertPrefix` 用一段含工具调用、合并的工具结果、对话中的系统消息和回放推理的对话，逐轮转换比较 |
+| Chat 请求只要 `Inspect` 接受，转换要么得到我们自己读得了的请求体，要么是 `*NotSupported` 或 `ErrInvalid`，不会 panic | 模糊测试 `FuzzConvert`，以 `Inspect` 的 Chat 用例和上面的对话为种子 |
 | 官方样本都通过检查，每条结构规则都有违反它的流被拒 | `TestSamples`；表驱动的坏流按错误里的说法区分规则，所以去掉任何一条规则，它的用例就失败 |
 | 上游给的序号再离谱，检查也只报错 | 序号只与已见到的部件个数比较，从不用来分配或下标越界；模糊测试以全部样本和极端序号为种子 |
 | 录制的样本要么完整、通过样本测试、不含 key 和 ID 位置上的原值，要么不存在；ID 位置之外的数据原样保留 | 本地 httptest 上游回放三种格式的已提交样本，分别用 LF、单独 CR、CRLF 行尾，前面加一组评审找到的注释（落单引号、`"input": {`、行末反斜杠），断言写下的流就是样本的事件按规范形式重建、只换了 ID，请求里工具参数的 `input.id` 不动，同一个 ID 在请求里转义写、在流里原样写也对应同一个占位值；每种拒绝一个用例（含评审的注释反例后跟转义写出的 key），断言没有发出请求（发出前的拒绝）、错误里没有 key 且目录为空；重定向、空闲超时各有用例；模糊测试：任意流重建后读回的事件数相同，每个事件除 ID 位置外 JSON 值相同，占位值一一对应，不含 key；每条规则都经过变异验证 |
@@ -194,6 +233,10 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | Responses 在 `response.created` 之前出错时写 `error` 事件 | 流只能以 `response.created` 或 `error` 开头；网关提交前出错本来换端点，不写结尾，这是防御 | 一律 `response.failed` |
 | Responses 的项完成时只加比增量多出的字节 | 增量和完成的项重复同一段文字，两次都计会让追加提前一倍；只计增量又漏掉一次给全的项 | 只计增量；增量和项都计 |
 | 步骤类型带 `Step` 前缀 | 草图里的 `Progress` 既是类型又是步骤类型，同一个包里不能重名 | 改名 `Progress` 类型：billing 的草图用这个名字 |
+| M1 的规范模型就是 Chat 的形状，用 jsonx 读成结构体，字符串存原文 | 只有 Chat 请求要转换；结构体让每个转换函数只看自己要的成员，原文让搬运的文本解码后不变 | 先定义与格式无关的部件类型再逐格式解码：M1 只有一个来源，多一层没有用处 |
+| 表达不了的请求返回 `*NotSupported`，不近似 | 删掉约束、换写法会让模型做的不是客户端要的；换个端点能原样表达 | 尽量转换：结构化输出删掉子集外的约束、低细节图片按高细节发 |
+| 模型的思考方式、对话中系统消息、采样限制由 `Target` 带来 | 按模型名猜，新模型一出就错；catalog 的模型规格还没实现，由 gateway 从后台数据填 | 在 protocol 里按模型名判断 |
+| Responses 的推理项只回放带密文的 | 上游不存状态，只有 ID 的推理项查不到 | 只有摘要也回放 |
 | 拉取式：调用方循环调用 `Next` | 空闲超时只被真正的数据事件重置（[总体架构](../../docs/architecture.md#协议转换)）：注释在 `Next` 内部跳过，天然不算；`Next` 不认识数据里的事件类型，所以由认识格式的调用方先分出 Messages 的 `ping` 这类心跳，只在真正的数据事件上重置 | 回调或通道：取消和计时分散到两处 |
 | 截断的 JSON 报 `ErrInvalid`，不包装 JSON 的原始错误 | 原始错误包装着 `io.ErrUnexpectedEOF`，会被当成流提前结束 | 直接包装：两类错误分不开 |
 | 检查接受未列出的事件类型 | Anthropic 的版本策略会不另行通知地增加事件类型，要求客户端容忍；OpenAI 的两种格式同样对待，免得把新版本的接口判成坏上游 | 只认列出的类型 |

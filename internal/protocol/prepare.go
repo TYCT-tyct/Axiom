@@ -18,7 +18,32 @@ type Target struct {
 	// EncryptedReasoning is set when the model returns its reasoning encrypted on request, as OpenAI's reasoning
 	// models do. A model without it refuses a request that asks (README.md「同格式改写」).
 	EncryptedReasoning bool
+	// The rest is what a conversion needs to know of a Messages model (README.md「跨格式转换」). The gateway fills it
+	// from the model's spec: it is data, never guessed from the model's name.
+	//
+	// MaxOutput is the model's default output cap, which Messages requires when the request sets none.
+	MaxOutput int64
+	// Thinking is how the model is asked to reason.
+	Thinking Thinking
+	// MidSystem is set when the model takes a system message after the conversation has started, and
+	// UntrustedSystemAfterTools when it reads one right after tool results as text it may not trust (Anthropic
+	// 《Mid-conversation system messages》, read 2026-10-13).
+	MidSystem, UntrustedSystemAfterTools bool
+	// DefaultSamplingOnly is set when the model refuses a temperature or top_p other than the default and a forced
+	// tool choice, as Claude 5.5 models do.
+	DefaultSamplingOnly bool
 }
+
+// Thinking is how a Messages model is asked to reason.
+type Thinking uint8
+
+// The ways to ask.
+const (
+	// ThinkingAdaptive asks with thinking.type adaptive and output_config.effort.
+	ThinkingAdaptive Thinking = iota
+	// ThinkingManual asks with a thinking budget, budget_tokens, which the newer models refuse.
+	ThinkingManual
+)
 
 // Rewrites are the gateway's values for one request.
 type Rewrites struct {
@@ -55,11 +80,15 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // as it is. A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
-	if r.Format != t.Format {
+	var err error
+	if r.Format == t.Format {
+		u.Body, err = rewrite(r.Format, body, t, w)
+		return u, err
+	}
+	if r.Format != Chat {
 		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to format %d", r.Format, t.Format)}
 	}
-	var err error
-	u.Body, err = rewrite(r.Format, body, t, w)
+	u.Body, err = convert(body, t, w)
 	return u, err
 }
 
