@@ -75,6 +75,31 @@
 
 三种格式都：结尾之后再有事件、流在结尾之前结束，都不合规。未列出的事件类型照常接受，只按通用规则检查（Responses 的序号和所指的项、部件）。`[样本]`：`response.incomplete` 时项是否都已完成，官方文档没有写明，按 `response.completed` 的规则检查，等录到达到输出上限的流再确认。
 
+## 转发（草图）
+
+还没有实现，是 #27 的 P4–P10 要做的接口；gateway 怎么用它见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
+
+```go
+func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) // *NotSupported → gateway 跳过这个条目
+type UsageContext struct{ CacheTTL1h bool; Tier catalog.ServiceTier } // 实际发往上游的请求里的缓存断点与明确写的等级，Upstream 带出
+func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay
+func (r *Relay) Next() (Step, error) // 阻塞读；取消 attemptCtx 关闭 body 即返回
+type Step struct{ Out []byte; Kind StepKind } // Buffered | Commit（Out 含暂存的开头）| Data | Progress（未成事件，Out 为空）| Heartbeat | UpstreamDone
+func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、已报告的准数
+func (r *Relay) Usage() Usage       // Segments []Segment{catalog.Usage; Reported catalog.ItemSet}，每段各自的已报告项
+func (r *Relay) Finish(f Final) []byte
+func (r *Relay) Fail(e Error, f *Final) []byte // f 为 nil：结算没提交，结尾不带费用
+func KeepAlive(f Format) []byte
+func RenderError(f Format, e Error, fin *Final) (status int, body []byte)
+type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency; Estimated, Pending bool }
+```
+
+- **拉取式**：调用方循环调用 `Next`。`Next` 每做一次底层读（至多 16 KiB）就返回；读到的字节还没凑成完整事件时返回 `Progress`，已到的原始字节记进 `Progress().PartialBytes`，所以调用方可以在每次读之后计量，一个越过当前段的大事件、一个持续到达却迟迟不结束的事件，都在读的过程中被看到。
+- **切片的有效期**：`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效；`Relay` 只由一个 goroutine 调用。
+- **保活**：`KeepAlive(format)` 返回预生成的字节（Messages 是 `event: ping`，Chat 和 Responses 是注释行），调用方在已提交之后自己写，不经过 `Relay`。
+- **`UsageContext`**：用量归一化要知道实际发往上游的请求里有没有 1 小时的缓存断点、明确写了哪个服务等级。Anthropic 没给 `cache_creation` 明细时按它归类，规则以 [catalog 的用量折算](../catalog/README.md)为准。
+- `Final.Pending` 为真时（结算写不进），结尾带 `axiom.billing_pending`、不带费用（[接入的「用量与费用」](../../docs/domains/gateway.md#用量与费用)）。
+
 ## 录制样本
 
 协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`，场景名用英文小写和连字符。每个场景三个文件：
@@ -123,6 +148,7 @@
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
+| `Relay` 也是拉取式，单一调用方，保活用预生成字节 | 推送事件的接口要用 `internal/sse` 的类型，gateway 引用不了；只有一个调用方，就不用处理并发调用 | `Push(sse.Event)`：暴露内部类型 |
 | 拉取式：调用方循环调用 `Next` | 空闲超时只被真正的数据事件重置（[总体架构](../../docs/architecture.md#协议转换)）：注释在 `Next` 内部跳过，天然不算；`Next` 不认识数据里的事件类型，所以由认识格式的调用方先分出 Messages 的 `ping` 这类心跳，只在真正的数据事件上重置 | 回调或通道：取消和计时分散到两处 |
 | 截断的 JSON 报 `ErrInvalid`，不包装 JSON 的原始错误 | 原始错误包装着 `io.ErrUnexpectedEOF`，会被当成流提前结束 | 直接包装：两类错误分不开 |
 | 检查接受未列出的事件类型 | Anthropic 的版本策略会不另行通知地增加事件类型，要求客户端容忍；OpenAI 的两种格式同样对待，免得把新版本的接口判成坏上游 | 只认列出的类型 |
