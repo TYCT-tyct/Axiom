@@ -2,7 +2,7 @@
 
 预留、计量、追加、结算、清理与校正在代码层面的接口和规则。钱怎么算、收谁多少见[计费](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；这里只写调用路径上下游代码要依赖的部分，定价、账本、额度批次的代码结构随实现补入本文。
 
-> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote` 和计量 `Meter`（B2、B3 的纯内存部分，见下文「报价」「计量」）；其余是设计，尚未实现。
+> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`，以及预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`（见下文「报价」「计量」「数据」）；结算、清理、校正是设计，尚未实现。
 
 ## 接口（草图）
 
@@ -20,17 +20,21 @@ type Model struct{ ContextLength, ImageTokens, PageTokens, FilePages, OutputSpee
 type Segments struct{ Output int64; Overshoot time.Duration } // 站点设置：每段输出 token；追加等待加取消生效的延迟上限
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) // 已实现，纯函数；Reserve 在锁下调用它
 type Reservation struct{ Amount platform.Exact; Kept []int }
-func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, id platform.RequestID,
-	d Demand, q []Quotable) (*Hold, []int, error) // []int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}
-func (h *Hold) Bind(seq platform.AttemptSeq, entry int) *Meter // entry 是原路线下标；进入 Send 时调用
-func (r *Reservation) Bind(entry int) *Meter // 已实现；Hold.Bind 在 B2 里包它，加上尝试序号
+func Start(ctx context.Context, db *pg.DB, platform pg.Scope, c Config) (*Billing, error) // 已实现：登记一个新持有者
+func (b *Billing) Heartbeat(ctx context.Context) error // 已实现；ErrReaped：进程停止准入、换新持有者（再 Start）
+func (b *Billing) Reap(ctx context.Context) (int, error) // 已实现：回收过期超过宽限的持有者
+func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor int64) error // 已实现：开户时建余额行
+type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；accounts.Admit 落地后换成 accounts.Admission
+func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID,
+	d Demand, q []Quotable) (*Hold, []int, error) // 已实现；[]int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}、ErrTerminated
+func (h *Hold) Bind(entry int) *Meter // 已实现（经内嵌的 Reservation）；尝试序号随结算加入
 func (m *Meter) Observe(p Progress) MeterStep // 已实现，纯内存、不分配、只归所有者
 type MeterStep struct{ Extend bool; Request ExtendRequest; Exhausted bool } // 一次读可能同时越过追加点和当前段，两者都报
 func (m *Meter) Extended(seq int, err error)  // 已实现；所有者取回追加结果后调用，成功才采用新段、解除"追加中"
 type ExtendRequest struct{ Seq int; Entry int; Target platform.Exact } // 已实现；值类型，即不可变快照；Target 是累计目标
-func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error // ErrTerminated、*Insufficient；不读 Meter
+func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error // 已实现；ErrTerminated、*Insufficient；不读 Meter
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 前提：无追加在途；*Permanent 不再重试
-func (b *Billing) SettleOrphan(a accounts.Admission, id platform.RequestID) // 非阻塞，进程内队列
+func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
 func (b *Billing) Run(ctx context.Context) error // 心跳、回收、截止时间清理、按 ChargeSettled 校正、到期释放保留
 type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported catalog.Usage; Final catalog.ItemSet } // 已实现；gateway 从 protocol.Progress 复制；Final：已是最终值的已报告项
 type Segment struct{ Usage catalog.Usage; Reported catalog.ItemSet }
@@ -74,24 +78,41 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 
 ## 准入里的预留
 
-`Reserve` 最后执行，两条语句同批发出：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**，并以 `FOR KEY SHARE` 核对持有者（见下文）；后一条语句读余额、在途预留、工作区与 key 的计数和占用。READ COMMITTED 下后一条语句在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
+`Reserve` 最后执行，依次三条语句：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**（同时读出余额、底线、在途预留），再以 `FOR KEY SHARE` 核对持有者（见下文），最后一条读工作区与 key 在各自窗口的花费和占用。READ COMMITTED 下最后一条在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。`pg.Tx` 还没有批量发送，三条依次发出，比同批多两次往返，都在账户锁内。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
 
 - 余额行是账户资金写入的唯一串行点（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)），锁两个账户时的顺序也在那里。没有余额行的账户按余额 0 处理，行在开户时由本模块建。
 - 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。采样次数和按次项目的最大次数在报价时逐条目算：请求没写某个服务端工具的最大次数，就取该条目模型在 catalog 里的默认值，所以跨模型路线的条目可以不同。报价的测试至少包括：请求没写工具的最大次数；路线里两个条目的模型默认次数不同；开启服务端压缩时采样次数乘 2。
 - 余额不足是正常结果（`*Insufficient`），不让事务出错。
+
+## 数据
+
+迁移 `migrations/00001_reservations.sql`，查询 `queries/reservations.sql`（sqlc 生成）。金额都以十亿分之一额度存储；报价的 `Exact` 向上取整成金额（`platform.Exact.CeilAmount`）。别的模块的行只按 ID 引用，不建外键。应用没有任何表的 DELETE，UPDATE 只给下列可改的列。
+
+| 表 | 内容 | 谁能读写 |
+|---|---|---|
+| `holders` | `id`、`started_at`、`expires_at`、`reaped_at` | 任何范围可读、可加 `FOR KEY SHARE`（加锁要过 UPDATE 策略的 `USING`），只有平台范围能插入和改；可改 `expires_at`、`reaped_at` |
+| `balances` | `account_id`（主键）、`site_id`、`balance`（账本合计，记账随结算加入）、`floor`（≤ 0）、`reserved`（在途预留） | 账户范围；可改 `reserved` |
+| `spend` | `(subject, window_start)` 主键：工作区或 key 在一个限额窗口里的 `spent`、`reserved` | 账户范围；可改 `reserved` |
+| `reservations` | `request_id`（主键）、租户与工作区、key、`holder_id`、锁定的两个窗口、`segment`、累计的 `amount`、`state`（`pending`、`released`，结算和清理加入其余）、`deadline` | 账户范围；只有挂起的行能改，可改 `segment`、`amount`、`state` |
+
+- **窗口**按数据库时钟在读计数的那条语句里算：重置为每日、每周、每月的取 UTC 当天、当周、当月的开始；不重置或没有限额的取纪元（1970-01-01），重置的窗口不可能从那里开始，`time.Time` 也读得出它（`-infinity` 读不出）。
+- **余额行**在开户时由 `OpenBalance` 建；没有余额行的账户什么也预留不了，锁也锁不到东西，所以只会被拒，不会越过底线。
+- **墓碑**：`SettleOrphan` 找不到预留行时写一行 `segment = 0`、`amount = 0`、`released` 的行占住请求 ID，丢失的准入不可能再落库。
 
 ## 追加与结算
 
 - **`Extend`**：一个事务，锁余额行并核对持有者，按 `req` 绑定条目的价格版本和限额值算**累计目标**（取它与已预留的较大值，只增不减），以 `WHERE request_id=$r AND segment=$seq-1 AND state='pending'` 写成 `seq`。同一 `seq` 重试幂等；0 行时重读，已是 `seq` 即成功，已终结或持有者被回收返回 `ErrTerminated`。
 - **`Settle`**：以 `Admission.Scope()` 开事务，同批先写不需要账户锁的行（每次尝试的成本分录、`suppliers.RecordAttempts` 的对账键，都是 `ON CONFLICT DO NOTHING`），再锁余额行、读预留；按[免单规则](../../docs/domains/billing.md#免单规则)收费、记账本和花费计数；预留从挂起比较后再写到终态（暂估的转"已暂估"并保留余额）；COMMIT。5 次往返（BEGIN、设范围、批 1、批 2、COMMIT），持锁约 2 次往返加提交。各段先按精确值求和再取整一次。
 - `Final` 是补估后的最终用量（响应和账本用同一份）、账上**实收**金额（被底线截断时为实收）、是否暂估。比较后再写失败时按预留的持久化终态分支（下文「预留的状态」）；同一请求重试返回已存的 `Final`。
-- **`SettleOrphan`**：准入的 COMMIT 确认丢失时由 gateway 交来。一个事务，先锁该账户余额行（准入事务持有它直到结束，所以拿到锁时准入已提交或已回滚），有挂起预留就以"没有尝试"释放，没有就插入一行"已释放"墓碑；数据库错误退避重试到成功，进程死了由清理接管。
+- **`SettleOrphan`**：准入的 COMMIT 确认丢失时由 gateway 交来。一个事务，先锁该账户余额行（准入事务持有它直到结束，所以拿到锁时准入已提交或已回滚），有挂起预留就以"没有尝试"释放，没有就插入一行"已释放"墓碑，已终结的不动；重复执行无害。它是同步的一个事务，数据库错误由调用方退避重试到成功（进程内队列随 `Run` 加入），进程死了由清理接管。
+- **`Extend`** 在锁内先读预留行：已终结返回 `ErrTerminated`，段号已到 `seq` 即成功（确认丢失后的重试），否则只把累计目标高出已预留的部分与各来源的余量比较，再以段号比较后再写，并在同一事务里移动三层占用。
 
 ## 持有者与截止时间
 
 **持有者**是进程每次启动生成的 UUID，一行 `(holder, expires_at, reaped_at)`；时间比较一律用取锁之后的 `clock_timestamp()`，不用事务开始时的 `now()`。默认值和它们之间的关系见 [gateway 的「超时与限额」](../gateway/README.md#超时与限额)。
 
 - **写入栅栏**：准入、追加在锁余额行之后，以 `FOR KEY SHARE` 读自己的持有者行，要求 `reaped_at IS NULL AND expires_at > clock_timestamp()`。
+- **实现**：`Start` 登记持有者，`Heartbeat`、`Reap` 在平台范围的事务里执行；心跳"用连接池外的专用连接"还没有，`pg` 不交出连接，随 `Run` 一起做。
 - **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：进程改为未就绪、换新持有者。心跳和回收用连接池外的一条专用连接。
 - **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。
 - **截止时间**：每笔预留带 `deadline`（准入 + 单次调用最长 + 结算宽限）。过了截止时间仍挂起的，不论持有者是否活着都由清理处理（漏 `Settle`、永久性错误、panic）。节点身份只作诊断。
@@ -114,7 +135,7 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 
 | 写什么 | 事务 | 谁写 | 幂等键 / 守护 |
 |---|---|---|---|
-| 预留行（请求 ID、持有者、价格版本、限额窗口、段号 1、金额、截止时间、挂起）与三层占用 | 准入 | billing | 主键 `request_id`；写入栅栏；余额行锁守底线 |
+| 预留行（请求 ID、持有者、限额窗口、段号 1、金额、截止时间、挂起）与三层占用 | 准入 | billing | 主键 `request_id`；写入栅栏；余额行锁守底线 |
 | 追加第 seq 段（累计目标） | 每段一个 | billing | `WHERE request_id=$r AND segment=$seq-1 AND state='pending'`；写入栅栏 |
 | 对账日志 | 每节点每秒一个 | suppliers | 见 [suppliers 的「对账日志」](../suppliers/README.md#对账日志) |
 | 每次尝试的成本分录、对账键 | 结算 | billing、suppliers | `(request_id, attempt_seq, attempt_cost)`；主键 `(request_id, attempt_seq)` |
@@ -139,4 +160,7 @@ type Final struct{ Segments []Segment; Cost platform.Exact; Currency platform.Cu
 | 同一段号失败后原样重发，不按新进度重算 | `Extend` 以段号比较后再写，已是该段号即成功；若重算出更大的目标而第一次其实已提交，计量器会认可数据库里没有的额度 | 每次按最新进度重算：确认丢失时少预留 |
 | 一步同时报 `Extend` 和 `Exhausted` | 一次读可以同时越过追加点和当前段；只报其一，所有者要么停读却没有追加可等，要么继续读越过预留 | 枚举 Continue / ExtendNow / Exhausted |
 | 报价是纯函数 `Quote`，`Reserve` 在锁下调用它 | 报价规则最多、最容易错，脱开数据库才能用表驱动和性质测试逐条证明；锁内只多一次内存计算 | 在 `Reserve` 里边读边算：规则只能经数据库测试 |
+| 写入栅栏同时要求 `reaped_at IS NULL` 和未过期 | 回收后心跳续不上，正常情况下被回收的必已过期；但数据库时钟回拨（如主备切换）会让过期时间重新落在未来，只看过期就会放行已回收的持有者 | 只看 `expires_at` |
+| 计数窗口按数据库时钟，在锁后的读语句里算 | 与栅栏同一个时钟；多节点的本地时钟不一致时，同一请求的准入、追加、结算也落在同一个窗口（窗口写进预留行） | 按 Go 进程的时钟算 |
+| `Reserve` 接受 billing 自己的 `Admitted` | `accounts.Admit` 还没有；`Admitted` 只带预留要的字段和范围，范围仍只能由 accounts 构造后传入 | 等 accounts 落地再做预留 |
 | 可回收的持有者 + 截止时间；写入的 `FOR KEY SHARE` 与回收的 `FOR UPDATE` 互斥 | 进程死了、活着但漏结算、库长时间不可用都有人收尾，回收前的能续上 | `expires_at > now()` 的节点租约：时间可能过时、清理与写入无互斥、库恢复后回收活着的进程 |

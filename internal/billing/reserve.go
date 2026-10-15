@@ -1,0 +1,215 @@
+package billing
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+	"uuid"
+
+	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
+)
+
+// Admitted is what billing needs of an admission: the tenant, the account's scope for the transactions that follow
+// it, and the workspace's and key's limits as admission read them. It stands in for accounts.Admission until Admit
+// exists; only accounts builds account scopes.
+type Admitted struct {
+	Scope                         pg.Scope
+	Site, Account, Workspace, Key uuid.UUID
+	WorkspaceBudget, KeyLimit     *Limit // nil when there is none
+}
+
+// Limit is a spending limit in billionths of a credit over a window.
+type Limit struct {
+	Amount int64
+	Reset  Reset
+}
+
+// Reset is how often a limit starts over, in accounts' words.
+type Reset string
+
+// The resets; a window starts at the UTC day, week or month by the database's clock.
+const (
+	ResetNever   Reset = ""
+	ResetDaily   Reset = "daily"
+	ResetWeekly  Reset = "weekly"
+	ResetMonthly Reset = "monthly"
+)
+
+// Hold is a committed reservation of one request: the quotes of the entries it kept, and where its counters are.
+type Hold struct {
+	Reservation
+	id              uuid.UUID
+	admitted        Admitted
+	workspaceWindow time.Time
+	keyWindow       time.Time
+}
+
+// OpenBalance creates an account's balance row with its floor (0 or below), as the account is opened. Without the
+// row an account can reserve nothing.
+func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor int64) error {
+	if err := queries.InsertBalance(ctx, tx, InsertBalanceParams{AccountID: account, SiteID: site, Floor: floor}); err != nil {
+		return fmt.Errorf("billing: open the balance of %s: %w", account, err)
+	}
+	return nil
+}
+
+// Reserve reserves for request id in tx, the admission's transaction, which must hold the account's scope
+// (README.md「准入里的预留」). It locks the balance row, fences the holder, then reads the counters in a statement
+// that starts after the lock and so sees every change committed before it; quotes the route against what each
+// source allows, and writes the reservation and its three counters in one statement. It returns the kept entries'
+// indexes, or *Insufficient when the preferred entry is unaffordable.
+func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
+	balance, err := lockAccount(ctx, tx, a.Account)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.fence(ctx, tx); err != nil {
+		return nil, nil, err
+	}
+	usage, err := queries.ReadUsage(ctx, tx, ReadUsageParams{
+		WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("billing: read the counters: %w", err)
+	}
+	r, err := Quote(d, q, b.config.Segments, a.available(balance, usage.WorkspaceUsed, usage.KeyUsed))
+	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
+		return nil, nil, a.transient(insufficient)
+	} else if err != nil {
+		return nil, nil, err
+	}
+	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.WorkspaceWindow, keyWindow: usage.KeyWindow}
+	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
+		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
+		WorkspaceWindow: usage.WorkspaceWindow, KeyWindow: usage.KeyWindow, Amount: r.Amount.CeilAmount(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(),
+	}); err != nil {
+		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
+	}
+	return h, r.Kept, nil
+}
+
+// Extend writes segment r.Seq of h's reservation with the cumulative target r.Target, in a transaction of its own
+// (README.md「追加与结算」). The amount only grows. A retry of a segment already written succeeds and changes
+// nothing; a reservation that ended, or a holder that was reaped, gives ErrTerminated; an increase a source cannot
+// afford gives *Insufficient.
+func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error {
+	a := h.admitted
+	return b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
+		balance, err := lockAccount(ctx, tx, a.Account)
+		if err != nil {
+			return err
+		}
+		if err := b.fence(ctx, tx); err != nil {
+			return err
+		}
+		row, err := queries.GetReservation(ctx, tx, h.id)
+		if err != nil {
+			return fmt.Errorf("billing: read the reservation: %w", err)
+		}
+		switch {
+		case row.State != "pending":
+			return ErrTerminated
+		case int(row.Segment) >= r.Seq:
+			return nil // written by an earlier try whose acknowledgement was lost
+		case int(row.Segment) != r.Seq-1:
+			return fmt.Errorf("billing: extension %d of a reservation at segment %d", r.Seq, row.Segment)
+		}
+		delta := max(r.Target.CeilAmount()-row.Amount, 0)
+		avail := a.available(balance, row.WorkspaceUsed, row.KeyUsed)
+		if short := shortSource(platform.AmountExact(delta), avail); short >= 0 {
+			return a.transient(&Insufficient{Source: avail[short].Source})
+		}
+		// Under the balance row lock nothing changed the row since it was read, so the compare must hold.
+		if n, err := queries.ExtendReservation(ctx, tx, ExtendReservationParams{
+			RequestID: h.id, PreviousSegment: row.Segment, Delta: delta,
+		}); err != nil {
+			return fmt.Errorf("billing: write the extension: %w", err)
+		} else if n != 1 {
+			return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
+		}
+		return h.addReserved(ctx, tx, delta)
+	})
+}
+
+// SettleOrphan ends the reservation of a request whose admission's COMMIT went unacknowledged (README.md「追加与结算」).
+// The balance row lock waits for that admission to end, since it holds the lock until then: a pending reservation it
+// committed is released with no attempt made, and if it rolled back a released tombstone takes the request ID, so the
+// lost admission can never land later. The caller retries a database error; a dead process leaves it to cleanup.
+func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error {
+	return b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
+		if _, err := lockAccount(ctx, tx, a.Account); err != nil {
+			return err
+		}
+		row, err := queries.GetReservation(ctx, tx, id)
+		switch {
+		case errors.Is(err, pg.ErrNoRows):
+			err = queries.InsertTombstone(ctx, tx, InsertTombstoneParams{
+				RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
+			})
+		case err == nil && row.State == "pending":
+			h := &Hold{id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
+			if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
+				err = h.addReserved(ctx, tx, -row.Amount)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("billing: settle the orphan %s: %w", id, err)
+		}
+		return nil
+	})
+}
+
+func (h *Hold) addReserved(ctx context.Context, tx pg.Tx, delta int64) error {
+	a := h.admitted
+	if err := queries.AddReserved(ctx, tx, AddReservedParams{
+		Delta: delta, AccountID: a.Account, WorkspaceID: a.Workspace, WorkspaceWindow: h.workspaceWindow,
+		KeyID: a.Key, KeyWindow: h.keyWindow,
+	}); err != nil {
+		return fmt.Errorf("billing: move the reserved counters: %w", err)
+	}
+	return nil
+}
+
+// lockAccount locks the account's balance row; an account without one has nothing to reserve against.
+func lockAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (LockBalanceRow, error) {
+	row, err := queries.LockBalance(ctx, tx, account)
+	if err != nil && !errors.Is(err, pg.ErrNoRows) {
+		return row, fmt.Errorf("billing: lock the balance: %w", err)
+	}
+	return row, nil
+}
+
+// available is what each source still allows: the balance less its reservations down to the floor, and each limit
+// less what its window has spent and holds reserved.
+func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64) []Available {
+	avail := []Available{{SourceBalance, platform.AmountExact(balance.Balance - balance.Reserved - balance.Floor)}}
+	if a.WorkspaceBudget != nil {
+		avail = append(avail, Available{SourceWorkspace, platform.AmountExact(a.WorkspaceBudget.Amount - workspaceUsed)})
+	}
+	if a.KeyLimit != nil {
+		avail = append(avail, Available{SourceKey, platform.AmountExact(a.KeyLimit.Amount - keyUsed)})
+	}
+	return avail
+}
+
+// transient marks a refusal by a limit that resets: retrying later may succeed, which a short balance never does.
+func (a Admitted) transient(e *Insufficient) *Insufficient {
+	switch e.Source {
+	case SourceWorkspace:
+		e.Transient = reset(a.WorkspaceBudget) != ResetNever
+	case SourceKey:
+		e.Transient = reset(a.KeyLimit) != ResetNever
+	case SourceBalance, SourceSiteBalance:
+	}
+	return e
+}
+
+func reset(l *Limit) Reset {
+	if l == nil {
+		return ResetNever
+	}
+	return l.Reset
+}

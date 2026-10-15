@@ -75,8 +75,12 @@ type Available struct {
 	Amount platform.Exact
 }
 
-// Insufficient is the refusal when the preferred entry's quote exceeds what a source allows.
-type Insufficient struct{ Source Source }
+// Insufficient is the refusal when the preferred entry's quote, or an extension, exceeds what a source allows.
+// Transient is a limit that resets, so the same call may pass later; a short balance waits for a top-up.
+type Insufficient struct {
+	Source    Source
+	Transient bool
+}
 
 func (e *Insufficient) Error() string {
 	return fmt.Sprintf("billing: source %d cannot cover the reservation", e.Source)
@@ -123,7 +127,7 @@ func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, 
 		amount := eq.amount
 		if short := shortSource(amount, avail); short >= 0 {
 			if i == 0 {
-				return Reservation{}, &Insufficient{avail[short].Source}
+				return Reservation{}, &Insufficient{Source: avail[short].Source}
 			}
 			continue
 		}
