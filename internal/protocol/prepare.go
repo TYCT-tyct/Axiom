@@ -89,7 +89,7 @@ func withRouting(m map[string]rule) map[string]rule {
 
 // encrypted asks Responses for reasoning items that can be sent again, the only way when the upstream stores
 // nothing (OpenAI《Create a model response》, include, read 2026-10-14).
-const encrypted = `"reasoning.encrypted_content"`
+const encrypted = "reasoning.encrypted_content"
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
 type rewriter struct {
@@ -109,11 +109,9 @@ func (p *rewriter) copyTo(off int) {
 }
 
 // replace puts s in place of the n-byte value just read.
-func (p *rewriter) replace(n int, s ...string) {
+func (p *rewriter) replace(n int, s string) {
 	p.copyTo(p.offset() - n)
-	for _, b := range s {
-		p.out = append(p.out, b...)
-	}
+	p.out = append(p.out, s...)
 	p.at = p.offset()
 }
 
@@ -190,7 +188,7 @@ func (p *rewriter) identity() error {
 }
 
 func (p *rewriter) replaceString(n int, s string) (err error) {
-	p.replace(n)
+	p.replace(n, "")
 	p.out, err = jsontext.AppendQuote(p.out, s)
 	return err
 }
@@ -228,13 +226,13 @@ func (p *rewriter) include() error {
 	}
 	if ok, err := p.open('[', "an array"); !ok {
 		if err == nil {
-			p.replace(len("null"), "[", encrypted, "]")
+			p.replace(len("null"), `["`+encrypted+`"]`)
 		}
 		return err
 	}
 	start, has := p.offset(), false
 	for p.dec.PeekKind() != ']' {
-		is, err := p.is(encrypted[1 : len(encrypted)-1])
+		is, err := p.is(encrypted)
 		if err != nil {
 			return err
 		}
@@ -243,7 +241,7 @@ func (p *rewriter) include() error {
 	if !has {
 		empty := p.offset() == start
 		p.copyTo(start)
-		p.out = append(p.out, encrypted...)
+		p.out = append(p.out, `"`+encrypted+`"`...)
 		if !empty {
 			p.out = append(p.out, ',')
 		}
@@ -269,13 +267,12 @@ func (p *rewriter) input() error {
 		if len(bytes.TrimSpace(v[1:len(v)-1])) > 0 {
 			p.out = append(p.out, ',')
 		}
-	case v.Kind() == '"':
+	case v.Kind() == '"' || v.Kind() == 'n':
 		p.replace(len(v), "[")
 		p.history()
-		p.out = append(append(append(p.out, `,{"type":"message","role":"user","content":`...), v...), "}]"...)
-	case v.Kind() == 'n':
-		p.replace(len(v), "[")
-		p.history()
+		if v.Kind() == '"' {
+			p.out = append(append(append(p.out, `,{"type":"message","role":"user","content":`...), v...), '}')
+		}
 		p.out = append(p.out, ']')
 	default:
 		return errors.New("input is not a string or an array")
@@ -300,7 +297,7 @@ func (p *rewriter) addResponses() error {
 		p.out = append(p.out, `,"store":false`...)
 	}
 	if p.t.EncryptedReasoning && !p.included {
-		p.out = append(p.out, `,"include":[`+encrypted+`]`...)
+		p.out = append(p.out, `,"include":["`+encrypted+`"]`...)
 	}
 	if len(p.w.History) > 0 && !p.hasInput {
 		p.out = append(p.out, `,"input":[`...)

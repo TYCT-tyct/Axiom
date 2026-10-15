@@ -31,7 +31,7 @@ var prepareCases = []struct {
 	name      string
 	format    protocol.Format
 	encrypted bool // the target model returns encrypted reasoning
-	history   bool
+	continues bool
 	body      string
 	want      string
 }{
@@ -110,7 +110,7 @@ func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte,
 func TestPrepare(t *testing.T) {
 	for _, c := range prepareCases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := prepare(c.format, []byte(c.body), c.encrypted, c.history)
+			got, err := prepare(c.format, []byte(c.body), c.encrypted, c.continues)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,12 +128,12 @@ func TestPrepareSamples(t *testing.T) {
 		format protocol.Format
 		file   string
 		model  string
-		add    [2]string
+		store  bool // Prepare adds "store":false, after the sample's last member
 	}{
-		{protocol.Messages, "messages/text/request.json", `"claude-opus-5-5"`, [2]string{}},
-		{protocol.Messages, "messages/thinking/request.json", `"claude-opus-5-5"`, [2]string{}},
-		{protocol.Messages, "messages/tool-use/request.json", `"claude-opus-5"`, [2]string{}},
-		{protocol.Responses, "responses/text/request.json", `"gpt-6-astra"`, [2]string{`"stream": true`, `"stream": true,"store":false`}},
+		{protocol.Messages, "messages/text/request.json", `"claude-opus-5-5"`, false},
+		{protocol.Messages, "messages/thinking/request.json", `"claude-opus-5-5"`, false},
+		{protocol.Messages, "messages/tool-use/request.json", `"claude-opus-5"`, false},
+		{protocol.Responses, "responses/text/request.json", `"gpt-6-astra"`, true},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			body := caseBody(t, c.file)
@@ -141,7 +141,10 @@ func TestPrepareSamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := strings.Replace(strings.Replace(string(body), c.model, `"up"`, 1), c.add[0], c.add[1], 1)
+			want := strings.Replace(string(body), c.model, `"up"`, 1)
+			if c.store {
+				want = strings.Replace(want, `"stream": true`, `"stream": true,"store":false`, 1)
+			}
 			if diff := cmp.Diff(want, string(got)); diff != "" {
 				t.Error(diff)
 			}
