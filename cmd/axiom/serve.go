@@ -12,6 +12,7 @@ import (
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
 // bodyTimeout bounds how long a client may take to send a request body. Generous for large uploads over slow
@@ -95,6 +96,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration) (*pg.D
 			return nil, noAnswer // pgx reports only that the context ended
 		}
 		return nil, fmt.Errorf("database: %w", err)
+	}
+	if err := suppliers.CheckAdapters(ctx, db, pg.PlatformScope()); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return db, nil
 }
