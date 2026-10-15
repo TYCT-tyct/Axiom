@@ -111,7 +111,7 @@ const (
 )
 
 // open returns the application's pool on a fresh, seeded database.
-func open(t *testing.T) (*pg.DB, pgtest.Database) {
+func open(t testing.TB) (*pg.DB, pgtest.Database) {
 	t.Helper()
 	database := pgtest.New(t, accounts.Migrations())
 	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(strings.Join(seed, ";\n"))); err != nil {
