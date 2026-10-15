@@ -143,7 +143,23 @@ func checkRequest(request []byte, key string) error {
 	return nil
 }
 
+// hasKey looks at the raw bytes and at each JSON string decoded, since an escape such as \u0073k- hides a key from
+// the bytes but not from whoever decodes the file.
 func hasKey(data []byte, key string) bool {
+	if holdsKey(data, key) {
+		return true
+	}
+	for _, s := range jsonStrings(data) {
+		var text string
+		// A quote on a line that is not JSON, such as an SSE comment, may delimit no JSON string; the raw scan covers it.
+		if jsonx.Unmarshal(data[s.start:s.end], &text) == nil && holdsKey([]byte(text), key) {
+			return true
+		}
+	}
+	return false
+}
+
+func holdsKey(data []byte, key string) bool {
 	return bytes.Contains(data, []byte(key)) || keyLike.Match(data)
 }
 

@@ -151,6 +151,8 @@ func TestNothingWritten(t *testing.T) {
 		{"an error status echoing the key", "messages", "s", request, `{"error":"bad key ` + key + `"}`, 401, true, "not shown"},
 		{"a stream that breaks its format", "messages", "s", request, start, 200, true, "upstream.sse"},
 		{"the key echoed in the stream", "messages", "s", request, start + event(`{"type":"later","key":"`+key+`"}`) + end, 200, true, "upstream.sse holds a key"},
+		{"the key escaped in the request", "messages", "s", `{"stream":true,"x":"\u006c` + key[1:] + `"}`, "", 200, false, "holds a key"},
+		{"a key-like token escaped in the stream", "messages", "s", request, start + event(`{"type":"later","key":"\u0073k-`+strings.Repeat("a", 24)+`"}`) + end, 200, true, "upstream.sse holds a key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			url, hits := serve(t, tc.format, tc.status, tc.stream)
