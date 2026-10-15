@@ -15,7 +15,7 @@ func mustUsage(tb testing.TB, c counts) catalog.Usage {
 
 func mustTierUsage(tb testing.TB, st catalog.ServiceTier, c counts) catalog.Usage {
 	tb.Helper()
-	u, err := catalog.NewUsage(c, st)
+	u, err := catalog.NewUsage(c, st, nil)
 	if err != nil {
 		tb.Fatal(err)
 	}

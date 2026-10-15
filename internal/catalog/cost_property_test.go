@@ -14,8 +14,9 @@ import (
 // own prices, or every item missing when the schedule has none for it; the highest tier whose threshold the basis sum
 // strictly exceeds, a tier's prices over the service tier's base prices, reasoning at the output price when it has
 // none of its own, every other item with usage and no price reported as missing, and the exact total of the priced
-// items, whose tier the whole usage chose, missing items included. Each input seeds a batch of random schedules and
-// usages, so the committed seeds alone exercise thousands of cases.
+// items, whose tier the whole usage chose, missing items included. Missing must cover whatever Cost finds missing, so a
+// schedule that passes the listing threshold never meets an unpriced item. Each input seeds a batch of random
+// schedules and usages, so the committed seeds alone exercise thousands of cases.
 func FuzzCost(f *testing.F) {
 	for seed := range uint64(4) {
 		f.Add(seed, ^seed)
@@ -24,12 +25,17 @@ func FuzzCost(f *testing.F) {
 		r := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test data, not a secret
 		for range 500 {
 			c := randomCase(r)
-			got, missing, err := mustParse(t, c.json(t)).Cost(mustTierUsage(t, c.tier, c.usage))
+			s := mustParse(t, c.json(t))
+			got, missing, err := s.Cost(mustTierUsage(t, c.tier, c.usage))
 			want, wantMissing := c.cost()
 			if err != nil || got.Rat().Cmp(want) != 0 || !slices.Equal(members(missing), wantMissing) {
 				t.Fatalf("Cost of %v at %v under %s = %s, missing %v, %v; want %s, missing %v",
 					c.usage, c.tier, c.json(t), got.Rat().FloatString(15), members(missing), err, want.FloatString(15),
 					wantMissing)
+			}
+			if m := s.Missing(c.reportable()); !covers(m, c.tier, missing) {
+				t.Fatalf("Missing under %s = %v, %v; Cost of %v at %v found %v missing",
+					c.json(t), members(m.Items), serviceTierMembers(m.ServiceTiers), c.usage, c.tier, members(missing))
 			}
 		}
 	})
@@ -57,6 +63,29 @@ type (
 		tiers []prices // one per threshold
 	}
 )
+
+// reportable is what the case's upstream reported: the items it used and its service tier.
+func (c costCase) reportable() catalog.Reportable {
+	var r catalog.Reportable
+	for it, n := range c.usage {
+		if n > 0 {
+			r.Items.Add(it)
+		}
+	}
+	if c.tier != catalog.ServiceTierStandard {
+		r.ServiceTiers.Add(c.tier)
+	}
+	return r
+}
+
+// covers reports whether m names every item Cost found missing at the service tier: the item itself at the standard
+// tier, the service tier otherwise.
+func covers(m catalog.Reportable, st catalog.ServiceTier, missing catalog.ItemSet) bool {
+	if st == catalog.ServiceTierStandard {
+		return missing&^m.Items == 0
+	}
+	return missing == 0 || m.ServiceTiers.Has(st)
+}
 
 // randomCase draws counts and thresholds at one of two scales: up to 10¹⁰, the whole domain, or up to 30, where the
 // basis sum often lands exactly on a threshold.

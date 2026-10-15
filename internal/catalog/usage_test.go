@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"slices"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -8,10 +9,10 @@ import (
 
 func TestNewUsage(t *testing.T) {
 	if _, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 0, catalog.ItemWebSearch: 1e10},
-		catalog.ServiceTierFast); err != nil {
+		catalog.ServiceTierFast, nil); err != nil {
 		t.Errorf("NewUsage with 0 and 10¹⁰: %v", err)
 	}
-	if u, err := catalog.NewUsage(nil, catalog.ServiceTierFast+1); err == nil {
+	if u, err := catalog.NewUsage(nil, catalog.ServiceTierFast+1, nil); err == nil {
 		t.Errorf("NewUsage with an unknown service tier = %v, want an error", u)
 	}
 	for name, bad := range map[string]map[catalog.Item]int64{
@@ -19,9 +20,35 @@ func TestNewUsage(t *testing.T) {
 		"above 10¹⁰":   {catalog.ItemCacheRead: 1e10 + 1},
 		"unknown item": {catalog.NumItems: 1},
 	} {
-		if u, err := catalog.NewUsage(bad, catalog.ServiceTierStandard); err == nil {
+		if u, err := catalog.NewUsage(bad, catalog.ServiceTierStandard, nil); err == nil {
 			t.Errorf("%s: NewUsage(%v) = %v, want an error", name, bad, u)
 		}
+	}
+}
+
+// Usage the item table does not map, and a service tier value protocol does not recognise, reach billing as they were
+// reported instead of being dropped or guessed (README.md「计费项与用量」); a Usage does not change once made.
+func TestUsageUnknown(t *testing.T) {
+	reported := []catalog.UnknownUsage{
+		{Field: "usage.server_tool_use.future_tool_requests", Value: "1e0"},
+		{Field: "usage.service_tier", Value: `"scale"`},
+	}
+	want := slices.Clone(reported)
+	u, err := catalog.NewUsage(counts{in: 5}, catalog.ServiceTierStandard, reported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported[0].Value = "2"
+	got := u.Unknown()
+	if !slices.Equal(got, want) {
+		t.Fatalf("Unknown = %v, want %v", got, want)
+	}
+	got[1].Value = `"flex"`
+	if again := u.Unknown(); !slices.Equal(again, want) {
+		t.Errorf("Unknown after its result changed = %v, want %v", again, want)
+	}
+	if got := mustUsage(t, counts{in: 5}).Unknown(); len(got) != 0 {
+		t.Errorf("Unknown of fully mapped usage = %v, want none", got)
 	}
 }
 
@@ -36,7 +63,7 @@ func TestOutputTotal(t *testing.T) {
 		{map[catalog.Item]int64{catalog.ItemOutput: 20, catalog.ItemReasoning: 500, catalog.ItemInput: 9}, 520},
 		{map[catalog.Item]int64{catalog.ItemInput: 9}, 0},
 	} {
-		u, err := catalog.NewUsage(tc.counts, catalog.ServiceTierStandard)
+		u, err := catalog.NewUsage(tc.counts, catalog.ServiceTierStandard, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
