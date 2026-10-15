@@ -180,6 +180,7 @@ func TestJSON(t *testing.T) {
 			`{"metadata":{"user_id":"msg_user","item_id":"msg_m"},"input":[{"type":"function_call_output","call_id":"call_y","id":"fc_y"}]}`,
 			`{"metadata":{"user_id":"msg_user","item_id":"msg_m"},"input":[{"type":"function_call_output","call_id":"call_3","id":"fc_1"}]}`, "",
 		},
+		{"a name holding a slash", "messages", `{"message/id":"msg_x"}`, `{"message/id":"msg_x"}`, ""},
 		{"an ID-like name or text", "chat", `{"call_id":"call_z","tags":["id","call_z"],"user_id":"user_msg_1"}`, `{"call_id":"call_z","tags":["id","call_z"],"user_id":"user_msg_1"}`, ""},
 		{"a placeholder-like ID and the one after it", "chat", `{"id":"chatcmpl-1"}`, `{"id":"chatcmpl-1"}`, ""},
 		{"", "chat", `{"id":"chatcmpl-x"}`, `{"id":"chatcmpl-2"}`, ""},
@@ -361,6 +362,7 @@ func TestNothingWritten(t *testing.T) {
 	start, end := event(`{"type":"message_start","message":{"content":[]}}`), event(`{"type":"message_delta"}`)+event(`{"type":"message_stop"}`)
 	escapedKey := esc("%6c") + key[1:]
 	later := `{"type":"later","key":"` + escapedKey + `"}`
+	escapedError := `{"type":"error","error":{"message":"` + escapedKey + `"}}`
 	for _, tc := range []struct {
 		name, format, scenario, request, stream string
 		status                                  int
@@ -387,6 +389,8 @@ func TestNothingWritten(t *testing.T) {
 		{"the key escaped after a comment ending in CR", "messages", "s", request, start + ": a stray \" in a comment\r" + event(later) + end, 200, true, "upstream.sse: it holds a key"},
 		{"the key escaped after a comment ending in a backslash and CR", "messages", "s", request, start + ": stray \"\\\r" + event(later) + end, 200, true, "upstream.sse: it holds a key"},
 		{"the key escaped after a comment ending in a backslash and LF", "messages", "s", request, start + ": stray \"\\\n" + event(later) + end, 200, true, "upstream.sse: it holds a key"},
+		{"the second review's stream", "messages", "s", request, ": stray \"\r\rdata: " + escapedError + "\r\r", 200, true, "upstream.sse: it holds a key"},
+		{"the third review's stream", "messages", "s", request, ": stray \"\\\rdata: " + escapedError + "\r\r", 200, true, "upstream.sse: it holds a key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			url, hits := serve(t, tc.format, tc.status, tc.stream)

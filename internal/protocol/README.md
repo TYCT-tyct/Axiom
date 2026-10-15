@@ -60,7 +60,7 @@
 - **流的重建**：录下的流用 `internal/sse` 的 `Reader` 读成事件（行尾、BOM、注释都按 SSE 的规则处理），每个事件的数据是 `jsonx` 接受的 JSON 或 `[DONE]`。写下的 `upstream.sse` 由这些事件重建：Messages 和 Responses 先写一行 `event: <数据的 type>`（type 含换行等字符时不写这一行，免得改变分帧），再每行数据写一行 `data: `，最后一个空行；Chat 没有 `event` 行。注释、`id`、`retry`、上游原来的事件名和行尾都不保留，所以录制的样本是规范化的副本，不是逐字节的副本，`meta.json` 的 `note` 写明这一点；数据本身除 ID 外逐字节保留（空白、键序、数字写法）。
 - **ID 替换**：只换各格式放上游 ID 的位置，以 JSON Pointer 列在 `formats` 的 `ids` 里（`*` 是数组下标）：Messages 流里的 `message.id`、`content_block` 的 `id` 和 `tool_use_id`、出错事件的 `request_id`，请求里 `messages[].content[]` 的 `id`、`tool_use_id`；Responses 流里快照 `response` 的 `id`、`previous_response_id` 和 `output[]` 的 `id`、`call_id`，`item` 的 `id`、`call_id`，事件的 `item_id`，请求的 `previous_response_id` 和 `input[]` 的 `id`、`call_id`；Chat 流里块的 `id` 和 `choices[].delta.tool_calls[].id`，请求的 `messages[].tool_calls[].id`、`tool_call_id`。这些位置取自三种格式文档里的对象形状和 `streamcheck` 读的字段。位置上的非空字符串按解码后的文本查一张两个文件共用的表，按出现顺序换成它的前缀（开头的字母加 `_` 或 `-`，如 `msg_`、`chatcmpl-`；没有就用 `id_`）加序号，如 `msg_1`，只改写这个字符串自己的字节。所以同一个 ID 不论写没写转义，在两个文件里都换成同一个占位值；按前缀计数、包括本来就像占位值的 `call_1` 也换，所以不同的 ID 不会撞上。其他位置一律不动，不论值像不像 ID：工具参数里的 `"id":"call_customer"`、元数据、工具名、正文都原样保留；签名、`encrypted_content` 也不在位置上。录到新的 ID 位置时，把它加进对应格式的 `ids`。
 - **key**：配置的 key 原文，或词首的 `sk-` 加 20 个以上 key 字符（两家 key 的格式；base64url 中间偶然出现的 `sk-` 不算）。请求和每个事件的数据里，每个字符串（成员名和值）都解码后查，所以转义藏不住 key；写盘前再查三个文件的原始字节里有没有 key 原文。注释不写进样本，所以不查。非 200 的响应体查原始字节，是 JSON 的再查解码后的字符串。出现在请求里就不发，出现在要写的文件里就不写。
-- **写盘**：上游返回非 200、流读不完、超时或超过 64 MiB、`Sample` 不通过，都不写；写到一半失败就删掉样本目录。录完把上游是谁（官方或哪家中转站）、用的模型版本补进 `note`。
+- **写盘**：上游返回非 200、流读不完、超时或超过 64 MiB、流读不成事件（如数据不是 JSON）、`Sample` 不通过，都不写；写到一半失败就删掉样本目录。录完把上游是谁（官方或哪家中转站）、用的模型版本补进 `note`。
 
 ## 不变量
 
