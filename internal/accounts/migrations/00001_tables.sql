@@ -102,13 +102,15 @@ CREATE TABLE accounts.workspaces (
 );
 CREATE UNIQUE INDEX one_default_workspace ON accounts.workspaces (account_id) WHERE is_default;
 
--- A user signs in on one site and owns one personal account there. The TOTP secret is a secret.Sealed spread over
+-- A user signs in on one site and owns one personal account there, which no other user has: account_id is unique
+-- and account_kind, always personal, is part of its key, so two sign-ins never share an account's scope. The secret is a secret.Sealed spread over
 -- four columns, all set or none, so a key rotation rewraps the data key in place. A user's invite code is theirs;
 -- the inviter is another user of the same site, fixed at registration.
 CREATE TABLE accounts.users (
     id uuid PRIMARY KEY,
     site_id uuid NOT NULL,
-    account_id uuid NOT NULL,
+    account_id uuid NOT NULL UNIQUE,
+    account_kind text NOT NULL GENERATED ALWAYS AS ('personal') STORED,
     email text NOT NULL CHECK (email = lower(email) AND char_length(email) BETWEEN 3 AND 254 AND email LIKE '%_@_%'),
     password_hash text NOT NULL CHECK (password_hash LIKE '$argon2id$%'),
     factor_version bigint NOT NULL CHECK (factor_version >= 1),
@@ -125,14 +127,15 @@ CREATE TABLE accounts.users (
     UNIQUE (site_id, account_id, id),
     UNIQUE (site_id, email),
     UNIQUE (site_id, invite_code),
-    FOREIGN KEY (site_id, account_id) REFERENCES accounts.accounts (site_id, id),
+    FOREIGN KEY (site_id, account_id, account_kind) REFERENCES accounts.accounts (site_id, id, kind),
     FOREIGN KEY (site_id, inviter_user_id) REFERENCES accounts.users (site_id, id),
     CHECK (num_nulls(totp_ciphertext, totp_nonce, totp_wrapped_dek, totp_key_version) IN (0, 4))
 );
 
 -- A user's role in an account. The member is a user of the account's site, reached through the user's own account,
 -- and in a personal account only its owner: personal_owner is the account when it is personal, and must then be
--- the member's own account. The account's kind is carried as part of the key to know which applies.
+-- the member's own account, which belongs to that user alone. The account's kind is carried as part of the key to
+-- know which applies.
 CREATE TABLE accounts.members (
     site_id uuid NOT NULL,
     account_id uuid NOT NULL,
@@ -146,7 +149,6 @@ CREATE TABLE accounts.members (
     FOREIGN KEY (site_id, user_account_id, user_id) REFERENCES accounts.users (site_id, account_id, id),
     FOREIGN KEY (site_id, personal_owner, user_id) REFERENCES accounts.users (site_id, account_id, id)
 );
-CREATE UNIQUE INDEX one_personal_member ON accounts.members (account_id) WHERE account_kind = 'personal';
 
 -- A platform role, held only by a user of the main site: site_is_main must match the site's is_main. It is the
 -- grantee's account data that only the platform scope writes. granted_by is null when the command line granted it.
