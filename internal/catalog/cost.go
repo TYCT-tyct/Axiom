@@ -33,6 +33,11 @@ func (s Schedule) band(u Usage) int {
 			length += u.q[it]
 		}
 	}
+	return s.bandOf(length)
+}
+
+// bandOf is the context tier a prompt whose basis adds up to length falls in.
+func (s Schedule) bandOf(length int64) int {
 	band := 0
 	for band < len(s.above) && length > s.above[band] {
 		band++
@@ -58,4 +63,35 @@ func (l *level) rate(band int, it Item) (platform.UnitPrice, bool) {
 		return l.tiers[band-1].price[it], true
 	}
 	return l.base.price[it], l.base.priced.Has(it)
+}
+
+// Ceiling is the highest unit price any of the items has at any of the service tiers, over every context tier a prompt
+// whose basis adds up to at most length can fall in, and false when one of them has no price. Billing reserves
+// count × Ceiling: the band follows the basis sum, which a split between basis and non-basis items can put anywhere
+// up to length, and prices need not rise with the band, so no single band or item bounds the cost.
+func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (ceiling platform.UnitPrice, ok bool) {
+	for st := range numServiceTiers {
+		for it := range NumItems {
+			if tiers.Has(st) && items.Has(it) {
+				if ceiling, ok = s.highest(st, it, s.bandOf(length), ceiling); !ok {
+					return platform.UnitPrice{}, false
+				}
+			}
+		}
+	}
+	return ceiling, true
+}
+
+// highest is the higher of floor and the item's prices at the service tier in bands 0 to last.
+func (s Schedule) highest(st ServiceTier, it Item, last int, floor platform.UnitPrice) (platform.UnitPrice, bool) {
+	for band := range last + 1 {
+		p, ok := s.price(st, band, it)
+		if !ok {
+			return platform.UnitPrice{}, false
+		}
+		if p.Cmp(floor) > 0 {
+			floor = p
+		}
+	}
+	return floor, true
 }

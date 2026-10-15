@@ -12,8 +12,8 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// Migrations is this module's migrations, which cmd/axiom hands to pg.Migrate and pg.DB.Check.
-func Migrations() pg.Module {
+// Module is this module's migrations, which cmd/axiom hands to pg.Migrate and pg.DB.Check.
+func Module() pg.Module {
 	files, err := fs.Sub(migrations, "migrations")
 	if err != nil {
 		panic(err) // the directory is embedded, so this cannot happen

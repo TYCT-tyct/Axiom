@@ -34,12 +34,12 @@
 | 设了却没有被读取的 `AXIOM_*` 变量算错 | 同上 |
 | 配置问题只报变量名和期望的格式，不报取值 | 密钥可能填错了变量或拼错了名字；监听失败只报原因，不报地址 |
 | 密钥不出现在日志里 | 凭证明文用 `secret.Secret` 保存，格式化、slog、JSON 和文本序列化统一脱敏；只有显式 `Reveal()` 取出明文。主密钥加载错误只含变量名、行号和原因，不含文件内容或路径；调用方不得记录 `Reveal()` 的结果 |
-| JSON 只按一套策略读 | `jsonx` 用 v2 默认的严格模式（拒绝非法 UTF-8 和重复键：两个解析器各取一份时，我们计费的用量就不是客户端读到的用量），嵌套不超过 256 层；`jsontext` 自己的上限固定为 10000，所以逐个读记号时检查 `StackDepth`。模糊测试与 `jsontext` 自带的校验对照，只允许在超过 256 层时不同。未知成员默认跳过，因为上游和客户端会加字段；我们自己定义、要存下来的格式（如价目表）用 `UnmarshalKnown` 拒绝，读到不认识的条件就报错，不会忽略后按别的含义处理。存储并按字节比较的 JSON 用 `MarshalCanonical` 写，相同的值得到相同的字节；整数不按 RFC 8785 经过 float64，超过 2⁵³ 的门槛和计数才不会变。入口按行为命名，不给调用方传选项，宽严只在这里定。depguard 禁止 `jsonx` 之外引入 `encoding/json` 及其子包；生成代码本来不在 lint 范围内，其余例外在引用处用 nolint 写明理由 |
+| JSON 只按一套策略读 | `jsonx` 用 v2 默认的严格模式（拒绝非法 UTF-8 和重复键：两个解析器各取一份时，我们计费的用量就不是客户端读到的用量），嵌套不超过 256 层；`jsontext` 自己的上限固定为 10000，所以逐个读记号时检查 `StackDepth`。模糊测试与 `jsontext` 自带的校验对照，只允许在超过 256 层时不同。未知成员默认跳过，因为上游和客户端会加字段；我们自己定义、要存下来的格式（如价目表）用 `UnmarshalKnown` 拒绝，读到不认识的条件就报错，不会忽略后按别的含义处理。存储并按字节比较的 JSON 用 `MarshalCanonical` 写，相同的值得到相同的字节；整数不按 RFC 8785 经过 float64，超过 2⁵³ 的门槛和计数才不会变。入口按行为命名，不给调用方传选项，宽严只在这里定。depguard 禁止 `jsonx` 之外引入 `encoding/json` 及其子包；生成代码本来不在 lint 范围内，其余例外在引用处用 nolint 写明理由。`jsonx` 的豁免是 `.golangci.yml` 里锚定在仓库根的路径规则（`^internal/platform/jsonx/`），不是 depguard 的 `files` 通配：后者匹配绝对路径，`**/internal/platform/**` 连 `internal/<模块>/internal/platform` 也放过 |
 | 空值等于未设定 | Docker Compose 把未设定的 `${VAR}` 传成空串，按未设定处理才不会把默认值意外覆盖成空 |
-| 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 和只读的 `pg.DB.ReadTx` 是仅有的入口，先设范围再执行；`pg.Tx` 不暴露连接：`Exec`、`Query`、`QueryRow` 的签名与 sqlc 生成的代码要的一致，`Query` 的结果逐个转发 `pgx.Rows` 的方法，唯独 `Conn` 返回空，pgx 给 `Rows` 加方法时编译失败，不会悄悄转发出去；pgx 另外两处交出连接的回调也拦下：作为唯一扫描目标的 `RowScanner` 拿到的是这种不带连接的结果，参数开头的 `QueryRewriter` 拿到的连接是空。测试检查结果，以及经 `Rows.Scan`、`Row.Scan`、`Exec`、`Query`、`QueryRow` 的回调，都交不出连接，结果也没有 `pgx.Rows`、`pgx.Row` 以外的方法。depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql` |
+| 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 和只读的 `pg.DB.ReadTx` 是仅有的入口，先设范围再执行；`pg.Tx` 不暴露连接：`Exec`、`Query`、`QueryRow` 的签名与 sqlc 生成的代码要的一致，`Query` 的结果逐个转发 `pgx.Rows` 的方法，唯独 `Conn` 返回空，pgx 给 `Rows` 加方法时编译失败，不会悄悄转发出去；pgx 另外两处交出连接的回调也拦下：作为唯一扫描目标的 `RowScanner` 拿到的是这种不带连接的结果，参数开头的 `QueryRewriter` 拿到的连接是空。测试检查结果，以及经 `Rows.Scan`、`Row.Scan`、`Exec`、`Query`、`QueryRow` 的回调，都交不出连接，结果也没有 `pgx.Rows`、`pgx.Row` 以外的方法。depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql`，豁免同样是锚定在仓库根的路径规则（`^internal/platform/`） |
 | `ReadTx` 的各条查询看到同一时刻的数据库，而且不能写 | 隔离级别 REPEATABLE READ 和只读由 `BEGIN` 本身设定：设范围的查询执行后 PostgreSQL 不再允许改隔离级别。测试在两次读取之间从另一条连接提交插入，第二次读取看不到，下一个事务看得到；`ReadTx` 里删除失败 |
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
-| 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope` 在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；运行时拼出的 SQL 和 `pg` 里面靠评审 |
+| 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope`（规则和理由写在 `scripts/check_scope.py`，用例在 `scripts/test_scope.py`）在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；角色语句按数据库读到的样子匹配（`.sql` 文件和 Go 字符串，先解开 Go 转义，原始字符串丢掉回车），先认字符串再认注释（引号、转义字符串 `E'..'`、美元引号 `$$..$$`/`$tag$..$tag$` 里的注释标记是普通文字，美元引号正文里的注释照样抹掉，DO 块会执行它），`SET` 与 `ROLE` 之间的空白、换行和 `--`、`/* */`（可嵌套）注释都藏不住它，注释里的语句不会执行，不算；运行时拼出的 SQL、相邻字符串字面量拼成的 SQL 和 `pg` 里面靠评审 |
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
@@ -137,7 +137,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ### 迁移
 
-- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Migrations()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
+- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Module()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。
@@ -149,9 +149,9 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 模块的 SQL 写在自己目录的 `queries/*.sql`，由 [sqlc](https://sqlc.dev) 生成类型化的 Go 代码，不用 ORM（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）。
 
 - **配置**：根目录的 `sqlc.yaml`，每个有查询的模块一项：`schema` 是 `sqlc/schemas.sql`（各模块的 schema 由迁移之前的步骤建好，迁移里没有 `CREATE SCHEMA`，sqlc 只读迁移，所以在这里补上；模块加第一条查询时加一行）加这个模块自己的迁移目录，只列这两样：模块只读写自己的表（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)），别的模块的数据经它的公开接口取得。查询若写到别的模块的表，sqlc 报表不存在而生成失败，所以这一条由生成本身守住；解析本模块的迁移不需要别的模块的建表语句（指向 `platform` 函数的策略照样能解析）。
-- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。生成的文件不手改。
-- **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 重新生成后看有没有 `*.gen.go` 变化或没提交；它也拒绝名字不是 `.gen.go` 的 sqlc 输出，否则改了查询却忘了重新生成，没有检查看得见。
-- **豁免**：生成的文件整体不进 lint（`.golangci.yml` 的 `exclusions.generated`，唯一的一处）。其中包括「pgx 只能在 `internal/platform` 里导入」：`platform` 之外模块的生成代码要导入 pgx 的类型，手写代码仍然不能。
+- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。模块的 `sqlc.yaml` 项用 `overrides` 把 `uuid`、`numeric`、`timestamptz`、`int8` 生成成 `uuid.UUID`、`string`、`time.Time`、`int64`（可空的为指针），模块的手写代码和测试就不必引用 pgx 的类型；要判断错误的 SQLSTATE（唯一冲突、被拒绝的行）用 `pg.SQLState(err)`。生成的文件不手改。
+- **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 先删掉已提交的全部 `*.gen.go`、`*.gen.ts`，再重新生成，看有没有变化或没提交：手写却起了这种名字的文件会显示为被删，过期的也一样。删除会丢掉未提交的改动，所以这些文件有未提交的改动或是新文件时，它先失败并列出文件，一个也不删。生成之后，它还拒绝名字不是 `.gen.go`、却带 `// Code generated ... DO NOT EDIT.` 头的 Go 文件（不限 sqlc；头可以缩进、跟在块注释后面，与 Go 解析器的认法一致），生成器首次写出的错名文件（如 sqlc 条目漏了后缀的 `db.go`）也在其内，否则改了查询却忘了重新生成，没有检查看得见。生成器中途失败会留下被删的文件，`git restore` 即可找回。
+- **豁免**：生成的文件整体不进 lint（`.golangci.yml` 的 `exclusions.generated`，唯一的一处）。其中包括「pgx 只能在 `internal/platform` 里导入」：`platform` 之外模块的生成代码要导入 pgx 的类型，手写代码仍然不能。lint 凭文件头认生成代码，所以豁免的前提由 `just generated` 守住：带这个头的只有生成器写的 `.gen.go`。前端的 `*.gen.ts` 本来就按文件名免检，同样靠先删后生成证明名字没被冒用。
 
 ## 审计日志
 
@@ -179,7 +179,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 测试
 
-`pgtest` 每个测试二进制起一个 PostgreSQL 容器。`pgtest.New(t, 模块…)` 用非超级用户的迁移管理员执行 `platform` 和所给模块的迁移（各执行两遍，第二遍应无事可做），做成这组模块的模板，同一组模块只建一次；每个测试复制一个独立的库，可以并行。模块只测自己的迁移，不受上层模块迁移的影响；建模板串行进行，因为迁移会建整个实例共用的角色。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
+`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时在模板上执行它们的迁移并另存一份模板，之后的测试复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
 
 ## 决策与理由
 
@@ -204,6 +204,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | sqlc 生成的方法把 `tx` 作为参数（`emit_methods_with_db_argument`），`Queries` 是空的 | 事务由 `pg.DB.Tx` 开关，持有 `New(tx)` 的对象会让人把它留到事务之外；空结构体没有状态，也就没有 `WithTx`（调用不到，`just deadcode` 也过不了） | `New(tx)`：多一个可以逃出事务的对象，还带一个没人调用的 `WithTx` |
 | sqlc 一个根配置、每个有查询的模块一项，由 `just generate` 运行 | 一条命令生成全部，`generated` 一次检查全部 | 每个包里一条 `//go:generate`：每个包都跑一遍完整配置，或者各有一份配置 |
 | 生成物一律 `.gen.go` | `just generated` 只看这个后缀，别的名字过期了也没人发现 | 默认的 `*.sql.go`：不被检查 |
+| `just generated` 先删后生成，保留 `exclusions.generated: strict` | 只查文件头抓不到手写的 `x.gen.go`（重新生成不会碰它）；先删再生成，不是生成器写出的就显示为被删；有未提交改动的生成文件先拒绝，不删，否则检查会丢用户的文件。生成步骤是 `just generated` 的参数（默认 `just generate`），测试才能换成假的生成器，把这些行为写成测试。lint 的豁免继续由文件头决定，新模块的 sqlc 输出不用再登记第二处 | `generated: disable` 加按路径逐个列出生成文件：每个有查询的模块要在 `.golangci.yml` 再登记一次，与 `sqlc.yaml` 重复；只查文件头：不拦名字冒用 |
+| 角色语句的匹配写成 Python 脚本，不用 `git grep` 或 Go 工具 | `git grep` 逐行匹配，`SET` 与 `ROLE` 隔行或隔注释就漏；Go 工具的测试里要写 `SET ROLE` 字符串，会被 `just scope` 当成违规，Python 文件不在检查范围内 | `git grep -P` 加 `-z`：仍不会剥注释，也不会解开 Go 转义；`tools/` 里的 Go 程序：测试自己触发规则 |
 | 审计日志在平台，所有模块经 `audit.Record` 写同一张表 | 要留审计的 accounts、billing、catalog、payments 都不能引用 `operations`；一张表让运营按操作者、对象、时间检索全部改动 | 由 `operations` 提供写接口：违反依赖方向；各模块各建审计表：同样的列写好几份，检索要拼多张表 |
 | 审计在改动自己的事务里同步写 | 改动和条目一起成败，没有不留审计的改动，也没有记了却没发生的改动 | 提交后发事件再写：两者之间崩溃就丢条目；单独的事务写：改动回滚后留下没发生的条目 |
 | 写入时不接哈希链 | 链头要在每个写审计的事务里加锁，所有模块的管理操作排成一队，锁持有到各自提交；接链和异地留存放在提交之后 | 在 `Record` 里接链 |
