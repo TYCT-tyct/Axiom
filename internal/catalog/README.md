@@ -2,16 +2,20 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
+
 ## 包
 
 | 包 | 做什么 |
 |---|---|
-| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集同步、页面监测与核对 |
-| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog` |
+| `catalog` | 价目表结构与计价（已实现）；名字的归一化与解析；内存快照；管理操作；数据集同步、页面监测与核对（后几项是设计，尚未实现） |
+| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（设计，尚未实现） |
 
 ## 数据
 
 ### 表（schema `catalog`）
+
+> 设计，尚未实现。
 
 "只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
 
@@ -40,6 +44,8 @@
 - `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:watch`、`system:sync`），#23 定义操作者类型后替换。
 
 ### 行级安全与权限
+
+> 设计，尚未实现。
 
 - **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `platform.in_any_scope()`（任意非空范围），写用 `platform.in_platform_scope()`。`model` 的读策略另加 `status <> 'draft' OR platform.in_platform_scope()`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
 - **平台数据**（其余各表）：读写都用 `platform.in_platform_scope()`。
@@ -73,7 +79,7 @@
 - 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（Chat 的缓存写入和两种格式的音频字段路径、图片输出和联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
 - **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是按这些计法折算的近似值。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
-- **服务等级**：`Usage.ServiceTier` 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
+- **服务等级**：`Usage` 的服务等级 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
 - 免单判断用 `Usage.OutputTotal()`（`output + reasoning`），只看 `output` 会把只有推理的回复误判为零输出。
 - Anthropic 联网搜索每千次 $10，搜索带回的内容按普通 token 计入输入（Anthropic Pricing 页，2026-10-14）。
 
@@ -84,9 +90,9 @@
 - Anthropic Haiku 5.5：超过 100,000 token，"prompt length counts all of its input tokens, including cache reads and cache writes"，`TierBasis` = {`input`, `cache_read`, `cache_write`, `cache_write_1h`}；Claude 4.6 及以后的其他模型 1M 内统一价（Anthropic Pricing 页，2026-10-14）。
 - Gemini：提示词超过 200k，`TierBasis` = {`input`, `cache_read`, `audio_in`, `image_in`}，输出和缓存价同时换档（Gemini 定价页，2026-10-14）。
 
-服务等级用 `ServiceTierRates{Tier, Rates, ContextTiers}` 给标准档以外的某个等级（如 flex、priority、快速模式）一整套单价，组合规则：
+标准档以外的每个服务等级（如 flex、priority、快速模式）有自己的一整套单价，组合规则：
 
-- **先选服务等级，再选档位**：`Usage.ServiceTier` 是标准档时用价目表顶层的基础价和 `ContextTier`，否则用该等级的 `Rates` 和 `ContextTiers`；档位按共用的 `TierBasis` 选，`Rates` 列出的项换价，没列出的沿用该等级的 `Rates`。
+- **先选服务等级，再选档位**：`Usage` 的服务等级 是标准档时用价目表顶层的基础价和 `ContextTier`，否则用该等级的 `Rates` 和 `ContextTiers`；档位按共用的 `TierBasis` 选，`Rates` 列出的项换价，没列出的沿用该等级的 `Rates`。
 - **不跨等级继承**：等级的 `Rates` 没列出的项就是这个等级没有价格，不沿用标准档。沿用会把 priority 下没录的缓存读按标准价悄悄少收；缺价能被报告，由计费按「价目表缺项」处理。`reasoning` 回退到同一等级、同一档的 `output`，这仍是唯一的回退。
 - **门槛一致**：每个等级的 `ContextTiers` 的门槛必须与顶层的门槛逐个相同，不换价的档位写空的 `Rates`。否则 `ParseSchedule` 拒绝：等级漏写长上下文档时，长请求会按该等级的基础价算低。
 - 价目表没列出的等级就是没有它的价格。例：标准档输出 2、200k 以上 4，priority 输出 3、200k 以上 5，priority 的长请求输出按 5 计。
@@ -95,10 +101,12 @@
 
 ### 上架门槛与缺项
 
+> 只有 `Schedule.Missing` 已实现，其余是设计，尚未实现。
+
 - **上游可能报告什么**是模型数据 `spec.items` 和 `spec.tiers`，审核时确认：输入输出类型、工具和厂商提供的服务等级决定它，例如支持音频输入就有 `audio_in`，有联网搜索就有 `web_search`，OpenAI 有 flex、priority。`Model.Reportable()` 返回它。
 - **`Schedule.Missing(Reportable) Reportable`** 返回其中没有价格的项和等级，算上 `reasoning` 回退到 `output`：标准档在任何一档缺价的项，以及价目表没有、或任何一档缺任何一个可能报告的项的等级。计费用它检查售价是否满足[计费的「定价」](../../docs/domains/billing.md#定价)里的上架门槛（已知的按次项目可以由站点默认单价补上）。门槛在 billing 检查，不在本模块：目录在模块依赖里位于 billing 之下，不知道售价。
 - **`Schedule.Lost(prev Schedule, r Reportable) ([]PricePoint, error)`** 返回 `prev` 有价格而本价目表没有的位置 `PricePoint{ServiceTier, Above, Item}`，只看 `r` 里的等级和项，两边都算上 `reasoning` 回退到 `output`。区间按两张价目表门槛的并集切分：每个区间里两边的价各自不变，所以逐个（等级、区间、计费项）比较就是精确的。这只在两张价目表的 `TierBasis` 相同时成立：口径不同（例如旧表按 {`input`, `cache_read`} 算门槛、新表只按 {`input`}），同一个数字门槛对应的用量范围就不同，任一边有分档时两张表不可比较，`Lost` 返回 `ErrTierBasisChanged`，不返回位置列表；两边都没有分档时口径不影响价格，照常比较。替换参考价前用它防止价格覆盖退化；不用 `Missing` 比较，因为它把一个等级里的缺项合成一个等级，旧 priority 只缺 `web_search`、新 priority 连输入价都没有时两边的结果相同。
-- **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage.ServiceTier` 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
+- **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage` 的服务等级 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
 
 ### 数值域
@@ -126,6 +134,8 @@
 
 ## 快照
 
+> 设计，尚未实现。这里的「快照」是[术语表](../../docs/glossary.md#术语表)的快照；`page_snapshot` 是其中的页面快照，与它无关。
+
 - **加载**：`Load` 在一个只读的 Repeatable Read 事务里先读 `revision`，再读全部公开表。快照不可变，只含 listed 和 retired 模型、它们的名字和 listed 模型各币种的当前参考价；加载在平台范围执行，所以读得到 retired 模型的名字。retired 模型只用于两处：`ResolvePublic` 返回 `ErrRetired`，`Recognize` 仍认得出它的名字，供应商据此不把这个名字映射到别的模型。`Models()` 只给 listed 模型，`Model` 带 `Status`。快照大小随模型数增长，不随历史增长。
 - **发布**：比较后替换，只接受更大的 `revision`。
 - **传播**：写入的节点立即重建；其他节点每 5 秒读一次 `revision`，变了才全量加载。以后有 LISTEN/NOTIFY 时加一个触发源，接口不变。
@@ -136,6 +146,8 @@
 
 ## 参考价的录入
 
+> 设计，尚未实现。
+
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。
@@ -145,6 +157,8 @@
 - **发布**：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再经 `lock_models` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
 
 ## 不变量
+
+> 已实现的只有「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告，不按零计」「上游报告的用量不会被悄悄丢掉」中 `Usage` 保留调用方交入的未知用量、构造与读取都复制这一半，其余是设计，尚未实现。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -161,7 +175,7 @@
 | 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序，经 `lock_models`）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
 | 单价精确、非负，计算不溢出 | 见「数值域」；性质测试对照 `math/big`，覆盖最小单价、最大乘积、负用量、门槛求和、转分数后取整 |
 | 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output` 是唯一的例外；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于参考计算的结果，参考计算用完整的用量选档、只对有价格的项求和（去掉缺价项的用量会改变档位）；用例：缺价的 `cache_read` 200,000 加有价的输入 1，输出按高档计 |
-| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`；测试：每家加一个虚构的用量字段、一个虚构的等级，都出现在 `Unknown()` 里 |
+| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。尚未实现：从各家响应识别未知字段和等级（protocol 的用量归一化），以及每家加一个虚构用量字段、一个虚构等级都出现在 `Unknown()` 里的测试 |
 | 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文和 `fetch_id`；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
 | 公开表里没有操作者、理由、证据 | 它们只在平台数据的 `change` 里；测试：查 `information_schema`，公开表没有 `actor`、`reason`、`evidence` 列；非平台范围读不到平台数据，读不到草稿模型和它的名字、参考价 |
 
@@ -170,27 +184,28 @@
 ```go
 package catalog // internal/catalog
 
-type ModelID uuid.UUID
+type ModelID uuid.UUID                 // 设计，尚未实现
 type Item uint8                        // 封闭枚举
 type ItemSet = set[Item]               // Item 的位集合（16 位）；NumItems 是 Item 的个数
 type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账户的等级
 type ServiceTierSet = set[ServiceTier] // ServiceTier 的位集合；两种集合都有 Has、Add
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
-type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0
-type Usage struct{ /* 各项数量、ServiceTier、不认识的用量 */ } // 只能经 NewUsage 构造
+type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0；设计，尚未实现
+type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
 
-type Schedule struct{ /* 币种、基础价、TierBasis、ContextTier、ServiceTierRates（各带自己的 Rates 和 ContextTiers） */ }
+type Schedule struct{ /* 币种、门槛口径、门槛、每个服务等级的单价；字段不导出 */ }
 func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝还不支持的条件
 func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
-func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；门槛口径不同且有分档时 ErrTierBasisChanged
-func Normalize(name string) string
+func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 设计，尚未实现：替换参考价前防退化；门槛口径不同且有分档时 ErrTierBasisChanged
+func Normalize(name string) string // 设计，尚未实现
 
+// 以下到末尾：设计，尚未实现
 type Snapshot struct{ /* 不可变 */ }
 func (s *Snapshot) Revision() int64
 func (s *Snapshot) ResolvePublic(name string) (Resolution, error) // 用户请求、模型列表、回退列表
@@ -214,6 +229,8 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 ```
 
 ## 测试
+
+> 已有的是计价的性质测试和基准、服务等级与档位交叉、`Missing`、`NewUsage`、`Unknown`、价目表解析与规范编码的用例，其余是设计，尚未实现。
 
 - 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
 - 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、每个服务等级随机有无价格、0 到 1000 的单价）、随机的服务等级和 0 到 10¹⁰ 的用量，与独立的模型比较选等级、选档、沿用该等级的基础价、推理按输出价、缺价的项和已定价部分的总额，并检查 `Missing` 覆盖 `Cost` 报告的每个缺价项：通过上架门槛的价目表，调用时不会缺价。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。

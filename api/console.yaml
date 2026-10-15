@@ -1,5 +1,5 @@
 # The console's API: what the user console calls on the public listener. Code on both sides is generated from this
-# file (docs/architecture.md「管理接口契约」); change the contract here first.
+# file (docs/architecture.md「仓库结构与契约文件」); change the contract here first.
 openapi: 3.0.3
 info:
   title: Axiom console API
