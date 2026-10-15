@@ -27,6 +27,13 @@ const (
 		"rates":{"input":"0.00000125","cache_read":"0.000000125","output":"0.00001"},
 		"context_tiers":{"basis":["input","cache_read"],"method":"whole",
 			"tiers":[{"above":200000,"rates":{"input":"0.0000025","cache_read":"0.00000025","output":"0.000015"}}]}}`
+	// README.md「条件」's example, in canonical form: standard output 2, 4 above the threshold; priority output 3, 5
+	// above it, and no cache_read price; fast mode at its own prices, with no change at the threshold; no flex prices.
+	// The prices and the threshold are made up.
+	serviceTiers = `{"context_tiers":{"basis":["input","cache_read"],"method":"whole","tiers":[{"above":10,` +
+		`"rates":{"output":"4"}}]},"currency":"USD","rates":{"cache_read":"1","input":"1","output":"2"},` +
+		`"service_tiers":{"fast":{"context_tiers":[{"above":10,"rates":{}}],"rates":{"input":"6","output":"12"}},` +
+		`"priority":{"context_tiers":[{"above":10,"rates":{"output":"5"}}],"rates":{"input":"1","output":"3"}}},"v":1}`
 )
 
 func mustParse(tb testing.TB, s string) catalog.Schedule {
@@ -44,7 +51,9 @@ func TestScheduleCanonicalJSON(t *testing.T) {
 	bigThreshold := `{"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"input":"2"}},` +
 		`{"above":9007199254740993,"rates":{"input":"3"}}]},"currency":"USD",` +
 		`"rates":{"input":"1"},"v":1}`
-	for text, want := range map[string]string{messy: haiku, haiku: haiku, bigThreshold: bigThreshold} {
+	for text, want := range map[string]string{
+		messy: haiku, haiku: haiku, bigThreshold: bigThreshold, serviceTiers: serviceTiers,
+	} {
 		got, err := mustParse(t, text).MarshalJSON()
 		if err != nil || string(got) != want {
 			t.Errorf("MarshalJSON of %s =\n%s, %v; want\n%s", text, got, err, want)
@@ -55,7 +64,7 @@ func TestScheduleCanonicalJSON(t *testing.T) {
 // FuzzParseSchedule checks the boundary for entered prices: whatever parses has a canonical form that parses back to the
 // same bytes, and prices bounded usage without an error.
 func FuzzParseSchedule(f *testing.F) {
-	for _, s := range []string{haiku, messy, gemini} {
+	for _, s := range []string{haiku, messy, gemini, serviceTiers} {
 		f.Add(s)
 	}
 	u := mustUsage(f, counts{in: 1e10, cacheRead: 7, cacheWrite: 1, out: 1e10, reasoning: 3, webSearch: 1})
@@ -82,41 +91,54 @@ func FuzzParseSchedule(f *testing.F) {
 func TestParseScheduleRejects(t *testing.T) {
 	valid := `{"v":1,"currency":"USD","rates":{"input":"0.000001"},` +
 		`"context_tiers":{"basis":["input"],"method":"whole",` +
-		`"tiers":[{"above":10,"rates":{"input":"0.000002"}},{"above":20,"rates":{"input":"0.000003"}}]}}`
+		`"tiers":[{"above":10,"rates":{"input":"0.000002"}},{"above":20,"rates":{"input":"0.000003"}}]},` +
+		`"service_tiers":{"priority":{"rates":{"input":"0.000004"},` +
+		`"context_tiers":[{"above":10,"rates":{}},{"above":20,"rates":{"input":"0.000005"}}]}}}`
 	mustParse(t, valid)
-	mustParse(t, strings.Replace(valid, `"above":10`, `"above":0`, 1)) // a written 0 is a threshold
+	mustParse(t, strings.ReplaceAll(valid, `"above":10`, `"above":0`)) // a written 0 is a threshold
+	// A threshold where only another service tier's prices change: every service tier lists every threshold.
+	mustParse(t, strings.Replace(valid, `"rates":{"input":"0.000002"}`, `"rates":{}`, 1))
 	// Every input-side item may count toward the threshold: Gemini's prompt includes audio, images and video.
 	mustParse(t, strings.Replace(valid, `"basis":["input"]`,
 		`"basis":["input","cache_read","cache_write","cache_write_1h","audio_in","image_in"]`, 1))
 	for name, edit := range map[string][2]string{
-		"excess method":       {`"method":"whole"`, `"method":"excess"`},
-		"no method":           {`"method":"whole",`, ``},
-		"unknown condition":   {`"v":1`, `"v":1,"time_of_day":{"from":"00:30","to":"08:30","rates":{"input":"0.5"}}`},
-		"unknown tier member": {`"above":10,`, `"above":10,"per":"excess",`},
-		"no basis":            {`"basis":["input"]`, `"basis":[]`},
-		"output in basis":     {`"basis":["input"]`, `"basis":["input","output"]`},
-		"web search in basis": {`"basis":["input"]`, `"basis":["input","web_search"]`},
-		"audio out in basis":  {`"basis":["input"]`, `"basis":["input","audio_out"]`},
-		"image out in basis":  {`"basis":["input"]`, `"basis":["input","image_out"]`},
-		"no tiers":            {`"tiers":[{"above":10,"rates":{"input":"0.000002"}},{"above":20,"rates":{"input":"0.000003"}}]`, `"tiers":[]`},
-		"no threshold":        {`"above":10,`, ``},
-		"null threshold":      {`"above":10`, `"above":null`},
-		"no tier rates":       {`,"rates":{"input":"0.000002"}`, ``},
-		"empty tier rates":    {`"rates":{"input":"0.000002"}`, `"rates":{}`},
-		"equal thresholds":    {`"above":20`, `"above":10`},
-		"falling thresholds":  {`"above":20`, `"above":5`},
-		"negative threshold":  {`"above":10`, `"above":-1`},
-		"unknown basis item":  {`"basis":["input"]`, `"basis":["input","prompt"]`},
-		"basis item twice":    {`"basis":["input"]`, `"basis":["input","input"]`},
-		"unknown rate item":   {`"input":"0.000001"`, `"audio_input":"0.000001"`},
-		"exponent price":      {`"input":"0.000001"`, `"input":"1e-6"`},
-		"number price":        {`"input":"0.000001"`, `"input":0.000001`},
-		"price twice":         {`"input":"0.000001"`, `"input":"0.000001","input":"0.000002"`},
-		"version 2":           {`"v":1`, `"v":2`},
-		"no version":          {`"v":1,`, ``},
-		"no currency":         {`"currency":"USD",`, ``},
-		"lower-case currency": {`"USD"`, `"usd"`},
-		"input modalities":    {`"v":1`, `"v":1,"input_modalities":["text"]`},
+		"excess method":                        {`"method":"whole"`, `"method":"excess"`},
+		"no method":                            {`"method":"whole",`, ``},
+		"unknown condition":                    {`"v":1`, `"v":1,"time_of_day":{"from":"00:30","to":"08:30","rates":{"input":"0.5"}}`},
+		"unknown tier member":                  {`"above":10,`, `"above":10,"per":"excess",`},
+		"no basis":                             {`"basis":["input"]`, `"basis":[]`},
+		"output in basis":                      {`"basis":["input"]`, `"basis":["input","output"]`},
+		"web search in basis":                  {`"basis":["input"]`, `"basis":["input","web_search"]`},
+		"audio out in basis":                   {`"basis":["input"]`, `"basis":["input","audio_out"]`},
+		"image out in basis":                   {`"basis":["input"]`, `"basis":["input","image_out"]`},
+		"no tiers":                             {`"tiers":[{"above":10,"rates":{"input":"0.000002"}},{"above":20,"rates":{"input":"0.000003"}}]`, `"tiers":[]`},
+		"no threshold":                         {`"above":10,`, ``},
+		"null threshold":                       {`"above":10`, `"above":null`},
+		"no tier rates":                        {`,"rates":{"input":"0.000002"}`, ``},
+		"equal thresholds":                     {`"above":20`, `"above":10`},
+		"falling thresholds":                   {`"above":20`, `"above":5`},
+		"negative threshold":                   {`"above":10`, `"above":-1`},
+		"unknown basis item":                   {`"basis":["input"]`, `"basis":["input","prompt"]`},
+		"basis item twice":                     {`"basis":["input"]`, `"basis":["input","input"]`},
+		"unknown rate item":                    {`"input":"0.000001"`, `"audio_input":"0.000001"`},
+		"exponent price":                       {`"input":"0.000001"`, `"input":"1e-6"`},
+		"number price":                         {`"input":"0.000001"`, `"input":0.000001`},
+		"price twice":                          {`"input":"0.000001"`, `"input":"0.000001","input":"0.000002"`},
+		"version 2":                            {`"v":1`, `"v":2`},
+		"no version":                           {`"v":1,`, ``},
+		"no currency":                          {`"currency":"USD",`, ``},
+		"lower-case currency":                  {`"USD"`, `"usd"`},
+		"input modalities":                     {`"v":1`, `"v":1,"input_modalities":["text"]`},
+		"no rates":                             {`"rates":{"input":"0.000001"},`, ``},
+		"standard as a service tier":           {`"priority":`, `"standard":`},
+		"unknown service tier":                 {`"priority":`, `"scale":`},
+		"service tier without rates":           {`"rates":{"input":"0.000004"},`, ``},
+		"service tier tier without rates":      {`{"above":10,"rates":{}}`, `{"above":10}`},
+		"service tier missing a threshold":     {`{"above":10,"rates":{}},`, ``},
+		"service tier with another threshold":  {`{"above":20,"rates":{"input":"0.000005"}}`, `{"above":21,"rates":{"input":"0.000005"}}`},
+		"service tier with an extra threshold": {`{"above":20,"rates":{"input":"0.000005"}}`, `{"above":20,"rates":{}},{"above":30,"rates":{}}`},
+		"service tier prices an unknown item":  {`"input":"0.000004"`, `"pdf":"0.000004"`},
+		"service tier twice":                   {`"service_tiers":{`, `"service_tiers":{"priority":{"rates":{}},`},
 	} {
 		text := strings.Replace(valid, edit[0], edit[1], 1)
 		if text == valid {

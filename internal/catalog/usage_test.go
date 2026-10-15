@@ -7,15 +7,19 @@ import (
 )
 
 func TestNewUsage(t *testing.T) {
-	if _, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 0, catalog.ItemWebSearch: 1e10}); err != nil {
+	if _, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 0, catalog.ItemWebSearch: 1e10},
+		catalog.ServiceTierFast); err != nil {
 		t.Errorf("NewUsage with 0 and 10¹⁰: %v", err)
+	}
+	if u, err := catalog.NewUsage(nil, catalog.ServiceTierFast+1); err == nil {
+		t.Errorf("NewUsage with an unknown service tier = %v, want an error", u)
 	}
 	for name, bad := range map[string]map[catalog.Item]int64{
 		"negative":     {catalog.ItemOutput: -1},
 		"above 10¹⁰":   {catalog.ItemCacheRead: 1e10 + 1},
 		"unknown item": {catalog.NumItems: 1},
 	} {
-		if u, err := catalog.NewUsage(bad); err == nil {
+		if u, err := catalog.NewUsage(bad, catalog.ServiceTierStandard); err == nil {
 			t.Errorf("%s: NewUsage(%v) = %v, want an error", name, bad, u)
 		}
 	}
@@ -32,7 +36,7 @@ func TestOutputTotal(t *testing.T) {
 		{map[catalog.Item]int64{catalog.ItemOutput: 20, catalog.ItemReasoning: 500, catalog.ItemInput: 9}, 520},
 		{map[catalog.Item]int64{catalog.ItemInput: 9}, 0},
 	} {
-		u, err := catalog.NewUsage(tc.counts)
+		u, err := catalog.NewUsage(tc.counts, catalog.ServiceTierStandard)
 		if err != nil {
 			t.Fatal(err)
 		}

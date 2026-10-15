@@ -8,15 +8,12 @@ import "axiom/internal/platform"
 // cache write without a write price is reported rather than guessed, since guessing the input price would undercharge
 // an Anthropic schedule that left its write premium out. It does not allocate: it runs for every attempt.
 func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err error) {
-	tier := s.tier(u)
+	band := s.band(u)
 	for it := range NumItems {
 		if u.q[it] == 0 {
 			continue
 		}
-		price, ok := s.price(tier, it)
-		if !ok && it == ItemReasoning {
-			price, ok = s.price(tier, ItemOutput)
-		}
+		price, ok := s.price(u.serviceTier, band, it)
 		if !ok {
 			missing.add(it)
 			continue
@@ -28,25 +25,37 @@ func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err erro
 	return total, missing, nil
 }
 
-// tier returns the highest tier whose threshold the prompt length exceeds, or nil for the base prices.
-func (s Schedule) tier(u Usage) *contextTier {
+// band is the context tier the prompt length falls in: 0 for the base prices, i+1 above the i-th threshold.
+func (s Schedule) band(u Usage) int {
 	var length int64 // at most NumItems × 10¹⁰
 	for it := range NumItems {
 		if s.basis.Has(it) {
 			length += u.q[it]
 		}
 	}
-	for i := len(s.tiers) - 1; i >= 0; i-- {
-		if length > s.tiers[i].above {
-			return &s.tiers[i]
-		}
+	band := 0
+	for band < len(s.above) && length > s.above[band] {
+		band++
 	}
-	return nil
+	return band
 }
 
-func (s Schedule) price(tier *contextTier, it Item) (platform.UnitPrice, bool) {
-	if tier != nil && tier.rates.priced.Has(it) {
-		return tier.rates.price[it], true
+// price is the item's price at the service tier in the band. A service tier inherits nothing from another, and
+// reasoning without a price of its own falls back to the same tier's output price in the same band, the only fallback.
+func (s Schedule) price(st ServiceTier, band int, it Item) (platform.UnitPrice, bool) {
+	if !s.offered.Has(st) {
+		return platform.UnitPrice{}, false
 	}
-	return s.base.price[it], s.base.priced.Has(it)
+	l := &s.levels[st]
+	if p, ok := l.rate(band, it); ok || it != ItemReasoning {
+		return p, ok
+	}
+	return l.rate(band, ItemOutput)
+}
+
+func (l *level) rate(band int, it Item) (platform.UnitPrice, bool) {
+	if band > 0 && l.tiers[band-1].priced.Has(it) {
+		return l.tiers[band-1].price[it], true
+	}
+	return l.base.price[it], l.base.priced.Has(it)
 }

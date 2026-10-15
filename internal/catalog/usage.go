@@ -32,6 +32,23 @@ var itemNames = [NumItems]string{
 
 func (it Item) String() string { return itemNames[it] }
 
+// ServiceTier is the service tier that served a request. It is not called Tier, which is an account's tier.
+type ServiceTier uint8
+
+// The service tiers, as protocol reads them from each vendor's response (README.md「计费项与用量」).
+const (
+	ServiceTierStandard ServiceTier = iota
+	ServiceTierFlex
+	ServiceTierPriority
+	ServiceTierFast // Anthropic's fast mode
+	numServiceTiers
+)
+
+// serviceTierNames are the service tiers' names in stored price schedules, so they never change.
+var serviceTierNames = [numServiceTiers]string{"standard", "flex", "priority", "fast"}
+
+func (st ServiceTier) String() string { return serviceTierNames[st] }
+
 // ItemSet is a set of billing items.
 type ItemSet = set[Item]
 
@@ -54,13 +71,20 @@ const inputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 
 // maxCount bounds every count, so a tier's sum of up to NumItems counts stays far inside int64.
 const maxCount = 1e10
 
-// Usage is how much of each billing item a request used. Its counts are unexported so that NewUsage, which bounds
-// them, is the only way to make one.
-type Usage struct{ q [NumItems]int64 }
+// Usage is how much of each billing item a request used, at the service tier that served it. Its fields are
+// unexported so that NewUsage, which bounds them, is the only way to make one.
+type Usage struct {
+	q           [NumItems]int64
+	serviceTier ServiceTier
+}
 
-// NewUsage checks each count is from 0 to 10¹⁰; an item left out counts 0.
-func NewUsage(counts map[Item]int64) (Usage, error) {
-	var u Usage
+// NewUsage checks each count is from 0 to 10¹⁰ and the service tier is one of the enumeration; an item left out counts
+// 0.
+func NewUsage(counts map[Item]int64, st ServiceTier) (Usage, error) {
+	if st >= numServiceTiers {
+		return Usage{}, fmt.Errorf("usage: unknown service tier %d", uint8(st))
+	}
+	u := Usage{serviceTier: st}
 	for it, n := range counts {
 		if it >= NumItems {
 			return Usage{}, fmt.Errorf("usage: unknown billing item %d", uint8(it))

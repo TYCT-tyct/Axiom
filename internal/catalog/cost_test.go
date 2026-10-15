@@ -8,9 +8,14 @@ import (
 	"axiom/internal/catalog"
 )
 
-func mustUsage(tb testing.TB, counts map[catalog.Item]int64) catalog.Usage {
+func mustUsage(tb testing.TB, c counts) catalog.Usage {
 	tb.Helper()
-	u, err := catalog.NewUsage(counts)
+	return mustTierUsage(tb, catalog.ServiceTierStandard, c)
+}
+
+func mustTierUsage(tb testing.TB, st catalog.ServiceTier, c counts) catalog.Usage {
+	tb.Helper()
+	u, err := catalog.NewUsage(c, st)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -122,6 +127,40 @@ func TestCostMissing(t *testing.T) {
 		if err != nil || got.Rat().Cmp(want) != 0 || !slices.Equal(members(missing), tc.missing) {
 			t.Errorf("Cost of %v under %s = %s, missing %v, %v; want %s, missing %v",
 				tc.usage, tc.schedule, got.Rat().FloatString(15), members(missing), err, tc.want, tc.missing)
+		}
+	}
+}
+
+// A service tier is priced with its own rates and context tiers, chosen in that order, and inherits nothing from the
+// standard tier: what it does not price is missing, and a service tier the schedule does not price has every item
+// missing (README.md「条件」).
+func TestCostServiceTiers(t *testing.T) {
+	s := mustParse(t, serviceTiers)
+	standard, flex, priority, fast := catalog.ServiceTierStandard, catalog.ServiceTierFlex, catalog.ServiceTierPriority,
+		catalog.ServiceTierFast
+	for _, tc := range []struct {
+		name    string
+		tier    catalog.ServiceTier
+		usage   counts
+		want    string
+		missing []catalog.Item
+	}{
+		{"standard", standard, counts{in: 1, out: 1}, "3", nil},
+		{"standard above the threshold", standard, counts{in: 11, out: 1}, "15", nil},
+		{"priority", priority, counts{in: 1, out: 1}, "4", nil},
+		{"priority above the threshold", priority, counts{in: 11, out: 1}, "16", nil},
+		{"fast above an unchanged threshold", fast, counts{in: 11, out: 1}, "78", nil},
+		{"priority reasoning at priority's output price", priority, counts{in: 11, reasoning: 1}, "16", nil},
+		{"standard cache reads", standard, counts{cacheRead: 1, in: 1, out: 1}, "4", nil},
+		{"priority cache reads are not standard's", priority, counts{cacheRead: 1, in: 1, out: 1}, "4", []catalog.Item{cacheRead}},
+		{"unpriced cache reads count toward the threshold", priority, counts{cacheRead: 10, in: 1, out: 1}, "6", []catalog.Item{cacheRead}},
+		{"flex is not priced", flex, counts{in: 1, out: 1}, "0", []catalog.Item{in, out}},
+	} {
+		got, missing, err := s.Cost(mustTierUsage(t, tc.tier, tc.usage))
+		want, _ := new(big.Rat).SetString(tc.want)
+		if err != nil || got.Rat().Cmp(want) != 0 || !slices.Equal(members(missing), tc.missing) {
+			t.Errorf("%s: Cost = %s, missing %v, %v; want %s, missing %v",
+				tc.name, got.Rat().FloatString(15), members(missing), err, tc.want, tc.missing)
 		}
 	}
 }

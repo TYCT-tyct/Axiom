@@ -9,42 +9,51 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-// Schedule is a price schedule: a unit price per billing item, some of which change with the length of the prompt.
-// Official prices, supplier cost plans and billing's prices all use it and all store its canonical JSON.
+// Schedule is a price schedule: a unit price per billing item and service tier, some of which change with the length
+// of the prompt. Official prices, supplier cost plans and billing's prices all use it and all store its canonical
+// JSON.
 type Schedule struct {
 	currency platform.Currency
-	base     rates
-	basis    ItemSet       // the items whose counts add up to the prompt length the tiers compare
-	tiers    []contextTier // thresholds strictly increase
+	basis    ItemSet // the items whose counts add up to the prompt length the thresholds compare
+	above    []int64 // the context tiers' thresholds, strictly increasing, the same for every service tier
+	levels   [numServiceTiers]level
+	offered  set[ServiceTier] // the service tiers with prices; a parsed schedule always has the standard tier
 }
 
-// contextTier replaces the base prices it lists when the basis adds up to more than above, for the whole request:
-// M1 supports no other method (README.md「条件」).
-type contextTier struct {
-	above int64
-	rates rates
+// level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
+// when the basis adds up to more than the threshold, for the whole request; M1 supports no other method
+// (README.md「条件」).
+type level struct {
+	base  rates
+	tiers []rates
 }
 
-// rates are the unit prices a schedule or a tier sets. A zero price is a price; an item without one is unpriced.
+// rates are the unit prices a level or a tier sets. A zero price is a price; an item without one is unpriced.
 type rates struct {
 	price  [NumItems]platform.UnitPrice
 	priced ItemSet
 }
 
-// The stored form, README.md「存储」. Members are required except rates, which may price nothing, and context_tiers;
-// within a tier, above and a non-empty rates are required. Unknown members are refused, so a condition M1 does not
-// know is rejected rather than ignored.
+// The stored form, README.md「存储」. The top level holds the standard tier's prices; every other service tier has its
+// own level with the same thresholds. Members are required except context_tiers and service_tiers; every rates must
+// be given, though it may be empty, and every tier needs its above. Unknown members are refused, so a condition M1
+// does not know is rejected rather than ignored.
 type (
 	scheduleJSON struct {
-		ContextTiers *contextTiersJSON `json:"context_tiers,omitzero"`
-		Currency     string            `json:"currency"`
-		Rates        map[string]string `json:"rates"`
-		V            int               `json:"v"`
+		ContextTiers *contextTiersJSON    `json:"context_tiers,omitzero"`
+		Currency     string               `json:"currency"`
+		Rates        map[string]string    `json:"rates"`
+		ServiceTiers map[string]levelJSON `json:"service_tiers,omitzero"`
+		V            int                  `json:"v"`
 	}
 	contextTiersJSON struct {
 		Basis  []string   `json:"basis"`
 		Method string     `json:"method"`
 		Tiers  []tierJSON `json:"tiers"`
+	}
+	levelJSON struct {
+		ContextTiers []tierJSON        `json:"context_tiers,omitzero"`
+		Rates        map[string]string `json:"rates"`
 	}
 	tierJSON struct {
 		Above *int64            `json:"above"` // nil when left out or null
@@ -79,58 +88,89 @@ func (w *scheduleJSON) schedule() (s Schedule, err error) {
 	if s.currency, err = platform.ParseCurrency(w.Currency); err != nil {
 		return s, err
 	}
-	if s.base, err = parseRates(w.Rates); err != nil {
+	standard := levelJSON{Rates: w.Rates}
+	if w.ContextTiers != nil {
+		if s.basis, err = w.ContextTiers.parseBasis(); err != nil {
+			return s, fmt.Errorf("context tiers: %w", err)
+		}
+		standard.ContextTiers = w.ContextTiers.Tiers
+	}
+	if s.above, s.levels[ServiceTierStandard], err = standard.parse(); err != nil {
 		return s, err
 	}
-	if w.ContextTiers != nil {
-		s.basis, s.tiers, err = w.ContextTiers.parse()
+	s.offered.add(ServiceTierStandard)
+	for name, lw := range w.ServiceTiers {
+		st, l, err := parseServiceTier(name, lw, s.above)
+		if err != nil {
+			return s, fmt.Errorf("service tier %q: %w", name, err)
+		}
+		s.levels[st] = l
+		s.offered.add(st)
 	}
-	return s, err
+	return s, nil
 }
 
-func (w *contextTiersJSON) parse() (basis ItemSet, tiers []contextTier, err error) {
+// parseBasis refuses any method but whole, and a basis that is empty or adds up more than the prompt.
+func (w *contextTiersJSON) parseBasis() (basis ItemSet, err error) {
 	if w.Method != wholeRequest {
-		return 0, nil, fmt.Errorf("context tiers: method %q is not supported, only %q", w.Method, wholeRequest)
+		return 0, fmt.Errorf("method %q is not supported, only %q", w.Method, wholeRequest)
 	}
 	if basis, err = parseSet[Item](itemNames[:], w.Basis); err != nil {
-		return 0, nil, fmt.Errorf("context tiers: basis: %w", err)
+		return 0, fmt.Errorf("basis: %w", err)
 	}
 	if basis == 0 || len(w.Tiers) == 0 {
-		return 0, nil, errors.New("context tiers: want a basis and at least one tier")
+		return 0, errors.New("want a basis and at least one tier")
 	}
 	if basis&^inputSide != 0 {
-		return 0, nil, errors.New("context tiers: basis: only input-side items count")
+		return 0, errors.New("basis: only input-side items count")
 	}
-	tiers = make([]contextTier, len(w.Tiers))
-	for i, t := range w.Tiers {
-		if tiers[i], err = t.parse(); err != nil {
-			return 0, nil, fmt.Errorf("context tiers: %w", err)
-		}
-		if i > 0 && tiers[i].above <= tiers[i-1].above {
-			return 0, nil, errors.New("context tiers: thresholds must strictly increase")
-		}
+	return basis, nil
+}
+
+// parseServiceTier refuses thresholds that differ from the standard tier's: a service tier that left out the
+// long-context tier would price long requests at its base prices.
+func parseServiceTier(name string, w levelJSON, standardAbove []int64) (st ServiceTier, l level, err error) {
+	if st, err = lookup[ServiceTier](serviceTierNames[:], name); err != nil {
+		return st, l, err
 	}
-	return basis, tiers, nil
+	if st == ServiceTierStandard {
+		return st, l, errors.New("the standard tier's prices are the top-level ones")
+	}
+	above, l, err := w.parse()
+	if err == nil && !slices.Equal(above, standardAbove) {
+		err = errors.New("thresholds differ from the standard tier's")
+	}
+	return st, l, err
 }
 
 // parse refuses a tier without a threshold rather than read it as 0, which would price every prompt at the tier, and
-// a tier without prices, which changes nothing.
-func (t *tierJSON) parse() (tier contextTier, err error) {
-	if t.Above == nil || *t.Above < 0 {
-		return tier, errors.New("a tier's threshold must be given and non-negative")
+// missing rates rather than read them as pricing nothing.
+func (w *levelJSON) parse() (above []int64, l level, err error) {
+	if l.base, err = parseRates(w.Rates); err != nil {
+		return nil, l, err
 	}
-	if tier.rates, err = parseRates(t.Rates); err != nil {
-		return tier, err
+	for i, t := range w.ContextTiers {
+		if t.Above == nil || *t.Above < 0 {
+			return nil, l, errors.New("context tiers: a tier's threshold must be given and non-negative")
+		}
+		if i > 0 && *t.Above <= above[i-1] {
+			return nil, l, errors.New("context tiers: thresholds must strictly increase")
+		}
+		r, err := parseRates(t.Rates)
+		if err != nil {
+			return nil, l, fmt.Errorf("context tiers: %w", err)
+		}
+		above = append(above, *t.Above)
+		l.tiers = append(l.tiers, r)
 	}
-	if tier.rates.priced == 0 {
-		return tier, errors.New("a tier lists no price")
-	}
-	tier.above = *t.Above
-	return tier, nil
+	return above, l, nil
 }
 
 // parseRates needs no check for an item priced twice: the JSON decoder already refuses a duplicate member.
 func parseRates(m map[string]string) (r rates, err error) {
+	if m == nil {
+		return r, errors.New("rates must be given")
+	}
 	for name, text := range m {
 		it, err := lookup[Item](itemNames[:], name)
 		if err != nil {
@@ -169,18 +209,28 @@ func lookup[T ~uint8](names []string, name string) (T, error) {
 // MarshalJSON writes the canonical form (jsonx.MarshalCanonical): prices in UnitPrice's canonical text, lists in
 // enumeration order.
 func (s Schedule) MarshalJSON() ([]byte, error) {
-	w := scheduleJSON{
-		Currency: s.currency.String(),
-		Rates:    s.base.json(),
-		V:        scheduleVersion,
+	standard := s.levels[ServiceTierStandard]
+	w := scheduleJSON{Currency: s.currency.String(), Rates: standard.base.json(), V: scheduleVersion}
+	if len(s.above) > 0 {
+		w.ContextTiers = &contextTiersJSON{Basis: s.basis.names(itemNames[:]), Method: wholeRequest, Tiers: s.tiersJSON(standard)}
 	}
-	if len(s.tiers) > 0 {
-		w.ContextTiers = &contextTiersJSON{Basis: s.basis.names(itemNames[:]), Method: wholeRequest}
-		for _, t := range s.tiers {
-			w.ContextTiers.Tiers = append(w.ContextTiers.Tiers, tierJSON{Above: &t.above, Rates: t.rates.json()})
+	for st := ServiceTierStandard + 1; st < numServiceTiers; st++ {
+		if s.offered.Has(st) {
+			if w.ServiceTiers == nil {
+				w.ServiceTiers = make(map[string]levelJSON)
+			}
+			w.ServiceTiers[st.String()] = levelJSON{ContextTiers: s.tiersJSON(s.levels[st]), Rates: s.levels[st].base.json()}
 		}
 	}
 	return jsonx.MarshalCanonical(w)
+}
+
+func (s Schedule) tiersJSON(l level) []tierJSON {
+	var tiers []tierJSON
+	for i, r := range l.tiers {
+		tiers = append(tiers, tierJSON{Above: &s.above[i], Rates: r.json()})
+	}
+	return tiers
 }
 
 func (s set[T]) names(all []string) []string {
