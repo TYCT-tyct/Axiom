@@ -98,14 +98,14 @@ func (w *scheduleJSON) schedule() (s Schedule, err error) {
 	if s.above, s.levels[ServiceTierStandard], err = standard.parse(); err != nil {
 		return s, err
 	}
-	s.offered.add(ServiceTierStandard)
+	s.offered.Add(ServiceTierStandard)
 	for name, lw := range w.ServiceTiers {
 		st, l, err := parseServiceTier(name, lw, s.above)
 		if err != nil {
 			return s, fmt.Errorf("service tier %q: %w", name, err)
 		}
 		s.levels[st] = l
-		s.offered.add(st)
+		s.offered.Add(st)
 	}
 	return s, nil
 }
@@ -179,7 +179,7 @@ func parseRates(m map[string]string) (r rates, err error) {
 		if r.price[it], err = platform.ParseUnitPrice(text); err != nil {
 			return r, fmt.Errorf("rates: %s: %w", name, err)
 		}
-		r.priced.add(it)
+		r.priced.Add(it)
 	}
 	return r, nil
 }
@@ -193,7 +193,7 @@ func parseSet[T ~uint8](names, list []string) (s set[T], err error) {
 		if s.Has(v) {
 			return 0, fmt.Errorf("%q is listed twice", name)
 		}
-		s.add(v)
+		s.Add(v)
 	}
 	return s, nil
 }

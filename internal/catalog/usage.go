@@ -56,17 +56,21 @@ func (st ServiceTier) String() string { return serviceTierNames[st] }
 // ItemSet is a set of billing items.
 type ItemSet = set[Item]
 
+// ServiceTierSet is a set of service tiers.
+type ServiceTierSet = set[ServiceTier]
+
 // set holds values of a small enumeration, one bit each.
 type set[T ~uint8] uint16
 
-// A seventeenth value would have no bit: Has would report it absent and add would drop it. This fails to compile
+// A seventeenth value would have no bit: Has would report it absent and Add would drop it. This fails to compile
 // first.
 var _ [16 - NumItems]struct{}
 
 // Has reports whether v is in the set.
 func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
 
-func (s *set[T]) add(v T) { *s |= 1 << v }
+// Add puts v in the set.
+func (s *set[T]) Add(v T) { *s |= 1 << v }
 
 // inputSide are the items a prompt is made of, the only ones a context tier's threshold may add up.
 const inputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |

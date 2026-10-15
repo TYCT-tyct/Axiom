@@ -15,7 +15,7 @@ func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err erro
 		}
 		price, ok := s.price(u.serviceTier, band, it)
 		if !ok {
-			missing.add(it)
+			missing.Add(it)
 			continue
 		}
 		if total, err = total.Add(price.Mul(u.q[it])); err != nil {
