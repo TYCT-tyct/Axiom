@@ -103,8 +103,9 @@ linters:
               desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
             - pkg: database/sql
               desc: "reach the database only through platform/pg's scoped transactions (docs/security.md「租户隔离」)"
-        # Generated code is outside every linter (exclusions.generated below); consoleapi.gen.go encodes our own
-        # types with encoding/json. Every other exception is a nolint comment on the import, with its reason.
+        # Generated code is outside every linter (exclusions.generated below): consoleapi.gen.go encodes our own
+        # types with encoding/json, and sqlc's *.gen.go in a module outside platform imports pgx for the types
+        # pg.Tx satisfies. Every other exception is a nolint comment on the import, with its reason.
         json:
           files: ["!**/internal/platform/jsonx/**"]
           deny:
