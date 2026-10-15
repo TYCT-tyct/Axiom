@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,9 +20,8 @@ import (
 )
 
 var (
-	site1, site2       = uuid.NewV7(), uuid.NewV7()
-	account1, account2 = uuid.NewV7(), uuid.NewV7()
-	platform           = pg.NewScope(true, nil, nil)
+	site, account = uuid.NewV7(), uuid.NewV7()
+	platform      = pg.NewScope(true, nil, nil)
 )
 
 // open returns the application's pool on a fresh database that also holds public.changes, a table standing in for
@@ -43,12 +41,12 @@ func open(t *testing.T) *pg.DB {
 	return db
 }
 
-// event is a valid event about a target of the given tenant, named by targetID.
-func event(targetID string, site, account uuid.UUID) audit.Event {
+// event is a valid event.
+func event() audit.Event {
 	return audit.Event{
 		Actor:  audit.System("catalog.sync"),
 		Action: "model.retire",
-		Target: audit.Target{Module: "catalog", Kind: "model", ID: targetID, Site: site, Account: account},
+		Target: audit.Target{Module: "catalog", Kind: "model", ID: "m"},
 	}
 }
 
@@ -69,7 +67,7 @@ func count(t *testing.T, db *pg.DB, table string) int {
 func TestRefusedEntryFailsTheChange(t *testing.T) {
 	t.Parallel()
 	db := open(t)
-	refused := event("m", uuid.Nil(), uuid.Nil())
+	refused := event()
 	refused.Action = ""
 	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		if _, err := tx.Exec(t.Context(), "INSERT INTO public.changes VALUES ('retired')"); err != nil {
@@ -91,7 +89,7 @@ func TestEntriesCannotBeRewritten(t *testing.T) {
 	t.Parallel()
 	db := open(t)
 	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		return audit.Record(t.Context(), tx, event("m", uuid.Nil(), uuid.Nil()))
+		return audit.Record(t.Context(), tx, event())
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,72 +112,76 @@ func TestEntriesCannotBeRewritten(t *testing.T) {
 	}
 }
 
-// TestScopeDecidesWhichEntries: a transaction reads and records the entries of the tenants in its scope; only the
-// platform scope reads and records those of no tenant.
-func TestScopeDecidesWhichEntries(t *testing.T) {
+// TestOnlyThePlatformScopeRecordsAndReads: entries name no tenant, so only the platform scope records or reads them.
+func TestOnlyThePlatformScopeRecordsAndReads(t *testing.T) {
 	t.Parallel()
 	db := open(t)
-	targets := []struct {
-		id            string
-		site, account uuid.UUID
-	}{{"a1", site1, account1}, {"s1", site1, uuid.Nil()}, {"a2", site2, account2}, {"platform", uuid.Nil(), uuid.Nil()}}
-	scopes := []struct {
-		name  string
-		scope pg.Scope
-		sees  string // the targets whose entries the scope may record and read
-	}{
-		{"no scope", pg.Scope{}, ""},
-		{"account 1", pg.NewScope(false, nil, []uuid.UUID{account1}), "a1"},
-		{"site 1", pg.NewScope(false, []uuid.UUID{site1}, nil), "a1,s1"},
-		{"platform", platform, "a1,a2,platform,s1"},
-	}
-	for _, s := range scopes {
-		var recorded []string
-		for _, target := range targets {
-			if err := db.Tx(t.Context(), s.scope, func(tx pg.Tx) error {
-				return audit.Record(t.Context(), tx, event(target.id, target.site, target.account))
-			}); err == nil {
-				recorded = append(recorded, target.id)
-			} else if code(err) != "42501" { // the policy's refusal
-				t.Errorf("%s recording %s: %v", s.name, target.id, err)
-			}
+	for _, s := range []struct {
+		name    string
+		scope   pg.Scope
+		refusal string // SQLSTATE of recording; 42501 is the policy's refusal
+		sees    int
+	}{ // platform first, so the others have an entry they must not read
+		{"platform", platform, "", 1},
+		{"no scope", pg.Scope{}, "42501", 0},
+		{"account", pg.NewScope(false, nil, []uuid.UUID{account}), "42501", 0},
+		{"site", pg.NewScope(false, []uuid.UUID{site}, nil), "42501", 0},
+	} {
+		err := db.Tx(t.Context(), s.scope, func(tx pg.Tx) error { return audit.Record(t.Context(), tx, event()) })
+		if code(err) != s.refusal {
+			t.Errorf("%s recording: %v, want SQLSTATE %q", s.name, err, s.refusal)
 		}
-		slices.Sort(recorded)
-		if got := strings.Join(recorded, ","); got != s.sees {
-			t.Errorf("%s recorded %q, want %q", s.name, got, s.sees)
-		}
-	}
-	for _, s := range scopes {
-		var read string
+		var read int
 		if err := db.Tx(t.Context(), s.scope, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), `SELECT coalesce(string_agg(DISTINCT target_id, ',' ORDER BY target_id), '')
-				FROM platform.audit_log`).Scan(&read)
+			return tx.QueryRow(t.Context(), "SELECT count(*) FROM platform.audit_log").Scan(&read)
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if read != s.sees {
-			t.Errorf("%s read %q, want %q", s.name, read, s.sees)
+			t.Errorf("%s read %d entries, want %d", s.name, read, s.sees)
 		}
 	}
 }
 
-// TestRecordRefusesIncompleteEvents: an event without an actor, an action or a target, attributed to an account
-// without its site, or carrying more than a small detail, is refused.
+// TestTenantEntriesAreRefused: nothing yet ties an account to its site, so the table refuses any entry naming a
+// tenant, whoever writes it; otherwise an account's scope could record (another site, its account) for that site to
+// read.
+func TestTenantEntriesAreRefused(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	for name, tenant := range map[string][2]any{
+		"a site":                 {site, nil},
+		"an account":             {nil, account},
+		"an account of its site": {site, account},
+	} {
+		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+			_, err := tx.Exec(t.Context(), `INSERT INTO platform.audit_log (actor_kind, actor_id, action, module,
+				target_kind, target_id, site_id, account_id, detail)
+				VALUES ('system', 'catalog.sync', 'model.retire', 'catalog', 'model', 'm', $1, $2, '{}')`, tenant[0], tenant[1])
+			return err
+		})
+		if code(err) != "23514" { // check_violation
+			t.Errorf("%s: %v, want a check violation", name, err)
+		}
+	}
+}
+
+// TestRecordRefusesIncompleteEvents: an event without an actor, an action or a target, or carrying more than a small
+// detail, is refused.
 func TestRecordRefusesIncompleteEvents(t *testing.T) {
 	t.Parallel()
 	db := open(t)
 	cases := map[string]func(*audit.Event){
-		"no actor":                func(e *audit.Event) { e.Actor = audit.Actor{} },
-		"no action":               func(e *audit.Event) { e.Action = "" },
-		"an action of one word":   func(e *audit.Event) { e.Action = "retire" },
-		"no module":               func(e *audit.Event) { e.Target.Module = "" },
-		"no target kind":          func(e *audit.Event) { e.Target.Kind = "" },
-		"no target ID":            func(e *audit.Event) { e.Target.ID = "" },
-		"an account without site": func(e *audit.Event) { e.Target.Account = account1 },
-		"a large detail":          func(e *audit.Event) { e.Detail = map[string]any{"text": strings.Repeat("x", 8192)} },
+		"no actor":              func(e *audit.Event) { e.Actor = audit.Actor{} },
+		"no action":             func(e *audit.Event) { e.Action = "" },
+		"an action of one word": func(e *audit.Event) { e.Action = "retire" },
+		"no module":             func(e *audit.Event) { e.Target.Module = "" },
+		"no target kind":        func(e *audit.Event) { e.Target.Kind = "" },
+		"no target ID":          func(e *audit.Event) { e.Target.ID = "" },
+		"a large detail":        func(e *audit.Event) { e.Detail = map[string]any{"text": strings.Repeat("x", 8192)} },
 	}
 	for name, change := range cases {
-		e := event("m", uuid.Nil(), uuid.Nil())
+		e := event()
 		change(&e)
 		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error { return audit.Record(t.Context(), tx, e) })
 		if code(err) != "23514" { // check_violation
@@ -197,7 +199,7 @@ func TestRecordStoresTheEvent(t *testing.T) {
 	byUser := audit.Event{
 		Actor:  audit.User(user),
 		Action: "api_key.revoke",
-		Target: audit.Target{Module: "accounts", Kind: "api_key", ID: "k1", Site: site1, Account: account1},
+		Target: audit.Target{Module: "accounts", Kind: "api_key", ID: "k1"},
 		Reason: "leaked in a public repository",
 		Detail: map[string]any{"name": "ci", "was": "active"},
 	}
@@ -210,7 +212,7 @@ func TestRecordStoresTheEvent(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", http.NoBody))
 	requestID := response.Header().Get("X-Request-ID")
 	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		return audit.Record(t.Context(), tx, event("m", uuid.Nil(), uuid.Nil()))
+		return audit.Record(t.Context(), tx, event())
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +220,7 @@ func TestRecordStoresTheEvent(t *testing.T) {
 	var got []string
 	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		rows, err := tx.Query(t.Context(), `SELECT concat_ws(' | ', actor_kind, actor_id, coalesce(request_id::text, '-'),
-			action, module, target_kind, target_id, coalesce(site_id::text, '-'), coalesce(account_id::text, '-'),
-			coalesce(reason, '-'), detail::text) FROM platform.audit_log ORDER BY actor_kind DESC`)
+			action, module, target_kind, target_id, coalesce(reason, '-'), detail::text) FROM platform.audit_log ORDER BY actor_kind DESC`)
 		if err != nil {
 			return err
 		}
@@ -236,9 +237,9 @@ func TestRecordStoresTheEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"user | " + user.String() + " | " + requestID + " | api_key.revoke | accounts | api_key | k1 | " + site1.String() +
-			" | " + account1.String() + ` | leaked in a public repository | {"was": "active", "name": "ci"}`,
-		"system | catalog.sync | - | model.retire | catalog | model | m | - | - | - | {}",
+		"user | " + user.String() + " | " + requestID +
+			` | api_key.revoke | accounts | api_key | k1 | leaked in a public repository | {"was": "active", "name": "ci"}`,
+		"system | catalog.sync | - | model.retire | catalog | model | m | - | {}",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("entries (-want +got):\n%s", diff)

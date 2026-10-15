@@ -22,12 +22,9 @@ func User(id uuid.UUID) Actor { return Actor{"user", id.String()} }
 // System is a job of ours acting on its own, named <module>.<job> such as catalog.sync.
 func System(job string) Actor { return Actor{"system", job} }
 
-// Target is what a change was made to. Site and Account are the tenant it belongs to: both for account data, Site
-// alone for site data, neither (the zero UUID) for platform and public data.
-type Target struct {
-	Module, Kind, ID string
-	Site, Account    uuid.UUID
-}
+// Target is what a change was made to. It names no tenant: the table refuses tenant entries until accounts can tie
+// them to one, and the tenant fields come with that (internal/platform/README.md「审计日志」).
+type Target struct{ Module, Kind, ID string }
 
 // Event is one change. Action is a stable name, <noun>.<verb> such as api_key.revoke, for searching and replay.
 // Reason is the actor's own words, if a rule asks for them. Detail is small and structured: IDs, names, before and
@@ -42,7 +39,7 @@ type Event struct {
 
 // Record appends event in tx, so it commits or rolls back with the change it describes. Its error must fail the
 // change: an unrecorded change is not allowed to stand. The table's constraints refuse what is missing or malformed,
-// and its policy an event whose tenant is outside tx's scope. The request ID comes from ctx, when a request has one.
+// and its policy a transaction outside the platform scope. The request ID comes from ctx, when a request has one.
 func Record(ctx context.Context, tx pg.Tx, event Event) error {
 	detail, err := jsonx.MarshalCanonical(event.Detail)
 	if err != nil {
@@ -50,19 +47,10 @@ func Record(ctx context.Context, tx pg.Tx, event Event) error {
 	}
 	t := event.Target
 	if _, err := tx.Exec(ctx, `INSERT INTO platform.audit_log (actor_kind, actor_id, request_id, action, module,
-		target_kind, target_id, site_id, account_id, reason, detail)
-		VALUES ($1, $2, nullif($3, '')::uuid, $4, $5, $6, $7, $8, $9, nullif($10, ''), $11)`,
-		event.Actor.kind, event.Actor.id, httpserver.RequestID(ctx), event.Action, t.Module, t.Kind, t.ID,
-		tenant(t.Site), tenant(t.Account), event.Reason, detail); err != nil {
+		target_kind, target_id, reason, detail) VALUES ($1, $2, nullif($3, '')::uuid, $4, $5, $6, $7, nullif($8, ''), $9)`,
+		event.Actor.kind, event.Actor.id, httpserver.RequestID(ctx), event.Action, t.Module, t.Kind, t.ID, event.Reason,
+		detail); err != nil {
 		return fmt.Errorf("audit %s: %w", event.Action, err)
 	}
 	return nil
-}
-
-// tenant is id, or NULL for the zero UUID.
-func tenant(id uuid.UUID) *uuid.UUID {
-	if id == uuid.Nil() {
-		return nil
-	}
-	return &id
 }
