@@ -1,0 +1,5 @@
+{
+  "source": "https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create",
+  "date": "2026-10-14",
+  "note": "The Streaming example, transcribed from the rendered page, which spaces out tokens: the whitespace inside the JSON and the [DONE] marker are restored as the API sends them."
+}

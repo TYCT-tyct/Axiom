@@ -7,6 +7,7 @@ package jsonx
 import (
 	"bytes"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -48,4 +49,14 @@ func Validate(data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// Unmarshal decodes data into v when Validate accepts it. It reads data twice, once to enforce MaxDepth, which
+// json.Unmarshal cannot, and once to decode, whose defaults are the rest of the policy. Members v does not name are
+// skipped, and names match exactly, case included.
+func Unmarshal(data []byte, v any) error {
+	if err := Validate(data); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
 }

@@ -41,6 +41,35 @@ func TestValidate(t *testing.T) {
 
 var errSyntax = errors.New("syntax error")
 
+func TestUnmarshal(t *testing.T) {
+	type event struct {
+		Type  string `json:"type"`
+		Index int64  `json:"index"`
+	}
+	for _, tc := range []struct {
+		name, data string
+		want       event
+		err        error // as in TestValidate
+	}{
+		{"named members only", `{"type":"ping","index":2,"extra":[1]}`, event{"ping", 2}, nil},
+		{"names match case", `{"Type":"ping"}`, event{}, nil},
+		{"duplicate name", `{"type":"a","type":"b"}`, event{}, errSyntax},
+		{"too deep", `{"type":"a","x":` + nested(MaxDepth) + `}`, event{}, errTooDeep},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got event
+			err := Unmarshal([]byte(tc.data), &got)
+			var syntax *jsontext.SyntacticError
+			if errors.Is(tc.err, errSyntax) && !errors.As(err, &syntax) || !errors.Is(tc.err, errSyntax) && !errors.Is(err, tc.err) {
+				t.Fatalf("Unmarshal = %v, want %v", err, tc.err)
+			}
+			if tc.err == nil && got != tc.want {
+				t.Errorf("Unmarshal decoded %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // FuzzValidate checks Validate against jsontext's own validator: they may disagree only on documents nested deeper
 // than MaxDepth, which jsontext accepts.
 func FuzzValidate(f *testing.F) {
