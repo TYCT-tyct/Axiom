@@ -5,10 +5,14 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: Prepare walks the body token by token
 	"errors"
 	"fmt"
+
+	"axiom/internal/catalog"
 )
 
 // Target is the endpoint an attempt is sent to.
 type Target struct {
+	// Format is the endpoint's call format.
+	Format Format
 	// Model is the endpoint's name for the model.
 	Model string
 	// EncryptedReasoning is set when the model returns its reasoning encrypted on request, as OpenAI's reasoning
@@ -26,14 +30,60 @@ type Rewrites struct {
 	History [][]byte
 }
 
+// Upstream is a request ready for an endpoint: its body, and what the body tells the relay about the usage the
+// endpoint will report.
+type Upstream struct {
+	Body  []byte
+	Usage UsageContext
+}
+
+// NotSupported reports an endpoint that cannot express the request, such as one of another format for a request
+// the conversion would change. The gateway skips the endpoint without counting an attempt; it is not the client's
+// error, which ErrInvalid is.
+type NotSupported struct{ Reason string }
+
+func (e *NotSupported) Error() string {
+	return "protocol: the endpoint cannot express the request: " + e.Reason
+}
+
 // errHistory reports a gateway that passed a history to a request that continues no response, or none to one that
 // does: the request's context would be lost or invented.
 var errHistory = errors.New("protocol: previous_response_id and the history passed disagree")
 
-// Prepare rewrites a body Inspect accepted for an endpoint of the same format, changing only the members README.md
-// 「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied as it is. Chat's rewrites
-// depend on the endpoint's dialect, which comes with the conversion to and from Chat (#27).
-func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
+// Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
+// only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
+// as it is. A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
+	u := Upstream{Usage: usageContext(r)}
+	if r.Format != t.Format {
+		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to format %d", r.Format, t.Format)}
+	}
+	var err error
+	u.Body, err = rewrite(r.Format, body, t, w)
+	return u, err
+}
+
+// usageContext is what the request tells the relay about the usage: a 1-hour cache breakpoint, and the service tier
+// when the request names one alone.
+func usageContext(r *Request) UsageContext {
+	u := UsageContext{CacheTTL1h: r.InputItems.Has(catalog.ItemCacheWrite1h)}
+	n := 0
+	for _, st := range [...]catalog.ServiceTier{
+		catalog.ServiceTierStandard, catalog.ServiceTierFlex, catalog.ServiceTierPriority, catalog.ServiceTierFast,
+	} {
+		if r.ServiceTiers.Has(st) {
+			u.Tier, n = st, n+1
+		}
+	}
+	if n != 1 {
+		u.Tier = catalog.ServiceTierStandard
+	}
+	return u
+}
+
+// rewrite is Prepare for an endpoint of the request's format. Chat's rewrites depend on the endpoint's dialect,
+// which come later (#27).
+func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	rules := rewriteRules[f]
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
