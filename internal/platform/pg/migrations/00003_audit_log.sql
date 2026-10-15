@@ -15,10 +15,8 @@ CREATE TABLE platform.audit_log (
     module text NOT NULL CHECK (module ~ '^[a-z]+$'),
     target_kind text NOT NULL CHECK (target_kind ~ '^[a-z][a-z0-9_]*$'),
     target_id text NOT NULL CHECK (target_id <> ''),
-    -- The tenant the target belongs to: both for account data, the site alone for site data, neither for platform
-    -- and public data. Nothing here yet ties an account to its site, and a policy that admits a row by either one
-    -- would show an entry of (another site, this account) to that site; so no_tenant refuses tenant entries until
-    -- accounts' tables exist to tie them to (internal/platform/README.md「审计日志」).
+    -- The tenant the target belongs to. no_tenant refuses tenant entries until accounts can tie an account to its
+    -- site (internal/platform/README.md「审计日志」).
     site_id uuid,
     account_id uuid,
     CONSTRAINT no_tenant CHECK (site_id IS NULL AND account_id IS NULL),

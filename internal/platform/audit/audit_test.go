@@ -11,6 +11,7 @@ import (
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"axiom/internal/platform/audit"
@@ -50,16 +51,25 @@ func event() audit.Event {
 	}
 }
 
-// count reads the number of rows of table that the platform scope sees.
-func count(t *testing.T, db *pg.DB, table string) int {
+// count reads the number of rows of table that scope sees.
+func count(t *testing.T, db *pg.DB, scope pg.Scope, table string) int {
 	t.Helper()
 	var n int
-	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), "SELECT count(*) FROM "+table).Scan(&n)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// exec runs one statement in its own platform transaction.
+func exec(t *testing.T, db *pg.DB, sql string, args ...any) error {
+	t.Helper()
+	return db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), sql, args...)
+		return err
+	})
 }
 
 // TestRefusedEntryFailsTheChange: an entry is written in the transaction of the change it describes, so when the
@@ -78,7 +88,7 @@ func TestRefusedEntryFailsTheChange(t *testing.T) {
 	if err == nil {
 		t.Error("the transaction committed")
 	}
-	if changes := count(t, db, "public.changes"); changes != 0 {
+	if changes := count(t, db, platform, "public.changes"); changes != 0 {
 		t.Errorf("kept %d changes", changes)
 	}
 }
@@ -102,11 +112,7 @@ func TestEntriesCannotBeRewritten(t *testing.T) {
 		`INSERT INTO platform.audit_log (id, actor_kind, actor_id, action, module, target_kind, target_id, detail)
 			VALUES (uuidv7(), 'system', 'catalog.sync', 'model.retire', 'catalog', 'model', 'm', '{}')`,
 	} {
-		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := tx.Exec(t.Context(), statement)
-			return err
-		})
-		if code(err) != "42501" { // insufficient_privilege
+		if err := exec(t, db, statement); code(err) != "42501" { // insufficient_privilege
 			t.Errorf("%s: %v, want permission denied", statement, err)
 		}
 	}
@@ -131,37 +137,30 @@ func TestOnlyThePlatformScopeRecordsAndReads(t *testing.T) {
 		if code(err) != s.refusal {
 			t.Errorf("%s recording: %v, want SQLSTATE %q", s.name, err, s.refusal)
 		}
-		var read int
-		if err := db.Tx(t.Context(), s.scope, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), "SELECT count(*) FROM platform.audit_log").Scan(&read)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if read != s.sees {
+		if read := count(t, db, s.scope, "platform.audit_log"); read != s.sees {
 			t.Errorf("%s read %d entries, want %d", s.name, read, s.sees)
 		}
 	}
 }
 
-// TestTenantEntriesAreRefused: nothing yet ties an account to its site, so the table refuses any entry naming a
-// tenant, whoever writes it; otherwise an account's scope could record (another site, its account) for that site to
-// read.
+// TestTenantEntriesAreRefused: no_tenant refuses any entry naming a tenant, whoever writes it; why is in the platform
+// README (审计日志).
 func TestTenantEntriesAreRefused(t *testing.T) {
 	t.Parallel()
 	db := open(t)
-	for name, tenant := range map[string][2]any{
-		"a site":                 {site, nil},
-		"an account":             {nil, account},
-		"an account of its site": {site, account},
+	for _, c := range []struct {
+		name          string
+		site, account any
+	}{
+		{"a site", site, nil},
+		{"an account", nil, account},
+		{"an account of its site", site, account},
 	} {
-		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := tx.Exec(t.Context(), `INSERT INTO platform.audit_log (actor_kind, actor_id, action, module,
-				target_kind, target_id, site_id, account_id, detail)
-				VALUES ('system', 'catalog.sync', 'model.retire', 'catalog', 'model', 'm', $1, $2, '{}')`, tenant[0], tenant[1])
-			return err
-		})
+		err := exec(t, db, `INSERT INTO platform.audit_log (actor_kind, actor_id, action, module, target_kind, target_id,
+			site_id, account_id, detail)
+			VALUES ('system', 'catalog.sync', 'model.retire', 'catalog', 'model', 'm', $1, $2, '{}')`, c.site, c.account)
 		if code(err) != "23514" { // check_violation
-			t.Errorf("%s: %v, want a check violation", name, err)
+			t.Errorf("%s: %v, want a check violation", c.name, err)
 		}
 	}
 }
@@ -224,15 +223,8 @@ func TestRecordStoresTheEvent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var row string
-			if err := rows.Scan(&row); err != nil {
-				return err
-			}
-			got = append(got, row)
-		}
-		return rows.Err()
+		got, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
