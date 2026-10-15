@@ -42,7 +42,7 @@
 - **租户列直接存在行上**：账户数据的每张表都有 `site_id`、`account_id`，都不为空。被引用的父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用它，所以两列不可能与"key → 工作区 → 账户 → 站点"不一致；两列不在可改的列里，写入后不变。外键检查不受行级安全影响。理由见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由)。
 - **授予每种目标一张表**：账户角色在 `members.role_id`，平台角色在 `platform_grants`；站点员工、工作区角色以后各加一张。每张表的外键都直接，不需要一张多态表靠条件约束拼归属。
 - `members` 在 M1 只有个人账户的主人一行，按所属账户归类即可。企业账户的成员要读到自己在别的账户里的成员关系，怎么分类随企业账户确定（待定）。
-- 新账户的 `tier_id` 取 `invite_tenant` 在库里读出的 `default_tier_id`，之后与默认等级无关。不取快照：快照可能晚 30 秒，而写进账户的等级以后不会再改。
+- 新账户的 `tier_id` 取 `invite_tenant` 在库里读出的 `default_tier_id`（M2 的开放注册同样在库里读出），之后与默认等级无关。不取快照：快照可能晚 30 秒，而写进账户的等级以后不会再改。
 - 新 key 的 `spend_limit` 取 `site_settings` 的每日上限（空则用代码默认值），`limit_reset = daily`；用户可以改成别的值或不设。
 
 ### 行级安全的写法
@@ -107,7 +107,7 @@
 **缓存只存不会变的东西；能被改的（停用、删除、过期、IP 白名单、可用模型、预设、上限、等级）每次调用都在准入事务里读库，判定能否使用、定规则和路由都只用读出的值。** 所以缓存陈旧、并发的缓存填充交出旧结果、提交确认丢失、多个核心节点，都不会让停用后的 key 通过，也不会按旧预设路由，不需要失效协议。
 
 1. **认出**（`AuthenticateKey`，内存）：解析并核对校验位，用 `(site_id, 当前版本的哈希)` 查缓存。条目里只有 `key_id`、`account_id`、`workspace_id`、`site_id`，建后永不改变。未命中时按 `(site, 哈希)` 合并并发的查找：无范围调用 `key_tenant`，无结果写负缓存、返回 401；有结果写入缓存。
-2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。不满足就回滚，返回与"key 不存在"相同的 401。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（可用模型在路由的认模型一步约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。
+2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。不满足就回滚，返回与"key 不存在"相同的 401。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。
 3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。
 
 - **为什么停用立即生效**：停用的提交被确认之后开始的调用，其准入查询都在提交之后执行，读到的就是停用（Read Committed 每条语句取新快照），与缓存内容、节点数、提交确认是否送达都无关。改预设、可用模型、等级同理：下一次调用就按新值路由和计价，最高价也按新等级的售价比较。
