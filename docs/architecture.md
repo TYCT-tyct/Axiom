@@ -154,14 +154,14 @@
 ## 仓库结构与契约文件
 
 ```
-cmd/axiom/                    唯一的程序入口，按节点角色启动
+cmd/axiom/                    唯一的服务程序入口，按节点角色启动
 internal/<模块>/              模块的公开接口
 internal/<模块>/internal/     模块的实现，其他模块在编译层面就无法引用
 internal/platform/            基础设施和共用值类型
 api/                          控制台、管理和运营接口的 OpenAPI 定义
 web/                          前端：官网、控制台、管理后台、共享组件
 deploy/                       镜像与部署配置
-tools/                        开发和 CI 用的 Go 工具
+tools/                        开发和 CI 用的 Go 工具；要引用某模块实现的开发命令放在该模块的 internal/ 下，如 protocol 的录制命令
 scripts/                      CI 检查脚本
 docs/                         文档
 ```

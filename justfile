@@ -60,6 +60,12 @@ test:
     go test -race -bench . -benchtime 1x ./...
     go test -C tools -race ./...
 
+# Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
+# stream as internal/protocol/testdata/<format>/<scenario>/, scrubbed and checked. Base URLs and keys come from the
+# environment or .env, as .env.example lists; internal/protocol/README.md「录制样本」 has the rules.
+record format scenario request:
+    go run ./internal/protocol/internal/record internal/protocol/testdata {{ quote(format) }} {{ quote(scenario) }} {{ quote(request) }}
+
 # Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
