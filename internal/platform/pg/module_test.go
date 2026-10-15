@@ -1,6 +1,7 @@
 package pg_test
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"strings"
@@ -170,6 +171,11 @@ func TestCheckAuditsWhatMigrationsBuilt(t *testing.T) {
 		{"a definer with another search_path", definer("pg_catalog, public, pg_temp", "axiom_lookup", true), definers},
 		{"a definer anyone may run", definer("pg_catalog, pg_temp", "axiom_lookup", false), definers},
 		{
+			"a schema the lookup role may create in",
+			[]string{"GRANT CREATE ON SCHEMA platform TO axiom_lookup"},
+			"the lookup role axiom_lookup breaks its limits: it may create objects in platform",
+		},
+		{
 			"a table the lookup role owns",
 			[]string{"CREATE TABLE public.mine ()", "ALTER TABLE public.mine OWNER TO axiom_lookup"},
 			"the lookup role axiom_lookup breaks its limits: it owns mine",
@@ -187,5 +193,30 @@ func TestCheckAuditsWhatMigrationsBuilt(t *testing.T) {
 				t.Errorf("%v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestCheckRefusesALookupRoleOutOfBounds: a lookup role that is a superuser or bypasses row-level security reads every
+// tenant, and a database without the role was never migrated. Roles belong to the whole cluster, so this test does
+// not run in parallel, and it puts the role back before the parallel tests resume.
+func TestCheckRefusesALookupRoleOutOfBounds(t *testing.T) {
+	database := pgtest.New(t)
+	db := open(t, database.App)
+	cases := []struct{ name, change, undo, want string }{
+		{"a superuser", "ALTER ROLE axiom_lookup SUPERUSER", "ALTER ROLE axiom_lookup NOSUPERUSER", "it can log in or escape row-level security"},
+		{"bypassing row-level security", "ALTER ROLE axiom_lookup BYPASSRLS", "ALTER ROLE axiom_lookup NOBYPASSRLS", "it can log in or escape row-level security"},
+		{"missing", "ALTER ROLE axiom_lookup RENAME TO axiom_lookup_gone", "ALTER ROLE axiom_lookup_gone RENAME TO axiom_lookup", "axiom_lookup (run axiom migrate first): it does not exist"},
+	}
+	for _, c := range cases {
+		if err := pgtest.Run(t.Context(), database.Superuser, c.change); err != nil {
+			t.Fatal(err)
+		}
+		err := db.Check(t.Context())
+		if err := pgtest.Run(context.WithoutCancel(t.Context()), database.Superuser, c.undo); err != nil {
+			t.Fatal(err)
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
 	}
 }
