@@ -1,11 +1,14 @@
 package streamcheck
 
-import "io"
+import (
+	"io"
+	"slices"
+)
 
 // Responses checks an OpenAI Responses stream against OpenAI's "Responses streaming events" reference (read
 // 2026-10-14): response.created first; sequence_number on every event, rising; output items added with output_index
 // counting up from 0, their content parts and summary parts likewise per item, each part done before its item and
-// each item before the response completes; every event that names an output item, part or item_id refers to one
+// each item before the response completes, and output_item.done naming the id and type of the item it closes; every event that names an output item, part or item_id refers to one
 // that is open, and a delta of a typed part matches its type. The stream ends with response.completed,
 // response.incomplete, response.failed or error.
 //
@@ -49,15 +52,21 @@ type responsesEvent struct {
 	} `json:"response"`
 }
 
-// partKinds and itemKinds give the part or item type an event may refer to.
+// partKinds gives the part an event must refer to, by its list and type; itemKinds the item type an event may refer
+// to.
 var (
-	partKinds = map[string]string{
-		"response.output_text.delta":    "output_text",
-		"response.output_text.done":     "output_text",
-		"response.refusal.delta":        "refusal",
-		"response.refusal.done":         "refusal",
-		"response.reasoning_text.delta": "reasoning_text",
-		"response.reasoning_text.done":  "reasoning_text",
+	partKinds = map[string]struct {
+		list partList
+		kind string
+	}{
+		"response.output_text.delta":            {contentParts, "output_text"},
+		"response.output_text.done":             {contentParts, "output_text"},
+		"response.refusal.delta":                {contentParts, "refusal"},
+		"response.refusal.done":                 {contentParts, "refusal"},
+		"response.reasoning_text.delta":         {contentParts, "reasoning_text"},
+		"response.reasoning_text.done":          {contentParts, "reasoning_text"},
+		"response.reasoning_summary_text.delta": {summaryParts, "summary_text"},
+		"response.reasoning_summary_text.done":  {summaryParts, "summary_text"},
 	}
 	itemKinds = map[string]string{
 		"response.function_call_arguments.delta": "function_call",
@@ -123,6 +132,9 @@ func (r *responses) itemDone(e *responsesEvent) error {
 	if err != nil {
 		return err
 	}
+	if e.Item.ID != it.id || e.Item.Type != it.kind {
+		return invalid("output_item.done names %q of type %q, output item %d is %q of type %q", e.Item.ID, e.Item.Type, *e.OutputIndex, it.id, it.kind)
+	}
 	for _, parts := range [][]part{it.parts, it.summaries} {
 		for _, p := range parts {
 			if !p.done {
@@ -186,10 +198,10 @@ func (r *responses) failed(*responsesEvent) error {
 // refersToOpen checks an event the table does not handle, a delta or done event or one of a type not listed: the
 // item, item_id and parts it names must be open, and a typed event must name what its type belongs to.
 func (r *responses) refersToOpen(e *responsesEvent) error {
-	partKind, typedPart := partKinds[e.Type]
+	ref, typedPart := partKinds[e.Type]
 	itemKind, typedItem := itemKinds[e.Type]
-	if e.OutputIndex == nil && !typedPart && !typedItem {
-		return nil
+	if e.OutputIndex == nil && e.ContentIndex == nil && e.SummaryIndex == nil && !typedPart && !typedItem {
+		return r.idOpen(e)
 	}
 	it, err := r.openItem(e)
 	switch {
@@ -197,24 +209,35 @@ func (r *responses) refersToOpen(e *responsesEvent) error {
 		return err
 	case typedItem && itemKind != it.kind:
 		return invalid("%s for a %s item", e.Type, it.kind)
-	case typedPart && e.ContentIndex == nil:
-		return invalid("%s without content_index", e.Type)
 	}
-	return r.partsOpen(e, it, partKind)
+	if typedPart {
+		p, err := r.openPart(e, ref.list)
+		if err != nil {
+			return err
+		}
+		if p.kind != ref.kind {
+			return invalid("%s for a %s part", e.Type, p.kind)
+		}
+	}
+	return r.partsOpen(e, it)
 }
 
-// partsOpen checks that the parts e names in it are open and, when kind is set, of that kind.
-func (r *responses) partsOpen(e *responsesEvent, it *item, kind string) error {
+// idOpen checks an event that names its item by item_id alone: unlisted types may do so, and the item must be open.
+func (r *responses) idOpen(e *responsesEvent) error {
+	if e.ItemID == "" || slices.ContainsFunc(r.items, func(it item) bool { return it.id == e.ItemID && !it.done }) {
+		return nil
+	}
+	return invalid("%s for an output item that is not open", e.Type)
+}
+
+// partsOpen checks that every part e names in it is open.
+func (r *responses) partsOpen(e *responsesEvent, it *item) error {
 	for _, list := range []partList{contentParts, summaryParts} {
 		if _, i := list(it, e); i == nil {
 			continue
 		}
-		p, err := r.openPart(e, list)
-		if err != nil {
+		if _, err := r.openPart(e, list); err != nil {
 			return err
-		}
-		if kind != "" && p.kind != kind {
-			return invalid("%s for a %s part", e.Type, p.kind)
 		}
 	}
 	return nil

@@ -129,7 +129,8 @@ func TestMessages(t *testing.T) {
 		{"wrong delta type", stream(msgStart, block(0, "text"), delta(0, "input_json_delta")), `"input_json_delta" in a text block`},
 		{"message_delta inside a block", stream(msgStart, block(0, "text"), msgDelta), "while block 0 is open"},
 		{"stop without message_delta", stream(msgStart, msgStop), "without a message_delta"},
-		{"stop with a block open", stream(msgStart, msgDelta, block(0, "text"), msgStop), "before the last block stops"},
+		{"stop with a block open", stream(msgStart, block(0, "text"), msgStop), "before the last block stops"},
+		{"a block after message_delta", stream(msgStart, msgDelta, block(0, "text"), stop(0), msgStop), "block 0 starts after message_delta"},
 		{"an event after the stop", stream(msgStart, msgDelta, msgStop, `{"type":"ping"}`), "after the stream ended"},
 		{"cut short", stream(append([]string{msgStart}, text...)...), "ends before message_stop"},
 		{"[DONE]", stream(msgStart, "[DONE]"), "not an event object"},
@@ -161,16 +162,22 @@ func TestResponses(t *testing.T) {
 	}
 	call := `{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call"}}`
 	args := `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{"}`
-	reasoning := []string{
-		created, `{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning"}}`,
-		`{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text"}}`,
-		`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"x"}`,
-		`{"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":0}`,
-		`{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning"}}`, completed,
-	}
+	rsAdded := `{"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning"}}`
+	sumAdded := `{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text"}}`
+	sumDelta := `{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"x"}`
+	sumDone := `{"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":0}`
+	rsDone := `{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning"}}`
+	later := func(fields string) string { return `{"type":"later",` + fields + `}` }
 	run(t, streamcheck.Responses, []checkCase{
 		{"message", with(completed), ""},
-		{"reasoning summary", stream(seq(reasoning...)...), ""},
+		{"reasoning summary", stream(seq(created, rsAdded, sumAdded, sumDelta, sumDone, rsDone, completed)...), ""},
+		{"summary delta without summary_index", stream(seq(created, rsAdded, strings.Replace(sumDelta, `"summary_index":0,`, "", 1), rsDone, completed)...), "part that is not open"},
+		{"summary delta to another part type", stream(seq(created, rsAdded, strings.Replace(sumAdded, "summary_text", "reasoning_text", 1), sumDelta)...), "for a reasoning_text part"},
+		{"unlisted type naming an open item_id", stream(seq(created, msgAdded, later(`"item_id":"msg_1"`), msgDone, completed)...), ""},
+		{"unlisted type naming a done item_id", with(later(`"item_id":"msg_1"`)), "later for an output item that is not open"},
+		{"unlisted type naming an unknown item_id", stream(seq(created, msgAdded, later(`"item_id":"msg_2"`))...), "later for an output item that is not open"},
+		{"unlisted type with content_index but no item", stream(seq(created, msgAdded, partAdded, later(`"content_index":0`))...), "later for an output item that is not open"},
+		{"unlisted type with summary_index but no item", stream(seq(created, rsAdded, sumAdded, later(`"summary_index":0`))...), "later for an output item that is not open"},
 		{"unknown types and gaps in sequence_number", stream(seq(created)[0], `{"sequence_number":5,"type":"later"}`, `{"sequence_number":9,"type":"response.failed"}`), ""},
 		{"failed with an open item", stream(seq(created, msgAdded, `{"type":"response.failed"}`)...), ""},
 		{"an error ends it", stream(seq(`{"type":"error","code":"server_error"}`)...), ""},
@@ -186,9 +193,12 @@ func TestResponses(t *testing.T) {
 		{"delta after the item is done", stream(seq(append(message, textDelta)...)...), "output item that is not open"},
 		{"another item_id", stream(seq(created, msgAdded, partAdded, strings.Replace(textDelta, "msg_1", "msg_2", 1))...), "output item that is not open"},
 		{"text delta to a refusal part", stream(seq(created, msgAdded, strings.Replace(partAdded, "output_text", "refusal", 1), textDelta)...), "for a refusal part"},
-		{"text delta without content_index", stream(seq(created, msgAdded, strings.Replace(textDelta, `"content_index":0,`, "", 1))...), "without content_index"},
+		{"text delta without content_index", stream(seq(created, msgAdded, partAdded, strings.Replace(textDelta, `"content_index":0,`, "", 1))...), "part that is not open"},
 		{"arguments for a message", stream(seq(created, msgAdded, args)...), "for a message item"},
 		{"arguments for a call", stream(seq(created, call, args, strings.Replace(call, "added", "done", 1), completed)...), ""},
+		{"item done with another id", stream(seq(created, msgAdded, strings.Replace(msgDone, "msg_1", "msg_2", 1))...), `names "msg_2" of type "message"`},
+		{"item done with another type", stream(seq(created, msgAdded, strings.Replace(msgDone, "message", "function_call", 1))...), `names "msg_1" of type "function_call"`},
+		{"item done without its identity", stream(seq(created, msgAdded, strings.Replace(msgDone, `{"id":"msg_1","type":"message"}`, "{}", 1))...), `names "" of type ""`},
 		{"item done with an open part", stream(seq(created, msgAdded, partAdded, msgDone)...), "while a part of item 0 is open"},
 		{"completed with an open item", stream(seq(created, msgAdded, completed)...), "while item 0 is open"},
 		{"completed without its items", with(strings.Replace(completed, "{}", "", 1)), "lists 0 output items, the stream added 1"},

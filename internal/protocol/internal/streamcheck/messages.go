@@ -97,6 +97,8 @@ func (m *messages) blockStart(e *messagesEvent) error {
 	switch {
 	case m.open:
 		return invalid("block %d starts while block %d is open", m.blocks, m.blocks-1)
+	case m.deltas > 0:
+		return invalid("block %d starts after message_delta", m.blocks)
 	case !next(e.Index, m.blocks):
 		return invalid("content_block_start without index %d", m.blocks)
 	case e.ContentBlock.Type == "":
