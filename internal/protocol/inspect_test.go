@@ -330,10 +330,38 @@ func body(f protocol.Format, size int, lead string) []byte {
 
 var sizes = []int{1 << 10, 1 << 20, 4 << 20}
 
-// TestInspectAllocs holds that reading a request allocates a constant more than jsonx.Validate does on it, whatever
-// its size (README.md「不变量」): Inspect's own allocations do not grow with the body. The tokenizer's grow with
-// objects wider than 64 names, so the bodies come both without and with them.
-func TestInspectAllocs(t *testing.T) {
+// TestAllocs holds that reading or rewriting a request allocates a constant more than jsonx.Validate does on it,
+// whatever its size (README.md「不变量」): Inspect's and Prepare's own allocations do not grow with the body. The
+// tokenizer's grow with objects wider than 64 names, so the bodies come both without and with them.
+func TestAllocs(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		formats protocol.Format // the formats below it
+		read    func(protocol.Format, []byte) error
+	}{
+		{"Inspect", protocol.Format(len(turns)), func(f protocol.Format, b []byte) error {
+			_, err := protocol.Inspect(f, b)
+			return err
+		}},
+		{"Prepare", protocol.Chat, func(f protocol.Format, b []byte) error {
+			_, err := prepare(f, b, true, false)
+			return err
+		}},
+	} {
+		for f := range c.formats {
+			for _, lead := range []string{"", wideTurn} {
+				if extra := extraAllocs(t, f, lead, c.read); extra[0] != extra[len(extra)-1] {
+					t.Errorf("%s, format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
+						c.name, f, lead != "", extra, sizes)
+				}
+			}
+		}
+	}
+}
+
+// extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of sizes.
+func extraAllocs(t *testing.T, f protocol.Format, lead string, read func(protocol.Format, []byte) error) []float64 {
+	t.Helper()
 	allocs := func(read func() error) float64 {
 		return testing.AllocsPerRun(5, func() {
 			if err := read(); err != nil {
@@ -341,20 +369,12 @@ func TestInspectAllocs(t *testing.T) {
 			}
 		})
 	}
-	for f := range protocol.Format(len(turns)) {
-		for _, lead := range []string{"", wideTurn} {
-			var extra []float64
-			for _, size := range sizes {
-				b := body(f, size, lead)
-				extra = append(extra, allocs(func() error { _, err := protocol.Inspect(f, b); return err })-
-					allocs(func() error { return jsonx.Validate(b) }))
-			}
-			if extra[0] != extra[len(extra)-1] {
-				t.Errorf("format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
-					f, lead != "", extra, sizes)
-			}
-		}
+	var extra []float64
+	for _, size := range sizes {
+		b := body(f, size, lead)
+		extra = append(extra, allocs(func() error { return read(f, b) })-allocs(func() error { return jsonx.Validate(b) }))
 	}
+	return extra
 }
 
 func BenchmarkInspect(b *testing.B) {
