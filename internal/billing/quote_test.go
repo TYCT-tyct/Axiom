@@ -200,7 +200,7 @@ func amount(tb testing.TB, n int64) platform.Exact {
 }
 
 // BenchmarkQuote runs under the balance-row lock: one entry, and a three-entry route over a schedule with two context
-// tiers and two service tiers, with a server tool and cache reads. Only Kept allocates.
+// tiers and two service tiers, with a server tool and cache reads. Only Kept and the per-entry quotes allocate.
 func BenchmarkQuote(b *testing.B) {
 	tiered := entry(b, true, 3)
 	tiered.Price = mustSchedule(b, `{"v":1,"currency":"USD",
