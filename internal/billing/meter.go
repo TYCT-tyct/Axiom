@@ -39,9 +39,9 @@ type Meter struct {
 	entry   int
 	trigger int64 // per mille of a segment
 	seq     int
-	ceiling ceiling // what the approved segments cover
-	next    ceiling // what the extension in flight would cover
-	pending bool    // an extension is in flight
+	ceiling ceiling        // what the approved segments cover
+	next    ceiling        // what the extension in flight would cover
+	pending bool           // an extension is in flight
 	stop    platform.Exact // spend past it exhausts the approved segments
 	ask     platform.Exact // spend past it asks for the next segment
 }
