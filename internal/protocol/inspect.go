@@ -94,7 +94,12 @@ func Inspect(f Format, body []byte) (Request, error) {
 		s.r.ServiceTiers = anyTier
 	}
 	if s.callCap > 0 { // only Responses has it, and its tools have no limits of their own
-		s.r.WebSearches, s.r.CodeExecutions = s.callCap, s.callCap
+		if s.r.Needs.Has(WebSearch) {
+			s.r.WebSearches = s.callCap
+		}
+		if s.r.Needs.Has(CodeExecution) {
+			s.r.CodeExecutions = s.callCap
+		}
 	}
 	return s.r, nil
 }

@@ -141,6 +141,11 @@ var inspectCases = []struct {
 				protocol.Reasoning | protocol.StructuredOutput
 		},
 	},
+	{
+		"responses call limit only for enabled tools", protocol.Responses, `{"model":"m",
+		"tools":[{"type":"web_search"},{"type":"function","name":"f"}],"max_tool_calls":4}`,
+		func(r *protocol.Request) { r.Model, r.WebSearches, r.Needs = "m", 4, protocol.WebSearch|protocol.Tools },
+	},
 }
 
 func TestInspect(t *testing.T) {
