@@ -148,7 +148,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 - **配置**：根目录的 `sqlc.yaml`，每个有查询的模块一项：`schema` 是 `sqlc/schemas.sql`（各模块的 schema 由迁移之前的步骤建好，迁移里没有 `CREATE SCHEMA`，sqlc 只读迁移，所以在这里补上；模块加第一条查询时加一行）加这个模块自己的迁移目录，只列这两样：模块只读写自己的表（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)），别的模块的数据经它的公开接口取得。查询若写到别的模块的表，sqlc 报表不存在而生成失败，所以这一条由生成本身守住；解析本模块的迁移不需要别的模块的建表语句（指向 `platform` 函数的策略照样能解析）。
 - **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。生成的文件不手改。
-- **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 先删掉全部 `*.gen.go`、`*.gen.ts`，重新生成后看有没有变化或没提交：手写却起了这种名字的文件会显示为被删，过期的也一样。它也拒绝名字不是 `.gen.go`、却带 `// Code generated ... DO NOT EDIT.` 头的 Go 文件（`generated-names`，不限 sqlc），否则改了查询却忘了重新生成，没有检查看得见。
+- **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 先删掉已提交的全部 `*.gen.go`、`*.gen.ts`，再重新生成，看有没有变化或没提交：手写却起了这种名字的文件会显示为被删，过期的也一样。删除会丢掉未提交的改动，所以这些文件有未提交的改动或是新文件时，它先失败并列出文件，一个也不删。生成之后，它还拒绝名字不是 `.gen.go`、却带 `// Code generated ... DO NOT EDIT.` 头的 Go 文件（不限 sqlc；头可以缩进、跟在块注释后面，与 Go 解析器的认法一致），生成器首次写出的错名文件（如 sqlc 条目漏了后缀的 `db.go`）也在其内，否则改了查询却忘了重新生成，没有检查看得见。生成器中途失败会留下被删的文件，`git restore` 即可找回。
 - **豁免**：生成的文件整体不进 lint（`.golangci.yml` 的 `exclusions.generated`，唯一的一处）。其中包括「pgx 只能在 `internal/platform` 里导入」：`platform` 之外模块的生成代码要导入 pgx 的类型，手写代码仍然不能。lint 凭文件头认生成代码，所以豁免的前提由 `just generated` 守住：带这个头的只有生成器写的 `.gen.go`。前端的 `*.gen.ts` 本来就按文件名免检，同样靠先删后生成证明名字没被冒用。
 
 ## 审计日志
@@ -202,7 +202,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | sqlc 生成的方法把 `tx` 作为参数（`emit_methods_with_db_argument`），`Queries` 是空的 | 事务由 `pg.DB.Tx` 开关，持有 `New(tx)` 的对象会让人把它留到事务之外；空结构体没有状态，也就没有 `WithTx`（调用不到，`just deadcode` 也过不了） | `New(tx)`：多一个可以逃出事务的对象，还带一个没人调用的 `WithTx` |
 | sqlc 一个根配置、每个有查询的模块一项，由 `just generate` 运行 | 一条命令生成全部，`generated` 一次检查全部 | 每个包里一条 `//go:generate`：每个包都跑一遍完整配置，或者各有一份配置 |
 | 生成物一律 `.gen.go` | `just generated` 只看这个后缀，别的名字过期了也没人发现 | 默认的 `*.sql.go`：不被检查 |
-| `just generated` 先删后生成，保留 `exclusions.generated: strict` | 只查文件头抓不到手写的 `x.gen.go`（重新生成不会碰它）；先删再生成，不是生成器写出的就显示为被删。lint 的豁免继续由文件头决定，新模块的 sqlc 输出不用再登记第二处 | `generated: disable` 加按路径逐个列出生成文件：每个有查询的模块要在 `.golangci.yml` 再登记一次，与 `sqlc.yaml` 重复；只查文件头：不拦名字冒用 |
+| `just generated` 先删后生成，保留 `exclusions.generated: strict` | 只查文件头抓不到手写的 `x.gen.go`（重新生成不会碰它）；先删再生成，不是生成器写出的就显示为被删；有未提交改动的生成文件先拒绝，不删，否则检查会丢用户的文件。生成步骤是 `just generated` 的参数（默认 `just generate`），测试才能换成假的生成器，把这些行为写成测试。lint 的豁免继续由文件头决定，新模块的 sqlc 输出不用再登记第二处 | `generated: disable` 加按路径逐个列出生成文件：每个有查询的模块要在 `.golangci.yml` 再登记一次，与 `sqlc.yaml` 重复；只查文件头：不拦名字冒用 |
 | 角色语句的匹配写成 Python 脚本，不用 `git grep` 或 Go 工具 | `git grep` 逐行匹配，`SET` 与 `ROLE` 隔行或隔注释就漏；Go 工具的测试里要写 `SET ROLE` 字符串，会被 `just scope` 当成违规，Python 文件不在检查范围内 | `git grep -P` 加 `-z`：仍不会剥注释，也不会解开 Go 转义；`tools/` 里的 Go 程序：测试自己触发规则 |
 | 审计日志在平台，所有模块经 `audit.Record` 写同一张表 | 要留审计的 accounts、billing、catalog、payments 都不能引用 `operations`；一张表让运营按操作者、对象、时间检索全部改动 | 由 `operations` 提供写接口：违反依赖方向；各模块各建审计表：同样的列写好几份，检索要拼多张表 |
 | 审计在改动自己的事务里同步写 | 改动和条目一起成败，没有不留审计的改动，也没有记了却没发生的改动 | 提交后发事件再写：两者之间崩溃就丢条目；单独的事务写：改动回滚后留下没发生的条目 |
