@@ -1,10 +1,11 @@
 // Command record sends a request to a live upstream and saves the stream it answers with as a protocol sample, laid out
 // as internal/protocol/README.md「录制样本」 describes. Nothing is written unless the whole sample passes the same
-// check as the samples test; headers are never kept, upstream-generated IDs are replaced by placeholders, and a
-// request or response that holds the key, or anything that looks like one, is refused.
+// check as the samples test; headers are never kept, the stream is rebuilt from its events, upstream-generated IDs
+// are replaced by placeholders, and a request or response that holds the key, or anything that looks like one, is
+// refused.
 //
-// It lives in the protocol module, not in tools/, because it checks streams with protocol's internal streamcheck,
-// which Go lets only packages under internal/protocol import.
+// It lives in the protocol module, not in tools/, because it reads streams with protocol's internal sse and
+// streamcheck, which Go lets only packages under internal/protocol import.
 //
 // usage: go run ./internal/protocol/internal/record <testdata dir> <format> <scenario> <request file>
 package main
@@ -13,6 +14,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json/jsontext" //nolint:depguard // only to find each string's offsets, in values jsonx.Validate has accepted
 	"errors"
 	"fmt"
 	"io"
@@ -21,10 +23,12 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol/internal/sse"
 	"axiom/internal/protocol/internal/streamcheck"
 )
 
@@ -39,27 +43,62 @@ type upstream struct {
 	baseVar, keyVar string
 	auth            func(h http.Header, key string)
 	check           func(io.Reader) error
+	events          bool           // the format names each event in an event line, which restates its type
+	ids             *regexp.Regexp // the JSON Pointers, in the request or in an event, of the IDs the upstream generates
 }
 
+// The ID positions follow each format's documented objects, for the request and the stream at once since their
+// pointers never meet: Messages' message, content blocks (tool_use and server tool IDs, tool_use_id of results) and
+// error request_id; Responses' response, its output items and the item events (id, call_id, item_id,
+// previous_response_id), and the request's input items; Chat's chunk, its tool calls, and the request's tool calls and
+// tool_call_id. Only these positions change, so the caller's data, such as a tool argument named id, never does.
 var formats = map[string]upstream{
-	"messages": {"/v1/messages", "/v1/messages", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", func(h http.Header, key string) {
-		h.Set("X-Api-Key", key)
-		h.Set("Anthropic-Version", "2023-06-01")
-	}, streamcheck.Messages},
-	"responses": {"/responses", "/v1/responses", "OPENAI_BASE_URL", "OPENAI_API_KEY", bearer, streamcheck.Responses},
-	"chat":      {"/chat/completions", "/v1/chat/completions", "OPENAI_BASE_URL", "OPENAI_API_KEY", bearer, streamcheck.Chat},
+	"messages": {
+		path: "/v1/messages", endpoint: "/v1/messages", baseVar: "ANTHROPIC_BASE_URL", keyVar: "ANTHROPIC_API_KEY",
+		auth: func(h http.Header, key string) {
+			h.Set("X-Api-Key", key)
+			h.Set("Anthropic-Version", "2023-06-01")
+		},
+		check: streamcheck.Messages, events: true,
+		ids: positions("/message/id", "/content_block/id", "/content_block/tool_use_id", "/request_id",
+			"/messages/*/content/*/id", "/messages/*/content/*/tool_use_id"),
+	},
+	"responses": {
+		path: "/responses", endpoint: "/v1/responses", baseVar: "OPENAI_BASE_URL", keyVar: "OPENAI_API_KEY",
+		auth: bearer, check: streamcheck.Responses, events: true,
+		ids: positions("/response/id", "/response/previous_response_id", "/response/output/*/id", "/response/output/*/call_id",
+			"/item/id", "/item/call_id", "/item_id", "/previous_response_id", "/input/*/id", "/input/*/call_id"),
+	},
+	"chat": {
+		path: "/chat/completions", endpoint: "/v1/chat/completions", baseVar: "OPENAI_BASE_URL", keyVar: "OPENAI_API_KEY",
+		auth: bearer, check: streamcheck.Chat,
+		ids: positions("/id", "/choices/*/delta/tool_calls/*/id", "/messages/*/tool_calls/*/id", "/messages/*/tool_call_id"),
+	},
 }
 
 func bearer(h http.Header, key string) { h.Set("Authorization", "Bearer "+key) }
+
+// positions compiles JSON Pointers, where * stands for any array index, into one pattern.
+func positions(pointers ...string) *regexp.Regexp {
+	for i, p := range pointers {
+		pointers[i] = strings.ReplaceAll(regexp.QuoteMeta(p), `\*`, `\d+`)
+	}
+	return regexp.MustCompile(`^(?:` + strings.Join(pointers, "|") + `)$`)
+}
 
 var (
 	scenarioName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	// keyLike matches the keys of both providers, sk-ant-… and sk-…, where a token starts: inside a run of base64url,
 	// such as an encrypted reasoning item, "sk-" is chance, not a key.
 	keyLike = regexp.MustCompile(`(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}`)
-	// upstreamID matches the start of an ID an upstream generates, by the prefixes the three formats' references use.
-	upstreamID = regexp.MustCompile(`^(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)`)
+	// idPrefix is the part of an ID that names its kind, such as msg_ or chatcmpl-, which its placeholder keeps.
+	idPrefix = regexp.MustCompile(`^[A-Za-z]+[_-]`)
+	// eventName is what a rebuilt event line may hold. A type outside it, such as one holding a line break, would
+	// change the stream's framing, so its event gets no event line, which readers ignore anyway.
+	eventName = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
 )
+
+var errKey = errors.New("it holds a key, so nothing is written")
 
 // client never follows a redirect: Go drops only Authorization and cookies when one leaves the host, so X-Api-Key
 // would reach wherever the upstream points. A redirect fails as a status that is not 200.
@@ -137,38 +176,27 @@ func checkRequest(request []byte, key string) error {
 	if !r.Stream {
 		return errors.New(`request: a sample is a stream, so the request needs "stream": true`)
 	}
-	if hasKey(request, key) {
+	if leaks(request, key) {
 		return errors.New("request: it holds a key, so it is not sent")
 	}
 	return nil
 }
 
-// hasKey looks at the raw bytes and at each JSON string decoded, since an escape such as \u0073k- hides a key from
-// the bytes but not from whoever decodes the file.
-func hasKey(data []byte, key string) bool {
-	if holdsKey(data, key) {
+// leaks reports whether data, which need not be JSON, holds a key in its bytes or, when it is JSON, in any string
+// once decoded: an escaped character hides a key from the bytes but not from whoever decodes them.
+func leaks(data []byte, key string) bool {
+	if holdsKey(string(data), key) {
 		return true
 	}
-	for _, s := range jsonStrings(data) {
-		if holdsKey([]byte(decode(data, s)), key) {
-			return true
-		}
+	strs, err := jsonStrings(data)
+	if err != nil {
+		return false // not JSON, so nothing decodes it: the bytes were checked
 	}
-	return false
+	return slices.ContainsFunc(strs, func(s jsonString) bool { return holdsKey(s.text, key) })
 }
 
-// decode returns the text of the JSON string at s, or "" if s delimits none: a quote on a line that is not JSON, such
-// as an SSE comment, may pair with another; the raw bytes are still scanned for keys.
-func decode(data []byte, s span) string {
-	var text string
-	if jsonx.Unmarshal(data[s.start:s.end], &text) != nil {
-		return ""
-	}
-	return text
-}
-
-func holdsKey(data []byte, key string) bool {
-	return bytes.Contains(data, []byte(key)) || keyLike.Match(data)
+func holdsKey(text, key string) bool {
+	return strings.Contains(text, key) || keyLike.MatchString(text)
 }
 
 // send posts the request exactly as the file holds it and returns the stream's bytes as they arrived.
@@ -191,7 +219,7 @@ func send(ctx context.Context, up upstream, base, key string, request []byte) ([
 	switch err = errors.Join(err, resp.Body.Close()); {
 	case err != nil:
 		return nil, fmt.Errorf("reading the stream: %w", err)
-	case resp.StatusCode != http.StatusOK && hasKey(stream, key):
+	case resp.StatusCode != http.StatusOK && leaks(stream, key):
 		return nil, fmt.Errorf("upstream answered %s with a body that holds a key, so the body is not shown", resp.Status)
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("upstream answered %s: %.1000s", resp.Status, stream)
@@ -215,21 +243,24 @@ func (r idleReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// sample returns the three files with IDs replaced, after the same check the samples test makes.
+// sample returns the three files, after the same check the samples test makes: the request and the stream with IDs
+// replaced, the stream rebuilt from its events, and meta.json.
 func sample(up upstream, key string, request, stream []byte) (map[string][]byte, error) {
-	ids := placeholders{map[string][]byte{}, map[string]int{}}
-	request, stream = ids.replace(request), ids.replace(stream)
-	note := ""
-	if len(ids.ids) > 0 {
-		note = ",\n  \"note\": \"IDs the upstream generated are replaced in both files by their prefix and a number in order of appearance.\""
+	s := scrubber{key, map[string]string{}, map[string]int{}}
+	request, _, err := s.json(request, up.ids)
+	if err != nil {
+		return nil, fmt.Errorf("request.json: %w", err)
+	}
+	if stream, err = s.stream(up, stream); err != nil {
+		return nil, fmt.Errorf("upstream.sse: %w", err)
 	}
 	// Every value is ASCII without quotes or backslashes, where %q quotes as JSON does.
-	meta := fmt.Appendf(nil, "{\n  \"source\": %q,\n  \"date\": %q%s\n}\n",
-		"recorded from a live upstream: POST "+up.endpoint, time.Now().Format(time.DateOnly), note)
+	meta := fmt.Appendf(nil, "{\n  \"source\": %q,\n  \"date\": %q,\n  \"note\": %q\n}\n",
+		"recorded from a live upstream: POST "+up.endpoint, time.Now().Format(time.DateOnly), recordedNote)
 	files := map[string][]byte{"request.json": request, "upstream.sse": stream, "meta.json": meta}
 	for name, data := range files {
-		if hasKey(data, key) {
-			return nil, fmt.Errorf("%s holds a key, so nothing is written", name)
+		if bytes.Contains(data, []byte(key)) {
+			return nil, fmt.Errorf("%s: %w", name, errKey)
 		}
 	}
 	if err := streamcheck.Sample(up.check, request, stream, meta); err != nil {
@@ -238,113 +269,128 @@ func sample(up upstream, key string, request, stream []byte) (map[string][]byte,
 	return files, nil
 }
 
-// placeholders maps each upstream ID to its placeholder. Every ID is replaced, including one that already looks like
-// a placeholder, and a counter per prefix numbers them, so distinct IDs never share a placeholder.
-type placeholders struct {
-	ids   map[string][]byte
+const recordedNote = "Rebuilt from the upstream's events: comments and the id and retry fields are left out, an event line, " +
+	"where the format has one, restates the event's type, and IDs the upstream generated are replaced in both files " +
+	"by their prefix and a number in order of appearance."
+
+// scrubber replaces the IDs of one recording through one table, so an ID gets the same placeholder in the request and
+// in the stream however it is escaped, and refuses JSON that holds a key once decoded. Every ID is replaced, including
+// one that already looks like a placeholder, and a counter per prefix numbers them, so distinct IDs never share one.
+type scrubber struct {
+	key   string
+	ids   map[string]string // decoded ID to placeholder, quotes included
 	count map[string]int
 }
 
-// opaque names the members whose object value is the caller's own data, not the protocol's: a tool's input, metadata,
-// a JSON Schema, a prompt's variables. An id member inside one, such as a tool argument, is never an upstream ID.
-// Responses' input is an array of items, which do carry IDs, so only an object value is skipped.
-var opaque = map[string]bool{"input": true, "metadata": true, "input_schema": true, "parameters": true, "schema": true, "variables": true}
-
-// replace replaces each ID in data: a string with an upstream ID's prefix that is the value of a member named id or
-// ending in _id, the names under which the three formats carry IDs, outside opaque objects. Requiring the name leaves
-// alone a tool or a schema key that merely starts like an ID, and text that quotes one. Names and IDs are judged and
-// mapped by their decoded text, so an escape never splits one ID in two; only the ID's own bytes are rewritten.
-func (p placeholders) replace(data []byte) []byte {
+// stream returns the stream's events, each written the same way, with IDs replaced: an event line where the format
+// has one, a data line per line of data, and a blank line. Comments, the id and retry fields, a byte order mark and
+// the line endings the upstream chose are not kept: they are SSE framing, which no reader of a sample looks at.
+func (s scrubber) stream(up upstream, stream []byte) ([]byte, error) {
+	events := sse.NewReader(bytes.NewReader(stream), maxStream)
 	var out []byte
-	last, skip := 0, 0
-	strs := jsonStrings(data)
-	for i, s := range strs {
-		value, ok := memberValue(data, s)
-		if s.start < skip || !ok {
-			continue
+	for {
+		data, err := events.Next()
+		if errors.Is(err, io.EOF) {
+			return out, nil
 		}
-		name := decode(data, s)
-		if opaque[name] && data[value] == '{' {
-			skip = objectEnd(data, value, strs[i+1:])
-			continue
+		if err != nil {
+			return nil, err
 		}
-		if name != "id" && !strings.HasSuffix(name, "_id") || i+1 == len(strs) || strs[i+1].start != value {
-			continue
+		if out, err = s.event(out, up, data); err != nil {
+			return nil, err
 		}
-		id := strs[i+1]
-		text := decode(data, id)
-		prefix := upstreamID.FindStringSubmatch(text)
-		if prefix == nil {
-			continue
-		}
-		placeholder, ok := p.ids[text]
-		if !ok {
-			p.count[prefix[1]]++
-			placeholder = fmt.Appendf(nil, `"%s%d"`, prefix[1], p.count[prefix[1]])
-			p.ids[text] = placeholder
-		}
-		out = append(append(out, data[last:id.start]...), placeholder...)
-		last = id.end
 	}
-	return append(out, data[last:]...)
 }
 
-// memberValue returns where the value of the member named by the string at s starts, if a colon follows s.
-func memberValue(data []byte, s span) (int, bool) {
-	rest := bytes.TrimLeft(data[s.end:], jsonSpace)
-	if len(rest) == 0 || rest[0] != ':' {
-		return 0, false
+// event appends to out the event whose data is data, with IDs replaced.
+func (s scrubber) event(out []byte, up upstream, data []byte) ([]byte, error) {
+	if string(data) != sse.Done {
+		var typ string
+		var err error
+		if data, typ, err = s.json(data, up.ids); err != nil {
+			return nil, err
+		}
+		if up.events && eventName.MatchString(typ) {
+			out = fmt.Appendf(out, "event: %s\n", typ)
+		}
 	}
-	value := bytes.TrimLeft(rest[1:], jsonSpace)
-	return len(data) - len(value), len(value) > 0
+	for line := range bytes.SplitSeq(data, []byte("\n")) { // data joins its data lines with LF
+		out = append(append(append(out, "data: "...), line...), '\n')
+	}
+	return append(out, '\n'), nil
 }
 
-const jsonSpace = " \t\r\n"
-
-// objectEnd returns where the object that starts at start ends, counting braces outside strs, the strings after start.
-func objectEnd(data []byte, start int, strs []span) int {
-	depth := 0
-	for i := start; i < len(data); i++ {
-		if len(strs) > 0 && i == strs[0].start {
-			i, strs = strs[0].end-1, strs[1:]
-			continue
+// json returns the JSON value data with the string at each ID position replaced by its placeholder, every other byte
+// kept, and the value's top-level type member; it fails if any string, a member name or a value, holds a key.
+func (s scrubber) json(data []byte, ids *regexp.Regexp) (out []byte, typ string, err error) {
+	strs, err := jsonStrings(data)
+	if err != nil {
+		return nil, "", err
+	}
+	last := 0
+	for _, str := range strs {
+		switch {
+		case holdsKey(str.text, s.key):
+			return nil, "", errKey
+		case str.name || str.text == "":
+		case str.pointer == "/type":
+			typ = str.text
+		case ids.MatchString(str.pointer):
+			out = append(append(out, data[last:str.start]...), s.placeholder(str.text)...)
+			last = str.end
 		}
-		switch data[i] {
-		case '{':
-			depth++
-		case '}':
-			if depth--; depth == 0 {
-				return i + 1
+	}
+	return append(out, data[last:]...), typ, nil
+}
+
+func (s scrubber) placeholder(id string) string {
+	p, ok := s.ids[id]
+	if !ok {
+		prefix := cmp.Or(idPrefix.FindString(id), "id_")
+		s.count[prefix]++
+		p = fmt.Sprintf(`"%s%d"`, prefix, s.count[prefix])
+		s.ids[id] = p
+	}
+	return p
+}
+
+// jsonString is a string in a JSON value, a member name or a value: its JSON Pointer, where it lies, quotes
+// included, and its decoded text.
+type jsonString struct {
+	pointer    string
+	name       bool
+	start, end int
+	text       string
+}
+
+// jsonStrings returns the strings in the JSON value data in order, once jsonx.Validate accepts data.
+func jsonStrings(data []byte) ([]jsonString, error) {
+	if err := jsonx.Validate(data); err != nil {
+		return nil, err
+	}
+	dec := jsontext.NewDecoder(bytes.NewReader(data))
+	var strs []jsonString
+	for {
+		if dec.PeekKind() != '"' {
+			if _, err := dec.ReadToken(); errors.Is(err, io.EOF) {
+				return strs, nil
+			} else if err != nil {
+				return nil, err
 			}
+			continue
 		}
-	}
-	return len(data)
-}
-
-// span is where a JSON string lies in a file, its quotes included.
-type span struct{ start, end int }
-
-// jsonStrings returns the JSON strings in data in order, honoring escapes. A JSON string cannot hold a CR or an LF,
-// and either ends an SSE line, so each ends whatever a stray quote outside JSON, as in an SSE comment, opened.
-func jsonStrings(data []byte) []span {
-	var spans []span
-	start := -1
-	for i := 0; i < len(data); i++ {
-		switch c := data[i]; {
-		case c == '\n' || c == '\r':
-			start = -1
-		case start < 0:
-			if c == '"' {
-				start = i
-			}
-		case c == '\\':
-			i++
-		case c == '"':
-			spans = append(spans, span{start, i + 1})
-			start = -1
+		kind, n := dec.StackIndex(dec.StackDepth()) // in an object, an even count of tokens read means a name is next
+		raw, err := dec.ReadValue()
+		if err != nil {
+			return nil, err
 		}
+		text, err := jsontext.AppendUnquote(nil, raw)
+		if err != nil {
+			return nil, err
+		}
+		end := int(dec.InputOffset())
+		strs = append(strs, jsonString{string(dec.StackPointer()), kind == '{' && n%2 == 0, end - len(raw), end, string(text)})
 	}
-	return spans
 }
 
 // write creates dir under root, failing if it exists, with the files; if a write fails, it removes dir again.
