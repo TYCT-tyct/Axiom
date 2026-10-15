@@ -145,6 +145,19 @@ func FuzzAdd(f *testing.F) {
 	})
 }
 
+// FuzzCmp checks the comparison against math/big over the whole signed range, both words' edges seeded.
+func FuzzCmp(f *testing.F) {
+	for _, pair := range [][2]Exact{{maxExact, minExact}, {{0, 1 << 63}, {0, 1}}, {{-1, 1<<64 - 1}, {}}, {{1, 0}, {0, 1<<64 - 1}}} {
+		f.Add(pair[0].hi, pair[0].lo, pair[1].hi, pair[1].lo)
+	}
+	f.Fuzz(func(t *testing.T, ahi int64, alo uint64, bhi int64, blo uint64) {
+		a, b := Exact{ahi, alo}, Exact{bhi, blo}
+		if got, want := a.Cmp(b), a.Rat().Cmp(b.Rat()); got != want {
+			t.Fatalf("%v.Cmp(%v) = %d, want %d", a, b, got, want)
+		}
+	})
+}
+
 // TestExactRat pins the conversion to a fraction at the edges of the domain: one unit, the largest product, the sum of
 // seven of them, and both ends of the 128-bit range, whose bits span both words. Billing multiplies the fraction by an
 // exchange rate such as 10/71 and rounds up once to its smallest amount, 10⁻⁹; a value exactly on an amount stays

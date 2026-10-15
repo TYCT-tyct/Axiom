@@ -2,7 +2,7 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
 
 ## 包
 
@@ -107,6 +107,7 @@
 - **`Schedule.Missing(Reportable) Reportable`** 返回其中没有价格的项和等级，算上 `reasoning` 回退到 `output`：标准档在任何一档缺价的项，以及价目表没有、或任何一档缺任何一个可能报告的项的等级。计费用它检查售价是否满足[计费的「定价」](../../docs/domains/billing.md#定价)里的上架门槛（已知的按次项目可以由站点默认单价补上）。门槛在 billing 检查，不在本模块：目录在模块依赖里位于 billing 之下，不知道售价。
 - **`Schedule.Lost(prev Schedule, r Reportable) ([]PricePoint, error)`** 返回 `prev` 有价格而本价目表没有的位置 `PricePoint{ServiceTier, Above, Item}`，只看 `r` 里的等级和项，两边都算上 `reasoning` 回退到 `output`。区间按两张价目表门槛的并集切分：每个区间里两边的价各自不变，所以逐个（等级、区间、计费项）比较就是精确的。这只在两张价目表的 `TierBasis` 相同时成立：口径不同（例如旧表按 {`input`, `cache_read`} 算门槛、新表只按 {`input`}），同一个数字门槛对应的用量范围就不同，任一边有分档时两张表不可比较，`Lost` 返回 `ErrTierBasisChanged`，不返回位置列表；两边都没有分档时口径不影响价格，照常比较。替换参考价前用它防止价格覆盖退化；不用 `Missing` 比较，因为它把一个等级里的缺项合成一个等级，旧 priority 只缺 `web_search`、新 priority 连输入价都没有时两边的结果相同。
 - **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage` 的服务等级 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
+- **`Ceiling` 给预留用的单价上界**：这些项在这些服务等级里、在基数合计不超过 `length` 的提示词可能落入的每一档中的最高单价，任一处缺价返回 false。档位只按基数里的项求和，提示词在基数内外怎么拆分都可能落到 `length` 以下的任一档，价格也不一定随档位上升，所以只看某一档或某一项都不是上界。
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
 
 ### 数值域
@@ -194,6 +195,7 @@ type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Abo
 type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
+func (u Usage) Count(it Item) int64 // billing 的计量读已报告的数
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
 
@@ -201,6 +203,7 @@ type Schedule struct{ /* 币种、门槛口径、门槛、每个服务等级的�
 func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝还不支持的条件
 func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
+func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // 预留的单价上界，见下
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 设计，尚未实现：替换参考价前防退化；门槛口径不同且有分档时 ErrTierBasisChanged
 func Normalize(name string) string // 设计，尚未实现
