@@ -46,10 +46,17 @@ func Record(ctx context.Context, tx pg.Tx, event Event) error {
 		return fmt.Errorf("audit %s: encode the detail: %w", event.Action, err)
 	}
 	t := event.Target
-	if _, err := tx.Exec(ctx, `INSERT INTO platform.audit_log (actor_kind, actor_id, request_id, action, module,
-		target_kind, target_id, reason, detail) VALUES ($1, $2, nullif($3, '')::uuid, $4, $5, $6, $7, nullif($8, ''), $9)`,
-		event.Actor.kind, event.Actor.id, httpserver.RequestID(ctx), event.Action, t.Module, t.Kind, t.ID, event.Reason,
-		detail); err != nil {
+	if err := New().InsertAuditEntry(ctx, tx, InsertAuditEntryParams{
+		ActorKind:  event.Actor.kind,
+		ActorID:    event.Actor.id,
+		RequestID:  httpserver.RequestID(ctx),
+		Action:     event.Action,
+		Module:     t.Module,
+		TargetKind: t.Kind,
+		TargetID:   t.ID,
+		Reason:     event.Reason,
+		Detail:     detail,
+	}); err != nil {
 		return fmt.Errorf("audit %s: %w", event.Action, err)
 	}
 	return nil
