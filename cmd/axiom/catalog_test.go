@@ -13,7 +13,7 @@ import (
 
 // catalogRunner runs `axiom catalog` against a fresh database with the request in a file, and returns the result line.
 func catalogRunner(t *testing.T) func(operation, doc string) (map[string]any, error) {
-	environ := []string{"AXIOM_DATABASE_URL=" + pgtest.New(t, modules...).App}
+	environ := []string{"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App}
 	return func(operation, doc string) (map[string]any, error) {
 		file := filepath.Join(t.TempDir(), "request.json")
 		if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
