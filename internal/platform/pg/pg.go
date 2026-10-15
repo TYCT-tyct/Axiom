@@ -53,11 +53,19 @@ type Scope struct {
 // (forbidigo) refuses it elsewhere, because a module that could build it could read every tenant.
 func PlatformScope() Scope { return Scope{platform: true} }
 
-// NewScope builds any scope, for tests in any module. Production code gets the platform scope from PlatformScope and,
-// once authorization exists, tenant scopes from it; until then the same lint rule refuses NewScope outside tests.
+// NewScope builds any scope, for tests in any module. Production code gets the platform scope from PlatformScope and
+// tenant scopes from authorization; the same lint rule refuses NewScope outside tests.
 func NewScope(platform bool, sites, accounts []uuid.UUID) Scope {
 	return Scope{platform, sites, accounts}
 }
+
+// SiteScope is the rows of one site. Only internal/accounts builds it, after authorization; the lint rule refuses it
+// elsewhere, as it refuses PlatformScope.
+func SiteScope(site uuid.UUID) Scope { return Scope{sites: []uuid.UUID{site}} }
+
+// AccountScope is the rows of one account. Only internal/accounts builds it, after authorization or for the account a
+// registration creates; the lint rule refuses it elsewhere.
+func AccountScope(account uuid.UUID) Scope { return Scope{accounts: []uuid.UUID{account}} }
 
 // Tx is a transaction whose scope is already set.
 type Tx struct{ tx pgx.Tx }

@@ -42,9 +42,11 @@
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
-| 只有 `cmd/` 能构造平台范围 | 能构造它的模块就能读写所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，`internal/platform` 自己也不例外 |
-| 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner` 不能是超级用户、带 BYPASSRLS 或能登录 |
-| 数据库缺少本程序的迁移就不启动 | `serve` 启动时比较已执行的版本；数据库比程序新可以运行，因为迁移只做扩展 |
+| 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
+| 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
+| Axiom 的 schema 里每张表都受行级安全约束 | `serve` 启动时检查各模块同名的 schema（`platform` 和[依赖表](../../docs/architecture.md#模块之间的依赖)里的模块）：除版本表外，每张表都 ENABLE 并 FORCE 行级安全，并且有策略；没有策略的表什么都查不到，是迁移漏了一步，在启动时报出，而不是在运行时表现为查不到数据。测试分别建只 FORCE 没 ENABLE、只 ENABLE 没 FORCE、没有策略的表 |
+| 登录前的查找只经 `axiom_lookup` 的定义者函数 | `serve` 启动时检查：这些 schema 里的 `SECURITY DEFINER` 函数都属于 `axiom_lookup`，`search_path` 固定为 `pg_catalog, pg_temp`，除所有者外只有 `axiom_app` 能执行；`axiom_lookup` 不能登录、不是超级用户、没有 BYPASSRLS，不拥有任何表。测试分别构造函数的三种违规，以及查找角色能登录、拥有表的情况 |
+| 数据库缺少本程序的迁移就不启动 | `serve` 启动时逐个模块比较已执行的版本，缺版本表也不启动；数据库比程序新可以运行，因为迁移只做扩展 |
 | 数据库不应答就不启动，不在监听之前无声地卡住 | `serve` 连接数据库和启动检查合计最多等 `AXIOM_STARTUP_TIMEOUT`，超时后报这两个变量名，不报地址；测试用只建立连接、从不应答的服务器 |
 | 退出时停止接收新请求，在途请求在上限时间内完成 | 第一个 SIGINT 或 SIGTERM：就绪状态先改为否，随即关闭监听，在途请求最多等 `AXIOM_SHUTDOWN_TIMEOUT`，到时关闭剩下的连接，请求的 context 随之结束，按 context 执行的数据库查询中止并归还连接，连接池才能关闭（不看 context 的处理器仍会拖住退出）；第二个信号立即退出 |
 | 单价取值 0 … 1000，单位 10⁻¹⁵；录入的单价只来自十进制文本；同一单价只有一种写法 | 规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)；算出来的单价从分数向上取整，本包还没有这个构造方式。`ParseUnitPrice` 拒绝符号、指数、超过 15 位小数（是 0 也拒绝）和超出上限的值；`String` 的输出没有前导零，小数末尾不留零。模糊测试对照 `math/big`：任意文本的解析，以及整个取值范围的格式化往返 |
@@ -110,21 +112,23 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 角色 | 登录 | 用途 |
 |---|---|---|
 | `axiom_owner` | 否 | 拥有全部 schema 和对象，只在迁移时进入；没有 BYPASSRLS |
+| `axiom_lookup` | 否 | 只拥有登录前查找的定义者函数，见 [accounts 的「登录前的查找」](../accounts/README.md#登录前的查找)；`axiom_app` 能调用这些函数，不能成为这个角色 |
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
-| 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner` 由别的角色建好时，还要有它的 ADMIN 权限。建好 `axiom_owner` 和 schema，再切成 `axiom_owner` 执行迁移 |
+| 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner`、`axiom_lookup` 由别的角色建好时，还要有它们的 ADMIN 权限。建好 `axiom_owner`、`axiom_lookup` 和各模块的 schema，再切成 `axiom_owner` 执行迁移 |
 
-[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。登录前查找用的定义者函数和拥有它们的 `axiom_lookup` 角色属于 accounts，`axiom_app` 不能成为这个角色，见 [accounts 的「登录前的查找」](../accounts/README.md#登录前的查找)。
+[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
 
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
 - 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
-- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。账户和站点范围以后由授权（#23）算出。各模块的测试用 `pg.NewScope` 构造任意范围。
+- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope` 构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
 - 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移
 
-- 每个模块的迁移在自己目录的 `migrations/` 下，版本表是 `platform.goose_<模块>`；`platform` 先执行。
+- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`，由它同样传给 `pg.Migrate` 和 `DB.Check`。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
+- 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。
 - 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
@@ -145,6 +149,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
 | 登录角色和密码由部署创建 | 密码不经过本程序。部署的初始化脚本用 `CREATE ROLE … PASSWORD` 设置它，语句里有明文密码，数据库开启 DDL 日志时会记下来，所以初始化时不开 | `axiom migrate` 按连接串设置密码：密码要经过程序 |
+| 模块把迁移作为 `pg.Module` 值交给 `cmd/axiom`，由它传给 `Migrate` 和 `Check`；执行顺序和合法的模块名在 `pg` 的清单里固定 | 依赖一眼可见，没有导入顺序决定的全局状态；顺序与调用方怎么排无关；拼错的模块名在迁移和启动时就失败 | 各模块在包初始化时登记到全局表：靠导入的副作用，gochecknoinits 也禁止；按传入的顺序执行：测试和生产可能以不同顺序迁移 |
+| 启动检查按模块名单（各模块同名的 schema）找表和函数，版本表按名字精确排除 | 名单就是 Axiom 自己的全部 schema，迁移不会建名单之外的；比程序新的模块只要在名单里也被检查 | 按 schema 所有者找：以别的角色建的 schema（例如手工修复）会漏查；按 `goose_` 前缀排除版本表：同名前缀的表会漏查 |
 | 迁移管理员不必是超级用户，测试也这样跑 | 生产上缺的权限在测试里就暴露 | 测试用超级用户：权限问题到部署时才发现 |
 | 测试用 testcontainers，一个测试二进制一个容器，每个测试一份模板副本 | 对着真实的 PostgreSQL 测；复制模板只要几十毫秒，测试互不影响 | 每个测试一个容器：慢；共用一个库：测试互相干扰 |
 | 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），以后的管理后台和运营接口各一份，在各自的监听上 | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台和运营接口只挂在管理监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |

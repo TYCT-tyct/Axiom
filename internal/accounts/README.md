@@ -92,8 +92,8 @@
 - 域名或站点停用、域名不属于这个监听面时都无结果；都在库里判定，不看快照。都以请求的域名为条件，所以别站的 key、别站的会话令牌和不存在的走同一条路径。配置和密码哈希在拿到账户后用账户范围再读。
 - **函数的所有者是专用角色 `axiom_lookup`**，不用平台范围：它不能登录，不拥有任何表，`axiom_app` 不是它的成员（不能 `SetRole` 过去）。这几张表上只为它加 `FOR SELECT TO axiom_lookup USING (true)` 的策略，只授予函数要读的列。函数固定 `search_path = pg_catalog, pg_temp`，名字全部带 schema，只有 `axiom_app` 能执行。
 - 不在函数里设范围：`just scope` 禁止平台的 `pg` 之外出现范围参数，迁移也一样；按角色加策略不需要范围，也没有"函数返回后范围留在调用方事务里"的风险。
-- `serve` 启动时检查：Axiom 自己的 schema（`platform` 和各模块的）里每个 `SECURITY DEFINER` 函数的所有者都是 `axiom_lookup`，`search_path` 是上面的固定值，执行权限只有 `axiom_app`；`axiom_app` 不能成为 `axiom_lookup`；`axiom_lookup` 不拥有表。任一不满足就不启动。测试分别构造这几种情况。
-- `axiom_lookup` 怎么建、迁移怎么把函数交给它，在模块迁移的 PR 里对着非超级用户的迁移管理员验证。
+- `serve` 启动时检查：Axiom 自己的 schema（`platform` 和各模块的）里每个 `SECURITY DEFINER` 函数的所有者都是 `axiom_lookup`，`search_path` 是上面的固定值，执行权限只有 `axiom_app`；`axiom_app` 不能成为 `axiom_lookup`；`axiom_lookup` 不能登录、不拥有表。任一不满足就不启动。检查在平台的 `DB.Check` 里，见[平台的「不变量」](../platform/README.md#不变量)。
+- `axiom_lookup` 由迁移的第一步建立（见[平台的「角色」](../platform/README.md#角色)）。迁移以 `axiom_owner` 建函数，`REVOKE EXECUTE … FROM PUBLIC`、`GRANT EXECUTE … TO axiom_app`，再 `ALTER FUNCTION … OWNER TO axiom_lookup`：改所有者要求新所有者对 schema 有 CREATE，所以只在这一句前后授予、随即收回。平台的测试用非超级用户的迁移管理员照这个写法执行通过。
 
 ## API key
 

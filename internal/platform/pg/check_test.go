@@ -51,6 +51,7 @@ func TestCheckRefusesLoginsThatEscape(t *testing.T) {
 		"a login that creates roles through a group":               riskyLogin("creates_roles", "CREATEROLE"),
 		"a login that creates databases through a group":           riskyLogin("creates_databases", "CREATEDB"),
 		"a login that owns the tables through a group":             riskyLogin("owns", "IN ROLE axiom_owner"),
+		"a login that looks up any tenant through a group":         riskyLogin("looks_up", "IN ROLE axiom_lookup"),
 	}
 	for name, login := range logins {
 		db := open(t, login)
@@ -244,19 +245,36 @@ func hold(t *testing.T, databaseURL, take string, args ...any) {
 	}
 }
 
-// TestMigrateRefusesAnUnsafeOwner: an existing axiom_owner that bypasses row-level security stops the run. It
-// alters a cluster-wide role, so it does not run in parallel: Go finishes it before any parallel test resumes.
-func TestMigrateRefusesAnUnsafeOwner(t *testing.T) {
+// TestMigrateRefusesUnsafeRoles: an existing axiom_owner or axiom_lookup that row-level security cannot hold, or
+// that can log in, stops the run, and a node refuses a lookup role changed after it. Each alters a cluster-wide role,
+// so the test does not run in parallel: Go finishes it before any parallel test resumes.
+func TestMigrateRefusesUnsafeRoles(t *testing.T) {
 	database := pgtest.New(t)
-	if err := pgtest.Run(t.Context(), database.Superuser, "ALTER ROLE axiom_owner BYPASSRLS"); err != nil {
+	for _, role := range []struct{ name, unsafe, safe, check string }{
+		{"axiom_owner", "BYPASSRLS", "NOBYPASSRLS", ""},
+		{"axiom_lookup", "LOGIN", "NOLOGIN", "axiom_lookup breaks its limits: it can log in"},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			alterRole(t, database.Superuser, role.name, role.unsafe, role.safe)
+			if err := pg.Migrate(t.Context(), database.Migrator); err == nil || !strings.Contains(err.Error(), role.name+" must not") {
+				t.Errorf("Migrate accepted %s with %s: %v", role.name, role.unsafe, err)
+			}
+			if err := open(t, database.App).Check(t.Context()); role.check != "" && (err == nil || !strings.Contains(err.Error(), role.check)) {
+				t.Errorf("Check accepted %s with %s: %v", role.name, role.unsafe, err)
+			}
+		})
+	}
+}
+
+// alterRole changes a cluster-wide role until the test ends.
+func alterRole(t *testing.T, superuser, role, change, undo string) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), superuser, "ALTER ROLE "+role+" "+change); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := pgtest.Run(context.WithoutCancel(t.Context()), database.Superuser, "ALTER ROLE axiom_owner NOBYPASSRLS"); err != nil {
+		if err := pgtest.Run(context.WithoutCancel(t.Context()), superuser, "ALTER ROLE "+role+" "+undo); err != nil {
 			t.Error(err)
 		}
 	})
-	if err := pg.Migrate(t.Context(), database.Migrator); err == nil || !strings.Contains(err.Error(), "axiom_owner must not") {
-		t.Errorf("Migrate accepted an owner with BYPASSRLS: %v", err)
-	}
 }

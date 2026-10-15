@@ -10,3 +10,9 @@ func (db *DB) SessionScope(ctx context.Context) (string, error) {
 		coalesce(current_setting('axiom.scope_accounts', true), '')`).Scan(&scope)
 	return scope, err
 }
+
+// ModuleOrder is the order migrations run in.
+var ModuleOrder = moduleOrder
+
+// Ordered is platform's own migrations and modules, in the order they run in.
+func Ordered(modules ...Module) ([]Module, error) { return ordered(modules) }
