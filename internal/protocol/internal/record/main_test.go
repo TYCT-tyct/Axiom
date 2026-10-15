@@ -129,6 +129,31 @@ func checkRecorded(t *testing.T, dir, format, request, stream string) {
 	}
 }
 
+// TestReplace runs a request and then a stream through one table, so the same ID gets the same placeholder however
+// it is escaped and in whichever file it appears.
+func TestReplace(t *testing.T) {
+	ids := placeholders{map[string][]byte{}, map[string]int{}}
+	for _, tc := range []struct{ name, data, want string }{
+		{"an ID", `{"call_id":"call_1"}`, `{"call_id":"call_1"}`},
+		{"the same ID and a new one, escaped", `{"call\u005fid":"call\u005f1","id":"\u0063all_x"}`, `{"call\u005fid":"call_1","id":"call_2"}`},
+		{
+			"a tool's input", `{"type":"tool_use","input":{"q":"}","id":"call_customer","n":{"x_id":"msg_x"}},"id":"toolu_abc"}`,
+			`{"type":"tool_use","input":{"q":"}","id":"call_customer","n":{"x_id":"msg_x"}},"id":"toolu_1"}`,
+		},
+		{
+			"metadata, and input that holds items", `{"metadata":{"user_id":"msg_user"},"input":[{"call_id":"call_y"}]}`,
+			`{"metadata":{"user_id":"msg_user"},"input":[{"call_id":"call_3"}]}`,
+		},
+		{"a prefix inside the value", `{"user_id":"user_msg_1"}`, `{"user_id":"user_msg_1"}`},
+		{"a string that names no member", `{"tags":["user_id","msg_x"]}`, `{"tags":["user_id","msg_x"]}`},
+		{"an ID member that is not a string", `{"previous_response_id":null,"call_x":0}`, `{"previous_response_id":null,"call_x":0}`},
+	} {
+		if got := ids.replace([]byte(tc.data)); string(got) != tc.want {
+			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestNothingWritten covers every refusal: what is refused before the call never reaches the upstream, and no
 // failure leaves a sample directory behind.
 func TestNothingWritten(t *testing.T) {
@@ -153,6 +178,8 @@ func TestNothingWritten(t *testing.T) {
 		{"the key echoed in the stream", "messages", "s", request, start + event(`{"type":"later","key":"`+key+`"}`) + end, 200, true, "upstream.sse holds a key"},
 		{"the key escaped in the request", "messages", "s", `{"stream":true,"x":"\u006c` + key[1:] + `"}`, "", 200, false, "holds a key"},
 		{"a key-like token escaped in the stream", "messages", "s", request, start + event(`{"type":"later","key":"\u0073k-`+strings.Repeat("a", 24)+`"}`) + end, 200, true, "upstream.sse holds a key"},
+		// A CR ends the comment line as LF does, so its stray quote cannot pair with the quotes of the event after it.
+		{"the key escaped after a comment ending in CR", "messages", "s", request, start + `: a stray " in a comment` + "\r" + event(`{"type":"later","key":"\u006c`+key[1:]+`"}`) + end, 200, true, "upstream.sse holds a key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			url, hits := serve(t, tc.format, tc.status, tc.stream)

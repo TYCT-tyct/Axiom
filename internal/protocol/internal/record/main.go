@@ -150,13 +150,21 @@ func hasKey(data []byte, key string) bool {
 		return true
 	}
 	for _, s := range jsonStrings(data) {
-		var text string
-		// A quote on a line that is not JSON, such as an SSE comment, may delimit no JSON string; the raw scan covers it.
-		if jsonx.Unmarshal(data[s.start:s.end], &text) == nil && holdsKey([]byte(text), key) {
+		if holdsKey([]byte(decode(data, s)), key) {
 			return true
 		}
 	}
 	return false
+}
+
+// decode returns the text of the JSON string at s, or "" if s delimits none: a quote on a line that is not JSON, such
+// as an SSE comment, may pair with another; the raw bytes are still scanned for keys.
+func decode(data []byte, s span) string {
+	var text string
+	if jsonx.Unmarshal(data[s.start:s.end], &text) != nil {
+		return ""
+	}
+	return text
 }
 
 func holdsKey(data []byte, key string) bool {
@@ -237,48 +245,93 @@ type placeholders struct {
 	count map[string]int
 }
 
+// opaque names the members whose object value is the caller's own data, not the protocol's: a tool's input, metadata,
+// a JSON Schema, a prompt's variables. An id member inside one, such as a tool argument, is never an upstream ID.
+// Responses' input is an array of items, which do carry IDs, so only an object value is skipped.
+var opaque = map[string]bool{"input": true, "metadata": true, "input_schema": true, "parameters": true, "schema": true, "variables": true}
+
 // replace replaces each ID in data: a string with an upstream ID's prefix that is the value of a member named id or
-// ending in _id, the names under which the three formats carry IDs. Requiring the name leaves alone a tool or a schema
-// key that merely starts like an ID, and text that quotes one.
+// ending in _id, the names under which the three formats carry IDs, outside opaque objects. Requiring the name leaves
+// alone a tool or a schema key that merely starts like an ID, and text that quotes one. Names and IDs are judged and
+// mapped by their decoded text, so an escape never splits one ID in two; only the ID's own bytes are rewritten.
 func (p placeholders) replace(data []byte) []byte {
 	var out []byte
-	last := 0
+	last, skip := 0, 0
 	strs := jsonStrings(data)
 	for i, s := range strs {
-		id := data[s.start+1 : s.end-1]
-		if i == 0 || !isIDMember(data, strs[i-1], s) || !upstreamID.Match(id) {
+		value, ok := memberValue(data, s)
+		if s.start < skip || !ok {
 			continue
 		}
-		placeholder, ok := p.ids[string(id)]
-		if !ok {
-			prefix := string(upstreamID.FindSubmatch(id)[1])
-			p.count[prefix]++
-			placeholder = fmt.Appendf(nil, `"%s%d"`, prefix, p.count[prefix])
-			p.ids[string(id)] = placeholder
+		name := decode(data, s)
+		if opaque[name] && data[value] == '{' {
+			skip = objectEnd(data, value, strs[i+1:])
+			continue
 		}
-		out = append(append(out, data[last:s.start]...), placeholder...)
-		last = s.end
+		if name != "id" && !strings.HasSuffix(name, "_id") || i+1 == len(strs) || strs[i+1].start != value {
+			continue
+		}
+		id := strs[i+1]
+		text := decode(data, id)
+		prefix := upstreamID.FindStringSubmatch(text)
+		if prefix == nil {
+			continue
+		}
+		placeholder, ok := p.ids[text]
+		if !ok {
+			p.count[prefix[1]]++
+			placeholder = fmt.Appendf(nil, `"%s%d"`, prefix[1], p.count[prefix[1]])
+			p.ids[text] = placeholder
+		}
+		out = append(append(out, data[last:id.start]...), placeholder...)
+		last = id.end
 	}
 	return append(out, data[last:]...)
 }
 
-// isIDMember reports whether value is the value of the member name, and name is id or ends in _id.
-func isIDMember(data []byte, name, value span) bool {
-	n := string(data[name.start+1 : name.end-1])
-	return string(bytes.TrimSpace(data[name.end:value.start])) == ":" && (n == "id" || strings.HasSuffix(n, "_id"))
+// memberValue returns where the value of the member named by the string at s starts, if a colon follows s.
+func memberValue(data []byte, s span) (int, bool) {
+	rest := bytes.TrimLeft(data[s.end:], jsonSpace)
+	if len(rest) == 0 || rest[0] != ':' {
+		return 0, false
+	}
+	value := bytes.TrimLeft(rest[1:], jsonSpace)
+	return len(data) - len(value), len(value) > 0
+}
+
+const jsonSpace = " \t\r\n"
+
+// objectEnd returns where the object that starts at start ends, counting braces outside strs, the strings after start.
+func objectEnd(data []byte, start int, strs []span) int {
+	depth := 0
+	for i := start; i < len(data); i++ {
+		if len(strs) > 0 && i == strs[0].start {
+			i, strs = strs[0].end-1, strs[1:]
+			continue
+		}
+		switch data[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(data)
 }
 
 // span is where a JSON string lies in a file, its quotes included.
 type span struct{ start, end int }
 
-// jsonStrings returns the JSON strings in data in order, honoring escapes. A JSON string cannot hold a line break, so
-// a line break ends whatever a stray quote outside JSON, as in an SSE comment, opened.
+// jsonStrings returns the JSON strings in data in order, honoring escapes. A JSON string cannot hold a CR or an LF,
+// and either ends an SSE line, so each ends whatever a stray quote outside JSON, as in an SSE comment, opened.
 func jsonStrings(data []byte) []span {
 	var spans []span
 	start := -1
 	for i := 0; i < len(data); i++ {
 		switch c := data[i]; {
-		case c == '\n':
+		case c == '\n' || c == '\r':
 			start = -1
 		case start < 0:
 			if c == '"' {
