@@ -15,5 +15,5 @@ func migrate(ctx context.Context, environ []string) error {
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	return pg.Migrate(ctx, adminURL, modules...)
+	return pg.Migrate(ctx, adminURL, modules()...)
 }

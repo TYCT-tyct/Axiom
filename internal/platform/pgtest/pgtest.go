@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,10 +34,13 @@ var (
 	cluster   *url.URL // the superuser's URL to the container, database name left out
 	startErr  error
 	databases atomic.Int64
+
+	templatesMu sync.Mutex
+	templates   = map[string]bool{} // module templates already built, by name
 )
 
-// New returns a database of its own for one test, migrated for platform and for the modules given, which a test of a
-// module passes, as cmd/axiom does for the program.
+// New returns a database of its own for one test. Given modules, it also holds their migrations: the database is a
+// copy of a template that has them, built the first time a set of modules is asked for.
 func New(t testing.TB, modules ...pg.Module) Database {
 	t.Helper()
 	once.Do(func() { startErr = start(context.Background()) })
@@ -59,14 +63,9 @@ func New(t testing.TB, modules ...pg.Module) Database {
 	}
 }
 
-var (
-	templatesMu sync.Mutex
-	templates   = map[string]string{} // the modules' names, in order, to the template migrated for them
-)
-
-// templateFor is the template that holds platform's migrations and those of modules, made once per set of modules
-// from the platform template: copying beats migrating in every test. Migrate grants roles cluster-wide, so the
-// templates are made one at a time.
+// templateFor is the template a database with modules is copied from. Migrate grants roles cluster-wide and so must
+// not run twice at once, which the lock here keeps; a template is built once per set of module names, and the
+// modules of a test binary are the same in every test.
 func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
 	if len(modules) == 0 {
 		return "axiom_template", nil
@@ -75,13 +74,13 @@ func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
 	for i, m := range modules {
 		names[i] = m.Name
 	}
-	key := strings.Join(names, ",")
+	slices.Sort(names)
+	name := "axiom_template_" + strings.Join(names, "_")
 	templatesMu.Lock()
 	defer templatesMu.Unlock()
-	if name, ok := templates[key]; ok {
+	if templates[name] {
 		return name, nil
 	}
-	name := fmt.Sprintf("axiom_template_%d", len(templates))
 	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
 		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		return "", err
@@ -89,7 +88,7 @@ func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
 	if err := pg.Migrate(ctx, at("migrator", "migrator", name), modules...); err != nil {
 		return "", err
 	}
-	templates[key] = name
+	templates[name] = true
 	return name, nil
 }
 

@@ -46,6 +46,15 @@ func (db *DB) Close() { db.pool.Close() }
 // failure; they may not import pgx.
 var ErrNoRows = pgx.ErrNoRows
 
+// SQLState is the SQLSTATE code of the PostgreSQL error in err's chain, or "" when there is none. Modules tell a
+// conflict or a refused row from other failures by it without importing pgx.
+func SQLState(err error) string {
+	if e, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return e.Code
+	}
+	return ""
+}
+
 // Scope is the set of rows a transaction may see and write: every row, the rows of some sites, the rows of some
 // accounts, or any union of these. The zero value is the empty set.
 type Scope struct {
