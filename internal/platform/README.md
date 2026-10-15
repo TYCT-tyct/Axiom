@@ -120,7 +120,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
 - 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
 - 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。账户和站点范围以后由授权（#23）算出。各模块的测试用 `pg.NewScope` 构造任意范围。
-- 站点数据和账户数据的表把 `site_id`、`account_id` 直接存在行上，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
+- 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移
 
