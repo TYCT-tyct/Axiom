@@ -34,10 +34,11 @@ var (
 	databases atomic.Int64
 )
 
-// New returns a database of its own for one test.
-func New(t testing.TB) Database {
+// New returns a database of its own for one test. The template holds the migrations of platform and of modules; the
+// first call in a test binary builds it, so every call in a binary must give the same modules.
+func New(t testing.TB, modules ...pg.Module) Database {
 	t.Helper()
-	once.Do(func() { startErr = start(context.Background()) })
+	once.Do(func() { startErr = start(context.Background(), modules) })
 	if startErr != nil {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
@@ -82,7 +83,7 @@ func keepReaperAlive() error {
 
 // start runs the container and builds the template. Durability is off for speed; tests of durability, migrations
 // under load and performance run elsewhere with it on.
-func start(ctx context.Context) error {
+func start(ctx context.Context, modules []pg.Module) error {
 	if err := keepReaperAlive(); err != nil {
 		return err
 	}
@@ -107,7 +108,7 @@ func start(ctx context.Context) error {
 		return err
 	}
 	for range 2 { // the second run finds nothing to do
-		if err := pg.Migrate(ctx, at("migrator", "migrator", "axiom_template")); err != nil {
+		if err := pg.Migrate(ctx, at("migrator", "migrator", "axiom_template"), modules...); err != nil {
 			return err
 		}
 	}

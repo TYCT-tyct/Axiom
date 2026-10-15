@@ -9,10 +9,24 @@ import (
 	"net/http"
 	"time"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/telemetry"
 )
+
+// modules are the modules that own tables, in no particular order: pg runs their migrations in the order of the
+// dependency table. A module with migrations is listed here and nowhere else.
+func modules() []pg.Module { return []pg.Module{observability.Module()} }
+
+// The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
+// README「并发、背压与共享状态」), so a request waits for room only when the database is far behind; batches
+// of 500 rows or 200 ms keep the insert rate low (internal/observability README「写入」).
+var callRecords = observability.Config{
+	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
+	RetryMax: 5 * time.Second,
+}
 
 // bodyTimeout bounds how long a client may take to send a request body. Generous for large uploads over slow
 // links; the gateway sets size limits and per-route deadlines on top.
@@ -42,14 +56,26 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout)
+	tel, err := telemetry.New()
 	if err != nil {
 		return err
 	}
-	defer db.Close() // after the listeners close: requests in flight may still need it
+	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
+	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return err
+	}
+	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
 
-	var health httpserver.Health
-	servers := node(publicAddr, publicRoutes(consoleAPI{version: version()}, logger), probesAddr, &health, logger)
+	callRecords := callRecords
+	callRecords.Meter = tel.Metrics.Meter("axiom/observability")
+	recorder := observability.NewRecorder(ctx, db, pg.PlatformScope(), callRecords, logger)
+	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
+	if err != nil {
+		return err
+	}
+	health := httpserver.Health{Metrics: tel.MetricsHandler()}
+	servers := node(publicAddr, publicRoutes(consoleAPI{version: version()}, logger), probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -67,29 +93,32 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	case <-ctx.Done():
 	}
 	logger.Info("shutting down", "timeout", shutdownTimeout.String())
-	return errors.Join(stopped, shutdown(context.WithoutCancel(ctx), shutdownTimeout, &health, servers))
+	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancel()
+	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), recorder.Close(ctx))
 }
 
 // node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
 // it drains while the probes still answer.
-func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger) []*listening {
+func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
-		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout), logger), nil},
+		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
 		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
 	}
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
-func openDatabase(ctx context.Context, url string, timeout time.Duration) (*pg.DB, error) {
+func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
 	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
-	db, err := pg.Open(ctx, url)
+	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Check(ctx); err != nil {
+	if err := db.Check(ctx, modules()...); err != nil {
 		db.Close()
 		if errors.Is(context.Cause(ctx), noAnswer) {
 			return nil, noAnswer // pgx reports only that the context ended

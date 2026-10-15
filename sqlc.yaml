@@ -17,3 +17,20 @@ sql:
         output_models_file_name: models.gen.go
         emit_methods_with_db_argument: true
         omit_unused_structs: true
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/observability/migrations]
+    queries: internal/observability/queries
+    gen:
+      go:
+        package: observability
+        out: internal/observability
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          # time.Time instead of pgtype.Timestamptz: pgx reads and writes it directly, and the module may not import pgx.
+          - db_type: timestamptz
+            go_type: time.Time

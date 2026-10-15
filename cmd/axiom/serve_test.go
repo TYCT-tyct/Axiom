@@ -22,7 +22,7 @@ import (
 func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
-		"AXIOM_DATABASE_URL=" + pgtest.New(t).App,
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -36,6 +36,7 @@ func TestServe(t *testing.T) {
 		}
 	}
 	checkVersion(t, "http://"+addrs.Public+"/api/console/v1/version")
+	checkMetrics(t, addrs)
 	cancel()
 	select {
 	case err := <-done:
@@ -52,10 +53,45 @@ func TestServe(t *testing.T) {
 	}
 }
 
+// checkMetrics: the ops listener serves Prometheus text with the request just made, counted by route pattern and
+// status class only, and the recorder's queue gauge; the public listener does not serve it. Unknown paths, one of them
+// with an identifier in it, share one "unmatched" series instead of making one each.
+func checkMetrics(t *testing.T, addrs addresses) {
+	t.Helper()
+	for _, path := range []string{"/api/console/v1/nothing-here", "/api/console/v1/key_01hxyz0000000000000000000a"} {
+		if _, err := get(t, "http://"+addrs.Public+path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if resp, err := get(t, "http://"+addrs.Public+"/metrics"); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /metrics on the public listener: %v %v, want 404", resp.Response, err)
+	}
+	resp, err := get(t, "http://"+addrs.Ops+"/metrics")
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("GET /metrics on the ops listener: %v %v", resp.Response, err)
+	}
+	text := string(resp.body)
+	for _, want := range []string{
+		`axiom_http_server_requests_total{route="GET /api/console/v1/version",status_class="2xx"} 1`,
+		`axiom_http_server_requests_total{route="unmatched",status_class="4xx"} 3`,
+		`axiom_http_server_duration_seconds_count{route="GET /api/console/v1/version",status_class="2xx"} 1`,
+		"axiom_observability_queue_depth 0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the metrics lack %q:\n%s", want, text)
+		}
+	}
+	for _, leak := range []string{"key_01hxyz", "nothing-here", "request_id", "account", "user", "planted"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("the metrics mention %q: a label or value that is not bounded", leak)
+		}
+	}
+}
+
 // TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
-	database := pgtest.New(t)
+	database := pgtest.New(t, modules()...)
 	// taken is bound but never accepts: the system still completes connections to it, which then hear nothing, as
 	// from a database server that has stalled.
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")

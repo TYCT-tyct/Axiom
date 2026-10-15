@@ -20,11 +20,13 @@ import (
 // timeout covers that wait. net/http clears the read deadline itself once the body ends, so a long streamed
 // response is not cut by it (TestPublicLongRequestsOutliveTheBodyDeadline holds it to that); a request without a
 // body has nothing to stall on and gets none.
-func Public(routes http.Handler, logger *slog.Logger, bodyTimeout time.Duration) http.Handler {
+func Public(routes http.Handler, logger *slog.Logger, bodyTimeout time.Duration, opts ...Option) http.Handler {
+	o := apply(opts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := uuid.NewV7().String()
 		w.Header().Set("X-Request-ID", id)
-		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
+		ctx, finish := o.telemetry.start(context.WithValue(r.Context(), requestIDKey{}, id), id)
+		r = r.WithContext(ctx)
 		log := logger.With("request_id", id)
 		if r.Body != http.NoBody {
 			if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyTimeout)); err != nil {
@@ -42,6 +44,7 @@ func Public(routes http.Handler, logger *slog.Logger, bodyTimeout time.Duration)
 			if status == 0 && !abort {
 				status = http.StatusOK // the handler wrote nothing; the server sends an empty 200
 			}
+			finish(r.Pattern, status, time.Since(start))
 			log.Info("request", "method", r.Method, "route", r.Pattern, "status", status,
 				"bytes", recorder.bytes, "duration", time.Since(start))
 			if abort {
