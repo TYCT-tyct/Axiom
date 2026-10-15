@@ -64,6 +64,17 @@ var (
 	upstreamID = regexp.MustCompile(`"(chatcmpl-|msg_|toolu_|srvtoolu_|req_|resp_|rs_|fc_|call_|ws_)[A-Za-z0-9_-]{16,}"`)
 )
 
+// client never follows a redirect: Go drops only Authorization and cookies when one leaves the host, so X-Api-Key
+// would reach wherever the upstream points. A redirect fails as a status that is not 200.
+var client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// idleTimeout bounds each wait for the upstream: the connection, the headers and every read of the stream. It waits
+// for the next bytes, not the whole stream, and is long because a reasoning model may send nothing while it thinks.
+// It is a variable so that tests can shorten it.
+var idleTimeout = 10 * time.Minute
+
+var errIdle = errors.New("the upstream sent nothing for too long")
+
 func main() {
 	if len(os.Args) != 5 {
 		fmt.Fprintln(os.Stderr, "usage: record <testdata dir> <format> <scenario> <request file>")
@@ -141,26 +152,46 @@ func hasKey(data []byte, key string) bool {
 
 // send posts the request exactly as the file holds it and returns the stream's bytes as they arrived.
 func send(ctx context.Context, up upstream, base, key string, request []byte) ([]byte, error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := time.AfterFunc(idleTimeout, func() { cancel(fmt.Errorf("%w (%v)", errIdle, idleTimeout)) })
+	defer idle.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(base, "/")+up.path, bytes.NewReader(request))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	up.auth(req.Header, key)
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // the developer chooses the upstream
+	resp, err := client.Do(req) //nolint:gosec // the developer chooses the upstream
 	if err != nil {
 		return nil, err
 	}
-	stream, err := io.ReadAll(io.LimitReader(resp.Body, maxStream+1))
+	stream, err := io.ReadAll(io.LimitReader(idleReader{resp.Body, idle}, maxStream+1))
 	switch err = errors.Join(err, resp.Body.Close()); {
 	case err != nil:
 		return nil, fmt.Errorf("reading the stream: %w", err)
+	case resp.StatusCode != http.StatusOK && hasKey(stream, key):
+		return nil, fmt.Errorf("upstream answered %s with a body that holds a key, so the body is not shown", resp.Status)
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("upstream answered %s: %.1000s", resp.Status, stream)
 	case len(stream) > maxStream:
 		return nil, fmt.Errorf("the stream is over %d bytes, too large to commit", maxStream)
 	}
 	return stream, nil
+}
+
+// idleReader restarts the idle timer whenever bytes arrive.
+type idleReader struct {
+	r    io.Reader
+	idle *time.Timer
+}
+
+func (r idleReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.idle.Reset(idleTimeout)
+	}
+	return n, err
 }
 
 // sample returns the three files with IDs replaced, after the same check the samples test makes.

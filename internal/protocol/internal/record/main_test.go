@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"axiom/internal/protocol/internal/streamcheck"
 )
@@ -28,8 +30,8 @@ func serve(t *testing.T, format string, status int, stream string) (url string, 
 		if format != "messages" {
 			auth = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		}
-		if want := formats[format].endpoint; r.URL.Path != want || auth != key {
-			t.Errorf("got %s with key %q, want %s with the key", r.URL.Path, auth, want)
+		if want := formats[format].endpoint; r.Method != http.MethodPost || r.URL.Path != want || auth != key {
+			t.Errorf("got %s %s with key %q, want POST %s with the key", r.Method, r.URL.Path, auth, want)
 		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, stream) //nolint:errcheck // the recorder reports a short stream
@@ -144,6 +146,7 @@ func TestNothingWritten(t *testing.T) {
 		{"not a stream", "messages", "s", `{"stream":false}`, "", 200, false, `"stream": true`},
 		{"a request with a duplicate key", "messages", "s", `{"stream":true,"stream":true}`, "", 200, false, "request"},
 		{"an error status", "messages", "s", request, `{"error":{}}`, 500, true, "upstream answered 500"},
+		{"an error status echoing the key", "messages", "s", request, `{"error":"bad key ` + key + `"}`, 401, true, "not shown"},
 		{"a stream that breaks its format", "messages", "s", request, start, 200, true, "upstream.sse"},
 		{"the key echoed in the stream", "messages", "s", request, start + event(`{"type":"later","key":"`+key+`"}`) + end, 200, true, "upstream.sse holds a key"},
 	} {
@@ -153,6 +156,9 @@ func TestNothingWritten(t *testing.T) {
 			err := record(t.Context(), env(url), testdata, tc.format, tc.scenario, requestFile(t, tc.request))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error saying %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), key) {
+				t.Errorf("the error shows the key: %v", err)
 			}
 			if sent := hits.Load() > 0; sent != tc.sent {
 				t.Errorf("request sent: %v, want %v", sent, tc.sent)
@@ -183,6 +189,72 @@ func TestRefusedEarly(t *testing.T) {
 			t.Fatalf("got %v, want an error naming the variable", err)
 		}
 	})
+}
+
+// TestNoRedirect checks that a redirect fails the call instead of taking the key to another host.
+func TestNoRedirect(t *testing.T) {
+	other, hits := serve(t, "messages", http.StatusOK, "")
+	redirect := httptest.NewServer(http.RedirectHandler(other+"/v1/messages", http.StatusTemporaryRedirect))
+	t.Cleanup(redirect.Close)
+	testdata := t.TempDir()
+	err := record(t.Context(), env(redirect.URL), testdata, "messages", "s", requestFile(t, `{"stream":true}`))
+	if err == nil || !strings.Contains(err.Error(), "307") || hits.Load() > 0 {
+		t.Fatalf("got %v after %d calls to the other host, want a 307 failure and none", err, hits.Load())
+	}
+	if entries, err := os.ReadDir(testdata); err != nil || len(entries) > 0 {
+		t.Errorf("left %v behind (%v)", entries, err)
+	}
+}
+
+// TestIdleTimeout checks that an upstream that stops sending fails the call, before the headers or in the middle of
+// the stream, and that a slow stream whose gaps are each shorter than the timeout is recorded.
+func TestIdleTimeout(t *testing.T) {
+	defer func(d time.Duration) { idleTimeout = d }(idleTimeout)
+	idleTimeout = 300 * time.Millisecond
+	events := strings.SplitAfter(string(file(t, filepath.Join("..", "..", "testdata", "chat", "text"), "upstream.sse")), "\n\n")
+	for _, tc := range []struct {
+		name  string
+		parts []string
+		stall bool
+	}{
+		{"no headers", nil, true},
+		{"a stall mid-stream", events[:1], true},
+		{"a slow stream", events, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testdata, request, done := t.TempDir(), requestFile(t, `{"stream":true}`), make(chan error, 1)
+			url := trickle(t, tc.parts, tc.stall)
+			go func() { done <- record(t.Context(), env(url), testdata, "chat", "s", request) }()
+			select {
+			case err := <-done:
+				if tc.stall != errors.Is(err, errIdle) || !tc.stall && err != nil {
+					t.Fatalf("got %v, want a timeout: %v", err, tc.stall)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the recorder is still waiting")
+			}
+		})
+	}
+}
+
+// trickle serves parts 100 ms apart as a Chat upstream and, if stall, then waits until the test ends.
+func trickle(t *testing.T, parts []string, stall bool) (url string) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for i, part := range parts {
+			if i > 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
+			_, _ = io.WriteString(w, part) //nolint:errcheck // the recorder reports a short stream
+			w.(http.Flusher).Flush()
+		}
+		if stall {
+			<-release
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs first, so Close does not wait on the handler
+	return srv.URL + "/v1"
 }
 
 func TestDotenv(t *testing.T) {
