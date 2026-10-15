@@ -31,8 +31,8 @@ func FuzzQuoteCoversWorstCase(f *testing.F) {
 				t.Fatalf("quote of %+v: %v", c, err)
 			}
 			for range 20 {
-				if cost := c.call(t, r); q.Rat().Cmp(cost) < 0 {
-					t.Fatalf("quote %s below a call costing %s: %+v under %s", q.Rat().RatString(), cost.RatString(), c, c.json)
+				if cost := c.call(t, r); q.amount.Rat().Cmp(cost) < 0 {
+					t.Fatalf("quote %s below a call costing %s: %+v under %s", q.amount.Rat().RatString(), cost.RatString(), c, c.json)
 				}
 			}
 		}
@@ -61,8 +61,8 @@ func FuzzQuoteArithmetic(f *testing.F) {
 			c := randomQuoteCase(t, r, math.MaxInt64)
 			q, err := quoteEntry(c.d, c.e, c.s)
 			want, fits := c.reference(t)
-			if fits != (err == nil) || fits && q.Rat().Cmp(want) != 0 {
-				t.Fatalf("quote %s, %v; want %s (fits %v): %+v under %s", q.Rat().RatString(), err, want.RatString(), fits, c, c.json)
+			if fits != (err == nil) || fits && q.amount.Rat().Cmp(want) != 0 {
+				t.Fatalf("quote %s, %v; want %s (fits %v): %+v under %s", q.amount.Rat().RatString(), err, want.RatString(), fits, c, c.json)
 			}
 		}
 	})

@@ -92,8 +92,8 @@ func TestQuoteEntry(t *testing.T) {
 		},
 	} {
 		got, err := quoteEntry(tc.d, entry(t, tc.segmentable, 3), segments)
-		if err != nil || units(t, got) != tc.want {
-			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got), err, tc.want)
+		if err != nil || units(t, got.amount) != tc.want {
+			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got.amount), err, tc.want)
 		}
 	}
 }
@@ -120,8 +120,8 @@ func TestQuoteEntryModel(t *testing.T) {
 		{"cache reads dearer than input: 80 at 2 + 1", Demand{TextBytes: 80}, dearCache, "161"},
 	} {
 		got, err := quoteEntry(tc.d, tc.e, segments)
-		if err != nil || units(t, got) != tc.want {
-			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got), err, tc.want)
+		if err != nil || units(t, got.amount) != tc.want {
+			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got.amount), err, tc.want)
 		}
 	}
 }
@@ -144,7 +144,7 @@ func TestQuoteEntryRefuses(t *testing.T) {
 		{"a model without a context length", Demand{}, noContext},
 	} {
 		if got, err := quoteEntry(tc.d, tc.e, segments); err == nil {
-			t.Errorf("%s: quote = %s, want an error", tc.name, units(t, got))
+			t.Errorf("%s: quote = %s, want an error", tc.name, units(t, got.amount))
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"math/rand/v2"
 	"time"
 
 	"axiom/internal/catalog"
@@ -82,8 +83,22 @@ func (e *Insufficient) Error() string {
 
 // Reservation is the outcome of a quote: the amount to reserve and the entries kept, as indexes into the route.
 type Reservation struct {
-	Amount platform.Exact
-	Kept   []int
+	Amount  platform.Exact
+	Kept    []int
+	quotes  []quote // by route index; a dropped entry's is never bound
+	trigger int64   // the per mille of a segment at which to extend, drawn once per request from 400 to 600
+}
+
+// quote is one entry's reservation in parts, so that a meter builds every later target by addition.
+type quote struct {
+	fixed     platform.Exact     // every sampling's input at its bound and every server tool at its most uses
+	allowance platform.Exact     // the overshoot allowance, held until settlement
+	amount    platform.Exact     // fixed, the allowance and the first segment's output, or fixed and the whole output
+	output    platform.UnitPrice // the dearest price an output or reasoning token can have
+	search    platform.UnitPrice // a web search's dearest price, when the request enables web search
+	searches  int64              // the web searches fixed covers
+	outputCap int64              // the most output tokens the upstream may produce
+	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
 }
 
 var (
@@ -95,12 +110,14 @@ var (
 // kept, so a fallback never meets an entry dearer than what was reserved. A dropped preferred entry refuses the
 // request with *Insufficient, naming the first source in avail that falls short.
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) {
-	var r Reservation
+	r := Reservation{quotes: make([]quote, len(q)), trigger: 400 + rand.Int64N(201)} //nolint:gosec // G404: spreads extensions over time, not a secret
 	for i, e := range q {
-		amount, err := quoteEntry(d, e, s)
+		eq, err := quoteEntry(d, e, s)
 		if err != nil {
 			return Reservation{}, fmt.Errorf("entry %d: %w", i, err)
 		}
+		r.quotes[i] = eq
+		amount := eq.amount
 		if short := shortSource(amount, avail); short >= 0 {
 			if i == 0 {
 				return Reservation{}, &Insufficient{avail[short].Source}
@@ -127,10 +144,10 @@ func shortSource(amount platform.Exact, avail []Available) int {
 // quoteEntry follows docs/domains/billing.md「预留与结算」: the input of every sampling at its bound, every server tool
 // at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
 // the dearest price it can have.
-func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
+func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	window := e.Model.ContextLength
 	if window <= 0 {
-		return platform.Exact{}, errors.New("billing: the model has no context length")
+		return q, errors.New("billing: the model has no context length")
 	}
 	tiers := d.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard)
@@ -141,15 +158,16 @@ func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
 		longest = window // every later sampling rereads up to the whole context
 	}
 	rest := mul(samplings-1, window)
-	output, overshoot := mul(e.MaxOutput, max(d.Choices, 1)), int64(0) // overshoot in token-nanoseconds
+	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
+	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
 	if e.Segmentable {
 		overshoot = mul(int64(s.Overshoot), e.Model.OutputSpeed)
-		output = add(min(output, s.Output), ceilDiv(overshoot, int64(time.Second)))
+		q.segment, output, allowance = s.Output, min(output, s.Output), ceilDiv(overshoot, int64(time.Second))
 	}
 	// A saturated count understates the quote, so one that reached math.MaxInt64 refuses the entry. Only the first
 	// prompt may saturate: the context length caps it anyway.
-	if max(samplings, rest, output, overshoot) == math.MaxInt64 {
-		return platform.Exact{}, errOverflow
+	if max(samplings, rest, add(output, allowance), overshoot) == math.MaxInt64 {
+		return q, errOverflow
 	}
 	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
 	in.Add(catalog.ItemInput)
@@ -157,20 +175,26 @@ func quoteEntry(d Demand, e Quotable, s Segments) (platform.Exact, error) {
 	restPrice, ok2 := e.Price.Ceiling(in, tiers, window)
 	outPrice, ok3 := e.Price.Ceiling(1<<catalog.ItemOutput|1<<catalog.ItemReasoning, tiers, longest)
 	if !ok1 || !ok2 || !ok3 {
-		return platform.Exact{}, errUnpriced
+		return q, errUnpriced
 	}
-	amount := sum(firstPrice.Mul(first), restPrice.Mul(rest), outPrice.Mul(output))
+	q.output = outPrice
+	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
 	for it, n := range uses {
 		if n == 0 {
 			continue
 		}
 		price, ok := e.Price.Ceiling(1<<catalog.Item(it), tiers, window)
 		if !ok {
-			return platform.Exact{}, errUnpriced
+			return q, errUnpriced
 		}
-		amount = sum(amount, price.Mul(n))
+		if catalog.Item(it) == catalog.ItemWebSearch {
+			q.search, q.searches = price, n
+		}
+		q.fixed = sum(q.fixed, price.Mul(n))
 	}
-	return amount, nil
+	q.allowance = outPrice.Mul(allowance)
+	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
+	return q, nil
 }
 
 // fileTokens bounds one file: Documents counts files, not pages (protocol does not parse PDFs), so a file takes its
