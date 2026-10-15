@@ -77,8 +77,8 @@ var ErrInvalid = errors.New("protocol: invalid request")
 var errTooDeep = fmt.Errorf("nesting deeper than %d levels", jsonx.MaxDepth)
 
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
-// its allocations do not grow with the body (README.md「请求摘要」). Members it does not read are only checked to be
-// JSON.
+// its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
+// names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
 func Inspect(f Format, body []byte) (Request, error) {
 	g := &grammars[f]
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
