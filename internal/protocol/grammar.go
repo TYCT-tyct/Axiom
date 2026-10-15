@@ -1,0 +1,328 @@
+package protocol
+
+import (
+	"fmt"
+
+	"axiom/internal/catalog"
+)
+
+// grammar is what Inspect reads in one format (README.md「请求摘要」 has the sources). Messages, items and content parts
+// share the part members: a message or item holds its parts in content or output, and a Messages tool_result holds
+// more parts in its content, so following those members reaches every part and nothing else. Members such as a
+// tool's input schema or a tool call's arguments are never entered, so a key there named cache_control or type is
+// the client's data, not ours.
+type grammar struct {
+	top, part, tool fields
+	parts           map[string]Capabilities           // content part types that need a capability
+	servers         []serverTool                      // tool types billed per call; other tools are Tools
+	tiers           map[string]catalog.ServiceTierSet // service_tier values; 0 is the vendor's default
+	input           catalog.ItemSet                   // what input is billed as before any cache marker
+}
+
+type serverTool struct {
+	prefix string // Anthropic versions its tool types, as in web_search_20260209
+	kind   Capabilities
+}
+
+var grammars = [...]grammar{
+	Messages: {
+		top: fields{
+			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
+			"system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
+			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
+			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
+		},
+		part: fields{
+			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
+			"source": func(s *scanner) error { return s.object(sourceFields) },
+		},
+		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
+		parts:   map[string]Capabilities{"image": Images, "document": Documents},
+		servers: []serverTool{{"web_search_", WebSearch}, {"code_execution_", CodeExecution}},
+		tiers:   map[string]catalog.ServiceTierSet{"auto": 0, "standard_only": 1 << catalog.ServiceTierStandard},
+		input:   1 << catalog.ItemInput,
+	},
+	Responses: {
+		top: fields{
+			"model": (*scanner).model, "stream": (*scanner).stream, "max_output_tokens": (*scanner).maxOutput,
+			"input": (*scanner).content, "tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
+			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
+			"previous_response_id": (*scanner).previous,
+		},
+		part: fields{
+			"type": (*scanner).partType, "content": (*scanner).content, "output": (*scanner).content,
+			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
+		},
+		tool:    fields{"type": (*scanner).toolType},
+		parts:   map[string]Capabilities{"input_image": Images, "input_file": Documents},
+		servers: []serverTool{{"web_search", WebSearch}, {"code_interpreter", CodeExecution}},
+		tiers:   openAITiers,
+		input:   openAIInput,
+	},
+	Chat: {
+		top: fields{
+			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
+			"max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
+			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
+			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
+			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
+		},
+		part: fields{
+			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
+			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
+			"file":      func(s *scanner) error { return s.object(chatFileFields) },
+		},
+		parts: map[string]Capabilities{"image_url": Images, "file": Documents},
+		tiers: openAITiers,
+		input: openAIInput,
+	},
+}
+
+var (
+	openAITiers = map[string]catalog.ServiceTierSet{
+		"auto": 0, "default": 1 << catalog.ServiceTierStandard,
+		"flex": 1 << catalog.ServiceTierFlex, "priority": 1 << catalog.ServiceTierPriority,
+	}
+	// OpenAI caches a prefix without being asked, and from GPT-5.6 on bills the write at 1.25 times input (OpenAI
+	// 《Prompt caching》, read 2026-10-14). Whether a model bills writes is its schedule's business.
+	openAIInput    = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheWrite)
+	anthropicSpeed = map[string]catalog.ServiceTierSet{"standard": 0, "fast": 1 << catalog.ServiceTierFast}
+
+	sourceFields = fields{
+		"type": func(s *scanner) (err error) { s.p.binary, err = s.is("base64"); return err },
+		"data": (*scanner).data,
+	}
+	cacheFields = fields{"ttl": func(s *scanner) error {
+		long, err := s.is("1h")
+		if long {
+			s.r.InputItems.Add(catalog.ItemCacheWrite1h)
+		}
+		return err
+	}}
+	reasoningFields = fields{
+		"type":    func(s *scanner) error { return s.when("disabled", &s.p.off) },   // Messages' thinking
+		"effort":  func(s *scanner) error { return s.when("none", &s.p.off) },       // OpenAI, OpenRouter
+		"display": func(s *scanner) error { return s.when("omitted", &s.p.hidden) }, // Messages' thinking
+		"enabled": func(s *scanner) error { k, err := s.flag(); s.p.off = s.p.off || k == 'f'; return err },
+		"exclude": func(s *scanner) error { k, err := s.flag(); s.p.hidden = s.p.hidden || k == 't'; return err },
+	}
+	chatImageFields = fields{"url": (*scanner).imageURL}
+	chatFileFields  = fields{"file_data": (*scanner).fileData}
+	formatHolder    = fields{"format": (*scanner).format}
+	formatFields    = fields{"type": func(s *scanner) error {
+		v, err := s.str()
+		if string(v) == "json_schema" || string(v) == "json_object" {
+			s.r.Needs |= StructuredOutput
+		}
+		return err
+	}}
+)
+
+func (s *scanner) model() error {
+	v, err := s.str()
+	s.r.Model = string(v)
+	return err
+}
+
+func (s *scanner) stream() error {
+	k, err := s.flag()
+	s.r.Stream = k == 't'
+	return err
+}
+
+// maxOutput reads an output cap. Chat has two names for it; the larger bounds the reply either way.
+func (s *scanner) maxOutput() error {
+	n, err := s.count()
+	s.r.MaxOutput = max(s.r.MaxOutput, n)
+	return err
+}
+
+func (s *scanner) choices() error {
+	n, err := s.count()
+	s.r.Choices = max(1, n)
+	return err
+}
+
+func (s *scanner) previous() error {
+	v, err := s.str()
+	s.r.Previous = string(v)
+	return err
+}
+
+// maxToolCalls reads Responses' cap on all built-in tool calls together, which Inspect applies to each at the end.
+func (s *scanner) maxToolCalls() (err error) {
+	s.callCap, err = s.count()
+	return err
+}
+
+// content reads a message's content or a tool result's output: a string, which TextBytes already counts, or parts.
+func (s *scanner) content() error {
+	if s.dec.PeekKind() == '"' {
+		return s.skip()
+	}
+	return s.array((*scanner).contentPart)
+}
+
+func (s *scanner) contentPart() error {
+	outer := s.p
+	s.p = part{}
+	err := s.object(s.g.part)
+	p := s.p
+	s.p = outer
+	if err != nil {
+		return err
+	}
+	s.r.Needs |= p.kind
+	if p.kind == Images {
+		s.r.Images++
+	}
+	if p.kind == Documents {
+		s.r.Documents++
+	}
+	if p.binary {
+		s.r.TextBytes -= p.payload
+	}
+	return nil
+}
+
+func (s *scanner) partType() error {
+	v, err := s.str()
+	s.p.kind = s.g.parts[string(v)]
+	return err
+}
+
+func (s *scanner) data() error {
+	v, err := s.raw()
+	s.p.payload = int64(len(v))
+	return err
+}
+
+// fileData reads a file's contents, base64 with or without a data URL around it.
+func (s *scanner) fileData() error {
+	s.p.binary = true
+	return s.data()
+}
+
+// imageURL reads an image's URL, which carries the image itself when it is a data URL. An escaped "data:" counts
+// as text, which only raises the bound.
+func (s *scanner) imageURL() error {
+	v, err := s.raw()
+	s.p.payload = int64(len(v))
+	s.p.binary = hasPrefix(v, `"data:`)
+	return err
+}
+
+func (s *scanner) cacheControl() error {
+	if s.dec.PeekKind() != 'n' {
+		s.r.Needs |= PromptCache
+		s.r.InputItems.Add(catalog.ItemCacheWrite)
+	}
+	return s.object(cacheFields)
+}
+
+func (s *scanner) tools() error { return s.array((*scanner).tool) }
+
+func (s *scanner) tool() error {
+	s.p = part{kind: Tools}
+	if err := s.object(s.g.tool); err != nil {
+		return err
+	}
+	if s.p.kind&(WebSearch|CodeExecution) != 0 {
+		s.addCalls()
+	}
+	s.r.Needs |= s.p.kind
+	return nil
+}
+
+// addCalls adds a server tool's limit to its kind's total. Limits of two tools of a kind add up, and a tool without
+// one leaves the total to the model's default.
+func (s *scanner) addCalls() {
+	n := &s.r.WebSearches
+	if s.p.kind == CodeExecution {
+		n = &s.r.CodeExecutions
+	}
+	if s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0) {
+		*n = 0
+	} else {
+		*n += s.p.max
+	}
+}
+
+func (s *scanner) toolType() error {
+	v, err := s.str()
+	for _, t := range s.g.servers {
+		if hasPrefix(v, t.prefix) {
+			s.p.kind = t.kind
+		}
+	}
+	return err
+}
+
+func (s *scanner) maxUses() (err error) {
+	s.p.max, err = s.count()
+	return err
+}
+
+// reasoning reads a reasoning setting: on unless it says off, and in the stream unless it says otherwise.
+func (s *scanner) reasoning() error {
+	if s.dec.PeekKind() == 'n' {
+		return s.skip()
+	}
+	s.p = part{}
+	if err := s.object(reasoningFields); err != nil {
+		return err
+	}
+	if !s.p.off {
+		s.r.Needs |= Reasoning
+	}
+	s.r.HidesReasoning = s.p.hidden
+	return nil
+}
+
+func (s *scanner) reasoningEffort() error {
+	v, err := s.str()
+	if v != nil && string(v) != "none" {
+		s.r.Needs |= Reasoning
+	}
+	return err
+}
+
+func (s *scanner) withFormat() error { return s.object(formatHolder) }
+
+func (s *scanner) format() error { return s.object(formatFields) }
+
+func (s *scanner) webSearchOptions() error {
+	if s.dec.PeekKind() != 'n' {
+		s.r.Needs |= WebSearch
+	}
+	return s.skip()
+}
+
+func (s *scanner) serviceTier() error { return s.pick(s.g.tiers, &s.tiers) }
+
+func (s *scanner) speed() error { return s.pick(anthropicSpeed, &s.fast) }
+
+// pick reads a service tier value. One no table lists cannot be priced, so the request is refused.
+func (s *scanner) pick(values map[string]catalog.ServiceTierSet, dst *catalog.ServiceTierSet) error {
+	v, err := s.str()
+	if v == nil || err != nil {
+		return err
+	}
+	t, ok := values[string(v)]
+	if !ok {
+		return fmt.Errorf("%s %q is not supported", s.name, v)
+	}
+	*dst = t
+	return nil
+}
+
+// when reads a string and sets flag when it is lit.
+func (s *scanner) when(lit string, flag *bool) error {
+	is, err := s.is(lit)
+	*flag = *flag || is
+	return err
+}
+
+func hasPrefix(v []byte, prefix string) bool {
+	return len(v) >= len(prefix) && string(v[:len(prefix)]) == prefix
+}
