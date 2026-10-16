@@ -31,3 +31,12 @@ UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'ac
 -- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.
 UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id RETURNING site_id, account_id;
+
+-- name: GetKeyInfo :one
+-- What a key shows of itself: its name, the text a client may see (the prefix and the last four characters), and when
+-- it expires. Read in the key's account scope, so another account's key is not found.
+SELECT name, prefix, last4, expires_at FROM accounts.api_keys WHERE id = @id AND deleted_at IS NULL;
+
+-- name: ListAccountWorkspaces :many
+-- Every workspace of the scope's account, deleted ones included: what billing summed once belongs to them still.
+SELECT id FROM accounts.workspaces WHERE account_id = @account_id ORDER BY id;

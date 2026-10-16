@@ -67,6 +67,7 @@ func NewHandler(d Deps) (*Handler, error) {
 			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))
 		}
 		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+		h.auxRoutes(prefix)
 	}
 	return h, nil
 }

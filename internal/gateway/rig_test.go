@@ -20,6 +20,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -108,7 +109,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations)
+	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module())
 	var err error
 	dsn := r.database.App
 	if o.conns > 0 {
