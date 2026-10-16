@@ -474,13 +474,14 @@ func TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter(t *testing.T) {
 }
 
 // TestSuppliersThatCannotBeSyncedDoNotTakeTheSweepsPlace: a sweep enqueues the longest-overdue suppliers, a batch at a
-// time. More of them than a batch that fail before they are called (their exit is one this node lacks) are backed off
-// like any failure, so the sweeps after reach the supplier that is due later and works.
+// time. More of them than a batch, and than the jobs a node works at once (whose leases take them out of the list),
+// that fail before they are called (their exit is one this node lacks) are backed off like any failure, so the sweeps
+// after reach the supplier that is due later and works.
 func TestSuppliersThatCannotBeSyncedDoNotTakeTheSweepsPlace(t *testing.T) {
 	t.Parallel()
 	s := &system{account: healthy()}
 	c := newCluster(t, s)
-	hosts := make([]string, sweepBatch+1)
+	hosts := make([]string, sweepBatch+50)
 	for i := range hosts {
 		hosts[i] = fmt.Sprintf("broken%d.example", i)
 	}
