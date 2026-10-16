@@ -93,9 +93,6 @@ var (
 	keyLike = regexp.MustCompile(`(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}`)
 	// idPrefix is the part of an ID that names its kind, such as msg_ or chatcmpl-, which its placeholder keeps.
 	idPrefix = regexp.MustCompile(`^[A-Za-z]+[_-]`)
-	// eventName is what a rebuilt event line may hold. A type outside it, such as one holding a line break, would
-	// change the stream's framing, so its event gets no event line, which readers ignore anyway.
-	eventName = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
 )
 
 var errKey = errors.New("it holds a key, so nothing is written")
@@ -304,20 +301,17 @@ func (s scrubber) stream(up upstream, stream []byte) ([]byte, error) {
 
 // event appends to out the event whose data is data, with IDs replaced.
 func (s scrubber) event(out []byte, up upstream, data []byte) ([]byte, error) {
+	var typ string
 	if string(data) != sse.Done {
-		var typ string
 		var err error
 		if data, typ, err = s.json(data, up.ids); err != nil {
 			return nil, err
 		}
-		if up.events && eventName.MatchString(typ) {
-			out = fmt.Appendf(out, "event: %s\n", typ)
-		}
 	}
-	for line := range bytes.SplitSeq(data, []byte("\n")) { // data joins its data lines with LF
-		out = append(append(append(out, "data: "...), line...), '\n')
+	if !up.events {
+		typ = ""
 	}
-	return append(out, '\n'), nil
+	return sse.AppendEvent(out, typ, data), nil
 }
 
 // json returns the JSON value data with the string at each ID position replaced by its placeholder, every other byte
