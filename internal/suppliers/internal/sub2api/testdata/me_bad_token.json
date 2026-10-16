@@ -1,0 +1,10 @@
+{
+ "method": "GET",
+ "path": "/api/v1/auth/me",
+ "status": 401,
+ "header": {},
+ "body": {
+  "code": "INVALID_TOKEN",
+  "message": "Invalid token"
+ }
+}
