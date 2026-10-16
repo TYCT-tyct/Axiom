@@ -46,6 +46,7 @@ type scanState struct {
 	Fast      int   `json:"fast"`      // short passes in a row
 	LastLate  int64 `json:"last_late"` // when the last late pass finished
 	LateEnd   int64 `json:"late_end"`  // the end of the time the late passes have covered, so the next starts there
+	Connected int64 `json:"connected"` // when the scan began: nothing before it is ours, so no pass reads from before
 	Pass      *pass `json:"pass,omitempty"`
 }
 
@@ -61,7 +62,7 @@ type pass struct {
 
 func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 	if len(raw) == 0 { // the first scan: nothing before the connection is ours
-		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix()}, nil
+		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix(), Connected: now.Unix()}, nil
 	}
 	var s scanState
 	if err := jsonx.UnmarshalKnown(raw, &s); err != nil || s.V != 1 || s.Span <= 0 {
@@ -118,7 +119,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	if s.Pass == nil {
 		if s.Pass = nextPass(s, now); s.Pass == nil {
 			state, err := s.encode()
-			return adapter.ChargePage{Done: true}, state, err
+			return adapter.ChargePage{Done: true, Through: time.Unix(s.Watermark, 0).UTC()}, state, err
 		}
 	}
 	page, err := m.readPage(ctx, s.Pass)
@@ -139,7 +140,11 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 		s.Pass.Page++
 	}
 	state, err := s.encode()
-	return adapter.ChargePage{Charges: charges, Done: done}, state, err
+	page2 := adapter.ChargePage{Charges: charges, Done: done}
+	if done {
+		page2.Through = time.Unix(s.Watermark, 0).UTC()
+	}
+	return page2, state, err
 }
 
 // nextPass picks what to read next: the last day again when that is due, otherwise the stretch after the watermark,
@@ -149,13 +154,13 @@ func nextPass(s scanState, now time.Time) *pass {
 		// From a day before where the last late pass ended, so every stretch is read again a day after, whatever time the
 		// passes run at: a record that appears up to a day late is read by the pass after it, and the stretches overlap, so
 		// no time goes unread however late a pass is run.
-		return &pass{Late: true, Start: s.lateEnd() - int64(lateEvery/time.Second), End: now.Add(-lag).Unix(), Page: 1}
+		return &pass{Late: true, Start: max(s.lateEnd()-int64(lateEvery/time.Second), s.Connected), End: now.Add(-lag).Unix(), Page: 1}
 	}
 	end := min(s.Watermark+s.Span, now.Add(-lag).Unix())
 	if end-s.Watermark < int64(minSpan/time.Second) {
 		return nil
 	}
-	return &pass{Start: s.Watermark - int64(overlap/time.Second), End: end, Page: 1}
+	return &pass{Start: max(s.Watermark-int64(overlap/time.Second), s.Connected), End: end, Page: 1}
 }
 
 // finish records a finished pass: the watermark moves to the pass's end, so it only ever rises, and the next forward
@@ -256,4 +261,21 @@ func funding(o otherInfo) adapter.Funding {
 		return adapter.FundingWallet
 	}
 	return adapter.FundingOther
+}
+
+var _ adapter.Rescanner = (*manager)(nil)
+
+// Rescan begins a late pass over [since, now), for a removal that reads the last records after the grace period: it
+// reads that stretch again whatever the passes the adapter schedules would do next.
+func (m *manager) Rescan(since time.Time) adapter.ScanState {
+	now := m.now()
+	s := scanState{
+		V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix(),
+		Pass: &pass{Late: true, Start: since.Unix(), End: now.Add(-lag).Unix(), Page: 1},
+	}
+	state, err := s.encode()
+	if err != nil {
+		panic(err) // integers and booleans always encode
+	}
+	return state
 }

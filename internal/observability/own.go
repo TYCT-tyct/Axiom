@@ -51,17 +51,53 @@ const (
 	MaxPageSize     = 200
 )
 
-// ownParams are the parameters of the list query for a page of size calls: one more is asked for, to learn whether a
-// next page exists, and the first page starts after the newest possible call.
-func ownParams(q OwnQuery, size int) store.ListOwnCallsParams {
-	params := store.ListOwnCallsParams{
-		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp, PageSize: int32(size) + 1, //nolint:gosec // ListOwn has checked size is 1 to MaxPageSize
-		AfterAt: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), AfterID: uuid.Max().String(),
-	}
+// cursorOf is where the page starts: after the newest possible call for the first page, else after the cursor.
+func cursorOf(q OwnQuery) (at time.Time, id string) {
 	if q.After != nil {
-		params.AfterAt, params.AfterID = q.After.At, q.After.ID.String()
+		return q.After.At, q.After.ID.String()
 	}
-	return params
+	return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), uuid.Max().String()
+}
+
+// listRows runs the list query that fits the filters, for a page of size calls: one more is asked for, to learn whether
+// a next page exists. A model, with or without a client application, is read from the model's index; a client
+// application alone from the application's; no filter from the account's. The rows of all three have one shape.
+func listRows(ctx context.Context, tx pg.Tx, q OwnQuery, size int) ([]store.ListOwnCallsRow, error) {
+	// The values of a list decide its plan: a prepared statement that the server has switched to its generic plan reads
+	// all of an account's calls in the window (4,300 buffers for 60,000 calls) where the plan made for the values reads a
+	// page. A list is read for a person at a console, not on the call path, so it is planned every time.
+	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		return nil, fmt.Errorf("plan the list for its values: %w", err)
+	}
+	at, id := cursorOf(q)
+	limit := int32(size) + 1 //nolint:gosec // ListOwn has checked size is 1 to MaxPageSize
+	account, queries := q.Account.String(), store.New()
+	switch {
+	case q.Model != "":
+		rows, err := queries.ListOwnCallsByModel(ctx, tx, store.ListOwnCallsByModelParams{
+			AccountID: account, Model: q.Model,
+			Since: q.Since, Until: q.Until, ClientApp: q.ClientApp, AfterAt: at, AfterID: id, PageSize: limit,
+		})
+		return convert(rows, func(r store.ListOwnCallsByModelRow) store.ListOwnCallsRow { return store.ListOwnCallsRow(r) }), err
+	case q.ClientApp != "":
+		rows, err := queries.ListOwnCallsByApp(ctx, tx, store.ListOwnCallsByAppParams{
+			AccountID: account, ClientApp: q.ClientApp,
+			Since: q.Since, Until: q.Until, AfterAt: at, AfterID: id, PageSize: limit,
+		})
+		return convert(rows, func(r store.ListOwnCallsByAppRow) store.ListOwnCallsRow { return store.ListOwnCallsRow(r) }), err
+	}
+	return queries.ListOwnCalls(ctx, tx, store.ListOwnCallsParams{
+		AccountID: account, Since: q.Since, Until: q.Until,
+		AfterAt: at, AfterID: id, PageSize: limit,
+	})
+}
+
+func convert[From any](rows []From, to func(From) store.ListOwnCallsRow) []store.ListOwnCallsRow {
+	out := make([]store.ListOwnCallsRow, len(rows))
+	for i, r := range rows {
+		out[i] = to(r)
+	}
+	return out
 }
 
 // ListOwn returns one page of the calls the transaction's scope can see, and the cursor of the next page, nil when
@@ -75,7 +111,7 @@ func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, err
 	case size < 0 || size > MaxPageSize:
 		return nil, nil, fmt.Errorf("list calls: page size %d, want 1 to %d", size, MaxPageSize)
 	}
-	rows, err := store.New().ListOwnCalls(ctx, tx, ownParams(q, size))
+	rows, err := listRows(ctx, tx, q, size)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list calls: %w", err)
 	}

@@ -128,7 +128,7 @@ func scanOf(t *testing.T, raw adapter.ScanState) scanState {
 
 func startState(t *testing.T, watermark time.Time) adapter.ScanState {
 	t.Helper()
-	raw, err := scanState{V: 1, Watermark: watermark.Unix(), Span: int64(time.Hour / time.Second), LastLate: watermark.Unix()}.encode()
+	raw, err := scanState{V: 1, Watermark: watermark.Unix(), Span: int64(time.Hour / time.Second), LastLate: watermark.Unix(), Connected: watermark.Unix()}.encode()
 	if err != nil {
 		t.Fatal(err)
 	}

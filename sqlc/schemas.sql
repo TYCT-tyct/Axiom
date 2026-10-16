@@ -5,3 +5,4 @@ CREATE SCHEMA accounts;
 CREATE SCHEMA catalog;
 CREATE SCHEMA observability;
 CREATE SCHEMA suppliers;
+CREATE SCHEMA billing;

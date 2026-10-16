@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -182,28 +183,74 @@ func TestRecordJSON(t *testing.T) {
 	}
 }
 
-// BenchmarkPlan is the route for a request with fifty candidates, the size docs/performance.md expects ("通常几十个"): the
-// budget for routing is 1ms at p99, and the mean is checked against it here.
-func BenchmarkPlan(b *testing.B) {
+// candidates is a harness with n endpoints of one model, every seventh with its breaker open, and a request that
+// sticks to the third: what BenchmarkPlan and TestPlanScales plan over.
+func candidates(tb testing.TB, n int) (*harness, routing.Input) {
+	tb.Helper()
 	var endpoints []routing.Endpoint
-	for n := 1; n <= 50; n++ {
-		endpoints = append(endpoints, endpoint(b, n, func(e *routing.Endpoint) {
-			e.Price.Schedule = schedule(b, "0.000001", "0.000002", "0.0000001")
-			if n%7 == 0 {
+	for i := 1; i <= n; i++ {
+		endpoints = append(endpoints, endpoint(tb, i, func(e *routing.Endpoint) {
+			e.Price.Schedule = schedule(tb, "0.000001", "0.000002", "0.0000001")
+			if i%7 == 0 {
 				e.BreakerOpen = true
 			}
 		}))
 	}
-	h := newHarness(b, routing.Config{}, openPreset(), endpoints...)
 	in := input()
 	in.Sticky = ep(3)
+	return newHarness(tb, routing.Config{}, openPreset(), endpoints...), in
+}
+
+// BenchmarkPlan is the route for a request with fifty candidates, the size docs/performance.md expects ("通常几十个").
+// It reports time and allocations; just bench-compare fails on more allocations. The 1ms p99 budget is a wall-clock
+// figure, so it is checked by the load tests of docs/performance.md「怎么验证」, not here, where a busy machine would
+// fail it at random (#107); TestPlanScales catches the regressions a budget would.
+func BenchmarkPlan(b *testing.B) {
+	h, in := candidates(b, 50)
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, wait, err := h.r.Plan(in); wait != nil || err != nil {
 			b.Fatal(wait, err)
 		}
 	}
-	if mean := b.Elapsed() / time.Duration(b.N); mean > 500*time.Microsecond {
-		b.Fatalf("a plan takes %v on average, past half the 1ms p99 budget", mean)
+}
+
+// TestPlanScales: planning over thirty-two times the candidates costs about thirty-two times as much, not a thousand,
+// so a change that makes Plan quadratic fails here whatever the machine's load. Each size is timed over the same
+// number of plans, at least 5ms at the small size, as some clocks tick too coarsely to time one plan; the fastest of
+// several such samples counts, interleaved between the sizes: load only ever adds time, so the minimum is the closest
+// to the true cost, and both sizes see the same machine. A linear Plan with its n log n sort measures about 30 to 40;
+// the bar of 96 leaves room for noise, and even a quadratic pass as cheap as comparing IDs (the mutation in the PR for
+// #107) measures over 100. Allocations must not grow with the candidates beyond a few: Plan's slices are sized once.
+func TestPlanScales(t *testing.T) {
+	const small, large, samples = 25, 800, 5
+	hs, ins := candidates(t, small)
+	hl, inl := candidates(t, large)
+	reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
+	// also warm both sizes up
+	for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 5*time.Millisecond {
+		timed(hl, inl, 1)
+		reps *= 2
 	}
+	bestSmall, bestLarge := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
+	for range samples {
+		bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
+	}
+	if ratio := float64(bestLarge) / float64(bestSmall); ratio > 96 {
+		t.Errorf("planning %d candidates takes %.1f times as long as %d (%v against %v for %d plans), want about %d",
+			large, ratio, small, bestLarge, bestSmall, reps, large/small)
+	}
+	allocsSmall, allocsLarge := testing.AllocsPerRun(5, func() { hs.plan(ins) }), testing.AllocsPerRun(5, func() { hl.plan(inl) })
+	if allocsLarge > 3*allocsSmall {
+		t.Errorf("planning %d candidates allocates %v times, %d candidates %v: want about as many", large, allocsLarge, small, allocsSmall)
+	}
+}
+
+// timed is how long reps plans take.
+func timed(h *harness, in routing.Input, reps int) time.Duration {
+	start := time.Now()
+	for range reps {
+		h.plan(in)
+	}
+	return time.Since(start)
 }

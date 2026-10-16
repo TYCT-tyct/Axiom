@@ -145,7 +145,8 @@ func FuzzAdd(f *testing.F) {
 	})
 }
 
-// FuzzCmp checks the comparison against math/big over the whole signed range, both words' edges seeded.
+// FuzzCmp checks the comparison and the negation against math/big over the whole signed range, both words' edges
+// seeded.
 func FuzzCmp(f *testing.F) {
 	for _, pair := range [][2]Exact{{maxExact, minExact}, {{0, 1 << 63}, {0, 1}}, {{-1, 1<<64 - 1}, {}}, {{1, 0}, {0, 1<<64 - 1}}} {
 		f.Add(pair[0].hi, pair[0].lo, pair[1].hi, pair[1].lo)
@@ -154,6 +155,35 @@ func FuzzCmp(f *testing.F) {
 		a, b := Exact{ahi, alo}, Exact{bhi, blo}
 		if got, want := a.Cmp(b), a.Rat().Cmp(b.Rat()); got != want {
 			t.Fatalf("%v.Cmp(%v) = %d, want %d", a, b, got, want)
+		}
+		if a != minExact {
+			if got, want := a.Neg().Rat(), new(big.Rat).Neg(a.Rat()); got.Cmp(want) != 0 {
+				t.Fatalf("%v.Neg() = %s, want %s", a, got, want)
+			}
+		}
+	})
+}
+
+// FuzzAmount checks both conversions against math/big over the whole range: an amount converts exactly, and an exact
+// value rounds up to the next billionth, or panics when that is beyond int64.
+func FuzzAmount(f *testing.F) {
+	for _, pair := range [][2]int64{{math.MinInt64, 0}, {math.MaxInt64, -1}, {-1, 1}, {0, 0}} {
+		f.Add(pair[0], pair[1], uint64(1))
+	}
+	f.Fuzz(func(t *testing.T, n, hi int64, lo uint64) {
+		billionth := big.NewRat(1, 1e9)
+		if got, want := AmountExact(n).Rat(), new(big.Rat).Mul(big.NewRat(n, 1), billionth); got.Cmp(want) != 0 {
+			t.Fatalf("AmountExact(%d) = %s, want %s", n, got, want)
+		}
+		e := Exact{hi, lo}
+		q := new(big.Rat).Quo(e.Rat(), billionth)
+		ceil := new(big.Int).Neg(new(big.Int).Div(new(big.Int).Neg(q.Num()), q.Denom())) // Div floors
+		got, panicked := func() (got int64, panicked bool) {
+			defer func() { panicked = recover() != nil }()
+			return e.CeilAmount(), false
+		}()
+		if panicked != !ceil.IsInt64() || !panicked && got != ceil.Int64() {
+			t.Fatalf("%v.CeilAmount() = %d (panicked %v), want %s", e, got, panicked, ceil)
 		}
 	})
 }
