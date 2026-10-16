@@ -119,6 +119,10 @@ type Group struct {
 	Ratio     Amount
 	Facts     GroupFacts
 	Models    []Model
+	// ModelsUnread is set when the supplier did not let the adapter read this group's models this time (no key in the
+	// group, or a balance too low to list): Models is then empty because nothing was read, and the module keeps the
+	// models it last saw instead of taking the group to have none.
+	ModelsUnread bool
 }
 
 // GroupFacts is a group's facts as canonical JSON.
@@ -175,10 +179,14 @@ type Charge struct {
 	Model      string
 }
 
-// ChargePage is one page of charges and whether the scan has reached its end.
+// ChargePage is one page of charges and whether the pass has reached its end. A pass may cover less than the time up
+// to now (an adapter reads a backlog window by window), so Done does not say how far the records are read: Through
+// does. On a Done page it is the time before which every record has been read, or the zero time if the adapter does not
+// say. A removal reads on until Through reaches the moment it began.
 type ChargePage struct {
 	Charges []Charge
 	Done    bool
+	Through time.Time
 }
 
 // ScanState is an adapter's own position in a scan, opaque to everyone else.
