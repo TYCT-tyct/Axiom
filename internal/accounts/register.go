@@ -20,7 +20,14 @@ var (
 	ErrEmailTaken = errors.New("accounts: email already registered")
 	// ErrWeakPassword is a password shorter than 12 characters or longer than 256.
 	ErrWeakPassword = errors.New("accounts: password must be 12 to 256 characters")
+	// ErrBadEmail is an address the table would refuse: not 3 to 254 printable ASCII characters around an @.
+	ErrBadEmail = errors.New("accounts: not an email address")
 )
+
+// OpenedFunc runs in the transaction that opens an account, once the account exists, so that a module above accounts
+// can give the account what it needs to exist there too (billing's balance row) and the account is never seen
+// without it. cmd/axiom supplies it: accounts may not import the modules above it.
+type OpenedFunc func(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error
 
 // RegisterRequest is a registration with an invite code at a console domain.
 type RegisterRequest struct {
@@ -44,6 +51,10 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if err := s.fromIP(d.site, r.ClientIP); err != nil {
 		return UserID{}, err
 	}
+	email := normalEmail(r.Email)
+	if !emailAllowed(email) {
+		return UserID{}, ErrBadEmail
+	}
 	if !passwordAllowed(r.Password) {
 		return UserID{}, ErrWeakPassword
 	}
@@ -51,37 +62,16 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if err != nil {
 		return UserID{}, err
 	}
-	email := normalEmail(r.Email)
 	var hash string
 	if err := s.hash(ctx, func() { hash = hashPassword(r.Password) }); err != nil {
 		return UserID{}, err
 	}
 	user, account := uuid.NewV7(), uuid.NewV7()
-	site := invite.SiteID
 	err = s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		for _, step := range []func() error{
-			func() error {
-				return s.queries.InsertAccount(ctx, tx, InsertAccountParams{ID: account, SiteID: site, Name: truncate(email, 100), TierID: invite.DefaultTierID})
-			},
-			func() error { return audit.RegisterAccount(ctx, tx, site, account) },
-			func() error {
-				return s.queries.InsertDefaultWorkspace(ctx, tx, InsertDefaultWorkspaceParams{ID: uuid.NewV7(), SiteID: site, AccountID: account})
-			},
-			func() error {
-				return s.queries.InsertUser(ctx, tx, InsertUserParams{
-					ID: user, SiteID: site, AccountID: account, Email: email, PasswordHash: hash,
-					InviteCode: newInviteCode(), InviterUserID: &invite.InviterUserID,
-				})
-			},
-			func() error {
-				return s.queries.InsertOwner(ctx, tx, InsertOwnerParams{SiteID: site, AccountID: account, UserID: user, RoleID: snap.roleIDs["owner"]})
-			},
-		} {
-			if err := step(); err != nil {
-				return err
-			}
-		}
-		return nil
+		return createUser(ctx, tx, s.queries, s.opened, newUser{
+			id: user, account: account, site: invite.SiteID, tier: invite.DefaultTierID, role: snap.roleIDs["owner"],
+			email: email, passwordHash: hash, inviter: &invite.InviterUserID,
+		})
 	})
 	if constraint, ok := pg.Duplicate(err); ok && constraint == "users_site_id_email_key" {
 		return UserID{}, ErrEmailTaken
@@ -90,6 +80,62 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 		return UserID{}, fmt.Errorf("register: %w", err)
 	}
 	return UserID(user), nil
+}
+
+// newUser is a user and the personal account that comes with them. inviter is nil for a user the command line makes.
+type newUser struct {
+	id, account, site, tier, role uuid.UUID
+	email, passwordHash           string
+	inviter                       *uuid.UUID
+}
+
+// createUser inserts n's account, its tenant registration, its default workspace, the user and the user as the
+// account's owner in tx, which must hold the new account's scope, then runs opened. Registration and the command line
+// make users through this one body.
+func createUser(ctx context.Context, tx pg.Tx, q *Queries, opened OpenedFunc, n newUser) error {
+	for _, step := range []func() error{
+		func() error {
+			return q.InsertAccount(ctx, tx, InsertAccountParams{ID: n.account, SiteID: n.site, Name: truncate(n.email, 100), TierID: n.tier})
+		},
+		func() error { return audit.RegisterAccount(ctx, tx, n.site, n.account) },
+		func() error {
+			return q.InsertDefaultWorkspace(ctx, tx, InsertDefaultWorkspaceParams{ID: uuid.NewV7(), SiteID: n.site, AccountID: n.account})
+		},
+		func() error {
+			return q.InsertUser(ctx, tx, InsertUserParams{
+				ID: n.id, SiteID: n.site, AccountID: n.account, Email: n.email, PasswordHash: n.passwordHash,
+				InviteCode: newInviteCode(), InviterUserID: n.inviter,
+			})
+		},
+		func() error {
+			return q.InsertOwner(ctx, tx, InsertOwnerParams{SiteID: n.site, AccountID: n.account, UserID: n.id, RoleID: n.role})
+		},
+		func() error {
+			if opened == nil {
+				return nil
+			}
+			return opened(ctx, tx, n.site, n.account)
+		},
+	} {
+		if err := step(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// emailAllowed reports whether email, already normalized, is one the users table takes: 3 to 254 printable ASCII
+// characters (what lower() and the length check agree on in every locale) with an @ that has a character on each side.
+func emailAllowed(email string) bool {
+	if len(email) < 3 || len(email) > 254 {
+		return false
+	}
+	for i := range len(email) {
+		if email[i] <= ' ' || email[i] > '~' {
+			return false
+		}
+	}
+	return strings.Contains(email[1:len(email)-1], "@")
 }
 
 // invite is what code admits at host's site, or ErrInvalidInvite.

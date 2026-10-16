@@ -10,6 +10,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 )
 
@@ -26,9 +27,13 @@ const (
 // Site is a site as the snapshot holds it. It decides nothing about access: whether a site or domain is enabled is
 // read from the database on every call (README.md「快照」).
 type Site struct {
-	ID        SiteID
-	Main      bool
-	KeyPrefix string
+	ID           SiteID
+	Main         bool
+	Name         string
+	KeyPrefix    string
+	Registration string // invite or closed
+	// Currency is the site's accounting currency, which the amounts its API shows are in.
+	Currency platform.Currency
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit int64
 	sessions         map[Surface]lifetime
@@ -130,12 +135,18 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	}
 	for _, r := range sites {
 		site := Site{
-			ID: SiteID(r.ID), Main: r.IsMain, KeyPrefix: r.KeyPrefix, NewKeyDailyLimit: defaultNewKeyDailyLimit,
+			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
+			NewKeyDailyLimit: defaultNewKeyDailyLimit,
 			sessions: map[Surface]lifetime{
 				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
 				Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
 			},
 		}
+		currency, err := platform.ParseCurrency(r.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
+		}
+		site.Currency = currency
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
 		}
@@ -158,7 +169,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	for _, r := range roles {
-		if unknown := slices.IndexFunc(r.Permissions, func(p string) bool { return !permissions[p] }); unknown >= 0 {
+		if unknown := slices.IndexFunc(r.Permissions, func(p string) bool { _, declared := permissions[p]; return !declared }); unknown >= 0 {
 			return nil, fmt.Errorf("role %s holds %q, which this program does not declare", r.Name, r.Permissions[unknown])
 		}
 		next.roleIDs[r.Name] = r.ID

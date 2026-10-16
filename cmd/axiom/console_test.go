@@ -17,45 +17,77 @@ import (
 )
 
 // failingConsole is a console API whose handler fails with an error describing our internals.
-type failingConsole struct{ pendingConsole }
+type failingConsole struct{ consoleAPI }
 
 func (failingConsole) GetVersion(context.Context, consoleapi.GetVersionRequestObject) (consoleapi.GetVersionResponseObject, error) {
 	return nil, errors.New("planted-internal-detail")
+}
+
+// answer is what a client gets for the request "METHOD path" (GET when no method is given) from a console whose
+// handler fails, and what the log recorded.
+func answer(t *testing.T, request string) (rec *httptest.ResponseRecorder, logs string) {
+	t.Helper()
+	method, path := http.MethodGet, request
+	if m, p, ok := strings.Cut(request, " "); ok {
+		method, path = m, p
+	}
+	var log bytes.Buffer
+	rec = httptest.NewRecorder()
+	routes := publicRoutes(failingConsole{}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.NewJSONHandler(&log, nil)))
+	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, path, nil))
+	return rec, log.String()
 }
 
 // TestPublicRoutesAnswerWithTheErrorBody: every failure of the generated code reaches the client as the contract's
 // error body, and a handler's error reaches the log but not the client.
 func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
 	cases := []struct {
-		name, path string
-		status     int
-		code       consoleapi.ErrorCode
+		name, request string
+		status        int
+		code          consoleapi.ErrorCode
 	}{
 		{"a handler fails", "/api/console/v1/version", http.StatusInternalServerError, consoleapi.ErrorCodeInternal},
-		{"an operation has no handler yet", "/api/console/v1/site", http.StatusNotImplemented, consoleapi.ErrorCodeNotImplemented},
-		{"a parameter is malformed", "/api/console/v1/calls?limit=many", http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest},
+		{"a path the contract lacks", "/api/console/v1/nothing-here", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a method the contract lacks", "POST /api/console/v1/version", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var logs bytes.Buffer
-			rec := httptest.NewRecorder()
-			routes := publicRoutes(failingConsole{}, testFrontend(t), slog.New(slog.NewJSONHandler(&logs, nil)))
-			routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, c.path, nil))
+			rec, logs := answer(t, c.request)
 			var body consoleapi.Error
 			if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("the client got %d %q, which is not the error body: %v", rec.Code, rec.Body, err)
 			}
-			if rec.Code != c.status || body.Error.Code != c.code || rec.Header().Get("Content-Type") != "application/json" {
-				t.Errorf("the client got %d %q %q, want %d %q", rec.Code, rec.Header().Get("Content-Type"), body.Error.Code, c.status, c.code)
+			if rec.Code != c.status || body.Error.Code != c.code {
+				t.Errorf("the client got %d %q, want %d %q", rec.Code, body.Error.Code, c.status, c.code)
 			}
-			if strings.Contains(rec.Body.String(), "planted-internal-detail") {
-				t.Errorf("the client was told the handler's error: %s", rec.Body)
-			}
-			if logged := strings.Contains(logs.String(), "planted-internal-detail"); logged != (c.status == http.StatusInternalServerError) {
-				t.Errorf("the handler's error logged = %v for status %d: %s", logged, c.status, &logs)
-			}
+			checkSecrecy(t, rec, logs, c.status == http.StatusInternalServerError)
 		})
 	}
+}
+
+// checkSecrecy: a response is uncached JSON that does not tell the client the handler's error, and the log has it
+// exactly when the handler failed.
+func checkSecrecy(t *testing.T, rec *httptest.ResponseRecorder, logs string, failed bool) {
+	t.Helper()
+	if rec.Header().Get("Content-Type") != "application/json" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("headers: %v", rec.Header())
+	}
+	if strings.Contains(rec.Body.String(), "planted-internal-detail") {
+		t.Errorf("the client was told the handler's error: %s", rec.Body)
+	}
+	if strings.Contains(logs, "planted-internal-detail") != failed {
+		t.Errorf("the handler's error logged = %v for a failed = %v: %s", !failed, failed, logs)
+	}
+}
+
+// loadedContract is the console's contract as the program loads it.
+func loadedContract(t testing.TB) *contract {
+	t.Helper()
+	c, err := consoleContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // testFrontend is a frontend of three one-line apps, so the routes are tested without the build.
@@ -83,11 +115,11 @@ func TestPublicRoutesServePagesBesideTheAPI(t *testing.T) {
 		{"the website", "/", "text/html", 200, "<site>"},
 		{"the console", "/console/keys", "text/html", 200, "<console>"},
 		{"the API", "/api/console/v1/version", "*/*", 200, ""},
-		{"an API path no route claims", "/api/console/v1/nothing-here", "text/html", 404, "404 page not found\n"},
+		{"an API path no route claims", "/api/console/v1/nothing-here", "text/html", 404, ""},
 		{"the model calls' prefix", "/v1/chat/completions", "text/html", 404, "Not Found\n"},
 		{"a path of the admin, which the website's router does not know either", "/admin/", "text/html", 200, "<site>"},
 	}
-	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	routes := publicRoutes(consoleAPI{version: "v"}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.DiscardHandler))
 	for _, c := range cases {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, c.target, nil)
 		req.Header.Set("Accept", c.accept)
@@ -111,7 +143,7 @@ func TestConsoleAnswersAreCompressed(t *testing.T) {
 		{"v1", "gzip", ""},
 	}
 	for _, c := range cases {
-		routes := publicRoutes(consoleAPI{version: c.version}, testFrontend(t), slog.New(slog.DiscardHandler))
+		routes := publicRoutes(consoleAPI{version: c.version}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.DiscardHandler))
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/console/v1/version", nil)
 		req.Header.Set("Accept-Encoding", c.accept)
 		rec := httptest.NewRecorder()
@@ -131,16 +163,16 @@ func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
 		status                int
 		secured               bool
 	}{
-		{http.MethodGet, "/api/console/v1/auth/sign-in", "POST", 405, false},
-		{http.MethodHead, "/api/console/v1/auth/sign-in", "POST", 405, false},
-		{http.MethodPut, "/api/console/v1/auth/sign-in", "POST", 405, false},
-		{http.MethodPut, "/api/console/v1/version", "GET, HEAD", 405, false},
+		{http.MethodGet, "/api/console/v1/auth/sign-in", "", 404, false},
+		{http.MethodHead, "/api/console/v1/auth/sign-in", "", 404, false},
+		{http.MethodPut, "/api/console/v1/auth/sign-in", "", 404, false},
+		{http.MethodPut, "/api/console/v1/version", "", 404, false},
 		{http.MethodGet, "/api/console/v1/nothing-here", "", 404, false},
 		{http.MethodPost, "/", "GET, HEAD", 405, true},
 		{http.MethodGet, "/console", "", 308, true},
 		{http.MethodGet, "/", "", 200, true},
 	}
-	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	routes := publicRoutes(consoleAPI{version: "v"}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.DiscardHandler))
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
 		routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), c.method, c.target, nil))
@@ -156,7 +188,7 @@ func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
 // TestPublicRoutesSecureEveryAnswer: the answer the router itself gives for a path it cleans, a redirect, carries the
 // security headers like any other, because they are set outside the router.
 func TestPublicRoutesSecureEveryAnswer(t *testing.T) {
-	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	routes := publicRoutes(consoleAPI{version: "v"}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.DiscardHandler))
 	rec := httptest.NewRecorder()
 	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/console//keys", nil))
 	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/console/keys" {

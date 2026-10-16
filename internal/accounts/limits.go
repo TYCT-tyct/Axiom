@@ -20,6 +20,14 @@ var (
 	ErrBusy = errors.New("accounts: busy, try again shortly")
 )
 
+// TooManyAttempts is ErrTooManyAttempts with how long until the attempt would be let through.
+type TooManyAttempts struct{ RetryAfter time.Duration }
+
+func (*TooManyAttempts) Error() string { return ErrTooManyAttempts.Error() }
+
+// Is makes errors.Is(err, ErrTooManyAttempts) true for it.
+func (*TooManyAttempts) Is(target error) bool { return target == ErrTooManyAttempts }
+
 // limits are a site's attempt limits before sign-in (README.md「登录前的资源」), its settings over defaultLimits.
 type limits struct {
 	ipBurst, ipPerMinute int // sign-ins, registrations and two-step verifications from one IP
@@ -49,19 +57,19 @@ func newBuckets[K comparable]() *buckets[K] {
 	return &buckets[K]{full: newLRU[K, time.Time](cacheLimit)}
 }
 
-// take spends one of key's tokens, or reports that none is left.
-func (b *buckets[K]) take(key K, size int, per time.Duration, now time.Time) bool {
+// take spends one of key's tokens and returns 0, or spends none and returns how long until one is left.
+func (b *buckets[K]) take(key K, size int, per time.Duration, now time.Time) time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	full, ok := b.full.get(key, now)
 	if !ok {
 		full = now
 	}
-	if full.Sub(now)+per > time.Duration(size)*per {
-		return false
+	if wait := full.Sub(now) + per - time.Duration(size)*per; wait > 0 {
+		return wait
 	}
 	b.full.put(key, full.Add(per), full.Add(per))
-	return true
+	return 0
 }
 
 // give returns a token take spent, for an attempt that succeeded: only failures count.
@@ -109,8 +117,8 @@ func newGuards(concurrency int, wait time.Duration) guards {
 // fromIP spends one of the IP's attempts on site.
 func (s *Service) fromIP(site SiteID, ip netip.Addr) error {
 	l := s.snapshot.Load().sites[site].limits
-	if !s.guards.ips.take(siteIP{site, ip}, l.ipBurst, time.Minute/time.Duration(l.ipPerMinute), s.now()) {
-		return ErrTooManyAttempts
+	if wait := s.guards.ips.take(siteIP{site, ip}, l.ipBurst, time.Minute/time.Duration(l.ipPerMinute), s.now()); wait > 0 {
+		return &TooManyAttempts{RetryAfter: wait}
 	}
 	return nil
 }
@@ -119,8 +127,8 @@ func (s *Service) fromIP(site SiteID, ip netip.Addr) error {
 // and given back when attempt succeeds.
 func failing[K comparable](s *Service, b *buckets[K], key K, size int, window time.Duration, attempt func() error) error {
 	per := window / time.Duration(size)
-	if !b.take(key, size, per, s.now()) {
-		return ErrTooManyAttempts
+	if wait := b.take(key, size, per, s.now()); wait > 0 {
+		return &TooManyAttempts{RetryAfter: wait}
 	}
 	err := attempt()
 	if err == nil {

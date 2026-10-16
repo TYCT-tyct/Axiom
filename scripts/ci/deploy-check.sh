@@ -17,6 +17,9 @@ deployed="$(curl -fsS http://127.0.0.1:8080/api/console/v1/version | jq -r .vers
 built="$(just axiom-version)"
 [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
+# The console's other operations are served by a node that read its key files and its contract: an address no site
+# registers is the contract's 404
+[ "$(curl -s http://127.0.0.1:8080/api/console/v1/site | jq -r .error.code)" = not_found ] || { echo "::error::the node does not answer the console's API as the contract says"; exit 1; }
 
 # The pages: the website and the console on the public port; the admin on its own port, and none of its files on the
 # public one. The admin's own script is asked for, so the embedded files, their caching and their compression are what

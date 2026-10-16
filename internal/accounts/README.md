@@ -25,7 +25,7 @@
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
-| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值 | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
@@ -34,7 +34,7 @@
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
-| `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
+| `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
@@ -77,7 +77,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`，以及敏感的 `sites.manage`、`platform_grants.manage`。默认角色由迁移 00003 写入：owner 有前三项，admin 五项全有，member 有两项 key 权限，finance、viewer、support 只有 `api_keys.view`；以后加权限的 PR 用迁移改这些集合。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`。默认角色由迁移 00003 写入、00005 改成现在的集合：owner 有前五项，admin 七项全有，member 有两项 key 权限和 `calls.view`，finance 有 `api_keys.view` 和 `balance.view`，viewer 有 `api_keys.view`、`calls.view`、`balance.view`，support 有 `api_keys.view` 和 `calls.view`；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 登录前的查找
@@ -119,8 +119,9 @@
 - **满载排队不占数据库连接**：等待放在事务里，一个满载模型的排队请求每个都占着一条连接，能把连接池占满，别的模型的准入和结算都拿不到连接；在事务外等，排队的请求不占连接，醒来重新准入还顺带读到等待期间的停用和改动。重新准入的次数受路由的排队时间上限约束，到期返回 429。
 - **停用的 key 在准入之前能看到什么**：解析和名字解析在准入之前，所以停用的 key 仍可能收到请求格式类的错误（400、模型不存在），但不会调用上游、读不到租户数据、不产生费用。准入的拒绝不缓存：拒绝可能与请求有关（IP），缓存它会误拒同一把 key 的合法请求。
 - **防枚举只承诺到这里**：不存在、属于别的站点、停用、过期、删除、IP 不允许，状态码和正文完全相同。剩余的时间差：本站真实存在的 key 多一次准入查询；缓存命中与未命中不同。只有持有这把 key 的人能利用。
+- **key 的设置**（`KeySettings`）：名称、停用、花费上限（十亿分之一额度，空表示不限）、重置周期（空表示总额不重置，要有上限）、可用模型（空表示任意，空列表按空处理）、IP 白名单（`cidr`，主机位清零）。创建时不写上限就取站点的新 key 每日上限、按日重置；`UpdateKey` 整体替换，没写的就是不限制，所以页面把读到的设置连同修改送回；到期时间只能在创建时给。创建、整体替换、删除各记一条审计（`api_key.create`、`api_key.update`、`api_key.delete`），改成停用或重新启用也是 `update`。`Key.CreatedAt` 取自 UUIDv7 的 ID（前 48 位毫秒），不另存一列。输入的检查（币种、不为负、重置需要上限、地址能解析、到期在将来）在 `cmd/axiom` 的处理器里，进模块的设置已满足表的约束。
 - 创建 key 不做幂等键：提交后响应丢失，用户在列表里看到一把从未用过的 key，删掉即可，不为重试保存明文。
-- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
+- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.update`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
 - 以后的二级站点：`Admit` 的范围并上站长账户，同一事务里一起预留（见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)「二级站点的请求」）。
 
 | 缓存 | 内容 | 容量与过期 |
@@ -143,11 +144,11 @@
 | 注册 | 邀请码；邮箱不验证 | 开放注册（要人机验证）、邮箱验证 |
 | 登录 | 邮箱 + 密码，开了 TOTP 的再过 TOTP 或恢复码 | 第三方登录、通行密钥、邮箱验证码 |
 | 找回密码 | `axiom user set-password`（从标准输入读） | 邮件链接 |
-| 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform` | — |
+| 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform`（见下文「命令行」） | — |
 | 认证因素 | 开启 TOTP、重建恢复码 | 关闭或更换 TOTP、改密码（M1 只经命令行 `reset-mfa`、`set-password`） |
 | 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
 
-- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。不用站点或平台范围包住注册。
+- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，第一条语句都是 `SELECT … FROM users WHERE id = $u FOR UPDATE`，在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
@@ -166,9 +167,26 @@
 | key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
 | 计数器本身 | 有容量上限的 LRU | — |
 
+- 超限返回 `*TooManyAttempts`（`errors.Is(err, ErrTooManyAttempts)` 仍成立），带 `RetryAfter`：桶再放过一次尝试的时间，控制台接口据此写 `Retry-After`（至少 1 秒）。开启 TOTP 也算：错的验证码或密码用掉用户的验证码失败次数（与登录的验证共用），"已经开启"这类没在猜什么的拒绝不算。
 - 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时从 LRU 过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
 - 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再计算哈希、不碰数据库。IP 的次数不退。
 - 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
+
+## 命令行
+
+`Operator` 以 `cmd/axiom` 交入的平台范围执行，是做出第一个站点和用户、授予平台角色、在 M1 改密码和重置两步验证的唯一途径；每个命令在同一事务里记审计，操作者是 `system:accounts.cli`，输出一行 JSON。
+
+| 命令 | 做什么 |
+|---|---|
+| `axiom site init --name N --currency CODE --console HOST --api HOST [--admin HOST] [--key-prefix P]` | 一个事务建主站（注册策略 invite）、首个等级「Default」（新账户的默认等级）、各监听面的域名；`localhost` 的域名登记 `http://` 的源，其余登记 `https://`。主站已存在返回 `ErrSiteExists`，域名已被占用返回 `ErrDomainTaken`。币种必须写明且主站只能是 `USD`（[计费](../../docs/domains/billing.md)「钱的表示」），其他值在写库前被拒 |
+| `axiom user create --email E`（密码读标准输入） | 在主站建用户和个人账户，与注册共用 `createUser`（账户、租户登记、默认工作区、用户、所有者，再调开户回调），无邀请人；邮箱与密码的规则同注册 |
+| `axiom user grant-platform --email E [--role admin]` | 授予内置角色；已持有则不变，不重复记审计（同时授予也只留一条，靠部分唯一索引） |
+| `axiom user set-password --email E`（密码读标准输入） | 换密码并加因素版本：旧会话、待验证的登录、未用的恢复码失效 |
+| `axiom user reset-mfa --email E` | 清除 TOTP 密钥并加因素版本；用户可在控制台重新开启 |
+
+- 密码只读标准输入（最多一行，去掉末尾的换行），不进进程列表和 shell 历史。找不到用户返回 `ErrNotFound`；站点还没建返回 `ErrNoSite`，提示先运行 `site init`。
+- 改因素的两个命令同控制台一样：事务第一条语句锁用户行，在锁内改，所以与进行中的登录互斥。
+- **开户回调**：`Config.OnAccountOpened` 和 `NewOperator` 的参数是同一个 `OpenedFunc`，在开户事务里账户建好之后调用；`cmd/axiom` 接到 `billing.OpenBalance`（底线 0），所以账户一出现就有余额行，回调失败整个事务回滚。accounts 不能引用 billing（[依赖表](../../docs/architecture.md#模块边界规则)），回调就是「下层定义接口、上层实现」。
 
 ## 不变量
 
@@ -183,13 +201,17 @@
 | key 能否使用每次调用以库为准 | `Admit` 在准入事务里读库；缓存只存不变的标识。测试：两个 `Service` 共用一个库，一个停用，另一个下一次 `Admit` 被拒；客户端先超时、服务端随后提交停用，之后的 `Admit` 被拒；禁止的 IP 先请求，允许的紧接着成功 |
 | 定规则和路由只用库里的当前值 | `Admission` 带当前的 `preset_id`、`models`、`tier_id`，缓存条目里没有这几项；测试：两个 `Service` 共用一个库，各认出同一把 key 并预热缓存后，一个改预设、可用模型（从 A 改成 A+B）、等级，另一个下一次 `Admit` 交给 `fn` 的是新值；`fn` 里的路由与最高价检查用 `Admission` 的值，接线的证明在 #27 |
 | 准入事务里不等待，满载排队不占数据库连接 | `fn` 只做内存计算和预留，满载时返回"需要等待"、在事务外等；本模块测试：`fn` 返回"需要等待"后事务已回滚、连接已归还池子。接线的验收在 #27：连接池设为 N，模型 A 只有一个并发名额且有多于 N 个请求在排队，期间模型 B 的准入和另一个调用的结算照常完成、在预算之内，排队中的 A 请求占用的连接数为 0 |
-| 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `accounts_key_cache_misses_total` |
+| 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `axiom_accounts_key_cache_misses_total`（OpenTelemetry 的 `axiom.accounts.key_cache.misses`，每次真去问数据库的查找加一，命中和负缓存都不加） |
 | 登录前拿不到租户数据 | 无范围的事务 + 「登录前的查找」的函数和启动检查 |
 | 范围和认证结果不可伪造 | 生产代码只有本模块能构造账户和站点范围（forbidigo）；`Caller`、`Principal`、`Admission` 的字段不导出 |
 | 敏感权限只给本次做过两步验证的会话 | `level = mfa`；测试：先登录的密码会话后来被授予管理员，仍被拒 |
 | 一次性因素只能用一次，一个挑战只换出一个会话 | 用户行锁 + 条件更新 + 影响行数；测试：两条连接同时提交同一个码、同一挑战的两个码，都只有一个成功 |
 | 登录前的猜测有上限，换挑战、换会话不重置 | 每邮箱、每用户的失败计数先扣后退，每 IP 的令牌桶，argon2id 的并发名额；测试：站点设置的 IP 和邮箱上限，等待后恢复，成功不计；两个挑战各错 5 次后第三个挑战的对码也被拒，回一次后通过；名额被占时登录返回忙，请求结束时等待随之结束 |
 | 两步验证开启后只能经命令行重置，不能被覆盖 | 用户行锁内核对 `mfa_enabled_at`；测试：新密钥、原密钥同一步长都被拒，版本、会话、恢复码不变；两次同时开启只有一次成功 |
+| 账户一出现就有余额行 | 注册和命令行建用户都经 `createUser`，开户回调在同一事务里；测试：回调失败则没有用户，命令行建出的账户有余额行 |
+| 一个用户同一平台角色只有一条有效授予 | 部分唯一索引 `platform_grants_held` + `ON CONFLICT DO NOTHING`；测试：两条授予同时开始（授予表被锁住直到两条都在等待），只留一条授予、一条审计 |
+| 主站的币种是 `USD` | `InitSite` 写库前核对；测试：EUR 被拒，没有任何写入（核对在事务之前） |
+| 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，删掉账户的租户登记后开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
@@ -219,11 +241,19 @@ func (s *Service) SignOut(ctx context.Context, p Principal) error
 func (*Service) BeginTOTP(p Principal) (secret, uri string)
 func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
+func NewOperator(db *pg.DB, platform pg.Scope, opened OpenedFunc) *Operator // 命令行：InitSite、CreateUser、GrantPlatform、SetPassword、ResetMFA
+func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) // 同 Authenticate，但接受待验证会话：getSession、signOut
+func (p Principal) Pending() bool; func (p Principal) Verified() bool
+func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
+func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
+func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
+func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用
 func (s *Service) CheckOrigin(r *http.Request) error                         // 登录、注册等没有会话的改数据请求
 func (s *Service) Cookie(host string, issued Issued) (*http.Cookie, error)
+func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时让浏览器丢掉会话 Cookie
 ```
 
-控制台和管理接口：本模块实现 `consoleapi` 和管理接口里属于自己的方法，`cmd/axiom` 组装。gateway 和 billing 的准入必须经 `Admit` 打开事务，billing 的预留只接受 `Admission`；本模块的测试只证明 `Admit` 本身，接线的证明在 #27、#28。
+控制台和管理接口：处理器在 `cmd/axiom`（它们要组合 accounts、billing、observability，只有 `cmd/axiom` 能同时引用三者），只经各模块的公开接口；`cmd/axiom` 的守卫先按契约做站点、Origin、会话、CSRF、权限的检查（见[平台的「接口约定」](../platform/README.md#接口约定)），处理器拿到的 `Principal` 和范围都是 accounts 签发的。gateway 和 billing 的准入必须经 `Admit` 打开事务，billing 的预留只接受 `Admission`；本模块的测试只证明 `Admit` 本身，接线的证明在 #27、#28。
 
 ## 决策与理由
 

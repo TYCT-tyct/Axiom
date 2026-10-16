@@ -1,0 +1,20 @@
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147","reasoning_details":[{"type":"reasoning.text","text":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"\n462 = 3 × 147 + 21","reasoning_details":[{"type":"reasoning.text","text":"\n462 = 3 × 147 + 21","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"\n147 = 7 × 21 + 0","reasoning_details":[{"type":"reasoning.text","text":"\n147 = 7 × 21 + 0","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"\nThe remainder is 0, so GCD(1071, 462) = 21.","reasoning_details":[{"type":"reasoning.text","text":"\nThe remainder is 0, so GCD(1071, 462) = 21.","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"","signature":"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds...","format":"anthropic-claude-v1","index":0}]},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"content":"The greatest common divisor of 1071 and 462 is **21**."},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"completion_tokens":0,"completion_tokens_details":{"reasoning_tokens":0},"total_tokens":0,"cost":3.703701,"cost_currency":"USD"}}
+
+data: [DONE]
+
