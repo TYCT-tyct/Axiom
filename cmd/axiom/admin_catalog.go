@@ -13,14 +13,14 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// The catalog's operations carry the Idempotency-Key as the catalog's own op_key (internal/catalog/README.md「管理操作」):
-// a retry with the key of one that went through gets that one's result, and the response is the model as it is now.
+// The catalog's operations run inside the transaction that claims the Idempotency-Key (idempotently), and carry it as the
+// catalog's own op_key (internal/catalog/README.md「管理操作」): a retry gets the response the first request stored.
 
 // opOf is the identity and intent every catalog operation carries.
 func opOf(ctx context.Context, key, reason string) (catalog.Op, error) {
-	id, err := uuid.Parse(key) // the guard has held the header to the contract's pattern
+	id, err := keyOf(key)
 	if err != nil {
-		return catalog.Op{}, invalidField("Idempotency-Key", "must be a UUID")
+		return catalog.Op{}, err
 	}
 	return catalog.Op{Actor: actor(ctx), Key: id, Reason: reason}, nil
 }
@@ -69,17 +69,19 @@ func (a adminAPI) SaveAuthor(ctx context.Context, request adminapi.SaveAuthorReq
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.catalog.SaveAuthor(ctx, catalog.SaveAuthorRequest{Op: op, Slug: request.Slug, Name: request.Body.Name})
+	body, replayed, err := idempotently(ctx, a.db, "saveAuthor", request.Params.IdempotencyKey, []any{request.Slug, request.Body},
+		func(tx pg.Tx) (adminapi.Author, error) {
+			op.Tx = &tx
+			if _, err := a.catalog.SaveAuthor(ctx, catalog.SaveAuthorRequest{Op: op, Slug: request.Slug, Name: request.Body.Name}); err != nil {
+				return adminapi.Author{}, err
+			}
+			return authorBody(catalog.Author{Slug: request.Slug, Name: request.Body.Name}), nil
+		})
 	if err != nil {
 		return nil, err
 	}
-	author, err := a.catalog.GetAuthor(ctx, request.Slug)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.SaveAuthor200JSONResponse{
-		Body: authorBody(author), Headers: adminapi.SaveAuthor200ResponseHeaders{IdempotencyReplayed: replayedHeader(result.Replayed)},
-	}, nil
+	a.refreshCatalog(ctx, replayed)
+	return adminapi.SaveAuthor200JSONResponse{Body: body, Headers: adminapi.SaveAuthor200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 // cursorOf reads the cursor of a model list: the slug the page before ended with, which a client cannot tell from any
@@ -156,6 +158,15 @@ func modelBody(v catalog.ModelView) (adminapi.Model, error) {
 	return body, nil
 }
 
+// readModelIn is the model as it is in tx, the transaction of a change.
+func (a adminAPI) readModelIn(ctx context.Context, tx pg.Tx, id catalog.ModelID) (adminapi.Model, error) {
+	view, err := catalog.ModelIn(ctx, tx, id)
+	if err != nil {
+		return adminapi.Model{}, err
+	}
+	return modelBody(view)
+}
+
 // readModel is the model as it is now.
 func (a adminAPI) readModel(ctx context.Context, id catalog.ModelID) (adminapi.Model, error) {
 	view, err := a.catalog.Model(ctx, id)
@@ -178,9 +189,21 @@ func (a adminAPI) GetModel(ctx context.Context, request adminapi.GetModelRequest
 	return adminapi.GetModel200JSONResponse(body), nil
 }
 
-// changed runs a change of a model that takes an Idempotency-Key and answers with the model as it is after, and whether
-// the key had been used by this change before.
-func (a adminAPI) changed(ctx context.Context, model, key, reason string, change func(op catalog.Op, id catalog.ModelID) (catalog.Result, error)) (adminapi.Model, *bool, error) {
+// refreshCatalog rebuilds this node's snapshot after a change committed. A failure is not the change's: the other nodes
+// poll for the revision, and so does this one.
+func (a adminAPI) refreshCatalog(ctx context.Context, replayed bool) {
+	if replayed {
+		return
+	}
+	if err := a.catalog.Refresh(context.WithoutCancel(ctx)); err != nil {
+		a.logger.WarnContext(ctx, "catalog change saved but this node did not reload it", "err", err)
+	}
+}
+
+// changed runs a change of a model that takes an Idempotency-Key as the operation, answers with the model as the change
+// left it, and says whether the key had been used by this request before: then the answer is the first one's. request is
+// the body the answer depends on.
+func (a adminAPI) changed(ctx context.Context, operation, model, key string, request any, reason string, change func(op catalog.Op, id catalog.ModelID) (catalog.Result, error)) (adminapi.Model, *bool, error) {
 	id, err := modelIDOf(model)
 	if err != nil {
 		return adminapi.Model{}, nil, err
@@ -189,12 +212,15 @@ func (a adminAPI) changed(ctx context.Context, model, key, reason string, change
 	if err != nil {
 		return adminapi.Model{}, nil, err
 	}
-	result, err := change(op, id)
-	if err != nil {
-		return adminapi.Model{}, nil, err
-	}
-	body, err := a.readModel(ctx, id)
-	return body, replayedHeader(result.Replayed), err
+	body, replayed, err := idempotently(ctx, a.db, operation, key, []any{model, request}, func(tx pg.Tx) (adminapi.Model, error) {
+		op.Tx = &tx
+		if _, err := change(op, id); err != nil {
+			return adminapi.Model{}, err
+		}
+		return a.readModelIn(ctx, tx, id)
+	})
+	a.refreshCatalog(ctx, replayed || err != nil)
+	return body, replayedHeader(replayed), err
 }
 
 // CreateModel drafts a model.
@@ -208,8 +234,19 @@ func (a adminAPI) CreateModel(ctx context.Context, request adminapi.CreateModelR
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.catalog.CreateModel(ctx, catalog.CreateModelRequest{
-		Op: op, Slug: b.Slug, VersionBasis: catalog.VersionBasis(b.VersionBasis), PriceSource: catalog.PriceSource(b.PriceSource), Spec: spec,
+	body, replayed, err := idempotently(ctx, a.db, "createModel", request.Params.IdempotencyKey, b, func(tx pg.Tx) (adminapi.Model, error) {
+		op.Tx = &tx
+		result, err := a.catalog.CreateModel(ctx, catalog.CreateModelRequest{
+			Op: op, Slug: b.Slug, VersionBasis: catalog.VersionBasis(b.VersionBasis), PriceSource: catalog.PriceSource(b.PriceSource), Spec: spec,
+		})
+		if err != nil {
+			return adminapi.Model{}, err
+		}
+		id, err := modelIDOf(result.Subject)
+		if err != nil {
+			return adminapi.Model{}, err
+		}
+		return a.readModelIn(ctx, tx, id)
 	})
 	if _, duplicate := pg.Duplicate(err); duplicate {
 		return nil, &apiError{status: http.StatusConflict, code: codeConflict, message: "a model with that slug exists"}
@@ -217,15 +254,8 @@ func (a adminAPI) CreateModel(ctx context.Context, request adminapi.CreateModelR
 	if err != nil {
 		return nil, err
 	}
-	id, err := modelIDOf(result.Subject)
-	if err != nil {
-		return nil, err
-	}
-	body, err := a.readModel(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.CreateModel201JSONResponse{Body: body, Headers: adminapi.CreateModel201ResponseHeaders{IdempotencyReplayed: replayedHeader(result.Replayed)}}, nil
+	a.refreshCatalog(ctx, replayed)
+	return adminapi.CreateModel201JSONResponse{Body: body, Headers: adminapi.CreateModel201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 // UpdateModelSpec replaces a model's baseline as of the rev the request was decided on.
@@ -235,7 +265,7 @@ func (a adminAPI) UpdateModelSpec(ctx context.Context, request adminapi.UpdateMo
 	if err != nil {
 		return nil, err
 	}
-	body, replayed, err := a.changed(ctx, request.ModelId, request.Params.IdempotencyKey, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
+	body, replayed, err := a.changed(ctx, "updateModelSpec", request.ModelId, request.Params.IdempotencyKey, b, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
 		return a.catalog.UpdateSpec(ctx, catalog.UpdateSpecRequest{Op: op, Model: id, Rev: b.Rev, Spec: spec})
 	})
 	if err != nil {
@@ -247,7 +277,7 @@ func (a adminAPI) UpdateModelSpec(ctx context.Context, request adminapi.UpdateMo
 // AddModelName gives a model another name.
 func (a adminAPI) AddModelName(ctx context.Context, request adminapi.AddModelNameRequestObject) (adminapi.AddModelNameResponseObject, error) {
 	b := request.Body
-	body, replayed, err := a.changed(ctx, request.ModelId, request.Params.IdempotencyKey, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
+	body, replayed, err := a.changed(ctx, "addModelName", request.ModelId, request.Params.IdempotencyKey, b, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
 		return a.catalog.AddName(ctx, catalog.AddNameRequest{Op: op, Model: id, Name: b.Name, Visibility: catalog.Visibility(b.Visibility)})
 	})
 	if err != nil {
@@ -259,7 +289,7 @@ func (a adminAPI) AddModelName(ctx context.Context, request adminapi.AddModelNam
 // SetModelStatus puts a draft model on sale or takes a model on sale out of use, as of the rev the request was decided on.
 func (a adminAPI) SetModelStatus(ctx context.Context, request adminapi.SetModelStatusRequestObject) (adminapi.SetModelStatusResponseObject, error) {
 	b := request.Body
-	body, replayed, err := a.changed(ctx, request.ModelId, request.Params.IdempotencyKey, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
+	body, replayed, err := a.changed(ctx, "setModelStatus", request.ModelId, request.Params.IdempotencyKey, b, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
 		r := catalog.ModelRequest{Op: op, Model: id, Rev: b.Rev}
 		if b.Status == adminapi.ModelStatusUpdateStatusRetired {
 			return a.catalog.Retire(ctx, r)
@@ -299,7 +329,7 @@ func (a adminAPI) PublishReferencePrice(ctx context.Context, request adminapi.Pu
 	if err != nil {
 		return nil, err
 	}
-	body, replayed, err := a.changed(ctx, request.ModelId, request.Params.IdempotencyKey, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
+	body, replayed, err := a.changed(ctx, "publishReferencePrice", request.ModelId, request.Params.IdempotencyKey, b, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
 		return a.catalog.PublishPrice(ctx, catalog.PublishPriceRequest{
 			Op: op, Model: id, Base: base, Source: catalog.PriceSource(b.Source), Schedule: schedule, Evidence: evidence,
 			ConfirmBasisChange: b.ConfirmBasisChange != nil && *b.ConfirmBasisChange,
@@ -340,7 +370,7 @@ func (a adminAPI) SelectPriceSource(ctx context.Context, request adminapi.Select
 	if err != nil {
 		return nil, err
 	}
-	body, replayed, err := a.changed(ctx, request.ModelId, request.Params.IdempotencyKey, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
+	body, replayed, err := a.changed(ctx, "selectPriceSource", request.ModelId, request.Params.IdempotencyKey, b, b.Reason, func(op catalog.Op, id catalog.ModelID) (catalog.Result, error) {
 		return a.catalog.SelectPriceSource(ctx, catalog.SelectPriceSourceRequest{
 			Op: op, Model: id, Rev: b.Rev, Source: catalog.PriceSource(b.Source), Bases: bases, Prices: prices,
 			ConfirmBasisChange: b.ConfirmBasisChange != nil && *b.ConfirmBasisChange,

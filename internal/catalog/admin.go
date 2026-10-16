@@ -39,6 +39,9 @@ type Op struct {
 	Actor  audit.Actor `json:"-"`
 	Key    uuid.UUID   `json:"op_key"`
 	Reason string      `json:"reason"`
+	// Tx, when set, is the transaction the operation runs in, the caller's own (the admin API claims its idempotency
+	// key in it), instead of one of its own. The caller refreshes the snapshot after it commits.
+	Tx *pg.Tx `json:"-"`
 }
 
 // SetActor names who does the operation, for a request read from a file.
@@ -67,6 +70,10 @@ func (c *Catalog) apply(ctx context.Context, op Op, kind string, do func(tx pg.T
 	}
 	if op.Key == (uuid.UUID{}) {
 		return Result{}, ErrNoOpKey
+	}
+	if op.Tx != nil {
+		res, _, err := once(ctx, *op.Tx, op, kind, do)
+		return res, err
 	}
 	var res Result
 	var raised bool

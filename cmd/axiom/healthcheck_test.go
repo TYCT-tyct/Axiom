@@ -34,7 +34,7 @@ func TestHealthcheck(t *testing.T) {
 	for _, c := range cases {
 		health.SetReady(c.ready)
 		// Other AXIOM_* variables belong to serve and must not fail the check.
-		err := healthcheck(t.Context(), []string{"AXIOM_OPS_ADDR=" + c.addr, "AXIOM_DATABASE_URL=x"})
+		err := healthcheck(t.Context(), []string{"AXIOM_PROBES_ADDR=" + c.addr, "AXIOM_DATABASE_URL=x"})
 		if (err == nil) != c.healthy {
 			t.Errorf("%s: error %v, want healthy %v", c.name, err, c.healthy)
 		}
@@ -68,7 +68,7 @@ func TestHealthcheckTrustsOnlyTheNode(t *testing.T) {
 	}()
 	for name, addr := range map[string]string{"a redirect": redirecting.Listener.Addr().String(), "a silent node": silent.Addr().String()} {
 		start := time.Now()
-		if err := healthcheck(t.Context(), []string{"AXIOM_OPS_ADDR=" + addr}); err == nil {
+		if err := healthcheck(t.Context(), []string{"AXIOM_PROBES_ADDR=" + addr}); err == nil {
 			t.Errorf("%s passed the check", name)
 		}
 		if elapsed := time.Since(start); elapsed > 2*probeTimeout {

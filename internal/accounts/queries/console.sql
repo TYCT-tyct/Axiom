@@ -43,6 +43,14 @@ WHERE s.id = @id AND s.revoked_at IS NULL AND s.expires_at > now()
     AND s.last_seen_at + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)) > now()
     AND u.status = 'active' AND u.factor_version = s.factor_version;
 
+-- name: EndSessionsOverSiteLimits :execrows
+-- A session the site's lifetimes now have cut ends for good, so that a site which loosens them again does not bring it
+-- back (ValidSession only cuts, it does not write).
+UPDATE accounts.sessions SET revoked_at = now()
+WHERE id = @id AND revoked_at IS NULL
+    AND (created_at + make_interval(secs => @max_age_seconds::bigint) <= now()
+        OR last_seen_at + make_interval(secs => @idle_seconds::bigint) <= now());
+
 -- name: TouchSession :exec
 -- Idle time counts from the last request, written at most once a minute.
 UPDATE accounts.sessions SET last_seen_at = now() WHERE id = @id AND last_seen_at < now() - interval '1 minute';

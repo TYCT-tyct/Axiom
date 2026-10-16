@@ -28,6 +28,7 @@ type adminAPI struct {
 	db       *pg.DB
 	// suppliers is what the admin does with suppliers; detections limits how often a session may ask a third party's
 	// site what it runs.
+	logger     *slog.Logger
 	suppliers  *suppliers.Admin
 	detections *windowLimiter
 }
@@ -36,9 +37,9 @@ type adminAPI struct {
 const detectionsPerMinute = 10
 
 // newAdminAPI is the admin's handlers on the modules and the database of the node.
-func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, db *pg.DB) adminAPI {
+func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, db *pg.DB, logger *slog.Logger) adminAPI {
 	return adminAPI{
-		version: version, accounts: a, catalog: c, suppliers: s, db: db,
+		version: version, accounts: a, catalog: c, suppliers: s, db: db, logger: logger,
 		detections: newWindowLimiter(detectionsPerMinute, time.Minute, time.Now),
 	}
 }

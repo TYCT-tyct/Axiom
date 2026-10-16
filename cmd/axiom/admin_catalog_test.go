@@ -282,8 +282,9 @@ func TestModelPages(t *testing.T) {
 	expectAdmin(t, "getModel of none", f.do(http.MethodGet, "/models/"+uuid.NewV7().String(), "", as(f.s)), http.StatusNotFound, codeNotFound)
 }
 
-// TestCatalogKeys: the Idempotency-Key is the catalog's op_key: the same request again answers with the model as it is
-// and changes nothing, and the key of another kind of change is refused.
+// TestCatalogKeys: the Idempotency-Key claims one request: the same request again answers with the first response, even
+// after the model changed, and does nothing; the key of another kind of change, of another model or of another body is
+// refused, and so is the all-zero key, before anything is written.
 func TestCatalogKeys(t *testing.T) {
 	f := newCatalogFixture(t)
 	key := newKey()
@@ -293,6 +294,7 @@ func TestCatalogKeys(t *testing.T) {
 	expectAdmin(t, "createModel", rec, http.StatusCreated, "")
 	var first, again adminapi.Model
 	decode(t, rec, &first)
+	f.addName(first, "acme/alpha", "public") // the model moves on; the replay is still the first response
 	rec = f.change(f.s, http.MethodPost, "/models", body, key)
 	expectAdmin(t, "createModel again", rec, http.StatusCreated, "")
 	decode(t, rec, &again)
@@ -304,4 +306,49 @@ func TestCatalogKeys(t *testing.T) {
 	}
 	expectAdmin(t, "the key for another kind of change", f.change(f.s, http.MethodPut, "/authors/acme", `{"name":"Acme","reason":"r"}`, key),
 		http.StatusConflict, codeIdempotencyReuse)
+	expectAdmin(t, "the key with another body", f.change(f.s, http.MethodPost, "/models", strings.Replace(body, "alpha", "beta", 1), key),
+		http.StatusConflict, codeIdempotencyReuse)
+
+	other := f.create("acme/beta")
+	specKey := newKey()
+	spec := func(m adminapi.Model) string {
+		return `{"rev":` + strconv.FormatInt(m.Rev, 10) + `,"spec":` + specBody + `,"reason":"r"}`
+	}
+	m := first
+	expectAdmin(t, "the spec of one model", f.change(f.s, http.MethodPut, "/models/"+m.Id+"/spec", spec(m), specKey), http.StatusOK, "")
+	expectAdmin(t, "the same key for another model", f.change(f.s, http.MethodPut, "/models/"+other.Id+"/spec", spec(other), specKey),
+		http.StatusConflict, codeIdempotencyReuse)
+
+	audits := f.auditCount("model.create")
+	rec = f.change(f.s, http.MethodPost, "/models", strings.Replace(body, "alpha", "gamma", 1), "00000000-0000-0000-0000-000000000000")
+	expectAdmin(t, "the all-zero key", rec, http.StatusBadRequest, codeInvalidRequest)
+	if fields := errorDetailOf(t, rec).Fields; fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "Idempotency-Key" {
+		t.Errorf("the all-zero key: fields %v, want Idempotency-Key", fields)
+	}
+	if got := f.text("SELECT count(*)::text FROM catalog.model"); got != "2" || f.auditCount("model.create") != audits {
+		t.Errorf("the all-zero key wrote: %s models, audits %s -> %s", got, audits, f.auditCount("model.create"))
+	}
+}
+
+// TestCatalogKeyRacing: the same request sent twice at once is one change, and both senders get its response.
+func TestCatalogKeyRacing(t *testing.T) {
+	f := newCatalogFixture(t)
+	f.saveAuthor("acme")
+	key := newKey()
+	body := `{"slug":"acme/alpha","version_basis":"dated","price_source":"manual","spec":` + specBody + `,"reason":"r"}`
+	recs := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() { recs <- f.change(f.s, http.MethodPost, "/models", body, key) }()
+	}
+	replays := 0
+	for range 2 {
+		rec := <-recs
+		expectAdmin(t, "createModel at once", rec, http.StatusCreated, "")
+		if rec.Header().Get("Idempotency-Replayed") == "true" {
+			replays++
+		}
+	}
+	if got := f.text("SELECT count(*)::text FROM catalog.model"); got != "1" || replays != 1 {
+		t.Errorf("%s models and %d replays, want 1 and 1", got, replays)
+	}
 }

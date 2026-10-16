@@ -113,7 +113,9 @@ func (a adminAPI) UpdateSiteSettings(ctx context.Context, request adminapi.Updat
 	}
 	if !replayed {
 		// The change is committed. A failure to reload is not its failure: every node reloads within its interval.
-		_ = a.accounts.Refresh(context.WithoutCancel(ctx)) //nolint:errcheck // the next reload tries again
+		if err := a.accounts.Refresh(context.WithoutCancel(ctx)); err != nil {
+			a.logger.WarnContext(ctx, "site settings saved but this node did not reload them", "site", request.SiteId, "err", err)
+		}
 	}
 	return adminapi.UpdateSiteSettings200JSONResponse{Body: view, Headers: adminapi.UpdateSiteSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }

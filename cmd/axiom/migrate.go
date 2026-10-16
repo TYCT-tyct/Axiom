@@ -19,7 +19,7 @@ const defaultMigrateTimeout = 30 * time.Minute
 // checked before anything is connected.
 func migrate(ctx context.Context, environ []string) error {
 	env := config.New(environ)
-	adminURL := env.Required("AXIOM_MIGRATE_DATABASE_URL")
+	adminURL := env.Required(pg.MigrateDatabaseURLVar)
 	connectTimeout := env.Duration("AXIOM_MIGRATE_CONNECT_TIMEOUT", pg.DefaultConnectTimeout)
 	timeout := env.Duration("AXIOM_MIGRATE_TIMEOUT", defaultMigrateTimeout)
 	err := env.Err()

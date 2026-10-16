@@ -192,7 +192,7 @@
 - **上架门槛**：规格声明了 `items` 和 `tiers`（可以为空，但要写，免得漏写让门槛形同虚设）；标准 ID（`slug` 去掉 `@版本`）是它的一个公开名字；至少有一个币种的当前参考价；每个当前参考价对 `Model.Reportable()` 的 `Missing` 为空。这是目录自己的门槛，保证上架的模型的参考价覆盖它声明的一切；计费对售价的上架门槛另算。
 - **证据**：现在只检查是非空的 JSON 对象，原样记进 `change`；引用页面快照、摘录逐字出现在正文里的检查随页面监测。
 - **`change` 之外是否另调 `audit.Record`**：调。`change` 是目录自己读回的领域数据（核对证据、靠 `op_key` 幂等），审计日志是所有模块共用的、运营检索与回放的一条线；改参考价和模型状态属于[审计日志](../platform/README.md#审计日志)要求留审计的后台数据改动，且两者在同一个事务里，不会一边有一边没有。`detail` 只放 `change_id`，改前改后在 `change` 里，所以不受 8 KiB 的限制。
-- **读取**（`read.go`，只读、平台范围、各一个一致的读，草稿也读）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、`slug` 前缀筛选，前缀按字面匹配，`slug` 键集分页，迁移 `00002_slug_prefix.sql` 的索引服务前缀）、`Model`（带名字和各币种当前参考价）。管理接口的 `Idempotency-Key` 就是 `Op.Key`：同一个键重发得到第一次的结果，键用在另一种操作上报 `ErrOpKeyReused`。
+- **读取**（`read.go`，只读、平台范围、各一个一致的读，草稿也读）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、`slug` 前缀筛选，前缀按字面匹配，`slug` 键集分页，迁移 `00002_slug_prefix.sql` 的索引服务前缀）、`Model`（带名字和各币种当前参考价）。管理接口的 `Idempotency-Key` 就是 `Op.Key`，处理器在占键的事务里带着 `Op.Tx` 调用操作（`ModelIn` 在同一事务里读回模型），由平台的 `idem` 绑定操作者、操作、目标和内容，重发得到第一次的响应；键用在另一种操作上、或不经管理接口（命令行）已用过，报 `ErrOpKeyReused`。
 - **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`、`select-dataset-source`（命令取数）；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。另有两个不带文件的命令：`axiom catalog sync` 对两个数据集各跑一轮并发布（`audit.System("catalog.sync")`），每个模型一行；`axiom catalog check` 只读，见「第一版验收的检查」。操作者的身份随 #23。
 
 ### 第一版验收的检查
