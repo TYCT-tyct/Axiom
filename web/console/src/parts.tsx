@@ -1,8 +1,21 @@
 import { Badge, Button } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
+import { useErrors } from "./errors";
 
 // A key's text is never shown again after it is made; the list shows where it starts and ends.
 export const maskedKey = (key: { prefix: string; last4: string }) => `${key.prefix}…${key.last4}`;
+
+// Signing out that did not happen leaves the session open; the reason and that fact are said next to the button, which
+// stays there to try again.
+export function SignOutError({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return error ? (
+    <span role="alert" className="block text-label text-bad [overflow-wrap:anywhere]">
+      {t("signOutFailed", { reason: errors.message(error) })}
+    </span>
+  ) : null;
+}
 
 // LoadMore asks for the next page of a list, which is only there while the last page gave a cursor.
 export function LoadMore({

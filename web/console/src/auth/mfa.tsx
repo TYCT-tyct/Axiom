@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
 import { readForm } from "../forms";
+import { SignOutError } from "../parts";
 import { Gate, startSession, useSignOut } from "../session";
 import { AuthFrame } from "./frame";
 
@@ -29,9 +30,12 @@ function MfaPage() {
       title={t("auth.mfa.title")}
       description={t("auth.mfa.description")}
       footer={
-        <Button variant="ghost" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
-          {t("auth.mfa.otherAccount")}
-        </Button>
+        <>
+          <Button variant="ghost" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+            {t("auth.mfa.otherAccount")}
+          </Button>
+          <SignOutError error={signOut.error} />
+        </>
       }
     >
       <form

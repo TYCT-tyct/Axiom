@@ -2,6 +2,7 @@ import { AppShell, Button, Icon, type IconName, Logo, PreferenceSwitches, SideNa
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { SignOutError } from "./parts";
 import { siteQuery } from "./queries";
 import { can, Gate, useSession, useSignOut } from "./session";
 import { NewVersionNotice } from "./version";
@@ -77,6 +78,9 @@ function Account() {
         <Icon name="logout" />
         {t("nav.signOut")}
       </Button>
+      <div className="px-2">
+        <SignOutError error={signOut.error} />
+      </div>
     </div>
   );
 }

@@ -9,6 +9,9 @@ export type Level = "none" | "pending_mfa" | "password" | "mfa";
 
 export type MockState = {
   level: Level;
+  // which account is signed in: the number its user and account IDs are made of, so a test can hand the browser's
+  // session to another account the way a second tab does
+  account: number;
   csrf: string;
   csrfCount: number;
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
@@ -83,6 +86,7 @@ const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 export function usualState(): MockState {
   return {
     level: "none",
+    account: 0,
     csrf: "",
     csrfCount: 0,
     user: {

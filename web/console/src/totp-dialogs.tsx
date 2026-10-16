@@ -5,10 +5,11 @@ import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
-import { startSession } from "./session";
+import { adoptToken } from "./session";
 
 // Recovery codes exist only in the answer that makes them. The dialog that shows them does not close on Escape or a
-// click outside, so they cannot be lost by accident.
+// click outside, and the dialog that asks for them does not close while the request is out, so they cannot be lost by
+// accident.
 function RecoveryCodes({ codes, onClose }: { codes: string[]; onClose: () => void }) {
   const { t } = useTranslation();
   return (
@@ -33,13 +34,13 @@ function RecoveryCodes({ codes, onClose }: { codes: string[]; onClose: () => voi
   );
 }
 
-// Changing a factor ends the user's other sessions and issues this one a new cookie and token: the page adopts them,
-// then shows the codes that came with them.
+// Changing a factor ends the user's other sessions and issues this one a new cookie and token: the page adopts the
+// token and shows the codes that came with it. Neither the dialog nor the codes wait for the session to be read again.
 function useFactorChange<Body>(request: (body: Body) => Promise<Schemas["FactorChange"]>) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: request,
-    onSuccess: (change) => startSession(queryClient, change.csrf_token),
+    onSuccess: (change) => adoptToken(queryClient, change.csrf_token),
   });
 }
 
@@ -54,7 +55,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
     return <RecoveryCodes codes={confirm.data.recovery_codes} onClose={onClose} />;
   }
   return (
-    <Dialog title={t("security.setup.title")} onClose={onClose}>
+    <Dialog title={t("security.setup.title")} onClose={onClose} dismissible={!confirm.isPending}>
       <div className="space-y-4">
         <p className="text-t2">{t("security.setup.scan")}</p>
         <div className="flex flex-col items-start gap-4 min-[420px]:flex-row">
@@ -91,7 +92,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
             error={errors.field(confirm.error, "code")}
           />
           <div className="flex justify-end gap-2">
-            <Button size="md" onClick={onClose}>
+            <Button size="md" onClick={onClose} disabled={confirm.isPending}>
               {t("cancel")}
             </Button>
             <SubmitButton pending={confirm.isPending}>{t("security.setup.enable")}</SubmitButton>
@@ -112,7 +113,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
     return <RecoveryCodes codes={regenerate.data.recovery_codes} onClose={onClose} />;
   }
   return (
-    <Dialog title={t("security.regenerate.title")} onClose={onClose}>
+    <Dialog title={t("security.regenerate.title")} onClose={onClose} dismissible={!regenerate.isPending}>
       <form
         noValidate
         className="space-y-4"
@@ -133,7 +134,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
           error={errors.field(regenerate.error, "code")}
         />
         <div className="flex justify-end gap-2">
-          <Button size="md" onClick={onClose}>
+          <Button size="md" onClick={onClose} disabled={regenerate.isPending}>
             {t("cancel")}
           </Button>
           <SubmitButton pending={regenerate.isPending}>{t("security.regenerate.confirm")}</SubmitButton>

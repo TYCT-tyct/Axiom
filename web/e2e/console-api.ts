@@ -73,11 +73,11 @@ const grant = (state: MockState, status: Schemas["SessionGrant"]["status"]): Sch
 
 const session = (state: MockState): Schemas["Session"] => ({
   user: {
-    id: `user_${"0".repeat(26)}` as Schemas["UserId"],
+    id: `user_${String(state.account).padStart(26, "0")}` as Schemas["UserId"],
     email: state.user.email,
     invite_code: state.user.inviteCode,
   },
-  account: `acct_${"0".repeat(26)}` as Schemas["AccountId"],
+  account: `acct_${String(state.account).padStart(26, "0")}` as Schemas["AccountId"],
   level: state.level === "none" ? "password" : state.level === "pending_mfa" ? "pending_mfa" : state.level,
   mfa_enabled: state.mfaEnabled,
   csrf_token: state.csrf,

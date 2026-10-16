@@ -1,10 +1,9 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { Button, CopyButton, Dialog, FormError, SubmitButton } from "@axiom/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { KeyForm } from "./key-form";
-import { balanceQuery } from "./queries";
 import { accountKey } from "./session";
 
 type Key = Schemas["Key"];
@@ -15,7 +14,6 @@ function useRefreshKeys() {
   return () => queryClient.invalidateQueries({ queryKey: [accountKey, "keys"] });
 }
 
-// The currency a new key's limit is in is the account's, which the balance tells.
 export function CreateKeyDialog({
   onClose,
   onCreated,
@@ -25,7 +23,6 @@ export function CreateKeyDialog({
 }) {
   const { t } = useTranslation();
   const refresh = useRefreshKeys();
-  const balance = useQuery(balanceQuery);
   const create = useMutation({
     mutationFn: (body: Schemas["KeyCreate"]) => unwrap(consoleApi.POST("/api/console/v1/keys", { body })),
     onSuccess: async (created) => {
@@ -36,7 +33,6 @@ export function CreateKeyDialog({
   return (
     <Dialog title={t("keys.create")} onClose={onClose}>
       <KeyForm
-        currency={balance.data?.balance.currency}
         pending={create.isPending}
         error={create.error}
         onCancel={onClose}
@@ -61,7 +57,6 @@ export function EditKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () =>
     <Dialog title={t("keys.edit")} onClose={onClose}>
       <KeyForm
         apiKey={apiKey}
-        currency={undefined}
         pending={update.isPending}
         error={update.error}
         onCancel={onClose}

@@ -36,6 +36,7 @@ export default {
     signOut: "退出登录",
   },
   cancel: "取消",
+  signOutFailed: "没能退出登录，你仍在登录状态。{{reason}}请重试。",
   loadMore: "加载更多",
   loadingMore: "正在加载",
   errors: {
@@ -122,6 +123,8 @@ export default {
       limit: "花费上限（{{currency}}）",
       limitHintCreate: "留空则使用本站为新 key 设的默认上限。",
       limitHintEdit: "留空表示不限。",
+      limitCurrencyLoading: "正在取得账户的币种。",
+      limitCurrencyFailed: "没能取得账户的币种，暂时不能设置花费上限。",
       limitInvalid: "请输入金额，最多 9 位小数，例如 12.5。",
       reset: "重置周期",
       resetNever: "不重置",
