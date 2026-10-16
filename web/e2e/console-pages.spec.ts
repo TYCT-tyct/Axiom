@@ -154,6 +154,21 @@ test.describe("signing in", () => {
     await expect(page.getByText("Deploy bot")).toHaveCount(0);
   });
 
+  test("a session that keeps its account but loses a permission stops showing what that permission read", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/balance");
+    await expect(page.getByText("US$12.00", { exact: true })).toBeVisible();
+
+    state.permissions = state.permissions.filter((permission) => permission !== "balance.view");
+    await returnToWindow(page);
+    await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByText("US$12.00", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "余额" })).toHaveCount(0);
+  });
+
   test("a sign-out that fails says the user is still signed in, and trying again signs out", async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);
