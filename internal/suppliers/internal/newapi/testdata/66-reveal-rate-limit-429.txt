@@ -1,0 +1,7 @@
+# 66-reveal-rate-limit-429
+POST /api/token/1/key
+> Authorization: Bearer <ALICE_PAT>
+< status: 429  (elapsed 0.03s)
+< Retry-After: 1200
+< X-Oneapi-Request-Id: sample-request-id
+< body: 

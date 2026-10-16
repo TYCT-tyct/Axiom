@@ -29,7 +29,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	})
 	var health httpserver.Health
 	health.SetReady(true)
-	servers := node("127.0.0.1:0", slow, "127.0.0.1:0", &health, logger)
+	servers := node("127.0.0.1:0", slow, "127.0.0.1:0", &health, logger, httpserver.Telemetry{})
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 // TestShutdownEndsRequestsPastTheLimit: a request still holding a database connection when the limit runs out is
 // ended, so the pool closes and the node stops within about the limit instead of waiting for the request.
 func TestShutdownEndsRequestsPastTheLimit(t *testing.T) {
-	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	db, err := pg.Open(t.Context(), pgtest.New(t, modules()...).App)
 	if err != nil {
 		t.Fatal(err)
 	}
