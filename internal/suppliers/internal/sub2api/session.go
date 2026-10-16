@@ -243,3 +243,40 @@ func (s *session) afterRefusal(ctx context.Context, resp adapter.Response, attem
 	}
 	return s.renew(ctx)
 }
+
+// LoginKind names this credential structure in suppliers.supplier_logins.kind.
+const LoginKind = "session"
+
+// NativeUnit implements adapter.Onboarding: sub2api counts dollars.
+func (*Adapter) NativeUnit() string { return "usd" }
+
+// LoginFields implements adapter.Onboarding: the tokens a person got by signing in by hand, which keep the login alive
+// by refreshing, and the email and password to sign in again with. A site with a CAPTCHA cannot be signed into by a
+// program, so for it only the tokens.
+func (*Adapter) LoginFields(captcha bool) []adapter.LoginField {
+	tokens := []adapter.LoginField{adapter.FieldAccessToken, adapter.FieldRefreshToken, adapter.FieldAccessTokenExpiresAt}
+	if captcha {
+		return tokens
+	}
+	return append([]adapter.LoginField{adapter.FieldEmail, adapter.FieldPassword}, tokens...)
+}
+
+// NewLogin implements adapter.Onboarding: either the tokens, all three, or the email and the password, or both.
+func (*Adapter) NewLogin(c adapter.Credentials) (adapter.Login, error) {
+	l := Login{Email: c.Email, Password: secret.New(c.Password), Access: secret.New(c.AccessToken), Refresh: secret.New(c.RefreshToken), AccessExpires: c.AccessTokenExpiresAt}
+	switch {
+	case (c.Email == "") != (c.Password == ""):
+		return adapter.Login{}, &adapter.LoginError{Field: adapter.FieldPassword, Reason: "and email go together"}
+	case (c.AccessToken == "") != (c.RefreshToken == ""):
+		return adapter.Login{}, &adapter.LoginError{Field: adapter.FieldRefreshToken, Reason: "and access_token go together"}
+	case c.AccessToken != "" && c.AccessTokenExpiresAt.IsZero():
+		return adapter.Login{}, &adapter.LoginError{Field: adapter.FieldAccessTokenExpiresAt, Reason: "is required with the tokens"}
+	case c.Email == "" && c.AccessToken == "":
+		return adapter.Login{}, &adapter.LoginError{Field: adapter.FieldAccessToken, Reason: "or email and password are required"}
+	}
+	raw, err := l.Encode()
+	if err != nil {
+		return adapter.Login{}, err
+	}
+	return adapter.Login{Kind: LoginKind, Plaintext: raw, ExpiresAt: c.AccessTokenExpiresAt}, nil
+}

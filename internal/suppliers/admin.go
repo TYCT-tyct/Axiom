@@ -1,0 +1,328 @@
+package suppliers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+	"uuid"
+
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
+	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/registry"
+	"axiom/internal/suppliers/internal/store"
+)
+
+// What the admin does with suppliers (README.md「管理接口」). Each function takes the caller's transaction, which must
+// hold the platform scope: the audit entry is written in it. Nothing here talks to a supplier except Detect; the
+// sync does, and finds what was decided here in the rows and in the supplier's configuration generation.
+
+// The ways a change is refused.
+var (
+	// ErrNoSupplier is a supplier that is not there.
+	ErrNoSupplier = errors.New("suppliers: no such supplier")
+	// ErrSupplierExists is an origin and account already connected.
+	ErrSupplierExists = errors.New("suppliers: that origin and account are already connected")
+	// ErrNoAdapter is a kind of system this program has no adapter for, or an adapter a person cannot connect.
+	ErrNoAdapter = errors.New("suppliers: no adapter of that kind that can be connected")
+	// ErrBadOrigin is an origin that is no https://host[:port].
+	ErrBadOrigin = errors.New("suppliers: the origin is not https://host[:port]")
+	// ErrAddressRefused is an origin the outbound client refuses to connect to (egress.ErrAddressDenied).
+	ErrAddressRefused = errors.New("suppliers: the outbound client refuses that address")
+	// ErrUnreachable is an origin that did not answer a probe.
+	ErrUnreachable = errors.New("suppliers: the site did not answer")
+	// ErrStatusLocked is a supplier whose status a person cannot move: it is not in a state this change starts from.
+	ErrStatusLocked = errors.New("suppliers: the supplier's status does not allow this")
+	// ErrNoGroup is a group the supplier does not have.
+	ErrNoGroup = errors.New("suppliers: the supplier has no such group")
+	// ErrGroupGone is a group the supplier no longer lists, which cannot be selected.
+	ErrGroupGone = errors.New("suppliers: the supplier no longer lists that group")
+	// ErrGroupNotSelected is a group that is not selected, which a key cannot be bound to.
+	ErrGroupNotSelected = errors.New("suppliers: the group is not selected")
+	// ErrKeyBound is a key of the supplier that is already bound.
+	ErrKeyBound = errors.New("suppliers: that key is already bound")
+	// ErrAliasExists is an upstream name that already has an alias in the scope.
+	ErrAliasExists = errors.New("suppliers: that name already has an alias in that scope")
+	// ErrUnitValue is a value that is not above 0 and at most 1000 with at most 15 decimals.
+	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
+)
+
+// LoginError is credentials that cannot make a login: the member that is wrong, and which rule it breaks.
+type LoginError struct{ Field, Reason string }
+
+func (e *LoginError) Error() string { return "suppliers: login: " + e.Field + " " + e.Reason }
+
+// Credentials are what a person gives for a supplier's login. They are secrets and are only sealed.
+type Credentials = adapter.Credentials
+
+// Status is where a supplier is in its life.
+type Status string
+
+// The statuses (the table's CHECK).
+const (
+	Connecting     Status = "connecting"
+	Active         Status = "active"
+	LowBalance     Status = "low_balance"
+	NeedsAttention Status = "needs_attention"
+	Paused         Status = "paused"
+	Removing       Status = "removing"
+	Removed        Status = "removed"
+)
+
+// Supplier is a supplier as the admin lists it. Strings that are empty are not there.
+type Supplier struct {
+	ID                                  uuid.UUID
+	Name, Kind, Origin, UpstreamAccount string
+	Generation, DetectedVersion         string
+	NativeUnit, SettlementCurrency      string
+	Status                              Status
+	StatusReason                        string
+	BalanceNative, LowBalanceThreshold  string
+	BalanceObservedAt                   *time.Time
+	UnitValue                           string
+}
+
+func supplierOf(r store.GetSupplierViewRow) Supplier {
+	return Supplier{
+		ID: r.ID, Name: r.Name, Kind: r.Kind, Origin: r.Origin, UpstreamAccount: r.UpstreamAccount,
+		Generation: deref(r.Generation), DetectedVersion: deref(r.DetectedVersion), NativeUnit: r.NativeUnit,
+		SettlementCurrency: r.SettlementCurrency, Status: Status(r.Status), StatusReason: deref(r.StatusReason),
+		BalanceNative: r.BalanceNative, LowBalanceThreshold: r.LowBalanceThreshold, BalanceObservedAt: r.BalanceObservedAt,
+		UnitValue: r.UnitValue,
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// Admin is the admin side of the module in one node.
+type Admin struct {
+	registry *registry.Registry
+	keys     *secret.Keyring
+	egress   *egress.Client
+	now      func() time.Time
+}
+
+// AdminConfig is what the admin side needs.
+type AdminConfig struct {
+	// Keys seals the logins.
+	Keys *secret.Keyring
+	// Egress is the outbound client probes and address checks go through.
+	Egress *egress.Client
+	// Registry is the adapters of the program; nil is registry.Default.
+	Registry *registry.Registry
+	// Clock is the time; nil is time.Now.
+	Clock func() time.Time
+}
+
+// NewAdmin makes the admin side.
+func NewAdmin(cfg AdminConfig) (*Admin, error) {
+	r := cfg.Registry
+	if r == nil {
+		var err error
+		if r, err = registry.Default(); err != nil {
+			return nil, fmt.Errorf("adapters: %w", err)
+		}
+	}
+	if cfg.Clock == nil {
+		cfg.Clock = time.Now
+	}
+	return &Admin{registry: r, keys: cfg.Keys, egress: cfg.Egress, now: cfg.Clock}, nil
+}
+
+// onboarding is the adapter of kind, which a person can connect.
+func (a *Admin) onboarding(kind string) (adapter.Onboarding, error) {
+	ad, ok := a.registry.Get(adapter.Kind(kind))
+	if !ok {
+		return nil, ErrNoAdapter
+	}
+	o, ok := ad.(adapter.Onboarding)
+	if !ok {
+		return nil, ErrNoAdapter
+	}
+	return o, nil
+}
+
+// SupplierQuery chooses the suppliers to list, newest first. After is the last supplier of the page before, the zero
+// UUID for the first page; an empty Status is every status.
+type SupplierQuery struct {
+	Status   Status
+	After    uuid.UUID
+	PageSize int
+}
+
+// Suppliers lists a page of suppliers; more tells whether suppliers remain beyond it.
+func (*Admin) Suppliers(ctx context.Context, tx pg.Tx, q SupplierQuery) (suppliers []Supplier, more bool, err error) {
+	params := store.ListSuppliersPageParams{PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
+	if q.Status != "" {
+		status := string(q.Status)
+		params.Status = &status
+	}
+	if q.After != (uuid.UUID{}) {
+		params.After = &q.After
+	}
+	rows, err := store.New().ListSuppliersPage(ctx, tx, params)
+	if err != nil {
+		return nil, false, fmt.Errorf("list the suppliers: %w", err)
+	}
+	if more = len(rows) > q.PageSize; more {
+		rows = rows[:q.PageSize]
+	}
+	suppliers = make([]Supplier, len(rows))
+	for i, r := range rows {
+		suppliers[i] = supplierOf(store.GetSupplierViewRow(r))
+	}
+	return suppliers, more, nil
+}
+
+// Group is one of a supplier's groups. Facts is the supplier's own statement about it.
+type Group struct {
+	ID                uuid.UUID
+	UpstreamRef, Name string
+	Ratio             string
+	Selected, Present bool
+	Codename          string
+	Facts             map[string]any
+}
+
+// Credential is a key bound to a group.
+type Credential struct {
+	ID, Group      uuid.UUID
+	UpstreamKeyRef string
+	Status         string
+	CooldownUntil  *time.Time
+	ExpiresAt      *time.Time
+	MaxConcurrency int
+}
+
+// Detail is a supplier with its groups and the keys bound to them, as the sync last stored them.
+type Detail struct {
+	Supplier    Supplier
+	Groups      []Group
+	Credentials []Credential
+}
+
+func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool) (Group, error) {
+	g := Group{ID: id, UpstreamRef: ref, Name: name, Ratio: ratio, Selected: selected, Codename: deref(codename), Present: present}
+	if err := jsonx.Unmarshal(facts, &g.Facts); err != nil {
+		return Group{}, fmt.Errorf("the facts of group %s: %w", id, err)
+	}
+	return g, nil
+}
+
+// Supplier is one supplier with its groups and credentials; ErrNoSupplier when there is none.
+func (*Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
+	q := store.New()
+	rows, err := q.GetSupplierView(ctx, tx, id)
+	if err != nil {
+		return Detail{}, fmt.Errorf("read the supplier: %w", err)
+	}
+	if len(rows) == 0 {
+		return Detail{}, ErrNoSupplier
+	}
+	d := Detail{Supplier: supplierOf(rows[0])}
+	groups, err := q.ListGroupsOf(ctx, tx, id)
+	if err != nil {
+		return Detail{}, fmt.Errorf("read the groups: %w", err)
+	}
+	for _, g := range groups {
+		group, err := groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present)
+		if err != nil {
+			return Detail{}, err
+		}
+		d.Groups = append(d.Groups, group)
+	}
+	creds, err := q.ListCredentialsOf(ctx, tx, id)
+	if err != nil {
+		return Detail{}, fmt.Errorf("read the credentials: %w", err)
+	}
+	for _, c := range creds {
+		d.Credentials = append(d.Credentials, Credential{
+			ID: c.ID, Group: c.SupplierGroupID, UpstreamKeyRef: c.UpstreamKeyRef, Status: c.Status,
+			CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: int(c.MaxConcurrency),
+		})
+	}
+	return d, nil
+}
+
+// locked is the supplier's row, locked for a change: it must be there and in one of the statuses the change starts
+// from (none: any status that is not an end of life, removing or removed).
+func (*Admin) locked(ctx context.Context, tx pg.Tx, id uuid.UUID, from ...Status) (store.LockSupplierRow, error) {
+	rows, err := store.New().LockSupplier(ctx, tx, id)
+	if err != nil {
+		return store.LockSupplierRow{}, fmt.Errorf("lock the supplier: %w", err)
+	}
+	if len(rows) == 0 {
+		return store.LockSupplierRow{}, ErrNoSupplier
+	}
+	status := Status(rows[0].Status)
+	if len(from) == 0 {
+		from = []Status{Connecting, Active, LowBalance, NeedsAttention, Paused}
+	}
+	if !slices.Contains(from, status) {
+		return store.LockSupplierRow{}, fmt.Errorf("%w: it is %s", ErrStatusLocked, status)
+	}
+	return rows[0], nil
+}
+
+func (*Admin) record(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, id uuid.UUID, reason string, detail map[string]any) error {
+	return audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: action, Reason: reason,
+		Target: audit.Target{Module: "suppliers", Kind: "supplier", ID: id.String()}, Detail: detail,
+	})
+}
+
+// view reads the supplier as it is.
+func (a *Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID) (Supplier, error) {
+	d, err := a.Supplier(ctx, tx, id)
+	return d.Supplier, err
+}
+
+// SetStatus pauses a supplier that is in use or resumes one that is paused; another change of status is the sync's, or
+// the removal's. A supplier already as asked, paused or in use, is left as it is.
+func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, to Status, reason string) (Supplier, error) {
+	row, err := a.locked(ctx, tx, id, Active, LowBalance, Paused)
+	if err != nil {
+		return Supplier{}, err
+	}
+	if paused := Status(row.Status) == Paused; paused != (to == Paused) {
+		action := "supplier.pause"
+		if to == Active {
+			action = "supplier.resume"
+		}
+		if err := store.New().SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{ID: id, Status: string(to)}); err != nil {
+			return Supplier{}, fmt.Errorf("set the status: %w", err)
+		}
+		if err := a.record(ctx, tx, actor, action, id, reason, map[string]any{"from": row.Status, "to": string(to)}); err != nil {
+			return Supplier{}, err
+		}
+	}
+	return a.view(ctx, tx, id)
+}
+
+// Remove starts removing a supplier: out of the snapshot, then the sync's steps to the end. A supplier already being
+// removed is left as it is; one removed is ErrStatusLocked.
+func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Supplier, error) {
+	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing)
+	if err != nil {
+		return Supplier{}, err
+	}
+	if Status(row.Status) != Removing {
+		if err := store.New().SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{ID: id, Status: string(Removing)}); err != nil {
+			return Supplier{}, fmt.Errorf("start removing: %w", err)
+		}
+		if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status}); err != nil {
+			return Supplier{}, err
+		}
+	}
+	return a.view(ctx, tx, id)
+}

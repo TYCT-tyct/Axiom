@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -191,14 +192,30 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger)
 	if p.cfg.adminAddr != "" {
-		cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
-		if err != nil {
+		if admin, err = p.adminHandler(db, service, tel, logger); err != nil {
 			return nil, nil, err
 		}
-		admin = adminRoutes(adminAPI{version: version(), accounts: service, catalog: cat, db: db},
-			&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, logger)
 	}
 	return public, admin, nil
+}
+
+// adminHandler is the admin's API on the accounts module, the catalog, the suppliers and the database of this node. The
+// outbound client is the one a probe of a supplier's site goes through.
+func (p consoleParts) adminHandler(db *pg.DB, service *accounts.Service, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+	cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, err
+	}
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
+	if err != nil {
+		return nil, err
+	}
+	return adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db),
+		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, logger), nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.

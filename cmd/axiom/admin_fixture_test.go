@@ -13,8 +13,10 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/suppliers"
 )
 
 const (
@@ -68,7 +70,15 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	routes := adminRoutes(adminAPI{version: "test", accounts: svc, catalog: cat, db: c.db}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
+	exit, err := egress.New(egress.Direct)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(c.t), Egress: exit})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, c.db), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 

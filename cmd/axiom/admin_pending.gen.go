@@ -11,54 +11,6 @@ import (
 // pendingAdmin answers the operations of api/admin.yaml that have no handler yet.
 type pendingAdmin struct{}
 
-func (pendingAdmin) BindSupplierKey(context.Context, adminapi.BindSupplierKeyRequestObject) (adminapi.BindSupplierKeyResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ConfirmSupplierUnitValue(context.Context, adminapi.ConfirmSupplierUnitValueRequestObject) (adminapi.ConfirmSupplierUnitValueResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) CreateSupplier(context.Context, adminapi.CreateSupplierRequestObject) (adminapi.CreateSupplierResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) DetectSupplier(context.Context, adminapi.DetectSupplierRequestObject) (adminapi.DetectSupplierResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) GetSupplier(context.Context, adminapi.GetSupplierRequestObject) (adminapi.GetSupplierResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ListPendingMappings(context.Context, adminapi.ListPendingMappingsRequestObject) (adminapi.ListPendingMappingsResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ListSuppliers(context.Context, adminapi.ListSuppliersRequestObject) (adminapi.ListSuppliersResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) MapSupplierModel(context.Context, adminapi.MapSupplierModelRequestObject) (adminapi.MapSupplierModelResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) PreviewPricing(context.Context, adminapi.PreviewPricingRequestObject) (adminapi.PreviewPricingResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) RemoveSupplier(context.Context, adminapi.RemoveSupplierRequestObject) (adminapi.RemoveSupplierResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ReplaceSupplierLogin(context.Context, adminapi.ReplaceSupplierLoginRequestObject) (adminapi.ReplaceSupplierLoginResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) SelectSupplierGroup(context.Context, adminapi.SelectSupplierGroupRequestObject) (adminapi.SelectSupplierGroupResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) SetSupplierStatus(context.Context, adminapi.SetSupplierStatusRequestObject) (adminapi.SetSupplierStatusResponseObject, error) {
 	return nil, errNotImplemented
 }

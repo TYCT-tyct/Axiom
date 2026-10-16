@@ -36,6 +36,7 @@ var errProtocolSwitch = errors.New("egress: upstream answered 101 Switching Prot
 // Client owns its transport so callers cannot replace address validation or enable proxies.
 type Client struct {
 	transport *http.Transport
+	dialer    *dialer
 	tracer    trace.Tracer
 }
 
@@ -71,7 +72,7 @@ func newClient(policy egresstest.Policy, lookup func(context.Context, string, st
 		connect: (&net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}).DialContext,
 		policy:  policy,
 	}
-	c := &Client{tracer: noop.NewTracerProvider().Tracer("axiom/egress"), transport: &http.Transport{
+	c := &Client{tracer: noop.NewTracerProvider().Tracer("axiom/egress"), dialer: d, transport: &http.Transport{
 		DialContext: d.dialContext,
 		// A custom DialContext turns HTTP/2 off unless it is requested explicitly.
 		ForceAttemptHTTP2:   true,
@@ -91,6 +92,15 @@ func newClient(policy egresstest.Policy, lookup func(context.Context, string, st
 }
 
 const maxResponseHeaderBytes = 1 << 20
+
+// Check says whether a connection to host would be let through, resolving it and applying the address policy as a
+// dial does, without connecting. It is how a host is vetted before it is stored: a refused host is ErrAddressDenied.
+// The answer holds for the moment it is given; every dial checks again, so a name that later resolves elsewhere is
+// still refused.
+func (c *Client) Check(ctx context.Context, host string) error {
+	_, err := c.dialer.resolve(ctx, host)
+	return err
+}
 
 // Do clones headers so concurrent callers retain ownership of their request metadata.
 // RoundTrip deliberately leaves redirects, including malformed Location values, untouched.
