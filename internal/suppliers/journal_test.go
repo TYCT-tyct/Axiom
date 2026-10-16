@@ -310,15 +310,16 @@ func TestABlockedWriteDoesNotStopTheLoop(t *testing.T) {
 	w := newWorld(t, 1)
 	w.svc.cfg.FlushEvery, w.svc.cfg.FlushTimeout = 5*time.Millisecond, 30*time.Millisecond
 	var calls atomic.Int32
+	// The answering write runs on the test's context, not the 30 ms flush deadline: it is only what makes the blocked
+	// writes end, and a loaded machine must not turn the database's real latency into a failure of this test; it is
+	// still cancelled when the test ends, so a database that hangs cannot outlive it.
+	dbCtx := t.Context()
 	w.svc.writeRows = func(ctx context.Context, rows []store.JournalRow) error {
 		if calls.Add(1) <= 3 {
 			<-ctx.Done() // the database does not answer
 			return ctx.Err()
 		}
-		// The answering write ignores the 30 ms deadline: it is only what makes the blocked writes end, and a loaded
-		// machine must not turn the database's real latency into a failure of this test.
-		ctx = context.WithoutCancel(ctx)
-		return w.db.Tx(ctx, platformScope, func(tx pg.Tx) error { return store.UpsertJournal(ctx, tx, rows) })
+		return w.db.Tx(dbCtx, platformScope, func(tx pg.Tx) error { return store.UpsertJournal(dbCtx, tx, rows) })
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	var wg sync.WaitGroup
