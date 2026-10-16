@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -103,7 +104,12 @@ func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte,
 	if continues {
 		w.History = history
 	}
-	return protocol.Prepare(f, body, protocol.Target{Model: "up", EncryptedReasoning: encrypted}, w)
+	r, err := protocol.Inspect(f, body)
+	if err != nil {
+		return nil, err
+	}
+	u, err := protocol.Prepare(&r, body, protocol.Target{Format: f, Model: "up", EncryptedReasoning: encrypted}, w)
+	return u.Body, err
 }
 
 // TestPrepare compares whole bodies, so a byte changed outside the rewrites fails it (README.md「同格式改写」, I1, I2).
@@ -266,15 +272,55 @@ func BenchmarkPrepare(b *testing.B) {
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
 		for _, size := range sizes {
 			body := body(f, size, "")
+			prepare := prepareInspected()
 			b.Run(fmt.Sprintf("format=%d/size=%d", f, size), func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(body)))
 				for b.Loop() {
-					if _, err := prepare(f, body, true, false); err != nil {
+					if err := prepare(f, body); err != nil {
 						b.Fatal(err)
 					}
 				}
 			})
 		}
+	}
+}
+
+// TestPrepareUpstream: the usage context comes from the request: a 1-hour cache breakpoint, and the service tier only
+// when the request names one alone; a format not converted to the endpoint's is the endpoint's shortcoming, not the
+// client's error.
+func TestPrepareUpstream(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		to         protocol.Format
+		want       protocol.UsageContext
+		supported  bool
+	}{
+		{"defaults", `{"model":"m","messages":[]}`, protocol.Messages, protocol.UsageContext{}, true},
+		{
+			"1-hour breakpoint", `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`,
+			protocol.Messages,
+			protocol.UsageContext{CacheTTL1h: true},
+			true,
+		},
+		{
+			"one tier named", `{"model":"m","service_tier":"standard_only","speed":"fast"}`, protocol.Messages,
+			protocol.UsageContext{Tier: catalog.ServiceTierFast},
+			true,
+		},
+		{"auto names two", `{"model":"m","service_tier":"auto"}`, protocol.Messages, protocol.UsageContext{}, true},
+		{"to another format", `{"model":"m"}`, protocol.Responses, protocol.UsageContext{}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, err := protocol.Inspect(protocol.Messages, []byte(c.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, err := protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.to, Model: "up"}, protocol.Rewrites{Identity: derive})
+			var unsupported *protocol.NotSupported
+			if u.Usage != c.want || (err == nil) != c.supported || !c.supported && !errors.As(err, &unsupported) {
+				t.Errorf("usage %+v, error %v", u.Usage, err)
+			}
+		})
 	}
 }

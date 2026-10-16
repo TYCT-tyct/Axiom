@@ -1,0 +1,12 @@
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"content":" there! How can I assist you today?"},"finish_reason":null}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":37,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"completion_tokens":11,"completion_tokens_details":{"reasoning_tokens":0},"total_tokens":48,"cost":3.703701,"cost_currency":"USD"}}
+
+data: [DONE]
+

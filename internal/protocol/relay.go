@@ -77,8 +77,14 @@ type RelayOptions struct {
 	// ID is the call ID, written in place of the upstream's ID for the reply; Model is the model name the client
 	// asked for (docs/domains/gateway.md「转发规则」).
 	ID, Model string
+	// Created is when the call started, in Unix seconds: the created of every chunk a Chat client gets from an
+	// upstream of another format, which has none of its own to give.
+	Created int64
 	// Memory is the node's budget for what streams hold beyond their base allowance. It must not be nil.
 	Memory *Memory
+	// Aggregate is set for a client that did not ask for a stream: nothing is written until the end, Next gives no
+	// Out, and Finish and Fail return the reply's body, whose HTTP status Status gives (README.md「非流式聚合」).
+	Aggregate bool
 }
 
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
@@ -88,25 +94,6 @@ type Final struct {
 	Cost               platform.Exact
 	Currency           platform.Currency
 	Estimated, Pending bool
-}
-
-// ErrorType is the unified error type of an error ending (docs/domains/gateway.md「错误」).
-type ErrorType uint8
-
-// The error types an ending reports.
-const (
-	CreditsInsufficient ErrorType = iota
-	BillingUnavailable
-	UpstreamFailed
-	Timeout
-)
-
-var errorTypeNames = [...]string{"credits_insufficient", "billing_unavailable", "upstream_error", "timeout"}
-
-// Error is an error to end a stream with.
-type Error struct {
-	Type    ErrorType
-	Message string
 }
 
 var (
@@ -168,6 +155,7 @@ type Relay struct {
 	events    *sse.Reader
 	up        upstream
 	format    *relayFormat
+	client    Format
 	o         RelayOptions
 	state     state
 	committed bool
@@ -184,6 +172,11 @@ type Relay struct {
 	progress                                      Progress
 	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
 	held, charged int64
+	// For a reply that is aggregated: its aggregator, the data of an event of several lines, joined, and the HTTP
+	// status of the body returned.
+	agg    aggregator
+	lines  []byte
+	status int
 }
 
 // relayFormat is what the relay needs to know of a format.
@@ -205,16 +198,30 @@ var relayFormats = [...]relayFormat{
 	Chat:      {newChatStream, 1 << 20, true},
 }
 
+// chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
+// events, by its own bound, become chunks whose usage chunk the relay writes.
+var chatConversions = [...]relayFormat{
+	Messages:  {newMessagesToChat, relayFormats[Messages].limit, true},
+	Responses: {newResponsesToChat, relayFormats[Responses].limit, true},
+}
+
 // NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
 // yet; for others the first step fails.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
-	r := &Relay{o: o, held: meterMemory} // within the base allowance, so nothing is drawn yet
-	if client != upstream || int(upstream) >= len(relayFormats) {
-		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported yet", upstream, client)
+	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
+	switch {
+	case client == upstream && int(upstream) < len(relayFormats):
+		r.format = &relayFormats[upstream]
+	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
+		r.format = &chatConversions[upstream]
+	default:
+		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
 	}
-	r.format = &relayFormats[upstream]
 	r.up = r.format.newUpstream(u, o, r.charge)
+	if o.Aggregate {
+		r.agg = newAggregator(client, r.charge)
+	}
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
@@ -242,6 +249,9 @@ func (r *Relay) Next() (Step, error) {
 	var step Step
 	if err == nil {
 		step, err = r.event(data)
+	}
+	if err == nil && r.agg != nil {
+		step, err = r.aggregate(step)
 	}
 	if err != nil {
 		return Step{}, r.fail(err)
@@ -272,10 +282,7 @@ func (r *Relay) event(data []byte) (Step, error) {
 func (r *Relay) route(e event, data []byte) (Step, error) {
 	switch e.role {
 	case heartbeat:
-		if !r.committed {
-			return Step{Kind: StepHeartbeat}, nil
-		}
-		return r.write(StepHeartbeat, e.name, data)
+		return r.heartbeat(e.name, data)
 	case ending:
 		step, err := r.hold(e.name, data, e.usageAt)
 		if err != nil || !e.ends {
@@ -324,6 +331,9 @@ func (r *Relay) observe(e event) {
 // hold keeps an ending event for Finish. An earlier one, which a stream may have, is withheld as it is, without a
 // cost, and the events that followed it after it.
 func (r *Relay) hold(name string, data []byte, usageAt int) (Step, error) {
+	if r.agg != nil && len(data) > aggregateLimit { // Responses' ending is the reply: the cap is on it too
+		return Step{}, fmt.Errorf("%w: the ending of %d bytes passes the %d a reply may hold", ErrMemory, len(data), aggregateLimit)
+	}
 	var err error
 	if len(r.ending) > 0 {
 		if _, err = r.withhold(r.endingName, r.ending); err != nil {
@@ -406,6 +416,28 @@ func (r *Relay) write(kind StepKind, name string, data []byte) (Step, error) {
 	return Step{Out: r.out, Kind: kind}, nil
 }
 
+// heartbeat passes the upstream's keep-alive on once the stream is committed: as it is, or for a converted stream,
+// whose data is nil, as the client's own.
+func (r *Relay) heartbeat(name string, data []byte) (Step, error) {
+	switch {
+	case !r.committed:
+		return Step{Kind: StepHeartbeat}, nil
+	case data == nil:
+		return r.writeRaw(StepHeartbeat, KeepAlive(r.client))
+	}
+	return r.write(StepHeartbeat, name, data)
+}
+
+// writeRaw appends bytes already framed as events to out and returns the step that writes out.
+func (r *Relay) writeRaw(kind StepKind, b []byte) (Step, error) {
+	var err error
+	if r.out, err = r.grow(r.out, len(b)); err != nil {
+		return Step{}, err
+	}
+	r.out = append(r.out, b...)
+	return Step{Out: r.out, Kind: kind}, nil
+}
+
 func (r *Relay) grow(b []byte, n int) ([]byte, error) { return sse.Grow(b, n, r.charge) }
 
 // charge accounts for n more bytes held, drawing what passes the base allowance from the node's budget.
@@ -441,9 +473,13 @@ func (r *Relay) fail(err error) error {
 		err = fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	r.state, r.err = failed, err
-	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited = nil, nil, nil, nil, nil, nil
+	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited, r.lines = nil, nil, nil, nil, nil, nil, nil
 	r.up.dropBuffers()
 	r.held = int64(cap(r.out)) + meterMemory
+	if r.agg != nil {
+		r.agg.failed()
+		r.held += r.agg.taken()
+	}
 	keep := max(0, r.held-baseMemory)
 	r.o.Memory.left.Add(r.charged - keep)
 	r.charged = keep
@@ -478,6 +514,9 @@ func (r *Relay) Finish(f Final) []byte {
 	out = append(out, r.trailing...)
 	if r.stop != nil {
 		out = sse.AppendEvent(out, r.stopName, r.stop)
+	}
+	if r.agg != nil {
+		return r.finishAggregate(out, f)
 	}
 	r.state = ended
 	r.release()
@@ -516,7 +555,10 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 		u = f.Usage
 	}
 	var out []byte
-	if r.up != nil { // nil for a pair of formats not relayed
+	switch {
+	case r.agg != nil:
+		out = r.failAggregate(e, f, u)
+	case r.up != nil: // nil for a pair of formats not relayed
 		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
 	}
 	r.state = ended
