@@ -2,13 +2,13 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发流的 `Relay`（同格式，以及把 Messages、Responses 的流转给 Chat 客户端）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合按 Issue #27 的计划随后加入，加入时改写本文。
+目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发流的 `Relay`（同格式，以及把 Messages、Responses 的流转给 Chat 客户端）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」。
 
 ## 包
 
 | 包 | 做什么 |
 |---|---|
-| `protocol`（本目录） | `Inspect` 读出请求摘要，见下文「请求摘要」；`Prepare` 把请求改写给同格式的端点，见「同格式改写」；`Relay` 把上游的流转给客户端、计量、写结尾，见「转发（草图）」 |
+| `protocol`（本目录） | `Inspect` 读出请求摘要，见下文「请求摘要」；`Prepare` 把请求改写给同格式的端点，见「同格式改写」；`Relay` 把上游的流转给客户端、计量、写结尾，见「转发（草图）」；给不要流的客户端则聚合成整个响应体，见「非流式聚合」 |
 | `internal/sse` | 把上游的 SSE 字节流读成完整事件，逐个严格校验后交出事件的 data |
 | `internal/streamcheck` | 按格式检查一路流的结构：事件顺序、把增量挂到部件上的序号、恰好一个结尾；不看内容。`Sample` 按下文「录制样本」的约定检查一个样本的三个文件 |
 | `internal/record` | 开发用的命令（`just record`）：向真实上游发一个请求，把流存成样本，见下文「录制」 |
@@ -119,7 +119,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 
 ## 转发（草图）
 
-`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有三种格式的同格式转发（P5）和给 Chat 客户端的跨格式转发，`RenderError` 已实现；非流式聚合是 #27 之后的 PR 要做的。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
+`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有三种格式的同格式转发（P5）和给 Chat 客户端的跨格式转发，`RenderError` 已实现，非流式聚合见下文「非流式聚合」。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
 
 ```go
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) // *NotSupported → gateway 跳过这个条目
@@ -133,6 +133,8 @@ func (r *Relay) Finish(f Final) []byte
 func (r *Relay) Fail(e Error, f *Final) []byte // f 为 nil：结算没提交，结尾不带费用
 func KeepAlive(f Format) []byte
 func RenderError(f Format, e Error, fin *Final) (status int, body []byte)
+type RelayOptions struct{ ID, Model string; Created int64; Memory *Memory; Aggregate bool } // Aggregate：客户端没要流，Next 的 Out 为空，Finish、Fail 返回整个响应体
+func (r *Relay) Status() int // 聚合时，Finish、Fail 返回的响应体的 HTTP 状态
 type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency; Estimated, Pending bool }
 ```
 
@@ -197,6 +199,31 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 - **内存**：块的缓冲、各成员拼接中的缓冲、`tool_use` 暂存的 `input` 都在增长前记账；Responses 的项和部件存在映射里，每项按 96 字节、每个部件按 320 字节（含 SHA-256 的状态）估，见 `itemSize`、`partSize`。
 - **`RenderError(f, e, fin)`**：流开始之前的错误。状态码和 Messages 的类型按[接入的「错误」](../../docs/domains/gateway.md#错误)的表，一种类型一行（`no_endpoint` 永久的 404、暂时的 503 是名字相同的两个类型）；Chat 和 Responses 用 Chat 的外壳 `{"error":{"code","message","metadata":{"error_type",…}}}`，Messages 用 `{"type":"error","error":{"type","message","error_type",…}}`。`Error.Details` 写在类型旁边（如 402 的 `limit_source`、所需金额）；`fin` 不为空时带 `axiom.usage`：本格式的用量字段加费用，结算写不进时带 `billing_pending`。调用方没给说明时用每种类型自己的说法，不出现上游的原话；流里的出错结尾用同一张表。
 
+
+## 非流式聚合
+
+客户端没要流时（`RelayOptions.Aggregate`），上游照样以流读（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）：读、计量、内存记账都与流式相同，不同的只有输出。`Relay` 把要写给客户端的、客户端格式的事件交给聚合器，`Next` 的 `Out` 恒为空（提交点照常是 `StepCommit`，心跳是 `StepHeartbeat` 但不写保活），`Finish`、`Fail` 返回整个响应体，`Status()` 给出它的 HTTP 状态（还没有结尾时为 0）。每种客户端格式一个聚合器（`aggregatemessages.go`、`aggregatechat.go`、`aggregateresponses.go`），五条路径共用这三个：Messages、Responses 的流转给 Chat 客户端时，聚合器看到的就是 Chat 的块，不知道上游是谁。聚合器收到的是 `Relay` 写出的事件字节（`Finish`、`Fail` 写的结尾也一样，所以带费用），按 `sse.AppendEvent` 的格式切开，多行 data 用换行连接。字段取自 Anthropic《Messages API reference》、OpenAI《Create chat completion》《Responses API reference》、OpenRouter《Reasoning tokens》（均沿用上文已读的版本，本 PR 没有重读）。
+
+| 客户端格式 | 响应体 | 怎么聚合 |
+|---|---|---|
+| Messages | `message`：`message_start` 的成员（`content`、`stop_reason`、`stop_sequence`、`usage` 除外），`content`，结尾的 `stop_reason`、`stop_sequence`、`usage`，有 `axiom` 时再加 `axiom` | 块一个接一个，所以整个消息写在一个缓冲区里：文本和思考的增量原位写进块的字符串，字符串到块结束才闭合；`input_json_delta` 的片段反转义后接成 `input`，没有增量就是块开头给的 `input`，开头也没有就是 `{}`，有增量时块结束要检查它是 JSON；签名和 `citations_delta` 的引用攒到块结束再写；开头里文本、思考、签名、`input`、引用以外的成员原样，其他类型的块（服务端工具及其结果、`redacted_thinking`）整块原样。`usage` 是 `message_start` 和各个 `message_delta` 里的 `usage` 按成员合并，后来的覆盖，费用在最后一个里；`delta` 同样合并，所以较早的 `message_delta` 被最后一个覆盖。不认识的事件和增量类型忽略 |
+| Chat | `chat.completion`：第一块的 `id`、`created`、`model`，`choices`，最后的 `usage`（含费用），出错时顶层 `error`，有 `axiom`（`billing_pending`）时再加 `axiom` | 选项交错，所以每个选项各存各的片段：`content`、`refusal`、`reasoning`、`reasoning_content` 的字符串内容拼接（不解转义，转义不会跨片段），`tool_calls` 按 `index` 归到一个调用（`id`、`type` 取给出的，`name`、`arguments` 拼接），`reasoning_details` 的条目攒起来、结束时用请求一侧同一个 `mergeDetails` 按类型和 `index` 合并，`annotations` 和 `logprobs` 的 `content`、`refusal` 数组的元素按序拼接。`finish_reason` 取给出的最后一个；有工具调用而没有文本的消息 `content` 为 `null`，`refusal` 没有时为 `null`，`logprobs` 没有时为 `null`。出错结尾（`error` 块）把顶层 `error` 放进响应体，没有结束原因的选项以 `error` 结束。`audio` 和旧的 `function_call` 成员没有聚合 |
+| Responses | `response` | 成功：就是结尾快照（`response.completed`、`response.incomplete`）的 `response`，它已带最终的 `output`、`usage` 和费用，原样返回，事件顶层的 `axiom`（结算没写时的 `billing_pending`）加到响应体顶层。失败：`Fail` 写的 `response.failed` 里的 `response`，换上聚合器按事件记下的 `output`（见下） |
+
+- **Responses 成功取快照，不从增量重建**：官方的完整响应就是快照；而官方样本的中间事件被省成一行注释（`testdata/responses/text/meta.json`），增量拼不出最终文本，所以从增量重建的响应体与官方非流式响应对不上。代价是依赖上游的快照带全部输出项：官方如此，[检查流结构](#检查流结构)也要求 `response.completed` 的 `output` 条数等于流里加入的项数。
+- **Responses 失败的响应体要有仍在进行中的输出项**（[接入的「错误」](../../docs/domains/gateway.md#错误)）：聚合器按 `output_index` 记每个项：`output_item.done` 给全的项原样，`output_item.added` 给出骨架的项加上之后的 `content_part.added`、`reasoning_summary_part.added` 的部件骨架和 `*.delta` 的文本、`annotation.added` 的注释、`function_call_arguments.delta` 的参数。失败时，没完成的项按骨架重建，`status` 改为 `incomplete`，文本部件写上已收到的文本（`refusal` 部件写在 `refusal` 里），函数调用的参数是已收到的字符串，不修补。响应体其余成员取自 `response.failed`（调用编号、模型名、`error`、`usage`），`created_at` 取自 `response.created`，`error_type` 在顶层，与流里的失败事件一致。序号对不上已记的项的事件不记，与 `Relay` 的内容计数同样处理。
+- **失败的状态码**（[接入的「错误」](../../docs/domains/gateway.md#错误)）：
+
+| 失败时 | 状态 | 响应体 |
+|---|---|---|
+| 还没有内容（提交点之前） | `RenderError` 给的状态码，网关可以换端点重试 | `RenderError` 的外壳，带 `axiom.usage`；没写结算时只有用量，不带费用、不带 `billing_pending` |
+| 有内容，Chat | 200 | 已生成的内容，`finish_reason: "error"`，顶层 `error`，`usage` |
+| 有内容，Responses | 200 | `status: "failed"`，已生成的 `output`，`usage` |
+| 有内容，Messages | 502（D16） | `RenderError` 的外壳，不带内容，用量和费用在 `axiom` 里 |
+
+  聚合器可以拒绝 `streamcheck` 接受、却造不出回复的流（没有 `message` 的 `message_start`、顺序不对的块、不是 JSON 的工具输入、没有 `response` 的结尾），按上游的失败处理：在 `Next` 里是 `ErrUpstream`，在结尾里则 `Finish` 改以 `upstream_error` 失败，结算已写的费用照常在里面。
+- **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），结束时全部归还；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
+- **分配**：聚合器按位置读事件，不把事件解成树；每个事件的分配次数有常数上界，缓冲翻倍带来的分配随长度对数增长，与增量的大小无关（`TestAggregateAllocs`）。
 ## 录制样本
 
 协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：
@@ -207,9 +234,10 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | `upstream.sse` | 上游返回的流。官方样本是原样的字节，`.gitattributes` 让 `*.sse` 不做换行转换，所以 CRLF 的流也原样保存；录制的样本是按事件重建的规范形式，见「录制」 |
 | `to-<上游格式>.json` | 只在 Chat 样本里：`request.json` 转换给该格式端点的请求体，按测试里固定的模型名、输出上限和派生值；`go test ./internal/protocol -update` 重写 |
 | `client-<客户端格式>.sse` | `Relay` 把这个流转给该格式客户端的输出，按测试里固定的调用编号、模型名和费用；`go test ./internal/protocol -update` 重写，PR 里审差异 |
+| `aggregate-<客户端格式>.json` | `Relay` 把这个流聚合给不要流的该格式客户端的响应体，条件同上；Messages、Responses 的流给 Chat 客户端的叫 `aggregate-to-chat.json`；`go test ./internal/protocol -update` 重写 |
 | `meta.json` | `source`：官方样本是来源的网址，录制的是 `recorded from a live upstream: POST <官方端点>`，不写上游的地址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
 
-- `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。
+- `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。它的非流式黄金输出是 `responses-reasoning-tool.aggregate-to-chat.json` 和 `responses-reasoning-tool.aggregate-responses.json`。
 - 只收两种来源：官方文档里的完整流，以及用合成提示词录制的真实上游。官方示例常把中间事件省略成一行注释（`:` 开头），读 SSE 时注释本来就跳过，所以原样保留，在 `note` 里写明省略了什么；网页渲染改动过的空白按接口的原样还原，同样写进 `note`。
 - 样本里不能有密钥、服务器地址、用户数据；`just secrets` 在推送前扫描。样本只存请求体和流，不存头；录制真实上游时，上游生成的标识换成占位值，在 `note` 里写明（规则见「录制」）。官方示例里的 ID 本来就是示例值，原样保留。
 - `streamcheck.Sample` 检查 `meta.json` 有来源和合法日期、`request.json` 是合规的 JSON，并用对应格式的检查通过 `upstream.sse`；`TestSamples` 对每个场景读齐三个文件后调用它，录制工具写盘前也调用它，所以写下的样本一定通过样本测试。官方文档没有给出完整流的情形（Chat 的工具调用和用量块、各格式的出错结尾），只在测试里构造，不放进样本目录。
@@ -256,6 +284,10 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 官方样本都通过检查，每条结构规则都有违反它的流被拒 | `TestSamples`；表驱动的坏流按错误里的说法区分规则，所以去掉任何一条规则，它的用例就失败 |
 | 上游给的序号再离谱，检查也只报错 | 序号只与已见到的部件个数比较，从不用来分配或下标越界；模糊测试以全部样本和极端序号为种子 |
 | 录制的样本要么完整、通过样本测试、不含 key 和 ID 位置上的原值，要么不存在；ID 位置之外的数据原样保留 | 本地 httptest 上游回放三种格式的已提交样本，分别用 LF、单独 CR、CRLF 行尾，前面加一组评审找到的注释（落单引号、`"input": {`、行末反斜杠），断言写下的流就是样本的事件按规范形式重建、只换了 ID，请求里工具参数的 `input.id` 不动，同一个 ID 在请求里转义写、在流里原样写也对应同一个占位值；每种拒绝一个用例（含评审的注释反例后跟转义写出的 key），断言没有发出请求（发出前的拒绝）、错误里没有 key 且目录为空；重定向、空闲超时各有用例；模糊测试：任意流重建后读回的事件数相同，每个事件除 ID 位置外 JSON 值相同，占位值一一对应，不含 key；每条规则都经过变异验证 |
+| 非流式的响应体有官方响应的形状，内容就是客户端的流所说的，整段读和逐字节读结果相同 | `TestAggregateSamples` 对每个样本的每条路径（三种同格式加 Messages、Responses 转 Chat）：形状检查，与 `aggregate-*.json` 逐字节相同，与测试里独立写的 `foldStream` 对已解码的值相同；`TestAggregateMessages`（每种块和增量、片段的转义、工具输入的三种来源、引用、不认识的事件）、`TestAggregateMessagesFraming`（多行 data、`billing_pending`）、`TestAggregateChat`（交错的选项、按序号归并的工具调用、合并的推理细节、注释、logprobs）；模糊测试 `FuzzRelay` 的 `checkAggregate`：`streamcheck` 接受的流聚合出的响应体与分片无关，聚合失败当且仅当转发失败，成功时与流的折叠相同 |
+| 失败按「失败的状态码」表答：没有内容是 `RenderError` 的答案，有内容时 Chat、Responses 是带内容和错误的 200，Messages 是不带内容的 502；用量总在，费用当且仅当结算写了；Responses 的响应体有仍在进行中的输出项 | `TestAggregateFail` 五条路径 × 结算写了和没写，`TestAggregateFailBeforeContent`（与 `RenderError` 逐字节相同），`TestAggregateResponsesFail`、`TestAggregateResponsesFailOpenReasoning`（完成的项、打开的消息、推理、拒答、函数调用），`TestAggregateRejects`（聚合器拒绝的事件顺序、结尾造不出响应体） |
+| 一个流聚合的片段不超过 16 MiB，超出和节点预算不够都以 `ErrMemory` 结束而不是 `ErrUpstream`，结束时节点预算回到原值，聚合器持有的不超过已记账的 | `TestAggregateBudget`（三种格式的上限内、上限外、节点预算不够，Responses 超限的结尾）；`TestRelayMemoryHeld` 的聚合变体：五百个选项、五百个 Responses 项、五百个函数调用、工具的长输入，每一步和失败之后（每一步都要数一遍持有量，代价随个数平方增长，所以比非聚合的 5000 个少） |
+| 聚合每个事件不比读 SSE 多分配 | `TestAggregateAllocs` 对三种格式比较 10 个与 200 个增量、1 KiB 与 64 KiB 的增量；`BenchmarkAggregate` |
 
 ## 决策与理由
 
@@ -298,3 +330,8 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | `include` 只对返回加密推理的模型加，由 `Target` 说明 | 不推理的模型收到它返回 400 "Encrypted content is not supported with this model"（pydantic-ai issue #2865，2025-09；hermes-agent issue #23450，2026-05）；推理模型不写 `reasoning` 也会推理，看请求判断不了 | 一律加（设计草稿）；按请求是否要求推理决定 |
 | `session_id` 删除，不换成派生值转发 | 三种官方格式都没有这个参数，带着不认识的成员的请求会被官方端点以 400 拒绝（Anthropic 的 "Extra inputs are not permitted"，见 anthropics/claude-code issue #21612，2026-01；OpenAI 的 "Unrecognized request argument supplied"）；它是 OpenRouter 的路由参数，粘性由 routing 用，上游的粘性靠 `prompt_cache_key`、`metadata.user_id` 和会话请求头 | 换成派生值转发 |
 | 文件只数个数，不数页数 | 页数要解析 PDF；一个文件的上界由计费用模型数据（单页最大值和页数上限）或上下文长度给出 | 在调用路径上解析 PDF |
+| 聚合器吃客户端格式的事件字节，不吃上游的事件 | 一份聚合器服务五条路径，转换路径不用再写；它的输入就是黄金流（`client-*.sse`、`to-chat.sse`）写出的那种事件，能单独回放；代价是多一次切开事件的小开销，只在非流式路径上 | 每条路径一个聚合器，挂在各格式的读取器上 |
+| Responses 成功时取结尾快照的 `response`，不从增量重建 | 官方的完整响应就是快照；官方样本的增量对不上最终文本（`testdata/responses/text/meta.json`）；省掉一份与快照重复的重建 | 全部从增量重建：形状对不上官方，还要持有两份输出 |
+| Messages 的非流式失败返回 502，不带内容，用量和费用在 `axiom` 里 | [接入的 D16](../../docs/domains/gateway.md)：Messages 没有表示出错的结束原因，半截内容当成功返回会让客户端以为完整；聚合器因此在失败时放掉全部片段 | 带半截内容的 200 |
+| 16 MiB 算片段的缓冲容量，要拷成响应体的片段多记一倍，推理细节记四倍 | 记账要对得上实际持有：Chat 的片段在 `Finish` 时才拷成响应体，那时不能再申请（`Finish` 不会失败），所以预先留出；容量而非字节数，因为内存是按容量占的，翻倍的富余到上限为止，内容接近 16 MiB 的回答放得下 | 只按字节数算：低估持有量；`Finish` 里申请：它没有失败的出口 |
+| 失败时打开的 Responses 项 `status` 写 `incomplete` | 响应已经 `failed`，不会再有事件让 `in_progress` 变成别的；`incomplete` 是 OpenAI 项状态里表示「没做完」的那个 | 保持上游骨架里的 `in_progress` |

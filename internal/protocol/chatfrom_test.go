@@ -279,7 +279,7 @@ func TestConvertResponses(t *testing.T) {
 
 // FuzzConvertStream: a Messages or Responses stream its format's check accepts converts the same however it is cut
 // into reads, into a stream Chat's check accepts, and fails only as the upstream's failure; a Messages stream that
-// converts gives the client its text.
+// converts gives the client its text; aggregated, it is the completion that stream folds to (checkAggregate).
 func FuzzConvertStream(f *testing.F) {
 	for i, format := range formats[:2] {
 		for _, dir := range must(fs.Glob(samples, format.dir+"/*")) {
@@ -308,6 +308,7 @@ func FuzzConvertStream(f *testing.F) {
 		if format.f == protocol.Messages && whole.err == nil && decodes(stream) {
 			checkText(t, stream, whole.out)
 		}
+		checkAggregate(t, protocol.Chat, format.f, stream, cuts, whole)
 	})
 }
 
