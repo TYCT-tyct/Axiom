@@ -331,8 +331,8 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	}()
 	<-locked
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
-		"AXIOM_DATABASE_URL=" + database.App,
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
+		"AXIOM_DATABASE_URL=" + database.App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
 	}
 	served := make(chan error, 1)
 	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
