@@ -8,9 +8,10 @@
 -- usage without the process that admitted it. charged_seq and entry are the attempt the user is charged for and the
 -- route index it bound; charged what the user paid so far, price what the rules asked before the floor capped it;
 -- waived whether only per-use items were charged, which a correction keeps; estimated whether the charge rests on
--- usage the upstream did not report; final_usage the charged usage as Final gives it (README.md「结算与账本」);
--- correct_by ends the hour in which an estimated or cleaned-up charge may still be corrected, holding
--- amount - charged reserved until then.
+-- usage the upstream did not report; unpriced whether it has usage no price covers yet (docs/domains/billing.md
+-- 「价目表缺项」), which keeps it held, out of cleanup's reach, until a supplier record prices it; final_usage the
+-- charged usage as Final gives it, unknown usage included (README.md「结算与账本」); correct_by ends the hour in which
+-- an estimated or cleaned-up charge may still be corrected, holding amount - charged reserved until then.
 ALTER TABLE billing.reservations
     DROP CONSTRAINT reservations_state_check,
     ADD CONSTRAINT reservations_state_check CHECK (state IN ('pending', 'released', 'settled', 'estimated',
@@ -22,7 +23,8 @@ ALTER TABLE billing.reservations
     ADD COLUMN price bigint NOT NULL DEFAULT 0 CHECK (price >= 0),
     ADD COLUMN waived boolean NOT NULL DEFAULT false,
     ADD COLUMN estimated boolean NOT NULL DEFAULT false,
-    ADD COLUMN final_usage bigint[] NOT NULL DEFAULT '{}',
+    ADD COLUMN unpriced boolean NOT NULL DEFAULT false,
+    ADD COLUMN final_usage jsonb NOT NULL DEFAULT '[]',
     ADD COLUMN correct_by timestamptz;
 
 -- The newest supplier record applied to each attempt: a record's revisions belong to its attempt, and every attempt's
@@ -121,5 +123,5 @@ GRANT UPDATE (cost) ON billing.waivers TO axiom_app;
 GRANT UPDATE (revision) ON billing.corrections TO axiom_app;
 GRANT UPDATE (balance) ON billing.balances TO axiom_app;
 GRANT UPDATE (spent) ON billing.spend TO axiom_app;
-GRANT UPDATE (charged_seq, entry, charged, price, waived, estimated, final_usage, correct_by) ON billing.reservations
-    TO axiom_app;
+GRANT UPDATE (charged_seq, entry, charged, price, waived, estimated, unpriced, final_usage, correct_by)
+    ON billing.reservations TO axiom_app;

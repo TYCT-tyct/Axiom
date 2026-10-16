@@ -152,40 +152,55 @@ func (c *locked) recharges(k Correction) bool {
 
 // recharge replaces an estimated or cleaned-up charge with the record's: the reservation's hold pays the makeup, which
 // therefore never passes the floor; past the hold the platform bears it. An estimate keeps holding the rest until its
-// window ends, for a later revision; a cleaned-up call releases it.
+// window ends, for a later revision; a cleaned-up call releases it. A record with usage no price covers leaves an
+// estimate that holds the rest, with no window, until a record prices it, which opens the window then.
 func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	r := c.row
 	if !c.recharges(k) {
 		return nil
 	}
-	s, err := schedule(r.Prices, int(*r.Entry))
-	if err != nil {
-		return err
-	}
-	segments := make([]Segment, len(k.Usage))
-	for i, u := range k.Usage {
-		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
-	}
-	price, estimated, err := priceSegments(s, segments, r.Waived)
+	p, usage, err := c.priceRecord(k)
 	if err != nil {
 		return err
 	}
 	hold := max(r.Amount-r.Charged, 0)
-	c.charged = min(price, r.Charged+hold)
+	c.charged = min(p.price, r.Charged+hold)
 	if _, err := post(ctx, tx, c.event("reverse", k.Revision), reversal(r.Price, r.Charged)...); err != nil {
 		return err
 	}
-	if _, err := post(ctx, tx, c.event("settle", k.Revision), charge(price, c.charged)...); err != nil {
+	if _, err := post(ctx, tx, c.event("settle", k.Revision), charge(p.price, c.charged)...); err != nil {
 		return err
 	}
 	w := c.kept("cleanup_settled")
-	w.price, w.estimated, w.usage = price, estimated, encodeUsage(segments)
+	w.price, w.estimated, w.unpriced, w.usage = p.price, p.estimated, p.unpriced, usage
 	keep := int64(0)
-	if r.State == "estimated" {
+	if r.State == "estimated" || p.unpriced {
 		w.state, keep = "estimated", max(r.Amount-c.charged, 0)
+	}
+	if r.Unpriced && !p.unpriced { // priced at last: the window it never had opens now
+		w.holdSeconds = c.b.config.CorrectionWindow.Seconds()
 	}
 	if err := c.move(ctx, tx, keep-hold, c.charged-r.Charged); err != nil {
 		return err
 	}
 	return c.write(ctx, tx, w)
+}
+
+// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver,
+// and encodes it as final_usage stores it.
+func (c *locked) priceRecord(k Correction) (priced, []byte, error) {
+	s, err := schedule(c.row.Prices, int(*c.row.Entry))
+	if err != nil {
+		return priced{}, nil, err
+	}
+	segments := make([]Segment, len(k.Usage))
+	for i, u := range k.Usage {
+		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
+	}
+	p, err := priceSegments(s, segments, c.row.Waived)
+	if err != nil {
+		return priced{}, nil, err
+	}
+	usage, err := encodeUsage(segments)
+	return p, usage, err
 }
