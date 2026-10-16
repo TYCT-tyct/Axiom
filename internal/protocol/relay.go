@@ -77,6 +77,9 @@ type RelayOptions struct {
 	// ID is the call ID, written in place of the upstream's ID for the reply; Model is the model name the client
 	// asked for (docs/domains/gateway.md「转发规则」).
 	ID, Model string
+	// Created is when the call started, in Unix seconds: the created of every chunk a Chat client gets from an
+	// upstream of another format, which has none of its own to give.
+	Created int64
 	// Memory is the node's budget for what streams hold beyond their base allowance. It must not be nil.
 	Memory *Memory
 }
@@ -88,25 +91,6 @@ type Final struct {
 	Cost               platform.Exact
 	Currency           platform.Currency
 	Estimated, Pending bool
-}
-
-// ErrorType is the unified error type of an error ending (docs/domains/gateway.md「错误」).
-type ErrorType uint8
-
-// The error types an ending reports.
-const (
-	CreditsInsufficient ErrorType = iota
-	BillingUnavailable
-	UpstreamFailed
-	Timeout
-)
-
-var errorTypeNames = [...]string{"credits_insufficient", "billing_unavailable", "upstream_error", "timeout"}
-
-// Error is an error to end a stream with.
-type Error struct {
-	Type    ErrorType
-	Message string
 }
 
 var (
@@ -168,6 +152,7 @@ type Relay struct {
 	events    *sse.Reader
 	up        upstream
 	format    *relayFormat
+	client    Format
 	o         RelayOptions
 	state     state
 	committed bool
@@ -205,15 +190,26 @@ var relayFormats = [...]relayFormat{
 	Chat:      {newChatStream, 1 << 20, true},
 }
 
+// chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
+// events, by its own bound, become chunks whose usage chunk the relay writes.
+var chatConversions = [...]relayFormat{
+	Messages:  {newMessagesToChat, relayFormats[Messages].limit, true},
+	Responses: {newResponsesToChat, relayFormats[Responses].limit, true},
+}
+
 // NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
 // yet; for others the first step fails.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
-	r := &Relay{o: o, held: meterMemory} // within the base allowance, so nothing is drawn yet
-	if client != upstream || int(upstream) >= len(relayFormats) {
-		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported yet", upstream, client)
+	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
+	switch {
+	case client == upstream && int(upstream) < len(relayFormats):
+		r.format = &relayFormats[upstream]
+	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
+		r.format = &chatConversions[upstream]
+	default:
+		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
 	}
-	r.format = &relayFormats[upstream]
 	r.up = r.format.newUpstream(u, o, r.charge)
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
@@ -272,10 +268,7 @@ func (r *Relay) event(data []byte) (Step, error) {
 func (r *Relay) route(e event, data []byte) (Step, error) {
 	switch e.role {
 	case heartbeat:
-		if !r.committed {
-			return Step{Kind: StepHeartbeat}, nil
-		}
-		return r.write(StepHeartbeat, e.name, data)
+		return r.heartbeat(e.name, data)
 	case ending:
 		step, err := r.hold(e.name, data, e.usageAt)
 		if err != nil || !e.ends {
@@ -403,6 +396,28 @@ func (r *Relay) write(kind StepKind, name string, data []byte) (Step, error) {
 	if !r.committed {
 		return Step{Kind: StepBuffered}, nil
 	}
+	return Step{Out: r.out, Kind: kind}, nil
+}
+
+// heartbeat passes the upstream's keep-alive on once the stream is committed: as it is, or for a converted stream,
+// whose data is nil, as the client's own.
+func (r *Relay) heartbeat(name string, data []byte) (Step, error) {
+	switch {
+	case !r.committed:
+		return Step{Kind: StepHeartbeat}, nil
+	case data == nil:
+		return r.writeRaw(StepHeartbeat, KeepAlive(r.client))
+	}
+	return r.write(StepHeartbeat, name, data)
+}
+
+// writeRaw appends bytes already framed as events to out and returns the step that writes out.
+func (r *Relay) writeRaw(kind StepKind, b []byte) (Step, error) {
+	var err error
+	if r.out, err = r.grow(r.out, len(b)); err != nil {
+		return Step{}, err
+	}
+	r.out = append(r.out, b...)
 	return Step{Out: r.out, Kind: kind}, nil
 }
 

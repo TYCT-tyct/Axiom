@@ -178,8 +178,9 @@ paths:
       summary: Finish enabling two-step verification
       description: >-
         Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes
-        (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Enabling
-        twice replaces the old secret.
+        (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Only for a user
+        who has not enabled it: once on, it stays on and cannot be replaced from the console (409); the person
+        who runs the deployment can reset it from the command line.
 
 
         Limits: failed codes count against the user's 10 an hour.
@@ -204,6 +205,7 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/recovery-codes:
@@ -773,9 +775,10 @@ components:
       description: "A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`."
     Site:
       type: object
-      required: [name, key_prefix, registration]
+      required: [name, key_prefix, registration, currency]
       properties:
         name: {type: string}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
         logo_url: {type: string, description: "Absent when the site has no logo."}
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
         registration:

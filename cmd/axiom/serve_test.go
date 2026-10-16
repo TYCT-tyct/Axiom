@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -20,22 +18,12 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// masterKey is the environment entry that names a master key file the node can read, made for the test.
-func masterKey(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "master-key")
-	if err := os.WriteFile(path, []byte("1:"+strings.Repeat("A", 43)+"=\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return "AXIOM_MASTER_KEY_FILE=" + path
-}
-
 // TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
-		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -49,6 +37,7 @@ func TestServe(t *testing.T) {
 		}
 	}
 	checkVersion(t, "http://"+addrs.Public+"/api/console/v1/version")
+	checkGuard(t, "http://"+addrs.Public+"/api/console/v1/site")
 	checkPages(t, addrs)
 	checkMetrics(t, addrs)
 	cancel()
@@ -105,7 +94,7 @@ func checkAdminScript(t *testing.T, public, admin, script string) {
 
 // checkMetrics: the ops listener serves Prometheus text with the request just made, counted by route pattern and
 // status class only, and the recorder's queue gauge; the public listener does not serve it. Unknown paths, one of them
-// with an identifier in it, share one series each (the pages' "/", or "unmatched" under the API) instead of making one each.
+// with an identifier in it, share one series each (the pages' "/", or "/api/" under the API) instead of making one each.
 func checkMetrics(t *testing.T, addrs addresses) {
 	t.Helper()
 	for _, path := range []string{"/api/console/v1/nothing-here", "/api/console/v1/key_01hxyz0000000000000000000a"} {
@@ -124,7 +113,7 @@ func checkMetrics(t *testing.T, addrs addresses) {
 	for _, want := range []string{
 		`axiom_http_server_requests_total{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
 		`axiom_http_server_requests_total{outcome="completed",route="/",status_class="4xx"} 2`,
-		`axiom_http_server_requests_total{outcome="completed",route="unmatched",status_class="4xx"} 2`,
+		`axiom_http_server_requests_total{outcome="completed",route="/api/",status_class="4xx"} 2`,
 		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
 		"axiom_observability_queue_depth 0",
 	} {
@@ -199,8 +188,9 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
-		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0"}, c.environ...)
-		environ = append(environ, masterKey(t))
+		environ := append([]string{
+			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		}, c.environ...)
 		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
@@ -242,6 +232,21 @@ func checkVersion(t *testing.T, url string) {
 	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || body.Version != version() || strings.Contains(body.Version, runtime.Version()) ||
 		resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Request-ID") == "" {
 		t.Errorf("GET %s: %d %v %s (%v)", url, resp.StatusCode, resp.Header, resp.body, err)
+	}
+}
+
+// checkGuard: the console's other operations are behind the guard: at a host no site registers, which is the address
+// this test dials, the answer is the contract's 404, uncached.
+func checkGuard(t *testing.T, url string) {
+	t.Helper()
+	resp, err := get(t, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct{ Error struct{ Code string } }
+	if err := json.Unmarshal(resp.body, &body, json.MatchCaseInsensitiveNames(true)); err != nil || resp.StatusCode != http.StatusNotFound ||
+		body.Error.Code != "not_found" || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("GET %s: %d %s (%v)", url, resp.StatusCode, resp.body, err)
 	}
 }
 
@@ -303,28 +308,6 @@ func getAccepting(t *testing.T, url, accept string) (response, error) {
 	return response{resp, body}, errors.Join(err, resp.Body.Close())
 }
 
-// TestServeRefusesAMasterKeyItCannotUse: without a master key file the node does not start, whether the variable is
-// missing or the file is absent or not a key, and the error names the variable and what is wrong but quotes neither the
-// path nor the file.
-func TestServeRefusesAMasterKeyItCannotUse(t *testing.T) {
-	notAKey := filepath.Join(t.TempDir(), "master-key")
-	if err := os.WriteFile(notAKey, []byte("planted-value\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]struct{ environ, want string }{
-		"no variable": {"", "AXIOM_MASTER_KEY_FILE: required"},
-		"no file":     {"AXIOM_MASTER_KEY_FILE=" + filepath.Join(t.TempDir(), "planted-value"), "AXIOM_MASTER_KEY_FILE: open: file not found"},
-		"not a key":   {"AXIOM_MASTER_KEY_FILE=" + notAKey, "AXIOM_MASTER_KEY_FILE: line 1: want version:base64 key"},
-	} {
-		// The database is not reached, so none is made: a node that wrongly goes on fails on this one instead.
-		environ := []string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_DATABASE_URL=postgres://planted-value@127.0.0.1:1/x", c.environ}
-		err := serve(t.Context(), environ, slog.New(slog.DiscardHandler))
-		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "planted-value") {
-			t.Errorf("%s: %v, want %q and no quoted value", name, err, c.want)
-		}
-	}
-}
-
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
 // address, closes it on the way out, so no writer goroutine outlives serve.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
@@ -334,8 +317,8 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	}
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(),
-		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
+		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("the node started on a taken address")

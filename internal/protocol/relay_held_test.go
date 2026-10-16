@@ -13,8 +13,8 @@ import (
 	"axiom/internal/catalog"
 )
 
-// footprint is what a value keeps reachable: the arrays of its slices by capacity and the bytes of its strings, each
-// array counted once however many slices share it, and its maps at twice their keys and values. Numbers, booleans and
+// footprint is what a value keeps reachable: the arrays of its slices by capacity, the bytes of its strings and the
+// values its pointers point at, each counted once however many share it, and its maps at twice their keys and values. Numbers, booleans and
 // funcs hold nothing that grows; the node's budget is shared and what a test reads from is the test's, so neither
 // counts.
 type footprint struct {
@@ -59,6 +59,7 @@ func (f *footprint) pointer(v reflect.Value) {
 		return
 	}
 	f.seen[v.Pointer()] = true
+	f.span(v.Pointer(), v.Elem().Type().Size()) // the value it points at, such as an entry of a map of pointers
 	f.walk(v.Elem())
 }
 
@@ -105,14 +106,19 @@ func (f *footprint) string(v reflect.Value) {
 
 // heldStreams grow what a relay keeps from event to event: a Chat chunk finishing thousands of choices, thousands of
 // Responses output items, a long escaped member name, more unknown usage fields than the meter keeps, a long service
-// tier repeated in every chunk; the last stream ends with a chunk that breaks after its usage was read.
+// tier repeated in every chunk; the last stream ends with a chunk that breaks after its usage was read. Converted for
+// a Chat client: a tool's long input, which waits for its deltas, that input when the upstream fails right after it, and
+// thousands of function calls.
 func heldStreams() map[string]struct {
 	f      Format
 	stream string
+	chat   bool // converted for a Chat client
 } {
 	chat := `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[`
-	var choices, items, unknown strings.Builder
+	var choices, items, calls, unknown strings.Builder
 	for i := range 5000 {
+		fmt.Fprintf(&calls, `data: {"type":"response.output_item.added","sequence_number":%d,"output_index":%d,`+
+			`"item":{"id":"fc_%0100d","type":"function_call","call_id":"c%d","name":"f","arguments":""}}`+"\n\n", i+1, i, i, i)
 		fmt.Fprintf(&choices, `%s{"index":%d,"delta":{"content":"x"},"finish_reason":"stop"}`, map[bool]string{true: ","}[i > 0], i)
 		fmt.Fprintf(&items, `data: {"type":"response.output_item.added","sequence_number":%d,"output_index":%d,`+
 			`"item":{"id":"m","type":"message","content":[]}}`+"\n\n", i+1, i)
@@ -130,16 +136,26 @@ func heldStreams() map[string]struct {
 	return map[string]struct {
 		f      Format
 		stream string
+		chat   bool
 	}{
-		"chat choices":    {Chat, chat + choices.String() + "]}\n\n" + "data: [DONE]\n\n"},
-		"responses items": {Responses, created + items.String() + completed},
+		"chat choices": {Chat, chat + choices.String() + "]}\n\n" + "data: [DONE]\n\n", false},
+		"a tool's long input for chat": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` + "\n\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"f","input":{"a":"` +
+			strings.Repeat("x", 100000) + `"}}}` + "\n\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}` + "\n\n" +
+			`data: {"type":"message_stop"}` + "\n\n", true},
+		"a tool's long start, then an error": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` + "\n\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"f","input":{"a":"` +
+			strings.Repeat("x", 100000) + `"}}}` + "\n\n" + `data: {"type":"error","error":{"type":"api_error","message":"m"}}` + "\n\n", true},
+		"function calls for chat": {Responses, created + calls.String() + completed, true},
+		"responses items":         {Responses, created + items.String() + completed, false},
 		"escaped name": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` +
 			"\n\n" + `data: {"type":"ping","` + strings.Repeat(`\u0061`, 20000) + `":1}` + "\n\n" +
-			`data: {"type":"message_delta","delta":{},"usage":{"output_tokens":1}}` + "\n\n" + `data: {"type":"message_stop"}` + "\n\n"},
+			`data: {"type":"message_delta","delta":{},"usage":{"output_tokens":1}}` + "\n\n" + `data: {"type":"message_stop"}` + "\n\n", false},
 		"long tier, bad chunk": {Chat, tiered + tiered + chat[:len(chat)-len(`"choices":[`)] +
-			`"usage":{"prompt_tokens":1,"x":` + strings.Repeat("9", 50000) + `},"choices":[1]}` + "\n\n"},
+			`"usage":{"prompt_tokens":1,"x":` + strings.Repeat("9", 50000) + `},"choices":[1]}` + "\n\n", false},
 		"unknown usage": {Chat, chat + `{"index":0,"delta":{"content":"x"},"finish_reason":"stop"}]}` + "\n\n" +
-			unknown.String() + "data: [DONE]\n\n"},
+			unknown.String() + "data: [DONE]\n\n", false},
 	}
 }
 
@@ -154,11 +170,12 @@ func TestRelayMemoryHeld(t *testing.T) {
 				if broken {
 					stream = stream[:strings.LastIndex(stream, "data:")]
 				}
-				r := NewRelay(tc.f, tc.f, bytes.NewReader([]byte(stream)), UsageContext{},
+				client := map[bool]Format{false: tc.f, true: Chat}[tc.chat]
+				r := NewRelay(client, tc.f, bytes.NewReader([]byte(stream)), UsageContext{},
 					RelayOptions{ID: "id", Model: "m", Memory: NewMemory(64 << 20)})
 				peak, err := readHeld(t, r)
 				switch n := held(r); {
-				case (broken || name == "long tier, bad chunk") != (err != nil):
+				case (broken || name == "long tier, bad chunk" || name == "a tool's long start, then an error") != (err != nil):
 					t.Fatalf("error %v", err)
 				case peak < 64<<10 && name != "unknown usage": // which the meter bounds
 					t.Errorf("the stream kept at most %d bytes, too few to show anything; charged %d", peak, r.held)

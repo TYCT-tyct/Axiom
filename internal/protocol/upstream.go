@@ -74,6 +74,9 @@ type eventReader struct {
 	// id and model are the call ID and the client's model name as JSON strings, for edits.
 	id, model string
 	tier      *string // the service tier the OpenAI formats name outside usage, kept for every usage report
+	// converting is set for a reader whose events are converted to another format: nothing of the upstream's
+	// identity reaches the client, so there is nothing to rewrite.
+	converting bool
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
@@ -156,6 +159,9 @@ func (s *eventReader) edit(n int, with string) error {
 // room is charged first: a rewrite replaces two strings at most, the id and the model, with ours, and only drops the
 // rest.
 func (s *eventReader) rewrite(rules formatRules) (event, error) {
+	if s.converting {
+		return s.e, nil
+	}
 	data, err := s.apply()
 	if err != nil {
 		return event{}, err

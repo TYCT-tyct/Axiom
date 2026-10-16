@@ -2,7 +2,7 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发同格式流的 `Relay`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；跨格式的流转换、非流式聚合和 `RenderError` 按 Issue #27 的计划随后加入，加入时改写本文。
+目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发流的 `Relay`（同格式，以及把 Messages、Responses 的流转给 Chat 客户端）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合按 Issue #27 的计划随后加入，加入时改写本文。
 
 ## 包
 
@@ -57,7 +57,7 @@
 
 ## 跨格式转换
 
-M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；Messages、Responses 客户端只走原格式的端点，其他方向返回 `*NotSupported`。本节是请求一侧，流和非流式聚合随后一个 PR 加入。
+M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；Messages、Responses 客户端只走原格式的端点，其他方向返回 `*NotSupported`。本节是请求一侧，流见「跨格式的流」，非流式聚合随后加入。
 
 - **规范模型**：`canon` 用 jsonx 读 Chat 请求，形状就是 Chat 的：M1 只有 Chat 请求要转换，以后另两种格式的客户端要跨格式时，各自读进同一个模型。凡是原样搬运的字符串都存成原文（`jsontext.Value`），引号和转义照旧写出，所以上游读到的解码值与客户端写的完全相同，不经过解码再编码。
 - **读一次**：每条消息的内容在读请求时一次读成部件，两个方向都用它；名字和拒答按下表放进部件，流式交回的推理条目在这里合并。
@@ -123,7 +123,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 
 ## 转发（草图）
 
-`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有三种格式的同格式转发（P5），跨格式、非流式聚合和 `RenderError` 是 #27 之后的 PR 要做的。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
+`Prepare` 已合并（P4，#78），这里的草图扩展它；`Relay` 已有三种格式的同格式转发（P5）和给 Chat 客户端的跨格式转发，`RenderError` 已实现；非流式聚合是 #27 之后的 PR 要做的。gateway 怎么用它们见 [gateway 的「Relay 的所有权」](../gateway/README.md#relay-的所有权)。
 
 ```go
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) // *NotSupported → gateway 跳过这个条目
@@ -164,11 +164,42 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 
 - **改写**：Messages 的 `message.id`、Responses 快照里 `response.id`、Chat 每块的 `id` 换成调用编号，对应的 `model` 换成客户端请求的名字。Chat 每块都有这两个成员，原地替换、不重新扫描；带 `provider`（OpenRouter 写上游是谁）或 `axiom` 的块才整块改写，删掉它们。`usage` 只留官方的用量成员（Messages：`input_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`、`cache_creation`、`output_tokens`、`output_tokens_details`、`server_tool_use`、`service_tier`、`speed`、`inference_geo`、`iterations`，Anthropic《Messages API reference》2026-10-15；Responses：`input_tokens`、`input_tokens_details`、`output_tokens`、`output_tokens_details`、`total_tokens`），中转站的 `cost` 之类删掉，`usage: null` 也删掉；上游写的顶层 `axiom` 删掉，免得与 `billing_pending` 重复。其余字节原样。
 - **结尾的费用**：Messages 和 Responses 在结尾的 `usage`（Responses 是 `response.usage`）末尾加 `cost`、`cost_currency`，暂估再加 `cost_estimated: true`，没有 `usage` 就在事件顶层加一个；Chat 的用量块由本站从结算写出：`usage` 按 Chat 的字段从回复段渲染再加费用，`choices` 与 OpenRouter 一样是一个不带内容、重复 `finish_reason` 的选项（很多客户端对每块都读 `choices[0]`），上游没发用量块也照样写。结算写不进时事件顶层加 `axiom.billing_pending`、不带费用。
-- **出错结尾**：Messages 是 `error` 事件，`error.type` 取 Messages 的类型（`credits_insufficient` → `billing_error`，`timeout` → `timeout_error`，`billing_unavailable`、`upstream_error` → `api_error`），`error.error_type` 是本站的类型；Responses 是 `response.failed`（`sequence_number` 接在上游最后一个之后，`response` 带调用编号、`status: "failed"`、`error.code` 为本站的类型），`error_type` 在事件顶层，`response.created` 之前出错时改写 `error` 事件，因为流只能以它们之一开头；Chat 是顶层带 `error`（`code` 是对应的 HTTP 状态：402、503、502、408，`metadata.error_type` 是本站的类型）、`finish_reason: "error"` 的块。三种都带按本格式字段从回复段渲染的 `usage`，结算提交了再加费用；扣住的块不写，提交前出错时暂存的开头随出错结尾一起写出。
+- **出错结尾**：Messages 是 `error` 事件，`error.type` 取 Messages 的类型（`credits_insufficient` → `billing_error`，`timeout` → `timeout_error`，`billing_unavailable`、`upstream_error` → `api_error`），`error.error_type` 是本站的类型；Responses 是 `response.failed`（`sequence_number` 接在上游最后一个之后，`response` 带调用编号、`status: "failed"`、`error.code` 为本站的类型），`error_type` 在事件顶层，`response.created` 之前出错时改写 `error` 事件，因为流只能以它们之一开头；Chat 是顶层带 `error`（`code` 是与 `RenderError` 同一张表的 HTTP 状态，`metadata.error_type` 是本站的类型）、`finish_reason: "error"` 的块。三种都带按本格式字段从回复段渲染的 `usage`，结算提交了再加费用；扣住的块不写，提交前出错时暂存的开头随出错结尾一起写出。
 - **用量**：按 [catalog 的「计费项与用量」](../catalog/README.md#计费项与用量)折算。几次报告按字段合并：一次报告没写的服务等级、未知计数和 `iterations` 保留之前报告的，没有报告过服务等级就按请求的。Messages：`message_start` 和各个 `message_delta` 的数按项取最新，后来的 0 不覆盖先前的正数，变小判为无效；`iterations` 里每个 `compaction` 条目是自己的一段，`message` 条目已含在顶层里；`speed: "fast"` 是快速模式；`server_tool_use.web_fetch_requests` 进 `Unknown()`。OpenAI 两种格式字段不同、含义相同：输入总量减去缓存读、缓存写、音频是 `input`，输出总量减去推理、音频是 `output`，相减之前先查总量和每个细项都在 0 到 10¹⁰ 之间，细项加起来超过总量判为无效；Chat 的用量可以在带选项的块里，从块里拿出、换成 `null`，块照常转发；`service_tier` 的 `default`、`flex`、`priority` 对应三档，其余进 `Unknown()`；用量只在结尾出现，所以一出现就是最终值。三种格式都把映射表外的非零计数放进 `Unknown()`，中转站的 `cost`、`cost_details`、`is_byok` 不是用量，不进。无效时（变小、细项超过总数、不是整数、超出范围、未知的 `iterations` 类型）不中断流，`Usage().Invalid` 写明原因，所有项都不算已报告。`Usage()` 只把最终值算作已报告：流在最后的用量事件之前断了，之前报告的输出只是下界，按准数结算会少收。
 - **字节上界**：正文、推理、工具参数按解码后的字节计；Chat 的 `reasoning_details` 和 Messages 的工具 `input` 按原文字节计。Responses 的项完成时（`response.output_item.done`）只加它比自己的增量多出的字节，所以同一段文字不计两次，没有增量、一次给全的项也计入；`web_search_call` 项计一次搜索。
 - **错误**：上游断流、流不合规、出错事件都包装 `ErrUpstream`；读失败（例如取消 `attemptCtx` 关掉响应体）原样返回；内存申请不到返回 `ErrMemory`。出错之后 `Next` 一直返回同一个错误，上游正常结束或写过结尾之后返回 `ErrTerminated`；`Finish`、`Fail` 只有第一次写结尾，之后返回空。
 - **内存**：Relay 和它的读取器跨事件留着的一切都按容量在增长之前记账：读 SSE 的两块、暂存与本步的输出、扣住的事件、结尾、原地替换和整块改写用的缓冲、原地替换的列表、反转义成员名和字符串的暂存、Chat 扣住的结束信号、Responses 每个输出项的计数、Chat 和 Responses 记下的服务等级；Chat 已开始的选项存在映射里，没有容量可查，每项按 48 字节估（推导见 `choiceSize`）。前 64 KiB 是 gateway 每路记下的基础额度，超出的向 `RelayOptions.Memory`（节点预算）申请，`Memory.Charge`、`Refund` 也是 gateway 给请求体记账的接口；`Finish`、`Fail` 时全部归还。只在一个事件内用的副本（成员名、解出的用量结构）以事件上限为界、下一个事件前就放掉，不记账。计量器要活到结算之后，所以给它定上限并在开始时先记 16 KiB（`meterMemory`）：未知用量字段回复段和压缩段各最多 16 个，字段名和值各最长 128 字节，压缩段最多 8 个；超出就判为用量无效，按估算结算，与其他无法采用的用量一样。读失败后 gateway 先结算再调 `Fail`，期间 Relay 还活着，所以失败时清空全部读取状态（读 SSE 的、解码器和成员名、各格式的暂存、扣住的、结尾、改写的），只留 `Fail` 要写的暂存开头和计量器，持有量改为这两者并归还其余。单个事件上限：Messages、Chat 1 MiB（增量和控制事件的上限），Responses 32 MiB（快照事件回显请求和全部输出，取「检查流结构」的封顶值）。
+
+## 跨格式的流
+
+`NewRelay(Chat, Messages 或 Responses, …)` 把上游的流转换给 Chat 客户端，其余跨格式的组合第一步就失败。每个转换器（`chatfrommessages.go`、`chatfromresponses.go`）持有上游格式自己的读取器：计量、内容字节上界和上游出错都由它按同格式的规则判断，只是不做改写；转换器再走一遍同一事件的数据，写出 Chat 的块。块的 `id`、`model` 是调用编号和客户端请求的名字，`created` 是 `RelayOptions.Created`。结束原因的块扣到正常结束，用量块由本站从结算写出，与同格式的 Chat 相同，`[DONE]` 结束。字段取自 Anthropic《Streaming messages》、OpenAI《Responses streaming events》（2026-10-14 读取）、OpenRouter《Reasoning tokens》「Streaming Response」（2026-10-15 读取）。
+
+| 上游 | Chat 客户端得到 |
+|---|---|
+| `message_start`、`response.created` | 一个 `role: "assistant"`、`content: ""` 的块，不是提交点 |
+| 文本：`text` 块和它的 `text_delta`，`output_text` | `content` |
+| Responses 的拒答 | `refusal` |
+| 思考 `thinking_delta`，推理文本 `reasoning_text`，推理摘要 `reasoning_summary_text` | `reasoning`，再加一条 `reasoning_details`：`reasoning.text` 或 `reasoning.summary`，带 `format`（`anthropic-claude-v1` 或 `openai-responses-v1`）和 `index`；Responses 的还带项 ID |
+| 签名 `signature_delta` | 同一 `index` 的 `reasoning.text` 条目带上 `signature`，只给开头的思考（见下） |
+| `redacted_thinking`；推理项的 `encrypted_content`（只在 `output_item.done` 里） | `reasoning.encrypted` 条目，`data` 是密文；Responses 的带项 ID |
+| `tool_use` 块，`function_call` 项 | `tool_calls`，序号从 0 起；`id` 是 `tool_use` 的 ID 或 Responses 的 `call_id`（下一轮交回时就是它）；名字在第一段，`arguments` 随增量 |
+| `tool_use` 的 `input` | 后面有 `input_json_delta` 就丢掉（官方给 `{}`）；没有增量就在块结束时作为整段参数（sub2api 遇到过只给 `input` 的上游） |
+| `ping` | 提交后写 Chat 的保活注释 |
+| 服务端工具的块和项、引用（`citations_delta`、`output_text.annotation.added`）、不认识的块或项、没有 ID（`tool_use` 的 `id`、`function_call` 的 `call_id`）或名字的工具调用（缺失、`null`、空串）、结束原因之后又来的内容 | `ErrUpstream`：转换出来的请求不会要它们，Chat 也没有地方放 |
+
+| 上游的结束 | `finish_reason` |
+|---|---|
+| `end_turn`、`stop_sequence`；`response.completed` 没有函数调用 | `stop` |
+| `tool_use`；`response.completed` 有函数调用 | `tool_calls` |
+| `max_tokens`、`model_context_window_exceeded`；`response.incomplete` 因为 `max_output_tokens` | `length` |
+| `refusal`；`response.incomplete` 因为 `content_filter` | `content_filter` |
+| `pause_turn`（只随服务端工具出现）、不认识的停止原因、`message_stop` 之前没有停止原因；`response.incomplete` 因为别的原因 | `ErrUpstream` |
+
+- **推理的回放**：一条回复里，排在所有非思考块之前的思考块给出签名和 `redacted_thinking`；排在正文或工具调用之后的只给文本、不给签名，`redacted_thinking` 不给。Chat 的助手消息表达不了「正文之后又思考」，回放时推理只能放在最前，而 Anthropic 的思考块绑定它之前的全部内容（《Preserved thinking》），挪了位置的块会被拒绝。客户端按块收到的条目原样交回或合并后交回，请求一侧都按类型和 `index` 合并（「跨格式转换」）；`TestConvertRoundTrip` 核对流 → 客户端 → 下一轮请求的往返。
+- **快照比对**：Responses 的部件会在 `*.done`、`content_part.done`、`reasoning_summary_part.done`、`output_item.done` 里再给整段。每个部件（项序号、部件序号、种类）记已发出文本解码后的长度和 SHA-256，不留原文：与已发出的相同就忽略；已发出的是它的严格前缀，就发出余下部分（重新编码，解码值不变）；从没发出过就原样整段发出；其他是 `ErrUpstream`。每一层都比也不会重复，只在 `output_item.done` 给全文的上游也完整。
+- **内容字节**：Messages 沿用上游格式读取器的计数，与同格式转发相同（同一段推理在 `reasoning` 和 `reasoning_details` 里各出现一次，按转换后的字节计会重复）。Responses 的部件可能只在快照里给出，读取器要到 `output_item.done` 才计入，所以转换器自己计：每一段发给客户端的文本（增量或快照补出的，解码后的字节）在发出的事件里计入并记在项上，重复的快照不计；`output_item.done` 再按项的大小补上没被各段覆盖的部分（如密文），因此客户端读到的内容在写出前就已计入，计到的总数与同一条流转发给 Responses 客户端相同。
+- **内存**：块的缓冲、各成员拼接中的缓冲、`tool_use` 暂存的 `input` 都在增长前记账；Responses 的项和部件存在映射里，每项按 96 字节、每个部件按 320 字节（含 SHA-256 的状态）估，见 `itemSize`、`partSize`。
+- **`RenderError(f, e, fin)`**：流开始之前的错误。状态码和 Messages 的类型按[接入的「错误」](../../docs/domains/gateway.md#错误)的表，一种类型一行（`no_endpoint` 永久的 404、暂时的 503 是名字相同的两个类型）；Chat 和 Responses 用 Chat 的外壳 `{"error":{"code","message","metadata":{"error_type",…}}}`，Messages 用 `{"type":"error","error":{"type","message","error_type",…}}`。`Error.Details` 写在类型旁边（如 402 的 `limit_source`、所需金额）；`fin` 不为空时带 `axiom.usage`：本格式的用量字段（Messages 的 `input_tokens`、`cache_*`、`output_tokens`；Responses 的 `input_tokens`、`output_tokens` 及其 `*_details`；Chat 的 `prompt_tokens`、`completion_tokens` 及其 `*_details`，不混用）加费用，结算写不进时带 `billing_pending`。调用方没给说明时用每种类型自己的说法，不出现上游的原话；流里的出错结尾用同一张表。
 
 ## 录制样本
 
@@ -182,6 +213,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | `client-<客户端格式>.sse` | `Relay` 把这个流转给该格式客户端的输出，按测试里固定的调用编号、模型名和费用；`go test ./internal/protocol -update` 重写，PR 里审差异 |
 | `meta.json` | `source`：官方样本是来源的网址，录制的是 `recorded from a live upstream: POST <官方端点>`，不写上游的地址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
 
+- `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。
 - 只收两种来源：官方文档里的完整流，以及用合成提示词录制的真实上游。官方示例常把中间事件省略成一行注释（`:` 开头），读 SSE 时注释本来就跳过，所以原样保留，在 `note` 里写明省略了什么；网页渲染改动过的空白按接口的原样还原，同样写进 `note`。
 - 样本里不能有密钥、服务器地址、用户数据；`just secrets` 在推送前扫描。样本只存请求体和流，不存头；录制真实上游时，上游生成的标识换成占位值，在 `note` 里写明（规则见「录制」）。官方示例里的 ID 本来就是示例值，原样保留。
 - `streamcheck.Sample` 检查 `meta.json` 有来源和合法日期、`request.json` 是合规的 JSON，并用对应格式的检查通过 `upstream.sse`；`TestSamples` 对每个场景读齐三个文件后调用它，录制工具写盘前也调用它，所以写下的样本一定通过样本测试。官方文档没有给出完整流的情形（Chat 的工具调用和用量块、各格式的出错结尾），只在测试里构造，不放进样本目录。
@@ -217,8 +249,11 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples` 覆盖全部样本；黄金输出也通过本格式的 `streamcheck` |
 | 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是；`TestRelayOpenAIUsage` 覆盖 OpenAI 两种格式的细项、超出总数、负数、溢出、未知计数和服务等级；`TestRelayUsageMerge` 核对后来的报告没写的等级、未知计数和 `iterations` 保留 |
 | 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes`；字节上界不漏不重 | `TestRelayProgress`；`TestRelayChatContent` 计入各方言的推理、拒答和工具调用；`TestRelayResponsesContent` 核对项完成时只加多出的字节、没有增量的项照样计入、`web_search_call` 计一次搜索；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
-| 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；`TestRelayMemoryHeld` 遍历 Relay 实际引用的全部切片、字符串和映射，按底层数组去重求和：上千个选项结束的 Chat 块、上千个 Responses 输出项、很长的转义成员名、每块都带的很长的服务等级和读完用量后才出错的块、超出上限的未知用量，每一步引用的都不超过已记账的，失败后引用的不超过 `out` 的容量加计量器的预留；`TestMeterMemory` 核对计量器在上限处不超过预留、超出就判无效；样本在预算为 0 时照常转发，说明基础额度够用 |
+| 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；`TestRelayMemoryHeld` 遍历 Relay 实际引用的全部切片、字符串和映射，按底层数组去重求和：上千个选项结束的 Chat 块、上千个 Responses 输出项、很长的转义成员名、每块都带的很长的服务等级和读完用量后才出错的块、超出上限的未知用量、`tool_use` 起始事件之后上游立刻出错（读取状态里的事件成员不能留着），每一步引用的都不超过已记账的，失败后引用的不超过 `out` 的容量加计量器的预留；`TestMeterMemory` 核对计量器在上限处不超过预留、超出就判无效；样本在预算为 0 时照常转发，说明基础额度够用 |
 | 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 40 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
+| Messages、Responses 的流转给 Chat 客户端时，每条映射和结束原因都按上表，输出与黄金输出 `to-chat.sse` 逐字节相同，整段读和逐字节读结果相同，都通过 Chat 的检查 | `TestConvertStreams` 覆盖全部样本和 `testdata/assembled` 的流；`TestConvertMessages`、`TestConvertResponses` 每条映射、每个结束原因各一例，含出错的行和快照比对的四种情况；`TestConvertToolCallFields` 核对工具调用缺 ID 或名字（缺失、`null`、空串）时在写出前以 `ErrUpstream` 失败；`TestConvertProgress` 核对快照补出的内容在该事件处就已计入、重复的快照和 `output_item.done` 不重复计，终值与同格式转发相同；`TestConvertKeepAlive`；模糊测试 `FuzzConvertStream`：检查接受的上游流转换结果与分片无关、只以 `ErrUpstream` 失败、通过 Chat 的检查，Messages 的正文与上游一致 |
+| 转换给 Chat 客户端的回复，交回下一轮时原样回到上游（I2） | `TestConvertRoundTrip`：客户端按流合并后交回，Messages 开头的思考及签名、工具调用的 ID 和参数，Responses 的推理项及摘要、密文，函数调用的 `call_id` 和参数都在转换出的请求里 |
+| 错误按表回答，不说 new-api 会据以停用渠道的话 | `TestRenderError` 每种类型 × 三种格式核对状态码、类型的位置、详情和 `axiom`，其中 `axiom.usage` 逐字段与该格式的完整用量对比（`chargedUsage`）；`TestRenderErrorCharges`；`TestErrorMessages` 核对 `RenderError` 和三种出错结尾都不含 new-api 的 `AutomaticDisableKeywords`（源码 `setting/operation_setting/operation_setting.go`，提交 ebe4c36，2026-09-08），比较不区分大小写 |
 | Chat 请求转换给 Messages、Responses 端点时，表里每一行都按表写，表达不了的返回 `*NotSupported`、类型不对的返回 `ErrInvalid` | `TestConvertToMessages`、`TestConvertToResponses` 每行至少一个用例，比较解码后的值；`TestConvertSamples` 把官方样本的请求与黄金输出逐字节比较；`TestToolUseIDs` 核对 ID 写出来仍不同、调用和结果配得上 |
 | 转换只取决于历史：第 n 轮的转换结果是第 n+1 轮的前缀（I11） | `TestConvertPrefix` 用一段含工具调用、合并的工具结果、对话中的系统消息和回放推理的对话，逐轮转换比较 |
 | Chat 请求只要 `Inspect` 接受，转换要么得到我们自己读得了的请求体，要么是 `*NotSupported` 或 `ErrInvalid`，不会 panic | 模糊测试 `FuzzConvert`，以 `Inspect` 的 Chat 用例和上面的对话为种子 |
@@ -241,6 +276,9 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | Chat 每块的 `id`、`model` 原地替换，只有要删成员的块才整块改写 | 每块都有这两个成员，整块改写会让每个事件都分配一个解码器和一份拷贝 | 每块都用改写器 |
 | Responses 在 `response.created` 之前出错时写 `error` 事件 | 流只能以 `response.created` 或 `error` 开头；网关提交前出错本来换端点，不写结尾，这是防御 | 一律 `response.failed` |
 | Responses 的项完成时只加比增量多出的字节 | 增量和完成的项重复同一段文字，两次都计会让追加提前一倍；只计增量又漏掉一次给全的项 | 只计增量；增量和项都计 |
+| 转换器持有上游格式自己的读取器，再走一遍同一事件写出 Chat 的块 | 计量、内容上界和出错判断已按同格式的规则评审过，各写一份会分叉；代价是每个事件多解析一遍，读取器不再做改写 | 转换器自己计量和判断：两份规则 |
+| `created` 用 `RelayOptions.Created`，调用开始的时间 | Messages 没有时间戳；同一路流的块都一样，黄金输出可重复 | 用上游的 `created_at`：只有 Responses 有 |
+| 推理细节每块一条、带 `index`，签名单独一条 | 与 OpenRouter 的流式写法相同，客户端看得到推理的进度；请求一侧按 `index` 合并，原样交回也能回放 | 扣到块结束再一次给出：流式客户端看不到推理 |
 | 步骤类型带 `Step` 前缀 | 草图里的 `Progress` 既是类型又是步骤类型，同一个包里不能重名 | 改名 `Progress` 类型：billing 的草图用这个名字 |
 | M1 的规范模型就是 Chat 的形状，用 jsonx 读成结构体，字符串存原文 | 只有 Chat 请求要转换；结构体让每个转换函数只看自己要的成员，原文让搬运的文本解码后不变 | 先定义与格式无关的部件类型再逐格式解码：M1 只有一个来源，多一层没有用处 |
 | 表达不了的请求返回 `*NotSupported`，不近似 | 删掉约束、换写法会让模型做的不是客户端要的；换个端点能原样表达 | 尽量转换：结构化输出删掉子集外的约束、低细节图片按高细节发 |
