@@ -39,6 +39,10 @@ func NewOperator(db *pg.DB, platformScope pg.Scope, opened OpenedFunc) *Operator
 	return &Operator{db: db, platform: platformScope, opened: opened, queries: New()}
 }
 
+// mainCurrency is the accounting currency of the main site; only a secondary site chooses its own, and the column
+// cannot change once the site exists.
+const mainCurrency = "USD"
+
 // SiteSpec is the main site: its name, its accounting currency and the host each surface is served on.
 type SiteSpec struct {
 	Name      string
@@ -65,8 +69,8 @@ func (spec SiteSpec) check() error {
 	if n := len([]rune(spec.Name)); n < 1 || n > 100 {
 		return errors.New("the site's name must be 1 to 100 characters")
 	}
-	if spec.Currency == (platform.Currency{}) {
-		return errors.New("the site's currency is required")
+	if spec.Currency.String() != mainCurrency {
+		return fmt.Errorf("the main site's currency is %q, want %s: docs/domains/billing.md 「钱的表示」", spec.Currency, mainCurrency)
 	}
 	if !sitePrefixPattern.MatchString(spec.KeyPrefix) {
 		return fmt.Errorf("key prefix %q: want up to 15 lower-case letters, digits and hyphens, then a hyphen", spec.KeyPrefix)

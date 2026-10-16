@@ -21,11 +21,11 @@ SELECT id FROM accounts.roles WHERE name = @name;
 SELECT id, account_id FROM accounts.users WHERE site_id = @site_id AND email = @email;
 
 -- name: InsertPlatformGrant :execrows
--- A user holds a role once: granting it again changes nothing.
+-- A user holds a role once: granting it again changes nothing. The index platform_grants_held decides, so two
+-- grants at once cannot both insert.
 INSERT INTO accounts.platform_grants (id, site_id, account_id, user_id, role_id)
-SELECT @id, @site_id, @account_id, @user_id, @role_id
-WHERE NOT EXISTS (
-    SELECT 1 FROM accounts.platform_grants g WHERE g.user_id = @user_id AND g.role_id = @role_id AND g.revoked_at IS NULL);
+VALUES (@id, @site_id, @account_id, @user_id, @role_id)
+ON CONFLICT (user_id, role_id) WHERE revoked_at IS NULL DO NOTHING;
 
 -- name: SetPassword :exec
 UPDATE accounts.users SET password_hash = @password_hash, factor_version = factor_version + 1 WHERE id = @id;
