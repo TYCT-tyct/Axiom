@@ -142,7 +142,9 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
 func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；key 打不开或缺适配器就失败，旧快照不动
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较交换；ErrNoEndpoint、ErrNoSlot
-func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify
+func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Body, Header}
+func NotExecuted(f *Failure) bool // 失败是否确知上游没有执行；gateway 够不到适配器的类型，只问这两个
+func RateLimited(f *Failure) bool // 上游是否回了“请求过多”，路由据此给端点降权
 func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
 func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、已到的对账键
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
@@ -160,7 +162,7 @@ func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalE
 func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
 ```
 
-与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数和单位价值（单位价值表随 billing 的换算加入）；`Send` 的入参是 `Call{Format, Body}`，`protocol.Upstream` 合并后换成它。`Failure` 是 `adapter.Failure`。
+与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数和单位价值（单位价值表随 billing 的换算加入）；`Send` 的入参是 `Call{Format, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Failure` 是 `adapter.Failure`。
 
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **日志写入有期限**：`Run` 的每次写都有自己的期限（`FlushTimeout`，默认 10 秒），超时保留数据、记日志、退避后重试。

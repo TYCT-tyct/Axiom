@@ -142,6 +142,7 @@ type supplierServer struct {
 	*httptest.Server
 	mu                      sync.Mutex
 	path, auth, version, ct string
+	beta                    string
 	body                    []byte
 }
 
@@ -152,6 +153,7 @@ func newSupplierServer(t *testing.T) *supplierServer {
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // a test server
 		s.mu.Lock()
 		s.path, s.auth, s.version, s.ct, s.body = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Anthropic-Version"), r.Header.Get("Content-Type"), body
+		s.beta = r.Header.Get("Anthropic-Beta")
 		s.mu.Unlock()
 		switch string(body) {
 		case "hangup":
@@ -209,6 +211,34 @@ func TestASuccessfulSendIsAuthenticatedAndKeepsTheKey(t *testing.T) {
 	}
 	if receipt.ref != "ref-1" || receipt.credential != w.credential || receipt.endpoint != w.endpoint || receipt.schedule != w.sc {
 		t.Errorf("receipt %+v", receipt)
+	}
+}
+
+// TestTheClientsProtocolHeadersGoUpstream: anthropic-beta reaches the supplier, the client's anthropic-version beats
+// the default, and a header cannot replace the credential or the content type.
+func TestTheClientsProtocolHeadersGoUpstream(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	server := newSupplierServer(t)
+	w.pointAt(server.URL)
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := http.Header{
+		"Anthropic-Beta": {"tools-2026"}, "Anthropic-Version": {"2024-01-01"},
+		"Authorization": {"Bearer client-key"}, "Content-Type": {"text/plain"},
+	}
+	resp, f := a.Send(t.Context(), Call{Format: protocol.Messages, Body: []byte("{}"), Header: header})
+	if f != nil {
+		t.Fatalf("%+v", f)
+	}
+	_ = resp.Body.Close() //nolint:errcheck // nothing was read
+	a.Done()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.beta != "tools-2026" || server.version != "2024-01-01" || server.auth != "Bearer sk-test-key" || server.ct != "application/json" {
+		t.Errorf("beta %q, version %q, auth %q, content type %q", server.beta, server.version, server.auth, server.ct)
 	}
 }
 
