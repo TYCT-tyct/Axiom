@@ -192,13 +192,7 @@ func checkCharged(t *testing.T, h *harness) {
 	if len(a) != 3 {
 		t.Fatalf("attempts %+v", a)
 	}
-	d := routing.DemandOf(&h.call.Request)
-	bound, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
-	d.TextBytes = (d.TextBytes + 3) / 4
-	input, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
-	if input >= bound {
-		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
-	}
+	input := estimatedInput(t, h)
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 || !a[0].Costed {
 		t.Errorf("not executed: %+v", a[0])
 	}
@@ -208,6 +202,20 @@ func checkCharged(t *testing.T, h *harness) {
 	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 2, 1<<catalog.ItemInput) || a[2].Cost != 70 {
 		t.Errorf("broken after the commit point: %+v", a[2])
 	}
+}
+
+// estimatedInput is the input of the call's second entry with its text at 4 bytes a token, which must be below the
+// admission's bound for the test to tell them apart.
+func estimatedInput(t *testing.T, h *harness) int64 {
+	t.Helper()
+	d := routing.DemandOf(&h.call.Request)
+	bound, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	d.TextBytes = (d.TextBytes + 3) / 4
+	input, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	if input >= bound {
+		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
+	}
+	return input
 }
 
 // usageIs: one sampling, of that input and output, and those items reported.
