@@ -1,0 +1,492 @@
+package gateway
+
+import (
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+
+	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol"
+)
+
+// countingBody is a request body that counts how often it was read.
+type countingBody struct {
+	reads int
+	r     io.Reader
+}
+
+func (b *countingBody) Read(p []byte) (int, error) { b.reads++; return b.r.Read(p) }
+func (*countingBody) Close() error                 { return nil }
+
+// iotestErr is a reader that fails.
+type iotestErr struct{ err error }
+
+func (e iotestErr) Read([]byte) (int, error) { return 0, e.err }
+
+// serve runs one request through the handler without a network, as the public listener wraps it.
+func (r *rig) serve(req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	httpserver.Public(r.handler, slog.New(slog.DiscardHandler), time.Minute).ServeHTTP(rec, req)
+	return rec
+}
+
+func post(t *testing.T, host, path, key string, body io.Reader) *http.Request {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+host+path, body)
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	return req
+}
+
+// TestUnrecognisedKeyIsRefusedBeforeTheBodyIsRead: a request whose host or key is not recognised is answered 401, the
+// same for every reason, and closes the connection; its body is never read.
+func TestUnrecognisedKeyIsRefusedBeforeTheBodyIsRead(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	body := messageBody("acme/beta")
+	for name, tc := range map[string]struct{ host, key string }{
+		"a key that is not known":       {apiHost, "sk-ax-v1-nope"},
+		"no key":                        {apiHost, ""},
+		"a host that is not registered": {"elsewhere.test", a.key},
+		"a console host":                {consoleHost, a.key},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &countingBody{r: strings.NewReader(body)}
+			req := post(t, tc.host, "/v1/messages", tc.key, b)
+			req.ContentLength = int64(len(body))
+			rec := r.serve(req)
+			code, typ := errorOf(t, rec.Body.String())
+			if rec.Code != http.StatusUnauthorized || b.reads != 0 || rec.Header().Get("Connection") != "close" ||
+				code != "authentication" || typ != "authentication_error" {
+				t.Errorf("%d, body read %d times, Connection %q, %s %s", rec.Code, b.reads, rec.Header().Get("Connection"), code, typ)
+			}
+		})
+	}
+	r.idle(1 << 30)
+}
+
+// TestSlowBodyOfAnUnknownKeyIsNeverWaitedFor: over a real connection, a client that announces a body and never sends it
+// is told 401 at once, because the key is judged by the headers alone (the slow-body attack the order is for).
+func TestSlowBodyOfAnUnknownKeyIsNeverWaitedFor(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { quietly(pw) })
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, r.server.URL+"/v1/messages", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host, req.ContentLength = apiHost, 1<<20
+	req.Header.Set("Authorization", "Bearer sk-ax-v1-"+strings.Repeat("A", 49))
+	done := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Error(err)
+			close(done)
+			return
+		}
+		resp.Body.Close() //nolint:errcheck,gosec // nothing was sent to read
+		done <- resp.StatusCode
+	}()
+	select {
+	case status, ok := <-done:
+		if ok && status != http.StatusUnauthorized {
+			t.Errorf("status %d", status)
+		}
+	case <-time.After(time.Minute): // the pipe is never written, so only a handler that waits for it takes longer
+		t.Fatal("the 401 did not arrive while the body was still being awaited")
+	}
+}
+
+// TestWaysToSendTheKey: the key may come as a Bearer token in any case or as x-api-key; a Bearer token wins, and an
+// Authorization of another scheme does not hide x-api-key. A recognised request's body is read.
+func TestWaysToSendTheKey(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	body := messageBody("acme/beta")
+	for name, headers := range map[string][][2]string{
+		"x-api-key":                      {{"X-Api-Key", a.key}},
+		"Bearer, in any case":            {{"Authorization", "bearer " + a.key}},
+		"Bearer over a wrong x-api-key":  {{"Authorization", "Bearer " + a.key}, {"X-Api-Key", "sk-ax-v1-nope"}},
+		"x-api-key after another scheme": {{"Authorization", "Basic abc"}, {"X-Api-Key", a.key}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &countingBody{r: strings.NewReader(body)}
+			req := post(t, apiHost, "/v1/messages", "", b)
+			req.ContentLength = int64(len(body))
+			for _, h := range headers {
+				req.Header.Set(h[0], h[1])
+			}
+			if rec := r.serve(req); rec.Code != http.StatusOK || b.reads == 0 {
+				t.Errorf("%d %s, body read %d times", rec.Code, rec.Body, b.reads)
+			}
+		})
+	}
+	r.idle(1 << 30)
+}
+
+// TestSlots: an account's slots, then the node's, are taken before the body is read, and are given back when a call
+// ends or is refused. A tenth of the node's slots is an account's by default.
+func TestSlots(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) { o.config = func(c *Config) { c.NodeInFlight = 10 } })
+	release := r.holdCalls()
+	accounts := make([]account, 10)
+	for i := range accounts {
+		accounts[i] = r.newAccount(1e9)
+	}
+	requests := make([]func() (reply, string), 10)
+	for i := range requests {
+		requests[i] = func() (reply, string) { return r.message(accounts[i], "acme/beta") }
+	}
+	together(func() {
+		r.asked(10)
+		if resp, body := r.message(accounts[0], "acme/beta"); resp.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("a second call of an account with one slot: %d %s", resp.StatusCode, body)
+		}
+		resp, body := r.message(r.newAccount(1e9), "acme/beta")
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "overloaded" || resp.Header.Get("Retry-After") != "1" {
+			t.Errorf("a call when the node's slots are taken: %d %s", resp.StatusCode, body)
+		}
+		release()
+	}, requests...)
+	r.idle(1 << 30)
+	if resp, body := r.message(accounts[0], "acme/beta"); resp.StatusCode != http.StatusOK {
+		t.Errorf("after the calls ended: %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestIPLimits: a client address may have only so many requests in flight, however it spells itself with proxy
+// headers; another address is not affected.
+func TestIPLimits(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) { o.config = func(c *Config) { c.IPInFlight = 2 } })
+	a, b, c := r.newAccount(1e9), r.newAccount(1e9), r.newAccount(1e9) // one account each: one account's gate would turn one away
+	release := r.holdCalls()
+	together(func() {
+		r.asked(2)
+		resp, body := r.do(http.MethodPost, "/v1/messages", b.key, strings.NewReader(messageBody("acme/beta")), "X-Forwarded-For", "203.0.113.9")
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusTooManyRequests || code != "rate_limited" {
+			t.Errorf("a third request from the address: %d %s", resp.StatusCode, body)
+		}
+		other := post(t, apiHost, "/v1/messages", b.key, strings.NewReader(messageBody("acme/beta")))
+		other.RemoteAddr = "198.51.100.4:5000"
+		done := make(chan *httptest.ResponseRecorder)
+		go func() { done <- r.serve(other) }()
+		r.asked(3) // admitted while the first address is at its limit
+		release()
+		if rec := <-done; rec.Code != http.StatusOK {
+			t.Errorf("another address: %d %s", rec.Code, rec.Body)
+		}
+	}, func() (reply, string) { return r.message(a, "acme/beta") }, func() (reply, string) { return r.message(c, "acme/beta") })
+	r.idle(1 << 30)
+}
+
+// TestIPKey: IPv4 addresses count one by one, IPv6 by their /64, and a v4 address in v6 clothes is the v4 address.
+func TestIPKey(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"203.0.113.7":          "203.0.113.7",
+		"::ffff:203.0.113.7":   "203.0.113.7",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"2001:db8:1:2::ffff":   "2001:db8:1:2::/64",
+	} {
+		if got := ipKey(netip.MustParseAddr(in).Unmap()); got != want {
+			t.Errorf("ipKey(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// quietly closes what a test is done with; there is nobody to tell about a failure.
+func quietly(c io.Closer) { c.Close() } //nolint:errcheck,gosec // the test is over with it
+
+// TestConnectionLimit: a client address that holds its share of connections has the next one closed as it is
+// accepted; closing one makes room.
+func TestConnectionLimit(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	cfg.IPConnections = 2
+	bp, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := bp.LimitConnections(ln)
+	t.Cleanup(func() { quietly(limited) })
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := limited.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	dial := func() net.Conn {
+		c, err := new(net.Dialer).DialContext(t.Context(), "tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { quietly(c) })
+		return c
+	}
+	dial()
+	dial()
+	third := dial()
+	one := <-accepted
+	<-accepted
+	if err := third.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := third.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("the third connection was not closed: %v", err)
+	}
+	quietly(one)
+	dial()
+	select {
+	case c := <-accepted:
+		quietly(c)
+	case <-time.After(5 * time.Second):
+		t.Error("a connection was not accepted after one closed")
+	}
+}
+
+// TestBodyLimits: a body over the limit is 413 by its announced length or as it comes, one that is cut short is 400
+// and one too slow 408, a body the node has no memory for is 503, and every byte charged is given back.
+func TestBodyLimits(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.config = func(c *Config) { c.MaxBody = 1 << 10 }
+		o.memory = 4 << 10
+	})
+	a := r.newAccount(1e9)
+	big := strings.Repeat("x", 2<<10)
+	small := messageBody("acme/beta")
+	for name, tc := range map[string]struct {
+		body   io.Reader
+		length int64
+		status int
+		code   string
+	}{
+		"announced over the limit": {strings.NewReader(big), int64(len(big)), http.StatusRequestEntityTooLarge, "request_too_large"},
+		"unannounced and over":     {io.NopCloser(strings.NewReader(big)), -1, http.StatusRequestEntityTooLarge, "request_too_large"},
+		"too slow":                 {&countingBody{r: iotestErr{os.ErrDeadlineExceeded}}, -1, http.StatusRequestTimeout, "timeout"},
+		"cut short": {
+			&countingBody{r: io.MultiReader(strings.NewReader(small[:10]), iotestErr{io.ErrUnexpectedEOF})}, int64(len(small)),
+			http.StatusBadRequest, "invalid_request",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := post(t, apiHost, "/v1/messages", a.key, tc.body)
+			req.ContentLength = tc.length
+			rec := r.serve(req)
+			if code, _ := errorOf(t, rec.Body.String()); rec.Code != tc.status || code != tc.code {
+				t.Errorf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	r.idle(4 << 10)
+	r.memory.Charge(4<<10 - 10) // what is left is smaller than a body that fits the limit
+	rec := r.serve(post(t, apiHost, "/v1/messages", a.key, strings.NewReader(small)))
+	if code, _ := errorOf(t, rec.Body.String()); rec.Code != http.StatusServiceUnavailable || code != "overloaded" {
+		t.Errorf("a body the node's memory cannot hold: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestRequestsThatAreNotServed: what M1 does not take, and what is not a request, is 400 and reserves nothing.
+func TestRequestsThatAreNotServed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for name, tc := range map[string]struct {
+		path, body string
+		header     [][2]string
+		named      string
+	}{
+		"a continued response": {"/v1/responses", `{"model":"acme/beta","input":"x","previous_response_id":"resp_1"}`, nil, "previous_response_id"},
+		"a protocol upgrade":   {"/v1/messages", messageBody("acme/beta"), [][2]string{{"Upgrade", "websocket"}}, "upgrade"},
+		"not JSON":             {"/v1/chat/completions", `{"model":`, nil, ""},
+		"no model":             {"/v1/messages", `{"max_tokens":1}`, nil, "model"},
+		"too many alternates":  {"/v1/chat/completions", `{"model":"acme/beta","models":["1","2","3","4","5","6","7","8","9"]}`, nil, "models"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := post(t, apiHost, tc.path, a.key, strings.NewReader(tc.body))
+			for _, h := range tc.header {
+				req.Header.Set(h[0], h[1])
+			}
+			rec := r.serve(req)
+			if code, _ := errorOf(t, rec.Body.String()); rec.Code != http.StatusBadRequest || code != "invalid_request" ||
+				!strings.Contains(strings.ToLower(rec.Body.String()), tc.named) {
+				t.Errorf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	if r.count(allRows) != 0 || len(r.calls()) != 0 {
+		t.Errorf("%d reservation rows, %d calls", r.count(allRows), len(r.calls()))
+	}
+	// A client that tries the WebSocket handshake of Codex on a call path is refused, and a plain GET is not allowed.
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+apiHost+"/v1/responses", nil)
+	req.Header.Set("Upgrade", "websocket")
+	if rec := r.serve(req); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request") {
+		t.Errorf("the handshake: %d %s", rec.Code, rec.Body)
+	}
+	plain := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+apiHost+"/v1/responses", nil)
+	if rec := r.serve(plain); rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "POST" {
+		t.Errorf("a GET: %d, Allow %q", rec.Code, rec.Header().Get("Allow"))
+	}
+	r.idle(1 << 30)
+}
+
+// TestPathsAndFormats: each call path answers under both prefixes, and the call knows the format of its path.
+func TestPathsAndFormats(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	cases := []struct {
+		path, body string
+		format     protocol.Format
+	}{
+		{"/chat/completions", `{"model":"acme/beta","max_tokens":10,"service_tier":"default","messages":[{"role":"user","content":"hi"}]}`, protocol.Chat},
+		{"/responses", `{"model":"acme/beta","max_output_tokens":10,"service_tier":"default","input":"hi"}`, protocol.Responses},
+		{"/messages", messageBody("acme/beta"), protocol.Messages},
+	}
+	for _, prefix := range []string{"/v1", "/api/v1"} {
+		for _, c := range cases {
+			resp, body := r.do(http.MethodPost, prefix+c.path, a.key, strings.NewReader(c.body))
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s%s: %d %s", prefix, c.path, resp.StatusCode, body)
+				continue
+			}
+			calls := r.calls()
+			if got := calls[len(calls)-1].Format; got != c.format {
+				t.Errorf("%s%s: format %v, want %v", prefix, c.path, got, c.format)
+			}
+		}
+	}
+}
+
+// TestAlternateModels: the models a request lists follow its own in the route, and one that does not exist is left
+// out.
+func TestAlternateModels(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	body := `{"model":"acme/alpha","models":["acme/none","acme/beta"],"max_tokens":` + itoa(maxOutput) + `,"service_tier":"standard_only","messages":[]}`
+	resp, out := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, out)
+	}
+	var got []string
+	for _, e := range r.calls()[0].Plan.Entries {
+		got = append(got, e.Model.String())
+	}
+	want := []string{r.alpha.String(), r.alpha.String(), r.beta.String()}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("models of the route (-want +got):\n%s", diff)
+	}
+}
+
+// TestForwardedHeaders: only the protocol's own headers go upstream, as they were written; the client's credentials
+// and the headers that name its tooling do not.
+func TestForwardedHeaders(t *testing.T) {
+	t.Parallel()
+	in := http.Header{
+		"Authorization": {"Bearer secret"}, "X-Api-Key": {"secret"}, "X-Axiom-Preset": {"x"}, "X-Claude-Code-Session-Id": {"s"},
+		"Http-Referer": {"https://app.example"}, "X-Title": {"app"}, "Cookie": {"a=b"}, "Content-Type": {"application/json"},
+		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
+		"Anthropic-Version": {"2023-06-01"},
+	}
+	want := http.Header{
+		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
+		"Anthropic-Version": {"2023-06-01"},
+	}
+	if diff := cmp.Diff(want, forwardable(in)); diff != "" {
+		t.Errorf("forwarded headers (-want +got):\n%s", diff)
+	}
+}
+
+// listedModel is a model of the list with the members of OpenAI's and of Anthropic's.
+type listedModel struct {
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	Type        string `json:"type"`
+	OwnedBy     string `json:"owned_by"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   string `json:"created_at"`
+	Created     *int64 `json:"created"`
+}
+
+func (m listedModel) complete() bool {
+	return m.Object == "model" && m.Type == "model" && m.OwnedBy != "" && m.DisplayName != "" && m.CreatedAt != "" && m.Created != nil
+}
+
+// listIDs reads the model list at path and returns the IDs, checking every model carries the members OpenAI's and
+// Anthropic's clients read.
+func (r *rig) listIDs(a account, path string) []string {
+	r.t.Helper()
+	resp, body := r.do(http.MethodGet, path, a.key, nil)
+	var list struct {
+		Object  string        `json:"object"`
+		HasMore bool          `json:"has_more"`
+		FirstID string        `json:"first_id"`
+		Data    []listedModel `json:"data"`
+	}
+	if resp.StatusCode != http.StatusOK || jsonx.Unmarshal([]byte(body), &list) != nil || list.Object != "list" || len(list.Data) == 0 {
+		r.t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	var ids []string
+	for _, m := range list.Data {
+		if !m.complete() {
+			r.t.Errorf("model %+v lacks a member OpenAI or Anthropic clients read", m)
+		}
+		ids = append(ids, m.ID)
+	}
+	if list.FirstID != ids[0] || list.HasMore {
+		r.t.Errorf("first_id %q, has_more %v", list.FirstID, list.HasMore)
+	}
+	return ids
+}
+
+// TestModelList: the list names every model by the name the catalog gives it and by its maker's own where that
+// resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog.
+func TestModelList(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-test", "claude-test"}
+	for _, path := range []string{"/v1/models", "/api/v1/models"} {
+		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", path, diff)
+		}
+	}
+	r.model("acme/gamma")
+	if err := r.catalog.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.listIDs(a, "/v1/models"); len(got) != 5 {
+		t.Errorf("after a model was listed: %v", got)
+	}
+	resp, body := r.do(http.MethodGet, "/v1/models", "", nil, "Anthropic-Version", "2023-06-01")
+	if code, typ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" || typ != "authentication_error" {
+		t.Errorf("without a key: %d %s", resp.StatusCode, body)
+	}
+}
