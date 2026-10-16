@@ -1,0 +1,7 @@
+# 53-err-self-bad-pat
+GET /api/user/self
+> Authorization: Bearer nap_doesnotexist00000000000000000000000000000
+< status: 401  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token","message_key":"Unauthorized, invalid access token","success":false}
