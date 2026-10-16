@@ -25,7 +25,9 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
-	defer a.landed(true) //nolint:errcheck // billing settles with no extension in flight; its outcome changes nothing now
+	// Billing settles with no extension in flight, and the extension's goroutine must not outlive the call, whose slots
+	// bound it; its outcome changes nothing now.
+	defer a.landed(true) //nolint:errcheck // see above
 	for {
 		st, err := relay.Next()
 		if err != nil {

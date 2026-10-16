@@ -170,6 +170,19 @@ func checkCutStream(t *testing.T, h *harness, tc cutCase) {
 	}
 }
 
+// TestAnExtensionThatFailsEarlyCutsAtOnce: one that fails while the segment still has room cuts the stream at the next
+// read, without waiting for the segment to run out (docs/domains/billing.md「预留与结算」).
+func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{extend: func(context.Context, billing.ExtendRequest) error { return errors.New("connection refused") }}))
+		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart), h.feed(evBlock), beat{data: text(130)}, beat{wait: time.Second, data: text(1)})}
+		h.run()
+		if h.elapsed() != time.Second || !strings.Contains(h.w.body(), `"error_type":"billing_unavailable"`) || strings.Contains(h.w.body(), `"x"`) {
+			t.Errorf("after %v:\n%s", h.elapsed(), h.w.body())
+		}
+	})
+}
+
 // TestNoSettlementWhileAnExtensionIsInFlight: billing settles a reservation with no extension in flight, so a stream that
 // breaks while one is waits for it first.
 func TestNoSettlementWhileAnExtensionIsInFlight(t *testing.T) {
