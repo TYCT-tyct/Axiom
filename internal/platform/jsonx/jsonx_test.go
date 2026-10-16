@@ -31,16 +31,27 @@ func TestValidate(t *testing.T) {
 		{"invalid UTF-8", "\"\xff\"", errSyntax},
 		{"escaped lone surrogate", `"\ud800"`, errSyntax},
 		{"truncated", `{"a":`, errSyntax},
+		{"large", "[" + strings.Repeat("1,", keepMax) + "1]", nil},
+		{"large and too deep", nested(MaxDepth+1) + strings.Repeat(" ", keepMax), errTooDeep},
+		{"large and duplicate name", `{"a":1,` + strings.Repeat(" ", keepMax) + `"a":2}`, errSyntax},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Validate([]byte(tc.data))
-			var syntax *jsontext.SyntacticError
-			if errors.Is(tc.want, errSyntax) && !errors.As(err, &syntax) || !errors.Is(tc.want, errSyntax) && !errors.Is(err, tc.want) {
-				t.Fatalf("Validate = %v, want %v", err, tc.want)
+			// The Validator is shared by the cases, so a case that follows a failed or a large one shows what it kept.
+			for name, validate := range map[string]func([]byte) error{"Validate": Validate, "Validator": validator.Validate} {
+				err := validate([]byte(tc.data))
+				var syntax *jsontext.SyntacticError
+				if errors.Is(tc.want, errSyntax) && !errors.As(err, &syntax) || !errors.Is(tc.want, errSyntax) && !errors.Is(err, tc.want) {
+					t.Fatalf("%s = %v, want %v", name, err, tc.want)
+				}
+			}
+			if (len(tc.data) > keepMax) != (validator.dec == nil) {
+				t.Errorf("after %d bytes the Validator keeps its decoder: %t, want %t", len(tc.data), validator.dec != nil, len(tc.data) <= keepMax)
 			}
 		})
 	}
 }
+
+var validator Validator
 
 var errSyntax = errors.New("syntax error")
 

@@ -28,11 +28,45 @@ var (
 	errTrailing = errors.New("jsonx: data after the JSON value")
 )
 
+// keepMax is the largest document a Validator keeps its decoder after: what a decoder retains between documents
+// (its names and nesting stacks) grows with the document it read, so a Validator that outlives a stream's large event
+// would hold what the event needed. 4 KiB covers the events streams are made of; a larger document, whose cost
+// dwarfs a decoder's, gets a decoder of its own.
+const keepMax = 4 << 10
+
+// Validator is Validate for a caller that validates many documents one after another, such as the events of a stream:
+// it keeps the decoder instead of building one each time. The zero value is ready; it is not safe for concurrent use.
+type Validator struct {
+	buf bytes.Buffer
+	dec *jsontext.Decoder
+}
+
 // Validate returns nil when data is exactly one JSON value, optionally surrounded by whitespace, that satisfies the
 // policy in the package comment.
 func Validate(data []byte) error {
 	// A bytes.Buffer lets the decoder parse data in place instead of copying it.
-	dec := jsontext.NewDecoder(bytes.NewBuffer(data))
+	return validate(jsontext.NewDecoder(bytes.NewBuffer(data)))
+}
+
+// Validate is the function Validate, reusing the decoder of the documents before.
+func (v *Validator) Validate(data []byte) error {
+	v.buf = *bytes.NewBuffer(data)
+	if v.dec == nil {
+		v.dec = jsontext.NewDecoder(&v.buf)
+	} else {
+		v.dec.Reset(&v.buf)
+	}
+	err := validate(v.dec)
+	v.buf = bytes.Buffer{} // neither the buffer nor the decoder may keep data alive
+	if len(data) > keepMax {
+		v.dec = nil
+	} else {
+		v.dec.Reset(&v.buf)
+	}
+	return err
+}
+
+func validate(dec *jsontext.Decoder) error {
 	for {
 		if _, err := dec.ReadToken(); err != nil {
 			if errors.Is(err, io.EOF) {
