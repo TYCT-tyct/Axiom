@@ -3,11 +3,13 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -93,8 +95,10 @@ GRANT axiom_lookup TO axiom_owner WITH INHERIT FALSE, SET TRUE;`
 // lock, so concurrent runs wait for each other, and a run that dies leaves the lock with its connection; the next run
 // continues from the recorded versions. Every lock is waited for at most about 5 seconds: a long transaction or
 // another run makes this one fail instead of queueing the application's queries behind it. A failed connection,
-// wherever it happens, is reported without the URL's parts. ctx bounds the whole run, long DDL included, and a
-// connection that is not made within DefaultConnectTimeout fails (MigrateWith sets another).
+// wherever it happens, is reported without the URL's parts. ctx bounds the whole run, long DDL included: the server
+// ends any statement at the deadline by itself (statement_timeout), and the run returns within stopGrace of it even if
+// the server stops answering. A connection that is not made within DefaultConnectTimeout fails (MigrateWith sets
+// another).
 func Migrate(ctx context.Context, adminURL string, modules ...Module) error {
 	return MigrateWith(ctx, adminURL, DefaultConnectTimeout, modules...)
 }
@@ -103,8 +107,17 @@ func Migrate(ctx context.Context, adminURL string, modules ...Module) error {
 // not left to the operating system's minutes.
 const DefaultConnectTimeout = 10 * time.Second
 
-// MigrateWith is Migrate with the time each connection may take to be made. The URL's own connect_timeout does not
-// count: a deployment sets the limit in one place.
+// closeTimeout is how long closing the bootstrap connection may take.
+const closeTimeout = 5 * time.Second
+
+// stopGrace is how long after ctx ends the run may take to wind down (cancel the statement, release goose's lock, close
+// the connections) before MigrateWith gives up waiting. goose releases its lock with a context that cannot be cancelled,
+// so a server that stops answering would otherwise hold the run forever; the caller then exits, the connections close
+// with the process, and the server ends the session and with it the lock.
+const stopGrace = 15 * time.Second
+
+// MigrateWith is Migrate with the time each connection may take to be made, from the name lookup to the end of the
+// handshake, across all the addresses of the host together. A connect_timeout in the URL can only shorten that.
 func MigrateWith(ctx context.Context, adminURL string, connectTimeout time.Duration, modules ...Module) error {
 	all, err := ordered(modules)
 	if err != nil {
@@ -113,7 +126,50 @@ func MigrateWith(ctx context.Context, adminURL string, connectTimeout time.Durat
 	if connectTimeout <= 0 {
 		return errors.New("migrate: the connect timeout must be positive")
 	}
-	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", migrate(ctx, adminURL, connectTimeout, all))
+	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", runBounded(ctx, stopGrace, func() error {
+		return migrate(ctx, adminURL, connectTimeout, all)
+	}))
+}
+
+// runBounded runs f and returns its result, or, if f is still running grace after ctx ended, gives up on it. f is left
+// running: the caller is about to exit.
+func runBounded(ctx context.Context, grace time.Duration, f func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(grace):
+		return fmt.Errorf("migrate did not stop within %s of its deadline: %w", grace, context.Cause(ctx))
+	}
+}
+
+// timedConnector gives every new database/sql connection one deadline for the whole connect.
+type timedConnector struct {
+	driver.Connector
+	timeout time.Duration
+}
+
+func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.Connector.Connect(ctx)
+}
+
+// statementTimeout is what is left of the run, in milliseconds, for the server to end a statement by itself at the
+// deadline: a cancel request is sent from the client's background and may not get out before the process exits. It is a
+// setting of every connection from the start; the connections are made at the start of the run, so none outlives the
+// deadline by more than the setup.
+func statementTimeout(deadline time.Time, bounded bool) string {
+	if !bounded {
+		return "0"
+	}
+	return strconv.FormatInt(max(time.Until(deadline).Milliseconds(), 1), 10)
 }
 
 func migrate(ctx context.Context, adminURL string, connectTimeout time.Duration, modules []Module) error {
@@ -121,15 +177,16 @@ func migrate(ctx context.Context, adminURL string, connectTimeout time.Duration,
 	if err != nil {
 		return errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string")
 	}
-	config.ConnectTimeout = connectTimeout
+	deadline, bounded := ctx.Deadline()
 	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
-	if err := prepare(ctx, config, modules); err != nil {
+	config.RuntimeParams["statement_timeout"] = statementTimeout(deadline, bounded)
+	if err := prepare(ctx, config, connectTimeout, modules); err != nil {
 		return err
 	}
-	db := stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+	db := sql.OpenDB(timedConnector{stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
 		_, err := conn.Exec(ctx, "SET ROLE axiom_owner")
 		return err
-	}))
+	})), connectTimeout})
 	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
 	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // goose retries every second, 5 times
 	if err != nil {
@@ -164,12 +221,18 @@ func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) er
 
 // prepare runs bootstrap and creates each module's schema for axiom_owner, which may not create schemas itself, in
 // one transaction on its own connection.
-func prepare(ctx context.Context, config *pgx.ConnConfig, modules []Module) error {
-	conn, err := pgx.ConnectConfig(ctx, config)
+func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	conn, err := pgx.ConnectConfig(connectCtx, config)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("connect as the migration administrator: %w", err)
 	}
-	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the transaction already reported the outcome
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+		defer cancel()
+		_ = conn.Close(closeCtx) //nolint:errcheck // the transaction already reported the outcome
+	}()
 	if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, bootstrap); err != nil {
 			return err
