@@ -351,7 +351,7 @@ func FuzzPrepare(f *testing.F) {
 		if err != nil {
 			t.Fatalf("%s: %v", out, err)
 		}
-		r.Model, r.Previous, r.TextBytes = "up", "", r.TextBytes+int64(len(out)-len(body))
+		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
 		if diff := cmp.Diff(r, got); diff != "" {
 			t.Fatalf("%s:\n%s", out, diff)
 		}

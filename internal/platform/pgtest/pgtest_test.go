@@ -1,6 +1,17 @@
 package pgtest
 
-import "testing"
+import (
+	"context"
+	"net/url"
+	"strings"
+	"testing"
+	"testing/fstest"
+
+	"github.com/jackc/pgx/v5"
+	"golang.org/x/sync/errgroup"
+
+	"axiom/internal/platform/pg"
+)
 
 // TestDockerHostFor: on Windows without DOCKER_HOST the pipe is named, so testcontainers does not have to find it by
 // checking that the path exists, which fails while the pipe is busy; whatever the developer set is kept, and other
@@ -15,6 +26,65 @@ func TestDockerHostFor(t *testing.T) {
 	} {
 		if got := dockerHostFor(c.goos, c.current); got != c.want {
 			t.Errorf("%s with %q: %q, want %q", c.goos, c.current, got, c.want)
+		}
+	}
+}
+
+func nameOf(t *testing.T, databaseURL string) string {
+	t.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(u.Path, "/")
+}
+
+// TestDatabasesAreSeparate: each test has a database of its own, whatever else shares the cluster.
+func TestDatabasesAreSeparate(t *testing.T) {
+	first, second := New(t), New(t)
+	if nameOf(t, first.Superuser) == nameOf(t, second.Superuser) {
+		t.Fatal("two tests got the same database")
+	}
+	if err := Run(t.Context(), first.Superuser, "CREATE TABLE only_here (n int)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(t.Context(), second.Superuser, "INSERT INTO only_here VALUES (1)"); err == nil {
+		t.Error("a table made in one test's database is visible in another's")
+	}
+}
+
+// TestTemplatesAreBuiltUnderConcurrentBuilders: binaries of one run build templates at the same time, the same one or
+// different ones. Each goroutine here stands for one binary: the mutex of templateFor is not shared between binaries,
+// so they go straight to ensureTemplate. All must succeed and every template must hold its own module's migration.
+func TestTemplatesAreBuiltUnderConcurrentBuilders(t *testing.T) {
+	New(t) // the cluster is up
+	var group errgroup.Group
+	modules := map[string]pg.Module{}
+	for _, module := range []string{"catalog", "billing"} {
+		up := "-- +goose Up\nCREATE FUNCTION " + module + ".built() RETURNS text LANGUAGE sql RETURN 'built';\n"
+		m := pg.Module{Name: module, Migrations: fstest.MapFS{"00001_built.sql": {Data: []byte(up)}}}
+		modules["axiom_template_concurrent_"+module+"_"+runID] = m
+		for range 3 {
+			group.Go(func() error {
+				return ensureTemplate(context.Background(), "axiom_template_concurrent_"+module+"_"+runID, []pg.Module{m})
+			})
+		}
+	}
+	if err := group.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	for name, m := range modules {
+		conn, err := pgx.Connect(t.Context(), at("postgres", "postgres", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var built string
+		err = conn.QueryRow(t.Context(), "SELECT "+m.Name+".built()").Scan(&built)
+		if closeErr := conn.Close(context.WithoutCancel(t.Context())); closeErr != nil {
+			t.Error(closeErr)
+		}
+		if err != nil || built != "built" {
+			t.Errorf("template %s: built() is %q (%v), want the migration applied", name, built, err)
 		}
 	}
 }

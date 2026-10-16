@@ -83,7 +83,7 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 	if err != nil {
 		return err
 	}
-	return redactConnect("AXIOM_DATABASE_URL", db.Tx(ctx, Scope{}, func(tx Tx) error {
+	return redactConnect(DatabaseURLVar, db.Tx(ctx, Scope{}, func(tx Tx) error {
 		if err := loginAudit.run(ctx, tx); err != nil {
 			return err
 		}
