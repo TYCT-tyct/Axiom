@@ -230,8 +230,9 @@ func (c *locked) price(ctx context.Context, tx pg.Tx, o Outcome, last AttemptRes
 }
 
 // waiverCost is what waiving the call costs the platform, as the daily cap counts it: each attempt's cost, or, for one
-// whose cost is not all known, what its usage sells for at its entry's locked price. The 保本线 keeps a sale price at or
-// above the cost, so the cap stops no later than it would at the true cost (docs/domains/billing.md「免单规则」).
+// whose cost is not all known, what its usage sells for at its entry's locked price: the revenue the waiver gives up,
+// which the 保本线 will also make an upper bound of the cost once it is enforced across currencies
+// (docs/domains/billing.md「免单规则」).
 func (c *locked) waiverCost(o Outcome) (int64, error) {
 	var cost int64
 	for _, at := range o.Attempts {
