@@ -238,23 +238,7 @@ func TestKnownKeyNeedsNoDatabase(t *testing.T) {
 func TestMissesShareOneLookup(t *testing.T) {
 	t.Parallel()
 	_, database, s, key := callSetup(t)
-	admin, err := pg.Open(t.Context(), database.Superuser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(admin.Close)
-	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	go func() {
-		done <- admin.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
-			if _, err := tx.Exec(t.Context(), "LOCK TABLE accounts.api_keys IN ACCESS EXCLUSIVE MODE"); err != nil {
-				return err
-			}
-			close(locked)
-			<-release
-			return nil
-		})
-	}()
-	<-locked
+	admin, release := lockTable(t, database, "accounts.api_keys")
 	var wg sync.WaitGroup
 	results := make(chan error, 20)
 	for range 20 {
@@ -263,18 +247,12 @@ func TestMissesShareOneLookup(t *testing.T) {
 			results <- err
 		})
 	}
-	waiting := func() string {
-		return texts(t, admin, pg.Scope{}, `SELECT count(*)::text FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
-	}
-	for deadline := time.Now().Add(10 * time.Second); waiting() == "0" && time.Now().Before(deadline); {
-		time.Sleep(10 * time.Millisecond)
-	}
+	awaitLookup(t, admin)
 	time.Sleep(300 * time.Millisecond) // time for any further lookup to reach the lock
-	if n := waiting(); n != "1" {
+	if n := lookupsWaiting(t, admin); n != "1" {
 		t.Errorf("%s lookups waiting, want 1", n)
 	}
-	close(release)
+	release()
 	wg.Wait()
 	close(results)
 	for err := range results {
@@ -282,9 +260,125 @@ func TestMissesShareOneLookup(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	if err := <-done; err != nil {
+}
+
+// TestEachWaiterKeepsItsDeadline: a shared lookup does not end when the request that started it leaves, and a request
+// waiting on it stops at its own deadline, while the others still get the answer.
+func TestEachWaiterKeepsItsDeadline(t *testing.T) {
+	t.Parallel()
+	_, database, s, key := callSetup(t)
+	admin, release := lockTable(t, database, "accounts.api_keys")
+	authenticate := func(ctx context.Context) chan error {
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.AuthenticateKey(ctx, accounts.SiteID(s1), key)
+			result <- err
+		}()
+		return result
+	}
+	first, leave := context.WithCancel(t.Context())
+	started := authenticate(first)
+	awaitLookup(t, admin)
+	patient := authenticate(t.Context())
+	hurried, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	impatient := authenticate(hurried)
+	time.Sleep(50 * time.Millisecond) // the others join the lookup
+	leave()
+	if err := <-started; !errors.Is(err, context.Canceled) {
+		t.Errorf("the request that left: %v", err)
+	}
+	if err := <-impatient; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the request whose deadline passed: %v", err)
+	}
+	release()
+	if err := <-patient; err != nil {
+		t.Errorf("the request still waiting: %v", err)
+	}
+}
+
+// lockTable holds table locked from a superuser connection until release, which waits for the unlock.
+func lockTable(t *testing.T, database pgtest.Database, table string) (*pg.DB, func()) {
+	t.Helper()
+	admin, err := pg.Open(t.Context(), database.Superuser)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(admin.Close)
+	locked, unlock, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- admin.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE "+table+" IN ACCESS EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			close(locked)
+			<-unlock
+			return nil
+		})
+	}()
+	<-locked
+	return admin, func() {
+		close(unlock)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// awaitLookup waits until a key lookup waits for the lock.
+func awaitLookup(t *testing.T, admin *pg.DB) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); lookupsWaiting(t, admin) == "0" && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func lookupsWaiting(t *testing.T, admin *pg.DB) string {
+	t.Helper()
+	return texts(t, admin, pg.Scope{}, `SELECT count(*)::text FROM pg_stat_activity
+		WHERE wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
+}
+
+// TestReloadGivesUpAndRecovers: a reload the database does not answer gives up within its limit instead of holding
+// the reload loop, and the next one succeeds once the database answers.
+func TestReloadGivesUpAndRecovers(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	s := node(t, db, hashKeys(t, 1), nil)
+	_, release := lockTable(t, database, "accounts.sites")
+	began := time.Now()
+	if err := s.Reload(t.Context()); err == nil || time.Since(began) > 8*time.Second {
+		t.Errorf("a reload against a locked table: %v after %v", err, time.Since(began))
+	}
+	release()
+	if err := s.Reload(t.Context()); err != nil {
+		t.Errorf("the next reload: %v", err)
+	}
+}
+
+// BenchmarkAdmit measures Admit's query against an empty transaction in the same account scope on the same database,
+// the increment README.md「认出与准入」 asks for.
+func BenchmarkAdmit(b *testing.B) {
+	db, _, s, key := callSetup(b)
+	c, err := s.AuthenticateKey(b.Context(), accounts.SiteID(s1), key)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("empty transaction", func(b *testing.B) {
+		for b.Loop() {
+			if err := db.Tx(b.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(pg.Tx) error { return nil }); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("Admit", func(b *testing.B) {
+		for b.Loop() {
+			if err := s.Admit(b.Context(), c, accounts.AdmitRequest{Domain: apiDomain, ClientIP: client},
+				func(pg.Tx, accounts.Admission) error { return nil }); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // TestLookupsStayInTheirSite: the definer functions, which read past every policy, answer only for the site or

@@ -247,7 +247,12 @@ func TestChat(t *testing.T) {
 		{"call without its id", stream(strings.Replace(callStart(0), `"id":"call_0",`, "", 1)), "starts call 0 with its id and name"},
 		{"skipped call index", stream(callStart(1)), "starts call 0"},
 		{"continuing a call not started", stream(callStart(0), callArgs(1)), "starts call 1"},
-		{"usage with choices", stream(finish, strings.Replace(usage, "[]", `[{"index":0,"delta":{}}]`, 1)), "usage chunk with choices"},
+		{
+			"usage with OpenRouter's finished choice",
+			stream(finish, strings.Replace(usage, "[]", `[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]`, 1), "[DONE]"), "",
+		},
+		{"usage with content", stream(finish, strings.Replace(usage, "[]", `[{"index":0,"delta":{"content":"x"}}]`, 1)), "a delta with content"},
+		{"usage with a new choice", stream(finish, strings.Replace(usage, "[]", `[{"index":1,"delta":{}}]`, 1)), "did not finish"},
 		{"usage before finish", stream(text, usage), "before every choice finished"},
 		{"chunk after usage", stream(finish, usage, text), "after the error or usage chunk"},
 		{"chunk after an error", stream(`{"error":{}}`, text), "after the error or usage chunk"},

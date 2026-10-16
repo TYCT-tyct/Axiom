@@ -71,6 +71,9 @@ var (
 const (
 	reloadEvery = 30 * time.Second
 	staleAfter  = 3 * reloadEvery
+	// reloadTimeout bounds one reload, so a database that stops answering cannot hold the only reload loop: the
+	// next tick tries again on a fresh connection.
+	reloadTimeout = 5 * time.Second
 )
 
 // Load reads the snapshot, refusing a role with a permission the code does not declare, then reloads it every
@@ -88,13 +91,20 @@ func (s *Service) Load(ctx context.Context, logger *slog.Logger) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := s.reload(ctx); err != nil && ctx.Err() == nil {
+				if err := s.reloadWithin(ctx); err != nil && ctx.Err() == nil {
 					logger.Error("reload the site snapshot", "err", err)
 				}
 			}
 		}
 	}()
 	return nil
+}
+
+// reloadWithin is reload bounded by reloadTimeout.
+func (s *Service) reloadWithin(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, reloadTimeout)
+	defer cancel()
+	return s.reload(ctx)
 }
 
 // reload reads the snapshot in one read-only transaction, so its tables agree with each other.
