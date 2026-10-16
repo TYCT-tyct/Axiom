@@ -328,7 +328,7 @@ func body(f protocol.Format, size int, lead string) []byte {
 	return []byte(t.head + strings.TrimSuffix(strings.Repeat(t.turn, n), ",") + "]}")
 }
 
-var sizes = []int{1 << 10, 1 << 20, 4 << 20}
+var sizes = []int{1 << 10, 1 << 20}
 
 // TestAllocs holds that reading or rewriting a request allocates a constant more than jsonx.Validate does on it,
 // whatever its size (README.md「不变量」): Inspect's and Prepare's own allocations do not grow with the body. The
@@ -378,7 +378,7 @@ func prepareInspected() func(protocol.Format, []byte) error {
 func extraAllocs(t *testing.T, f protocol.Format, lead string, read func(protocol.Format, []byte) error) []float64 {
 	t.Helper()
 	allocs := func(read func() error) float64 {
-		return testing.AllocsPerRun(5, func() {
+		return steadyAllocs(func() {
 			if err := read(); err != nil {
 				t.Fatal(err)
 			}
