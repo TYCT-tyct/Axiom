@@ -9,13 +9,14 @@
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥；供应商凭证的信封加密与明文脱敏 |
-| `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查 |
+| `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi` | 由 `api/console.yaml` 生成的控制台接口类型和服务端接口，除包说明外不手写 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查 |
-| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好 |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
+| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一个测试二进制里每次调用给的模块必须相同 |
+| `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
 
@@ -95,7 +96,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 监听 | 提供什么 |
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 控制台接口（`/api/console/v1/…`）；以后加模型调用接口、控制台页面、支付回调 |
-| 探针 `AXIOM_OPS_ADDR` | 健康检查 |
+| 探针 `AXIOM_OPS_ADDR` | 健康检查；`/metrics` |
 
 公网的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -104,6 +105,17 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 - **panic**：还没发出响应时返回 500（带请求 ID）；响应已经开始时（写过内容，或只刷新过响应头）中断连接，让客户端看到响应不完整，而不是一个状态码错误却"完整"的响应。被中断的请求也记访问日志。
 - 包装响应时实现 `FlushError` 和 `Unwrap`，流式处理器通过 `http.ResponseController` 刷新和设置期限，刷新也算响应已开始。
 - 生成的接口代码的每条出错路径都在 `cmd/axiom` 里设定，不留默认值：请求本身不合法时返回 400，说明只涉及客户端自己发来的内容；处理器出错时记日志、只返回 500，不把内部错误原文发给客户端。
+
+## 遥测
+
+指标和链路追踪的基座（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）：OpenTelemetry 的 API 与 SDK，指标经 Prometheus 导出器暴露。`telemetry.New` 在 `serve` 里建出提供者，`cmd/axiom` 把它们作为参数交给 `pg.Open`（`pg.WithTracerProvider`）、`egress`（`egress.WithTracerProvider`）、`httpserver.NewTelemetry` 和各模块；**不用 OpenTelemetry 的全局**，并行的测试各自持有自己的，互不影响。
+
+- **指标只在探针监听 `/metrics` 上**，公网监听没有这个路径（测试：公网 404，探针 200，`text/plain`）。指标放在专用的注册表里，只有经 `Metrics` 注册的才会出现，不带 Go 运行时和进程的默认集合（运行时指标随第一个需要它们的告警加入）。
+- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`，如 `axiom_http_server_requests_total`、`axiom_http_server_duration_seconds`、`axiom_observability_queue_depth`。
+- **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
+- **链路**：每个公网请求一个服务端跨度，名字是路由模式，属性 `request_id`（与 `X-Request-ID` 相同）、状态码；`pg` 的事务（`db.tx`）和 `egress` 的出站请求（`egress.request`，到响应头为止）是它的子跨度，同一个 trace。跨度属性只有主机名、状态码、`db.system` 这类有界的值：不记语句（可能含数据）、不记错误文本（可能引用地址或数据）、不记路径和查询。测试：请求路径、查询和语句里放入标记值，没有任何跨度属性含它；并核对父子关系和请求 ID。
+- **采样与导出**：提供者现在不带导出器，跨度在进程内产生后丢弃，所以没有采样可调；导出器是 `telemetry.New` 的一个 `SpanProcessor` 参数。设计：接上第一个收集器时用父级决定加按比例采样（默认 10%，出错的请求总采），OTLP/HTTP 导出，地址和凭证由标准的 `OTEL_EXPORTER_OTLP_*` 变量给，配置错了不启动。OTLP 导出器要带进 gRPC、protobuf 等一批依赖，等有收集器的部署再决定并评审，不在这里预先引入。
+- **不记**对话正文和密钥：指标没有任何自由文本，跨度属性按上面的白名单。
 
 ## 健康检查
 
@@ -135,7 +147,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ### 迁移
 
-- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`，由它同样传给 `pg.Migrate` 和 `DB.Check`。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
+- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Module()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。
@@ -147,7 +159,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 模块的 SQL 写在自己目录的 `queries/*.sql`，由 [sqlc](https://sqlc.dev) 生成类型化的 Go 代码，不用 ORM（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）。
 
 - **配置**：根目录的 `sqlc.yaml`，每个有查询的模块一项：`schema` 是 `sqlc/schemas.sql`（各模块的 schema 由迁移之前的步骤建好，迁移里没有 `CREATE SCHEMA`，sqlc 只读迁移，所以在这里补上；模块加第一条查询时加一行）加这个模块自己的迁移目录，只列这两样：模块只读写自己的表（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)），别的模块的数据经它的公开接口取得。查询若写到别的模块的表，sqlc 报表不存在而生成失败，所以这一条由生成本身守住；解析本模块的迁移不需要别的模块的建表语句（指向 `platform` 函数的策略照样能解析）。
-- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。模块的 `sqlc.yaml` 项用 `overrides` 把 `uuid`、`numeric`、`timestamptz`、`int8` 生成成 `uuid.UUID`、`string`、`time.Time`、`int64`（可空的为指针），模块的手写代码和测试就不必引用 pgx 的类型；要判断错误的 SQLSTATE（唯一冲突、被拒绝的行）用 `pg.SQLState(err)`。生成的文件不手改。
+- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。模块的 `sqlc.yaml` 项用 `overrides` 把 `uuid`、`numeric`、`timestamptz`、`int8` 生成成 `uuid.UUID`、`string`、`time.Time`、`int64`（可空的为指针），模块的手写代码和测试就不必引用 pgx 的类型；要判断错误的 SQLSTATE（唯一冲突、被拒绝的行）用 `pg.SQLState(err)`。查询没有找到行用 `pg.ErrNoRows` 判断（模块不能引用 pgx）；模块原样保存、不解析的 JSON 字段用 `jsonx.Raw`；模块自己的改动历史要记操作者时用 `audit.Actor.String()`（`<种类>:<ID>`）。生成的文件不手改。
 - **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 先删掉已提交的全部 `*.gen.go`、`*.gen.ts`，再重新生成，看有没有变化或没提交：手写却起了这种名字的文件会显示为被删，过期的也一样。删除会丢掉未提交的改动，所以这些文件有未提交的改动或是新文件时，它先失败并列出文件，一个也不删。生成之后，它还拒绝名字不是 `.gen.go`、却带 `// Code generated ... DO NOT EDIT.` 头的 Go 文件（不限 sqlc；头可以缩进、跟在块注释后面，与 Go 解析器的认法一致），生成器首次写出的错名文件（如 sqlc 条目漏了后缀的 `db.go`）也在其内，否则改了查询却忘了重新生成，没有检查看得见。生成器中途失败会留下被删的文件，`git restore` 即可找回。
 - **豁免**：生成的文件整体不进 lint（`.golangci.yml` 的 `exclusions.generated`，唯一的一处）。其中包括「pgx 只能在 `internal/platform` 里导入」：`platform` 之外模块的生成代码要导入 pgx 的类型，手写代码仍然不能。lint 凭文件头认生成代码，所以豁免的前提由 `just generated` 守住：带这个头的只有生成器写的 `.gen.go`。前端的 `*.gen.ts` 本来就按文件名免检，同样靠先删后生成证明名字没被冒用。
 
