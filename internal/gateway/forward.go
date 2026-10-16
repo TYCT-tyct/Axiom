@@ -196,6 +196,9 @@ func (s *session) isStarted() bool {
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
 	cause := context.Cause(ctx)
+	if failed, ok := errors.AsType[*extendFailed](cause); ok {
+		return a.truncate(relay, cut(failed.err))
+	}
 	e := protocol.Error{Type: protocol.UpstreamFailed}
 	finish, again := billing.FinishError, true
 	switch {

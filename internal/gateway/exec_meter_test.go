@@ -178,19 +178,20 @@ func checkCutStream(t *testing.T, h *harness, tc cutCase) {
 	}
 }
 
-// TestAnExtensionThatFailsEarlyCutsAtOnce: one that fails while the segment still has room cuts the stream at the next
-// read, without waiting for the segment to run out (docs/domains/billing.md「预留与结算」); unless that read is the
-// upstream's normal end, when there is nothing left to stop.
+// TestAnExtensionThatFailsEarlyCutsAtOnce: one that fails while the segment still has room cuts the stream when it
+// fails, whether the upstream is quiet by then or goes on sending, without waiting for the segment to run out
+// (docs/domains/billing.md「预留与结算」) or for the idle timeout; unless the upstream has already ended normally, when
+// there is nothing left to stop.
 func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
 	failing := func(context.Context, billing.ExtendRequest) error { return errors.New("connection refused") }
 	run(t, func(t *testing.T, ctx context.Context) {
 		late := func(context.Context, billing.ExtendRequest) error {
-			time.Sleep(time.Second) // the failure comes before the upstream's end, and is taken with it
+			time.Sleep(time.Second) // the failure comes after the upstream's end, and is taken with it
 			return errors.New("connection refused")
 		}
 		h := newHarness(t, ctx, segmented(options{extend: late}))
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(130)},
-			h.feed(evBlockStop), h.feed(evMsgDelta), h.after(1500*time.Millisecond, evMsgStop))}
+			h.feed(evBlockStop), h.feed(evMsgDelta), h.feed(evMsgStop))}
 		h.run()
 		if body := h.w.body(); strings.Contains(body, "event: error") || !strings.Contains(body, "message_stop") ||
 			h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
@@ -201,8 +202,62 @@ func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
 		h := newHarness(t, ctx, segmented(options{extend: failing}))
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart), h.feed(evBlock), beat{data: text(130)}, beat{wait: time.Second, data: text(1)})}
 		h.run()
-		if h.elapsed() != time.Second || !strings.Contains(h.w.body(), `"error_type":"billing_unavailable"`) || strings.Contains(h.w.body(), `"x"`) {
+		if h.elapsed() != 0 || !strings.Contains(h.w.body(), `"error_type":"billing_unavailable"`) || strings.Contains(h.w.body(), `"x"`) {
 			t.Errorf("after %v:\n%s", h.elapsed(), h.w.body())
+		}
+	})
+}
+
+// TestAnExtensionThatFailsCutsAnUpstreamThatSaysNothing: the owner is blocked in a read of an upstream that has gone
+// quiet when the extension fails; the failure ends the read and the call, billing_unavailable, not the idle timeout
+// three minutes on, which would call it the upstream's.
+func TestAnExtensionThatFailsCutsAnUpstreamThatSaysNothing(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{extend: func(context.Context, billing.ExtendRequest) error {
+			return errors.New("connection refused")
+		}}))
+		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart), h.feed(evBlock), beat{data: text(130)})}
+		h.run()
+		body := h.w.body()
+		if got := h.elapsed(); got != 0 || !strings.Contains(body, `"error_type":"billing_unavailable"`) || strings.Contains(body, `"error_type":"timeout"`) {
+			t.Errorf("cut after %v:\n%s", got, body)
+		}
+		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.Committed || a[0].Finish != billing.FinishTruncated {
+			t.Errorf("attempts %+v", a)
+		}
+	})
+}
+
+// freeOutput is a price schedule whose output costs nothing, as a promotion's may.
+const freeOutput = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0"}}`
+
+// TestOutputThatCostsNothingNeverWaitsForAnExtension: it spends no segment, so a stream of several segments' worth is
+// read through without an extension, and a client that goes while the upstream is quiet ends the call. A meter that
+// said the segment was spent when no extension was coming left the owner waiting for none, and again, with the
+// processor to itself and no way to cancel it.
+func TestOutputThatCostsNothingNeverWaitsForAnExtension(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{price: freeOutput}))
+		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(250)}, beat{data: text(250)},
+			h.feed(evBlockStop, evMsgDelta, evMsgStop))}
+		h.run()
+		h.mu.Lock()
+		asked := len(h.extensions)
+		h.mu.Unlock()
+		if !strings.Contains(h.w.body(), "message_stop") || asked != 0 || h.elapsed() != 0 {
+			t.Errorf("%d extensions, took %v:\n%s", asked, h.elapsed(), h.w.body())
+		}
+	})
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{price: freeOutput}))
+		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart), h.feed(evBlock), beat{data: text(250)})}
+		done := h.start()
+		time.Sleep(time.Second)
+		h.client()
+		<-done
+		h.check()
+		if s := h.ended(); !s.outcome.Cancelled || h.elapsed() != time.Second {
+			t.Errorf("cancelled %t after %v", s.outcome.Cancelled, h.elapsed())
 		}
 	})
 }

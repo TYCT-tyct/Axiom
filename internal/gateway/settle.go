@@ -103,7 +103,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		return
 	}
 	input, _ := billing.InputBound(routing.DemandOf(&s.c.Request), a.entry.Limits)
-	rec.Segments = estimated(a.usage, a.seen, input)
+	rec.Segments = estimated(a.usage, a.seen, input, a.meter.OutputCap())
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
@@ -120,10 +120,11 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the
 // admission's bound of the first sampling, unless any input-side item was reported; the output by the text, reasoning
-// and tool input read, which bounds it as the meter does, never below a count reported so far; the web searches by
-// the events seen. Bounds stand in for the estimates by model the docs want, which have no data yet; so an estimate is
-// never above what the reservation covers, and a supplier's record corrects it.
-func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Segment {
+// and tool input read, which bounds it as the meter does, at the output cap the attempt was quoted at (outputCap, the
+// meter's own) and never below a count reported so far; the web searches by the events seen. Bounds stand in for the
+// estimates by model the docs want, which have no data yet; so an estimate is never above what the reservation covers,
+// and a supplier's record corrects it.
+func estimated(u protocol.Usage, p protocol.Progress, input, outputCap int64) []billing.Segment {
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
 	for i, seg := range u.Segments {
 		segments[i] = billing.Segment{Usage: seg.Usage, Reported: seg.Reported}
@@ -137,7 +138,7 @@ func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Seg
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), p.ContentBytes) - counts[catalog.ItemReasoning]
+		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), min(p.ContentBytes, outputCap)) - counts[catalog.ItemReasoning]
 	}
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)

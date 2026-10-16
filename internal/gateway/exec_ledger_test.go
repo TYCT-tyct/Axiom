@@ -153,6 +153,33 @@ func TestALostAcknowledgementChargesOnce(t *testing.T) {
 	r.ledgerBalanced()
 }
 
+// TestAnEstimateIsNeverChargedBeyondTheReservation: a stream that sent six times the output limit in text and broke
+// off without reporting its usage is charged for the limit, which the reservation (extended as the stream went on)
+// covers, not for its bytes: settlement guards the balance's floor and nothing else, so what the estimate does not
+// cap, a rich account pays.
+func TestAnEstimateIsNeverChargedBeyondTheReservation(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	up := withExecutor(r, &flakyLedger{})
+	a := r.funded(1e12)
+	sample, _ := messagesSample(t)
+	for _, e := range up.eps {
+		e.script = []scripted{streamed(sample, 6, maxOutput, true)}
+	}
+	resp, body := r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/beta")))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d: %s", resp.StatusCode, body)
+	}
+	r.exec.Drain(t.Context(), time.Minute)
+	if n := r.count("SELECT count(*) FROM billing.reservations WHERE charged > 0"); n != 1 {
+		t.Fatalf("%d charges, want the one", n)
+	}
+	if n := r.count("SELECT count(*) FROM billing.reservations WHERE charged > amount"); n != 0 {
+		t.Errorf("%d charges are beyond what was reserved", n)
+	}
+	r.ledgerBalanced()
+}
+
 // TestTheLedgerBalancesWhateverHappens: calls whose upstreams end, break, fail or never run, whose extensions and
 // settlements fail or lose their acknowledgements at random, on accounts that run short, leave no reservation pending
 // once settled, every balance the sum of its entries and above its floor, and no call charged twice.

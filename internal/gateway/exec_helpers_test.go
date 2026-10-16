@@ -352,7 +352,8 @@ type options struct {
 	alive       func() bool
 	mutate      func(*Call)
 	noSlot      []int
-	memory      int64 // the node's budget; memorySize when zero
+	memory      int64  // the node's budget; memorySize when zero
+	price       string // the entries' price schedule; cheap when empty
 }
 
 type harness struct {
@@ -424,7 +425,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 func (h *harness) newCall(o options, request []byte) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
-	schedule, err := catalog.ParseSchedule([]byte(cheap))
+	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
 	if err != nil {
 		h.t.Fatal(err)
 	}
