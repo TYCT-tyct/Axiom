@@ -195,6 +195,43 @@ func TestPrepareBufferEscapes(t *testing.T) {
 	}
 }
 
+// TestPrepareBufferDefaultIdentityLen holds the room for Identity's values to the default bound when IdentityLen is
+// not set: values as long as the bound, all of bytes that need escaping, replacing originals that need none, fit in
+// one allocation; a longer one is refused as the gateway's error.
+func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
+	for _, c := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`},
+	} {
+		prepareWith := func(n int) (float64, error) {
+			id := strings.Repeat(`\`, n)
+			w := protocol.Rewrites{Identity: func(string) string { return id }}
+			var err error
+			allocs := testing.AllocsPerRun(5, func() {
+				_, err = protocol.Prepare(c.format, []byte(c.body), protocol.Target{Model: "m"}, w)
+			})
+			return allocs, err
+		}
+		long, err := prepareWith(128)
+		if err != nil {
+			t.Fatal(err)
+		}
+		short, err := prepareWith(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if long != short {
+			t.Errorf("format %d: %d allocations with 128 escaped bytes, %d with one", c.format, int(long), int(short))
+		}
+		if _, err := prepareWith(129); err == nil || errors.Is(err, protocol.ErrInvalid) {
+			t.Errorf("format %d: got %v for 129 bytes, want the gateway's error", c.format, err)
+		}
+	}
+}
+
 // TestPrepareSamples holds the recorded requests, pretty-printed as published, to a change of the model alone, and
 // of storage in Responses.
 func TestPrepareSamples(t *testing.T) {

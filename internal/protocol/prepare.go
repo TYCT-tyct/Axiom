@@ -21,13 +21,21 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
-	// IdentityLen is the most bytes Identity returns, before JSON escaping, 0 when it never returns more than it is given. It sizes the
-	// output so that identifiers longer than the ones they replace do not make Prepare copy the body again.
+	// IdentityLen is the most bytes Identity may return, before JSON escaping; 0 means defaultIdentityLen. It sizes the
+	// output, so that identifiers that are longer than the ones they replace, or need escaping, do not make Prepare
+	// copy the body again; a longer value is refused (errIdentity).
 	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
 }
+
+// defaultIdentityLen is what Identity may return when Rewrites.IdentityLen is 0: derived identifiers are short opaque
+// values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
+const defaultIdentityLen = 128
+
+// errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
+var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
 
 // errHistory reports a gateway that passed a history to a request that continues no response, or none to one that
 // does: the request's context would be lost or invented.
@@ -41,6 +49,9 @@ func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
+	if w.IdentityLen == 0 {
+		w.IdentityLen = defaultIdentityLen
+	}
 	size := len(body) + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
 	for _, item := range w.History {
 		size += len(item) + 1
@@ -49,7 +60,7 @@ func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
 	}
 	if err := p.top(rules); err != nil {
-		if errors.Is(err, errHistory) {
+		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -210,7 +221,11 @@ func (p *rewriter) identity() error {
 	if err != nil {
 		return err
 	}
-	return p.replaceString(len(v), p.w.Identity(string(s)))
+	derived := p.w.Identity(string(s))
+	if p.w.IdentityLen > 0 && len(derived) > p.w.IdentityLen {
+		return errIdentity
+	}
+	return p.replaceString(len(v), derived)
 }
 
 func (p *rewriter) replaceString(n int, s string) (err error) {
