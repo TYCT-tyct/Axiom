@@ -28,10 +28,32 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid AND at >= @since AND at < @until
-    AND (@model::text = '' OR model = @model)
-    AND (@client_app::text = '' OR client_app = @client_app)
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
 -- Qualified: a bare id would sort by the output column id::text, which is not the index order.
+ORDER BY call_log.at DESC, call_log.id DESC
+LIMIT @page_size;
+
+-- name: ListOwnCallsByModel :many
+-- The same list for one model, read from the index (account_id, model, at DESC, id DESC). A client application may be
+-- given as well; it is then checked on the rows of the model, which are the fewer.
+SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+FROM observability.call_log
+WHERE account_id = (@account_id::text)::uuid AND model = @model AND at >= @since AND at < @until
+    AND (@client_app::text = '' OR client_app = @client_app)
+    AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+ORDER BY call_log.at DESC, call_log.id DESC
+LIMIT @page_size;
+
+-- name: ListOwnCallsByApp :many
+-- The same list for one client application, read from the index (account_id, client_app, at DESC, id DESC).
+SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+FROM observability.call_log
+WHERE account_id = (@account_id::text)::uuid AND client_app = @client_app AND at >= @since AND at < @until
+    AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
 
