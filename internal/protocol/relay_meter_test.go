@@ -472,7 +472,6 @@ func raceDetector() bool {
 
 func BenchmarkRelay(b *testing.B) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	warm := warmUp
 	if raceDetector() { // `just test` runs every benchmark once under the race detector, whose counts nobody compares
 		warm = 0
@@ -482,6 +481,8 @@ func BenchmarkRelay(b *testing.B) {
 			for _, size := range []int{1 << 10, 64 << 10} {
 				stream := deltas(format.f, n, size)
 				b.Run(fmt.Sprintf("%s/deltas=%d/size=%d", format.dir, n, size), func(b *testing.B) {
+					// Here, not once above: the testing package restores GOMAXPROCS before every repetition of -count.
+					defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 					b.ReportAllocs()
 					b.SetBytes(int64(len(stream)))
 					relayTimed(b, format.f, stream, warm)
