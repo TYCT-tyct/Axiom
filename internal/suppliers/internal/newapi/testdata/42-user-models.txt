@@ -1,0 +1,7 @@
+# 42-user-models
+GET /api/user/models
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":["gpt-4o-mini","mock-gpt"],"message":"","success":true}

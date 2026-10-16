@@ -15,13 +15,29 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // DB is the runtime connection pool, logged in as a role that row-level security binds (Check verifies it).
-type DB struct{ pool *pgxpool.Pool }
+type DB struct {
+	pool   *pgxpool.Pool
+	tracer trace.Tracer
+}
+
+// Option adjusts Open.
+type Option func(*DB)
+
+// WithTracerProvider makes every transaction a span, a child of the span in the context it was given. The span
+// carries no statement and no error text, which may quote data.
+func WithTracerProvider(tp trace.TracerProvider) Option {
+	return func(db *DB) { db.tracer = tp.Tracer("axiom/pg") }
+}
 
 // Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
-func Open(ctx context.Context, url string) (*DB, error) {
+func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, errors.New("AXIOM_DATABASE_URL: not a PostgreSQL connection string")
@@ -36,11 +52,28 @@ func Open(ctx context.Context, url string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to the database: %w", err)
 	}
-	return &DB{pool}, nil
+	db := &DB{pool: pool, tracer: noop.NewTracerProvider().Tracer("axiom/pg")}
+	for _, opt := range opts {
+		opt(db)
+	}
+	return db, nil
 }
 
 // Close waits for borrowed connections to come back and closes the pool.
 func (db *DB) Close() { db.pool.Close() }
+
+// ErrNoRows is what a Row's Scan returns when its query found no row, for the modules that must tell "none" from a
+// failure; they may not import pgx.
+var ErrNoRows = pgx.ErrNoRows
+
+// SQLState is the SQLSTATE code of the PostgreSQL error in err's chain, or "" when there is none. Modules tell a
+// conflict or a refused row from other failures by it without importing pgx.
+func SQLState(err error) string {
+	if e, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return e.Code
+	}
+	return ""
+}
 
 // Scope is the set of rows a transaction may see and write: every row, the rows of some sites, the rows of some
 // accounts, or any union of these. The zero value is the empty set.
@@ -183,7 +216,15 @@ func (db *DB) ReadTx(ctx context.Context, scope Scope, fn func(Tx) error) error 
 	return db.begin(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, scope, fn)
 }
 
-func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn func(Tx) error) error {
+func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn func(Tx) error) (err error) {
+	ctx, span := db.tracer.Start(ctx, "db.tx", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("db.system", "postgresql")))
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, "transaction failed")
+		}
+		span.End()
+	}()
 	return pgx.BeginTxFunc(ctx, db.pool, options, func(tx pgx.Tx) error {
 		platform := ""
 		if scope.platform {
@@ -206,4 +247,13 @@ func uuidArray(ids []uuid.UUID) string {
 		texts[i] = id.String()
 	}
 	return "{" + strings.Join(texts, ",") + "}"
+}
+
+// IsDataError reports whether the database refused the data itself (SQLSTATE class 22, a malformed value, or 23, a
+// violated constraint) rather than failing to take it (a lost connection, a restart, a timeout). A writer that
+// retries failures retries only the second kind: the first never succeeds, and retrying it would hold up every row
+// behind it.
+func IsDataError(err error) bool {
+	code := SQLState(err)
+	return strings.HasPrefix(code, "22") || strings.HasPrefix(code, "23")
 }

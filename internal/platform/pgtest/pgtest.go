@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,17 +34,25 @@ var (
 	cluster   *url.URL // the superuser's URL to the container, database name left out
 	startErr  error
 	databases atomic.Int64
+
+	templatesMu sync.Mutex
+	templates   = map[string]bool{} // module templates already built, by name
 )
 
-// New returns a database of its own for one test.
-func New(t testing.TB) Database {
+// New returns a database of its own for one test. Given modules, it also holds their migrations: the database is a
+// copy of a template that has them, built the first time a set of modules is asked for.
+func New(t testing.TB, modules ...pg.Module) Database {
 	t.Helper()
 	once.Do(func() { startErr = start(context.Background()) })
 	if startErr != nil {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
+	template, err := templateFor(t.Context(), modules)
+	if err != nil {
+		t.Fatalf("test database template: %v", err)
+	}
 	name := fmt.Sprintf("test_%d", databases.Add(1))
-	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE "+template,
 		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +61,35 @@ func New(t testing.TB) Database {
 		Migrator:  at("migrator", "migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
+}
+
+// templateFor is the template a database with modules is copied from. Migrate grants roles cluster-wide and so must
+// not run twice at once, which the lock here keeps; a template is built once per set of module names, and the
+// modules of a test binary are the same in every test.
+func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
+	if len(modules) == 0 {
+		return "axiom_template", nil
+	}
+	names := make([]string, len(modules))
+	for i, m := range modules {
+		names[i] = m.Name
+	}
+	slices.Sort(names)
+	name := "axiom_template_" + strings.Join(names, "_")
+	templatesMu.Lock()
+	defer templatesMu.Unlock()
+	if templates[name] {
+		return name, nil
+	}
+	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		return "", err
+	}
+	if err := pg.Migrate(ctx, at("migrator", "migrator", name), modules...); err != nil {
+		return "", err
+	}
+	templates[name] = true
+	return name, nil
 }
 
 // Run executes statements one after another on a new connection to databaseURL.
