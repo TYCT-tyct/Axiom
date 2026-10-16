@@ -138,6 +138,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
+契约也要模块里还没有的读写，由写处理器的 PR 一并加：`accounts` 的读取和整体替换一把 key 的设置（现在只有创建、停用、删除）、用户和账户的列表、站点设置的读写；`billing` 的余额与本月花费、赠送批次；`observability` 的 `OwnCall` 加游标的编码与解码；`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
+
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
 ## 遥测
