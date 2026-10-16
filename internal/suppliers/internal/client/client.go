@@ -72,18 +72,18 @@ func (c *Client) Do(ctx context.Context, r adapter.Request) (adapter.Response, e
 	if err != nil {
 		return adapter.Response{}, fmt.Errorf("client: send the request: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // the body was read or abandoned; nothing more to learn from closing it
+	defer resp.Body.Close()                            //nolint:errcheck // the body was read or abandoned; nothing more to learn from closing it
+	if resp.StatusCode == http.StatusTooManyRequests { // before the body: what it says is not needed, and it may not come
+		until := c.now().Add(retryAfter(resp.Header.Get("Retry-After")))
+		c.limiter.Block(r.Buckets, until)
+		return adapter.Response{}, adapter.Blocked{Until: until}
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return adapter.Response{}, fmt.Errorf("client: read the response: %w", err)
 	}
 	if len(body) > maxBody {
 		return adapter.Response{}, ErrTooLarge
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		until := c.now().Add(retryAfter(resp.Header.Get("Retry-After")))
-		c.limiter.Block(r.Buckets, until)
-		return adapter.Response{}, adapter.Blocked{Until: until}
 	}
 	return adapter.Response{Status: resp.StatusCode, Header: resp.Header, Body: body}, nil
 }

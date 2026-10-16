@@ -176,7 +176,11 @@ func TestClassifyReadsRecordedFailures(t *testing.T) {
 			adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Unknown{Status: 401}},
 		},
 		{"a 502", answer(502, `{"error":{"code":"x","type":"upstream_error"}}`), adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.UpstreamError{Status: 502}}},
-		{"a 400", answer(400, `{"error":{"code":"invalid_request","type":"invalid_request_error"}}`), adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}},
+		{"a 400", answer(400, `{"error":{"code":"invalid_request","type":"invalid_request_error"}}`), adapter.Failure{Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}},
+		{
+			"a 429 with a body", answer(429, `{"error":{"code":"x","type":"upstream_error"}}`),
+			adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{}},
+		},
 	}
 	for _, c := range cases {
 		got := New().Calls().Classify(c.resp.Status, c.resp.Header, c.resp.Body)

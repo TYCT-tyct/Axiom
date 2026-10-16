@@ -63,7 +63,7 @@ func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
 		return adapter.Failure{Scope: adapter.ScopeEgress, Cause: adapter.Unknown{Status: status, SuspectedEgressBlock: true}}
 	}
 	if status == http.StatusTooManyRequests {
-		return refused(adapter.ScopeEndpoint, adapter.RateLimited{RetryAfter: retryAfter(h.Get("Retry-After"))})
+		return rateLimited(h, body)
 	}
 	var e errorBody
 	if jsonx.Unmarshal(body, &e) == nil && e.Error.Type == "new_api_error" {
@@ -73,7 +73,7 @@ func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
 	}
 	switch {
 	case status == http.StatusBadRequest:
-		return refused(adapter.ScopeRequest, adapter.BadRequest{})
+		return adapter.Failure{Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	case status >= 500:
 		return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.UpstreamError{Status: status}}
 	}
@@ -95,6 +95,17 @@ func ownFailure(status int, code string) (adapter.Failure, bool) {
 		return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Overloaded{}}, true
 	}
 	return adapter.Failure{}, false
+}
+
+// rateLimited is a 429. new-api's own limiter answers with an empty body, which is the one form known to come before
+// the request is run (the recorded answer); a 429 with anything in it may be the channel's upstream passing through,
+// or new-api's status mapping of a channel error, after the request was run, so only the empty one is NotExecuted.
+func rateLimited(h http.Header, body []byte) adapter.Failure {
+	f := adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: retryAfter(h.Get("Retry-After"))}}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		f.Executed = adapter.NotExecuted
+	}
+	return f
 }
 
 // refused is a failure by which new-api says it refused before running the request.

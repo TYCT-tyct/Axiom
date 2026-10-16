@@ -5,6 +5,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,12 +28,15 @@ func TestTheAdapterRunsThroughTheEgressClient(t *testing.T) {
 		"GET /api/user/self":                 sample(t, "24-self-pat"),
 		"GET /api/subscription/self":         sample(t, "45-subscription-self"),
 	}
+	var mu sync.Mutex // the handler runs on the server's goroutines, the test on its own
 	var served, auth []string
-	limited := false
+	var limited atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Method + " " + r.URL.RequestURI()
+		mu.Lock()
 		served, auth = append(served, key), append(auth, r.Header.Get("Authorization"))
-		if limited {
+		mu.Unlock()
+		if limited.Load() {
 			w.Header().Set("Retry-After", "1200")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -51,15 +57,23 @@ func TestTheAdapterRunsThroughTheEgressClient(t *testing.T) {
 	if account, err := m.Account(t.Context()); err != nil || account.Balance != "5000000" {
 		t.Fatalf("Account: %+v, %v", account, err)
 	}
-	if auth[len(auth)-1] != "Bearer "+fakePAT || auth[0] != "" {
-		t.Errorf("the token went to %q and not to the public routes", auth)
+	mu.Lock()
+	tokens := slices.Clone(auth)
+	mu.Unlock()
+	if tokens[len(tokens)-1] != "Bearer "+fakePAT || tokens[0] != "" {
+		t.Errorf("the token went to %q and not to the public routes", tokens)
 	}
-	limited = true
+	limited.Store(true)
 	wantBlocked(t, accountErr(t, m), now.Add(1200*time.Second))
+	mu.Lock()
 	before := len(served)
+	mu.Unlock()
 	wantBlocked(t, accountErr(t, m), now.Add(1200*time.Second))
-	if len(served) != before {
-		t.Errorf("after a 429 %d requests were sent", len(served)-before)
+	mu.Lock()
+	after := len(served)
+	mu.Unlock()
+	if after != before {
+		t.Errorf("after a 429 %d requests were sent", after-before)
 	}
 }
 

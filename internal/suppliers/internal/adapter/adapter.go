@@ -86,6 +86,10 @@ type LoginStore interface {
 var ErrStaleLogin = errors.New("adapter: the stored login changed since it was read")
 
 // Manager is the read-only management half of an adapter.
+//
+// A listing that takes more requests than a rate bucket allows in a window may be read over several calls: when a request
+// is refused for want of allowance (an error wrapping ErrBucketsFull), the Manager may keep how far the listing got, and
+// the call made again on the same Manager continues. The module keeps a Manager through the retries of a round.
 type Manager interface {
 	Account(ctx context.Context) (Account, error)
 	Offer(ctx context.Context) (Offer, error)

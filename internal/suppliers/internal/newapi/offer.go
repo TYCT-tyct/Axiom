@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -28,48 +29,84 @@ type priceEntry struct {
 	Endpoints       []string `json:"supported_endpoint_types"`
 }
 
+// offerProgress is how far a reading of the offer got: the groups and prices, then the models of one group after
+// another. Reading them takes one request per group, more than a window of the rate bucket may allow.
+type offerProgress struct {
+	at     time.Time
+	groups map[string]groupEntry
+	names  []string
+	prices map[string]priceEntry
+	next   int
+	built  []adapter.Group
+}
+
+type groupEntry struct {
+	Ratio number `json:"ratio"`
+	Desc  string `json:"desc"`
+}
+
 // Offer implements adapter.Manager: the account's groups with their ratios, the models each serves, and for each model
 // a cost schedule where new-api's pricing can be expressed as one. The pricing answer is not trusted to name the
-// models a group serves; the per-group model list does.
+// models a group serves; the per-group model list does. A request refused for want of allowance leaves the progress
+// with the manager (see manager).
 func (m *manager) Offer(ctx context.Context) (adapter.Offer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.offer
+	if p == nil || m.now().Sub(p.at) > progressLife {
+		var err error
+		if p, err = m.readGroups(ctx); err != nil {
+			return adapter.Offer{}, err
+		}
+	}
+	for ; p.next < len(p.names); p.next++ {
+		name := p.names[p.next]
+		ratio, ok := p.groups[name].Ratio.rat()
+		if !ok { // "auto" picks among groups per request and has no ratio of its own
+			continue
+		}
+		var models struct {
+			Data []string `json:"data"`
+		}
+		if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &models); err != nil {
+			p.at, m.offer = m.now(), p
+			return adapter.Offer{}, err
+		}
+		if models.Data == nil {
+			return adapter.Offer{}, errMissing("list of models")
+		}
+		g, err := buildGroup(name, p.groups[name].Desc, p.groups[name].Ratio, ratio, models.Data, p.prices)
+		if err != nil {
+			return adapter.Offer{}, err
+		}
+		p.built = append(p.built, g)
+	}
+	m.offer = nil
+	return adapter.Offer{Groups: p.built}, nil
+}
+
+// readGroups starts a reading of the offer: the groups and the prices.
+func (m *manager) readGroups(ctx context.Context) (*offerProgress, error) {
 	var groups struct {
-		Data map[string]struct {
-			Ratio number `json:"ratio"`
-			Desc  string `json:"desc"`
-		} `json:"data"`
+		Data map[string]groupEntry `json:"data"`
 	}
 	if err := m.api.get(ctx, "/api/user/self/groups", global, &groups); err != nil {
-		return adapter.Offer{}, err
+		return nil, err
 	}
 	var pricing struct {
 		Data []priceEntry `json:"data"`
 	}
 	if err := m.api.get(ctx, "/api/pricing", global, &pricing); err != nil {
-		return adapter.Offer{}, err
+		return nil, err
+	}
+	if groups.Data == nil || pricing.Data == nil {
+		return nil, errMissing("list of groups or prices")
 	}
 	prices := make(map[string]priceEntry, len(pricing.Data))
 	for _, e := range pricing.Data {
 		prices[e.Model] = e
 	}
-	var offer adapter.Offer
-	for _, name := range sortedKeys(groups.Data) {
-		ratio, ok := groups.Data[name].Ratio.rat()
-		if !ok { // "auto" picks among groups per request and has no ratio of its own
-			continue
-		}
-		var names struct {
-			Data []string `json:"data"`
-		}
-		if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &names); err != nil {
-			return adapter.Offer{}, err
-		}
-		g, err := buildGroup(name, groups.Data[name].Desc, groups.Data[name].Ratio, ratio, names.Data, prices)
-		if err != nil {
-			return adapter.Offer{}, err
-		}
-		offer.Groups = append(offer.Groups, g)
-	}
-	return offer, nil
+	return &offerProgress{at: m.now(), groups: groups.Data, names: sortedKeys(groups.Data), prices: prices}, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

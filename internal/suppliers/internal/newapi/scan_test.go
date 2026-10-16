@@ -430,8 +430,8 @@ func checkRecordedCharge(t *testing.T, name string, c adapter.Charge) {
 	if c.Key != "1" || c.Amount != "23" || c.Funding != adapter.FundingWallet || c.Model != "gpt-4o-mini" || c.Usage.OutputTotal() != 50 {
 		t.Errorf("%s: charge %+v", name, c)
 	}
-	if !c.Reported.Has(catalog.ItemInput) || !c.Reported.Has(catalog.ItemOutput) || c.Reported.Has(catalog.ItemCacheRead) {
-		t.Errorf("%s: reported items %v, want input and output only", name, c.Reported)
+	if !c.Reported.Has(catalog.ItemInput) || c.Reported.Has(catalog.ItemOutput) || c.Reported.Has(catalog.ItemCacheRead) {
+		t.Errorf("%s: reported items %v, want the input only: the output holds the reasoning", name, c.Reported)
 	}
 	if name == "32-log-by-request-id" && c.Ref != "202610140453479800647938268d9d62FDITAAx" {
 		t.Errorf("ref %q is not the record's request id", c.Ref)
@@ -449,7 +449,9 @@ func recordedPage(t *testing.T) logPage {
 }
 
 func clonePage(p logPage) logPage {
-	p.Data.Items = slices.Clone(p.Data.Items)
+	data := *p.Data
+	data.Items = slices.Clone(data.Items)
+	p.Data = &data
 	return p
 }
 
@@ -458,17 +460,17 @@ func clonePage(p logPage) logPage {
 func TestUsageWithCachedTokensIsNotOfferedAsCorrection(t *testing.T) {
 	t.Parallel()
 	cached := clonePage(recordedPage(t))
-	cached.Data.Items[0].Other = `{"billing_source":"wallet","cache_tokens":40}`
+	cached.Data.Items[0].Other = new(`{"billing_source":"wallet","cache_tokens":40}`)
 	if charges, err := convert(cached); err != nil || charges[0].Reported != 0 || charges[0].Amount != "23" {
 		t.Errorf("a record with cached tokens: %+v, %v, want the amount and no reported items", charges, err)
 	}
 	subscription := clonePage(recordedPage(t))
-	subscription.Data.Items[0].Other = `{"billing_source":"subscription"}`
+	subscription.Data.Items[0].Other = new(`{"billing_source":"subscription"}`)
 	if charges, err := convert(subscription); err != nil || charges[0].Funding != adapter.FundingOther {
 		t.Error("a charge drawn on a subscription is taken for a wallet charge")
 	}
 	consumed := clonePage(recordedPage(t))
-	consumed.Data.Items[0].Type = 1
+	consumed.Data.Items[0].Type = new(1)
 	if charges, err := convert(consumed); err != nil || len(charges) != 0 {
 		t.Errorf("a record that is not a consumption: %+v, %v", charges, err)
 	}
@@ -479,10 +481,14 @@ func TestARecordThatCannotBeReadStopsThePass(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]func(*logPage){
 		"no request id":      func(p *logPage) { p.Data.Items[0].RequestID = "" },
-		"no key":             func(p *logPage) { p.Data.Items[0].TokenID = 0 },
+		"no key":             func(p *logPage) { p.Data.Items[0].TokenID = new(int64(0)) },
 		"a fractional quota": func(p *logPage) { p.Data.Items[0].Quota = "22.5" },
-		"garbled details":    func(p *logPage) { p.Data.Items[0].Other = `{` },
-		"negative tokens":    func(p *logPage) { p.Data.Items[0].Prompt = -1 },
+		"garbled details":    func(p *logPage) { p.Data.Items[0].Other = new(`{`) },
+		"negative tokens":    func(p *logPage) { p.Data.Items[0].Prompt = new(int64(-1)) },
+		"no details":         func(p *logPage) { p.Data.Items[0].Other = nil },
+		"no token counts":    func(p *logPage) { p.Data.Items[0].Output = nil },
+		"no time":            func(p *logPage) { p.Data.Items[0].CreatedAt = nil },
+		"no type":            func(p *logPage) { p.Data.Items[0].Type = nil },
 	} {
 		broken := clonePage(recordedPage(t))
 		mutate(&broken)

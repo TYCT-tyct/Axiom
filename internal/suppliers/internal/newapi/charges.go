@@ -44,7 +44,8 @@ type scanState struct {
 	Watermark int64 `json:"watermark"` // everything up to here has been read; only ever raised
 	Span      int64 `json:"span"`      // seconds a forward pass covers
 	Fast      int   `json:"fast"`      // short passes in a row
-	LastLate  int64 `json:"last_late"` // when the last late pass started
+	LastLate  int64 `json:"last_late"` // when the last late pass finished
+	LateEnd   int64 `json:"late_end"`  // the end of the time the late passes have covered, so the next starts there
 	Pass      *pass `json:"pass,omitempty"`
 }
 
@@ -60,7 +61,7 @@ type pass struct {
 
 func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 	if len(raw) == 0 { // the first scan: nothing before the connection is ours
-		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix()}, nil
+		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix()}, nil
 	}
 	var s scanState
 	if err := jsonx.UnmarshalKnown(raw, &s); err != nil || s.V != 1 || s.Span <= 0 {
@@ -69,25 +70,41 @@ func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 	return s, nil
 }
 
+// lateEnd is where the late passes stand; a position written before they kept it stands at the watermark.
+func (s scanState) lateEnd() int64 {
+	if s.LateEnd == 0 {
+		return s.Watermark
+	}
+	return s.LateEnd
+}
+
 func (s scanState) encode() (adapter.ScanState, error) { return jsonx.MarshalCanonical(s) }
 
 // logPage is the answer to one page of /api/log/self.
+//
+// Everything a charge is made of is a pointer or a list that may be nil, so that a member the supplier left out can be
+// told from a zero, an empty list and a null: an answer without them is not a page with no records.
 type logPage struct {
-	Data struct {
-		Total int `json:"total"`
-		Items []struct {
-			Type      int    `json:"type"`
-			CreatedAt int64  `json:"created_at"`
-			Model     string `json:"model_name"`
-			Quota     number `json:"quota"`
-			Prompt    int64  `json:"prompt_tokens"`
-			Output    int64  `json:"completion_tokens"`
-			TokenID   int64  `json:"token_id"`
-			RequestID string `json:"request_id"`
-			Other     string `json:"other"`
-		} `json:"items"`
+	Data *struct {
+		Total *int      `json:"total"`
+		Items []logItem `json:"items"`
 	} `json:"data"`
 }
+
+type logItem struct {
+	Type      *int    `json:"type"`
+	CreatedAt *int64  `json:"created_at"`
+	Model     string  `json:"model_name"`
+	Quota     number  `json:"quota"`
+	Prompt    *int64  `json:"prompt_tokens"`
+	Output    *int64  `json:"completion_tokens"`
+	TokenID   *int64  `json:"token_id"`
+	RequestID string  `json:"request_id"`
+	Other     *string `json:"other"`
+}
+
+// valid reports whether the answer has the structure of a page, whatever it holds.
+func (p logPage) valid() bool { return p.Data != nil && p.Data.Total != nil && p.Data.Items != nil }
 
 // Charges implements adapter.Manager: one page of the pass under way, or the start of a new one. The state it returns
 // is the one to keep with the page's records; on an error it is the state it was given, so nothing is skipped. A call
@@ -113,7 +130,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 		return adapter.ChargePage{}, scan, err
 	}
 	if s.Pass.Page == 1 {
-		s.Pass.Pages = (page.Data.Total + logPageSize - 1) / logPageSize
+		s.Pass.Pages = (*page.Data.Total + logPageSize - 1) / logPageSize
 	}
 	done := len(page.Data.Items) < logPageSize
 	if done {
@@ -129,7 +146,10 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 // which starts a little before it. Nothing is returned while less than a minute has passed beyond the watermark.
 func nextPass(s scanState, now time.Time) *pass {
 	if now.Sub(time.Unix(s.LastLate, 0)) >= lateEvery {
-		return &pass{Late: true, Start: now.Add(-lateEvery).Unix(), End: now.Add(-lag).Unix(), Page: 1}
+		// The day before now, or, when passes have come late, from where the last one ended: the stretches overlap, so no
+		// time goes unread however late a pass is run, and a record that appears up to a day late is read by the pass
+		// after it.
+		return &pass{Late: true, Start: min(now.Add(-lateEvery).Unix(), s.lateEnd()-int64(overlap/time.Second)), End: now.Add(-lag).Unix(), Page: 1}
 	}
 	end := min(s.Watermark+s.Span, now.Add(-lag).Unix())
 	if end-s.Watermark < int64(minSpan/time.Second) {
@@ -144,7 +164,7 @@ func finish(s scanState, now time.Time) scanState {
 	p := s.Pass
 	s.Pass = nil
 	if p.Late {
-		s.LastLate = now.Unix()
+		s.LastLate, s.LateEnd = now.Unix(), max(s.lateEnd(), p.End)
 		return s
 	}
 	s.Watermark = max(s.Watermark, p.End)
@@ -176,39 +196,56 @@ type otherInfo struct {
 // convert turns a page into charges. A record that cannot be read stops the pass instead of being left out: a charge
 // dropped here is money that nothing matches.
 func convert(page logPage) ([]adapter.Charge, error) {
+	if !page.valid() {
+		return nil, fmt.Errorf("%w: the answer is not a page of the log", adapter.ErrUnrecognised)
+	}
 	charges := make([]adapter.Charge, 0, len(page.Data.Items))
 	for _, it := range page.Data.Items {
-		if it.Type != 2 {
+		if it.Type == nil {
+			return nil, fmt.Errorf("%w: a record without a type", adapter.ErrUnrecognised)
+		}
+		if *it.Type != 2 {
 			continue
 		}
-		var other otherInfo
-		if it.Other != "" && jsonx.Unmarshal([]byte(it.Other), &other) != nil {
-			return nil, fmt.Errorf("%w: a record's details", adapter.ErrUnrecognised)
-		}
-		if it.RequestID == "" || it.TokenID <= 0 || !it.Quota.isInteger() {
-			return nil, fmt.Errorf("%w: a record without a request id, a key or an integer quota", adapter.ErrUnrecognised)
-		}
-		usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: it.Prompt, catalog.ItemOutput: it.Output}, catalog.ServiceTierStandard, nil)
+		c, err := charge(it)
 		if err != nil {
-			return nil, fmt.Errorf("%w: a record's token counts", adapter.ErrUnrecognised)
+			return nil, err
 		}
-		charges = append(charges, adapter.Charge{
-			Ref: adapter.ChargeRef(it.RequestID), Key: adapter.KeyRef(strconv.FormatInt(it.TokenID, 10)),
-			OccurredAt: time.Unix(it.CreatedAt, 0).UTC(), Amount: adapter.Amount(it.Quota),
-			Usage: usage, Reported: reported(other), Funding: funding(other), Model: it.Model,
-		})
+		charges = append(charges, c)
 	}
 	return charges, nil
 }
 
-// reported is the items the record states. The log's prompt_tokens includes the cached tokens for OpenAI-shaped usage
-// and leaves them out for Anthropic-shaped, and the record does not say which, so with any cached or cache-writing
-// token the input is not a number that can correct an estimate; the amount still can. The output is the completion
-// tokens, reasoning included, so reasoning is not reported apart.
+// charge reads one consumption record, which must state everything a charge is made of.
+func charge(it logItem) (adapter.Charge, error) {
+	if it.RequestID == "" || it.TokenID == nil || *it.TokenID <= 0 || !it.Quota.isInteger() || it.CreatedAt == nil ||
+		it.Prompt == nil || it.Output == nil || it.Other == nil {
+		return adapter.Charge{}, fmt.Errorf("%w: a record without its request id, key, time, quota, tokens or details", adapter.ErrUnrecognised)
+	}
+	var other otherInfo
+	if jsonx.Unmarshal([]byte(*it.Other), &other) != nil {
+		return adapter.Charge{}, fmt.Errorf("%w: a record's details", adapter.ErrUnrecognised)
+	}
+	usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: *it.Prompt, catalog.ItemOutput: *it.Output}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		return adapter.Charge{}, fmt.Errorf("%w: a record's token counts", adapter.ErrUnrecognised)
+	}
+	return adapter.Charge{
+		Ref: adapter.ChargeRef(it.RequestID), Key: adapter.KeyRef(strconv.FormatInt(*it.TokenID, 10)),
+		OccurredAt: time.Unix(*it.CreatedAt, 0).UTC(), Amount: adapter.Amount(it.Quota),
+		Usage: usage, Reported: reported(other), Funding: funding(other), Model: it.Model,
+	}, nil
+}
+
+// reported is the items the record states as billing items. The log's prompt_tokens includes the cached tokens for
+// OpenAI-shaped usage and leaves them out for Anthropic-shaped, and the record does not say which, so with any cached or
+// cache-writing token the input is not a number that can correct an estimate. The completion tokens include the
+// reasoning tokens and the record does not split them, so the output is never reported: correcting the output item
+// with a total that holds the reasoning would count the reasoning twice, once there and once in the item it stays in.
+// The amount corrects those.
 func reported(o otherInfo) (set catalog.ItemSet) {
 	if o.CacheTokens == 0 && o.CacheCreationTokens == 0 {
 		set.Add(catalog.ItemInput)
-		set.Add(catalog.ItemOutput)
 	}
 	return set
 }

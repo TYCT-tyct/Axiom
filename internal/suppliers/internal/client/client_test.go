@@ -154,3 +154,49 @@ func TestAnOversizedResponseIsRefused(t *testing.T) {
 		t.Errorf("a 9 MiB response: %v", err)
 	}
 }
+
+// TestARefusalCountsWhateverItsBodyDoes: the 429 and its Retry-After close the buckets even when the body is cut short or
+// larger than the limit, which would otherwise be read as an error and leave the buckets open.
+func TestARefusalCountsWhateverItsBodyDoes(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(w http.ResponseWriter){
+		"cut short": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Length", "1000")
+			w.WriteHeader(http.StatusTooManyRequests)
+			if _, err := w.Write([]byte("x")); err != nil {
+				return
+			}
+		},
+		"too large": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Length", strconv.Itoa(9<<20))
+			w.WriteHeader(http.StatusTooManyRequests)
+			if _, err := w.Write([]byte(strings.Repeat("x", 9<<20))); err != nil {
+				t.Log(err)
+			}
+		},
+	}
+	for name, respond := range cases {
+		var hits atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Retry-After", "600")
+			respond(w)
+		}))
+		cl, c := newClient(t, server)
+		req := adapter.Request{Method: "GET", Path: "/x", Buckets: []string{"global"}}
+		if until := blockedUntil(t, doErr(t, cl, req)); !until.Equal(c.t.Add(600 * time.Second)) {
+			t.Errorf("%s: blocked until %v", name, until)
+		}
+		blockedUntil(t, doErr(t, cl, req))
+		if hits.Load() != 1 {
+			t.Errorf("%s: %d requests reached the server, want only the refused one", name, hits.Load())
+		}
+		server.Close()
+	}
+}
+
+func doErr(t *testing.T, cl *client.Client, r adapter.Request) error {
+	t.Helper()
+	_, err := cl.Do(t.Context(), r)
+	return err
+}
