@@ -11,18 +11,23 @@ import (
 
 // The count of POST /messages/count_tokens, which never reaches an upstream (internal/gateway/README.md「辅助接口」).
 // The text is the request's bytes less the image and file data, a third of a token each; an image counts as the most
-// one costs, and a file, whose pages are not known without decoding it, as a flat few pages.
+// one costs, and a file, whose pages are not known without decoding it, as a flat few pages: a file of more pages is
+// undercounted, so only text and images are bounded from above.
 const (
 	bytesPerToken  = 3
 	imageTokens    = 1600
 	documentTokens = 3000
 )
 
-// countInput is the estimate of a request's input tokens. It rounds up, and errs on the high side for English, so a
-// client that trims to a window stays inside it.
+// countInput is the estimate of a request's input tokens. It rounds up and errs on the high side for English text and
+// for images; a file is a flat guess.
 func countInput(r protocol.Request) int64 {
 	return (r.TextBytes+bytesPerToken-1)/bytesPerToken + r.Images*imageTokens + r.Documents*documentTokens
 }
+
+// countRateKey is the key's count under the same counter as its calls but its own name, so the two spend separate
+// allowances (docs/domains/gateway.md「给其他中转站对接的接口」).
+func countRateKey(c accounts.Caller) string { return "count:" + keyKey(c) }
 
 // countTokens answers Anthropic's count_tokens: {"input_tokens": n}. It takes what a call takes before admission (the
 // address's limit, the key, the account's slot, the body's memory, the key's rate), then asks the database only whether
@@ -65,7 +70,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.Limits.Rate.Count(keyKey(caller)) > h.Limits.cfg.KeyRate {
+	if h.Limits.Rate.Count(countRateKey(caller)) > h.Limits.cfg.CountRate {
 		return 0, ErrRateLimited
 	}
 	snap, err := h.Catalog.Current()

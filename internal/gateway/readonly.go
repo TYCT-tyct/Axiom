@@ -24,6 +24,10 @@ var errNoGeneration = &Refusal{Status: http.StatusNotFound, Code: "generation_no
 // every balance a person has to the digits a client prints.
 func credits(nano int64) float64 { return float64(nano) / 1e9 }
 
+// totalCredits is the credits ever granted: the balance and the spend each shown, then added. Added in billionths the
+// two could pass MaxInt64 (a top-up after a spend) and wrap negative.
+func totalCredits(f billing.Funds) float64 { return credits(f.Balance) + credits(f.Spent) }
+
 // auxRoutes adds the endpoints that are not calls: the token count and the read-only account endpoints
 // (docs/domains/gateway.md「给其他中转站对接的接口」). Every one needs a usable key, and the reads happen in the same
 // transaction that checks it, so the key's account is the only data they can see.
@@ -125,7 +129,7 @@ func (h *Handler) accountCredits(ctx context.Context, tx pg.Tx, a accounts.Admis
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"data": map[string]any{"total_credits": credits(f.Balance + f.Spent), "total_usage": credits(f.Spent)}}, nil
+	return map[string]any{"data": map[string]any{"total_credits": totalCredits(f), "total_usage": credits(f.Spent)}}, nil
 }
 
 // subscription is OpenAI's legacy GET /dashboard/billing/subscription, which new-api reads a channel's balance from:
@@ -135,7 +139,7 @@ func (h *Handler) subscription(ctx context.Context, tx pg.Tx, a accounts.Admissi
 	if err != nil {
 		return nil, err
 	}
-	limit := credits(f.Balance + f.Spent)
+	limit := totalCredits(f)
 	return map[string]any{
 		"object": "billing_subscription", "has_payment_method": false, "soft_limit_usd": limit,
 		"hard_limit_usd": limit, "system_hard_limit_usd": limit, "access_until": 0,
@@ -175,7 +179,7 @@ func generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Value
 	return map[string]any{"data": map[string]any{
 		"id": call.ID.String(), "model": call.Model, "created_at": call.At.UTC().Format(time.RFC3339),
 		"total_cost": credits(call.PriceNano), "currency": call.Currency, "is_free": call.Free,
-		"service_tier": call.ServiceTier, "app": call.ClientApp, "api_type": call.Class,
+		"service_tier": call.ServiceTier, "app": call.ClientApp,
 		"latency": call.FirstToken.Milliseconds(), "generation_time": call.Latency.Milliseconds(),
 		"finish_reason": call.FinishReason, "error": call.ErrorKind, "usage": call.Usage,
 		"tokens_prompt":     sum("input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in"),

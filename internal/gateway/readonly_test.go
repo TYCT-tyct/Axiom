@@ -206,6 +206,60 @@ func TestCreditsShowTheOwnAccount(t *testing.T) {
 	}
 }
 
+// TestCreditsDoNotWrap: a balance at the largest amount and a spend on top of it add up past what the smallest unit holds;
+// the credits shown stay positive and the balance is still the credits less the usage.
+func TestCreditsDoNotWrap(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(math.MaxInt64)
+	r.spendRow(a, a.workspace, 0, 1e9, 0)
+	_, body := r.do(http.MethodGet, "/api/v1/credits", a.key, nil)
+	if d := data(t, body); !near(d["total_usage"], 1) || !(d["total_credits"].(float64) > 9.2e9) {
+		t.Errorf("/credits: %s", body)
+	}
+	_, body = r.do(http.MethodGet, "/v1/dashboard/billing/subscription", a.key, nil)
+	var sub map[string]any
+	if err := jsonx.Unmarshal([]byte(body), &sub); err != nil || !(sub["hard_limit_usd"].(float64) > 9.2e9) {
+		t.Errorf("/subscription: %s (%v)", body, err)
+	}
+}
+
+// TestCountRateIsItsOwn: counting tokens and calling the model each have their own allowance in the window, so one
+// running out leaves the other's alone, in both directions.
+func TestCountRateIsItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) { o.config = func(c *Config) { c.KeyRate, c.CountRate = 2, 2 } })
+	counted, called := r.newAccount(1e9), r.newAccount(1e9)
+	status := func(a account, count bool) int {
+		if count {
+			resp, _ := r.do(http.MethodPost, "/v1/messages/count_tokens", a.key, strings.NewReader(countBody))
+			return resp.StatusCode
+		}
+		resp, _ := r.message(a, "acme/beta")
+		return resp.StatusCode
+	}
+	for range 2 {
+		if got := status(counted, true); got != http.StatusOK {
+			t.Fatalf("count within its allowance: %d", got)
+		}
+	}
+	if got := status(counted, true); got != http.StatusTooManyRequests {
+		t.Errorf("a third count: %d, want 429", got)
+	}
+	if got := status(counted, false); got != http.StatusOK {
+		t.Errorf("a call after counts used up the counting allowance: %d", got)
+	}
+	for range 2 {
+		status(called, false)
+	}
+	if got := status(called, false); got != http.StatusTooManyRequests {
+		t.Errorf("a third call: %d, want 429", got)
+	}
+	if got := status(called, true); got != http.StatusOK {
+		t.Errorf("a count after calls used up the calling allowance: %d", got)
+	}
+}
+
 // TestLegacyBalance: the OpenAI dashboard endpoints new-api reads give the same figures: the hard limit is the credits,
 // the usage is in hundredths, and the dates asked do not narrow it, so the hard limit less the usage is the balance.
 func TestLegacyBalance(t *testing.T) {
@@ -338,6 +392,9 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 		if d[field] != want {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
 		}
+	}
+	if _, ok := d["api_type"]; ok { // the call record has no format, and the request class is not one
+		t.Errorf("api_type is shown: %v", d["api_type"])
 	}
 	for field, want := range map[string]float64{
 		"total_cost": 1.5, "tokens_prompt": 140, "tokens_completion": 25, "tokens_reasoning": 5, "tokens_cached": 40,
