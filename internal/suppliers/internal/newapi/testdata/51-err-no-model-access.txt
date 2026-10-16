@@ -1,0 +1,9 @@
+# 51-err-no-model-access
+POST /v1/chat/completions
+> Authorization: Bearer <ALICE_KEY1>
+> Content-Type: application/json
+> body: {"model": "nonexistent-model", "messages": [{"role": "user", "content": "hi"}]}
+< status: 503  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"error":{"code":"model_not_found","message":"No available channel for model nonexistent-model under group default (distributor) (request id: 202610140454247849124838268d9d6IKp473aj)","type":"new_api_error"}}

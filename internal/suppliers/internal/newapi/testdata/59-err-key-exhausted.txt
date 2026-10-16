@@ -1,0 +1,9 @@
+# 59-err-key-exhausted
+POST /v1/chat/completions
+> Authorization: Bearer <ALICE_KEY2>
+> Content-Type: application/json
+> body: {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+< status: 401  (elapsed 0.04s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"error":{"code":"","message":"Invalid token (request id: 202610140454416590679908268d9d6jWvzhKOS)","type":"new_api_error"}}
