@@ -98,7 +98,7 @@ export function usualState(): MockState {
     },
     mfaEnabled: false,
     permissions: allPermissions,
-    site: { name: "Axiom", key_prefix: "sk-ax-v1-", registration: "invite" },
+    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
