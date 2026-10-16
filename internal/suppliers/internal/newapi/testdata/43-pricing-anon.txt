@@ -1,0 +1,6 @@
+# 43-pricing-anon
+GET /api/pricing
+< status: 200  (elapsed 0.02s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"auto_groups":["default"],"data":[{"model_name":"gpt-4o-mini","vendor_id":-1012,"quota_type":0,"model_ratio":0.075,"model_price":0,"owner_by":"","completion_ratio":4,"cache_ratio":0.5,"enable_groups":["default"],"supported_endpoint_types":["openai"],"pricing_version":"5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"},{"model_name":"mock-gpt","vendor_id":-1012,"quota_type":0,"model_ratio":37.5,"model_price":0,"owner_by":"","completion_ratio":1,"enable_groups":["default"],"supported_endpoint_types":["openai"]}],"group_ratio":{"default":1,"vip":1},"pricing_version":"a42d372ccf0b5dd13ecf71203521f9d2","success":true,"supported_endpoint":{"openai":{"path":"/v1/chat/completions","method":"POST"}},"usable_group":{"default":"Default group","vip":"VIP group"},"vendors":[{"id":-1012,"name":"OpenAI","icon":"OpenAI"}]}

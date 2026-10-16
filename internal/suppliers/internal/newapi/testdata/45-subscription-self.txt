@@ -1,0 +1,7 @@
+# 45-subscription-self
+GET /api/subscription/self
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.02s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"all_subscriptions":[],"billing_preference":"subscription_first","subscriptions":[]},"message":"","success":true}

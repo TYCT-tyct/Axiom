@@ -1,0 +1,7 @@
+# 57-list-keys2
+GET /api/token/?p=1&page_size=100
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"page":1,"page_size":100,"total":2,"items":[{"id":2,"user_id":2,"key":"YfpB**********cn4H","status":1,"name":"small","created_time":1791953664,"accessed_time":1791953664,"expired_time":-1,"remain_quota":10,"unlimited_quota":false,"model_limits_enabled":false,"model_limits":"","allow_ips":"","used_quota":0,"group":"","cross_group_retry":false,"DeletedAt":null,"auto_groups":null},{"id":1,"user_id":2,"key":"<MASKED_KEY>","status":1,"name":"k1","created_time":1791953618,"accessed_time":1791953653,"expired_time":-1,"remain_quota":999954,"unlimited_quota":false,"model_limits_enabled":false,"model_limits":"","allow_ips":"","used_quota":46,"group":"","cross_group_retry":false,"DeletedAt":null,"auto_groups":null}]},"message":"","success":true}
