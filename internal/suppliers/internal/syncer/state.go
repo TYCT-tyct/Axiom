@@ -81,7 +81,9 @@ type GroupSnap struct {
 	Models                  []ModelSnap
 }
 
-// State is everything the engine knows about one supplier.
+// State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
+// 「持久化」), so the constants of Task, Status and RemovalStep only gain members at the end, and any other change to its
+// fields that an old stored state would read differently needs a new format number in package persist.
 type State struct {
 	Version   int64 // the Store's fence: a Commit must name the version it read
 	ConfigGen int64 // raised when the configuration changes; results of rounds that began before are void
@@ -139,6 +141,15 @@ const (
 	BalanceCrossed   // the balance went above or below the reserve a route needs
 	BalanceRecovered // the balance rose back over the low-balance line
 )
+
+var kindNames = [...]string{
+	"group_added", "group_removed", "ratio_changed", "model_added", "model_removed", "plan_changed", "key_changed",
+	"balance_low", "needs_attention", "task_halted", "removal_started", "removal_done", "group_changed", "model_changed",
+	"funding_changed", "balance_crossed", "balance_recovered",
+}
+
+// String is the name an event is stored and delivered under, so that reordering the constants changes no stored event.
+func (k Kind) String() string { return kindNames[k] }
 
 // Event is something that changed. The text fields are names and fingerprints, and a short reason of ours: never text
 // the supplier wrote.

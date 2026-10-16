@@ -16,6 +16,7 @@
     "duplicates": "jscpd",
     "test": "vitest run",
     "budget": "node scripts/budget.ts",
+    "embed": "node scripts/embed.ts",
     "e2e": "playwright test"
   },
   "devDependencies": {

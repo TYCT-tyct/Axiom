@@ -1,10 +1,11 @@
-import { ports, previewOffset } from "../vite.shared.ts";
+import { ports, servedOffset } from "../vite.shared.ts";
 
-const preview = (port: number, path = "/") => `http://localhost:${port + previewOffset}${path}`;
+const served = (port: number, path = "/") => `http://localhost:${port + servedOffset}${path}`;
 
-// The apps the end-to-end tests load, each from its `vite preview` server (playwright.config.ts starts them).
+// The apps the end-to-end tests load from the Go server (playwright.config.ts starts it): the website and the console on
+// its public listener, the admin on its admin listener.
 export const apps = [
-  { name: "website", filter: "@axiom/site", url: preview(ports.site) },
-  { name: "console", filter: "@axiom/console", url: preview(ports.console, "/console/") },
-  { name: "admin", filter: "@axiom/admin", url: preview(ports.admin) },
+  { name: "website", url: served(ports.site) },
+  { name: "console", url: served(ports.site, "/console/") },
+  { name: "admin", url: served(ports.admin) },
 ] as const;

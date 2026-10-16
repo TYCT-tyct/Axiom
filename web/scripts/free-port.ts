@@ -36,13 +36,13 @@ function listening(port: number, host: string): Promise<Listening> {
   });
 }
 
-// isFree says whether nothing listens on the port on the addresses a preview server may take.
+// isFree says whether nothing listens on the port on the addresses a test server may take.
 export async function isFree(port: number): Promise<boolean> {
   const answers = await Promise.all([listening(port, "127.0.0.1"), listening(port, "::1")]);
   return !answers.includes("taken");
 }
 
-// freeFirstPort finds a first port from which the three apps' dev ports and their preview ports (vite.shared.ts, offset
+// freeFirstPort finds a first port from which the three apps' dev ports and their test server ports (vite.shared.ts, offset
 // 1000) are all free. It is random, so two runs starting together do not look at the same ports one after the other and
 // both take them.
 export async function freeFirstPort(): Promise<number> {
@@ -53,5 +53,5 @@ export async function freeFirstPort(): Promise<number> {
       return first;
     }
   }
-  throw new Error("no free ports for the preview servers");
+  throw new Error("no free ports for the test servers");
 }
