@@ -73,29 +73,63 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 	return items, nil
 }
 
-const deleteKey = `-- name: DeleteKey :execrows
-UPDATE accounts.api_keys SET deleted_at = now() WHERE id = $1
+const deleteKey = `-- name: DeleteKey :many
+UPDATE accounts.api_keys SET deleted_at = now() WHERE id = $1 RETURNING site_id, account_id
 `
 
-// A deleted key is final: the table's policy updates only keys not yet deleted.
-func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
-	result, err := db.Exec(ctx, deleteKey, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+type DeleteKeyRow struct {
+	SiteID    uuid.UUID
+	AccountID uuid.UUID
 }
 
-const disableKey = `-- name: DisableKey :execrows
-UPDATE accounts.api_keys SET status = 'disabled' WHERE id = $1 AND status = 'active'
+// A deleted key is final: the table's policy updates only keys not yet deleted.
+func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) ([]DeleteKeyRow, error) {
+	rows, err := db.Query(ctx, deleteKey, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeleteKeyRow
+	for rows.Next() {
+		var i DeleteKeyRow
+		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const disableKey = `-- name: DisableKey :many
+UPDATE accounts.api_keys SET status = 'disabled' WHERE id = $1 AND status = 'active' RETURNING site_id, account_id
 `
 
-func (q *Queries) DisableKey(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
-	result, err := db.Exec(ctx, disableKey, id)
+type DisableKeyRow struct {
+	SiteID    uuid.UUID
+	AccountID uuid.UUID
+}
+
+func (q *Queries) DisableKey(ctx context.Context, db DBTX, id uuid.UUID) ([]DisableKeyRow, error) {
+	rows, err := db.Query(ctx, disableKey, id)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	var items []DisableKeyRow
+	for rows.Next() {
+		var i DisableKeyRow
+		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertKey = `-- name: InsertKey :exec

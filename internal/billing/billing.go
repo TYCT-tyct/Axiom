@@ -30,14 +30,19 @@ type Config struct {
 	ReapGrace time.Duration // how long past its expiry a holder is reaped
 	Lifetime  time.Duration // a reservation's deadline after admission: the longest call plus the settlement grace
 	Segments  Segments
+	// CorrectionWindow is how long an estimated or cleaned-up charge may be corrected, holding the rest of its
+	// reservation until then (an hour, docs/domains/billing.md「用量来源与暂估」).
+	CorrectionWindow time.Duration
+	WaiverCap        int64 // what an account's waived calls may cost the platform in a UTC day, in billionths
 }
 
 // Billing writes reservations under one holder, this start of the process.
 type Billing struct {
-	db       *pg.DB
-	platform pg.Scope // for the holder rows, which only the platform scope writes
-	holder   uuid.UUID
-	config   Config
+	db        *pg.DB
+	platform  pg.Scope // for the holder rows, which only the platform scope writes
+	holder    uuid.UUID
+	config    Config
+	suppliers Suppliers
 }
 
 // ErrTerminated is the refusal of a write whose holder was reaped or expired, or of an extension of a reservation
@@ -49,8 +54,8 @@ var ErrTerminated = errors.New("billing: the reservation's holder was reaped or 
 var ErrReaped = errors.New("billing: the holder was reaped")
 
 // Start registers a new holder. platform is the platform scope, which only cmd/ builds.
-func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config) (*Billing, error) {
-	b := &Billing{db: db, platform: platform, holder: uuid.NewV7(), config: config}
+func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s Suppliers) (*Billing, error) {
+	b := &Billing{db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s}
 	err := db.Tx(ctx, platform, func(tx pg.Tx) error {
 		return queries.InsertHolder(ctx, tx, InsertHolderParams{ID: b.holder, TtlSeconds: config.HolderTTL.Seconds()})
 	})
