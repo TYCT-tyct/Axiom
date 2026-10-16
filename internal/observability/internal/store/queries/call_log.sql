@@ -31,7 +31,8 @@ WHERE account_id = (@account_id::text)::uuid AND at >= @since AND at < @until
     AND (@model::text = '' OR model = @model)
     AND (@client_app::text = '' OR client_app = @client_app)
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
-ORDER BY at DESC, id DESC
+-- Qualified: a bare id would sort by the output column id::text, which is not the index order.
+ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
 
 -- name: GetOwnCall :one
