@@ -40,6 +40,10 @@ export const accountKey = "account";
 // start another's while this page is open; the session this page then reads is the other's.
 const identityOf = (session: Session | null) => (session ? `${session.user.id}/${session.account}` : "");
 
+// What the session may do. A change of it without a change of person keeps the pages (a dialog may hold what is shown
+// once) but not the data the lost permission read.
+const permissionsOf = (session: Session | null) => (session ? [...session.permissions].sort().join(",") : "");
+
 async function fetchSession(api: AuthApi, signal: AbortSignal) {
   try {
     const session = await api.session(signal);
@@ -57,16 +61,20 @@ async function fetchSession(api: AuthApi, signal: AbortSignal) {
 // The current session, or null when nobody is signed in. A 401 is the answer "no session", not a failure, and the page
 // keeps the CSRF token it carries in memory (@axiom/api) because the cookie itself is HttpOnly. A session of someone
 // else than the one before it drops what the previous one loaded, and the requests still out for it: the same cache key
-// would otherwise show one person's balance under another's name.
+// would otherwise show one person's balance under another's name. The same person with other permissions keeps the pages
+// and asks again for what is on them: what the account may no longer read is refused and shown as such, not kept.
 function sessionQuery(api: AuthApi) {
   return queryOptions({
     queryKey: sessionKey,
     queryFn: async ({ client, signal }) => {
-      const before = identityOf(client.getQueryData<Session | null>(sessionKey) ?? null);
+      const before = client.getQueryData<Session | null>(sessionKey) ?? null;
       const session = await fetchSession(api, signal);
-      if (identityOf(session) !== before) {
+      if (identityOf(session) !== identityOf(before)) {
         await client.cancelQueries({ queryKey: [accountKey] });
         client.removeQueries({ queryKey: [accountKey] });
+      } else if (permissionsOf(session) !== permissionsOf(before)) {
+        client.removeQueries({ queryKey: [accountKey], type: "inactive" });
+        void client.invalidateQueries({ queryKey: [accountKey] });
       }
       return session;
     },
