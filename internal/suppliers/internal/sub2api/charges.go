@@ -117,7 +117,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	if s.Pass == nil {
 		if s.Pass = nextPass(s, now); s.Pass == nil {
 			state, err := s.encode()
-			return adapter.ChargePage{Done: true}, state, err
+			return adapter.ChargePage{Done: true, Through: time.Unix(s.Watermark, 0).UTC()}, state, err
 		}
 	}
 	charges, done, err := m.passPage(ctx, s.Pass)
@@ -128,7 +128,11 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 		s = finish(s, now)
 	}
 	state, err := s.encode()
-	return adapter.ChargePage{Charges: charges, Done: done}, state, err
+	out := adapter.ChargePage{Charges: charges, Done: done}
+	if done {
+		out.Through = time.Unix(s.Watermark, 0).UTC()
+	}
+	return out, state, err
 }
 
 // passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended.

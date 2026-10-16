@@ -27,6 +27,9 @@ func (e *Engine) page(ctx context.Context, st *State, c *Commit) (done bool, err
 		return false, err // the pages before it were committed one by one: the pass goes on from there
 	}
 	c.Charges, c.State.Scan, c.State.ScanOpen = page.Charges, next, !page.Done
+	if !page.Through.IsZero() {
+		c.State.Through = page.Through
+	}
 	for _, ch := range page.Charges {
 		if ch.Funding != adapter.FundingWallet && c.State.Status == Normal {
 			// A record paid from something other than the wallet is a cost this module does not model.

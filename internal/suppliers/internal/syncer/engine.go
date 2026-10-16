@@ -42,6 +42,8 @@ type Settings struct {
 	LowBalance, Reserve adapter.Amount
 	// DrainLimit and Grace are the waits of a removal: for attempts in flight, and for late charge records.
 	DrainLimit, Grace time.Duration
+	// CatchUp is how close to the removal's start Through must come: an adapter keeps a short distance from the present.
+	CatchUp time.Duration
 }
 
 // Defaults are the design's values.
@@ -50,7 +52,7 @@ func Defaults() Settings {
 		Interval:    [numTasks]time.Duration{time.Minute, 5 * time.Minute, 5 * time.Minute, 2 * time.Minute},
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
 		MaxPages:   50,
-		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute,
+		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute, CatchUp: 2 * time.Minute,
 	}
 }
 

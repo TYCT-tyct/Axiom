@@ -109,6 +109,10 @@ type State struct {
 	// RescanFrom is where the second read of a removal starts: before the removal began by the grace period, so that a
 	// record that appears late within it is read.
 	RescanFrom time.Time
+	// RemovalAt is when the removal began, and Through how far the adapter says the records are read (the last Done page
+	// that said); the first read of a removal goes on until Through reaches RemovalAt, so no backlog is left unread when
+	// the grace period starts.
+	RemovalAt, Through time.Time
 }
 
 // Kind names an event.

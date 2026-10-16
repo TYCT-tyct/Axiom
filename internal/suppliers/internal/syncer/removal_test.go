@@ -130,3 +130,36 @@ func TestRemovalGoesOnWhenTheAccountIsRejected(t *testing.T) {
 		t.Errorf("status %v", st.state.Status)
 	}
 }
+
+// catchingUp is a supplier that reads a backlog an hour per pass and says how far it has read.
+type catchingUp struct {
+	*supplier
+	read   time.Time
+	passes int
+}
+
+// TestRemovalReadsUntilTheAdapterHasCaughtUp: one pass does not end at the present, so the first read of a removal goes
+// on pass after pass until the adapter says it has read to where the removal began, and only then the grace period
+// starts. An adapter that does not say is taken to have caught up when its pass ends.
+func TestRemovalReadsUntilTheAdapterHasCaughtUp(t *testing.T) {
+	t.Parallel()
+	c := &catchingUp{supplier: healthy(), read: t0}
+	var clock *clock
+	c.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+		c.passes++
+		c.read = c.read.Add(time.Hour)
+		if c.read.After(clock.now()) {
+			c.read = clock.now()
+		}
+		return adapter.ChargePage{Done: true, Through: c.read}, adapter.ScanState(`{"v":1}`), nil
+	}
+	e, st, clk := engine(c)
+	clock = clk
+	clk.advance(4 * time.Hour)
+	if done, err := e.Remove(t.Context(), &hooks{}); done || err != nil || st.state.Removal != StepGrace {
+		t.Fatalf("Remove = %v, %v at step %v; want it waiting in the grace period", done, err, st.state.Removal)
+	}
+	if c.passes != 4 || st.state.Through.Before(st.state.RemovalAt.Add(-2*time.Minute)) {
+		t.Errorf("%d passes, read to %v for a removal at %v; want 4 passes to the start", c.passes, st.state.Through, st.state.RemovalAt)
+	}
+}

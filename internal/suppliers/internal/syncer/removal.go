@@ -42,7 +42,7 @@ func (e *Engine) advance(ctx context.Context, st *State, h Hooks) (wait bool, er
 	switch st.Removal {
 	case StepNone:
 		c.State.Status, c.State.Removal, c.State.ConfigGen = Removing, StepLeaving, st.ConfigGen+1
-		c.State.RescanFrom = e.now().Add(-e.set.Grace)
+		c.State.RescanFrom, c.State.RemovalAt = e.now().Add(-e.set.Grace), e.now()
 		c.Events = append(c.Events, Event{Kind: RemovalStarted})
 	case StepLeaving:
 		c.State.Removal, c.State.GraceUntil = StepDraining, e.now().Add(e.set.DrainLimit)
@@ -96,11 +96,14 @@ func finish(ctx context.Context, c *Commit, h Hooks) error {
 	return nil
 }
 
-// finalScan reads the charge records to the end of a pass, then moves to the next step: after the first read the
-// grace period, after the second the deletion. A supplier that no longer lets us in has nothing more to give: that is
-// noted and the removal goes on. The limits of the supplier, or pages beyond this call's share, make it wait.
+// finalScan reads the charge records. The first read goes on, pass after pass, until the adapter says the records are
+// read up to where the removal began (an adapter reads a backlog window by window, and one pass may end long before the
+// present); an adapter that does not say is taken to have caught up when a pass ends. Pages and passes beyond this call's
+// share, and the limits of the supplier, make it wait. A supplier that no longer lets us in has nothing more to give:
+// that is noted and the removal goes on. Then the next step: after the first read the grace period, after the second the
+// deletion.
 func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool, err error) {
-	switch err = e.scan(ctx, st, c); {
+	switch err = e.readToCutoff(ctx, st, c); {
 	case errors.Is(err, adapter.ErrBucketsFull):
 		return true, nil
 	case errors.Is(err, adapter.ErrAuthRejected):
@@ -108,8 +111,8 @@ func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool
 		c.State.Scan, c.State.ScanOpen = nil, false
 	case err != nil:
 		return false, err
-	case st.ScanOpen:
-		return true, nil // pages remain beyond this call's share
+	case !e.caughtUp(st):
+		return true, nil // pages or passes remain beyond this call's share
 	}
 	if st.Removal == StepFinalScan {
 		c.State.Removal, c.State.GraceUntil = StepGrace, e.now().Add(e.set.Grace)
@@ -117,4 +120,25 @@ func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool
 		c.State.Removal = StepDelete
 	}
 	return false, nil
+}
+
+// readToCutoff reads passes until the records are read up to the removal's start, or the share of one call is used.
+func (e *Engine) readToCutoff(ctx context.Context, st *State, c *Commit) error {
+	for range e.set.MaxPages {
+		if err := e.scan(ctx, st, c); err != nil {
+			return err
+		}
+		if e.caughtUp(st) || st.Removal != StepFinalScan {
+			return nil
+		}
+	}
+	return nil
+}
+
+// caughtUp reports whether the last pass ended and the records are read to the removal's start.
+func (e *Engine) caughtUp(st *State) bool {
+	if st.ScanOpen {
+		return false
+	}
+	return st.Removal != StepFinalScan || st.Through.IsZero() || !st.Through.Before(st.RemovalAt.Add(-e.set.CatchUp))
 }
