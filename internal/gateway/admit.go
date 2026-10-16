@@ -108,14 +108,20 @@ func routingAdmission(a accounts.Admission, c *Call) routing.Admission {
 		ra.Preset = routing.PresetID(p)
 	}
 	if names := a.Models(); names != nil { // nil allows every model, an empty list none
-		ra.Allowed = make(map[catalog.ModelID]struct{}, len(names))
-		for _, name := range names {
-			if m, err := c.snap.ResolvePublic(name); err == nil {
-				ra.Allowed[m.Model] = struct{}{}
-			}
-		}
+		ra.Allowed = allowedModels(c.snap, names)
 	}
 	return ra
+}
+
+// allowedModels are the models the key's names stand for; a name the catalog does not know allows nothing.
+func allowedModels(snap *catalog.Snapshot, names []string) map[catalog.ModelID]struct{} {
+	allowed := make(map[catalog.ModelID]struct{}, len(names))
+	for _, name := range names {
+		if m, err := snap.ResolvePublic(name); err == nil {
+			allowed[m.Model] = struct{}{}
+		}
+	}
+	return allowed
 }
 
 func billingAdmitted(a accounts.Admission, c *Call) billing.Admitted {

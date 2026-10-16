@@ -45,7 +45,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 
 ## 入口与准入
 
-G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/messages`，`GET /models`；三个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。`/responses/compact`、`count_tokens` 随 G8、G9。
+G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/messages`，`GET /models`；三个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。`/responses/compact` 随 G8；`count_tokens` 和只读的账户接口见「辅助接口」。
 
 **一次请求的顺序**（任何一步失败都由错误出口作答，已取的名额和内存经 `Call.Done` 归还）：
 
@@ -80,6 +80,27 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 **头白名单**：只转发 `Anthropic-Beta`、`Anthropic-Version`，值原样；其余一律不转发（含 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`Cookie`）。要加协议头只改 `forwarded` 这一处。
 
 **模型列表**：`GET /v1/models` 和 `/api/v1/models` 要认 key，并像准入一样判定它能否使用：取一个准入类连接名额（不过账户闸，不动钱），调 `accounts.Admit`，`fn` 为空，所以停用、过期、删除、管理类 key 和 IP 白名单都生效，缓存里的认出不算数。不占账户名额，只受 IP 在途上限约束。每个上架的模型列出目录里的名字（`Slug`），以及去掉作者前缀的名字——只在它是公开名字、解析到同一个模型时才列，所以 `claude` 开头的厂商原生名字能被 Claude Code 发现。每项带 OpenAI 的 `id`、`object`、`created`、`owned_by` 和 Anthropic 的 `type`、`display_name`、`created_at`；目录没有上架时间，`created` 恒为 0。列表按目录快照缓存。`/api/v1/models` 现在与 `/v1/models` 相同，OpenRouter 格式的价格、上下文长度等随售价接口加入。
+
+## 辅助接口
+
+G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）。两套前缀（`/v1`、`/api/v1`）下路由相同：`POST /messages/count_tokens`，`GET /key`、`/credits`、`/generation?id=`、`/dashboard/billing/subscription`、`/dashboard/billing/usage`。行为基线是 OpenRouter 的 `GET /api/v1/key`、`/credits`（OpenRouter《API Reference》，2026-10-16 读取；`generation` 的字段取自同一套文档的惯例，该页当日取不到）、Anthropic 的 `count_tokens` 和 OpenAI 旧版的两个余额接口（new-api 源码，2026-10）。
+
+**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——区别是 `fn` 在这个事务里读。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
+
+| 接口 | 内容 | 数据从哪来 |
+|---|---|---|
+| `GET /key` | `label`（前缀、`...`、末四位）、`name`、`usage`（累计）、`usage_daily`、`usage_weekly`、`usage_monthly`（当前 UTC 日、周、月）、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`（恒 false）、`is_management_key`（恒 false）；没有上限的 key，`limit`、`limit_remaining`、`limit_reset` 是 null，不重置的上限 `limit_reset` 也是 null | `Admission.SpendLimit()`；`billing.ReadKeyUsage`：`billing.spend` 里 subject 是这把 key 的行（工作区的行另算，不相加）；`accounts.GetKeyInfo` |
+| `GET /credits` | `total_credits`、`total_usage` | `billing.ReadFunds`；工作区列表来自 `accounts.AccountWorkspaces` |
+| `GET /dashboard/billing/subscription` | `hard_limit_usd`、`soft_limit_usd`、`system_hard_limit_usd`，`has_payment_method` 恒 false，`access_until` 0 | 同上 |
+| `GET /dashboard/billing/usage` | `total_usage`（0.01 个单位）；`start_date`、`end_date` 不读 | 同上 |
+| `GET /generation?id=` | `id`、`model`、`created_at`、`total_cost`、`currency`、`is_free`、`service_tier`、`app`、`latency`（首字，毫秒）、`generation_time`（全程，毫秒）、`finish_reason`、`error`、`usage`（计费项名到数量）、`tokens_prompt`（输入侧各项之和）、`tokens_completion`（输出侧各项之和，含推理）、`tokens_reasoning`、`tokens_cached`（缓存读） | `observability.GetOwn`；`OwnCall` 没有成本、端点、路由，所以响应里也没有；也没有 `api_type`：调用记录不存调用格式，`request_class` 是请求类别，不是格式，借来填会误导客户端，待记录存格式后再加 |
+
+- **金额**：本站记账单位的额度，十亿分之一额度除以 10⁹ 显示（`float64` 对一个人持有的余额足够精确，只用于显示）；币种只在 `generation` 里带，OpenRouter 的 `key`、`credits` 没有币种字段。
+- **余额类字段**：`balance` 取余额行（账本的合计，在途预留不扣：预留是还没发生的收费，OpenRouter 的 `credits` 同样不扣），`usage` 取账户**所有工作区**的 `billing.spend.spent` 之和（含已删除的工作区；key 的计数器记的是同样的收费，不相加），`total_credits` = `balance` + `usage`，`total_usage` = `usage`，旧版接口的 `hard_limit_usd` = `total_credits`、`total_usage`（0.01 单位）= `usage` × 100，所以两种工具算出的余额都是 `balance`。不直接对账本求和：账户每次调用一行分录，轮询的接口要扫全部，而 `spend` 的行数只随天数和工作区数增长。今天动余额的只有进账（赠送）和收费，所以这个和就是累计进账；退款、额度过期加入时，它们也动余额但不是收费，`total_credits` 要改成另记的累计进账，那时再改这一处。`start_date`、`end_date` 不读，永远是累计。没有余额行的账户全是 0。
+- **`key` 的用量与上限**：`usage*` 只算已收的（`spent`）；`limit_remaining` = 上限 − 上限窗口里的（已收 + 在途预留），与准入拒绝的依据相同，不会为负。窗口按该 key 的 `limit_reset`、数据库时钟的 UTC 日、周、月；不重置的上限算全部日子。
+- **`generation` 的来源与缺口**：只读调用记录。记录由后台批量写，请求结束后至多约 200 ms 才可查，此前（和不存在、别的账户的）都是 404 `generation_not_found`，客户端稍后重试；接入文档里"记录还没写入时给账本里的精简版"没有做：账本（`billing.transactions`）只记金额，不记用量和价格版本，精简版的内容要等调用记录的写入方（G10）和账本一起定，现在记录没写入就是 404。编号不是 UUID 或缺失是 400。`GetOwn` 按主键在各月分区里查，每个分区一次索引探查，不在调用路径上。
+- **`count_tokens`**（`POST /messages/count_tokens`）：Anthropic 的格式，返回 `{"input_tokens": n}`。**不调上游**，所以 n 是估算，口径固定为：`⌈TextBytes / 3⌉ + 图片数 × 1600 + 文件数 × 3000`（粗估，不查模型的页数上限；`billing.InputBound` 才按模型的页数界定上限）。`TextBytes` 是 `protocol.Inspect` 读出的请求体字节数减去图片、文件的数据（含 JSON 的键和引号，不去除）；每三字节一个 token 是经验比例：英文约四字节一个，所以文本通常偏高，但不是保证的上界（字节多、token 更密的文本会低估）；图片取一张最多约 1,600 个 token（上游会把大图缩到这个量级），是上界；文件的页数不解码就不知道，取固定的 3000，页数多的文件会被低估。因此不承诺“只偏早、不超窗口”：带大文件的请求，按这个数裁剪的客户端（Claude Code 用它定压缩时机）可能偏晚。以后经上游的 `count_tokens` 转发时才有精确值。不读 `max_tokens`，不要求它。它不预留、不收费、不写调用记录；前置检查同调用：IP 在途、认 key、账户在途名额、请求体按内存预算、key 的计数请求速率（单独计数，键 `count:`+key，超过 `CountRate` 回 429，不占用也不受 `KeyRate` 影响），然后 `Admit` 确认 key 可用。**模型**必须存在（404 `model_not_found`），且 key 可用（`Admission.Models()`，用 `allowedModels`，与路由同一逻辑）；不可用的同样回 404 `model_not_found`，不回 403。要精确计数，以后可经上游的 `count_tokens` 转发（G4 之后），这里的估算作为没有上游时的回答。
+- **测试**：`readonly_test.go`（rig，真实数据库：成功、无效 key、无权限类 key、跨账户读取、不存在、计数口径、额度窗口）；`billing/read_test.go`（窗口边缘、行级安全）。
 
 ## 尝试
 
@@ -185,7 +206,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 预留截止时间 | 准入 + 单次调用最长 + 30 分钟结算宽限 | 清理接管 |
 | 优雅退出 | `AXIOM_SHUTDOWN_TIMEOUT` 到期取消全部上游，再给结算 30s | 交给清理 |
 
-- 默认值是后台配置的种子，保存时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPConnections`、`IPInFlight`、`MaxBody`、`KeyRate`、`RateWindow`、`KeyLookup`，默认 1000、500、32 MiB、每 key 每分钟 6000 次、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；结算宽限 > 结算的后台重试（`SettleBackground`，默认 20 分钟，给清理接管留 10 分钟）；批量写的连接数 ≤ N − 保留数；每 key 等待者 ≤ 全局等待者。
+- 默认值是后台配置的种子，保存时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPConnections`、`IPInFlight`、`MaxBody`、`KeyRate`、`CountRate`、`RateWindow`、`KeyLookup`，默认 1000、500、32 MiB、每 key 每分钟 6000 次（调用）、每 key 每分钟 6000 次（计数）、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；结算宽限 > 结算的后台重试（`SettleBackground`，默认 20 分钟，给清理接管留 10 分钟）；批量写的连接数 ≤ N − 保留数；每 key 等待者 ≤ 全局等待者。
 - **限额**：每个请求最多 3 次尝试（含结果未知的），共享期限，换端点不重置时钟。重试预算按供应商、在进程内：1 分钟内重试不超过首次请求数的 10%，保底每分钟 5 次；用完跳过该供应商并写进路由记录。凭证范围的失败在同端点换凭证，也算一次尝试；疑似出口拦截在 M1 按端点处理并报告 quality。suppliers、egress 不暗中重试 POST。
 
 ## 并发、背压与共享状态
@@ -260,7 +281,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 ## PR 拆分
 
-每个约 400 行非生成代码，测试先行；G1–G5 已落地（G1、G3 合为一个 PR，约 900 行非生成代码，因为准入的错误出口和限额由入口一并定下；G4、G5 合为一个 PR，约 700 行非生成代码，因为尝试循环和提交点之后的转发共用同一个读循环和同一个收尾）。下层的工作在各自的 Issue：accounts #23（关键路径：G1 要 `SiteForHost`、`AuthenticateKey`，G3 要 `Admit`）；catalog #24（名字解析、快照）；suppliers #25（S8 调用面、`Journal`、`Cost`、`RecordAttempts`；S9 对账）；routing #26（R1 快照含负载与端点实测的取消；R2 `Plan`、`Segmentable`、`NoEndpoint`、`Decide`；R3 路由记录）；protocol #27（P4 `Prepare`，已合并（#78），按 protocol 的「转发（草图）」扩展签名；P5 `Relay`；P6–P10 跨格式与聚合）；billing #28（B1 表、持有者、截止时间；B2 `Reserve`；B3 `Meter`、`Extend`；B4 `Settle`；B5 回收、清理、`SettleOrphan`、补扣；B6 校正与保留释放）；observability #29、#54（O1 调用记录批量写；O2 指标与链路）。各线按各模块 README 的接口草图用测试替身并行。
+每个约 400 行非生成代码，测试先行；G1–G5、G9 已落地（G1、G3 合为一个 PR，约 900 行非生成代码，因为准入的错误出口和限额由入口一并定下；G4、G5 合为一个 PR，约 700 行非生成代码，因为尝试循环和提交点之后的转发共用同一个读循环和同一个收尾）。下层的工作在各自的 Issue：accounts #23（关键路径：G1 要 `SiteForHost`、`AuthenticateKey`，G3 要 `Admit`）；catalog #24（名字解析、快照）；suppliers #25（S8 调用面、`Journal`、`Cost`、`RecordAttempts`；S9 对账）；routing #26（R1 快照含负载与端点实测的取消；R2 `Plan`、`Segmentable`、`NoEndpoint`、`Decide`；R3 路由记录）；protocol #27（P4 `Prepare`，已合并（#78），按 protocol 的「转发（草图）」扩展签名；P5 `Relay`；P6–P10 跨格式与聚合）；billing #28（B1 表、持有者、截止时间；B2 `Reserve`；B3 `Meter`、`Extend`；B4 `Settle`；B5 回收、清理、`SettleOrphan`、补扣；B6 校正与保留释放）；observability #29、#54（O1 调用记录批量写；O2 指标与链路）。各线按各模块 README 的接口草图用测试替身并行。
 
 | # | 内容 | 依赖 |
 |---|---|---|
@@ -324,3 +345,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 日志在 `Send` 返回时总是追加 | 同一尝试的条目合并成一行，追加是一次加锁和一次写 map；比较回执有没有变要多一个状态，还测不到（回执的字段不对外） | 只在回执变了才追加 |
 | `Prepare` 的副本计入节点内存预算，`Send` 返回即退还 | 性能文档说转换也计入；副本与请求体一样大，每路 5000 个并发就是预算的大头 | 不计：预算低估 |
 | 尝试结局用 `Ending` 交给 `Settle`，由 G7 换成 `billing.Outcome` | 对账键在回执里，回执的字段不对外，只有 suppliers 能读；成本估算也要 suppliers 的 `Cost` | 这里直接造 `billing.Outcome`：要在 gateway 里读回执 |
+| 只读接口在认 key 的同一个事务里读数据 | 范围就是 key 的账户，行级安全是全部的访问控制；不另开事务，也不在 gateway 里组装范围 | 先认 key、再用账户范围另开事务：多一次往返，且 gateway 要自己取范围 |
+| `/credits` 不要求管理 key，调用 key 可读 | M1 没有管理 key 的接口，要求它就无人可用；读的只是本账户的余额 | 照 OpenRouter 要求管理 key：M1 无人可调 |
+| 余额类字段：`total_usage` 取账户各工作区的 `spend.spent` 之和，`total_credits` 为余额加它 | 账本每次调用一行，每次轮询都扫全部不可接受；`spend` 随天数增长，且保持"额度 − 用量 = 余额" | 对 `entries` 求和：随调用数增长；把工作区和 key 的计数器一起加：每笔收费记两份，会重复；只给可用余额、用量 0：用量是假的 |
+| `count_tokens` 本地估算，三字节一 token，图片 1600、文件 3000 | 没有上游就没有精确值；文本通常偏高，客户端多半偏早压缩，但不保证不超出窗口（大文件、token 密的文本会低估）。路由、报价的输入上界（字节数）偏高太多，会让 Claude Code 压缩得太早 | 用报价的输入上界：高出约三到四倍；转发上游：G4 之后再做，且要为一个免费接口占用端点名额 |

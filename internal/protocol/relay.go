@@ -364,6 +364,9 @@ func (r *Relay) trail(e event, data []byte) (Step, error) {
 func (r *Relay) withhold(name string, data []byte) (Step, error) {
 	var err error
 	r.withheld, err = r.appendEvent(r.withheld, name, data)
+	if err == nil && r.agg != nil {
+		err = r.agg.hold(data)
+	}
 	return Step{Kind: StepBuffered}, err
 }
 

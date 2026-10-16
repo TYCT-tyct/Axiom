@@ -78,6 +78,7 @@ func (s *Service) lookUp(ctx context.Context, at keyHash, raw string) (Caller, e
 		return Caller{}, fmt.Errorf("look up an API key: %w", err)
 	}
 	defer release()
+	s.misses.Add(ctx, 1)
 	hashes := [][]byte{at.hash[:]}
 	for _, v := range s.versions[1:] {
 		h := s.hashes.Sum(v, []byte(raw))

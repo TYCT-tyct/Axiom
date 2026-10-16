@@ -15,7 +15,7 @@
 
 ## 请求摘要
 
-`Inspect(f, body)` 一次扫描读出计费准入和路由要从请求里知道的全部事实，返回值 `Request`，不借用 `body`。它按 token 读，不把请求体解成树，不读的成员只检查是合规的 JSON，所以它自己的分配次数与请求体大小无关；`jsontext` 查重复键时，超过 64 个成员名或 1 KiB 名字的对象每个名字分配一次，这部分随这类宽对象的成员数增长，`jsonx.Validate` 同样如此（[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)）。`Request` 用目录的计费项和服务等级表达，不引用 billing：模块依赖里 protocol 在 billing 之下。字段名取自 Anthropic《Messages API reference》《Service tiers》《Fast mode》《Extended thinking》、OpenAI《Create chat completion》《Responses API reference》《Prompt caching》、OpenRouter《Reasoning tokens》《Prompt caching》（2026-10-14 读取）。
+`Inspect(f, body)` 一次扫描读出计费准入和路由要从请求里知道的全部事实，返回值 `Request`，不借用 `body`。它按 token 读，不把请求体解成树，不读的成员只检查是合规的 JSON，所以它自己的分配次数与请求体大小无关；`jsontext` 查重复键时，超过 64 个成员名或 1 KiB 名字的对象每个名字分配一次，这部分随这类宽对象的成员数增长，`jsonx.Validate` 同样如此（[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)）。`Request` 用目录的计费项和服务等级表达，不引用 billing：模块依赖里 protocol 在 billing 之下。字段名取自 Anthropic《Messages API reference》《Service tiers》《Fast mode》《Extended thinking》《Compaction》、OpenAI《Create chat completion》《Responses API reference》《Prompt caching》《Compaction》、OpenRouter《Reasoning tokens》《Prompt caching》（2026-10-14 读取）；`search_result` 取自 Anthropic《Search results》（2026-10-15 读取）：用户消息顶层和 `tool_result` 里都可以有，`content` 是文本块数组，所以沿 `content` 进入的部件规则照常适用。
 
 | 字段 | 谁用 | Messages | Responses | Chat |
 |---|---|---|---|---|
@@ -23,10 +23,11 @@
 | `Models`：OpenRouter 的备选模型，最多 8 个，多于 8 个按请求无效 | gateway 在主模型之后认备选，交给路由 | `models` | 同左 | 同左 |
 | `MaxOutput`：0 是没给，用模型的默认值 | [计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)的首段输出；路由的上下文过滤 | `max_tokens` | `max_output_tokens` | `max_tokens`、`max_completion_tokens` 取大 |
 | `Choices`：每个回答各有一份输出上限 | 同上 | 1 | 1 | `n` |
-| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据 | `input_image`、`computer_screenshot` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
+| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据；`search_result` 的 `source` 是字符串（URL 或标识），按值的形状认，不当对象读 | `input_image`、`computer_screenshot` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
 | `InputItems`：输入可能按哪些计费项收费 | 输入按其中最贵的单价预留 | `input`；有 `cache_control` 加 `cache_write`，其 `ttl` 是 `1h` 再加 `cache_write_1h` | `input`、`cache_write`：不写标记也会隐式缓存，GPT-5.6 起写入按输入价的 1.25 倍收，模型收不收由价目表定 | 同 Responses，再按 OpenRouter 写法的 `cache_control` 加 |
 | `ServiceTiers`：可能以哪些等级服务 | 按其中最贵的等级预留；路由排除没有这些等级的端点 | `service_tier` 的 `auto` 或不写 → standard、priority（有 Priority Tier 容量时就用），`standard_only` → standard；`speed: "fast"` → fast，优先于前者 | `auto` 或不写 → standard、priority（项目设置的等级），`default` → standard，`flex`、`priority` | 同 Responses |
 | `WebSearches`、`CodeExecutions`：0 是没给，用模型的默认最大次数 | 按次项目的最大次数 | 各 `web_search_*` 工具的 `max_uses` 相加 | `max_tool_calls`，只给请求启用了的那种工具 | 不限 |
+| `Compacts` | 开了服务端压缩，会多采样一次，billing 的 `Demand` 据此乘 2 | `context_management.edits` 里有 `type` 以 `compact_` 开头的项（`compact_20260112`）；只清理内容的 `clear_*` 不算 | `context_management` 里有 `type` 为 `compaction` 的项 | — |
 | `HidesReasoning` | 推理不在流里，进度看不到，要一次预留足 | `thinking.display` 是 `omitted` | — | `reasoning.exclude` 是 true |
 | `Previous` | gateway 把它指向的历史计入输入 | — | `previous_response_id` | — |
 | `Provider`：OpenRouter 的 `provider` 对象，原样的字节，至多 4 KiB，没写或 `null` 为空；`Inspect` 只检查它是对象、大小在界内，含义由 gateway 读 | gateway 转成路由的覆盖条件（[gateway 的「入口与准入」](../gateway/README.md#入口与准入)） | `provider` | 同左 | 同左 |
@@ -51,6 +52,7 @@
 | `include` | — | `Target.EncryptedReasoning` 时保证含 `reasoning.encrypted_content`：没有就加，`null` 换成只含它的数组，数组里没有就插在开头；否则不动 | 上游不保存状态时，推理只能加密后带回下一轮；不推理的模型收到它返回 400 |
 
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
+- **输出缓冲**：一次分配，容量是原请求体加模型名、每个可换标识的 `Rewrites.IdentityLen`（`Identity` 返回的最大字节数，转义前；不写按 128；返回更长的值是 gateway 的错，`Prepare` 拒绝，这样不论客户端原来写了什么，容量都能事先定下），两者都按 JSON 编码后最坏的长度算（每字节最多 6 字节）、以及表里新增成员的字节数（`store`、`include`、包住字符串 `input` 或补出 `input` 的字节），所以改写不会因为缓冲不够把整个请求体再拷一遍；`TestPrepareBuffer`、`TestPrepareBufferEscapes`（模型名和标识全是要转义的字节）、`TestPrepareBufferDefaultIdentityLen`（不写 `IdentityLen`，标识是 128 个要转义的字节）用带长派生标识和历史的大请求核对分配次数与短标识时相同。
 - **出错**：标识不是字符串、`metadata` 不是对象、要加 `include` 时它不是数组或含非字符串的元素、有历史时 `input` 不是字符串、数组或 `null`，返回 `ErrInvalid`；`previous_response_id` 非空与是否给了历史不一致是 gateway 的错，返回另一个错误，不当成客户端的 400。历史条目是本站存下的原样 JSON，不再校验。
 
 ## 跨格式转换
@@ -141,7 +143,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 ```
 
 - **`Prepare`**：`Prepare(r *Request, body, t, w) (Upstream, error)`，`r` 是 `Inspect` 读出的摘要，`Target.Format` 是端点的格式。`Upstream` 带发往端点的请求体和 `UsageContext`：请求里有 1 小时的缓存断点（摘要的输入计费项含 `cache_write_1h`），以及请求只写了一个服务等级时的那个等级，写了 `auto` 或没写时按标准档。`ErrInvalid` 仍是客户端的错误（gateway 回 400），不换端点；`*NotSupported` 表示这个端点表达不了这个请求，gateway 跳过这个条目、不算尝试。同格式改写沿用 `TestPrepare`、`TestPrepareSamples`、`FuzzPrepare`；`TestAllocs`、`BenchmarkPrepare` 只计 `Prepare` 自己的分配。
-- **`Inspect` 的后续**：billing 的 `Demand` 要请求里的事实来算内部采样次数：启用了哪些服务端工具、各自写没写最大次数，以及是否开启了服务端压缩或上下文管理（Anthropic 的 `context_management`、Responses 的 `compaction`）。`Request` 现在有工具次数，没有压缩这一项，由 protocol 的后续 PR 补上。
+- **`Inspect` 的后续**：billing 的 `Demand` 要请求里的事实来算内部采样次数：启用了哪些服务端工具、各自写没写最大次数，以及是否开启了服务端压缩（Anthropic 的 `context_management` 里的 `compact_*`、Responses 的 `context_management` 里的 `compaction`）。`Request` 的 `WebSearches`、`CodeExecutions`、`Compacts` 已交出这些事实，乘出采样次数是 billing 的事。
 - **拉取式**：调用方循环调用 `Next`。`Next` 每做一次底层读（至多 16 KiB）就返回；读到的字节还没凑成完整事件时返回 `Progress`，已到的原始字节记进 `Progress().PartialBytes`，所以调用方可以在每次读之后计量，一个越过当前段的大事件、一个持续到达却迟迟不结束的事件，都在读的过程中被看到。
 - **已报告的数是否最终**：输入侧（输入、缓存读写）一经报告就是最终值；输出侧（输出、推理、搜索）在格式规定的最后一个用量事件（Messages 带 `stop_reason` 的 `message_delta`、Chat 的用量块、Responses 的结尾快照）之前报告的只是下界，例如 Messages 在 `message_start` 里报 `output_tokens: 1`（`testdata/messages/text/upstream.sse`）。`Progress` 逐项标明哪些已是最终值，billing 据此决定是否还要按字节上界计量（[billing 的「接口」](../billing/README.md#接口草图)）。
 - **切片的有效期**：`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效；`Relay` 只由一个 goroutine 调用。
@@ -204,7 +206,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 
 ## 非流式聚合
 
-客户端没要流时（`RelayOptions.Aggregate`），上游照样以流读（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）：读、计量、内存记账都与流式相同，不同的只有输出。`Relay` 把要写给客户端的、客户端格式的事件交给聚合器，`Next` 的 `Out` 恒为空（提交点照常是 `StepCommit`，心跳是 `StepHeartbeat` 但不写保活），`Finish`、`Fail` 返回整个响应体，`Status()` 给出它的 HTTP 状态（还没有结尾时为 0）。每种客户端格式一个聚合器（`aggregatemessages.go`、`aggregatechat.go`、`aggregateresponses.go`），五条路径共用这三个：Messages、Responses 的流转给 Chat 客户端时，聚合器看到的就是 Chat 的块，不知道上游是谁。聚合器收到的是 `Relay` 写出的事件字节（`Finish`、`Fail` 写的结尾也一样，所以带费用），按 `sse.AppendEvent` 的格式切开，多行 data 用换行连接。字段取自 Anthropic《Messages API reference》、OpenAI《Create chat completion》《Responses API reference》、OpenRouter《Reasoning tokens》（均沿用上文已读的版本，本 PR 没有重读）。
+客户端没要流时（`RelayOptions.Aggregate`），上游照样以流读（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）：读、计量、内存记账都与流式相同，不同的只有输出。`Relay` 把要写给客户端的、客户端格式的事件交给聚合器，`Next` 的 `Out` 恒为空（提交点照常是 `StepCommit`，心跳是 `StepHeartbeat` 但不写保活），`Finish`、`Fail` 返回整个响应体，`Status()` 给出它的 HTTP 状态（还没有结尾时为 0）。每种客户端格式一个聚合器（`aggregatemessages.go`、`aggregatechat.go`、`aggregateresponses.go`），五条路径共用这三个：Messages、Responses 的流转给 Chat 客户端时，聚合器看到的就是 Chat 的块，不知道上游是谁。聚合器收到的是 `Relay` 写出的事件字节（`Finish`、`Fail` 写的结尾也一样，所以带费用），按 `sse.AppendEvent` 的格式切开，多行 data 用换行连接。Chat 聚合器只跳过 `[DONE]` 和空的 data，其余都当 JSON 读（前导空白、制表符、多行都照常），不是对象就是上游的失败；Responses 聚合器收到的项和部件，`type` 不是字符串（或转义不合法）就在收到时以 `ErrUpstream` 失败，转义的类型按它拼出的名字算。字段取自 Anthropic《Messages API reference》、OpenAI《Create chat completion》《Responses API reference》、OpenRouter《Reasoning tokens》（均沿用上文已读的版本，本 PR 没有重读）。
 
 | 客户端格式 | 响应体 | 怎么聚合 |
 |---|---|---|
@@ -224,7 +226,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 有内容，Messages | 502（D16） | `RenderError` 的外壳，不带内容，用量和费用在 `axiom` 里 |
 
   聚合器可以拒绝 `streamcheck` 接受、却造不出回复的流（没有 `message` 的 `message_start`、顺序不对的块、不是 JSON 的工具输入、没有 `response` 的结尾），按上游的失败处理：在 `Next` 里是 `ErrUpstream`，在结尾里则 `Finish` 改以 `upstream_error` 失败，结算已写的费用照常在里面。
-- **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），结束时全部归还；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
+- **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），所以 `Relay` 扣住到正常结束才交给聚合器的事件（Chat 的结束选项），在扣住的那一刻就让聚合器按它们要开的选项和结束原因记账（`aggregator.hold`），超限在 `Next` 里就以 `ErrMemory` 结束；结束时全部归还；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
 - **分配**：聚合器按位置读事件，不把事件解成树；每个事件的分配次数有常数上界，缓冲翻倍带来的分配随长度对数增长，与增量的大小无关（`TestAggregateAllocs`）。
 ## 录制样本
 
@@ -260,7 +262,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 
 | 不变量 | 靠什么保证 |
 |---|---|
-| 读请求摘要、改写请求比 `jsonx.Validate` 多出的分配次数与请求体大小无关 | `TestAllocs` 对 `Inspect` 的三种格式和 `Prepare` 的两种格式 1 KiB、1 MiB、4 MiB 的请求体，分别在普通对象和含 100 个成员的宽对象下比较两者分配次数之差；`BenchmarkInspect`、`BenchmarkPrepare` 由 `just bench-compare` 与 `main` 比较 |
+| 读请求摘要、改写请求比 `jsonx.Validate` 多出的分配次数与请求体大小无关 | `TestAllocs` 对 `Inspect` 的三种格式和 `Prepare` 的两种格式 1 KiB、1 MiB 的请求体，分别在普通对象和含 100 个成员的宽对象下比较两者分配次数之差；`BenchmarkInspect`、`BenchmarkPrepare` 由 `just bench-compare` 与 `main` 比较 |
 | 同格式改写只改「同格式改写」表里的位置，其余字节原样；签名、加密内容、压缩项原样到达 | `TestPrepare` 逐字节比较整个请求体，用例含签名和 `redacted_thinking`、转义的思考正文、Codex 压缩后的第二轮（OpenAI《Compaction》的做法，ID 和密文是编的）、表里每条规则；`TestPrepareSamples` 对已提交的样本请求只差模型名（Responses 再加 `store`） |
 | 改写后准入和路由读到的摘要不变，输出合规 | 模糊测试 `FuzzPrepare`：`Inspect` 接受的请求，改写结果仍被 jsonx 接受，再读出的摘要除模型名、`Previous` 和 `TextBytes`（随增删的字节变）外完全相同；`Prepare` 返回 `ErrInvalid` 当且仅当把请求体整体解码后看到上面「出错」里的类型错误，所以错拒合法请求和漏拒错误类型都会失败；以 `Inspect` 和 `Prepare` 的表驱动用例（含拒绝的用例）为种子；每条规则都经过变异验证 |
 | `Inspect` 接受的请求体 jsonx 也接受；读出的 `model`、`stream` 与完整解码一致；`0 ≤ TextBytes ≤` 请求体字节数 | 模糊测试 `FuzzInspect`，以下面的表驱动用例和样本为种子 |
@@ -276,7 +278,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是；`TestRelayOpenAIUsage` 覆盖 OpenAI 两种格式的细项、超出总数、负数、溢出、未知计数和服务等级；`TestRelayUsageMerge` 核对后来的报告没写的等级、未知计数和 `iterations` 保留 |
 | 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes`；字节上界不漏不重 | `TestRelayProgress`；`TestRelayChatContent` 计入各方言的推理、拒答和工具调用；`TestRelayResponsesContent` 核对项完成时只加多出的字节、没有增量的项照样计入、`web_search_call` 计一次搜索；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
 | 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；`TestRelayMemoryHeld` 遍历 Relay 实际引用的全部切片、字符串和映射，按底层数组去重求和：上千个选项结束的 Chat 块、上千个 Responses 输出项、很长的转义成员名、每块都带的很长的服务等级和读完用量后才出错的块、超出上限的未知用量、`tool_use` 起始事件之后上游立刻出错（读取状态里的事件成员不能留着），每一步引用的都不超过已记账的，失败后引用的不超过 `out` 的容量加计量器的预留；`TestMeterMemory` 核对计量器在上限处不超过预留、超出就判无效；样本在预算为 0 时照常转发，说明基础额度够用 |
-| 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
+| 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 40 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
 | Messages、Responses 的流转给 Chat 客户端时，每条映射和结束原因都按上表，输出与黄金输出 `to-chat.sse` 逐字节相同，整段读和逐字节读结果相同，都通过 Chat 的检查 | `TestConvertStreams` 覆盖全部样本和 `testdata/assembled` 的流；`TestConvertMessages`、`TestConvertResponses` 每条映射、每个结束原因各一例，含出错的行和快照比对的四种情况；`TestConvertToolCallFields` 核对工具调用缺 ID 或名字（缺失、`null`、空串）时在写出前以 `ErrUpstream` 失败；`TestConvertProgress` 核对快照补出的内容在该事件处就已计入、重复的快照和 `output_item.done` 不重复计，终值与同格式转发相同；`TestConvertKeepAlive`；模糊测试 `FuzzConvertStream`：检查接受的上游流转换结果与分片无关、只以 `ErrUpstream` 失败、通过 Chat 的检查，Messages 的正文与上游一致 |
 | 转换给 Chat 客户端的回复，交回下一轮时原样回到上游（I2） | `TestConvertRoundTrip`：客户端按流合并后交回，Messages 开头的思考及签名、工具调用的 ID 和参数，Responses 的推理项及摘要、密文，函数调用的 `call_id` 和参数都在转换出的请求里 |
 | 错误按表回答，不说 new-api 会据以停用渠道的话 | `TestRenderError` 每种类型 × 三种格式核对状态码、类型的位置、详情和 `axiom`，其中 `axiom.usage` 逐字段与该格式的完整用量对比（`chargedUsage`）；`TestRenderErrorCharges`；`TestErrorMessages` 核对 `RenderError` 和三种出错结尾都不含 new-api 的 `AutomaticDisableKeywords`（源码 `setting/operation_setting/operation_setting.go`，提交 ebe4c36，2026-09-08），比较不区分大小写 |
@@ -287,8 +289,8 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 上游给的序号再离谱，检查也只报错 | 序号只与已见到的部件个数比较，从不用来分配或下标越界；模糊测试以全部样本和极端序号为种子 |
 | 录制的样本要么完整、通过样本测试、不含 key 和 ID 位置上的原值，要么不存在；ID 位置之外的数据原样保留 | 本地 httptest 上游回放三种格式的已提交样本，分别用 LF、单独 CR、CRLF 行尾，前面加一组评审找到的注释（落单引号、`"input": {`、行末反斜杠），断言写下的流就是样本的事件按规范形式重建、只换了 ID，请求里工具参数的 `input.id` 不动，同一个 ID 在请求里转义写、在流里原样写也对应同一个占位值；每种拒绝一个用例（含评审的注释反例后跟转义写出的 key），断言没有发出请求（发出前的拒绝）、错误里没有 key 且目录为空；重定向、空闲超时各有用例；模糊测试：任意流重建后读回的事件数相同，每个事件除 ID 位置外 JSON 值相同，占位值一一对应，不含 key；每条规则都经过变异验证 |
 | 非流式的响应体有官方响应的形状，内容就是客户端的流所说的，整段读和逐字节读结果相同 | `TestAggregateSamples` 对每个样本的每条路径（三种同格式加 Messages、Responses 转 Chat）：形状检查，与 `aggregate-*.json` 逐字节相同，与测试里独立写的 `foldStream` 对已解码的值相同；`TestAggregateMessages`（每种块和增量、片段的转义、工具输入的三种来源、引用、不认识的事件）、`TestAggregateMessagesFraming`（多行 data、`billing_pending`）、`TestAggregateChat`（交错的选项、按序号归并的工具调用、合并的推理细节、注释、logprobs）；模糊测试 `FuzzRelay` 的 `checkAggregate`：`streamcheck` 接受的流聚合出的响应体与分片无关，聚合失败当且仅当转发失败，成功时与流的折叠相同 |
-| 失败按「失败的状态码」表答：没有内容是 `RenderError` 的答案，有内容时 Chat、Responses 是带内容和错误的 200，Messages 是不带内容的 502；用量总在，费用当且仅当结算写了；Responses 的响应体有仍在进行中的输出项 | `TestAggregateFail` 五条路径 × 结算写了和没写，`TestAggregateFailBeforeContent`（与 `RenderError` 逐字节相同），`TestAggregateResponsesFail`、`TestAggregateResponsesFailOpenReasoning`（完成的项、打开的消息、推理、拒答、函数调用），`TestAggregateRejects`（聚合器拒绝的事件顺序、结尾造不出响应体） |
-| 一个流聚合的片段不超过 16 MiB，超出和节点预算不够都以 `ErrMemory` 结束而不是 `ErrUpstream`，结束时节点预算回到原值，聚合器持有的不超过已记账的 | `TestAggregateBudget`（三种格式的上限内、上限外、节点预算不够，Responses 超限的结尾）；`TestRelayMemoryHeld` 的聚合变体：五百个选项、五百个 Responses 项、五百个函数调用、工具的长输入，每一步和失败之后（每一步都要数一遍持有量，代价随个数平方增长，所以比非聚合的 5000 个少） |
+| 失败按「失败的状态码」表答：没有内容是 `RenderError` 的答案，有内容时 Chat、Responses 是带内容和错误的 200，Messages 是不带内容的 502；用量总在，费用当且仅当结算写了；Responses 的响应体有仍在进行中的输出项 | `TestAggregateFail` 五条路径 × 结算写了和没写，`TestAggregateFailBeforeContent`（与 `RenderError` 逐字节相同），`TestAggregateResponsesFail`、`TestAggregateResponsesFailOpenReasoning`（完成的项、打开的消息、推理、拒答、函数调用），`TestAggregateRejects`（聚合器拒绝的事件顺序、结尾造不出响应体）、`TestAggregateChatFraming`（空格、制表符、多行的块与普通的块聚合出同一个回复）、`TestAggregateResponsesTypes`（`type` 是数字、null、对象的部件和项以 `ErrUpstream` 失败而不 panic，转义的类型照常） |
+| 一个流聚合的片段不超过 16 MiB，超出和节点预算不够都以 `ErrMemory` 结束而不是 `ErrUpstream`，结束时节点预算回到原值，聚合器持有的不超过已记账的 | `TestAggregateBudget`（三种格式的上限内、上限外、节点预算不够，Responses 超限的结尾）；`TestAggregateChatHeld`（每块都远小于事件上限、合起来超过上限的纯结束选项，在 `Next` 里就以 `ErrMemory` 失败并归还预算）；`TestRelayMemoryHeld` 的聚合变体：五百个选项、五百个 Responses 项、五百个函数调用、工具的长输入，每一步和失败之后（每一步都要数一遍持有量，代价随个数平方增长，所以比非聚合的 5000 个少） |
 | 聚合每个事件不比读 SSE 多分配 | `TestAggregateAllocs` 对三种格式比较 10 个与 200 个增量、1 KiB 与 64 KiB 的增量；`BenchmarkAggregate` |
 
 ## 决策与理由

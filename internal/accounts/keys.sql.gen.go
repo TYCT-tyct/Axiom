@@ -73,6 +73,30 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 	return items, nil
 }
 
+const defaultWorkspace = `-- name: DefaultWorkspace :many
+SELECT id FROM accounts.workspaces WHERE account_id = $1 AND is_default
+`
+
+func (q *Queries) DefaultWorkspace(ctx context.Context, db DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, defaultWorkspace, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteKey = `-- name: DeleteKey :many
 UPDATE accounts.api_keys SET deleted_at = now() WHERE id = $1 RETURNING site_id, account_id
 `
@@ -132,11 +156,87 @@ func (q *Queries) DisableKey(ctx context.Context, db DBTX, id uuid.UUID) ([]Disa
 	return items, nil
 }
 
+const getKey = `-- name: GetKey :many
+SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys WHERE id = $1 AND kind = 'call' AND deleted_at IS NULL
+`
+
+type GetKeyRow struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Prefix      string
+	Last4       string
+	ExpiresAt   *time.Time
+	Status      string
+	SpendLimit  *int64
+	LimitReset  *string
+	Models      []string
+	IpAllow     []netip.Prefix
+}
+
+func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRow, error) {
+	rows, err := db.Query(ctx, getKey, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetKeyRow
+	for rows.Next() {
+		var i GetKeyRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Prefix,
+			&i.Last4,
+			&i.ExpiresAt,
+			&i.Status,
+			&i.SpendLimit,
+			&i.LimitReset,
+			&i.Models,
+			&i.IpAllow,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getKeyInfo = `-- name: GetKeyInfo :one
+SELECT name, prefix, last4, expires_at FROM accounts.api_keys WHERE id = $1 AND deleted_at IS NULL
+`
+
+type GetKeyInfoRow struct {
+	Name      string
+	Prefix    string
+	Last4     string
+	ExpiresAt *time.Time
+}
+
+// What a key shows of itself: its name, the text a client may see (the prefix and the last four characters), and when
+// it expires. Read in the key's account scope, so another account's key is not found.
+func (q *Queries) GetKeyInfo(ctx context.Context, db DBTX, id uuid.UUID) (GetKeyInfoRow, error) {
+	row := db.QueryRow(ctx, getKeyInfo, id)
+	var i GetKeyInfoRow
+	err := row.Scan(
+		&i.Name,
+		&i.Prefix,
+		&i.Last4,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const insertKey = `-- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, expires_at, status, spend_limit, limit_reset)
+    secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
 VALUES ($1, $2, $3, $4, 'call', $5, $6, $7, $8, $9,
-    $10, $11, 'active', $12, 'daily')
+    $10, $11, 'active', $12, $13, $14, $15)
 `
 
 type InsertKeyParams struct {
@@ -152,6 +252,9 @@ type InsertKeyParams struct {
 	CreatedBy     uuid.UUID
 	ExpiresAt     *time.Time
 	SpendLimit    *int64
+	LimitReset    *string
+	Models        []string
+	IpAllow       []netip.Prefix
 }
 
 func (q *Queries) InsertKey(ctx context.Context, db DBTX, arg InsertKeyParams) error {
@@ -168,6 +271,9 @@ func (q *Queries) InsertKey(ctx context.Context, db DBTX, arg InsertKeyParams) e
 		arg.CreatedBy,
 		arg.ExpiresAt,
 		arg.SpendLimit,
+		arg.LimitReset,
+		arg.Models,
+		arg.IpAllow,
 	)
 	return err
 }
@@ -200,6 +306,143 @@ func (q *Queries) KeyTenant(ctx context.Context, db DBTX, arg KeyTenantParams) (
 	for rows.Next() {
 		var i KeyTenantRow
 		if err := rows.Scan(&i.KeyID, &i.AccountID, &i.WorkspaceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAccountWorkspaces = `-- name: ListAccountWorkspaces :many
+SELECT id FROM accounts.workspaces WHERE account_id = $1 ORDER BY id
+`
+
+// Every workspace of the scope's account, deleted ones included: what billing summed once belongs to them still.
+func (q *Queries) ListAccountWorkspaces(ctx context.Context, db DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, listAccountWorkspaces, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listKeys = `-- name: ListKeys :many
+SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys
+WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL AND id < $2
+ORDER BY id DESC
+LIMIT $3
+`
+
+type ListKeysParams struct {
+	AccountID uuid.UUID
+	Before    uuid.UUID
+	PageSize  int32
+}
+
+type ListKeysRow struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Prefix      string
+	Last4       string
+	ExpiresAt   *time.Time
+	Status      string
+	SpendLimit  *int64
+	LimitReset  *string
+	Models      []string
+	IpAllow     []netip.Prefix
+}
+
+// An account's call keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
+func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]ListKeysRow, error) {
+	rows, err := db.Query(ctx, listKeys, arg.AccountID, arg.Before, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListKeysRow
+	for rows.Next() {
+		var i ListKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Prefix,
+			&i.Last4,
+			&i.ExpiresAt,
+			&i.Status,
+			&i.SpendLimit,
+			&i.LimitReset,
+			&i.Models,
+			&i.IpAllow,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateKey = `-- name: UpdateKey :many
+UPDATE accounts.api_keys SET name = $1, status = $2, spend_limit = $3, limit_reset = $4,
+    models = $5, ip_allow = $6
+WHERE id = $7 AND kind = 'call'
+RETURNING site_id, account_id
+`
+
+type UpdateKeyParams struct {
+	Name       string
+	Status     string
+	SpendLimit *int64
+	LimitReset *string
+	Models     []string
+	IpAllow    []netip.Prefix
+	ID         uuid.UUID
+}
+
+type UpdateKeyRow struct {
+	SiteID    uuid.UUID
+	AccountID uuid.UUID
+}
+
+// Every setting a user may change, replaced whole; the expiry is not among them.
+func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) ([]UpdateKeyRow, error) {
+	rows, err := db.Query(ctx, updateKey,
+		arg.Name,
+		arg.Status,
+		arg.SpendLimit,
+		arg.LimitReset,
+		arg.Models,
+		arg.IpAllow,
+		arg.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpdateKeyRow
+	for rows.Next() {
+		var i UpdateKeyRow
+		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

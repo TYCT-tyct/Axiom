@@ -4,3 +4,10 @@ generate:
   std-http-server: true
   strict-server: true
   models: true
+  # The contract itself, for cmd/axiom to enforce: GetSwagger (internal/platform/README.md「接口约定」).
+  embedded-spec: true
+additional-imports:
+  - package: axiom/internal/platform/jsonx
+output-options:
+  user-templates:
+    strict/strict-http.tmpl: templates/strict-http.tmpl

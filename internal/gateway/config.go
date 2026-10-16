@@ -18,6 +18,7 @@ type Config struct {
 	IPInFlight    int   // requests one client address may have in flight
 	MaxBody       int64 // largest request body, in bytes
 	KeyRate       int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
+	CountRate     int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
 	PoolSize         int // N, database connections
 	PoolReserve      int // connections only the Completion class may take
@@ -54,6 +55,7 @@ func DefaultConfig() Config {
 		IPInFlight:       500,
 		MaxBody:          32 << 20,
 		KeyRate:          6000,
+		CountRate:        6000,
 		KeyLookup:        time.Second,
 		RateWindow:       time.Minute,
 		PoolSize:         64,
