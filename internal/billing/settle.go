@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -290,8 +291,18 @@ type locked struct {
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
 // the floor, less what is reserved apart from what this reservation still holds.
+// It is computed exactly, as Reserve's headroom is, and clamped to what an amount can hold.
 func (c *locked) cap(held int64) int64 {
-	return max(c.balance.Balance-c.balance.Floor-(c.balance.Reserved-held), 0)
+	b := c.balance
+	left := sum(platform.AmountExact(b.Balance), platform.AmountExact(b.Floor).Neg(), platform.AmountExact(b.Reserved).Neg(),
+		platform.AmountExact(held))
+	switch {
+	case left.Cmp(platform.Exact{}) < 0:
+		return 0
+	case left.Cmp(platform.AmountExact(math.MaxInt64)) > 0:
+		return math.MaxInt64
+	}
+	return left.CeilAmount()
 }
 
 func (c *locked) event(kind string, revision int64) event {
@@ -318,7 +329,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, price int64, estimated bool,
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
 func (c *locked) late(ctx context.Context, tx pg.Tx, price int64, entryIndex *int32) error {
-	c.charged = min(price, c.row.Charged+c.cap(0))
+	c.charged = min(price, add(c.row.Charged, c.cap(0)))
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
 	}

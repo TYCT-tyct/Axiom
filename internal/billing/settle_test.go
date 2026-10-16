@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sync"
 	"testing"
@@ -397,5 +398,16 @@ func TestLedgerScope(t *testing.T) {
 		return tx.QueryRow(t.Context(), "SELECT count(*) FROM billing.entries").Scan(&n)
 	}); err != nil || n != 0 {
 		t.Errorf("another account reads %d entries, %v", n, err)
+	}
+}
+
+// TestSettleBalanceExtremes: the floor cap is computed exactly, so a balance at the top of int64 above a negative
+// floor charges in full instead of wrapping to nothing.
+func TestSettleBalanceExtremes(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{})
+	h := b.hold(100)
+	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d, floor = -1", int64(math.MaxInt64)))
+	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
+		t.Errorf("Settle = %+v, %v; want 70 charged", f, err)
 	}
 }
