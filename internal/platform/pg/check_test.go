@@ -52,6 +52,8 @@ func TestCheckRefusesLoginsThatEscape(t *testing.T) {
 		"a login that creates databases through a group":           riskyLogin("creates_databases", "CREATEDB"),
 		"a login that owns the tables through a group":             riskyLogin("owns", "IN ROLE axiom_owner"),
 		"a login that looks up any tenant through a group":         riskyLogin("looks_up", "IN ROLE axiom_lookup"),
+		"a login that reads server files through a group":          riskyLogin("reads_files", "IN ROLE pg_read_server_files"),
+		"a login that writes server files through a group":         riskyLogin("writes_files", "IN ROLE pg_write_server_files"),
 	}
 	for name, login := range logins {
 		db := open(t, login)

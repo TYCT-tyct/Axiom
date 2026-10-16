@@ -8,6 +8,7 @@ require (
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20261014201258-cf169cd0986f
 )
 
 require (

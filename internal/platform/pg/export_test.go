@@ -11,6 +11,9 @@ func (db *DB) SessionScope(ctx context.Context) (string, error) {
 	return scope, err
 }
 
+// LatestVersion is the newest of a module's migrations.
+func LatestVersion(m Module) (int64, error) { return latestVersion(m) }
+
 // ModuleOrder is the order migrations run in.
 var ModuleOrder = moduleOrder
 
