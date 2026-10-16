@@ -22,6 +22,9 @@ func User(id uuid.UUID) Actor { return Actor{"user", id.String()} }
 // System is a job of ours acting on its own, named <module>.<job> such as catalog.sync.
 func System(job string) Actor { return Actor{"system", job} }
 
+// String is the actor as <kind>:<id>, such as user:<uuid> or system:catalog.cli, for a module's own history table.
+func (a Actor) String() string { return a.kind + ":" + a.id }
+
 // Target is what a change was made to, and the tenant it belongs to: Site and Account for account data, Site alone
 // for site data, neither for platform and public data. The pair must be registered (RegisterSite, RegisterAccount).
 type Target struct {

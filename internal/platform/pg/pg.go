@@ -42,6 +42,10 @@ func Open(ctx context.Context, url string) (*DB, error) {
 // Close waits for borrowed connections to come back and closes the pool.
 func (db *DB) Close() { db.pool.Close() }
 
+// ErrNoRows is what a Row's Scan returns when its query found no row, for the modules that must tell "none" from a
+// failure; they may not import pgx.
+var ErrNoRows = pgx.ErrNoRows
+
 // SQLState is the SQLSTATE code of the PostgreSQL error in err's chain, or "" when there is none. Modules tell a
 // conflict or a refused row from other failures by it without importing pgx.
 func SQLState(err error) string {
