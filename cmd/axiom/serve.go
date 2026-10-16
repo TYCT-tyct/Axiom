@@ -19,6 +19,9 @@ import (
 // links; the gateway sets size limits and per-route deadlines on top.
 const bodyTimeout = 2 * time.Minute
 
+// defaultStartupTimeout bounds how long a command waits for the database before it starts.
+const defaultStartupTimeout = 30 * time.Second
+
 // opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
 func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
 
@@ -37,7 +40,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
 	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080") // model calls, the console, payment callbacks
 	probesAddr := opsAddr(env)
-	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", 30*time.Second)
+	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
 	databaseURL := env.Required("AXIOM_DATABASE_URL")
 	if err := env.Err(); err != nil {

@@ -2,20 +2,21 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式。其余都是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令。页面监测、数据集同步与核对、自动发布、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
 
 ## 包
 
 | 包 | 做什么 |
 |---|---|
-| `catalog` | 价目表结构与计价（已实现）；名字的归一化与解析；内存快照；管理操作；数据集同步、页面监测与核对（后几项是设计，尚未实现） |
-| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（设计，尚未实现） |
+| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作（均已实现）；数据集同步、页面监测与核对（设计，尚未实现） |
+| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（`watched_page` 等页面与数据集的表随它们的 PR 加入） |
+| `catalog/queries` | sqlc 的查询，生成的 `*.gen.go` 在 `catalog` 包里；生成的 `Queries` 构造函数叫 `New`，所以目录的构造函数叫 `Open` |
 
 ## 数据
 
 ### 表（schema `catalog`）
 
-> 设计，尚未实现。
+> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。
 
 "只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
 
@@ -45,12 +46,13 @@
 
 ### 行级安全与权限
 
-> 设计，尚未实现。
+> 已实现：公开数据和平台数据的策略与授权。设计，尚未实现：后台任务角色 `axiom_catalog_job` 和 `catalog.lock_models`。
 
 - **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `platform.in_any_scope()`（任意非空范围），写用 `platform.in_platform_scope()`。`model` 的读策略另加 `status <> 'draft' OR platform.in_platform_scope()`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
 - **平台数据**（其余各表）：读写都用 `platform.in_platform_scope()`。
 - 后台任务以 `axiom_catalog_job` 角色执行：由本模块的迁移建立，只授予它要写的表：平台数据表，以及自动发布要写的 `reference_price`、`revision`；任务的事务用 `pg.Tx.SetRole` 切过去。
-- 模型行只经 `catalog.lock_models(ids uuid[])` 加锁：`SECURITY DEFINER`，属主 `axiom_owner`，固定 `search_path`，按 id 升序 `SELECT … FOR UPDATE` 并返回 `price_source`、`rev`；只把 EXECUTE 授予 `axiom_app` 和 `axiom_catalog_job`。它是运行时唯一以 `axiom_owner` 身份执行的代码，只加锁、不写。PostgreSQL 的行锁要求对该表至少一列有 UPDATE 权限（PostgreSQL 文档《SELECT》），任务角色没有 `model` 的 UPDATE 权限，也不该有：给它任何一列都等于允许它改这一列。表强制启用行级安全，所以函数里的查询仍受范围约束。测试：切到任务角色后自动发布成功；直接 `SELECT … FOR UPDATE` 模型行被拒。
+- **现在的加锁**：管理操作以 `axiom_app` 执行，它对 `model` 的 `status`、`price_source`、`spec`、`rev` 有 UPDATE 权限，所以直接 `SELECT … FOR UPDATE`（`LockModel`），每个操作只锁一个模型，不需要排序。后台任务角色出现时才需要下面的 `lock_models`。
+- 模型行只经 `catalog.lock_models(ids uuid[])` 加锁（设计，随后台任务角色一起实现）：`SECURITY DEFINER`，属主 `axiom_owner`，固定 `search_path`，按 id 升序 `SELECT … FOR UPDATE` 并返回 `price_source`、`rev`；只把 EXECUTE 授予 `axiom_app` 和 `axiom_catalog_job`。它是运行时唯一以 `axiom_owner` 身份执行的代码，只加锁、不写。PostgreSQL 的行锁要求对该表至少一列有 UPDATE 权限（PostgreSQL 文档《SELECT》），任务角色没有 `model` 的 UPDATE 权限，也不该有：给它任何一列都等于允许它改这一列。表强制启用行级安全，所以函数里的查询仍受范围约束。测试：切到任务角色后自动发布成功；直接 `SELECT … FOR UPDATE` 模型行被拒。
 - `in_any_scope()`、`in_platform_scope()`、切换角色的 `pg.Tx.SetRole` 和生产代码可用的平台范围 `pg.PlatformScope` 由 platform 提供。
 
 ## 价目表
@@ -101,11 +103,11 @@
 
 ### 上架门槛与缺项
 
-> 只有 `Schedule.Missing` 已实现，其余是设计，尚未实现。
+> `Schedule.Missing`、`Schedule.Lost` 和 `ErrTierBasisChanged` 已实现，上架门槛见「管理操作」。`Model.Reportable()` 已实现。
 
 - **上游可能报告什么**是模型数据 `spec.items` 和 `spec.tiers`，审核时确认：输入输出类型、工具和厂商提供的服务等级决定它，例如支持音频输入就有 `audio_in`，有联网搜索就有 `web_search`，OpenAI 有 flex、priority。`Model.Reportable()` 返回它。
 - **`Schedule.Missing(Reportable) Reportable`** 返回其中没有价格的项和等级，算上 `reasoning` 回退到 `output`：标准档在任何一档缺价的项，以及价目表没有、或任何一档缺任何一个可能报告的项的等级。计费用它检查售价是否满足[计费的「定价」](../../docs/domains/billing.md#定价)里的上架门槛（已知的按次项目可以由站点默认单价补上）。门槛在 billing 检查，不在本模块：目录在模块依赖里位于 billing 之下，不知道售价。
-- **`Schedule.Lost(prev Schedule, r Reportable) ([]PricePoint, error)`** 返回 `prev` 有价格而本价目表没有的位置 `PricePoint{ServiceTier, Above, Item}`，只看 `r` 里的等级和项，两边都算上 `reasoning` 回退到 `output`。区间按两张价目表门槛的并集切分：每个区间里两边的价各自不变，所以逐个（等级、区间、计费项）比较就是精确的。这只在两张价目表的 `TierBasis` 相同时成立：口径不同（例如旧表按 {`input`, `cache_read`} 算门槛、新表只按 {`input`}），同一个数字门槛对应的用量范围就不同，任一边有分档时两张表不可比较，`Lost` 返回 `ErrTierBasisChanged`，不返回位置列表；两边都没有分档时口径不影响价格，照常比较。替换参考价前用它防止价格覆盖退化；不用 `Missing` 比较，因为它把一个等级里的缺项合成一个等级，旧 priority 只缺 `web_search`、新 priority 连输入价都没有时两边的结果相同。
+- **`Schedule.Lost(prev Schedule, r Reportable) ([]PricePoint, error)`** 返回 `prev` 有价格而本价目表没有的位置 `PricePoint{ServiceTier, Above, Item}`，只看 `r` 里的等级和项，两边都算上 `reasoning` 回退到 `output`。区间按两张价目表门槛的并集切分：每个区间里两边的价各自不变，所以逐个（等级、区间、计费项）比较就是精确的。这只在两张价目表的 `TierBasis` 相同时成立：口径不同（例如旧表按 {`input`, `cache_read`} 算门槛、新表只按 {`input`}），同一个数字门槛对应的用量范围就不同，两边都有分档时两张表不可比较，`Lost` 返回 `ErrTierBasisChanged`，不返回位置列表；只有一边有分档时，另一边的价格与口径无关，按那一边的门槛切分后照常比较（新价目表去掉旧门槛就是这样）；两边都没有分档时同样照常比较。替换参考价前用它防止价格覆盖退化；不用 `Missing` 比较，因为它把一个等级里的缺项合成一个等级，旧 priority 只缺 `web_search`、新 priority 连输入价都没有时两边的结果相同。
 - **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage` 的服务等级 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
 - **`Ceiling` 给预留用的单价上界**：这些项在这些服务等级里、在基数合计不超过 `length` 的提示词可能落入的每一档中的最高单价，任一处缺价返回 false。档位只按基数里的项求和，提示词在基数内外怎么拆分都可能落到 `length` 以下的任一档，价格也不一定随档位上升，所以只看某一档或某一项都不是上界。
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
@@ -135,7 +137,7 @@
 
 ## 快照
 
-> 设计，尚未实现。这里的「快照」是[术语表](../../docs/glossary.md#术语表)的快照；`page_snapshot` 是其中的页面快照，与它无关。
+> 已实现：`Load`（`Refresh`）、发布、陈旧上限、`ResolvePublic`、`Recognize`、`Run` 的快照刷新。设计，尚未实现：`CurrentPrices`、LISTEN/NOTIFY。这里的「快照」是[术语表](../../docs/glossary.md#术语表)的快照；`page_snapshot` 是其中的页面快照，与它无关。
 
 - **加载**：`Load` 在一个只读的 Repeatable Read 事务里先读 `revision`，再读全部公开表。快照不可变，只含 listed 和 retired 模型、它们的名字和 listed 模型各币种的当前参考价；加载在平台范围执行，所以读得到 retired 模型的名字。retired 模型只用于两处：`ResolvePublic` 返回 `ErrRetired`，`Recognize` 仍认得出它的名字，供应商据此不把这个名字映射到别的模型。`Models()` 只给 listed 模型，`Model` 带 `Status`。快照大小随模型数增长，不随历史增长。
 - **发布**：比较后替换，只接受更大的 `revision`。
@@ -147,7 +149,7 @@
 
 ## 参考价的录入
 
-> 设计，尚未实现。
+> 页面监测、取数、数据集、自动发布、核对：设计，尚未实现。选价格来源和发布已实现，见「管理操作」，其中数据集来源的价目表和页面证据的核对随它们的 PR 加入。
 
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。
@@ -155,11 +157,40 @@
 - **自动发布**：本轮取数成功后，对 `price_source` 等于这个数据集的每个 listed 或 draft 模型，把条目与当前参考价按整张价目表比较。不同就先过计费的参考价安全阀（合理性检查和变化阈值，见[计费的「定价」](../../docs/domains/billing.md#定价)；阈值是后台数据）：通过就以 `system:sync` 发布，证据是条目原文和 `fetch_id`；不通过、条目解析失败、少了当前参考价已有的档位、对它的 `Lost` 不为空或返回 `ErrTierBasisChanged`，就开或更新 `price_change` 审核项，不发布，管理员确认后发布。
 - **核对**：其余数据集的条目与当前参考价按整张价目表比较，不一致开 `mismatch` 审核项，不改价。
 - **选价格来源**：改选就是一次发布，在同一个事务里完成：改 `price_source`，为新来源的每个币种发布一行（价目表与旧行相同也发布，`source` 变了），为新来源没有的币种各写一行撤下。所以改选之后每个币种的当前价都来自新来源，旧来源的币种不会留下来继续生效，计费在站点币种没有当前价时按汇率换算（见[计费的「定价」](../../docs/domains/billing.md#定价)）。新的价目表来自所选数据集的当前条目（要能解析，并且带有当前参考价的每一档），或者选 `official`、`manual` 时由操作带上（每个币种的价目表和证据，与 `PublishPrice` 的检查相同），至少一个币种；每张新价目表对当前每个币种的参考价的 `Lost`（`r` 取 `Model.Reportable()`）都为空，否则拒绝，改选不会悄悄丢掉 priority 这类等级里已有的价格；`Lost` 返回 `ErrTierBasisChanged` 时，改选必须在操作里明确确认门槛口径的变化（审核记录写明新旧口径），没有确认就拒绝，所以口径变化不会让防退化检查被绕过。选 `manual` 或 `official` 后，同步不再为它写行。
-- **发布**：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再经 `lock_models` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
+- **发布**（页面证据的部分是设计，其余见「管理操作」）：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再经 `lock_models` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
+
+## 管理操作
+
+> 已实现，平台范围。`axiom catalog` 命令是现在的入口；管理接口落地后经 operations 的审批中间层调用同样的方法。
+
+每个操作是 `Catalog` 的一个方法，带 `Op{Actor, Key, Reason}`，在一个事务里依次：
+
+0. `Key` 不能缺省或全零（`ErrNoOpKey`，数据库也拒绝），否则不同的操作会被当成第一个的重试。
+1. 按 `Key` 查 `change`：已有就返回第一次的 `Result`（`Replayed`），不再执行；种类不同报 `ErrOpKeyReused`。同一个 `Key` 的两个并发请求，后一个在唯一约束上失败，重试即得第一次的结果。
+2. 锁模型行（`LockModel`），带 `rev` 的操作比较 `rev`，不同报 `ErrStaleRev`。
+3. 对着锁住的行检查，写入。
+4. 写 `change`（改前改后和证据）和 `audit.Record`（动作名与 `change` 同名，`detail` 只放 `change_id`）；审计写不进，操作不成立。影响快照的写入（模型不是草稿时的改动）把 `revision` 加一。
+5. 提交后本节点立即重建快照，失败只记日志，轮询会补上。
+
+| 操作 | 做什么 | 检查 |
+|---|---|---|
+| `SaveAuthor` | 建厂商或改显示名 | 理由必填 |
+| `CreateModel` | 建草稿模型，厂商取自 `slug` 的前半 | 厂商存在；`spec` 是对象，`items`、`tiers` 若有则是已知的计费项和服务等级 |
+| `AddName` | 给模型加名字，归一化后全局唯一；名字长度 1 到 200 字节（入口、数据库 `octet_length`、解析器同一规则） | 模型未下线；`norm` 未被占用（`ErrNameTaken`）；公开名字的约束由数据库兜底 |
+| `UpdateSpec` | 原地改规格（带 `rev`） | 模型未下线；已上架的，新规格仍要声明 `items` 和 `tiers`（缺省或 null 不算，显式空列表算），且声明的东西每个当前参考价都定了价 |
+| `ListModel` | 草稿 → 上架（带 `rev`） | 上架门槛，见下 |
+| `Retire` | 上架 → 下线（带 `rev`） | 必须是上架状态 |
+| `PublishPrice` | 给一个币种追加一个参考价版本 | `base` 是审核时看到的当前行（没有历史时为空），否则 `ErrPriceChanged`；`source` 等于模型的 `price_source`；证据是非空对象；已上架的模型过上架门槛；`Lost` 为空，口径变化要操作确认（`ConfirmBasisChange`） |
+| `SelectPriceSource` | 改选来源（带 `rev`），同一个事务里为新来源的每个币种发布一行、撤下它没有的币种 | 请求带审核时每个币种的当前行（`bases`），在模型锁内与现在的逐一核对，多或少都是 `ErrPriceChanged`；每张新价目表对每个现有价格的币种（不只是同币种）都过 `Lost`，被撤下的币种的价格也不能丢；同 `PublishPrice` 的其余检查；至少一个币种；现在只能选 `official` 和 `manual`，数据集来源随数据集的 PR |
+
+- **上架门槛**：规格声明了 `items` 和 `tiers`（可以为空，但要写，免得漏写让门槛形同虚设）；标准 ID（`slug` 去掉 `@版本`）是它的一个公开名字；至少有一个币种的当前参考价；每个当前参考价对 `Model.Reportable()` 的 `Missing` 为空。这是目录自己的门槛，保证上架的模型的参考价覆盖它声明的一切；计费对售价的上架门槛另算。
+- **证据**：现在只检查是非空的 JSON 对象，原样记进 `change`；引用页面快照、摘录逐字出现在正文里的检查随页面监测。
+- **`change` 之外是否另调 `audit.Record`**：调。`change` 是目录自己读回的领域数据（核对证据、靠 `op_key` 幂等），审计日志是所有模块共用的、运营检索与回放的一条线；改参考价和模型状态属于[审计日志](../platform/README.md#审计日志)要求留审计的后台数据改动，且两者在同一个事务里，不会一边有一边没有。`detail` 只放 `change_id`，改前改后在 `change` 里，所以不受 8 KiB 的限制。
+- **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。操作者的身份随 #23。
 
 ## 不变量
 
-> 已实现的只有「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告，不按零计」「上游报告的用量不会被悄悄丢掉」中 `Usage` 保留调用方交入的未知用量、构造与读取都复制这一半，其余是设计，尚未实现。
+> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。尚未实现：参考价只来自选定的来源中同步部分（`manual` 不被覆盖的测试随数据集）、超过阈值的改价不自动生效、过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -185,13 +216,13 @@
 ```go
 package catalog // internal/catalog
 
-type ModelID uuid.UUID                 // 设计，尚未实现
+type ModelID uuid.UUID                 // 文本形式同 uuid.UUID
 type Item uint8                        // 封闭枚举
 type ItemSet = set[Item]               // Item 的位集合（16 位）；NumItems 是 Item 的个数
 type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账户的等级
 type ServiceTierSet = set[ServiceTier] // ServiceTier 的位集合；两种集合都有 Has、Add
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
-type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0；设计，尚未实现
+type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0
 type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
@@ -205,10 +236,9 @@ func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范�
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
 func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // 预留的单价上界，见下
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
-func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 设计，尚未实现：替换参考价前防退化；门槛口径不同且有分档时 ErrTierBasisChanged
-func Normalize(name string) string // 设计，尚未实现
+func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；两边都有分档而口径不同时 ErrTierBasisChanged
+func Normalize(name string) string
 
-// 以下到末尾：设计，尚未实现
 type Snapshot struct{ /* 不可变 */ }
 func (s *Snapshot) Revision() int64
 func (s *Snapshot) ResolvePublic(name string) (Resolution, error) // 用户请求、模型列表、回退列表
@@ -220,20 +250,21 @@ func (s *Snapshot) Models() iter.Seq[Model]                       // 只有 list
 type Resolution struct{ Model ModelID; Floating bool }
 type Recognition struct{ Model ModelID; Exact bool } // Exact：名字本身就是版本证据
 
+type Config struct{ MaxStale, PollEvery time.Duration; Logger *slog.Logger } // 默认 30 秒、5 秒、slog.Default()；MaxStale 必须大于 PollEvery
 type Catalog struct{ /* db、当前快照 */ }
-func New(db *pg.DB, scope pg.Scope, cfg Config) *Catalog    // 平台范围由 cmd/axiom 注入
+func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) // 平台范围由 cmd/axiom 注入
 func (c *Catalog) Current() (*Snapshot, error)              // 超过陈旧上限返回 ErrStale；一个请求从头到尾用同一个快照
 func (c *Catalog) Ready() bool
-func (c *Catalog) Run(ctx context.Context) error            // 快照刷新、页面监测、数据集同步与核对
-func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对
-// 管理操作，平台范围，经 operations 的审批中间层：ListReviews、ResolveReview、ListModel（draft → listed 并加名字）、
-// Retire、UpdateSpec、SelectPriceSource（这四个带 rev；SelectPriceSource 选 official、manual 时带每个币种的 schedule、evidence）、PublishPrice（base、schedule、evidence、op_key）。管理接口落地前由运维节点上的
-// axiom catalog 子命令以平台范围执行，读 JSON 文件，同样经代码检查和 op_key。
+func (c *Catalog) Refresh(ctx context.Context) error        // 读 revision，变了才全量加载
+func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；页面监测、数据集同步与核对随它们的 PR（设计，尚未实现）
+func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对；设计，尚未实现
+// 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、UpdateSpec、ListModel、Retire、PublishPrice、
+// SelectPriceSource，请求类型带 Op{Actor, Key, Reason}，返回 Result。ListReviews、ResolveReview 随审核项（设计，尚未实现）。
 ```
 
 ## 测试
 
-> 已有的是计价的性质测试和基准、服务等级与档位交叉、`Missing`、`NewUsage`、`Unknown`、价目表解析与规范编码的用例，其余是设计，尚未实现。
+> 已有：计价的性质测试和基准、服务等级与档位交叉、`Missing`、`Lost`、`NewUsage`、`Unknown`、价目表解析与规范编码的用例；`Normalize` 的黄金表和模糊测试；真实 PostgreSQL 上的行级安全与授权、参考价历史的约束、上架门槛、改选来源、重试与并发的 `rev`、快照加载与陈旧上限、名字解析（`ResolvePublic` 零分配用测试断言，没有单独的基准）；`axiom catalog` 命令。尚未有：数据集数字的用例、页面与自动发布的测试，以及「两表读取之间插入并发提交」的测试（一致性由 `pg.ReadTx` 的测试担保）。
 
 - 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
 - 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、每个服务等级随机有无价格、0 到 1000 的单价）、随机的服务等级和 0 到 10¹⁰ 的用量，与独立的模型比较选等级、选档、沿用该等级的基础价、推理按输出价、缺价的项和已定价部分的总额，并检查 `Missing` 覆盖 `Cost` 报告的每个缺价项：通过上架门槛的价目表，调用时不会缺价。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
@@ -257,7 +288,10 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 | 快照用只读 Repeatable Read 加载，只接受更大的 revision | Read Committed 下同一事务的两次查询可能看到不同的提交（PostgreSQL 文档《Transaction Isolation》） | 多表分别查询 |
 | 快照陈旧超限就拒绝新请求 | 刷新持续失败时，其他节点已下线的模型不能无限期地继续被调用 | 一直用旧快照 |
 | billing 定期比对当前参考价跟上改价 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
-| 改动历史写本模块的 `change` 表 | 改前改后的值、证据和 `op_key` 是目录自己要读回的领域数据：发布核对证据，重试靠 `op_key` 返回第一次的结果；操作者、理由、证据是平台数据，不能让租户范围读到。它不是平台的[审计日志](../platform/README.md#审计日志)，管理操作是否另调 `audit.Record` 待定，随 catalog 的管理接口 PR 定下 | 公开表里带 `actor` 列；只写平台的审计日志：它不存证据、不管幂等，补充信息最多 8 KiB |
+| 改动历史写本模块的 `change` 表，管理操作同时调 `audit.Record` | 改前改后的值、证据和 `op_key` 是目录自己要读回的领域数据：发布核对证据，重试靠 `op_key` 返回第一次的结果；操作者、理由、证据是平台数据，不能让租户范围读到。审计日志是所有模块共用、运营检索与回放的一条线，改参考价和模型状态是它要求留审计的后台数据改动；两个写入在同一个事务里，审计写不进操作就不成立，`detail` 只放 `change_id`，不受 8 KiB 限制（2026-10-15 定） | 公开表里带 `actor` 列；只写平台的审计日志：它不存证据、不管幂等，补充信息最多 8 KiB；只写 `change`：运营看不到目录的改动 |
+| 构造函数叫 `Open`，不叫 `New` | sqlc 生成的 `Queries` 构造函数在同一个包里叫 `New`，无法改名 | 把生成物放进子包：多一层包，类型要加前缀才能和目录自己的 `Model` 区分 |
+| 现在直接 `SELECT … FOR UPDATE` 锁模型行，`lock_models` 随后台任务角色 | `axiom_app` 有 `model` 四列的 UPDATE 权限，已能加锁；`lock_models` 要求 `SECURITY DEFINER` 函数属 `axiom_owner`，与[平台的启动检查](../platform/README.md#迁移)（只许 `axiom_lookup` 拥有）冲突，先有需要的是任务角色，到那时一并改检查 | 现在就建 `lock_models`：要改平台的检查，却没有调用方 |
+| 上架门槛现在检查目录自己的参考价覆盖规格声明的一切（`Missing`），不等计费 | 目录在依赖表里在计费之下，不知道售价；但上架的模型的参考价不完整，计费的缺项兜底就成了常态 | 只留给计费检查：不完整的参考价能上架，要到计费才发现 |
 | 页面监测用租约加代次，内容去重与当前指向分开 | 过期的执行者提交不了；页面 A→B→A 时当前指回 A，证据跟着页面现在的内容 | 没有代次的租约；按最晚入库的快照校验证据 |
 | 参考价的表和类型叫 `reference_price` | `price_version` 在术语表里是 billing 的售价版本，同名会让两个模块的概念混在一起；来源可能是数据集或手填，叫 `official_price` 名不副实 | `price_version`、`official_price` |
 | 服务等级各带一整套单价和同样的门槛，先选等级再选档，不跨等级继承 | 每个（等级、档位、计费项）只有一个价，`Cost`、`Missing` 和计费的保本线读法相同；缺的价被报告而不是按标准价少收 | 等级只列差价、其余沿用标准档：长上下文的 priority 价无从表达，覆盖顺序不同就得出不同的价 |
