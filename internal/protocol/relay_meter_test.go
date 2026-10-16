@@ -358,8 +358,8 @@ func TestRelayMemoryRewrite(t *testing.T) {
 		}
 		return 64<<20 - least
 	}
-	// The reader's buffer, its data, the held event and the rewritten copy each hold the snapshot.
-	if one, two := drawn(1), drawn(2); one < 4*size-64<<10 || two-one > 64<<10 {
+	// The reader's buffer, the held event and the rewritten copy each hold the snapshot.
+	if one, two := drawn(1), drawn(2); one < 3*size-64<<10 || two-one > 64<<10 {
 		t.Errorf("drew %d for one snapshot of %d, %d for two", one, size, two)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -33,6 +34,15 @@ var (
 // rarely stops short for lack of room, and a caller that polls hears back after every 16 KiB at most.
 const readSize = 16 << 10
 
+// keepSize and calmEvents decide when buffers a large event grew are given back: only buffers past keepSize are, and
+// only after calmEvents events in a row each used less than a quarter of them. Giving them back at the first small
+// event would allocate them again for every large event of a stream that has several; never giving them back would
+// leave a stream that had one large event holding twice its size for the rest of its life.
+const (
+	keepSize   = 64 << 10
+	calmEvents = 16
+)
+
 var bom = []byte("\xef\xbb\xbf") // U+FEFF in UTF-8
 
 // Reader reads events from an upstream stream. It is not safe for concurrent use.
@@ -42,9 +52,15 @@ type Reader struct {
 
 	buf   []byte // bytes read from src; buf[start:] is not yet parsed
 	start int
-	scan  int    // buf[start:start+scan] has no line ending, so a search resumes after it
-	data  []byte // the current event's data values, each followed by LF
-	size  int    // bytes of the current event so far: its lines with their line endings
+	scan  int // buf[start:start+scan] has no line ending, so a search resumes after it
+	// The current event's data values: lines of them so far. The first stays in buf as lone, which saves copying the
+	// common event of one data line; more() copies it into data, each value followed by LF, when buf is about to
+	// move, and a second value does the same.
+	lines int
+	lone  []byte
+	data  []byte
+	size  int // bytes of the current event so far: its lines with their line endings
+	calm  int // events in a row that used less than a quarter of the buffers
 	eof   bool
 	// readErr is a read failure held back until the bytes that came with it are parsed, so that events complete
 	// before the failure are returned however the reads were split.
@@ -53,6 +69,7 @@ type Reader struct {
 
 	bomChecked bool
 	charge     func(n int) error
+	validator  jsonx.Validator
 }
 
 // NewReader returns a Reader that fails with ErrTooLarge once an event, counting every byte of its lines and line
@@ -77,7 +94,9 @@ func (r *Reader) Poll() ([]byte, error) { return r.call(1) }
 func (r *Reader) Pending() int { return r.size + len(r.buf) - r.start }
 
 // ChargeGrowth has charge called before a buffer of the reader grows, with the bytes the new array adds to what the
-// reader holds; when it returns an error, the buffer does not grow and the reader fails with that error.
+// reader holds; when it returns an error, the buffer does not grow and the reader fails with that error. After a
+// large event the reader gives buffers back, calling charge with the bytes it no longer holds as a negative n; an
+// error from that call fails the reader as well.
 func (r *Reader) ChargeGrowth(charge func(n int) error) { r.charge = charge }
 
 func (r *Reader) call(reads int) ([]byte, error) {
@@ -107,7 +126,7 @@ func (r *Reader) next(reads int) ([]byte, error) {
 			if err := r.field(line); err != nil {
 				return nil, err
 			}
-		case len(r.data) > 0:
+		case r.lines > 0:
 			return r.dispatch()
 		default: // a blank line ending an event without data, which is no event at all
 			r.size = 0
@@ -117,11 +136,21 @@ func (r *Reader) next(reads int) ([]byte, error) {
 
 // dispatch ends the current event at its blank line and returns its data.
 func (r *Reader) dispatch() ([]byte, error) {
-	data := r.data[:len(r.data)-1] // the LF after the last value
-	r.data = r.data[:0]
-	r.size = 0
+	var data []byte
+	if len(r.data) == 0 { // the one value, still in buf; its room is not the caller's to append into
+		data = slices.Clip(r.lone)
+	} else {
+		data = r.data[:len(r.data)-1] // the LF after the last value
+		r.data = r.data[:0]
+	}
+	if 4*r.size > cap(r.buf)+cap(r.data) {
+		r.calm = 0
+	} else {
+		r.calm++
+	}
+	r.lines, r.lone, r.size = 0, nil, 0
 	if string(data) != Done {
-		if err := jsonx.Validate(data); err != nil {
+		if err := r.validator.Validate(data); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrInvalid, err) //nolint:errorlint // see ErrInvalid
 		}
 	}
@@ -129,8 +158,8 @@ func (r *Reader) dispatch() ([]byte, error) {
 }
 
 // line returns the next complete line without its line ending, which is LF, CRLF or CR. A CR at the end of the
-// buffer may be the first half of a CRLF, so its line waits for the next byte; at the end of the stream, the last
-// line ends there.
+// buffer may be the first half of a CRLF, so its line waits for the next byte, unless none will come because the
+// stream has ended or a read has failed; at the end of the stream, the last line ends there.
 func (r *Reader) line() ([]byte, bool) {
 	if !r.bomChecked && !r.skipBOM() {
 		return nil, false
@@ -150,7 +179,7 @@ func (r *Reader) line() ([]byte, bool) {
 		return r.take(i, 1), true
 	case i+1 < len(rest) && rest[i+1] == '\n':
 		return r.take(i, 2), true
-	case i+1 < len(rest) || r.eof:
+	case i+1 < len(rest) || r.eof || r.readErr != nil:
 		return r.take(i, 1), true
 	}
 	r.scan = i
@@ -185,9 +214,30 @@ func (r *Reader) field(line []byte) (err error) {
 	name, value, _ := bytes.Cut(line, []byte(":"))
 	if string(name) == "data" {
 		value = bytes.TrimPrefix(value, []byte(" "))
-		if r.data, err = Grow(r.data, len(value)+1, r.charge); err == nil {
-			r.data = append(append(r.data, value...), '\n')
+		if r.lines == 0 {
+			r.lone = value
+		} else if err = r.spill(); err == nil {
+			err = r.appendData(value)
 		}
+		r.lines++
+	}
+	return err
+}
+
+// spill copies the event's first data value, if that is all it has and it is still in buf, into data.
+func (r *Reader) spill() error {
+	if r.lines != 1 || len(r.data) > 0 {
+		return nil
+	}
+	err := r.appendData(r.lone)
+	r.lone = nil
+	return err
+}
+
+// appendData adds value and an LF to data.
+func (r *Reader) appendData(value []byte) (err error) {
+	if r.data, err = Grow(r.data, len(value)+1, r.charge); err == nil {
+		r.data = append(append(r.data, value...), '\n')
 	}
 	return err
 }
@@ -200,14 +250,13 @@ func (r *Reader) more() error {
 		return ErrTooLarge
 	case r.readErr != nil:
 		return r.readErr
-	case r.eof && len(r.data) > 0:
+	case r.eof && r.lines > 0:
 		return io.ErrUnexpectedEOF
 	case r.eof:
 		return io.EOF
 	}
-	if r.start > 0 { // only then: moving a long unfinished line onto itself on every read would cost quadratic time
-		r.buf = append(r.buf[:0], r.buf[r.start:]...)
-		r.start = 0
+	if err := r.repack(pending); err != nil {
+		return err
 	}
 	var err error
 	if r.buf, err = Grow(r.buf, readSize, r.charge); err != nil {
@@ -222,6 +271,44 @@ func (r *Reader) more() error {
 		r.readErr = fmt.Errorf("sse: read: %w", err)
 	}
 	return nil
+}
+
+// repack moves the pending bytes to the front of buf, which is about to be read into, after copying out of it what
+// the current event still needs, and gives back the buffers a large event left behind once calmEvents small ones have
+// followed it.
+func (r *Reader) repack(pending int) error {
+	if err := r.spill(); err != nil {
+		return err
+	}
+	if r.calm >= calmEvents && cap(r.buf)+cap(r.data) > keepSize {
+		if err := r.shrink(pending); err != nil {
+			return err
+		}
+	}
+	if r.start > 0 { // only then: moving a long unfinished line onto itself on every read would cost quadratic time
+		r.buf = append(r.buf[:0], r.buf[r.start:]...)
+		r.start = 0
+	}
+	return nil
+}
+
+// shrink drops data unless an event is using it and moves the pending bytes to a buffer that fits them and one read,
+// then tells charge what it gave back.
+func (r *Reader) shrink(pending int) error {
+	given := 0
+	if len(r.data) == 0 {
+		given, r.data = cap(r.data), nil
+	}
+	if want := pending + readSize; cap(r.buf) > want {
+		given += cap(r.buf) - want
+		r.buf = append(make([]byte, 0, want), r.buf[r.start:]...)
+		r.start = 0
+	}
+	r.calm = 0
+	if r.charge == nil || given == 0 {
+		return nil
+	}
+	return r.charge(-given)
 }
 
 // Grow returns b with room for n more elements. A new array is at least twice as large, so appending costs amortized
