@@ -235,6 +235,8 @@ func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝�
 func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
 func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // 预留的单价上界，见下
+func (s Schedule) Highest(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // Ceiling 不在缺价处停下：已知价格里最高的，以及是否有缺价
+func (s Schedule) BaseRate(it Item) (platform.UnitPrice, bool) // 标准档、第一道门槛以下的单价，给路由比较价格用
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；两边都有分档而口径不同时 ErrTierBasisChanged
 func Normalize(name string) string

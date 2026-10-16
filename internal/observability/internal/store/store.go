@@ -2,3 +2,6 @@
 // so every write passes through CallRecord and the Recorder, and every read through the account-scoped queries
 // (internal/observability/README.md「表」).
 package store
+
+// ListQuery is the text of ListOwnCalls as it runs, for the plan test to explain.
+const ListQuery = listOwnCalls

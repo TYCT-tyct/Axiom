@@ -105,7 +105,7 @@ WHERE account_id = ($1::text)::uuid AND at >= $2 AND at < $3
     AND ($4::text = '' OR model = $4)
     AND ($5::text = '' OR client_app = $5)
     AND (at, id) < ($6::timestamptz, ($7::text)::uuid)
-ORDER BY at DESC, id DESC
+ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT $8
 `
 
@@ -146,6 +146,7 @@ type ListOwnCallsRow struct {
 // security limits the rows to the account, and the explicit account condition lets the planner walk the index
 // (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
 // stably while new calls arrive.
+// Qualified: a bare id would sort by the output column id::text, which is not the index order.
 func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsParams) ([]ListOwnCallsRow, error) {
 	rows, err := db.Query(ctx, listOwnCalls,
 		arg.AccountID,
