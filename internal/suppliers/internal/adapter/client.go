@@ -21,6 +21,17 @@ type Client interface {
 // ErrBucketsFull is the error of a request that was not sent because a bucket had no allowance left.
 var ErrBucketsFull = errors.New("adapter: a rate bucket has no allowance left")
 
+// Blocked is the error of a request that was not sent, or whose answer said to wait: Until is when to try again. It
+// wraps ErrBucketsFull, so the caller defers the work.
+type Blocked struct{ Until time.Time }
+
+func (b Blocked) Error() string {
+	return "adapter: rate buckets are blocked until " + b.Until.UTC().Format(time.RFC3339)
+}
+
+// Unwrap makes errors.Is(err, ErrBucketsFull) true.
+func (Blocked) Unwrap() error { return ErrBucketsFull }
+
 // Request is one request to the supplier. Path is relative to the supplier's origin, which is fixed at connection.
 // Buckets names every bucket the request counts against: the supplier counts one request in several buckets at once
 // (new-api puts every /api/ path in a global bucket and its sensitive ones in a second).

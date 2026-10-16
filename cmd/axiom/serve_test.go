@@ -36,6 +36,7 @@ func TestServe(t *testing.T) {
 		}
 	}
 	checkVersion(t, "http://"+addrs.Public+"/api/console/v1/version")
+	checkMetrics(t, addrs)
 	cancel()
 	select {
 	case err := <-done:
@@ -48,6 +49,41 @@ func TestServe(t *testing.T) {
 	for _, addr := range []string{addrs.Public, addrs.Ops} {
 		if _, err := get(t, "http://"+addr+"/"); err == nil {
 			t.Errorf("%s still answers after shutdown", addr)
+		}
+	}
+}
+
+// checkMetrics: the ops listener serves Prometheus text with the request just made, counted by route pattern and
+// status class only, and the recorder's queue gauge; the public listener does not serve it. Unknown paths, one of them
+// with an identifier in it, share one "unmatched" series instead of making one each.
+func checkMetrics(t *testing.T, addrs addresses) {
+	t.Helper()
+	for _, path := range []string{"/api/console/v1/nothing-here", "/api/console/v1/key_01hxyz0000000000000000000a"} {
+		if _, err := get(t, "http://"+addrs.Public+path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if resp, err := get(t, "http://"+addrs.Public+"/metrics"); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /metrics on the public listener: %v %v, want 404", resp.Response, err)
+	}
+	resp, err := get(t, "http://"+addrs.Ops+"/metrics")
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("GET /metrics on the ops listener: %v %v", resp.Response, err)
+	}
+	text := string(resp.body)
+	for _, want := range []string{
+		`axiom_http_server_requests_total{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
+		`axiom_http_server_requests_total{outcome="completed",route="unmatched",status_class="4xx"} 3`,
+		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
+		"axiom_observability_queue_depth 0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the metrics lack %q:\n%s", want, text)
+		}
+	}
+	for _, leak := range []string{"key_01hxyz", "nothing-here", "request_id", "account", "user", "planted"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("the metrics mention %q: a label or value that is not bounded", leak)
 		}
 	}
 }
@@ -199,4 +235,30 @@ func get(t *testing.T, url string) (response, error) {
 	}
 	body, err := io.ReadAll(resp.Body)
 	return response{resp, body}, errors.Join(err, resp.Body.Close())
+}
+
+// TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
+// address, closes it on the way out, so no writer goroutine outlives serve.
+func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
+	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close() //nolint:errcheck // a test listener
+	environ := []string{
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(),
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+	}
+	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("the node started on a taken address")
+	}
+	buf := make([]byte, 1<<20)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "observability.(*Recorder).writer") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the call-record writer is still running after serve returned")
+		}
+	}
 }

@@ -11,6 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"axiom/internal/platform/egresstest"
 )
 
@@ -29,31 +34,44 @@ var ErrInvalidURL = errors.New("egress: expected an HTTP(S) URL with a host and 
 var errProtocolSwitch = errors.New("egress: upstream answered 101 Switching Protocols; protocol upgrades are not supported")
 
 // Client owns its transport so callers cannot replace address validation or enable proxies.
-type Client struct{ transport *http.Transport }
+type Client struct {
+	transport *http.Transport
+	tracer    trace.Tracer
+}
+
+// Option adjusts a Client.
+type Option func(*Client)
+
+// WithTracerProvider makes every Do a span, a child of the span in the request's context, carrying the target host
+// and the response status: the host is set by a site owner or ourselves, never by a client; the path and query, which
+// may hold identifiers, are left out.
+func WithTracerProvider(tp trace.TracerProvider) Option {
+	return func(c *Client) { c.tracer = tp.Tracer("axiom/egress") }
+}
 
 // New keeps one connection pool per selected exit; callers should reuse it across requests.
-func New(exit Exit) (*Client, error) {
+func New(exit Exit, opts ...Option) (*Client, error) {
 	if exit != Direct {
 		return nil, errors.New("egress: unsupported exit")
 	}
-	return newClient(egresstest.Policy{}, net.DefaultResolver.LookupNetIP), nil
+	return newClient(egresstest.Policy{}, net.DefaultResolver.LookupNetIP, opts...), nil
 }
 
 // NewForTesting accepts only a capability minted by egresstest, never an arbitrary address predicate.
-func NewForTesting(policy egresstest.Policy) *Client {
-	return newClient(policy, net.DefaultResolver.LookupNetIP)
+func NewForTesting(policy egresstest.Policy, opts ...Option) *Client {
+	return newClient(policy, net.DefaultResolver.LookupNetIP, opts...)
 }
 
 // newClient takes the resolver so tests can name hosts without replacing the production dial and TLS wiring.
 // The wait for response headers has no separate bound: Do requires a request deadline, and a non-streaming model
 // call sends its headers only after the whole generation, which can take minutes.
-func newClient(policy egresstest.Policy, lookup func(context.Context, string, string) ([]netip.Addr, error)) *Client {
+func newClient(policy egresstest.Policy, lookup func(context.Context, string, string) ([]netip.Addr, error), opts ...Option) *Client {
 	d := &dialer{
 		lookup:  lookup,
 		connect: (&net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}).DialContext,
 		policy:  policy,
 	}
-	return &Client{transport: &http.Transport{
+	c := &Client{tracer: noop.NewTracerProvider().Tracer("axiom/egress"), transport: &http.Transport{
 		DialContext: d.dialContext,
 		// A custom DialContext turns HTTP/2 off unless it is requested explicitly.
 		ForceAttemptHTTP2:   true,
@@ -66,6 +84,10 @@ func newClient(policy egresstest.Policy, lookup func(context.Context, string, st
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
 	}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 const maxResponseHeaderBytes = 1 << 20
@@ -90,10 +112,16 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		}
 	}
 	out.Header.Set("User-Agent", "Axiom")
+	ctx, span := c.tracer.Start(out.Context(), "egress.request", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("server.address", out.URL.Hostname())))
+	defer span.End()           // ends when the response headers arrive; reading the body is the caller's
+	out = out.WithContext(ctx) //nolint:contextcheck // ctx comes from out.Context() through the tracer
 	resp, err := c.transport.RoundTrip(out)
 	if err != nil {
+		span.SetStatus(codes.Error, "request failed") // the error text can quote the address
 		return nil, fmt.Errorf("egress request: %w", err)
 	}
+	span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
 	// After a 101 the body is the raw connection, which the request context no longer closes, so a silent upstream
 	// could hold a reader past its deadline. Axiom never asks for an upgrade; closing the body closes the connection.
 	if resp.StatusCode == http.StatusSwitchingProtocols {

@@ -23,8 +23,12 @@ func New(handler http.Handler, logger *slog.Logger) *http.Server {
 
 // Health answers the probes: /livez while the process runs, /readyz only while it takes new work. A node reports
 // not ready until everything it needs is up, and turns not ready again when shutdown begins, just before its
-// listeners close.
-type Health struct{ ready atomic.Bool }
+// listeners close. Metrics, when set, is also served at /metrics: the ops listener is the only place metrics are
+// exposed, and it listens on loopback unless a deployment says otherwise.
+type Health struct {
+	Metrics http.Handler
+	ready   atomic.Bool
+}
 
 // SetReady records whether the node takes new work.
 func (h *Health) SetReady(ready bool) { h.ready.Store(ready) }
@@ -41,7 +45,7 @@ func (h *Health) Server(logger *slog.Logger) *http.Server {
 	return server
 }
 
-// Handler serves /livez and /readyz, for GET and HEAD.
+// Handler serves /livez, /readyz and, if Metrics is set, /metrics, for GET and HEAD.
 func (h *Health) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", func(http.ResponseWriter, *http.Request) {})
@@ -50,5 +54,8 @@ func (h *Health) Handler() http.Handler {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	})
+	if h.Metrics != nil {
+		mux.Handle("GET /metrics", h.Metrics)
+	}
 	return mux
 }
