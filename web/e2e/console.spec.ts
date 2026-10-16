@@ -236,7 +236,7 @@ test("an address no page answers says so and leads to the console's home", async
   await expect(page).toHaveTitle("找不到这个页面 · Axiom");
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
 
-  // The console's own home, not the website's: the preview server would redirect "/" to the console and hide it.
+  // The console's own home, not the website's.
   const home = page.getByRole("link", { name: "回到首页" });
   await expect(home).toHaveAttribute("href", "/console/");
   await home.click();
