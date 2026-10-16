@@ -96,10 +96,6 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	frontend, err := webui.Embedded()
-	if err != nil {
-		return err
-	}
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
@@ -127,12 +123,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, frontend, logger)
+	routes, err := console.routes(ctx, db, tel, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.adminAddr, frontend.Admin(), cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, console.frontend.Admin(), cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -159,6 +155,7 @@ type consoleParts struct {
 	master   *secret.Keyring // seals users' TOTP secrets
 	hashes   *secret.MACKeys // keys API keys are hashed with
 	contract *contract
+	frontend *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -171,12 +168,16 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	contract, err := consoleContract()
-	return consoleParts{cfg, master, hashes, contract}, err
+	if err != nil {
+		return consoleParts{}, err
+	}
+	frontend, err := webui.Embedded()
+	return consoleParts{cfg, master, hashes, contract, frontend}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
 // ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, frontend *webui.Frontend, logger *slog.Logger) (http.Handler, error) {
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
@@ -188,7 +189,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nil, err
 	}
 	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, frontend, logger), nil
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger), nil
 }
 
 // startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
