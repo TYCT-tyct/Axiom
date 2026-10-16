@@ -73,6 +73,7 @@ type eventReader struct {
 	pre []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
 	// id and model are the call ID and the client's model name as JSON strings, for edits.
 	id, model string
+	tier      *string // the service tier the OpenAI formats name outside usage, kept for every usage report
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
@@ -95,7 +96,25 @@ func (s *eventReader) start(data []byte) {
 }
 
 func (s *eventReader) dropBuffers() {
-	s.reader, s.src, s.rw, s.buf, s.pre, s.e = reader{}, bytes.Buffer{}, rewriter{}, nil, nil, event{}
+	s.reader, s.src, s.rw, s.buf, s.pre, s.e, s.tier = reader{}, bytes.Buffer{}, rewriter{}, nil, nil, event{}, nil
+}
+
+// serviceTier keeps the service tier the event names, charging what it holds beyond the one before.
+func (s *eventReader) serviceTier() error {
+	v, err := s.str()
+	if v == nil || err != nil || s.tier != nil && *s.tier == string(v) {
+		return err
+	}
+	had := 0
+	if s.tier != nil {
+		had = len(*s.tier)
+	}
+	if err := s.charge(max(0, len(v)-had)); err != nil {
+		return err
+	}
+	t := string(v)
+	s.tier = &t
+	return nil
 }
 
 // text counts a string member, unquoted, as content.

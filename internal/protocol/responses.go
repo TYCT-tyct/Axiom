@@ -23,7 +23,6 @@ type responsesStream struct {
 	webSearch, hasResponse bool
 	report                 *openAIUsage
 	reportErr              error
-	tier                   *string
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -118,7 +117,7 @@ func (s *responsesStream) settle() error {
 
 func (s *responsesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.items, s.report = nil, nil
+	s.items, s.report, s.reportErr = nil, nil, nil
 }
 
 func (s *responsesStream) eventType() error {
@@ -195,15 +194,6 @@ func (s *responsesStream) usage() error {
 	s.report, s.e.usage = &openAIUsage{}, true
 	s.reportErr = jsonx.Unmarshal(v, s.report)
 	return nil
-}
-
-func (s *responsesStream) serviceTier() error {
-	v, err := s.str()
-	if v != nil {
-		t := string(v)
-		s.tier = &t
-	}
-	return err
 }
 
 func (s *responsesStream) meter(m *meter) {
