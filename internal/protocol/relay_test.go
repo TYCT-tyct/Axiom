@@ -27,7 +27,7 @@ var update = flag.Bool("update", false, "rewrite the golden client streams in te
 var (
 	usd     = must(platform.ParseCurrency("USD"))
 	price   = must(platform.ParseUnitPrice("0.000003"))
-	options = protocol.RelayOptions{ID: "gen-01", Model: "claude-client-name"}
+	options = protocol.RelayOptions{ID: "gen-01", Model: "claude-client-name", Created: 1760000000}
 )
 
 func must[T any](v T, err error) T {
@@ -65,9 +65,17 @@ func relay(t testing.TB, f protocol.Format, src io.Reader, ctx protocol.UsageCon
 	settle func(protocol.Usage) protocol.Final,
 ) relayed {
 	t.Helper()
+	return relayTo(t, f, f, src, ctx, mem, settle)
+}
+
+// relayTo is relay for a client of another format than the upstream's.
+func relayTo(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx protocol.UsageContext,
+	mem *protocol.Memory, settle func(protocol.Usage) protocol.Final,
+) relayed {
+	t.Helper()
 	o := options
 	o.Memory = mem
-	res := relayed{r: protocol.NewRelay(f, f, src, ctx, o)}
+	res := relayed{r: protocol.NewRelay(client, upstream, src, ctx, o)}
 	for {
 		step, err := res.r.Next()
 		if err != nil {
@@ -374,9 +382,11 @@ func TestRelayFail(t *testing.T) {
 }
 
 func TestRelayUnsupported(t *testing.T) {
-	r := protocol.NewRelay(protocol.Chat, protocol.Messages, strings.NewReader(""), protocol.UsageContext{}, options)
-	if _, err := r.Next(); err == nil {
-		t.Fatal("relaying Messages to a Chat client succeeded")
+	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Chat}, {protocol.Responses, protocol.Messages}} {
+		r := protocol.NewRelay(pair[0], pair[1], strings.NewReader(""), protocol.UsageContext{}, options)
+		if _, err := r.Next(); err == nil {
+			t.Errorf("relaying format %d to a client of format %d succeeded", pair[1], pair[0])
+		}
 	}
 }
 
