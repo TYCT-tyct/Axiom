@@ -41,18 +41,29 @@ func (q *Queries) AddWaiver(ctx context.Context, db DBTX, arg AddWaiverParams) (
 }
 
 const applyRevision = `-- name: ApplyRevision :execrows
-UPDATE billing.reservations SET applied_revision = $1
-WHERE request_id = $2 AND applied_revision < $1
+INSERT INTO billing.corrections AS c (request_id, attempt_seq, site_id, account_id, revision)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (request_id, attempt_seq) DO UPDATE SET revision = excluded.revision WHERE c.revision < excluded.revision
 `
 
 type ApplyRevisionParams struct {
-	Revision  int64
-	RequestID uuid.UUID
+	RequestID  uuid.UUID
+	AttemptSeq int32
+	SiteID     uuid.UUID
+	AccountID  uuid.UUID
+	Revision   int64
 }
 
-// A correction applies once, and never after a newer one (River delivers at least once, in any order).
+// A supplier record applies once to its attempt, and never after a newer one (River delivers at least once, in any
+// order): 0 rows is a revision already applied or older.
 func (q *Queries) ApplyRevision(ctx context.Context, db DBTX, arg ApplyRevisionParams) (int64, error) {
-	result, err := db.Exec(ctx, applyRevision, arg.Revision, arg.RequestID)
+	result, err := db.Exec(ctx, applyRevision,
+		arg.RequestID,
+		arg.AttemptSeq,
+		arg.SiteID,
+		arg.AccountID,
+		arg.Revision,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -72,6 +83,23 @@ type AttemptCostParams struct {
 func (q *Queries) AttemptCost(ctx context.Context, db DBTX, arg AttemptCostParams) (int64, error) {
 	row := db.QueryRow(ctx, attemptCost, arg.RequestID, arg.AttemptSeq)
 	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const corrected = `-- name: Corrected :one
+SELECT EXISTS (SELECT FROM billing.corrections WHERE request_id = $1 AND attempt_seq = $2)::boolean
+`
+
+type CorrectedParams struct {
+	RequestID  uuid.UUID
+	AttemptSeq int32
+}
+
+// Whether a supplier record has set this attempt's cost already, so a later Settle leaves it to the record.
+func (q *Queries) Corrected(ctx context.Context, db DBTX, arg CorrectedParams) (bool, error) {
+	row := db.QueryRow(ctx, corrected, arg.RequestID, arg.AttemptSeq)
+	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
 }
@@ -111,51 +139,61 @@ func (q *Queries) DueReservations(ctx context.Context, db DBTX, max int32) ([]Du
 	return items, nil
 }
 
-const endReservation = `-- name: EndReservation :exec
+const endReservation = `-- name: EndReservation :one
 UPDATE billing.reservations
-SET state = $1, entry = coalesce($2, entry), charged = $3, price = $4,
-    correct_by = CASE WHEN $5::float8 > 0
-        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $5::float8) ELSE correct_by END
-WHERE request_id = $6
+SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
+    charged = $4, price = $5, waived = $6, estimated = $7, final_usage = $8,
+    correct_by = CASE WHEN $9::float8 > 0
+        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $9::float8) ELSE correct_by END
+WHERE request_id = $10
+RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
 type EndReservationParams struct {
 	State       string
+	ChargedSeq  *int32
 	Entry       *int32
 	Charged     int64
 	Price       int64
+	Waived      bool
+	Estimated   bool
+	FinalUsage  []int64
 	HoldSeconds float64
 	RequestID   uuid.UUID
 }
 
-// Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state.
-func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) error {
-	_, err := db.Exec(ctx, endReservation,
+// Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state. The charged
+// attempt and entry stay as they were when none is given. It returns the database's time, which a terminal state's
+// EndRequest records, so every clock the request's end is judged by is the database's.
+func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) (time.Time, error) {
+	row := db.QueryRow(ctx, endReservation,
 		arg.State,
+		arg.ChargedSeq,
 		arg.Entry,
 		arg.Charged,
 		arg.Price,
+		arg.Waived,
+		arg.Estimated,
+		arg.FinalUsage,
 		arg.HoldSeconds,
 		arg.RequestID,
 	)
-	return err
+	var ended_at time.Time
+	err := row.Scan(&ended_at)
+	return ended_at, err
 }
 
 const insertCreditBatch = `-- name: InsertCreditBatch :exec
-INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, paid_price, paid_currency, expires_at)
-VALUES ($1, $2, $3, $4, $5, nullif($6::text, ''), nullif($7::text, ''),
-    $8)
+INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at)
+VALUES ($1, $2, $3, 'gift', $4, $5)
 `
 
 type InsertCreditBatchParams struct {
-	ID           uuid.UUID
-	SiteID       uuid.UUID
-	AccountID    uuid.UUID
-	Source       string
-	Amount       int64
-	PaidPrice    string
-	PaidCurrency string
-	ExpiresAt    *time.Time
+	ID        uuid.UUID
+	SiteID    uuid.UUID
+	AccountID uuid.UUID
+	Amount    int64
+	ExpiresAt *time.Time
 }
 
 func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCreditBatchParams) error {
@@ -163,10 +201,7 @@ func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCred
 		arg.ID,
 		arg.SiteID,
 		arg.AccountID,
-		arg.Source,
 		arg.Amount,
-		arg.PaidPrice,
-		arg.PaidCurrency,
 		arg.ExpiresAt,
 	)
 	return err
@@ -177,7 +212,8 @@ WITH entry AS (
     INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
     SELECT $3, $4, $2, unnest($5::text[]), unnest($6::bigint[])
 )
-UPDATE billing.balances b SET balance = b.balance - $1 WHERE b.account_id = $2
+UPDATE billing.balances b SET balance = b.balance - $1
+WHERE b.account_id = $2 AND $1::bigint <> 0
 `
 
 type InsertEntriesParams struct {
@@ -190,7 +226,7 @@ type InsertEntriesParams struct {
 }
 
 // One statement for a transaction's entries; the user's balance follows its book (user_debit, the entries' sum on
-// user_balance) in the same statement.
+// user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it.
 func (q *Queries) InsertEntries(ctx context.Context, db DBTX, arg InsertEntriesParams) error {
 	_, err := db.Exec(ctx, insertEntries,
 		arg.UserDebit,
@@ -238,7 +274,7 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
-    r.prices, r.entry, r.charged, r.price, r.applied_revision,
+    r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
     coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
 FROM billing.reservations r
 WHERE r.request_id = $1
@@ -254,10 +290,13 @@ type LockReservationRow struct {
 	Amount           int64
 	State            string
 	Prices           []string
+	ChargedSeq       *int32
 	Entry            *int32
 	Charged          int64
 	Price            int64
-	AppliedRevision  int64
+	Waived           bool
+	Estimated        bool
+	FinalUsage       []int64
 	CorrectionClosed bool
 }
 
@@ -275,10 +314,13 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.Amount,
 		&i.State,
 		&i.Prices,
+		&i.ChargedSeq,
 		&i.Entry,
 		&i.Charged,
 		&i.Price,
-		&i.AppliedRevision,
+		&i.Waived,
+		&i.Estimated,
+		&i.FinalUsage,
 		&i.CorrectionClosed,
 	)
 	return i, err
@@ -329,18 +371,23 @@ func (q *Queries) ReservationAccount(ctx context.Context, db DBTX, requestID uui
 }
 
 const unbalanced = `-- name: Unbalanced :many
+WITH transactions AS (
+    SELECT e.transaction_id FROM billing.entries e GROUP BY e.transaction_id HAVING sum(e.amount) <> 0
+), books AS (
+    SELECT e.account_id, sum(e.amount) AS amount FROM billing.entries e WHERE e.book = 'user_balance' GROUP BY e.account_id
+)
 SELECT p.problem::text FROM (
-    SELECT 'transaction ' || t.id::text AS problem FROM billing.transactions t
-    WHERE (SELECT coalesce(sum(e.amount), 0) FROM billing.entries e WHERE e.transaction_id = t.id) <> 0
+    SELECT 'transaction ' || t.transaction_id::text AS problem FROM transactions t
     UNION ALL
-    SELECT 'balance of ' || b.account_id::text FROM billing.balances b
-    WHERE b.balance <> -(SELECT coalesce(sum(e.amount), 0) FROM billing.entries e
-        WHERE e.account_id = b.account_id AND e.book = 'user_balance')
+    SELECT 'balance of ' || b.account_id::text FROM billing.balances b LEFT JOIN books k ON k.account_id = b.account_id
+    WHERE b.balance <> -coalesce(k.amount, 0)
 ) p
 ORDER BY 1
 `
 
-// Daily reconciliation: transactions whose entries do not sum to zero, and balances that differ from their book.
+// Daily reconciliation: transactions whose entries do not sum to zero, and balances that differ from their book. Each
+// side is aggregated once, by a grouped scan, rather than summed again per row; the user-balance book reads from its
+// own partial index.
 func (q *Queries) Unbalanced(ctx context.Context, db DBTX) ([]string, error) {
 	rows, err := db.Query(ctx, unbalanced)
 	if err != nil {

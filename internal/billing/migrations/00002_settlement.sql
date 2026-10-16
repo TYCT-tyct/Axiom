@@ -5,19 +5,36 @@
 
 -- The reservation now ends in one of the states README.md「预留的状态」 lists. prices are the kept entries' locked
 -- price schedules in canonical JSON, by route index ('' for a dropped entry), so cleanup and corrections can price
--- usage without the process that admitted it. entry is the route index the charge was priced at; charged what the
--- user paid so far, price what the rules asked before the floor capped it; correct_by ends the hour in which an
--- estimated or cleaned-up charge may still be corrected, holding amount - charged reserved until then.
+-- usage without the process that admitted it. charged_seq and entry are the attempt the user is charged for and the
+-- route index it bound; charged what the user paid so far, price what the rules asked before the floor capped it;
+-- waived whether only per-use items were charged, which a correction keeps; estimated whether the charge rests on
+-- usage the upstream did not report; final_usage the charged usage as Final gives it (README.md「结算与账本」);
+-- correct_by ends the hour in which an estimated or cleaned-up charge may still be corrected, holding
+-- amount - charged reserved until then.
 ALTER TABLE billing.reservations
     DROP CONSTRAINT reservations_state_check,
     ADD CONSTRAINT reservations_state_check CHECK (state IN ('pending', 'released', 'settled', 'estimated',
         'cleanup_pending', 'cleanup_settled', 'cleanup_released')),
     ADD COLUMN prices text[] NOT NULL DEFAULT '{}',
+    ADD COLUMN charged_seq integer CHECK (charged_seq >= 1),
     ADD COLUMN entry integer CHECK (entry >= 0),
     ADD COLUMN charged bigint NOT NULL DEFAULT 0 CHECK (charged >= 0),
     ADD COLUMN price bigint NOT NULL DEFAULT 0 CHECK (price >= 0),
-    ADD COLUMN correct_by timestamptz,
-    ADD COLUMN applied_revision bigint NOT NULL DEFAULT 0;
+    ADD COLUMN waived boolean NOT NULL DEFAULT false,
+    ADD COLUMN estimated boolean NOT NULL DEFAULT false,
+    ADD COLUMN final_usage bigint[] NOT NULL DEFAULT '{}',
+    ADD COLUMN correct_by timestamptz;
+
+-- The newest supplier record applied to each attempt: a record's revisions belong to its attempt, and every attempt's
+-- cost follows its own record whatever state the reservation is in.
+CREATE TABLE billing.corrections (
+    request_id uuid NOT NULL,
+    attempt_seq integer NOT NULL CHECK (attempt_seq >= 1),
+    site_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    revision bigint NOT NULL CHECK (revision >= 1),
+    PRIMARY KEY (request_id, attempt_seq)
+);
 
 -- Released and settled are final; every other state still changes.
 DROP POLICY updates ON billing.reservations;
@@ -46,23 +63,22 @@ CREATE TABLE billing.entries (
     site_id uuid NOT NULL,
     account_id uuid NOT NULL,
     book text NOT NULL CHECK (book IN ('user_balance', 'revenue', 'platform_borne', 'supplier_cost',
-        'supplier_prepaid', 'gift_expense', 'cash')),
+        'supplier_prepaid', 'gift_expense')),
     amount bigint NOT NULL CHECK (amount <> 0)
 );
 CREATE INDEX entries_by_transaction ON billing.entries (transaction_id);
+CREATE INDEX entries_user_balance ON billing.entries (account_id) INCLUDE (amount) WHERE book = 'user_balance';
 
--- A credit's batch: where it came from, and for a payment what one credit cost. Allocation and expiry replay later.
+-- A credit's batch: where it came from. Only gifts for now: an offline payment needs its cash booked at what was
+-- paid, in its currency at a locked rate, which comes with payments. Allocation and expiry replay later.
 CREATE TABLE billing.credit_batches (
     id uuid PRIMARY KEY,
     site_id uuid NOT NULL,
     account_id uuid NOT NULL,
-    source text NOT NULL CHECK (source IN ('gift', 'offline')),
+    source text NOT NULL CHECK (source IN ('gift')),
     amount bigint NOT NULL CHECK (amount > 0),
-    paid_price text CHECK (paid_price ~ '^[0-9]+(\.[0-9]+)?$'), -- the payment per credit, in its currency
-    paid_currency text CHECK (paid_currency ~ '^[A-Z]{3}$'),
     expires_at timestamptz,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    CHECK ((source = 'offline') = (paid_price IS NOT NULL AND paid_currency IS NOT NULL))
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
 -- What an account's waived calls cost the platform on one UTC day, against the daily cap (「免单规则」).
@@ -86,6 +102,12 @@ ALTER TABLE billing.credit_batches ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SE
 CREATE POLICY reads ON billing.credit_batches FOR SELECT USING (platform.in_scope(site_id, account_id));
 CREATE POLICY inserts ON billing.credit_batches FOR INSERT WITH CHECK (platform.in_scope(site_id, account_id));
 
+ALTER TABLE billing.corrections ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY reads ON billing.corrections FOR SELECT USING (platform.in_scope(site_id, account_id));
+CREATE POLICY inserts ON billing.corrections FOR INSERT WITH CHECK (platform.in_scope(site_id, account_id));
+CREATE POLICY updates ON billing.corrections FOR UPDATE USING (platform.in_scope(site_id, account_id))
+    WITH CHECK (platform.in_scope(site_id, account_id));
+
 ALTER TABLE billing.waivers ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY reads ON billing.waivers FOR SELECT USING (platform.in_scope(site_id, account_id));
 CREATE POLICY inserts ON billing.waivers FOR INSERT WITH CHECK (platform.in_scope(site_id, account_id));
@@ -93,8 +115,11 @@ CREATE POLICY updates ON billing.waivers FOR UPDATE USING (platform.in_scope(sit
     WITH CHECK (platform.in_scope(site_id, account_id));
 
 -- The ledger only grows: no UPDATE at all. balance and spent follow it, in the same transaction.
-GRANT SELECT, INSERT ON billing.transactions, billing.entries, billing.credit_batches, billing.waivers TO axiom_app;
+GRANT SELECT, INSERT ON billing.transactions, billing.entries, billing.credit_batches, billing.waivers,
+    billing.corrections TO axiom_app;
 GRANT UPDATE (cost) ON billing.waivers TO axiom_app;
+GRANT UPDATE (revision) ON billing.corrections TO axiom_app;
 GRANT UPDATE (balance) ON billing.balances TO axiom_app;
 GRANT UPDATE (spent) ON billing.spend TO axiom_app;
-GRANT UPDATE (entry, charged, price, correct_by, applied_revision) ON billing.reservations TO axiom_app;
+GRANT UPDATE (charged_seq, entry, charged, price, waived, estimated, final_usage, correct_by) ON billing.reservations
+    TO axiom_app;

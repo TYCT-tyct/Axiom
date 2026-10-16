@@ -271,6 +271,17 @@ func (q *Queries) LockExpiredHolders(ctx context.Context, db DBTX, graceSeconds 
 	return items, nil
 }
 
+const now = `-- name: Now :one
+SELECT clock_timestamp()::timestamptz
+`
+
+func (q *Queries) Now(ctx context.Context, db DBTX) (time.Time, error) {
+	row := db.QueryRow(ctx, now)
+	var column_1 time.Time
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const readUsage = `-- name: ReadUsage :one
 WITH d AS (SELECT date_trunc('day', coalesce($5::timestamptz, clock_timestamp()), 'UTC') AS day)
 SELECT

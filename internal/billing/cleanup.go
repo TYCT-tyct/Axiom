@@ -2,7 +2,6 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"uuid"
 
@@ -34,22 +33,17 @@ func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err erro
 }
 
 func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) error {
-	balance, err := lockAccount(ctx, tx, accountID)
+	c, err := b.lock(ctx, tx, id, accountID)
 	if err != nil {
 		return err
 	}
-	r, err := queries.LockReservation(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	c := locked{id: id, row: r, balance: balance, charged: r.Charged}
-	switch {
+	switch r := c.row; {
 	case r.State == "pending":
-		return b.takeOver(ctx, tx, &c)
+		return c.takeOver(ctx, tx)
 	case r.State == "estimated" && r.CorrectionClosed: // the estimate stands; release what it held
 		return c.release(ctx, tx, "settled", r.Amount-r.Charged)
 	case r.State == "cleanup_pending" && r.CorrectionClosed: // no supplier record within the hour
-		if err := b.suppliers.RecordLostRequest(ctx, tx, id); err != nil {
+		if err := c.b.suppliers.RecordLostRequest(ctx, tx, id); err != nil {
 			return err
 		}
 		return c.release(ctx, tx, "cleanup_released", r.Amount)
@@ -57,35 +51,43 @@ func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) 
 	return nil // a Settle got there first
 }
 
+// lock locks the account's balance row and reads the reservation under it.
+func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (*locked, error) {
+	balance, err := lockAccount(ctx, tx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	r, err := queries.LockReservation(ctx, tx, id)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the reservation: %w", err)
+	}
+	return &locked{b: b, id: id, row: r, balance: balance, charged: r.Charged}, nil
+}
+
 // takeOver ends a pending reservation no Settle will: only an attempt the journal marks committed, with a key to
 // match the supplier's record, is charged, later, at the record's usage; every other is a lost request.
-func (b *Billing) takeOver(ctx context.Context, tx pg.Tx, c *locked) error {
-	j, committed, err := b.suppliers.CommittedAttempt(ctx, tx, c.id)
+func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
+	j, committed, err := c.b.suppliers.CommittedAttempt(ctx, tx, c.id)
 	if err != nil {
 		return fmt.Errorf("billing: read the journal: %w", err)
 	}
 	if !committed || j.Key == "" {
-		if err := b.suppliers.RecordLostRequest(ctx, tx, c.id); err != nil {
+		if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id); err != nil {
 			return err
 		}
 		return c.release(ctx, tx, "cleanup_released", c.row.Amount)
 	}
-	if err := b.suppliers.RecordAttempts(ctx, tx, c.id, []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}); err != nil {
+	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}); err != nil {
 		return err
 	}
-	return c.write(ctx, tx, "cleanup_pending", index(j.Entry), 0, b.config.CorrectionWindow.Seconds())
+	w := c.kept("cleanup_pending")
+	w.seq, w.entry, w.estimated, w.holdSeconds = int32p(j.Seq), int32p(j.Entry), true, c.b.config.CorrectionWindow.Seconds()
+	return c.write(ctx, tx, w)
 }
 
-// release ends a reservation in state, giving back what it held, and keeps what was charged.
-func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
-	if err := c.move(ctx, tx, -max(held, 0), 0); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, state, nil, c.row.Price, 0)
-}
-
-// Correction is a supplier record that fixes an attempt's usage and cost (ChargeSettled): Revision orders the record's
-// versions, Usage is by sampling, all reported, and Cost is the attempt's cost in billionths of a credit.
+// Correction is a supplier record that fixes an attempt's usage and cost (ChargeSettled): Revision orders the
+// record's versions for its attempt, Usage is by sampling, all reported, and Cost is the attempt's cost in
+// billionths of a credit.
 type Correction struct {
 	Request  uuid.UUID
 	Seq      int
@@ -94,47 +96,42 @@ type Correction struct {
 	Cost     int64
 }
 
-// errStale is a correction applied already, or older than one applied: it succeeds and changes nothing.
-var errStale = errors.New("billing: a stale correction")
-
-// Correct applies c once (README.md「预留的状态」「校正」): only a revision newer than the last applied one changes
-// anything. The attempt's cost always follows the record; the user's charge only within the correction window: an
-// estimate is replaced, the makeup capped by what the reservation still holds, and a cleaned-up call is charged at
-// the record's usage and locked price.
+// Correct applies c once (README.md「结算与账本」): only a revision newer than the last one applied to its attempt
+// changes anything, in any state. The attempt's cost always follows the record. The user's charge follows it only for
+// the charged attempt, within the correction window: an estimate is replaced, keeping its waiver, the makeup capped by
+// what the reservation still holds; a cleaned-up call is charged at the record's usage and locked price. A database
+// error fails it, for the caller to retry.
 func (b *Billing) Correct(ctx context.Context, c Correction) error {
 	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
 		accountID, err := queries.ReservationAccount(ctx, tx, c.Request)
 		if err != nil {
 			return err
 		}
-		balance, err := lockAccount(ctx, tx, accountID)
+		l, err := b.lock(ctx, tx, c.Request, accountID)
 		if err != nil {
 			return err
 		}
-		r, err := queries.LockReservation(ctx, tx, c.Request)
-		if err != nil {
+		n, err := queries.ApplyRevision(ctx, tx, ApplyRevisionParams{
+			RequestID: c.Request, AttemptSeq: *int32p(c.Seq), SiteID: l.row.SiteID, AccountID: l.row.AccountID, Revision: c.Revision,
+		})
+		if err != nil || n == 0 { // n == 0: applied already, or older than the one applied
 			return err
 		}
-		if n, err := queries.ApplyRevision(ctx, tx, ApplyRevisionParams{RequestID: c.Request, Revision: c.Revision}); err != nil || n == 0 {
-			return errors.Join(err, errStale)
-		}
-		a := locked{id: c.Request, row: r, balance: balance, charged: r.Charged}
-		if err := a.adjustCost(ctx, tx, c); err != nil || r.CorrectionClosed {
+		if err := l.adjustCost(ctx, tx, c); err != nil {
 			return err
 		}
-		return a.recharge(ctx, tx, c)
+		return l.recharge(ctx, tx, c)
 	})
-	if errors.Is(err, errStale) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("billing: correct %s: %w", c.Request, err)
 	}
 	return nil
 }
 
+// adjustCost moves the attempt's cost to the record's: whatever was booked before, an estimate or an older record,
+// the cost entries of the attempt then add up to k.Cost.
 func (c *locked) adjustCost(ctx context.Context, tx pg.Tx, k Correction) error {
-	seq := int32(k.Seq) //nolint:gosec // G115: at most a few attempts
+	seq := *int32p(k.Seq)
 	recorded, err := queries.AttemptCost(ctx, tx, AttemptCostParams{RequestID: c.id, AttemptSeq: seq})
 	if err != nil {
 		return err
@@ -145,17 +142,23 @@ func (c *locked) adjustCost(ctx context.Context, tx pg.Tx, k Correction) error {
 	return err
 }
 
+// recharges: a record changes the user's charge only for the charged attempt of a reservation still held, within
+// its correction window.
+func (c *locked) recharges(k Correction) bool {
+	r := c.row
+	held := r.State == "estimated" || r.State == "cleanup_pending"
+	return held && !r.CorrectionClosed && r.ChargedSeq != nil && int(*r.ChargedSeq) == k.Seq && r.Entry != nil
+}
+
 // recharge replaces an estimated or cleaned-up charge with the record's: the reservation's hold pays the makeup, which
 // therefore never passes the floor; past the hold the platform bears it. An estimate keeps holding the rest until its
 // window ends, for a later revision; a cleaned-up call releases it.
 func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
-	if c.row.State != "estimated" && c.row.State != "cleanup_pending" {
+	r := c.row
+	if !c.recharges(k) {
 		return nil
 	}
-	if c.row.Entry == nil {
-		return fmt.Errorf("billing: %s has no charged entry", c.id)
-	}
-	s, err := schedule(c.row.Prices, int(*c.row.Entry))
+	s, err := schedule(r.Prices, int(*r.Entry))
 	if err != nil {
 		return err
 	}
@@ -163,24 +166,26 @@ func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	for i, u := range k.Usage {
 		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
 	}
-	price, _, err := priceSegments(s, segments, false)
+	price, estimated, err := priceSegments(s, segments, r.Waived)
 	if err != nil {
 		return err
 	}
-	held := max(c.row.Amount-c.row.Charged, 0)
-	c.charged = min(price, c.row.Charged+held)
-	state, keep := "cleanup_settled", int64(0)
-	if c.row.State == "estimated" {
-		state, keep = "estimated", max(c.row.Amount-c.charged, 0)
-	}
-	if _, err := post(ctx, tx, c.event("reverse", k.Revision), reversal(c.row.Price, c.row.Charged)...); err != nil {
+	hold := max(r.Amount-r.Charged, 0)
+	c.charged = min(price, r.Charged+hold)
+	if _, err := post(ctx, tx, c.event("reverse", k.Revision), reversal(r.Price, r.Charged)...); err != nil {
 		return err
 	}
 	if _, err := post(ctx, tx, c.event("settle", k.Revision), charge(price, c.charged)...); err != nil {
 		return err
 	}
-	if err := c.move(ctx, tx, keep-held, c.charged-c.row.Charged); err != nil {
+	w := c.kept("cleanup_settled")
+	w.price, w.estimated, w.usage = price, estimated, encodeUsage(segments)
+	keep := int64(0)
+	if r.State == "estimated" {
+		w.state, keep = "estimated", max(r.Amount-c.charged, 0)
+	}
+	if err := c.move(ctx, tx, keep-hold, c.charged-r.Charged); err != nil {
 		return err
 	}
-	return c.write(ctx, tx, state, nil, price, 0)
+	return c.write(ctx, tx, w)
 }

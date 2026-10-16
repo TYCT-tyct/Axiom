@@ -23,10 +23,14 @@ type supplies struct {
 	attempts map[uuid.UUID][]AttemptRecord
 	journal  map[uuid.UUID]JournalAttempt
 	lost     map[uuid.UUID]bool // true while lost, false once resolved
+	ended    map[uuid.UUID]int  // how many times each request was told to have ended
 }
 
 func newSupplies() *supplies {
-	return &supplies{attempts: map[uuid.UUID][]AttemptRecord{}, journal: map[uuid.UUID]JournalAttempt{}, lost: map[uuid.UUID]bool{}}
+	return &supplies{
+		attempts: map[uuid.UUID][]AttemptRecord{}, journal: map[uuid.UUID]JournalAttempt{}, lost: map[uuid.UUID]bool{},
+		ended: map[uuid.UUID]int{},
+	}
 }
 
 func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, id uuid.UUID, attempts []AttemptRecord) error {
@@ -47,6 +51,16 @@ func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lost[id] = true
+	return nil
+}
+
+func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at time.Time) error {
+	if at.IsZero() {
+		return errors.New("no time")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended[id]++
 	return nil
 }
 
@@ -77,9 +91,20 @@ func (b *bank) hold(text int64) *Hold {
 	return h
 }
 
-func (b *bank) tryHold(text int64) (h *Hold, err error) {
+func (b *bank) tryHold(text int64) (*Hold, error) { return b.tryHoldOn(metered(b.t), text) }
+
+func (b *bank) holdOn(q Quotable, text int64) *Hold {
+	b.t.Helper()
+	h, err := b.tryHoldOn(q, text)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return h
+}
+
+func (b *bank) tryHoldOn(q Quotable, text int64) (h *Hold, err error) {
 	err = b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{metered(b.t)})
+		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
 		return err
 	})
 	return h, err
@@ -125,6 +150,7 @@ func TestSettleWaivers(t *testing.T) {
 		{"not executed", outcome(NotExecuted, FinishNone, false), 1000, 0},
 		{"unknown past the daily cap", outcome(Unknown, FinishNone, false, full), 6, 80},
 		{"no reported usage past the cap is not a zero output", outcome(Unknown, FinishNone, false, used(t, 50, 0, 1, in, catalog.ItemOutput, webSearch)), 6, 60},
+		{"input reported, output not: not a zero output", outcome(Unknown, FinishNone, false, used(t, 50, 0, 1, catalog.ItemOutput)), 6, 60},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, WaiverCap: tc.cap})
@@ -238,7 +264,7 @@ func TestCleanup(t *testing.T) {
 		{"journal, never corrected", true, false, 0, "cleanup_released", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 50 * time.Millisecond})
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 500 * time.Millisecond})
 			h := b.hold(1000)
 			b.takenOver(h, tc.journal, tc.correct)
 			if tc.late > 0 {
@@ -275,7 +301,7 @@ func (b *bank) takenOver(h *Hold, journal, correct bool) {
 			b.t.Fatalf("the supplier record charged %d, want 400", n)
 		}
 	case journal:
-		time.Sleep(60 * time.Millisecond) // past the correction window
+		time.Sleep(600 * time.Millisecond) // past the correction window
 		b.cleanup()
 	}
 }
@@ -305,8 +331,8 @@ func (b *bank) state() string {
 func TestCreditOnce(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	c := Credit{
-		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500, PaidPrice: "0.98",
-		PaidCurrency: "USD", Actor: audit.System("billing.test"), Reason: "offline payment",
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500,
+		Actor: audit.System("billing.test"), Reason: "a gift",
 	}
 	for range 2 {
 		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error { return AddCredit(t.Context(), tx, c) }); err != nil {

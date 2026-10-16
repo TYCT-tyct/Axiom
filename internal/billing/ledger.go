@@ -19,7 +19,6 @@ const (
 	bookSupplierCost    = "supplier_cost"
 	bookSupplierPrepaid = "supplier_prepaid"
 	bookGiftExpense     = "gift_expense"
-	bookCash            = "cash"
 )
 
 // event names one ledger transaction: its tenant and its idempotency key.
@@ -88,17 +87,16 @@ func reversal(price, charged int64) []line {
 	return []line{{bookUserBalance, -charged}, {bookPlatformBorne, charged - price}, {bookRevenue, price}}
 }
 
-// Credit is a manual credit an administrator adds (docs/domains/billing.md「额度批次」): a gift, or an offline payment
-// recorded at what one credit cost. ID makes it idempotent.
+// Credit is a gift an administrator adds (docs/domains/billing.md「额度批次」). ID makes it idempotent. An offline
+// payment is not taken yet: its cash must be booked at what was paid, in its currency at a locked rate, which comes
+// with payments.
 type Credit struct {
-	ID                      uuid.UUID
-	Site, Account           uuid.UUID
-	Amount                  int64 // billionths of a credit, positive
-	Gift                    bool
-	PaidPrice, PaidCurrency string // per credit, for an offline payment
-	ExpiresAt               *time.Time
-	Actor                   audit.Actor
-	Reason                  string
+	ID            uuid.UUID
+	Site, Account uuid.UUID
+	Amount        int64 // billionths of a credit, positive
+	ExpiresAt     *time.Time
+	Actor         audit.Actor
+	Reason        string
 }
 
 // AddCredit records c in tx, which must be in the platform scope, as the audit log requires: the batch, the ledger
@@ -110,24 +108,19 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 	if _, err := lockAccount(ctx, tx, c.Account); err != nil {
 		return err
 	}
-	source, debit := "offline", bookCash
-	if c.Gift {
-		source, debit, c.PaidPrice, c.PaidCurrency = "gift", bookGiftExpense, "", ""
-	}
 	posted, err := post(ctx, tx, event{site: c.Site, account: c.Account, kind: "credit", request: c.ID},
-		line{debit, c.Amount}, line{bookUserBalance, -c.Amount})
+		line{bookGiftExpense, c.Amount}, line{bookUserBalance, -c.Amount})
 	if err != nil || !posted {
 		return err
 	}
 	if err := queries.InsertCreditBatch(ctx, tx, InsertCreditBatchParams{
-		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Source: source, Amount: c.Amount,
-		PaidPrice: c.PaidPrice, PaidCurrency: c.PaidCurrency, ExpiresAt: c.ExpiresAt,
+		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount, ExpiresAt: c.ExpiresAt,
 	}); err != nil {
 		return fmt.Errorf("billing: write the credit batch: %w", err)
 	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: c.Actor, Action: "credit.add", Target: audit.Target{Module: "billing", Kind: "account", ID: c.Account.String()},
-		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": source},
+		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"},
 	})
 }
 

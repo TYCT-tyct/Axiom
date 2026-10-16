@@ -181,12 +181,26 @@ func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) er
 			if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
 				err = h.addReserved(ctx, tx, -row.Amount)
 			}
+		case err == nil: // ended already, and told suppliers so
+			return nil
+		}
+		if err == nil {
+			err = b.ended(ctx, tx, id, a.Site, a.Account)
 		}
 		if err != nil {
 			return fmt.Errorf("billing: settle the orphan %s: %w", id, err)
 		}
 		return nil
 	})
+}
+
+// ended tells suppliers the request ended, at the database's time.
+func (b *Billing) ended(ctx context.Context, tx pg.Tx, id, site, account uuid.UUID) error {
+	at, err := queries.Now(ctx, tx)
+	if err == nil {
+		err = b.suppliers.EndRequest(ctx, tx, id, site, account, at)
+	}
+	return err
 }
 
 func (h *Hold) addReserved(ctx context.Context, tx pg.Tx, delta int64) error {

@@ -36,9 +36,9 @@ func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error //
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 已实现；前提：无追加在途
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者、校正窗口到期
 func (b *Billing) Correct(ctx context.Context, c Correction) error       // 已实现：ChargeSettled 的处理，按版本号只生效一次
-func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：tx 须是平台范围（审计日志要求）
+func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：只有赠送；tx 须是平台范围（审计日志要求）
 func (b *Billing) Reconcile(ctx context.Context) ([]string, error)    // 已实现：每日对账，列出不平的交易和与账本不符的余额
-type Suppliers interface{ RecordAttempts; CommittedAttempt; RecordLostRequest; ResolveLostRequest } // 已实现的最窄接口，见「结算与账本」
+type Suppliers interface{ RecordAttempts; CommittedAttempt; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
 func (b *Billing) Run(ctx context.Context) error // 心跳、回收、截止时间清理、按 ChargeSettled 校正、到期释放保留
 type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported catalog.Usage; Final catalog.ItemSet } // 已实现；gateway 从 protocol.Progress 复制；Final：已是最终值的已报告项
@@ -113,26 +113,27 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 
 | 表 / 列 | 内容 | 谁能读写 |
 |---|---|---|
-| `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`entry`（收费所按的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`correct_by`、`applied_revision` | 已释放、已结算的行不能再改 |
+| `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`charged_seq` 与 `entry`（收费的那次尝试和它的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`waived`（是否只收了按次项目）、`estimated`（收费是否基于上游没报告的用量）、`final_usage`（收费所用的用量，`Final` 从它读出）、`correct_by` | 已释放、已结算的行不能再改 |
 | `transactions` | 一个事件一笔：租户、`kind`（credit、settle、reverse、attempt_cost、cost_adjust）、`(request_id, attempt_seq, kind, revision)` 唯一 | 账户范围；只插入 |
-| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense、cash）、`amount`（借正贷负，不为 0） | 账户范围；只插入 |
-| `credit_batches` | 每次加额度一个批次：来源（赠送、线下付款）、金额、线下付款的单价与币种、过期时间 | 账户范围；只插入 |
+| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense）、`amount`（借正贷负，不为 0）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
+| `credit_batches` | 每次加额度一个批次：来源（目前只有赠送）、金额、过期时间 | 账户范围；只插入 |
+| `corrections` | 每次尝试已用到的供应商记录版本 `(request_id, attempt_seq) → revision` | 账户范围；可改 `revision` |
 | `waivers` | 账户每个 UTC 日免单的成本 | 账户范围；可改 `cost` |
 
 - **账本**：一笔交易的分录合计为 0（写入时断言），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
-- **`Settle`**：一个事务、账户范围。先写不需要锁的：每次尝试的成本交易和 `Suppliers.RecordAttempts`；再锁余额行、读预留行，按状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，超出部分记 `platform_borne`；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。语句依次发出，没有批量（同「准入里的预留」）。各段先按精确值求和再向上取整一次。
-- **免单**：最后一次尝试 `NotExecuted` 不收；客户端取消照收；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但上游报告的输出为 0 且结束原因为空或出错的，可以免单：账户当天免单成本（这个请求全部尝试的成本之和）不超过 `WaiverCap` 时只收按次项目，超过后只有零输出的条件还能免。站点级的每日上限还没有：它要一个所有账户范围都能写的计数，行级安全的口径待定。
-- **暂估**：用量里有上游没报告的项，或价目表缺价的项，收费标暂估、留住预留里没用掉的部分到 `correct_by`；缺价的项暂按 0 计，兜底价（「价目表缺项」）还没有，由校正补正。
-- **`Correct`**：`applied_revision` 只增，旧的或重复的版本直接成功。尝试成本总是跟着记录走（`cost_adjust`）；窗口内，暂估的冲正原结算再按记录记新的一笔（`reverse` 与 `settle` 用同一个版本号），补扣以保留的部分为限、超出部分平台承担，并继续保留到窗口结束，以便更新的版本；清理待定的按记录用量和锁定价格收费，转清理结算，释放其余。
+- **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本（已有供应商记录的尝试不再记估算的成本）和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，按精确值算，超出部分记 `platform_borne`；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。语句依次发出、没有批量：一次尝试约 13 次往返（开始、设范围、锁余额行、读预留行、每次尝试 3 条、写尝试、记免单、记收费 2 条、移动计数、写预留行、`EndRequest`、提交），持锁约 11 次；各段先按精确值求和再向上取整一次。纯成本的分录不动余额行。
+- **免单**：最后一次尝试 `NotExecuted` 不收；客户端取消照收；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、输出与推理合计为 0、结束原因为空或出错的，可以免单：账户当天免单成本（这个请求全部尝试的成本之和）不超过 `WaiverCap` 时只收按次项目（仍按整次采样所在的档位计价），超过后只有零输出的条件还能免。站点级的每日上限还没有：它要一个所有账户范围都能写的计数，行级安全的口径待定。
+- **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估、留住预留里没用掉的部分到 `correct_by`；缺价和映射不了的暂按 0 计，兜底价（「价目表缺项」）还没有，由校正补正。
+- **`Correct`**：版本号按尝试记在 `corrections`，只增，旧的或重复的版本直接成功，数据库错误照常返回让调用方重试。任何状态下，尝试成本都调到这条记录的数（`cost_adjust`）。只有收费的那次尝试、且在窗口内，才动用户的收费：暂估的冲正原结算再按记录记新的一笔（`reverse` 与 `settle` 用同一个版本号），沿用原来是否免单，补扣以保留的部分为限、超出部分平台承担，并继续保留到窗口结束，以便更新的版本；清理待定的按记录用量和锁定价格收费，转清理结算，释放其余。
 - **`Cleanup`**：平台范围，逐笔一个事务。挂起且过了截止时间或持有者已回收的：对账日志有已提交、带对账键的尝试就转清理待定（写尝试行、保留预留），否则清理释放并记丢失的请求；暂估到期释放保留、落已结算；清理待定到期仍无记录转清理释放。
 - **迟到的 `Settle`**：清理待定按正常结算；清理结算、清理释放冲正清理已收的，再按完整的 `Outcome` 收（版本号 −1），补扣最多到底线、其余平台承担；清理释放的还 `ResolveLostRequest`。找不到预留行时（主备切换丢了提交）现在返回错误，按清理释放补扣还没有：要先补一行预留。
-- **`AddCredit`**：锁余额行，记 credit 交易（赠送：借赠送支出；线下付款：借现金）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。
-- **`Suppliers`**：suppliers 的调用面和对账日志还没有，billing 按 [suppliers 的「接口」](../suppliers/README.md#接口草图)定义最窄的接口（写尝试、读已提交的尝试、记与解决丢失的请求），测试用替身；suppliers 实现后由 `cmd` 注入。
+- **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。线下付款还不收：现金要按实付金额和锁定汇率记，随支付一起做。
+- **`Suppliers`**：billing 在自己的事务里写尝试、丢失的请求与解决、请求的终结（`EndRequest`），读对账日志里已提交的尝试；接口在 billing，`cmd` 把 suppliers 的函数接上（suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`、`JournalOf`），测试用替身。
+- **`EndRequest`**：预留进入终态（已结算、已释放、清理结算、清理释放）的那个事务里调用，时间取写预留行时的数据库时钟，suppliers 据此在 2 天后清掉对账日志；暂估和清理待定还要等校正，不算终态。`SettleOrphan` 释放或写墓碑时同样调用。
 
 ## 追加与结算
 
 - **`Extend`**：一个事务，锁余额行并核对持有者，让预留覆盖计量器算好的**累计目标**（`ExtendRequest.Target`）：已覆盖即成功、什么也不写（确认丢失后的重发、前一次尝试已追加够的都在内），否则写入差额，以锁内读到的段号比较后再写，金额只增不减；已终结或持有者被回收返回 `ErrTerminated`。细节见本节末条。
-- **`Settle`**（设计，尚未实现）：以 `Admission.Scope()` 开事务，同批先写不需要账户锁的行（每次尝试的成本分录、`suppliers.RecordAttempts` 的对账键，都是 `ON CONFLICT DO NOTHING`），再锁余额行、读预留；按[免单规则](../../docs/domains/billing.md#免单规则)收费、记账本和花费计数；预留从挂起比较后再写到终态（暂估的转"已暂估"并保留余额）；COMMIT。估算 5 次往返（BEGIN、设范围、批 1、批 2、COMMIT），持锁约 2 次往返加提交，实现时按实际更新。各段先按精确值求和再取整一次。
 - `Final` 是补估后的最终用量（响应和账本用同一份）、账上**实收**金额（被底线截断时为实收）、是否暂估。比较后再写失败时按预留的持久化终态分支（下文「预留的状态」）；同一请求重试返回已存的 `Final`。
 - **`SettleOrphan`**：准入的 COMMIT 确认丢失时由 gateway 交来。一个事务，先锁该账户余额行（准入事务持有它直到结束，所以拿到锁时准入已提交或已回滚），有挂起预留就以"没有尝试"释放，没有就插入一行"已释放"墓碑，已终结的不动；重复执行无害。它是同步的一个事务，数据库错误由调用方退避重试到成功（进程内队列随 `Run` 加入），进程死了由清理接管。
 - **`Extend`** 在锁内先读预留行：已终结返回 `ErrTerminated`；已预留的不低于累计目标就成功、什么也不写（确认丢失后的重试，或前一次尝试的追加已经覆盖）；否则把差额与各来源的余量比较，以锁内读到的段号比较后再写，并在同一事务里移动三层占用。成功当且仅当提交后的已预留不低于目标。每次尝试的计量器各自从第 1 段编号，段号只是计量器自己的账，不用来判断重试。
@@ -158,7 +159,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 | 清理结算 | 清理待定的尝试对上中转站记录：按记录用量 × 锁定价格收费，释放其余 | 按完整的 `Outcome` 和正常规则算出应收，与清理已收的多退少补 |
 | 清理释放 | 清理：日志里没有已提交的尝试，或已提交的没有对账键，或清理待定到 `correct_by` 仍无记录。只靠日志时，只有标了已提交的尝试会向用户收费，日志里其余的尝试只记成本：看不到的后续尝试可能才是最后一次 | 迟到的 `Settle` 带着完整的 `Outcome`，按正常规则收费（客户端取消、非流式聚合成功、免单规则都照常），补扣最多到底线、其余平台承担，并 `ResolveLostRequest` |
 
-- **校正**：`ChargeSettled{charge_record_id, revision}` 的处理在事务里 `UPDATE … SET applied_revision=$rev WHERE applied_revision < $rev`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放；对账记录先到就先释放。
+- **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放；对账记录先到就先释放。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
 
 ## 写入的数据
@@ -170,7 +171,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 | 对账日志 | 每节点每秒一个 | suppliers | 见 [suppliers 的「对账日志」](../suppliers/README.md#对账日志) |
 | 每次尝试的成本分录、对账键 | 结算 | billing、suppliers | `(request_id, attempt_seq, attempt_cost)`；主键 `(request_id, attempt_seq)` |
 | 请求结算、余额、花费计数、预留终态；或只释放 | 结算 | billing | `(request_id, 0, settle, 0)`；锁内按预留状态分支 |
-| 暂估校正 | `ChargeSettled` 任务 | billing | `(request_id, 0, reverse / settle, revision)`、`(request_id, attempt_seq, cost_adjust, revision)` 加 `applied_revision` 守卫 |
+| 暂估校正 | `ChargeSettled` 任务 | billing | `(request_id, 0, reverse / settle, revision)`、`(request_id, attempt_seq, cost_adjust, revision)` 加 `corrections` 的版本守卫 |
 | 加额度 | 后台（平台范围） | billing | `(credit_id, 0, credit, 0)`；批次主键；审计日志同事务 |
 | 清理待定 / 清理结算 / 清理释放、丢失的请求 | 清理任务（后台角色） | billing + suppliers | 预留比较后再写；`lost_requests` 主键 `request_id` |
 | 迟到补扣 / 补差 | 迟到结算 | billing + suppliers | `(request_id, 0, reverse / settle, -1)`；只对清理释放、清理结算发生 |

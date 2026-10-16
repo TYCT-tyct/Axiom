@@ -86,3 +86,6 @@ INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id,
 VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
     date_trunc('day', clock_timestamp(), 'UTC'), date_trunc('day', clock_timestamp(), 'UTC'), 0, 0, 'released',
     clock_timestamp());
+
+-- name: Now :one
+SELECT clock_timestamp()::timestamptz;

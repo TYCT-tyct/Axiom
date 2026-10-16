@@ -69,7 +69,7 @@ func (b *bank) credit(amount int64) {
 	a := b.admitted
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		return AddCredit(b.t.Context(), tx, Credit{
-			ID: uuid.NewV7(), Site: a.Site, Account: a.Account, Amount: amount, Gift: true,
+			ID: uuid.NewV7(), Site: a.Site, Account: a.Account, Amount: amount,
 			Actor: audit.System("billing.test"), Reason: "test credit",
 		})
 	}); err != nil {
