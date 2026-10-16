@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -19,6 +20,7 @@ type grammar struct {
 	servers         []serverTool                      // tool types billed per call; other tools are Tools
 	tiers           map[string]catalog.ServiceTierSet // service_tier values; 0 is the vendor's default
 	input           catalog.ItemSet                   // what input is billed as before any cache marker
+	compaction      string                            // the type, or prefix of the type, of a context_management entry that compacts
 }
 
 type serverTool struct {
@@ -28,29 +30,33 @@ type serverTool struct {
 
 var grammars = [...]grammar{
 	Messages: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
-		},
+			"context_management": func(s *scanner) error { return s.object(editsHolder) },
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
-			"source": func(s *scanner) error { return s.object(sourceFields) },
+			"source": (*scanner).source,
 		},
 		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
 		parts:   map[string]Capabilities{"image": Images, "document": Documents},
 		servers: []serverTool{{"web_search_", WebSearch}, {"code_execution_", CodeExecution}},
 		tiers:   map[string]catalog.ServiceTierSet{"auto": 0, "standard_only": 1 << catalog.ServiceTierStandard},
 		input:   1 << catalog.ItemInput,
+		// compact_20260112 is the one that compacts; clear_tool_uses and clear_thinking only drop content.
+		compaction: "compact_",
 	},
 	Responses: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_output_tokens": (*scanner).maxOutput,
-			"input": (*scanner).content, "tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
+			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
-			"previous_response_id": (*scanner).previous,
-		},
+			"previous_response_id": (*scanner).previous, "context_management": (*scanner).edits,
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "output": (*scanner).result,
 			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
@@ -59,16 +65,16 @@ var grammars = [...]grammar{
 		parts:   map[string]Capabilities{"input_image": Images, "computer_screenshot": Images, "input_file": Documents},
 		servers: []serverTool{{"web_search", WebSearch}, {"code_interpreter", CodeExecution}},
 		tiers:   openAITiers,
-		input:   openAIInput,
+		input:   openAIInput, compaction: "compaction",
 	},
 	Chat: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
@@ -110,6 +116,14 @@ var (
 		"enabled": func(s *scanner) error { k, err := s.flag(); s.p.off = s.p.off || k == 'f'; return err },
 		"exclude": func(s *scanner) error { k, err := s.flag(); s.p.hidden = s.p.hidden || k == 't'; return err },
 	}
+	editsHolder = fields{"edits": (*scanner).edits}
+	editFields  = fields{"type": func(s *scanner) error {
+		v, err := s.str()
+		if v != nil && hasPrefix(v, s.g.compaction) {
+			s.r.Compacts = true
+		}
+		return err
+	}}
 	chatImageFields = fields{"url": (*scanner).imageURL}
 	chatFileFields  = fields{"file_data": (*scanner).fileData}
 	formatHolder    = fields{"format": (*scanner).format}
@@ -126,6 +140,20 @@ func (s *scanner) model() error {
 	v, err := s.str()
 	s.r.Model = string(v)
 	return err
+}
+
+// maxModels bounds the alternates a request lists, so what Inspect allocates for them does not grow with the body.
+const maxModels = 8
+
+func (s *scanner) models() error {
+	return s.array(func(s *scanner) error {
+		if len(s.r.Models) == maxModels {
+			return fmt.Errorf("models lists more than %d models", maxModels)
+		}
+		v, err := s.str()
+		s.r.Models = append(s.r.Models, string(v))
+		return err
+	})
 }
 
 func (s *scanner) stream() error {
@@ -232,6 +260,20 @@ func (s *scanner) cacheControl() error {
 		s.r.InputItems.Add(catalog.ItemCacheWrite)
 	}
 	return s.object(cacheFields)
+}
+
+// source reads a Messages part's source: an object for images and documents, a string for a search_result, whose
+// source names where the text came from (Anthropic《Search results》). The shape tells which, as in result.
+func (s *scanner) source() error {
+	if s.dec.PeekKind() == '"' {
+		return s.skip()
+	}
+	return s.object(sourceFields)
+}
+
+// edits reads the entries of a context_management list, each of which may compact the context.
+func (s *scanner) edits() error {
+	return s.array(func(s *scanner) error { return s.object(editFields) })
 }
 
 func (s *scanner) tools() error { return s.array((*scanner).tool) }
@@ -345,4 +387,30 @@ func (s *scanner) when(lit string, flag *bool) error {
 
 func hasPrefix(v []byte, prefix string) bool {
 	return len(v) >= len(prefix) && string(v[:len(prefix)]) == prefix
+}
+
+// withProvider adds the provider member, which the three formats share, to the members of a format's top level.
+func withProvider(f fields) fields {
+	f["provider"] = (*scanner).provider
+	return f
+}
+
+// maxProvider bounds the provider object a request carries: the gateway reads it whole, and the parameters it holds
+// are a handful of short names and numbers.
+const maxProvider = 4 << 10
+
+// provider keeps OpenRouter's provider object as written; what it means is for the gateway, which knows the routing.
+func (s *scanner) provider() error {
+	if ok, err := s.present('{', "an object"); !ok {
+		return err
+	}
+	v, err := s.dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	if len(v) > maxProvider {
+		return fmt.Errorf("%s is larger than %d bytes", s.name, maxProvider)
+	}
+	s.r.Provider = bytes.Clone(v)
+	return nil
 }

@@ -83,7 +83,7 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 	if err != nil {
 		return err
 	}
-	return redactConnect("AXIOM_DATABASE_URL", db.Tx(ctx, Scope{}, func(tx Tx) error {
+	return redactConnect(DatabaseURLVar, db.Tx(ctx, Scope{}, func(tx Tx) error {
 		if err := loginAudit.run(ctx, tx); err != nil {
 			return err
 		}
@@ -144,6 +144,9 @@ func redactConnect(variable string, err error) error {
 	}
 	if network, ok := errors.AsType[*net.OpError](err); ok {
 		return fmt.Errorf("%s: cannot reach the server: %w", variable, network.Err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: the server did not finish the connection within its time limit", variable)
 	}
 	return fmt.Errorf("%s: cannot connect to the database", variable)
 }

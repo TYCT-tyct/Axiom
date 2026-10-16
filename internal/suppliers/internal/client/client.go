@@ -35,14 +35,14 @@ var ErrTooLarge = errors.New("client: the response is larger than the limit")
 type Client struct {
 	origin  string
 	http    *egress.Client
-	limiter *Limiter
+	limiter Buckets
 	now     func() time.Time
 }
 
 var _ adapter.Client = (*Client)(nil)
 
 // New makes the client of the supplier at origin, which is scheme://host[:port] and nothing more.
-func New(origin string, exit *egress.Client, limiter *Limiter, now func() time.Time) (*Client, error) {
+func New(origin string, exit *egress.Client, limiter Buckets, now func() time.Time) (*Client, error) {
 	u, err := url.Parse(origin)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Path != "" || u.RawQuery != "" ||
 		u.Fragment != "" || u.User != nil {
@@ -58,7 +58,7 @@ func (c *Client) Do(ctx context.Context, r adapter.Request) (adapter.Response, e
 	if !strings.HasPrefix(r.Path, "/") || strings.HasPrefix(r.Path, "//") {
 		return adapter.Response{}, fmt.Errorf("client: path %q must start with a single slash", r.Path)
 	}
-	if err := c.limiter.Take(r.Buckets); err != nil {
+	if err := c.limiter.Take(ctx, r.Buckets); err != nil {
 		return adapter.Response{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -75,8 +75,8 @@ func (c *Client) Do(ctx context.Context, r adapter.Request) (adapter.Response, e
 	defer resp.Body.Close()                            //nolint:errcheck // the body was read or abandoned; nothing more to learn from closing it
 	if resp.StatusCode == http.StatusTooManyRequests { // before the body: what it says is not needed, and it may not come
 		until := c.now().Add(retryAfter(resp.Header.Get("Retry-After")))
-		c.limiter.Block(r.Buckets, until)
-		return adapter.Response{}, adapter.Blocked{Until: until}
+		// If the buckets cannot be closed the caller still waits, but the other nodes will not.
+		return adapter.Response{}, errors.Join(adapter.Blocked{Until: until}, c.limiter.Block(ctx, r.Buckets, until))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {

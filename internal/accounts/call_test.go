@@ -336,7 +336,7 @@ func awaitLookup(t *testing.T, admin *pg.DB) {
 func lookupsWaiting(t *testing.T, admin *pg.DB) string {
 	t.Helper()
 	return texts(t, admin, pg.Scope{}, `SELECT count(*)::text FROM pg_stat_activity
-		WHERE wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
 }
 
 // TestReloadGivesUpAndRecovers: a reload the database does not answer gives up within its limit instead of holding
@@ -437,6 +437,9 @@ func TestAdmissionStaysInTheKeysAccount(t *testing.T) {
 		t.Errorf("Admission.Scope sees %v, want a1", got)
 	}
 	checkAdmission(t, admitted, c)
+	if c.AccountID() != accounts.AccountID(a1) || c.WorkspaceID() != accounts.WorkspaceID(w1) {
+		t.Errorf("the key's account %v and workspace %v, want a1 and w1", c.AccountID(), c.WorkspaceID())
+	}
 }
 
 var errUndo = errors.New("undo")

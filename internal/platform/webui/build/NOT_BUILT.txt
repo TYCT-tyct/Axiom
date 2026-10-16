@@ -1,0 +1,2 @@
+The frontend is not built into this tree. `just web-embed` builds site, console and admin and copies them here
+(web/scripts/embed.ts); everything else in this directory is ignored by git.

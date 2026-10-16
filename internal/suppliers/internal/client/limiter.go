@@ -3,6 +3,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -10,9 +11,18 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// Limiter counts requests against a supplier's rate limits, in this process. The count of a node is part of what the
-// supplier sees from the address, so when several nodes share an address the allowance is divided among them or the
-// state moves to the database; the interface is the same.
+// Buckets is the supplier's rate limits as the client asks of them. Limiter counts in one process; SharedLimiter, in the
+// database, for nodes that reach the supplier from one address.
+type Buckets interface {
+	// Take takes one request from each bucket in names, or from none. It returns Blocked, with the time the last of the
+	// refusing buckets reopens, when it takes nothing.
+	Take(ctx context.Context, names []string) error
+	// Block closes the buckets in names until then, as the supplier's own refusal says to.
+	Block(ctx context.Context, names []string, until time.Time) error
+}
+
+// Limiter counts requests against a supplier's rate limits, in this process: for the tests of the adapters, and for a
+// node that is alone at its address.
 type Limiter struct {
 	mu      sync.Mutex
 	now     func() time.Time
@@ -37,7 +47,7 @@ func NewLimiter(specs []adapter.BucketSpec, now func() time.Time) *Limiter {
 
 // Take takes one request from each bucket in names, or from none: a request that one bucket refuses leaves the others
 // as they were. It returns Blocked, with the time the last of the refusing buckets reopens, when it takes nothing.
-func (l *Limiter) Take(names []string) error {
+func (l *Limiter) Take(_ context.Context, names []string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -55,13 +65,17 @@ func (l *Limiter) Take(names []string) error {
 		return adapter.Blocked{Until: until}
 	}
 	for _, name := range names {
-		b := l.buckets[name]
-		if b.windowStart.IsZero() || !now.Before(b.windowStart.Add(b.spec.Window)) {
-			b.windowStart, b.used = now, 0
-		}
-		b.used++
+		l.buckets[name].take(now)
 	}
 	return nil
+}
+
+// take counts a request at now, in a new window if the last has ended.
+func (b *bucket) take(now time.Time) {
+	if b.windowStart.IsZero() || !now.Before(b.windowStart.Add(b.spec.Window)) {
+		b.windowStart, b.used = now, 0
+	}
+	b.used++
 }
 
 // reopens is when the bucket next admits a request, or the zero time if it admits one now.
@@ -78,7 +92,7 @@ func (b *bucket) reopens(now time.Time) time.Time {
 
 // Block closes the buckets in names until then, as the supplier's own refusal says to. A refusal that does not say
 // which of the buckets a request counted in is applied to all of them.
-func (l *Limiter) Block(names []string, until time.Time) {
+func (l *Limiter) Block(_ context.Context, names []string, until time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, name := range names {
@@ -86,4 +100,5 @@ func (l *Limiter) Block(names []string, until time.Time) {
 			b.blockedUntil = until
 		}
 	}
+	return nil
 }

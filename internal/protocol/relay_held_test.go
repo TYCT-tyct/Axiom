@@ -157,12 +157,12 @@ func heldStreams(many int) map[string]heldStream {
 	}
 }
 
-// TestRelayMemoryHeld: at every step, what the relay keeps reachable is no more than it has charged, and after a
+// TestRelayMemoryHeld: at the steps readHeld checks, what the relay keeps reachable is no more than it has charged, and after a
 // failure what stays is the opening the failure ending writes and the meter, and, for a reply that is aggregated, what
 // the aggregator holds; the meter at its bounds fits meterMemory.
 func TestRelayMemoryHeld(t *testing.T) {
-	// The aggregated replies run on a tenth of the choices, items and calls: what they hold is checked after every
-	// step, which costs the square of that number.
+	// The aggregated replies run on a tenth of the choices, items and calls: what they hold is walked at each check,
+	// which costs more than a relay's own.
 	for _, aggregate := range []bool{false, true} {
 		for name, tc := range heldStreams(map[bool]int{false: 5000, true: 500}[aggregate]) {
 			for _, broken := range []bool{false, true} {
@@ -198,19 +198,24 @@ func checkHeld(t *testing.T, name string, tc heldStream, broken, aggregate bool)
 	}
 }
 
-// readHeld reads r to its end, checking after every step that it keeps no more than it charged, and returns the most
-// it kept and the error it ended with.
+// readHeld reads r to its end, checking that it keeps no more than it charged after the steps numbered by a power of two (walking all of what it keeps
+// after each of thousands of steps costs a quadratic
+// time, and growth that is not charged shows at the next check), and after the last, and returns the most it kept and
+// the error it ended with.
 func readHeld(t *testing.T, r *Relay) (int, error) {
 	t.Helper()
 	peak := 0
-	for {
+	for i := 1; ; i++ {
 		step, err := r.Next()
-		n := held(r)
-		if n > int(r.held) {
-			t.Fatalf("after step %d the relay keeps %d bytes, charged %d", step.Kind, n, r.held)
+		last := err != nil || step.Kind == StepUpstreamDone
+		if last || i&(i-1) == 0 {
+			n := held(r)
+			if n > int(r.held) {
+				t.Fatalf("after step %d (%d) the relay keeps %d bytes, charged %d", i, step.Kind, n, r.held)
+			}
+			peak = max(peak, n)
 		}
-		peak = max(peak, n)
-		if err != nil || step.Kind == StepUpstreamDone {
+		if last {
 			return peak, err
 		}
 	}
