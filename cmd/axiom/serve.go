@@ -130,7 +130,7 @@ func node(publicAddr string, routes http.Handler, probesAddr string, health *htt
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
+	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)

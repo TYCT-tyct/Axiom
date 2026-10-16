@@ -53,7 +53,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
 	// or reads them as "never" or "at every check".
 	if config.HealthCheckPeriod <= 0 {
-		return nil, errors.New("AXIOM_DATABASE_URL: pool_health_check_period must be positive")
+		return nil, errors.New(DatabaseURLVar + ": pool_health_check_period must be positive")
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
