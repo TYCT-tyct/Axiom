@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"io"
@@ -76,6 +77,7 @@ type rigOptions struct {
 	routing   routing.Config
 	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
 	memory    int64
+	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -130,7 +132,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), time.Minute))
+	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), cmp.Or(o.body, time.Minute)))
 	t.Cleanup(r.server.Close)
 	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
 	return r

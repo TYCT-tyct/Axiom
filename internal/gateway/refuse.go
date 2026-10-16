@@ -58,7 +58,7 @@ const maxRetryAfter = 60
 
 // writeRefusal is the one error exit before a stream starts. Messages has its own shell; Chat's serves Responses too,
 // as docs/domains/gateway.md「错误」 says. A 401 closes the connection, so a client that keeps sending a body to an
-// address it may not use is not read.
+// address it may not use is not read; so does a 408, whose body stopped coming and is not worth waiting for again.
 func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	message := r.Message
 	if message == "" {
@@ -80,7 +80,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	if r.RetryAfter > 0 {
 		h.Set("Retry-After", strconv.Itoa(min(r.RetryAfter, maxRetryAfter)))
 	}
-	if r.Status == http.StatusUnauthorized {
+	if r.Status == http.StatusUnauthorized || r.Status == http.StatusRequestTimeout {
 		h.Set("Connection", "close")
 	}
 	w.WriteHeader(r.Status)

@@ -68,8 +68,13 @@ func NewHandler(d Deps) (*Handler, error) {
 	return h, nil
 }
 
-// ServeHTTP routes the request. It expects httpserver.Public around it, which gives every request its ID.
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
+// ServeHTTP routes the request. It expects httpserver.Public around it, which gives every request its ID; the call
+// number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
+// routes that are not calls included.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
+	h.mux.ServeHTTP(w, r)
+}
 
 // Call is a request that has been admitted: its reservation is committed and its route is cut to the entries that
 // reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
@@ -119,7 +124,6 @@ func (c *Call) Done() {
 // call serves one of the three call paths.
 func (h *Handler) call(format protocol.Format) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
 		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
 		if err != nil {
 			h.fail(w, r, format, err)
@@ -282,9 +286,11 @@ func resolve(snap *catalog.Snapshot, req *protocol.Request) ([]catalog.ModelID, 
 	return models, nil
 }
 
-// fail answers a request that did not get through, unless its client has gone.
+// fail answers a request that did not get through, unless its client has gone. A body that was too slow is answered
+// though the context has ended: net/http cancels it when the read deadline passes, and the connection can still be
+// written to.
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.Format, err error) {
-	if r.Context().Err() != nil {
+	if r.Context().Err() != nil && !errors.Is(err, errBodyTimeout) {
 		return
 	}
 	ref, expected := refusal(err)

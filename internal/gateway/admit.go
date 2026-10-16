@@ -28,6 +28,7 @@ var errCommitUnknown = errors.New("gateway: the admission's commit was not ackno
 // reservation inside it. When every endpoint is full it waits in the queue, holding no gate and no connection, and
 // redoes only this step: the body was read once and the rate counted once.
 func (h *Handler) admit(ctx context.Context, c *Call) error {
+	var deadline time.Time // fixed when the call first queues: the limit is on all its waits together
 	for {
 		epoch := h.Limits.Queue.Epoch() // before the load is looked at, so a slot freed meanwhile is not missed
 		err := h.admitOnce(ctx, c)
@@ -35,7 +36,10 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 		if !ok {
 			return err
 		}
-		if err := h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch); err != nil {
+		if deadline.IsZero() {
+			deadline = time.Now().Add(h.Limits.cfg.QueueWait)
+		}
+		if err := h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch, deadline); err != nil {
 			if errors.Is(err, ErrRateLimited) {
 				return &Refusal{Status: ErrRateLimited.Status, Code: ErrRateLimited.Code, RetryAfter: seconds(wait.after)}
 			}

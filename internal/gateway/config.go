@@ -121,7 +121,7 @@ func New(cfg Config) (*Backpressure, error) {
 		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(ErrRateLimited), nodeMax: cfg.NodeInFlight},
 		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool},
 		Pool:     pool,
-		Queue:    newQueue(cfg.QueueWait, cfg.QueueMax, cfg.QueuePerKey),
+		Queue:    newQueue(cfg.QueueMax, cfg.QueuePerKey),
 		Rate:     NewRateCounter(cfg.RateWindow),
 		IPConns:  NewLimiter(ErrRateLimited),
 		IPCalls:  NewLimiter(ErrRateLimited),
