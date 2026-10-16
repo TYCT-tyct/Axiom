@@ -346,3 +346,99 @@ func messagesText(t *testing.T, stream []byte) string {
 	}
 	return text.String()
 }
+
+// TestConvertToolCallFields: a tool call the upstream starts without its id or name, or with either null or empty, is
+// the upstream's failure, before any of it reaches the client: written as it is, the call would be invalid JSON.
+func TestConvertToolCallFields(t *testing.T) {
+	for _, format := range []struct {
+		name, id string // the format's name and its id member
+		stream   func(members string) string
+		from     protocol.Format
+	}{
+		{"Messages", "id", func(members string) string {
+			return messageStart(`{}`) + startBlock(0, `{"type":"tool_use","input":{}`+members+`}`) + stopBlock(0) + stopWith("tool_use")
+		}, protocol.Messages},
+		{"Responses", "call_id", func(members string) string {
+			return rev("response.created", responseObject) + rev("response.output_item.added",
+				`,"output_index":0,"item":{"type":"function_call","arguments":""`+members+`}`) + ended("response.completed", "")
+		}, protocol.Responses},
+	} {
+		for _, spelling := range []struct{ name, value string }{{"missing", ""}, {"null", "null"}, {"empty", `""`}} {
+			for _, key := range []string{format.id, "name"} {
+				members := map[string]string{format.id: `,"` + format.id + `":"t1"`, "name": `,"name":"f"`}
+				members[key] = ""
+				if spelling.value != "" {
+					members[key] = `,"` + key + `":` + spelling.value
+				}
+				t.Run(format.name+" "+key+" "+spelling.name, func(t *testing.T) {
+					got := relayTo(t, protocol.Chat, format.from, strings.NewReader(format.stream(members[format.id]+members["name"])),
+						protocol.UsageContext{}, protocol.NewMemory(0), settled)
+					checkConverted(t, got, nil)
+				})
+			}
+		}
+	}
+}
+
+// TestConvertProgress: the meter has counted what the client was given by the time the event is written, whether the
+// upstream gave it as deltas or only in a snapshot; a snapshot that repeats the deltas adds nothing, and an item that
+// is done adds only what its pieces did not cover, so the stream counts as much as the same stream relayed to a
+// Responses client. Each case ends right after the event, as a stream that breaks does.
+func TestConvertProgress(t *testing.T) {
+	functionAdded := func(args string) string {
+		return rev("response.output_item.added", `,"output_index":0,"item":{"id":"fc_1","type":"function_call",`+
+			`"call_id":"c1","name":"f","arguments":"`+args+`"}`)
+	}
+	reasoningAdded := rev("response.output_item.added", `,"output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[]}`)
+	for name, c := range map[string]struct {
+		stream string
+		want   int64
+	}{
+		"a text only in its done event": {rev("response.output_item.added", messageAdded) + textDone("hello"), 5},
+		"a text part only in its part": {rev("response.output_item.added", messageAdded) +
+			rev("response.content_part.done", `,"output_index":0,"content_index":0,"part":{"type":"output_text","text":"héy"}`), 4},
+		"a refusal only in its done event": {rev("response.output_item.added", messageAdded) +
+			rev("response.refusal.done", `,"output_index":0,"content_index":0,"refusal":"no"`), 2},
+		"arguments in the added item": {functionAdded(`{\"a\":1}`), 7},
+		"arguments only in their done event": {functionAdded("") +
+			rev("response.function_call_arguments.done", `,"output_index":0,"arguments":"{}"`), 2},
+		"a summary only in its done event": {reasoningAdded +
+			rev("response.reasoning_summary_text.done", `,"output_index":0,"summary_index":0,"text":"why"`), 3},
+		"reasoning text only in its done event": {reasoningAdded +
+			rev("response.reasoning_text.done", `,"output_index":0,"content_index":0,"text":"why"`), 3},
+		"a snapshot past the deltas": {rev("response.output_item.added", messageAdded) + textDelta("ab") + textDone("abc"), 3},
+		"a snapshot that repeats the deltas": {rev("response.output_item.added", messageAdded) + textDelta("ab") + textDelta("c") +
+			textDone("abc") + textDone("abc"), 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stream := rev("response.created", responseObject) + c.stream
+			if got := progressAfter(t, protocol.Chat, protocol.Responses, stream); got != c.want {
+				t.Errorf("content bytes %d, want %d", got, c.want)
+			}
+		})
+	}
+	for name, stream := range map[string]string{
+		"deltas, snapshots and the item": rev("response.output_item.added", messageAdded) + textDelta("ab") + textDone("abc") +
+			messageDone("abc"),
+		"only the item": messageDone("whole"),
+	} {
+		t.Run(name+" count what a Responses client's does", func(t *testing.T) {
+			stream = rev("response.created", responseObject) + stream
+			if conv, native := progressAfter(t, protocol.Chat, protocol.Responses, stream),
+				progressAfter(t, protocol.Responses, protocol.Responses, stream); conv != native || conv == 0 {
+				t.Errorf("content bytes %d converted, %d relayed", conv, native)
+			}
+		})
+	}
+}
+
+// progressAfter relays the events of stream and returns the content bytes counted when the stream ends, or breaks.
+func progressAfter(t *testing.T, client, upstream protocol.Format, stream string) int64 {
+	t.Helper()
+	o := options
+	o.Memory = protocol.NewMemory(0)
+	r := protocol.NewRelay(client, upstream, strings.NewReader(stream), protocol.UsageContext{}, o)
+	for step, err := r.Next(); err == nil && step.Kind != protocol.StepUpstreamDone; step, err = r.Next() {
+	}
+	return r.Progress().ContentBytes
+}

@@ -181,7 +181,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | `tool_use` 块，`function_call` 项 | `tool_calls`，序号从 0 起；`id` 是 `tool_use` 的 ID 或 Responses 的 `call_id`（下一轮交回时就是它）；名字在第一段，`arguments` 随增量 |
 | `tool_use` 的 `input` | 后面有 `input_json_delta` 就丢掉（官方给 `{}`）；没有增量就在块结束时作为整段参数（sub2api 遇到过只给 `input` 的上游） |
 | `ping` | 提交后写 Chat 的保活注释 |
-| 服务端工具的块和项、引用（`citations_delta`、`output_text.annotation.added`）、不认识的块或项、结束原因之后又来的内容 | `ErrUpstream`：转换出来的请求不会要它们，Chat 也没有地方放 |
+| 服务端工具的块和项、引用（`citations_delta`、`output_text.annotation.added`）、不认识的块或项、没有 ID（`tool_use` 的 `id`、`function_call` 的 `call_id`）或名字的工具调用（缺失、`null`、空串）、结束原因之后又来的内容 | `ErrUpstream`：转换出来的请求不会要它们，Chat 也没有地方放 |
 
 | 上游的结束 | `finish_reason` |
 |---|---|
@@ -193,9 +193,9 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 
 - **推理的回放**：一条回复里，排在所有非思考块之前的思考块给出签名和 `redacted_thinking`；排在正文或工具调用之后的只给文本、不给签名，`redacted_thinking` 不给。Chat 的助手消息表达不了「正文之后又思考」，回放时推理只能放在最前，而 Anthropic 的思考块绑定它之前的全部内容（《Preserved thinking》），挪了位置的块会被拒绝。客户端按块收到的条目原样交回或合并后交回，请求一侧都按类型和 `index` 合并（「跨格式转换」）；`TestConvertRoundTrip` 核对流 → 客户端 → 下一轮请求的往返。
 - **快照比对**：Responses 的部件会在 `*.done`、`content_part.done`、`reasoning_summary_part.done`、`output_item.done` 里再给整段。每个部件（项序号、部件序号、种类）记已发出文本解码后的长度和 SHA-256，不留原文：与已发出的相同就忽略；已发出的是它的严格前缀，就发出余下部分（重新编码，解码值不变）；从没发出过就原样整段发出；其他是 `ErrUpstream`。每一层都比也不会重复，只在 `output_item.done` 给全文的上游也完整。
-- **内容字节**：沿用上游格式读取器的计数，与同格式转发相同：同一段推理在 `reasoning` 和 `reasoning_details` 里各出现一次，按转换后的字节计会重复。
+- **内容字节**：Messages 沿用上游格式读取器的计数，与同格式转发相同（同一段推理在 `reasoning` 和 `reasoning_details` 里各出现一次，按转换后的字节计会重复）。Responses 的部件可能只在快照里给出，读取器要到 `output_item.done` 才计入，所以转换器自己计：每一段发给客户端的文本（增量或快照补出的，解码后的字节）在发出的事件里计入并记在项上，重复的快照不计；`output_item.done` 再按项的大小补上没被各段覆盖的部分（如密文），因此客户端读到的内容在写出前就已计入，计到的总数与同一条流转发给 Responses 客户端相同。
 - **内存**：块的缓冲、各成员拼接中的缓冲、`tool_use` 暂存的 `input` 都在增长前记账；Responses 的项和部件存在映射里，每项按 96 字节、每个部件按 320 字节（含 SHA-256 的状态）估，见 `itemSize`、`partSize`。
-- **`RenderError(f, e, fin)`**：流开始之前的错误。状态码和 Messages 的类型按[接入的「错误」](../../docs/domains/gateway.md#错误)的表，一种类型一行（`no_endpoint` 永久的 404、暂时的 503 是名字相同的两个类型）；Chat 和 Responses 用 Chat 的外壳 `{"error":{"code","message","metadata":{"error_type",…}}}`，Messages 用 `{"type":"error","error":{"type","message","error_type",…}}`。`Error.Details` 写在类型旁边（如 402 的 `limit_source`、所需金额）；`fin` 不为空时带 `axiom.usage`：本格式的用量字段加费用，结算写不进时带 `billing_pending`。调用方没给说明时用每种类型自己的说法，不出现上游的原话；流里的出错结尾用同一张表。
+- **`RenderError(f, e, fin)`**：流开始之前的错误。状态码和 Messages 的类型按[接入的「错误」](../../docs/domains/gateway.md#错误)的表，一种类型一行（`no_endpoint` 永久的 404、暂时的 503 是名字相同的两个类型）；Chat 和 Responses 用 Chat 的外壳 `{"error":{"code","message","metadata":{"error_type",…}}}`，Messages 用 `{"type":"error","error":{"type","message","error_type",…}}`。`Error.Details` 写在类型旁边（如 402 的 `limit_source`、所需金额）；`fin` 不为空时带 `axiom.usage`：本格式的用量字段（Messages 的 `input_tokens`、`cache_*`、`output_tokens`；Responses 的 `input_tokens`、`output_tokens` 及其 `*_details`；Chat 的 `prompt_tokens`、`completion_tokens` 及其 `*_details`，不混用）加费用，结算写不进时带 `billing_pending`。调用方没给说明时用每种类型自己的说法，不出现上游的原话；流里的出错结尾用同一张表。
 
 ## 录制样本
 
@@ -245,11 +245,11 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples` 覆盖全部样本；黄金输出也通过本格式的 `streamcheck` |
 | 用量按表折算；输入侧一经报告即最终，输出侧到带 `stop_reason` 的 `message_delta` 才最终，与成员顺序无关；`Usage()` 只报最终值；计数只增 | `TestRelayUsage` 每条折算规则一个用例（含无效的五种）；`TestRelayMeter` 用 `message_start` 报 `output_tokens: 1` 的流，`type` 排在 `delta` 之后；`TestRelayMeterSample` 用官方样本 `messages/text`：提交时输出 1 不是最终值，结束时 15 是；`TestRelayOpenAIUsage` 覆盖 OpenAI 两种格式的细项、超出总数、负数、溢出、未知计数和服务等级；`TestRelayUsageMerge` 核对后来的报告没写的等级、未知计数和 `iterations` 保留 |
 | 每次底层读至多 16 KiB 就返回，越过一次读的事件、不结束的事件都在读的过程中计入 `PartialBytes`；字节上界不漏不重 | `TestRelayProgress`；`TestRelayChatContent` 计入各方言的推理、拒答和工具调用；`TestRelayResponsesContent` 核对项完成时只加多出的字节、没有增量的项照样计入、`web_search_call` 计一次搜索；`FuzzReader` 用 `Poll` 读时每次至多读一次 |
-| 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；`TestRelayMemoryHeld` 遍历 Relay 实际引用的全部切片、字符串和映射，按底层数组去重求和：上千个选项结束的 Chat 块、上千个 Responses 输出项、很长的转义成员名、每块都带的很长的服务等级和读完用量后才出错的块、超出上限的未知用量，每一步引用的都不超过已记账的，失败后引用的不超过 `out` 的容量加计量器的预留；`TestMeterMemory` 核对计量器在上限处不超过预留、超出就判无效；样本在预算为 0 时照常转发，说明基础额度够用 |
+| 每路流持有的缓冲都记账，超出基础额度的在增长前申请、结束时归还；申请不到时提交前什么都不写、提交后以出错结尾结束 | `TestRelayMemory` 三个用例都核对结束时节点预算回到原值；`TestRelayMemoryRewrite` 核对快照改写的缓冲记账且复用；`TestRelayMemoryFailure` 核对失败后结算期间暂存的开头仍记着、其余已归还，`Fail` 后全部归还；`TestChargeGrowth`；`TestRelayMemoryHeld` 遍历 Relay 实际引用的全部切片、字符串和映射，按底层数组去重求和：上千个选项结束的 Chat 块、上千个 Responses 输出项、很长的转义成员名、每块都带的很长的服务等级和读完用量后才出错的块、超出上限的未知用量、`tool_use` 起始事件之后上游立刻出错（读取状态里的事件成员不能留着），每一步引用的都不超过已记账的，失败后引用的不超过 `out` 的容量加计量器的预留；`TestMeterMemory` 核对计量器在上限处不超过预留、超出就判无效；样本在预算为 0 时照常转发，说明基础额度够用 |
 | 转发每个事件不比读 SSE 多分配 | `TestRelayAllocs` 对三种格式比较 10 个与 200 个增量的流，1 KiB 与 64 KiB 的增量；`BenchmarkRelay` 由 `just bench-compare` 与 `main` 比较 |
-| Messages、Responses 的流转给 Chat 客户端时，每条映射和结束原因都按上表，输出与黄金输出 `to-chat.sse` 逐字节相同，整段读和逐字节读结果相同，都通过 Chat 的检查 | `TestConvertStreams` 覆盖全部样本和 `testdata/assembled` 的流；`TestConvertMessages`、`TestConvertResponses` 每条映射、每个结束原因各一例，含出错的行和快照比对的四种情况；`TestConvertKeepAlive`；模糊测试 `FuzzConvertStream`：检查接受的上游流转换结果与分片无关、只以 `ErrUpstream` 失败、通过 Chat 的检查，Messages 的正文与上游一致 |
+| Messages、Responses 的流转给 Chat 客户端时，每条映射和结束原因都按上表，输出与黄金输出 `to-chat.sse` 逐字节相同，整段读和逐字节读结果相同，都通过 Chat 的检查 | `TestConvertStreams` 覆盖全部样本和 `testdata/assembled` 的流；`TestConvertMessages`、`TestConvertResponses` 每条映射、每个结束原因各一例，含出错的行和快照比对的四种情况；`TestConvertToolCallFields` 核对工具调用缺 ID 或名字（缺失、`null`、空串）时在写出前以 `ErrUpstream` 失败；`TestConvertProgress` 核对快照补出的内容在该事件处就已计入、重复的快照和 `output_item.done` 不重复计，终值与同格式转发相同；`TestConvertKeepAlive`；模糊测试 `FuzzConvertStream`：检查接受的上游流转换结果与分片无关、只以 `ErrUpstream` 失败、通过 Chat 的检查，Messages 的正文与上游一致 |
 | 转换给 Chat 客户端的回复，交回下一轮时原样回到上游（I2） | `TestConvertRoundTrip`：客户端按流合并后交回，Messages 开头的思考及签名、工具调用的 ID 和参数，Responses 的推理项及摘要、密文，函数调用的 `call_id` 和参数都在转换出的请求里 |
-| 错误按表回答，不说 new-api 会据以停用渠道的话 | `TestRenderError` 每种类型 × 三种格式核对状态码、类型的位置、详情和 `axiom`；`TestRenderErrorCharges`；`TestErrorMessages` 核对 `RenderError` 和三种出错结尾都不含 new-api 的 `AutomaticDisableKeywords`（源码 `setting/operation_setting/operation_setting.go`，提交 ebe4c36，2026-09-08），比较不区分大小写 |
+| 错误按表回答，不说 new-api 会据以停用渠道的话 | `TestRenderError` 每种类型 × 三种格式核对状态码、类型的位置、详情和 `axiom`，其中 `axiom.usage` 逐字段与该格式的完整用量对比（`chargedUsage`）；`TestRenderErrorCharges`；`TestErrorMessages` 核对 `RenderError` 和三种出错结尾都不含 new-api 的 `AutomaticDisableKeywords`（源码 `setting/operation_setting/operation_setting.go`，提交 ebe4c36，2026-09-08），比较不区分大小写 |
 | Chat 请求转换给 Messages、Responses 端点时，表里每一行都按表写，表达不了的返回 `*NotSupported`、类型不对的返回 `ErrInvalid` | `TestConvertToMessages`、`TestConvertToResponses` 每行至少一个用例，比较解码后的值；`TestConvertSamples` 把官方样本的请求与黄金输出逐字节比较；`TestToolUseIDs` 核对 ID 写出来仍不同、调用和结果配得上 |
 | 转换只取决于历史：第 n 轮的转换结果是第 n+1 轮的前缀（I11） | `TestConvertPrefix` 用一段含工具调用、合并的工具结果、对话中的系统消息和回放推理的对话，逐轮转换比较 |
 | Chat 请求只要 `Inspect` 接受，转换要么得到我们自己读得了的请求体，要么是 `*NotSupported` 或 `ErrInvalid`，不会 panic | 模糊测试 `FuzzConvert`，以 `Inspect` 的 Chat 用例和上面的对话为种子 |

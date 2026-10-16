@@ -92,9 +92,12 @@ func RenderError(f Format, e Error, fin *Final) (status int, body []byte) {
 // settlement was not written.
 func appendCharged(dst []byte, f Format, fin *Final) []byte {
 	u := reply(fin.Usage)
-	if f == Messages {
+	switch f {
+	case Messages:
 		dst = appendMessagesUsage(dst, u, cost(fin))
-	} else {
+	case Responses:
+		dst = appendOpenAIUsage(dst, responsesNames, u, cost(fin))
+	case Chat:
 		dst = appendOpenAIUsage(dst, chatNames, u, cost(fin))
 	}
 	if fin.Pending {

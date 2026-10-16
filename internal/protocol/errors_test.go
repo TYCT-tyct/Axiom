@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -53,18 +54,40 @@ func TestRenderError(t *testing.T) {
 					t.Errorf("status %d, want %d; %v:\n%s", status, row.status, err, body)
 				case diff != "":
 					t.Errorf("error (-want +got):\n%s\n%s", diff, body)
-				case !charged(axiom):
-					t.Errorf("axiom %v", axiom)
+				case !cmp.Equal(chargedUsage(f), axiom["usage"]):
+					t.Errorf("usage (-want +got):\n%s", cmp.Diff(chargedUsage(f), axiom["usage"]))
 				}
 			})
 		}
 	}
 }
 
-// charged reports whether an axiom object carries the settlement's input of 7 and its cost.
-func charged(axiom map[string]any) bool {
-	usage, _ := axiom["usage"].(map[string]any)
-	return usage["cost_currency"] == "USD" && (usage["input_tokens"] == float64(7) || usage["prompt_tokens"] == float64(7))
+// chargedUsage is the usage object the settlement of 7 input and 2 output tokens makes in format f: its own fields in
+// full, and no other format's.
+func chargedUsage(f protocol.Format) map[string]any {
+	cost := map[string]any{"cost": 3.703701, "cost_currency": "USD"}
+	var u map[string]any
+	switch f {
+	case protocol.Messages:
+		u = map[string]any{
+			"input_tokens": 7.0, "cache_creation_input_tokens": 0.0, "cache_read_input_tokens": 0.0,
+			"cache_creation":  map[string]any{"ephemeral_5m_input_tokens": 0.0, "ephemeral_1h_input_tokens": 0.0},
+			"output_tokens":   2.0,
+			"server_tool_use": map[string]any{"web_search_requests": 0.0},
+		}
+	case protocol.Responses:
+		u = map[string]any{
+			"input_tokens": 7.0, "input_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
+			"output_tokens": 2.0, "output_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+		}
+	case protocol.Chat:
+		u = map[string]any{
+			"prompt_tokens": 7.0, "prompt_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
+			"completion_tokens": 2.0, "completion_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+		}
+	}
+	maps.Copy(u, cost)
+	return u
 }
 
 // wantError is what typedError should find in an error of type name in format f.

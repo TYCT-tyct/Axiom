@@ -107,7 +107,8 @@ func (f *footprint) string(v reflect.Value) {
 // heldStreams grow what a relay keeps from event to event: a Chat chunk finishing thousands of choices, thousands of
 // Responses output items, a long escaped member name, more unknown usage fields than the meter keeps, a long service
 // tier repeated in every chunk; the last stream ends with a chunk that breaks after its usage was read. Converted for
-// a Chat client: a tool's long input, which waits for its deltas, and thousands of function calls.
+// a Chat client: a tool's long input, which waits for its deltas, that input when the upstream fails right after it, and
+// thousands of function calls.
 func heldStreams() map[string]struct {
 	f      Format
 	stream string
@@ -143,6 +144,9 @@ func heldStreams() map[string]struct {
 			strings.Repeat("x", 100000) + `"}}}` + "\n\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n" +
 			`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}` + "\n\n" +
 			`data: {"type":"message_stop"}` + "\n\n", true},
+		"a tool's long start, then an error": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` + "\n\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"f","input":{"a":"` +
+			strings.Repeat("x", 100000) + `"}}}` + "\n\n" + `data: {"type":"error","error":{"type":"api_error","message":"m"}}` + "\n\n", true},
 		"function calls for chat": {Responses, created + calls.String() + completed, true},
 		"responses items":         {Responses, created + items.String() + completed, false},
 		"escaped name": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` +
@@ -171,7 +175,7 @@ func TestRelayMemoryHeld(t *testing.T) {
 					RelayOptions{ID: "id", Model: "m", Memory: NewMemory(64 << 20)})
 				peak, err := readHeld(t, r)
 				switch n := held(r); {
-				case (broken || name == "long tier, bad chunk") != (err != nil):
+				case (broken || name == "long tier, bad chunk" || name == "a tool's long start, then an error") != (err != nil):
 					t.Fatalf("error %v", err)
 				case peak < 64<<10 && name != "unknown usage": // which the meter bounds
 					t.Errorf("the stream kept at most %d bytes, too few to show anything; charged %d", peak, r.held)

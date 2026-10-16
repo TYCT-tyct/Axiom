@@ -17,9 +17,13 @@ import (
 // said, by length and SHA-256 of the decoded text, so the client gets every part once (README.md「跨格式的流」).
 type responsesToChat struct {
 	converted
+	raw   *responsesStream // the reader of the upstream's events, which converted holds as inner
 	ev    responsesEvent
 	items map[int64]*responsesItem // by output_index
 	parts map[partKey]*snapshot
+	// fresh is the content the event gave the client: every piece counts when it is given, whether as a delta or in a
+	// snapshot, so the meter covers what the client has read before it is written (docs/domains/billing.md).
+	fresh int64
 }
 
 // responsesEvent is what an event says, its strings as written in its data.
@@ -75,12 +79,13 @@ type donePart struct {
 }
 
 // responsesItem is an output item: its kind, the Chat index of its tool call, the ID its reasoning details carry,
-// and whether it is done.
+// the bytes of its content counted so far, and whether it is done.
 type responsesItem struct {
-	kind itemKind
-	tool int64
-	id   []byte
-	done bool
+	kind    itemKind
+	tool    int64
+	id      []byte
+	counted int64
+	done    bool
 }
 
 // partKey names a part: its item's output_index, its index in the item's content or summary, and its kind.
@@ -110,7 +115,7 @@ func newResponsesToChat(u UsageContext, o RelayOptions, charge func(int) error) 
 	inner := &responsesStream{seq: -1}
 	inner.init(u, o, nil, charge)
 	inner.converting = true
-	s := &responsesToChat{items: map[int64]*responsesItem{}, parts: map[partKey]*snapshot{}}
+	s := &responsesToChat{raw: inner, items: map[int64]*responsesItem{}, parts: map[partKey]*snapshot{}}
 	s.init(inner, o, charge)
 	return s
 }
@@ -201,7 +206,7 @@ func (s *responsesToChat) event(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, err
 	}
-	s.ev = responsesEvent{parts: s.ev.parts[:0]}
+	s.ev, s.fresh = responsesEvent{parts: s.ev.parts[:0]}, 0
 	if err := walk(&s.walk, s, responsesChatFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -209,7 +214,20 @@ func (s *responsesToChat) event(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, fmt.Errorf("%w: %s: %w", ErrUpstream, e.name, err)
 	}
+	e.content = s.fresh + s.residual(e.name)
 	return s.settle(e, r, finish)
+}
+
+// residual is the content an item that is done holds beyond the text counted as it was given, such as encrypted
+// reasoning: the item's size bounds it from above, and counts only what the pieces did not.
+func (s *responsesToChat) residual(name string) int64 {
+	if name != "response.output_item.done" {
+		return 0
+	}
+	it := s.items[s.ev.index]
+	n := max(0, s.raw.itemBytes-it.counted)
+	it.counted += n
+	return n
 }
 
 // convert turns the event into the delta, or into the role it has.
@@ -328,6 +346,9 @@ func (s *responsesToChat) item(added bool) (*responsesItem, error) {
 	if s.ev.item == otherItem {
 		return nil, fmt.Errorf("item %d of a type a converted request does not ask for", s.ev.index)
 	}
+	if s.ev.item == functionItem && (nonEmpty(s.ev.callID) == nil || nonEmpty(s.ev.name) == nil) {
+		return nil, fmt.Errorf("function call %d without a call_id or a name", s.ev.index)
+	}
 	if err := s.walk.charge(itemSize + len(s.ev.id)); err != nil {
 		return nil, err
 	}
@@ -417,6 +438,9 @@ func (s *responsesToChat) snapshot(k partKey, whole []byte) error {
 
 // emit adds a piece of part k to the delta, as the Chat member its kind maps to.
 func (s *responsesToChat) emit(k partKey, p *snapshot, it *responsesItem, piece []byte) error {
+	n := unquotedLen(piece)
+	it.counted += n
+	s.fresh += n
 	switch k.kind {
 	case textPart:
 		return s.addText(&s.draft.content, piece)
