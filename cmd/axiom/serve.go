@@ -226,9 +226,9 @@ func node(publicAddr string, routes http.Handler, adminAddr string, adminRoutes 
 }
 
 // servedAddrs are the addresses the node listens on, named for the log line that reports them: public, admin when
-// the node serves one, and probes.
+// the node serves one, and ops.
 func servedAddrs(servers []*listening) []any {
-	names := map[string]string{"AXIOM_PUBLIC_ADDR": "public", "AXIOM_ADMIN_ADDR": "admin", "AXIOM_PROBES_ADDR": "probes"}
+	names := map[string]string{"AXIOM_PUBLIC_ADDR": "public", "AXIOM_ADMIN_ADDR": "admin", "AXIOM_PROBES_ADDR": "ops"}
 	var attrs []any
 	for _, s := range servers {
 		attrs = append(attrs, names[s.variable], s.listener.Addr().String())
