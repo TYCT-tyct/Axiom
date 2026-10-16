@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
-	"strconv"
 	"time"
+	"uuid"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -95,9 +95,9 @@ GRANT axiom_lookup TO axiom_owner WITH INHERIT FALSE, SET TRUE;`
 // lock, so concurrent runs wait for each other, and a run that dies leaves the lock with its connection; the next run
 // continues from the recorded versions. Every lock is waited for at most about 5 seconds: a long transaction or
 // another run makes this one fail instead of queueing the application's queries behind it. A failed connection,
-// wherever it happens, is reported without the URL's parts. ctx bounds the whole run, long DDL included: the server
-// ends any statement at the deadline by itself (statement_timeout), and the run returns within stopGrace of it even if
-// the server stops answering. A connection that is not made within DefaultConnectTimeout fails (MigrateWith sets
+// wherever it happens, is reported without the URL's parts. ctx bounds the whole run, long DDL included: at the deadline
+// the run ends its own sessions on the server, so a statement that outlives it, or ignores a cancel, ends too, and the
+// run returns within stopGrace of it even if the server stops answering. A connection that is not made within DefaultConnectTimeout fails (MigrateWith sets
 // another).
 func Migrate(ctx context.Context, adminURL string, modules ...Module) error {
 	return MigrateWith(ctx, adminURL, DefaultConnectTimeout, modules...)
@@ -110,11 +110,14 @@ const DefaultConnectTimeout = 10 * time.Second
 // closeTimeout is how long closing the bootstrap connection may take.
 const closeTimeout = 5 * time.Second
 
-// stopGrace is how long after ctx ends the run may take to wind down (cancel the statement, release goose's lock, close
-// the connections) before MigrateWith gives up waiting. goose releases its lock with a context that cannot be cancelled,
-// so a server that stops answering would otherwise hold the run forever; the caller then exits, the connections close
-// with the process, and the server ends the session and with it the lock.
+// stopGrace is how long after ctx ends the run may take to wind down (end the sessions, release goose's lock, close the
+// connections) before MigrateWith gives up waiting. goose releases its lock with a context that cannot be cancelled, so a
+// server that stops answering would otherwise hold the run forever; the caller then exits, the connections close with
+// the process, and the server ends the session and with it the lock.
 const stopGrace = 15 * time.Second
+
+// terminateTimeout is how long ending the migration's sessions may take, the connection to do it included.
+const terminateTimeout = 5 * time.Second
 
 // MigrateWith is Migrate with the time each connection may take to be made, from the name lookup to the end of the
 // handshake, across all the addresses of the host together. A connect_timeout in the URL can only shorten that.
@@ -126,14 +129,24 @@ func MigrateWith(ctx context.Context, adminURL string, connectTimeout time.Durat
 	if connectTimeout <= 0 {
 		return errors.New("migrate: the connect timeout must be positive")
 	}
-	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", runBounded(ctx, stopGrace, func() error {
-		return migrate(ctx, adminURL, connectTimeout, all)
-	}))
+	config, err := pgx.ParseConfig(adminURL)
+	if err != nil {
+		return redactConnect("AXIOM_MIGRATE_DATABASE_URL", errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string"))
+	}
+	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
+	// Every session of this run carries a name of its own, so that the run can end its sessions, and only those, at the
+	// deadline.
+	name := "axiom-migrate-" + uuid.NewV4().String()
+	config.RuntimeParams["application_name"] = name
+	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", runBounded(ctx, stopGrace,
+		func() error { return endSessions(ctx, config, name, connectTimeout) },
+		func() error { return migrate(ctx, config, connectTimeout, all) }))
 }
 
-// runBounded runs f and returns its result, or, if f is still running grace after ctx ended, gives up on it. f is left
-// running: the caller is about to exit.
-func runBounded(ctx context.Context, grace time.Duration, f func() error) error {
+// runBounded runs f and returns its result. When ctx ends first it runs stop, which must end what f is waiting for, then
+// gives f grace to return and gives up on it if it does not, leaving it running: the caller is about to exit. stop's
+// error is returned with f's.
+func runBounded(ctx context.Context, grace time.Duration, stop, f func() error) error {
 	done := make(chan error, 1)
 	go func() { done <- f() }()
 	select {
@@ -141,12 +154,35 @@ func runBounded(ctx context.Context, grace time.Duration, f func() error) error 
 		return err
 	case <-ctx.Done():
 	}
+	stopErr := stop()
 	select {
 	case err := <-done:
-		return err
+		return errors.Join(err, stopErr)
 	case <-time.After(grace):
-		return fmt.Errorf("migrate did not stop within %s of its deadline: %w", grace, context.Cause(ctx))
+		return errors.Join(fmt.Errorf("migrate did not stop within %s of its deadline: %w", grace, context.Cause(ctx)), stopErr)
 	}
+}
+
+// endSessions ends every session of the run on the server, from a connection of its own with a few seconds to do it, and
+// returns when the server has been told. A cancel request from the sessions' own connections is sent by pgx from the
+// background, and a statement can be written to ignore a cancel; a terminate cannot be ignored, and it is counted from
+// the run's deadline, not from the start of each statement. The sessions end, so their transactions roll back and the
+// advisory lock they hold is released.
+func endSessions(ctx context.Context, config *pgx.ConnConfig, name string, connectTimeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminateTimeout)
+	defer cancel()
+	connectCtx, connectCancel := context.WithTimeout(ctx, connectTimeout)
+	conn, err := pgx.ConnectConfig(connectCtx, config)
+	connectCancel()
+	if err != nil {
+		return fmt.Errorf("connect to end the migration's sessions: %w", err)
+	}
+	defer conn.Close(ctx) //nolint:errcheck // the sessions are already told to end
+	if _, err := conn.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		WHERE application_name = $1 AND pid <> pg_backend_pid()`, name); err != nil {
+		return fmt.Errorf("end the migration's sessions: %w", err)
+	}
+	return nil
 }
 
 // timedConnector gives every new database/sql connection one deadline for the whole connect.
@@ -161,25 +197,7 @@ func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	return c.Connector.Connect(ctx)
 }
 
-// statementTimeout is what is left of the run, in milliseconds, for the server to end a statement by itself at the
-// deadline: a cancel request is sent from the client's background and may not get out before the process exits. It is a
-// setting of every connection from the start; the connections are made at the start of the run, so none outlives the
-// deadline by more than the setup.
-func statementTimeout(deadline time.Time, bounded bool) string {
-	if !bounded {
-		return "0"
-	}
-	return strconv.FormatInt(max(time.Until(deadline).Milliseconds(), 1), 10)
-}
-
-func migrate(ctx context.Context, adminURL string, connectTimeout time.Duration, modules []Module) error {
-	config, err := pgx.ParseConfig(adminURL)
-	if err != nil {
-		return errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string")
-	}
-	deadline, bounded := ctx.Deadline()
-	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
-	config.RuntimeParams["statement_timeout"] = statementTimeout(deadline, bounded)
+func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
 	if err := prepare(ctx, config, connectTimeout, modules); err != nil {
 		return err
 	}

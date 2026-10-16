@@ -25,8 +25,8 @@ var ModuleOrder = moduleOrder
 func Ordered(modules ...Module) ([]Module, error) { return ordered(modules) }
 
 // RunBounded runs f, giving up on it grace after ctx ends.
-func RunBounded(ctx context.Context, grace time.Duration, f func() error) error {
-	return runBounded(ctx, grace, f)
+func RunBounded(ctx context.Context, grace time.Duration, stop, f func() error) error {
+	return runBounded(ctx, grace, stop, f)
 }
 
 // NewTimedConnector wraps a database/sql connector so that each connect has one deadline.

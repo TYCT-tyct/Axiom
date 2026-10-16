@@ -133,7 +133,10 @@ func TestMigrateWaitsSecondsForLocks(t *testing.T) {
 			t.Parallel()
 			fresh := freshDatabase(t)
 			hold(t, fresh.Superuser, held.take, held.args...)
-			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			// The run gives up by itself within seconds; this only stops a hang. It is generous because on a loaded machine the
+			// bootstrap and the schemas can take longer than the lock wait, and a run cut off by this deadline reports a failed
+			// connection, not the lock.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 			defer cancel()
 			if err := pg.Migrate(ctx, fresh.Migrator); err == nil || !strings.Contains(err.Error(), held.want) {
 				t.Errorf("Migrate under %s: %v, want %s", name, err, held.want)

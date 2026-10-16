@@ -14,85 +14,98 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// TestMigrateStatementsEndOnTheServer: every connection the run makes carries a statement timeout of what is left of the
-// run, so the server ends a statement at the deadline by itself, whether or not the client's cancel request got out
-// before the process exited; the run also leaves the server clean, so the migration can be tried again. A migration that
-// fails when statement_timeout is off reads the setting. Not parallel, as Migrate grants roles cluster-wide.
-func TestMigrateStatementsEndOnTheServer(t *testing.T) {
-	database := pgtest.New(t)
-	const check = up + `DO $$ BEGIN IF current_setting('statement_timeout') = '0' THEN RAISE EXCEPTION 'no statement timeout'; END IF; END $$;`
-	checking := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_check.sql": {Data: []byte(check)}}}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	defer cancel()
-	if err := pg.Migrate(ctx, database.Migrator, checking); err != nil {
-		t.Fatalf("with a deadline: %v", err)
-	}
-	// Without a deadline there is nothing to bound, and the setting is off.
-	other := pgtest.New(t)
-	if err := pg.Migrate(t.Context(), other.Migrator, checking); err == nil || !strings.Contains(err.Error(), "no statement timeout") {
-		t.Errorf("without a deadline: %v", err)
-	}
-}
+// deaf is a migration that ignores a cancel: it catches the cancellation of each second's sleep and goes on. Only ending the
+// session stops it, so a run that ends is one that terminated its sessions, not one that asked them to cancel (which
+// pgx does from the background, and a statement timeout would be caught the same way).
+const deaf = `DO $$ BEGIN LOOP BEGIN PERFORM pg_sleep(1); EXCEPTION WHEN query_canceled THEN NULL; END; END LOOP; END $$;`
 
-// TestMigrateLeavesNothingRunning: after a run that ended at its deadline the long statement is gone from the server,
-// the lock is free, and the migration runs when tried again.
-func TestMigrateLeavesNothingRunning(t *testing.T) {
+// TestMigrateEndsItsSessionsAtTheDeadline: after most of the budget is spent, a long statement that ignores a cancel is
+// ended at the run's deadline, counted from the start of the run and not of the statement; the run returns once the
+// server has been told, and leaves nothing running and no lock held, so the migration runs when tried again. Not
+// parallel, as Migrate grants roles cluster-wide.
+func TestMigrateEndsItsSessionsAtTheDeadline(t *testing.T) {
 	database := pgtest.New(t)
-	slow := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_slow.sql": {Data: []byte(up + "SELECT pg_sleep(121);")}}}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	slow := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_spend.sql": {Data: []byte(up + "SELECT pg_sleep(2.5);")},
+		"00002_deaf.sql":  {Data: []byte(up + deaf)},
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := pg.Migrate(ctx, database.Migrator, slow); err == nil {
-		t.Fatal("the slow migration finished")
+	start := time.Now()
+	err := pg.Migrate(ctx, database.Migrator, slow)
+	if err == nil || time.Since(start) > 10*time.Second {
+		t.Fatalf("after %v: %v, want an error soon after the 3s deadline", time.Since(start), err)
 	}
 	superuser, err := pg.Open(t.Context(), database.Superuser)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(superuser.Close)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var running int
-		if err := superuser.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%pg_sleep(121)%' AND pid <> pg_backend_pid()").Scan(&running)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if running == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%d statements still running on the server", running)
-		}
-		time.Sleep(100 * time.Millisecond)
+	var running int
+	if err := superuser.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'axiom-migrate-%'
+			AND pid <> pg_backend_pid()`).Scan(&running)
+	}); err != nil {
+		t.Fatal(err)
 	}
-	fast := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_slow.sql": {Data: []byte(up + "SELECT 1;")}}}
+	if running != 0 {
+		t.Errorf("%d sessions of the run still on the server when MigrateWith returned", running)
+	}
+	fast := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_spend.sql": {Data: []byte(up + "SELECT 1;")}, "00002_deaf.sql": {Data: []byte(up + "SELECT 1;")},
+	}}
 	if err := pg.Migrate(t.Context(), database.Migrator, fast); err != nil {
 		t.Errorf("the migration again: %v", err)
 	}
 }
 
-// TestRunBounded: a run whose work does not stop, such as goose releasing its lock on a connection that went silent with a
-// context that cannot be cancelled, is given up on a grace after the deadline; work that stops in time returns its own
-// result.
+// TestRunBounded: when the context ends, stop runs before the wait; work that does not stop is given up on a grace after
+// the deadline, with stop's error; work that stops in time returns its own result, and stop is not run when it finishes
+// first.
 func TestRunBounded(t *testing.T) {
 	t.Parallel()
 	stuck := make(chan struct{})
 	t.Cleanup(func() { close(stuck) })
+	stopped := errors.New("stop failed")
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := pg.RunBounded(ctx, 200*time.Millisecond, func() error { <-stuck; return nil })
-	if err == nil || !strings.Contains(err.Error(), "did not stop") || !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+	err := pg.RunBounded(ctx, 200*time.Millisecond, func() error { return stopped }, func() error { <-stuck; return nil })
+	if err == nil || !strings.Contains(err.Error(), "did not stop") || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, stopped) || time.Since(start) > 5*time.Second {
 		t.Errorf("a run that does not stop: %v after %v", err, time.Since(start))
 	}
 	want := errors.New("the work's own")
 	ctx2, cancel2 := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel2()
-	if err := pg.RunBounded(ctx2, time.Minute, func() error { <-ctx2.Done(); return want }); !errors.Is(err, want) {
-		t.Errorf("work that stops after the deadline, within the grace: %v", err)
+	ended := make(chan struct{})
+	err = pg.RunBounded(ctx2, time.Minute, func() error { close(ended); return nil }, func() error { <-ended; return want })
+	if !errors.Is(err, want) {
+		t.Errorf("work that ends because stop ended it: %v", err)
 	}
-	if err := pg.RunBounded(t.Context(), time.Minute, func() error { return want }); !errors.Is(err, want) {
-		t.Errorf("work that finishes: %v", err)
+	called := false
+	if err := pg.RunBounded(t.Context(), time.Minute, func() error { called = true; return nil }, func() error { return want }); !errors.Is(err, want) || called {
+		t.Errorf("work that finishes first: %v, stop called: %v", err, called)
+	}
+}
+
+// hanging is a connector whose connect never ends by itself.
+type hanging struct{}
+
+func (hanging) Connect(ctx context.Context) (driver.Conn, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (hanging) Driver() driver.Driver { return nil }
+
+// TestPoolConnectionsHaveADeadline: the connections the migrations run on, made by database/sql, are bound by the same
+// connect timeout as the first one.
+func TestPoolConnectionsHaveADeadline(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	_, err := pg.NewTimedConnector(hanging{}, 100*time.Millisecond).Connect(t.Context())
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Errorf("%v after %v", err, time.Since(start))
 	}
 }
 
@@ -118,26 +131,5 @@ func TestMigrateConnectTimeoutCoversEveryAddress(t *testing.T) {
 		if took := time.Since(start); err == nil || took > 2*time.Second {
 			t.Errorf("three silent addresses%s: %v after %v, want an error after about 1s, not 3s", query, err, took)
 		}
-	}
-}
-
-// hanging is a connector whose connect never ends by itself.
-type hanging struct{}
-
-func (hanging) Connect(ctx context.Context) (driver.Conn, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (hanging) Driver() driver.Driver { return nil }
-
-// TestPoolConnectionsHaveADeadline: the connections the migrations run on, made by database/sql, are bound by the same
-// connect timeout as the first one.
-func TestPoolConnectionsHaveADeadline(t *testing.T) {
-	t.Parallel()
-	start := time.Now()
-	_, err := pg.NewTimedConnector(hanging{}, 100*time.Millisecond).Connect(t.Context())
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
-		t.Errorf("%v after %v", err, time.Since(start))
 	}
 }
