@@ -388,7 +388,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 		if err := b.billing.Correct(ctx, Correction{
 			Request: pick().id, Seq: 1, Revision: r.Int64N(4) + 1,
 			Usage: []catalog.Usage{maybeUnknown(b.t, r, used(b.t, r.Int64N(3000), r.Int64N(200), 0)).Usage}, Cost: r.Int64N(5000),
-		}); err != nil {
+		}); err != nil && !errors.Is(err, ErrNotRecorded) { // a record before its attempt is recorded applies nothing
 			b.t.Fatal(err)
 		}
 	default: // a crash: what was left pending goes to cleanup, a journal sometimes showing a committed attempt,

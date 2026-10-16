@@ -103,8 +103,10 @@ type Correction struct {
 // changes anything, in any state. The attempt's cost always follows the record. The user's charge follows it only for
 // the charged attempt, within the correction window: an estimate is replaced, keeping its waiver, the makeup capped by
 // what the reservation still holds; a cleaned-up call is charged at the record's usage and locked price. A record with
-// usage nothing prices is charged at its cost × the locked markup instead. A database error fails it, for the caller
-// to retry.
+// usage nothing prices is charged at its cost × the locked markup instead. A revision counts as applied only once
+// every field of it nothing prices is noted against its attempt's model: a record with any, before Settle or cleanup
+// recorded its attempt, is ErrNotRecorded and applies nothing. That, or a database error, fails it, for the caller to
+// retry.
 func (b *Billing) Correct(ctx context.Context, c Correction) error {
 	if c.Cost < 0 {
 		return fmt.Errorf("billing: correct %s: a cost of %d", c.Request, c.Cost)
@@ -172,8 +174,7 @@ func (c *locked) recharges(k Correction) bool {
 // may also take what the account has free above its floor (「价目表缺项」: the reservation and the available balance).
 // An estimate keeps holding the rest until its window ends, for a later revision; a cleaned-up call releases it.
 // Whatever the attempt and the window, the record's unknown fields are noted against the model of the attempt's
-// entry once Settle or cleanup has recorded it; a record before either leaves that to Settle, which notes the
-// attempt's own usage.
+// entry (noteRecord).
 func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	r := c.row
 	segments, err := c.noteRecord(ctx, tx, k)
@@ -213,15 +214,20 @@ func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 }
 
 // noteRecord is the record's usage by sampling, all of it reported, whose unknown fields it notes against the model of
-// the attempt's entry, when attempt_entries has it.
+// the attempt's entry. A record with any, of an attempt attempt_entries does not have yet, is ErrNotRecorded: its
+// transaction rolls back, the revision with it, so the redelivery notes them once Settle or cleanup has recorded the
+// attempt.
 func (c *locked) noteRecord(ctx context.Context, tx pg.Tx, k Correction) ([]Segment, error) {
 	segments := make([]Segment, len(k.Usage))
 	for i, u := range k.Usage {
 		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
 	}
+	if !anyUnknown(segments) {
+		return segments, nil
+	}
 	entries := c.row.AttemptEntries
 	if k.Seq < 1 || k.Seq > len(entries) || entries[k.Seq-1] < 0 {
-		return segments, nil
+		return nil, ErrNotRecorded
 	}
 	return segments, c.noteUnknown(ctx, tx, int(entries[k.Seq-1]), segments)
 }
@@ -236,10 +242,13 @@ func (c *locked) priceRecord(segments []Segment, cost int64) (p priced, byCost b
 	if err != nil {
 		return priced{}, false, err
 	}
-	unknown := slices.ContainsFunc(segments, func(seg Segment) bool { return len(seg.Usage.Unknown()) > 0 })
-	if unknown && !c.row.Waived {
+	if anyUnknown(segments) && !c.row.Waived {
 		return priced{price: f.byCost(cost), estimated: true}, true, nil
 	}
 	p, err = priceSegments(s, f, segments, c.row.Waived)
 	return p, false, err
+}
+
+func anyUnknown(segments []Segment) bool {
+	return slices.ContainsFunc(segments, func(seg Segment) bool { return len(seg.Usage.Unknown()) > 0 })
 }

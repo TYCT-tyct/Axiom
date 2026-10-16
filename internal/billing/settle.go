@@ -103,6 +103,10 @@ type Final struct {
 // ErrNoAttempt is an outcome whose last attempt names no kept entry: nothing can price it.
 var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept entry")
 
+// ErrNotRecorded is a supplier record with usage nothing prices, of an attempt no Settle or cleanup has recorded yet:
+// the model to note it against is not known, so Correct applies nothing, for the caller to retry.
+var ErrNotRecorded = errors.New("billing: the record's attempt is not recorded yet")
+
 // Settle charges the call's last attempt and ends its reservation, in one transaction of the admission's scope
 // (README.md「结算与账本」): under the balance row lock, the attempts and their costs, the charge by 免单规则 capped at
 // the floor with the platform bearing the rest, the counters, the reservation's state, and EndRequest when the state

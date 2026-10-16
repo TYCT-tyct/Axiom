@@ -52,15 +52,7 @@ func TestFallbackHoldsPages(t *testing.T) {
 // charged attempt alone.
 func TestUnknownItemsOnEveryAttempt(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, Config{})
-	first, second := metered(t), metered(t)
-	first.Model.ID, second.Model.ID = catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
-	var h *Hold
-	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	h, first := b.holdOnTwoModels()
 	o := Outcome{Attempts: []AttemptResult{
 		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{fetches(t, 50, "2")}, Result: FailedBeforeCommit, Finish: FinishError},
 		{Seq: 2, Entry: 1, Cost: 7, Segments: []Segment{used(t, 50, 20, 0)}, Result: Committed, Finish: FinishStop},
@@ -80,6 +72,86 @@ func TestUnknownItemsOnEveryAttempt(t *testing.T) {
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Errorf("unknown items %+v, want %+v", items, want)
+	}
+}
+
+// TestRecordBeforeItsAttempt: a supplier record with a field nothing prices, of an attempt no Settle or cleanup has
+// recorded yet, applies nothing; the redelivery of the same revision, after Settle or cleanup, notes the field against
+// the attempt's own model and applies the record. The gateway's usage of the attempt does not have the field.
+func TestRecordBeforeItsAttempt(t *testing.T) {
+	t.Run("then Settle", recordThenSettle)
+	t.Run("then cleanup", recordThenCleanup)
+}
+
+const newThing = "usage.new_thing_tokens"
+
+func recordThenSettle(t *testing.T) {
+	b := fallbackBank(t, 10_000, 0, Config{})
+	h, first := b.holdOnTwoModels()
+	record := Correction{Request: h.id, Seq: 1, Revision: 1, Usage: usages([]Segment{unknown(t, 50, newThing, "5")}), Cost: 9}
+	b.correctEarly(record)
+	o := Outcome{Attempts: []AttemptResult{
+		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{used(t, 50, 0, 0)}, Result: FailedBeforeCommit, Finish: FinishError},
+		{Seq: 2, Entry: 1, Cost: 7, Segments: []Segment{used(t, 50, 20, 0)}, Result: Committed, Finish: FinishStop},
+	}}
+	if f := b.settleWith(h, o); f.Charged != platform.AmountExact(70) || f.Estimated {
+		t.Errorf("Settle = %+v, want 70, exact", f)
+	}
+	b.redeliver(record, first.Model.ID)
+	if cost := b.cost(h, 1); cost != 9 {
+		t.Errorf("attempt 1 cost %d, want the record's 9", cost)
+	}
+	b.expect("settled", 70)
+}
+
+func recordThenCleanup(t *testing.T) {
+	b := fallbackBank(t, 10_000, 0, lapsedWindow)
+	q := metered(t)
+	q.Model.ID = catalog.ModelID(uuid.NewV7())
+	h := b.holdOn(q, 1000)
+	b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
+	record := Correction{Request: h.id, Seq: 1, Revision: 1, Usage: usages([]Segment{unknown(t, 400, newThing, "40")}), Cost: 100}
+	b.correctEarly(record)
+	b.cleanup()
+	b.expect("cleanup_pending", 0)
+	b.redeliver(record, q.Model.ID)
+	b.expect("cleanup_settled", 150) // ⌈1.5 × 100⌉
+}
+
+// holdOnTwoModels reserves 100 text bytes on two metered entries of their own models, and returns the first.
+func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
+	b.t.Helper()
+	first, second := metered(b.t), metered(b.t)
+	first.Model.ID, second.Model.ID = catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
+	var h *Hold
+	if err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
+		return err
+	}); err != nil {
+		b.t.Fatal(err)
+	}
+	return h, first
+}
+
+// correctEarly: c, of an attempt not recorded yet, applies nothing and notes nothing.
+func (b *bank) correctEarly(c Correction) {
+	b.t.Helper()
+	if err := b.billing.Correct(b.t.Context(), c); !errors.Is(err, ErrNotRecorded) {
+		b.t.Fatalf("Correct before the attempt is recorded = %v, want ErrNotRecorded", err)
+	}
+	if items := b.unknownItems(); len(items) != 0 {
+		b.t.Fatalf("unknown items %+v before the attempt is recorded", items)
+	}
+}
+
+// redeliver applies c again and finds newThing noted against model, for c's request.
+func (b *bank) redeliver(c Correction, model catalog.ModelID) {
+	b.t.Helper()
+	if err := b.billing.Correct(b.t.Context(), c); err != nil {
+		b.t.Fatal(err)
+	}
+	if items := b.unknownItems(); len(items) != 1 || items[0].Model != model || items[0].Field != newThing || items[0].Request != c.Request {
+		b.t.Errorf("unknown items %+v, want %s on the attempt's model", items, newThing)
 	}
 }
 
