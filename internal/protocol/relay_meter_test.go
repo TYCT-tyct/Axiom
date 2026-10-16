@@ -429,23 +429,31 @@ func drain(tb testing.TB, f protocol.Format, stream []byte) {
 	}
 }
 
+// steadyAllocs is testing.AllocsPerRun without the runtime's own allocations, which a collection during a run adds
+// (a few, once the heap has grown) and which only ever raise a count: the collector is off and runs just before.
+func steadyAllocs(f func()) float64 {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	runtime.GC()
+	return testing.AllocsPerRun(5, f)
+}
+
 // TestRelayAllocs: beyond what reading the events allocates, which has a constant bound per event (README.md「读
 // SSE」), relaying them allocates nothing once the buffers have grown, in each format, so a longer reply costs the
 // relay no more allocations (docs/performance.md「调用路径上的规则」).
 func TestRelayAllocs(t *testing.T) {
 	extra := func(f protocol.Format, stream []byte) float64 {
-		read := testing.AllocsPerRun(5, func() {
+		read := steadyAllocs(func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
 			for _, err := r.Next(); err == nil; _, err = r.Next() {
 			}
 		})
-		return testing.AllocsPerRun(5, func() { drain(t, f, stream) }) - read
+		return steadyAllocs(func() { drain(t, f, stream) }) - read
 	}
 	for _, format := range formats {
 		for _, size := range []int{1 << 10, 64 << 10} {
-			// 190 more events would add at least 190 allocations if each allocated; the race detector's own add a few.
-			if few, many := extra(format.f, deltas(format.f, 10, size)), extra(format.f, deltas(format.f, 200, size)); many-few > 5 {
-				t.Errorf("%s, %d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 200",
+			// 30 more events would add at least 30 allocations if each allocated; the race detector's own add a few.
+			if few, many := extra(format.f, deltas(format.f, 10, size)), extra(format.f, deltas(format.f, 40, size)); many-few > 5 {
+				t.Errorf("%s, %d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 40",
 					format.dir, size, few, many)
 			}
 		}

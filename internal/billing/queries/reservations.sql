@@ -89,3 +89,27 @@ VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
 
 -- name: Now :one
 SELECT clock_timestamp()::timestamptz;
+
+-- The account's balance and what it has been charged in all, for the read-only endpoints: no lock, and no row means a
+-- balance of 0, which is how Reserve treats it too. Spent is summed over the account's workspaces only; each charge is
+-- also counted under its key.
+-- name: ReadFunds :one
+SELECT b.balance,
+    coalesce((SELECT sum(s.spent) FROM billing.spend s WHERE s.subject = ANY (@workspaces::uuid[])), 0)::bigint AS spent
+FROM billing.balances b
+WHERE b.account_id = @account_id;
+
+-- What a key has spent: all time, and in the current UTC day, week and month, plus what its limit counts in the
+-- current window of its reset (spent and reserved together, as admission does). An empty reset is the window of every
+-- day. A key that never spent has no rows, and its sums are 0.
+-- name: ReadKeyUsage :one
+WITH t AS (SELECT clock_timestamp() AS now)
+SELECT
+    coalesce(sum(s.spent), 0)::bigint AS total,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
+    coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(@reset::text, t.now)
+        AND s.window_start < billing.window_to(@reset::text, t.now)), 0)::bigint AS limited
+FROM billing.spend s, t
+WHERE s.subject = @key_id;

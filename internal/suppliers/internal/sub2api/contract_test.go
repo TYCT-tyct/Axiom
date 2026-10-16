@@ -111,7 +111,7 @@ func TestFiveHundredStaysUnknownWhateverItsCode(t *testing.T) {
 func limited(clk *clock, answer func(adapter.Request) adapter.Response) *server {
 	limiter := client.NewLimiter(New().Buckets(), clk.now)
 	return newServer(func(r adapter.Request) (adapter.Response, error) {
-		if err := limiter.Take(r.Buckets); err != nil {
+		if err := limiter.Take(context.Background(), r.Buckets); err != nil {
 			return adapter.Response{}, err
 		}
 		return answer(r), nil

@@ -1,69 +1,84 @@
-import {
-  AppShell,
-  focusPage,
-  Icon,
-  type IconName,
-  Logo,
-  PreferenceSwitches,
-  routerDefaults,
-  SideNavItem,
-} from "@axiom/ui";
-import { createRootRoute, createRoute, createRouter, Link, lazyRouteComponent, Outlet } from "@tanstack/react-router";
-import { useTranslation } from "react-i18next";
-import { NewVersionNotice } from "./version";
+import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import { Layout } from "./layout";
+import { safeNext } from "./session";
 
-const nav: { to: "/" | "/keys" | "/logs"; label: "nav.overview" | "nav.keys" | "nav.logs"; icon: IconName }[] = [
-  { to: "/", label: "nav.overview", icon: "grid" },
-  { to: "/keys", label: "nav.keys", icon: "key" },
-  { to: "/logs", label: "nav.logs", icon: "list" },
-];
+const root = createRootRoute({ component: Outlet });
 
-function Layout() {
-  const { t } = useTranslation();
-  return (
-    <AppShell
-      banner={<NewVersionNotice />}
-      sidebar={
-        <>
-          <Logo className="mb-4 px-2 py-1" />
-          {nav.map((item) => (
-            <SideNavItem key={item.to}>
-              <Link to={item.to} activeOptions={{ exact: item.to === "/" }}>
-                <Icon name={item.icon} />
-                {t(item.label)}
-              </Link>
-            </SideNavItem>
-          ))}
-          <PreferenceSwitches className="mt-auto flex flex-wrap gap-2 pt-4" />
-        </>
-      }
-    >
-      <Outlet />
-    </AppShell>
-  );
-}
+// The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
+// in, and a registration link can carry the invite code.
+const guestSearch = (search: Record<string, unknown>) => ({
+  next: safeNext(search.next),
+  invite: typeof search.invite === "string" ? search.invite : undefined,
+});
 
-const root = createRootRoute({ component: Layout });
+const app = createRoute({ getParentRoute: () => root, id: "app", component: Layout });
 
 // Every page is its own chunk, loaded when the user is about to open it; the first screen loads the page of the address
 // it opens (scripts/budget.ts counts it).
 const routeTree = root.addChildren([
   createRoute({
     getParentRoute: () => root,
-    path: "/",
-    component: lazyRouteComponent(() => import("./pages/overview")),
+    path: "/sign-in",
+    validateSearch: guestSearch,
+    component: lazyRouteComponent(() => import("./auth/sign-in")),
   }),
   createRoute({
     getParentRoute: () => root,
-    path: "/keys",
-    component: lazyRouteComponent(() => import("./pages/keys")),
+    path: "/mfa",
+    validateSearch: guestSearch,
+    component: lazyRouteComponent(() => import("./auth/mfa")),
   }),
   createRoute({
     getParentRoute: () => root,
-    path: "/logs",
-    component: lazyRouteComponent(() => import("./pages/logs")),
+    path: "/register",
+    validateSearch: guestSearch,
+    component: lazyRouteComponent(() => import("./auth/register")),
   }),
+  app.addChildren([
+    createRoute({
+      getParentRoute: () => app,
+      path: "/",
+      component: lazyRouteComponent(() => import("./pages/overview")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/keys",
+      component: lazyRouteComponent(() => import("./pages/keys")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/calls",
+      validateSearch: (search: Record<string, unknown>) => ({
+        since: text(search.since),
+        until: text(search.until),
+        model: text(search.model),
+        client_app: text(search.client_app),
+      }),
+      component: lazyRouteComponent(() => import("./pages/calls")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/calls/$callId",
+      component: lazyRouteComponent(() => import("./pages/call")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/balance",
+      component: lazyRouteComponent(() => import("./pages/balance")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/security",
+      component: lazyRouteComponent(() => import("./pages/security")),
+    }),
+    createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
+  ]),
 ]);
+
+function text(value: unknown) {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
 
 export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
 

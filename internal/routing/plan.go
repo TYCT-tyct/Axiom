@@ -36,7 +36,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
-		tokens: in.Req.TextBytes / r.cfg.BytesPerToken, demand: demandOf(in.Req), tiers: in.Req.ServiceTiers,
+		tokens: in.Req.TextBytes / r.cfg.BytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -73,9 +73,10 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}, nil, nil
 }
 
-// demandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
-// (billing.InputBound). Compaction is not in the request summary yet.
-func demandOf(req *protocol.Request) billing.Demand {
+// DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
+// (billing.InputBound), and the gateway reserves for the same demand it was routed by. Compaction is not in the request
+// summary yet.
+func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
 		InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
@@ -130,9 +131,11 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 // be made in segments.
 func (r *Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
+	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
+	// whose speed is unknown is reserved in full.
 	segmentable := c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
-		out > r.cfg.FirstSegment+r.cfg.Overshoot
-	return Entry{Endpoint: c.ID, Model: c.Model, Price: c.Price, MaxOutput: out, Segmentable: segmentable}
+		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
+	return Entry{Endpoint: c.ID, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out, Segmentable: segmentable}
 }
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint

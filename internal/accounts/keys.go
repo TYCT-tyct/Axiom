@@ -87,3 +87,34 @@ func recordKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, 
 		Module: "accounts", Kind: "api_key", ID: key.TypeID(), Site: site, Account: account,
 	}})
 }
+
+// KeyInfo is what a key shows of itself.
+type KeyInfo struct {
+	Name string
+	// Label is the key with its middle left out, such as sk-ax-v1-...Ab12: enough to tell keys apart, not to use one.
+	Label     string
+	ExpiresAt *time.Time
+}
+
+// GetKeyInfo reads a key of the transaction's scope; another account's key, a deleted one and an unknown one are all
+// ErrKeyNotFound.
+func (s *Service) GetKeyInfo(ctx context.Context, tx pg.Tx, key KeyID) (KeyInfo, error) {
+	row, err := s.queries.GetKeyInfo(ctx, tx, uuid.UUID(key))
+	if errors.Is(err, pg.ErrNoRows) {
+		return KeyInfo{}, ErrKeyNotFound
+	}
+	if err != nil {
+		return KeyInfo{}, fmt.Errorf("get an API key: %w", err)
+	}
+	return KeyInfo{Name: row.Name, Label: row.Prefix + "..." + row.Last4, ExpiresAt: row.ExpiresAt}, nil
+}
+
+// AccountWorkspaces are the IDs of all the workspaces of the account, deleted ones included, which billing sums an
+// account's spend over. The transaction's scope must be that account's; another account's workspaces are not visible.
+func (s *Service) AccountWorkspaces(ctx context.Context, tx pg.Tx, account AccountID) ([]uuid.UUID, error) {
+	ids, err := s.queries.ListAccountWorkspaces(ctx, tx, uuid.UUID(account))
+	if err != nil {
+		return nil, fmt.Errorf("list the workspaces of an account: %w", err)
+	}
+	return ids, nil
+}

@@ -12,6 +12,8 @@ export default {
     navigation: "主导航",
     skipToContent: "跳到正文",
   },
+  dialog: { close: "关闭" },
+  copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中" },
   state: {
     loading: "正在加载",
     emptyTitle: "这里还没有内容",

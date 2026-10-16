@@ -235,8 +235,16 @@ func TestSortAndPerformance(t *testing.T) {
 	}
 }
 
-// TestPlanBounds: at most three distinct entries; each carries its endpoint's price version and the output limit that
-// applies; the route is recorded.
+// checkLimits checks the limits an entry carries are its endpoint's, as the helper endpoint has them.
+func checkLimits(t *testing.T, i int, e routing.Entry) {
+	t.Helper()
+	if e.Limits.ContextLength != 1_000_000 || e.Limits.OutputSpeed != 100 || e.Limits.Reports != 1<<catalog.ItemCacheRead {
+		t.Errorf("entry %d limits: %+v", i, e.Limits)
+	}
+}
+
+// TestPlanBounds: at most three distinct entries; each carries its endpoint's price version, the output limit that
+// applies and the limits billing quotes it by; the route is recorded.
 func TestPlanBounds(t *testing.T) {
 	t.Parallel()
 	var endpoints []routing.Endpoint
@@ -257,6 +265,7 @@ func TestPlanBounds(t *testing.T) {
 		if seen[e.Endpoint] || e.MaxOutput != want || e.Price.Version != uuid.UUID(id(100+n)) || e.Model != model || p.Record.Route[i] != e.Endpoint {
 			t.Errorf("entry %d: %+v", i, e)
 		}
+		checkLimits(t, i, e)
 		seen[e.Endpoint] = true
 	}
 	if p.MaxAttempts != 4 || !p.StartBy.Equal(t0.Add(2*time.Minute)) {
@@ -276,6 +285,7 @@ func TestSegmentable(t *testing.T) {
 		{"all of it", nil, nil, true},
 		{"cannot stream", func(e *routing.Endpoint) { e.Streams = false }, nil, false},
 		{"does not cancel", func(e *routing.Endpoint) { e.Cancels = false }, nil, false},
+		{"its output speed is not known", func(e *routing.Endpoint) { e.OutputSpeed = 0 }, nil, false},
 		{"reasoning not visible in this format", func(e *routing.Endpoint) { e.ReasoningVisible = routing.Of(protocol.Chat) }, nil, false},
 		{"the request hides reasoning", nil, func(in *routing.Input) { in.Req.HidesReasoning = true }, false},
 		{"the limit is near the overshoot", nil, func(in *routing.Input) { in.Req.MaxOutput = 1500 }, false},

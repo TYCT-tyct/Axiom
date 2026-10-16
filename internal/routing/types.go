@@ -10,6 +10,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 )
@@ -69,11 +70,13 @@ type Plan struct {
 const MaxEntries = 3
 
 // Entry is one endpoint to try, with what billing needs to quote it: the price version it will be charged under, the
-// output limit that applies to it, and whether its reservation can be made in segments.
+// output limit that applies to it, whether its reservation can be made in segments, and the model's limits at this
+// endpoint, the same ones the route was filtered by.
 type Entry struct {
 	Endpoint    EndpointID
 	Model       catalog.ModelID
 	Price       PriceRef
+	Limits      billing.Model
 	MaxOutput   int64
 	Segmentable bool
 }

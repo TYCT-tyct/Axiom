@@ -286,6 +286,75 @@ func (q *Queries) Now(ctx context.Context, db DBTX) (time.Time, error) {
 	return column_1, err
 }
 
+const readFunds = `-- name: ReadFunds :one
+SELECT b.balance,
+    coalesce((SELECT sum(s.spent) FROM billing.spend s WHERE s.subject = ANY ($1::uuid[])), 0)::bigint AS spent
+FROM billing.balances b
+WHERE b.account_id = $2
+`
+
+type ReadFundsParams struct {
+	Workspaces []uuid.UUID
+	AccountID  uuid.UUID
+}
+
+type ReadFundsRow struct {
+	Balance int64
+	Spent   int64
+}
+
+// The account's balance and what it has been charged in all, for the read-only endpoints: no lock, and no row means a
+// balance of 0, which is how Reserve treats it too. Spent is summed over the account's workspaces only; each charge is
+// also counted under its key.
+func (q *Queries) ReadFunds(ctx context.Context, db DBTX, arg ReadFundsParams) (ReadFundsRow, error) {
+	row := db.QueryRow(ctx, readFunds, arg.Workspaces, arg.AccountID)
+	var i ReadFundsRow
+	err := row.Scan(&i.Balance, &i.Spent)
+	return i, err
+}
+
+const readKeyUsage = `-- name: ReadKeyUsage :one
+WITH t AS (SELECT clock_timestamp() AS now)
+SELECT
+    coalesce(sum(s.spent), 0)::bigint AS total,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
+    coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from($1::text, t.now)
+        AND s.window_start < billing.window_to($1::text, t.now)), 0)::bigint AS limited
+FROM billing.spend s, t
+WHERE s.subject = $2
+`
+
+type ReadKeyUsageParams struct {
+	Reset string
+	KeyID uuid.UUID
+}
+
+type ReadKeyUsageRow struct {
+	Total   int64
+	Daily   int64
+	Weekly  int64
+	Monthly int64
+	Limited int64
+}
+
+// What a key has spent: all time, and in the current UTC day, week and month, plus what its limit counts in the
+// current window of its reset (spent and reserved together, as admission does). An empty reset is the window of every
+// day. A key that never spent has no rows, and its sums are 0.
+func (q *Queries) ReadKeyUsage(ctx context.Context, db DBTX, arg ReadKeyUsageParams) (ReadKeyUsageRow, error) {
+	row := db.QueryRow(ctx, readKeyUsage, arg.Reset, arg.KeyID)
+	var i ReadKeyUsageRow
+	err := row.Scan(
+		&i.Total,
+		&i.Daily,
+		&i.Weekly,
+		&i.Monthly,
+		&i.Limited,
+	)
+	return i, err
+}
+
 const readUsage = `-- name: ReadUsage :one
 WITH d AS (SELECT date_trunc('day', coalesce($5::timestamptz, clock_timestamp()), 'UTC') AS day)
 SELECT
