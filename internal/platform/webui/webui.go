@@ -25,6 +25,7 @@ const (
 // Frontend is the three apps. It is immutable once built, so one value serves any number of requests.
 type Frontend struct {
 	site, console, admin *app
+	headers              map[string]string // the security headers of every answer
 }
 
 // New reads the apps from root, which holds site/, console/, admin/ and the content security policy. A missing app or
@@ -41,7 +42,7 @@ func New(root fs.FS) (*Frontend, error) {
 		"Referrer-Policy":         "strict-origin-when-cross-origin",
 		"Permissions-Policy":      "camera=(), microphone=(), geolocation=()",
 	}
-	f := &Frontend{}
+	f := &Frontend{headers: headers}
 	for _, a := range []struct {
 		dir, mount string
 		into       **app
@@ -50,7 +51,7 @@ func New(root fs.FS) (*Frontend, error) {
 		if err != nil {
 			return nil, err
 		}
-		if *a.into, err = loadApp(sub, a.mount, headers); err != nil {
+		if *a.into, err = loadApp(sub, a.mount); err != nil {
 			return nil, fmt.Errorf("%s: %w", a.dir, err)
 		}
 	}
@@ -58,37 +59,38 @@ func New(root fs.FS) (*Frontend, error) {
 }
 
 // Public serves the website at / and the console at /console/, and nothing of the admin: its files are not in this
-// handler at all.
+// handler at all. Every answer carries the security headers, the redirect and the 405 of the routing included.
 func (f *Frontend) Public() http.Handler {
 	mux := http.NewServeMux()
-	f.RegisterPublic(mux)
-	return mux
-}
-
-// RegisterPublic adds the website and the console to mux, for a listener that serves more than the pages: the
-// website answers every GET or HEAD no other pattern of mux claims, except those of an API (see apiPrefixes). The
-// patterns name their method so that another method on an API path finds no match and gets the mux's own 405 with
-// the methods that path takes, as it did before there were pages.
-func (f *Frontend) RegisterPublic(mux *http.ServeMux) {
-	mux.Handle("GET "+consoleMount+"/", f.console)
-	mux.HandleFunc("GET "+consoleMount, func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(consoleMount+"/", f.console)
+	mux.HandleFunc(consoleMount, func(w http.ResponseWriter, r *http.Request) {
 		target := consoleMount + "/"
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}
 		http.Redirect(w, r, target, http.StatusPermanentRedirect) //nolint:gosec // the path is constant; the query is the caller's own, sent back to the caller
 	})
-	mux.Handle("GET /", f.site)
+	mux.Handle("/", f.site)
+	return f.secured(mux)
 }
 
 // Admin serves the admin app, for the admin listener alone.
-func (f *Frontend) Admin() http.Handler { return f.admin }
+func (f *Frontend) Admin() http.Handler { return f.secured(f.admin) }
+
+// secured sets the security headers before next answers, so no answer of it, whoever writes it, goes without.
+func (f *Frontend) secured(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for name, value := range f.headers {
+			w.Header().Set(name, value)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // app is one app's files, read into memory once: a few MB, against a map lookup per request.
 type app struct {
-	mount   string // where the app is mounted, without the trailing slash; empty for the root
-	files   map[string]*file
-	headers map[string]string
+	mount string // where the app is mounted, without the trailing slash; empty for the root
+	files map[string]*file
 }
 
 // apiPrefixes are the path prefixes of the programs' APIs. What reaches an app under them is a request no API route
@@ -100,16 +102,12 @@ func isAPI(urlPath string) bool {
 }
 
 func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h := w.Header()
-	for name, value := range a.headers {
-		h.Set(name, value)
-	}
 	if isAPI(r.URL.Path) {
 		reject(w, http.StatusNotFound)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.Set("Allow", "GET, HEAD")
+		w.Header().Set("Allow", "GET, HEAD")
 		reject(w, http.StatusMethodNotAllowed)
 		return
 	}
@@ -152,7 +150,7 @@ const (
 	cacheNever   = "no-store"
 )
 
-func loadApp(files fs.FS, mount string, headers map[string]string) (*app, error) {
+func loadApp(files fs.FS, mount string) (*app, error) {
 	contents := map[string][]byte{}
 	err := fs.WalkDir(files, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -167,7 +165,7 @@ func loadApp(files fs.FS, mount string, headers map[string]string) (*app, error)
 	if _, ok := contents[entry]; !ok {
 		return nil, fmt.Errorf("no %s: run `just web-embed`", entry)
 	}
-	a := &app{mount: mount, files: map[string]*file{}, headers: headers}
+	a := &app{mount: mount, files: map[string]*file{}}
 	for name, body := range contents {
 		if isVariant(name, contents) {
 			continue

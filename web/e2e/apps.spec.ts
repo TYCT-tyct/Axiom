@@ -56,9 +56,11 @@ for (const app of apps) {
 
   // A script of a build that is gone must fail as the 404 it is: served as the entry page, it would pass for a script.
   test(`the ${app.name} answers a script it does not have with a 404, not a page`, async ({ request }) => {
-    const missing = await request.get(new URL("/assets/index-ZZZZZZZZ.js", app.url).href, {
+    const missing = await request.get(new URL("assets/index-ZZZZZZZZ.js", app.url).href, {
       headers: { Accept: "text/html" },
     });
+    // Asked under the app's own path, not the website's.
+    expect(new URL(missing.url()).pathname).toBe(`${new URL(app.url).pathname}assets/index-ZZZZZZZZ.js`);
     expect(missing.status()).toBe(404);
     expect(missing.headers()["content-type"]).not.toContain("html");
     expect(missing.headers()["cache-control"]).toBe("no-store");
@@ -88,6 +90,6 @@ test("the public listener has none of the admin's files", async ({ request }) =>
   expect(script).not.toBe("");
   expect((await request.get(new URL(script, apps[2].url).href)).status()).toBe(200);
   for (const app of [apps[0], apps[1]]) {
-    expect((await request.get(new URL(script, app.url).href)).status()).toBe(404);
+    expect((await request.get(new URL(script.slice(1), app.url).href)).status()).toBe(404);
   }
 });

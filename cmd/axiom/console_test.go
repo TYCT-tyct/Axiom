@@ -83,17 +83,11 @@ func TestPublicRoutesServePagesBesideTheAPI(t *testing.T) {
 		{"the website", "/", "text/html", 200, "<site>"},
 		{"the console", "/console/keys", "text/html", 200, "<console>"},
 		{"the API", "/api/console/v1/version", "*/*", 200, ""},
-		{"an API path no route claims", "/api/console/v1/nothing-here", "text/html", 404, "Not Found\n"},
+		{"an API path no route claims", "/api/console/v1/nothing-here", "text/html", 404, "404 page not found\n"},
 		{"the model calls' prefix", "/v1/chat/completions", "text/html", 404, "Not Found\n"},
 		{"a path of the admin, which the website's router does not know either", "/admin/", "text/html", 200, "<site>"},
 	}
 	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
-	// Another method on an API path is the API's 405, naming the method the path takes, not a page and not a 404.
-	rec := httptest.NewRecorder()
-	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/console/v1/version", nil))
-	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "GET") {
-		t.Errorf("PUT on an API path: %d, Allow %q, want 405 allowing GET", rec.Code, rec.Header().Get("Allow"))
-	}
 	for _, c := range cases {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, c.target, nil)
 		req.Header.Set("Accept", c.accept)
@@ -124,6 +118,37 @@ func TestConsoleAnswersAreCompressed(t *testing.T) {
 		routes.ServeHTTP(rec, req)
 		if got := rec.Header().Get("Content-Encoding"); got != c.wantEncoding || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Errorf("%d bytes, Accept-Encoding %q: Content-Encoding %q, Cache-Control %q", len(c.version), c.accept, got, rec.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+// TestPublicRoutesKeepTheAPIsMethodErrors: another method on an API path is the API's own 405 naming the one method the
+// path takes, however a page would answer it, and a path no route has is a 404. Every answer outside the API, the
+// routing's own 405 and the redirect included, carries the security headers.
+func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
+	cases := []struct {
+		method, target, allow string
+		status                int
+		secured               bool
+	}{
+		{http.MethodGet, "/api/console/v1/auth/sign-in", "POST", 405, false},
+		{http.MethodHead, "/api/console/v1/auth/sign-in", "POST", 405, false},
+		{http.MethodPut, "/api/console/v1/auth/sign-in", "POST", 405, false},
+		{http.MethodPut, "/api/console/v1/version", "GET, HEAD", 405, false},
+		{http.MethodGet, "/api/console/v1/nothing-here", "", 404, false},
+		{http.MethodPost, "/", "GET, HEAD", 405, true},
+		{http.MethodGet, "/console", "", 308, true},
+		{http.MethodGet, "/", "", 200, true},
+	}
+	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), c.method, c.target, nil))
+		if rec.Code != c.status || rec.Header().Get("Allow") != c.allow {
+			t.Errorf("%s %s: %d, Allow %q, want %d, %q", c.method, c.target, rec.Code, rec.Header().Get("Allow"), c.status, c.allow)
+		}
+		if got := rec.Header().Get("Content-Security-Policy"); c.secured && got != "default-src 'self'" {
+			t.Errorf("%s %s: Content-Security-Policy %q", c.method, c.target, got)
 		}
 	}
 }

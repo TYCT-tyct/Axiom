@@ -67,11 +67,15 @@ func publicRoutes(api consoleapi.StrictServerInterface, frontend *webui.Frontend
 			writeError(w, http.StatusInternalServerError, consoleapi.ErrorCodeInternal, "internal error")
 		},
 	})
-	mux := http.NewServeMux()
-	frontend.RegisterPublic(mux)
-	return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
-		BaseRouter:       mux,
+	handler := consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
+		BaseRouter:       http.NewServeMux(),
 		Middlewares:      []consoleapi.MiddlewareFunc{httpserver.Compress},
 		ErrorHandlerFunc: badRequest,
 	})
+	// The API owns its prefix for every method, so what it does not route is its own 404 or 405 with the methods the
+	// path takes; the pages get the rest.
+	routes := http.NewServeMux()
+	routes.Handle("/api/", handler)
+	routes.Handle("/", frontend.Public())
+	return routes
 }

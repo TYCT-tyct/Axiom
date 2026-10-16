@@ -33,8 +33,8 @@ func Compress(next http.Handler) http.Handler {
 			return
 		}
 		c := &compressor{ResponseWriter: w}
-		defer c.finish()
 		next.ServeHTTP(c, r)
+		c.finish() // not deferred: a handler that panics has sent nothing yet, and Public answers 500 for it
 	})
 }
 

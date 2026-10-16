@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -212,5 +213,50 @@ func TestCompressFlushesWhatItCompresses(t *testing.T) {
 	rest, err := io.ReadAll(zr)
 	if err != nil || string(rest) != second || resp.Header.Get("Content-Encoding") != "gzip" {
 		t.Errorf("the rest: %d bytes (%v), encoding %q", len(rest), err, resp.Header.Get("Content-Encoding"))
+	}
+}
+
+// panicking answers with the start of a JSON body and panics, flushing first if flush, behind Public and Compress.
+func panicking(t *testing.T, flush bool) http.Handler {
+	return Public(Compress(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeTo(t, w, `{"partial":`)
+		if flush {
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Error(err)
+			}
+		}
+		panic("planted")
+	})), slog.New(slog.DiscardHandler), time.Minute)
+}
+
+// getFrom serves h and requests it, accepting gzip.
+func getFrom(t *testing.T, h http.Handler) (*http.Response, error) {
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+	return http.DefaultClient.Do(req)
+}
+
+// TestCompressLeavesAPanicToPublic: a handler that panics before anything is flushed has sent the client nothing, so
+// Public answers 500 for it; Compress must not commit the answer it holds on the way out. After a flush the answer has
+// begun, and the connection is aborted instead.
+func TestCompressLeavesAPanicToPublic(t *testing.T) {
+	resp, err := getFrom(t, panicking(t, false))
+	if err != nil {
+		t.Fatalf("a panic before anything was sent: %v, want a 500", err)
+	}
+	if err := resp.Body.Close(); err != nil || resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("a panic before anything was sent: %d (%v), want 500", resp.StatusCode, err)
+	}
+	if resp, err := getFrom(t, panicking(t, true)); err == nil {
+		_, err := io.ReadAll(resp.Body)
+		if closeErr := resp.Body.Close(); err == nil && closeErr == nil {
+			t.Error("a panic after the flush ended as a complete response")
+		}
 	}
 }

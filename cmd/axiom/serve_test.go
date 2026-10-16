@@ -111,7 +111,8 @@ func checkMetrics(t *testing.T, addrs addresses) {
 	text := string(resp.body)
 	for _, want := range []string{
 		`axiom_http_server_requests_total{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
-		`axiom_http_server_requests_total{outcome="completed",route="GET /",status_class="4xx"} 4`,
+		`axiom_http_server_requests_total{outcome="completed",route="/",status_class="4xx"} 2`,
+		`axiom_http_server_requests_total{outcome="completed",route="/api/",status_class="4xx"} 2`,
 		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
 		"axiom_observability_queue_depth 0",
 	} {
