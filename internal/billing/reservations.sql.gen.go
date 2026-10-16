@@ -162,9 +162,10 @@ func (q *Queries) InsertHolder(ctx context.Context, db DBTX, arg InsertHolderPar
 const insertReservation = `-- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline)
+        workspace_window, key_window, segment, amount, state, deadline, prices)
     VALUES ($8, $3, $4, $1, $6, $9,
-        $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8))
+        $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
+        $11::text[])
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
 )
@@ -185,6 +186,7 @@ type InsertReservationParams struct {
 	RequestID       uuid.UUID
 	HolderID        uuid.UUID
 	LifetimeSeconds float64
+	Prices          []string
 }
 
 // One statement writes the reservation and its three counters.
@@ -200,6 +202,7 @@ func (q *Queries) InsertReservation(ctx context.Context, db DBTX, arg InsertRese
 		arg.RequestID,
 		arg.HolderID,
 		arg.LifetimeSeconds,
+		arg.Prices,
 	)
 	return err
 }
