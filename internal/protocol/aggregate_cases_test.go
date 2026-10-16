@@ -368,6 +368,24 @@ func finishOnly(n, per int) string {
 	return s.String() + chatDone
 }
 
+// TestAggregateResponsesBadItem: an item the upstream sends with a type that is not a string fails the call, and the
+// reply keeps what it had generated: the failure is still a 200 with the output so far.
+func TestAggregateResponsesBadItem(t *testing.T) {
+	stream := responsesEvent("response.created", 0, responsesObject) +
+		responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"msg_1","type":"message","content":[]}`) +
+		responsesEvent("response.content_part.added", 2, `,"output_index":0,"content_index":0,"item_id":"msg_1","part":{"type":"output_text","text":""}`) +
+		responsesEvent("response.output_text.delta", 3, `,"output_index":0,"content_index":0,"item_id":"msg_1","delta":"Hi"`) +
+		responsesEvent("response.output_item.added", 4, `,"output_index":1,"item":{"id":"x","type":null}`)
+	got := aggregate(t, protocol.Responses, protocol.Responses, strings.NewReader(stream), protocol.NewMemory(0), unsettled)
+	if !errors.Is(got.err, protocol.ErrUpstream) || got.status != http.StatusOK {
+		t.Fatalf("error %v, status %d:\n%s", got.err, got.status, got.body)
+	}
+	output := listOf(decode(t, got.body)["output"])
+	if len(output) != 1 || text(obj(listOf(obj(output[0])["content"])[0])["text"]) != "Hi" {
+		t.Errorf("output %v", output)
+	}
+}
+
 // TestAggregateChatHeld: the choices a Chat upstream finishes are held until its end and made into the reply after the
 // charging has ended, so they are charged when they are held: finish-only choices past the cap fail the stream with
 // ErrMemory before its end, and give back what they drew, though no chunk comes near the size of an event.

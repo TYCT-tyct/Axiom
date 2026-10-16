@@ -142,15 +142,15 @@ func (a *responsesAggregate) putItem(done bool) error {
 	if e.object == nil || e.item < 0 || e.item > int64(len(a.items)) {
 		return nil
 	}
+	if _, err := a.kindOf(e.object); err != nil { // before the item is added, which would leave it empty
+		return err
+	}
 	if e.item == int64(len(a.items)) {
 		var err error
 		if a.items, err = grow(&a.aggBase, a.items, 1, 1); err != nil {
 			return err
 		}
 		a.items = append(a.items, responseItem{})
-	}
-	if _, err := a.kindOf(e.object); err != nil {
-		return err
 	}
 	it := &a.items[e.item]
 	if done {
