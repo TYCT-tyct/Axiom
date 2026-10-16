@@ -65,15 +65,16 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 | 开头的 `system`、`developer` 消息 | 顶层 `system` 的文本块 | 原位的 `message` 项，角色不变 |
 | 对话中的 `system`、`developer` 消息 | `MidSystem` 时原位的 `role: "system"`，须紧跟用户或工具结果、后面是助手或结尾；紧跟工具结果而模型不信任时、位置不合规时 `*NotSupported`（《Mid-conversation system messages》，2026-10-13） | 原位 |
 | 第一条非系统消息不是用户 | `*NotSupported` | 照写 |
-| 文本 | 文本块，带着 OpenRouter 写法的 `cache_control`；空文本不写 | `input_text`；助手的是 `output_text`；`cache_control` 在 `CacheBreakpoints` 的模型上写成 `prompt_cache_breakpoint: {"mode": "explicit"}`，其余模型和其余部件、工具上的不写，TTL 不转：OpenAI 自己缓存前缀，标记不改变模型读到的内容（OpenRouter《Prompt caching》「OpenAI」，OpenAI《Prompt caching》，2026-10-16）。所以发往 Responses 时 `UsageContext.CacheTTL1h` 总是 false |
+| 文本 | 文本块，带着 OpenRouter 写法的 `cache_control`；空文本不写 | `input_text`；助手的是 `output_text`；文本块（助手的也一样）的 `cache_control` 在 `CacheBreakpoints` 的模型上写成 `prompt_cache_breakpoint: {"mode": "explicit"}`，其余模型和图片、文件、工具上的不写，TTL 不转，规则和对费用的影响见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)。所以发往 Responses 时 `UsageContext.CacheTTL1h` 总是 false |
 | 消息的 `name` | 按 OpenRouter 对非 OpenAI 模型的做法，以 `name: ` 写在第一段文本（或拒答）之前，没有文本就单独一段（OpenRouter《API reference》「Requests」，2026-10-16）；工具结果的不写，它的调用 ID 已经说明 | 同左 |
-| 助手的 `refusal` | 写成一个文本块：拒答就是助手说的话，Anthropic 自己的拒答也是文本 | 助手消息里的 `refusal` 部件 |
+| 助手的 `refusal`，消息的成员或 `refusal` 部件 | 写成一个文本块：拒答就是助手说的话，Anthropic 自己的拒答也是文本 | 助手消息里的 `refusal` 部件 |
+| 别的角色的 `refusal` 部件 | `*NotSupported` | `*NotSupported` |
 | 图片 | data URL 写成 base64，其余写成 URL；`detail: low` `*NotSupported` | `input_image`，`detail` 照写 |
 | 文件 | PDF 的 data URL 写成 `document`；其他文件、`file_id` `*NotSupported` | `input_file`；`file_id` `*NotSupported` |
 | 音频等其他部件 | `*NotSupported` | `*NotSupported` |
 | 工具调用 | `tool_use`，ID 见下；`arguments` 必须是 JSON 对象，空串当 `{}` | `function_call`，`call_id`、`arguments` 原样 |
 | 工具结果 | 连续的几条合成一条用户消息的 `tool_result` 块 | `function_call_output` |
-| 回放的推理（OpenRouter `reasoning_details`） | 先把客户端按流式收到的样子交回的条目合并：类型和 `index` 相同的是一条，文本和摘要按顺序拼接，签名、密文、ID 取给了的那个（OpenRouter《Reasoning tokens》「Streaming Response」，2026-10-15）；只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 同左合并后，只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文，ID 按解码后的值比较 |
+| 回放的推理（OpenRouter `reasoning_details`） | 先把客户端按流式收到的样子交回的条目合并：类型和 `index` 相同的是一条，文本和摘要按顺序拼接，签名、密文、ID 取给了的那个（OpenRouter《Reasoning tokens》「Streaming Response」，2026-10-15）；只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 同左合并后，只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文：每个 ID 解码一次作为映射键，按出现顺序写出、写原文 |
 | 空的助手消息 | 不写（Anthropic 拒绝空内容，前后的用户消息由它合并） | 一个空的 `output_text` |
 | 函数工具 | `input_schema`，没有就是空对象；`strict: true` 只在 schema 属于 Anthropic 的子集时写，否则 `*NotSupported` | `strict` 总是写，Chat 没写就写 `false`：Responses 把没写当成 `true` 并改写 schema（OpenAI《Function calling》「Strict mode」） |
 | `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `DefaultSamplingOnly` 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |

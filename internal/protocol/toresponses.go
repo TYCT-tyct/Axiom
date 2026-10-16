@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json/jsontext" //nolint:depguard // as in canon.go: an ID is decoded only to match it
 	"strconv"
 
 	"axiom/internal/platform/jsonx"
@@ -108,7 +109,7 @@ func inputItems(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) 
 		}
 		return append(append(append(out, '['), parts...), "]}"...), nil
 	case "assistant":
-		return assistantItems(out, msg)
+		return assistantItems(out, msg, breakpoints)
 	}
 	return nil, &NotSupported{Reason: "role " + msg.Role + " has no Responses counterpart"}
 }
@@ -127,18 +128,21 @@ func inputParts(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) 
 	return out, nil
 }
 
-// inputPart writes one part. A text part's cache_control becomes a cache breakpoint on a model that takes them;
-// elsewhere, and on other parts, it is left out, as OpenRouter does: OpenAI caches the prefix by itself, and the
-// marker changes nothing the model reads (OpenRouter《Prompt caching》"OpenAI", OpenAI《Prompt caching》"GPT-5.6 and
-// later", read 2026-10-16).
+// appendBreakpoint appends the cache breakpoint a text part's cache_control becomes on a model that takes them. Its TTL
+// and every other marker are left out, as OpenRouter does (docs/domains/gateway.md「转发规则」).
+func appendBreakpoint(out []byte, p canonPart, breakpoints bool) []byte {
+	if breakpoints && !isNull(p.CacheControl) {
+		out = append(out, `,"prompt_cache_breakpoint":{"mode":"explicit"}`...)
+	}
+	return out
+}
+
+// inputPart writes one part.
 func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 	switch {
 	case p.Type == "text":
 		out = append(append(out, `{"type":"input_text","text":`...), p.Text...)
-		if breakpoints && !isNull(p.CacheControl) {
-			out = append(out, `,"prompt_cache_breakpoint":{"mode":"explicit"}`...)
-		}
-		return append(out, '}'), nil
+		return append(appendBreakpoint(out, p, breakpoints), '}'), nil
 	case p.Type == "image_url" && p.ImageURL != nil:
 		out = appendQuoted(append(out, `{"type":"input_image","image_url":`...), p.ImageURL.URL)
 		if p.ImageURL.Detail != "" {
@@ -158,12 +162,12 @@ func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 // assistantItems writes an assistant message: each reasoning item it hands back with encrypted content, which is
 // all the upstream can use when it stores nothing, then its text and function calls. An empty turn still takes its
 // place in the conversation.
-func assistantItems(out []byte, msg canonMessage) ([]byte, error) {
+func assistantItems(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
 	start := len(out)
 	for _, item := range reasoningItems(msg.ReasoningDetails) {
 		out = append(commaAfter(out, start), item...)
 	}
-	text, err := outputText(msg)
+	text, err := outputText(msg, breakpoints)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +187,7 @@ func assistantItems(out []byte, msg canonMessage) ([]byte, error) {
 }
 
 // outputText is an assistant message's text as output_text parts, comma-separated; empty text writes nothing.
-func outputText(msg canonMessage) ([]byte, error) {
+func outputText(msg canonMessage, breakpoints bool) ([]byte, error) {
 	var text []byte
 	for _, p := range msg.Parts {
 		switch {
@@ -193,7 +197,8 @@ func outputText(msg canonMessage) ([]byte, error) {
 			return nil, &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
 		case string(p.Text) == `""`:
 		default:
-			text = append(append(append(commaAfter(text, 0), `{"type":"output_text","text":`...), p.Text...), '}')
+			text = append(append(commaAfter(text, 0), `{"type":"output_text","text":`...), p.Text...)
+			text = append(appendBreakpoint(text, p, breakpoints), '}')
 		}
 	}
 	return text, nil
@@ -206,15 +211,19 @@ type reasoningItem struct{ id, summary, encrypted []byte }
 // order. An item without encrypted content is left out: the upstream stores nothing to look its ID up in.
 func reasoningItems(details []canonReasoningDetail) [][]byte {
 	var gathered []*reasoningItem
+	at := map[string]int{} // by the ID decoded, so that two ways of escaping it are one item
 	for _, d := range details {
 		if d.Format != "openai-responses-v1" || isNull(d.ID) {
 			continue
 		}
-		i := 0
-		for i < len(gathered) && !sameString(gathered[i].id, d.ID) {
-			i++
+		key, err := jsontext.AppendUnquote(nil, d.ID)
+		if err != nil {
+			key = d.ID // not a string: matched as written
 		}
-		if i == len(gathered) {
+		i, seen := at[string(key)]
+		if !seen {
+			i = len(gathered)
+			at[string(key)] = i
 			gathered = append(gathered, &reasoningItem{id: d.ID})
 		}
 		gathered[i].add(d)

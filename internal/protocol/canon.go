@@ -70,7 +70,8 @@ type canonMessage struct {
 // canonPart is one content part.
 type canonPart struct {
 	Type     string         `json:"type"`
-	Text     jsontext.Value `json:"text"`
+	Text     jsontext.Value `json:"text"` // a refusal part's refusal too (settle)
+	Refusal  jsontext.Value `json:"refusal"`
 	ImageURL *struct {
 		URL    string `json:"url"`
 		Detail string `json:"detail"`
@@ -155,6 +156,11 @@ func (m *canonMessage) settle() error {
 	var err error
 	if m.Parts, err = m.readParts(); err != nil {
 		return err
+	}
+	for i, p := range m.Parts {
+		if p.Type == "refusal" { // what it says is its refusal, which the conversions write as they write text
+			m.Parts[i].Text = p.Refusal
+		}
 	}
 	if m.ReasoningDetails, err = mergeDetails(m.ReasoningDetails); err != nil {
 		return err
@@ -249,13 +255,6 @@ func (j *joined) value(unset jsontext.Value) jsontext.Value {
 	return slices.Concat([]byte{'"'}, j.body, []byte{'"'})
 }
 
-// sameString reports whether the JSON strings a and b say the same, however each escapes it.
-func sameString(a, b jsontext.Value) bool {
-	x, errA := jsontext.AppendUnquote(nil, a)
-	y, errB := jsontext.AppendUnquote(nil, b)
-	return errA == nil && errB == nil && string(x) == string(y)
-}
-
 // given is b when it was given, else a.
 func given(a, b jsontext.Value) jsontext.Value {
 	if isNull(b) {
@@ -292,8 +291,11 @@ func (m *canonMessage) checkShape() error {
 		}
 	}
 	for _, p := range m.Parts {
-		if p.Type == "text" && p.Text.Kind() != '"' {
-			return shapeError("a text part without text")
+		switch {
+		case (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() != '"':
+			return shapeError("a text part without text or a refusal part without its refusal")
+		case p.Type == "refusal" && m.Role != "assistant":
+			return &NotSupported{Reason: "a refusal part in a " + m.Role + " message"}
 		}
 	}
 	return nil
