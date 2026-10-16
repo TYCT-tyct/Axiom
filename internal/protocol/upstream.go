@@ -19,8 +19,8 @@ type upstream interface {
 	// usageEvent appends a usage event with u, cost and top, members for the usage and for the event; only a format
 	// whose relayFormat says rendersUsage is asked.
 	usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte
-	// dropBuffers lets go of what the reader holds for reading events, once no more are read: only what failure
-	// writes stays.
+	// dropBuffers lets go of everything the reader holds for reading events, once no more are read: only the
+	// strings failure writes stay.
 	dropBuffers()
 }
 
@@ -65,19 +65,18 @@ type edit struct {
 // writes into buf, charged as the relay's own buffers are and reused.
 type eventReader struct {
 	reader
-	src    bytes.Buffer
-	ctx    UsageContext
-	rw     rewriter
-	e      event
-	buf    []byte
-	pre    []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
-	charge func(n int) error
+	src bytes.Buffer
+	ctx UsageContext
+	rw  rewriter
+	e   event
+	buf []byte
+	pre []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
 	// id and model are the call ID and the client's model name as JSON strings, for edits.
 	id, model string
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
-	s.ctx, s.charge = u, charge
+	s.ctx, s.charge, s.rw.charge = u, charge, charge
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.Model
 	s.rw.usageMembers = usageMembers
@@ -96,8 +95,7 @@ func (s *eventReader) start(data []byte) {
 }
 
 func (s *eventReader) dropBuffers() {
-	s.src, s.dec, s.buf, s.pre, s.e = bytes.Buffer{}, nil, nil, nil, event{}
-	s.rw.dec, s.rw.body, s.rw.out = nil, nil, nil
+	s.reader, s.src, s.rw, s.buf, s.pre, s.e = reader{}, bytes.Buffer{}, rewriter{}, nil, nil, event{}
 }
 
 // text counts a string member, unquoted, as content.
@@ -118,16 +116,21 @@ func (s *eventReader) rawContent() error {
 // replace reads a member and edits it to with, a JSON string, whatever the upstream wrote but null.
 func (s *eventReader) replace(with string) error {
 	v, err := s.dec.ReadValue()
-	if err == nil && v.Kind() != 'n' {
-		s.edit(len(v), with)
+	if err != nil || v.Kind() == 'n' {
+		return err
 	}
-	return err
+	return s.edit(len(v), with)
 }
 
 // edit replaces the n bytes just read with with.
-func (s *eventReader) edit(n int, with string) {
+func (s *eventReader) edit(n int, with string) error {
+	var err error
+	if s.e.edits, err = sse.Grow(s.e.edits, 1, s.charge); err != nil {
+		return err
+	}
 	to := int(s.dec.InputOffset())
 	s.e.edits = append(s.e.edits, edit{to - n, to, with})
+	return nil
 }
 
 // rewrite rewrites the event, its edits applied, by rules into buf, which the relay copies before the next event. Its

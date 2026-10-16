@@ -17,26 +17,31 @@ import (
 // A chunk is split three ways. Its content goes on in place, so the content of every choice keeps its order. Each
 // finish_reason in it becomes null there and is held, as a chunk of its own for that choice, until [DONE]: a
 // finish_reason tells the client the choice is complete. Its usage becomes null there and goes to the meter; the
-// client gets the usage chunk we write from the settlement. [DONE] is the normal end once every choice that started
-// has finished, and a chunk with a top-level error the upstream's failure (OpenRouter《Errors》, read 2026-10-14).
+// client gets the usage chunk we write from the settlement. What is left goes on unless no choice in it has a member
+// with a value but its index and its finish_reason, and no delta in it has a member with a value: the members, not
+// the content counted, tell whether anything is left, so a role or logprobs next to a finish_reason still reach the
+// client. [DONE] is the normal end once every choice that started has finished, and a chunk with a top-level error
+// the upstream's failure (OpenRouter《Errors》, read 2026-10-14).
 type chatStream struct {
 	eventReader
 	created string // the created of the upstream's first chunk, for the chunks we write
-	// choices are the choices started so far, each with its finish_reason as written once it gave one.
-	choices map[int64]string
-	// The chunk being read: the choice being read, its finish_reason, the finish signals split from the chunk so
-	// far, and what else it carries.
-	index                       int64
-	finish                      string
-	held                        []byte
-	failed, rewrites, noChoices bool
-	report                      *openAIUsage
-	reportErr                   error
-	tier                        *string
+	// choices are the choices started so far, each set once it gave a finish_reason; first is choice 0's, as written,
+	// which our usage chunk repeats.
+	choices map[int64]bool
+	first   string
+	// The chunk being read: the choice being read and its finish_reason, in the chunk's data; the finish signals split
+	// from the chunk so far; whether anything but them is left; and what else it carries.
+	index                             int64
+	finish                            []byte
+	held                              []byte
+	more, failed, rewrites, noChoices bool
+	report                            *openAIUsage
+	reportErr                         error
+	tier                              *string
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
-	s := &chatStream{created: "0", choices: map[int64]string{}}
+	s := &chatStream{created: "0", choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
 	return s
 }
@@ -58,7 +63,7 @@ var (
 	}
 	choiceFields = map[string]func(*chatStream) error{
 		"index":         (*chatStream).choiceIndex,
-		"delta":         func(s *chatStream) error { return walk(&s.reader, s, chatDeltaFields) },
+		"delta":         func(s *chatStream) error { return s.walkNoting(chatDeltaFields, true) },
 		"finish_reason": (*chatStream).finishReason,
 	}
 	chatDeltaFields = map[string]func(*chatStream) error{
@@ -84,7 +89,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	if string(data) == sse.Done {
 		return s.done()
 	}
-	s.held, s.failed, s.rewrites, s.noChoices, s.report, s.reportErr = s.held[:0], false, false, false, nil, nil
+	s.held, s.more, s.failed, s.rewrites, s.noChoices = s.held[:0], false, false, false, false
 	if err := walk(&s.reader, s, chatFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -100,12 +105,13 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		s.e.role = ending
 	case s.e.content > 0:
 		s.e.role = content
-	case len(s.held) > 0: // only finish signals, which are held
+	case len(s.held) > 0 && !s.more: // only finish signals, which are held
 		s.e.role = skipped
 	}
 	if s.report != nil {
 		s.e.final = true
 		s.meter(m)
+		s.report, s.reportErr = nil, nil
 	}
 	if s.rewrites {
 		return s.rewrite(chatRewrites)
@@ -115,8 +121,8 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 
 // done is [DONE]: the normal end, once every choice that started has finished.
 func (s *chatStream) done() (event, error) {
-	for i, finish := range s.choices {
-		if finish == "" {
+	for i, finished := range s.choices {
+		if !finished {
 			return event{}, fmt.Errorf("%w: [DONE] before choice %d finished", ErrUpstream, i)
 		}
 	}
@@ -124,27 +130,62 @@ func (s *chatStream) done() (event, error) {
 	return s.e, nil
 }
 
+// choiceSize is what the choices map is charged for each choice: a slot of a key and a value, 16 bytes, and its
+// control byte, in a table that doubles when 7/8 full, so it holds up to 16/7 slots per choice: 39 bytes, rounded up.
+const choiceSize = 48
+
 // choice reads one choice of a chunk, starting it, and splits off its finish signal.
 func (s *chatStream) choice() error {
-	s.noChoices, s.index, s.finish = false, 0, ""
-	if err := walk(&s.reader, s, choiceFields); err != nil {
+	s.noChoices, s.index, s.finish = false, 0, nil
+	if err := s.walkNoting(choiceFields, false); err != nil {
 		return err
 	}
 	if _, started := s.choices[s.index]; !started {
-		s.choices[s.index] = ""
+		if err := s.charge(choiceSize); err != nil {
+			return err
+		}
+		s.choices[s.index] = false
 	}
-	if s.finish == "" {
+	if s.finish == nil {
 		return nil
 	}
-	s.choices[s.index] = s.finish
-	if len(s.held) == 0 {
-		s.held = append(s.held, s.chunk("[")...)
-	} else {
-		s.held = append(s.held, ',')
+	s.choices[s.index] = true
+	if s.index == 0 {
+		if err := s.charge(max(0, len(s.finish)-len(s.first))); err != nil {
+			return err
+		}
+		s.first = string(s.finish)
 	}
-	s.held = strconv.AppendInt(append(s.held, `{"index":`...), s.index, 10)
+	return s.hold()
+}
+
+// hold adds the choice's finish signal to the held chunk, charging its room first, the closing "]}" included.
+func (s *chatStream) hold() error {
+	head := []byte(",")
+	if len(s.held) == 0 {
+		head = s.chunk("[")
+	}
+	const room = len(`{"index":,"delta":{},"finish_reason":}]}`) + 20 // 20 digits hold any int64
+	var err error
+	if s.held, err = sse.Grow(s.held, len(head)+room+len(s.finish), s.charge); err != nil {
+		return err
+	}
+	s.held = strconv.AppendInt(append(append(s.held, head...), `{"index":`...), s.index, 10)
 	s.held = append(append(append(s.held, `,"delta":{},"finish_reason":`...), s.finish...), '}')
 	return nil
+}
+
+// walkNoting reads an object by fields as walk does, and sets more for a member with a value but null that the client
+// still needs once the finish signals are out: any member when all is set, else one fields does not name.
+func (s *chatStream) walkNoting(fields map[string]func(*chatStream) error, all bool) error {
+	return s.eachMember(func() error {
+		read := fields[string(s.name)]
+		s.more = s.more || (all || read == nil) && s.dec.PeekKind() != 'n'
+		if read != nil {
+			return read(s)
+		}
+		return s.skip()
+	})
 }
 
 func (s *chatStream) choiceIndex() error {
@@ -164,11 +205,12 @@ func (s *chatStream) createdAt() error {
 // finishReason takes a choice's finish_reason out of the chunk, leaving null in its place.
 func (s *chatStream) finishReason() error {
 	v, err := s.raw()
-	if v != nil && err == nil {
-		s.finish = string(v)
-		s.edit(len(v), "null")
+	if v == nil || err != nil {
+		return err
 	}
-	return err
+	to := int(s.dec.InputOffset())
+	s.finish = s.e.data[to-len(v) : to]
+	return s.edit(len(v), "null")
 }
 
 func (s *chatStream) upstreamError() error {
@@ -190,7 +232,9 @@ func (s *chatStream) usage() error {
 	if err != nil {
 		return err
 	}
-	s.edit(len(v), "null")
+	if err := s.edit(len(v), "null"); err != nil {
+		return err
+	}
 	s.report, s.e.usage = &openAIUsage{}, true
 	s.reportErr = jsonx.Unmarshal(v, s.report)
 	return nil
@@ -238,11 +282,16 @@ func (s *chatStream) failure(dst []byte, e Error, u catalog.Usage, cost string) 
 // read 2026-10-15).
 func (s *chatStream) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
 	choices := "[]"
-	if finish := s.choices[0]; finish != "" {
-		choices = `[{"index":0,"delta":{"content":""},"finish_reason":` + finish + `}]`
+	if s.first != "" {
+		choices = `[{"index":0,"delta":{"content":""},"finish_reason":` + s.first + `}]`
 	}
 	data := append(appendOpenAIUsage(append(s.chunk(choices), `,"usage":`...), chatNames, u, cost), top+"}"...)
 	return sse.AppendEvent(dst, "", data)
+}
+
+func (s *chatStream) dropBuffers() {
+	s.eventReader.dropBuffers()
+	s.choices, s.held, s.finish, s.first = nil, nil, nil, ""
 }
 
 // chunk is the start of a chunk of ours with choices, missing its closing brace.

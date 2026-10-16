@@ -84,12 +84,51 @@ const chatMixed = chatHead + `[{"index":0,"delta":{"role":"assistant","content":
 	chatHead + `[{"index":1,"delta":{"content":"B","tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},` +
 	`"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}` + "\n\n" + chatDone
 
+// TestRelayChatSplitKeeps: once its finish signals are out, a chunk goes on if any member is left with a value, even
+// one without text, such as another choice's role or a finish's logprobs; a chunk left with nothing goes no further.
+func TestRelayChatSplitKeeps(t *testing.T) {
+	stop := `{"index":0,"delta":{},"finish_reason":"stop"}`
+	second := chatHead + `[{"index":1,"delta":{"content":"y"},"finish_reason":"stop"}]}` + "\n\n"
+	// The client gets the role chunk, Hi, what is left of the chunk when it goes on, the chunks after it, a chunk of
+	// finish signals for each chunk that had them, and the usage chunk.
+	for name, tc := range map[string]struct {
+		chunk, after string
+		chunks       int
+	}{
+		"another choice's role":   {`[` + stop + `,{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]`, second, 7},
+		"the finish's logprobs":   {`[{"index":0,"delta":{},"logprobs":{"content":[]},"finish_reason":"stop"}]`, "", 5},
+		"a delta's other member":  {`[{"index":0,"delta":{"audio":{"id":"a"}},"finish_reason":"stop"}]`, "", 5},
+		"an empty content":        {`[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]`, "", 5},
+		"only the finish":         {`[` + stop + `]`, "", 4},
+		"members without a value": {`[{"index":0,"delta":{"content":null},"logprobs":null,"finish_reason":"stop"}]`, "", 4},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stream := chatRole + chatHi + chatHead + tc.chunk + "}\n\n" + tc.after + chatDone
+			got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+			if diff := cmp.Diff(contents(t, protocol.Chat, []byte(stream)), contents(t, protocol.Chat, got.out)); diff != "" ||
+				got.err != nil {
+				t.Fatalf("error %v; contents (-upstream +client):\n%s\n%s", got.err, diff, got.out)
+			}
+			if err := streamcheck.Chat(bytes.NewReader(got.out)); err != nil {
+				t.Error(err)
+			}
+			if n := strings.Count(string(got.out), "data: {"); n != tc.chunks {
+				t.Errorf("%d chunks, want %d:\n%s", n, tc.chunks, got.out)
+			}
+		})
+	}
+}
+
 // TestRelayChatChoices: when one choice finishes in a chunk that carries another's content, the content goes on in
 // place and only the finish signal is held, so every choice keeps its order, tool calls included; a chunk with content
 // is the commit point even when it finishes a choice and carries the usage.
 func TestRelayChatChoices(t *testing.T) {
 	got := relay(t, protocol.Chat, strings.NewReader(chatMixed), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	want := map[string]string{"0/content": "x", "1/content": "AB", "1/tool0/name": "f", "1/tool0/arguments": "{}"}
+	want := map[string]string{
+		"0/role": "assistant", "0/content": "x", "0/finish_reason": "stop", "1/role": "assistant", "1/content": "AB",
+		"1/tool0/id": "call_1", "1/tool0/type": "function", "1/tool0/name": "f", "1/tool0/arguments": "{}",
+		"1/finish_reason": "tool_calls",
+	}
 	if diff := cmp.Diff(want, contents(t, protocol.Chat, got.out)); diff != "" || got.err != nil {
 		t.Fatalf("error %v; contents (-want +got):\n%s\n%s", got.err, diff, got.out)
 	}

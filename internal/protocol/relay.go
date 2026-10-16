@@ -122,6 +122,10 @@ var (
 // (internal/gateway/README.md「并发、背压与共享状态」).
 const baseMemory = 64 << 10
 
+// meterMemory is what the meter may hold, at its bounds (meter.go), charged when the relay starts: the meter lives
+// until the settlement, past every buffer. TestRelayMemoryHeld measures it.
+const meterMemory = 16 << 10
+
 // Memory is the node's memory budget for streams. It is safe for concurrent use.
 type Memory struct{ left atomic.Int64 }
 
@@ -165,13 +169,14 @@ type Relay struct {
 	err       error
 	// out is what the current step writes, and before the commit point every event held until then. withheld are the
 	// events held until the normal end, written; ending is the held ending event's data, ready for the client but for
-	// its cost, which goes at usageAt; stop is the data of the upstream's last event, nil when the ending ended the
-	// stream. edited is room for an event edited in place.
-	out, withheld, ending, stop, edited []byte
-	usageAt                             int
-	endingName, stopName                string
-	meter                               meter
-	progress                            Progress
+	// its cost, which goes at usageAt; trailing are the events without content after it, written, which follow it;
+	// stop is the data of the upstream's last event, nil when the ending ended the stream. edited is room for an event
+	// edited in place.
+	out, withheld, ending, trailing, stop, edited []byte
+	usageAt                                       int
+	endingName, stopName                          string
+	meter                                         meter
+	progress                                      Progress
 	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
 	held, charged int64
 }
@@ -198,7 +203,7 @@ var relayFormats = [...]relayFormat{
 // NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
 // yet; for others the first step fails.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
-	r := &Relay{o: o}
+	r := &Relay{o: o, held: meterMemory} // within the base allowance, so nothing is drawn yet
 	if client != upstream || int(upstream) >= len(relayFormats) {
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported yet", upstream, client)
 		return r
@@ -278,7 +283,7 @@ func (r *Relay) route(e event, data []byte) (Step, error) {
 	}
 	switch {
 	case len(r.ending) > 0:
-		return Step{}, fmt.Errorf("%w: %s after the ending", ErrUpstream, e.name)
+		return r.trail(e, data)
 	case e.role == withheld:
 		return r.withhold(e.name, data)
 	case e.role == content && !r.committed:
@@ -312,27 +317,48 @@ func (r *Relay) observe(e event) {
 }
 
 // hold keeps an ending event for Finish. An earlier one, which a stream may have, is withheld as it is, without a
-// cost.
+// cost, and the events that followed it after it.
 func (r *Relay) hold(name string, data []byte, usageAt int) (Step, error) {
+	var err error
 	if len(r.ending) > 0 {
-		if _, err := r.withhold(r.endingName, r.ending); err != nil {
+		if _, err = r.withhold(r.endingName, r.ending); err != nil {
 			return Step{}, err
 		}
+		if r.withheld, err = r.grow(r.withheld, len(r.trailing)); err != nil {
+			return Step{}, err
+		}
+		r.withheld, r.trailing = append(r.withheld, r.trailing...), r.trailing[:0]
 	}
-	var err error
 	r.endingName, r.usageAt = name, usageAt
 	r.ending, err = r.keep(r.ending, data)
+	return Step{Kind: StepBuffered}, err
+}
+
+// trail takes an event after the held ending: one without content, such as one of a type we do not know, follows the
+// ending; content there is the upstream's failure, since the usage in the ending would not count it.
+func (r *Relay) trail(e event, data []byte) (Step, error) {
+	if e.role != passive {
+		return Step{}, fmt.Errorf("%w: %s after the ending", ErrUpstream, e.name)
+	}
+	var err error
+	r.trailing, err = r.appendEvent(r.trailing, e.name, data)
 	return Step{Kind: StepBuffered}, err
 }
 
 // withhold keeps an event until the normal end.
 func (r *Relay) withhold(name string, data []byte) (Step, error) {
 	var err error
-	if r.withheld, err = r.grow(r.withheld, sse.EventSize(name, data)); err != nil {
-		return Step{}, err
+	r.withheld, err = r.appendEvent(r.withheld, name, data)
+	return Step{Kind: StepBuffered}, err
+}
+
+// appendEvent appends an event to buf, charging its room first.
+func (r *Relay) appendEvent(buf []byte, name string, data []byte) ([]byte, error) {
+	buf, err := r.grow(buf, sse.EventSize(name, data))
+	if err != nil {
+		return buf, err
 	}
-	r.withheld = sse.AppendEvent(r.withheld, name, data)
-	return Step{Kind: StepBuffered}, nil
+	return sse.AppendEvent(buf, name, data), nil
 }
 
 // end takes the upstream's normal end, whose last event is stop, or nil when the ending ended the stream. A format
@@ -410,9 +436,9 @@ func (r *Relay) fail(err error) error {
 		err = fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	r.state, r.err = failed, err
-	r.events, r.withheld, r.ending, r.stop, r.edited = nil, nil, nil, nil, nil
+	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited = nil, nil, nil, nil, nil, nil
 	r.up.dropBuffers()
-	r.held = int64(cap(r.out))
+	r.held = int64(cap(r.out)) + meterMemory
 	keep := max(0, r.held-baseMemory)
 	r.o.Memory.left.Add(r.charged - keep)
 	r.charged = keep
@@ -426,9 +452,10 @@ func (r *Relay) Progress() Progress { return r.progress }
 func (r *Relay) Usage() Usage { return r.meter.result() }
 
 // Finish returns the ending after the upstream's normal end: the withheld events, the held ending event with the
-// cost of f, or for a format whose usage event the relay writes, one with the usage and cost of f, and the
-// upstream's last event. It returns nil unless Next returned StepUpstreamDone and no ending was written. Like Fail, it builds the
-// ending from bytes already charged and then gives them all back, so it charges nothing.
+// cost of f, or for a format whose usage event the relay writes, one with the usage and cost of f, the events without
+// content that followed it, and the upstream's last event. It returns nil unless Next returned StepUpstreamDone and no
+// ending was written. Like Fail, it builds the ending from bytes already charged and then gives them all back, so it
+// charges nothing.
 func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
@@ -443,6 +470,7 @@ func (r *Relay) Finish(f Final) []byte {
 	} else {
 		out = sse.AppendEvent(out, r.endingName, r.costed(usage, top))
 	}
+	out = append(out, r.trailing...)
 	if r.stop != nil {
 		out = sse.AppendEvent(out, r.stopName, r.stop)
 	}
