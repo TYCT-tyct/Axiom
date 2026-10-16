@@ -2,7 +2,7 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」）。页面监测、审核项、数据集核对、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」）。页面监测、审核项、数据集核对、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
 
 ## 包
 
