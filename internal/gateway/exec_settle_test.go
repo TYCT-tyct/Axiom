@@ -193,9 +193,7 @@ func checkCharged(t *testing.T, h *harness) {
 		t.Fatalf("attempts %+v", a)
 	}
 	input := estimatedInput(t, h)
-	if !a[0].Costed || !a[1].Costed || !a[2].Costed {
-		t.Errorf("a cost not known: %+v", a)
-	}
+	checkCosted(t, a)
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
 	}
@@ -204,6 +202,16 @@ func checkCharged(t *testing.T, h *harness) {
 	}
 	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 2, 1<<catalog.ItemInput) || a[2].Cost != 70 {
 		t.Errorf("broken after the commit point: %+v", a[2])
+	}
+}
+
+// checkCosted: every attempt's cost is known, the one known not to have run as well as those priced.
+func checkCosted(t *testing.T, a []billing.AttemptResult) {
+	t.Helper()
+	for _, at := range a {
+		if !at.Costed {
+			t.Errorf("attempt %d: its cost is not known", at.Seq)
+		}
 	}
 }
 
