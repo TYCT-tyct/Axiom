@@ -21,6 +21,7 @@ var ErrUnknownKey = errors.New("accounts: unknown API key")
 type Config struct {
 	Platform pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
 	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
+	Keyring  *secret.Keyring  // seals users' TOTP secrets
 	Now      func() time.Time // the clock; time.Now when nil
 }
 
@@ -29,6 +30,7 @@ type Service struct {
 	db       *pg.DB
 	platform pg.Scope
 	hashes   *secret.MACKeys
+	keyring  *secret.Keyring
 	versions []uint32 // of hashes, newest first
 	now      func() time.Time
 
@@ -64,7 +66,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		now = time.Now
 	}
 	return &Service{
-		db: db, platform: cfg.Platform, hashes: cfg.Hashes, versions: versions, now: now,
+		db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		queries: New(),
 	}, nil

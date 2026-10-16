@@ -51,7 +51,7 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	}); err != nil {
 		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
-	if err := recordKey(ctx, tx, actor, "api_key.create", id); err != nil {
+	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account)); err != nil {
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
@@ -59,29 +59,31 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 
 // DisableKey stops the key in tx and records it; the next call with it is refused on every node.
 func (s *Service) DisableKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error {
-	return changeKey(ctx, tx, actor, "api_key.disable", key, s.queries.DisableKey)
+	rows, err := s.queries.DisableKey(ctx, tx, uuid.UUID(key))
+	if err != nil {
+		return fmt.Errorf("disable an API key: %w", err)
+	}
+	if len(rows) == 0 {
+		return ErrKeyNotFound
+	}
+	return recordKey(ctx, tx, actor, "api_key.disable", key, rows[0].SiteID, rows[0].AccountID)
 }
 
 // DeleteKey deletes the key for good in tx and records it.
 func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error {
-	return changeKey(ctx, tx, actor, "api_key.delete", key, s.queries.DeleteKey)
-}
-
-func changeKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, key KeyID,
-	update func(context.Context, DBTX, uuid.UUID) (int64, error),
-) error {
-	changed, err := update(ctx, tx, uuid.UUID(key))
+	rows, err := s.queries.DeleteKey(ctx, tx, uuid.UUID(key))
 	if err != nil {
-		return fmt.Errorf("%s: %w", action, err)
+		return fmt.Errorf("delete an API key: %w", err)
 	}
-	if changed == 0 {
+	if len(rows) == 0 {
 		return ErrKeyNotFound
 	}
-	return recordKey(ctx, tx, actor, action, key)
+	return recordKey(ctx, tx, actor, "api_key.delete", key, rows[0].SiteID, rows[0].AccountID)
 }
 
-func recordKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, key KeyID) error {
-	return audit.Record(ctx, tx, audit.Event{
-		Actor: actor, Action: action, Target: audit.Target{Module: "accounts", Kind: "api_key", ID: key.TypeID()},
-	})
+// recordKey records a change to key, which belongs to account of site.
+func recordKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, key KeyID, site, account uuid.UUID) error {
+	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Target: audit.Target{
+		Module: "accounts", Kind: "api_key", ID: key.TypeID(), Site: site, Account: account,
+	}})
 }
