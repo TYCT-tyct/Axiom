@@ -315,6 +315,9 @@ func TestABlockedWriteDoesNotStopTheLoop(t *testing.T) {
 			<-ctx.Done() // the database does not answer
 			return ctx.Err()
 		}
+		// The answering write ignores the 30 ms deadline: it is only what makes the blocked writes end, and a loaded
+		// machine must not turn the database's real latency into a failure of this test.
+		ctx = context.WithoutCancel(ctx)
 		return w.db.Tx(ctx, platformScope, func(tx pg.Tx) error { return store.UpsertJournal(ctx, tx, rows) })
 	}
 	ctx, cancel := context.WithCancel(t.Context())
