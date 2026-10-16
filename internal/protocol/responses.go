@@ -216,18 +216,18 @@ func (s *responsesStream) failure(dst []byte, e Error, u catalog.Usage, cost str
 	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,`, name, s.seq+1)
 	if s.created {
 		data = append(data, `"response":{"id":`+s.id+`,"object":"response","status":"failed","model":`+s.model+
-			`,"output":[],"error":{"code":"`+errorTypeNames[e.Type]+`","message":`...)
-		data = append(appendQuoted(data, e.Message), `},"usage":`...)
+			`,"output":[],"error":{"code":"`+errorTypes[e.Type].name+`","message":`...)
+		data = append(appendQuoted(data, e.message()), `},"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 		data = append(data, '}')
 	} else {
 		name = "error"
 		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":"%s","param":null,"message":`, s.seq+1,
-			errorTypeNames[e.Type])
-		data = append(appendQuoted(data, e.Message), `,"usage":`...)
+			errorTypes[e.Type].name)
+		data = append(appendQuoted(data, e.message()), `,"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 	}
-	data = append(data, `,"error_type":"`+errorTypeNames[e.Type]+`"}`...)
+	data = append(appendErrorType(append(data, ','), e), '}')
 	return sse.AppendEvent(dst, name, data)
 }
 
