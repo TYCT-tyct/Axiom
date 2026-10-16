@@ -141,27 +141,30 @@ type ModelView struct {
 
 // Model reads one model with its names, by name, and its current prices, by currency; ErrModelNotFound when there is
 // none.
-func (c *Catalog) Model(ctx context.Context, id ModelID) (ModelView, error) {
-	var (
-		row    CatalogModel
-		names  []CatalogName
-		prices []CatalogReferencePrice
-	)
-	err := c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
-		if row, err = New().GetModel(ctx, tx, uuid.UUID(id)); err != nil {
-			return err
-		}
-		if names, err = New().ListNamesOfModel(ctx, tx, row.ID); err != nil {
-			return err
-		}
-		prices, err = New().ListCurrentPricesOfModel(ctx, tx, row.ID)
+func (c *Catalog) Model(ctx context.Context, id ModelID) (view ModelView, err error) {
+	err = c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
+		view, err = ModelIn(ctx, tx, id)
 		return err
 	})
+	return view, err
+}
+
+// ModelIn is Model read in tx, the transaction of a change, which sees what the change wrote.
+func ModelIn(ctx context.Context, tx pg.Tx, id ModelID) (ModelView, error) {
+	row, err := New().GetModel(ctx, tx, uuid.UUID(id))
 	if errors.Is(err, pg.ErrNoRows) {
 		return ModelView{}, ErrModelNotFound
 	}
 	if err != nil {
 		return ModelView{}, fmt.Errorf("read the model: %w", err)
+	}
+	names, err := New().ListNamesOfModel(ctx, tx, row.ID)
+	if err != nil {
+		return ModelView{}, fmt.Errorf("read the model's names: %w", err)
+	}
+	prices, err := New().ListCurrentPricesOfModel(ctx, tx, row.ID)
+	if err != nil {
+		return ModelView{}, fmt.Errorf("read the model's prices: %w", err)
 	}
 	view := ModelView{ModelSummary: summaryOf(row), Spec: row.Spec}
 	for _, n := range names {
