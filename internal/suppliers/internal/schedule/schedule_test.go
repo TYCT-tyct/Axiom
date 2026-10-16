@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -34,6 +35,10 @@ type system struct {
 	account  func() (adapter.Account, error)
 	opens    atomic.Int32
 	accounts atomic.Int32
+	// holdKeys, if set, makes the first listing of keys of each opened adapter end at the supplier's limits for as long
+	// as it says, as a listing of more pages than a window allows does; the second goes on and is counted as finished.
+	holdKeys     time.Duration
+	keysFinished atomic.Int32
 }
 
 func (*system) Kind() adapter.Kind            { return "fake" }
@@ -43,22 +48,35 @@ func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adap
 	if s.openErr != nil {
 		return nil, s.openErr
 	}
-	return manager{s}, nil
+	return &manager{s: s}, nil
 }
 
-type manager struct{ s *system }
+type manager struct {
+	s    *system
+	keys int
+}
 
-func (m manager) Account(context.Context) (adapter.Account, error) {
+func (m *manager) Account(context.Context) (adapter.Account, error) {
 	m.s.accounts.Add(1)
 	return m.s.account()
 }
-func (manager) Offer(context.Context) (adapter.Offer, error)     { return adapter.Offer{}, nil }
-func (manager) Keys(context.Context) ([]adapter.KeyState, error) { return nil, nil }
-func (manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
+
+func (*manager) Offer(context.Context) (adapter.Offer, error) { return adapter.Offer{}, nil }
+
+func (m *manager) Keys(context.Context) ([]adapter.KeyState, error) {
+	m.keys++
+	if m.keys == 1 && m.s.holdKeys > 0 {
+		return nil, adapter.Blocked{Until: time.Now().Add(m.s.holdKeys)}
+	}
+	m.s.keysFinished.Add(1)
+	return nil, nil
+}
+
+func (*manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
 	return secret.Secret{}, errors.New("not used")
 }
 
-func (manager) Charges(_ context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+func (*manager) Charges(_ context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 	return adapter.ChargePage{Done: true, Through: time.Now()}, adapter.ScanState(`{"v":1}`), nil
 }
 
@@ -101,22 +119,32 @@ func newCluster(t *testing.T, s *system) *cluster {
 // addSupplier makes a supplier of the fake system at the host, in the status.
 func (c *cluster) addSupplier(host, status string) uuid.UUID {
 	c.t.Helper()
-	db := c.open()
-	var id uuid.UUID
-	err := db.Tx(c.t.Context(), platform, func(tx pg.Tx) (err error) {
-		if id, err = store.New().InsertSupplier(c.t.Context(), tx, store.InsertSupplierParams{
-			OwnerScope: "platform", Name: host, Kind: "fake", Origin: "https://" + host, UpstreamAccount: "me",
-			NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: "direct",
-		}); err != nil {
-			return err
+	return c.addSuppliers(status, "direct", host)[0]
+}
+
+// addSuppliers makes suppliers of the fake system at the hosts, in the status, reached through the exit.
+func (c *cluster) addSuppliers(status, exit string, hosts ...string) (ids []uuid.UUID) {
+	c.t.Helper()
+	err := c.open().Tx(c.t.Context(), platform, func(tx pg.Tx) error {
+		for _, host := range hosts {
+			id, err := store.New().InsertSupplier(c.t.Context(), tx, store.InsertSupplierParams{
+				OwnerScope: "platform", Name: host, Kind: "fake", Origin: "https://" + host, UpstreamAccount: "me",
+				NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: exit,
+			})
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec(c.t.Context(), "UPDATE suppliers.suppliers SET status = $2 WHERE id = $1", id, status); err != nil {
+				return err
+			}
+			ids = append(ids, id)
 		}
-		_, err = tx.Exec(c.t.Context(), "UPDATE suppliers.suppliers SET status = $2 WHERE id = $1", id, status)
-		return err
+		return nil
 	})
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	return id
+	return ids
 }
 
 func (c *cluster) open() *pg.DB {
@@ -346,14 +374,28 @@ func TestTheSweepEnqueuesOnlyWhatIsDueAndFree(t *testing.T) {
 	}
 }
 
-// TestAJobFinishedDoesNotHoldUpTheNext: the unique job of a supplier does not outlive its run, or the supplier could not
-// be enqueued for as long as the queue keeps finished jobs.
+// TestAJobFinishedDoesNotHoldUpTheNext: the unique job of a supplier covers it while it waits and while it runs, and
+// does not outlive its run, or the supplier could not be enqueued for as long as the queue keeps finished jobs. The
+// supplier is not due, so the start-up sweep leaves it alone and the test alone enqueues; the job is held in its round
+// until the test lets it go.
 func TestAJobFinishedDoesNotHoldUpTheNext(t *testing.T) {
 	t.Parallel()
-	c := newCluster(t, &system{account: healthy()})
+	release, inRound := make(chan struct{}), make(chan struct{}, 2)
+	c := newCluster(t, &system{account: func() (adapter.Account, error) {
+		inRound <- struct{}{}
+		<-release
+		return adapter.Account{Balance: "1", Funding: adapter.FundingWallet}, nil
+	}})
 	n := c.node("a", time.Hour)
+	err := n.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "INSERT INTO suppliers.sync_states (supplier_id, next_due) VALUES ($1, now() + interval '1 hour')", c.supplier)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.start(n)
-	count := func() (inserted int) {
+	enqueue := func() (inserted int) {
 		err := n.db.Tx(t.Context(), platform, func(tx pg.Tx) (err error) {
 			inserted, err = n.q.InsertManyTx(t.Context(), tx, []river.InsertManyParams{{Args: SyncArgs{Supplier: c.supplier.String()}}})
 			return err
@@ -363,15 +405,104 @@ func TestAJobFinishedDoesNotHoldUpTheNext(t *testing.T) {
 		}
 		return inserted
 	}
-	if count() != 1 || count() != 0 {
-		t.Fatal("the first insert should be new and an insert while it waits a duplicate")
+	if enqueue() != 1 {
+		t.Fatal("the first insert should be new")
 	}
+	<-inRound
+	if enqueue() != 0 {
+		t.Error("an insert while the job runs was not a duplicate")
+	}
+	close(release)
 	c.waitFor("the job to finish", func() bool {
 		var done int
 		c.row("SELECT count(*) FROM river.river_job WHERE kind = 'suppliers.sync' AND args->>'supplier' = $1::text AND state = 'completed'", &done)
 		return done == 1
 	})
-	if count() != 1 {
+	if enqueue() != 1 {
 		t.Error("a finished job kept the supplier from being enqueued again")
 	}
+}
+
+// TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing: a supplier paused, put in removal or stopped for attention after
+// its job was queued is not called when the job runs: it takes the lease and gives it back, and reads nothing.
+func TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"paused", "removing", "removed", "needs_attention"} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			s := &system{account: healthy()}
+			c := newCluster(t, s)
+			n := c.node("a", time.Hour)
+			err := n.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+				_, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET status = $2 WHERE id = $1", c.supplier, status)
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := n.s.sync(t.Context(), c.supplier); err != nil {
+				t.Fatal(err)
+			}
+			var version int64
+			c.row("SELECT coalesce((SELECT version FROM suppliers.sync_states WHERE supplier_id = $1), 0)", &version)
+			if s.opens.Load() != 0 || s.accounts.Load() != 0 || version != 0 {
+				t.Errorf("a %s supplier was opened %d times, its balance read %d times, its state moved to version %d", status, s.opens.Load(), s.accounts.Load(), version)
+			}
+			if _, err := n.s.node.Acquire(t.Context(), c.supplier); err != nil {
+				t.Errorf("the lease was not given back: %v", err)
+			}
+		})
+	}
+}
+
+// TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter: when the supplier's limits end a listing half way, the job waits
+// for them to reopen and goes on with the adapter it has, whose listing remembers how far it got; a job that ended there
+// would leave the next to open a new adapter and begin the listing again, and a listing longer than a window would never
+// be finished.
+func TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter(t *testing.T) {
+	t.Parallel()
+	s := &system{account: healthy(), holdKeys: 300 * time.Millisecond}
+	c := newCluster(t, s)
+	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
+		t.Fatal(err)
+	}
+	if s.opens.Load() != 1 || s.keysFinished.Load() != 1 {
+		t.Errorf("the adapter was opened %d times and finished the listing %d times, want once and once", s.opens.Load(), s.keysFinished.Load())
+	}
+}
+
+// TestSuppliersThatCannotBeSyncedDoNotTakeTheSweepsPlace: a sweep enqueues the longest-overdue suppliers, a batch at a
+// time. More of them than a batch that fail before they are called (their exit is one this node lacks) are backed off
+// like any failure, so the sweeps after reach the supplier that is due later and works.
+func TestSuppliersThatCannotBeSyncedDoNotTakeTheSweepsPlace(t *testing.T) {
+	t.Parallel()
+	s := &system{account: healthy()}
+	c := newCluster(t, s)
+	hosts := make([]string, sweepBatch+1)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("broken%d.example", i)
+	}
+	c.addSuppliers("active", "elsewhere", hosts...)
+	err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO suppliers.sync_states (supplier_id, next_due)
+			SELECT id, now() - interval '2 hours' FROM suppliers.suppliers WHERE mgmt_egress_id = 'elsewhere'`)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(t.Context(), "INSERT INTO suppliers.sync_states (supplier_id, next_due) VALUES ($1, now() - interval '1 hour')", c.supplier)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := c.node("a", time.Hour)
+	c.start(n)
+	c.waitFor("the supplier that works to be synced", func() bool {
+		if err := n.s.sweep(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var version int64
+		c.row("SELECT version FROM suppliers.sync_states WHERE supplier_id = $1", &version)
+		return version > 0
+	})
 }

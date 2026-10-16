@@ -214,3 +214,101 @@ func TestCheckRefusesADatabaseWithoutTheQueue(t *testing.T) {
 		t.Errorf("Check on a database without the queue's version table: %v", err)
 	}
 }
+
+// held is a job that works until its test lets it go or its context ends, and reports how it ended.
+type held struct{ N int }
+
+func (held) Kind() string { return "test.held" }
+
+type holder struct {
+	river.WorkerDefaults[held]
+	started chan struct{}
+	release chan struct{}
+	ended   chan error // the context's error when the job ended, nil if it was let go
+}
+
+func (h *holder) Work(ctx context.Context, _ *river.Job[held]) error {
+	h.started <- struct{}{}
+	select {
+	case <-h.release:
+		h.ended <- nil
+	case <-ctx.Done():
+		h.ended <- context.Cause(ctx)
+	}
+	return nil
+}
+
+// runningHeldJob starts a queue on a context the test can cancel, as serve's is when the node is told to stop, and
+// returns once a held job is running on it.
+func runningHeldJob(t *testing.T) (q *pg.Queue, h *holder, endNode context.CancelFunc) {
+	t.Helper()
+	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	q = db.NewQueue(slog.New(slog.DiscardHandler))
+	h = &holder{started: make(chan struct{}, 1), release: make(chan struct{}), ended: make(chan error, 1)}
+	river.AddWorker(q.Workers(), h)
+	ctx, endNode := context.WithCancel(t.Context())
+	if err := q.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := q.InsertManyTx(t.Context(), tx, []river.InsertManyParams{{Args: held{N: 1}}})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.started:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the job did not start")
+	}
+	return q, h, endNode
+}
+
+// TestAJobRunningWhenTheNodeIsToldToStopIsLeftToFinish: the context Start was given ending does not cancel the jobs
+// running. Stop waits for them until its own deadline: a job that finishes before it ends undisturbed, and one that
+// does not is cancelled by it, and only then.
+func TestAJobRunningWhenTheNodeIsToldToStopIsLeftToFinish(t *testing.T) {
+	t.Parallel()
+	t.Run("finishes within the deadline", func(t *testing.T) {
+		t.Parallel()
+		q, h, endNode := runningHeldJob(t)
+		endNode()
+		stopped := make(chan error, 1)
+		go func() { stopped <- q.Stop(context.WithoutCancel(t.Context())) }()
+		select {
+		case err := <-h.ended:
+			t.Fatalf("the job ended before it was let go: %v", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+		close(h.release)
+		if err := <-h.ended; err != nil {
+			t.Errorf("the job was cancelled although it finished within the deadline: %v", err)
+		}
+		if err := <-stopped; err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+	t.Run("outlasts the deadline", func(t *testing.T) {
+		t.Parallel()
+		q, h, endNode := runningHeldJob(t)
+		endNode()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
+		defer cancel()
+		if err := q.Stop(ctx); err == nil {
+			t.Error("Stop reported a clean stop although a job outlasted its deadline")
+		}
+		select {
+		case err := <-h.ended:
+			if err == nil {
+				t.Error("the job was let go, not cancelled")
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("the job was not cancelled after the deadline")
+		}
+	})
+}

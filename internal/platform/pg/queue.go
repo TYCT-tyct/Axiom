@@ -57,7 +57,10 @@ func (q *Queue) Every(interval time.Duration, args func() river.JobArgs) {
 		func() (river.JobArgs, *river.InsertOpts) { return args(), nil }, &river.PeriodicJobOpts{RunOnStart: true}))
 }
 
-// Start begins working jobs. It refuses a database whose queue tables Migrate has not made.
+// Start begins working jobs. It refuses a database whose queue tables Migrate has not made. The queue runs until Stop,
+// whatever becomes of ctx: River would otherwise cancel the jobs it is working the moment ctx ends, before the shutdown
+// that decides how long they get has begun, and a job that is cut short mid-way (a login token spent and not yet
+// stored, say) is the harm Stop's deadline exists to avoid.
 func (q *Queue) Start(ctx context.Context) error {
 	client, err := river.NewClient(riverpgxv5.New(q.db.pool), &river.Config{
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
@@ -68,7 +71,7 @@ func (q *Queue) Start(ctx context.Context) error {
 		return fmt.Errorf("queue: %w", err)
 	}
 	q.client.Store(client) // before Start: a worker that runs at once may enqueue
-	if err := client.Start(ctx); err != nil {
+	if err := client.Start(context.WithoutCancel(ctx)); err != nil {
 		q.client.Store(nil)
 		return fmt.Errorf("queue: start: %w", err)
 	}

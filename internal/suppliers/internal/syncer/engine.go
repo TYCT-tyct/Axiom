@@ -62,6 +62,8 @@ type Engine struct {
 	mgr   adapter.Manager
 	set   Settings
 	now   func() time.Time
+	// blocked is when the first task that the supplier's limits held up in the last Round may go on; zero if none was.
+	blocked time.Time
 }
 
 // New makes the engine of one supplier. now is the clock; tests move it.
@@ -89,10 +91,16 @@ func (e *Engine) commit(ctx context.Context, st *State, c *Commit) error {
 	return nil
 }
 
+// Blocked is when the first task that the supplier's limits held up in the last Round may go on, or the zero time if
+// none was. A caller that keeps the Manager can run the Round again then, for a Manager that keeps how far a listing
+// got (adapter.Manager) only keeps it while it lives.
+func (e *Engine) Blocked() time.Time { return e.blocked }
+
 // Round runs the tasks of the supplier that are due, in order. A task's failure is recorded in the state and does not
 // stop the others, except an auth rejection, which ends the round and all polling: the error returned is the store's
 // (including ErrFenced), never a task's.
 func (e *Engine) Round(ctx context.Context) error {
+	e.blocked = time.Time{}
 	st, err := e.store.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("syncer: load: %w", err)
@@ -143,6 +151,9 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 		ts.Due = now.Add(time.Minute) // not a failure: the supplier's limits are used up for now
 		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
 			ts.Due = blocked.Until
+		}
+		if e.blocked.IsZero() || ts.Due.Before(e.blocked) {
+			e.blocked = ts.Due
 		}
 	case errors.Is(err, adapter.ErrUnrecognised):
 		ts.Halted = true

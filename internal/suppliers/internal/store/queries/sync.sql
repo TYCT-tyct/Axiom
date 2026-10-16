@@ -30,7 +30,7 @@ WHERE supplier_id = @supplier_id AND version = @expect;
 
 -- name: GetSupplierForSync :one
 -- The supplier as a round needs it, and the configuration generation a write of its credentials must still find.
-SELECT id, kind, origin, mgmt_egress_id, config_gen FROM suppliers.suppliers WHERE id = @id;
+SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = @id;
 
 -- name: LockSupplier :one
 -- The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
@@ -46,10 +46,10 @@ UPDATE suppliers.suppliers SET balance_native = @balance::numeric, balance_obser
 
 -- name: ListSyncDue :many
 -- The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
--- whose lease is free or has run out. A supplier in any state but connecting, active or low_balance is not synced.
+-- whose lease is free or has run out. Only suppliers in one of the statuses are listed.
 SELECT s.id FROM suppliers.suppliers s
 LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
-WHERE s.status IN ('connecting', 'active', 'low_balance')
+WHERE s.status = ANY(@statuses::text[])
     AND (y.supplier_id IS NULL OR (y.next_due <= @now AND (y.lease_until IS NULL OR y.lease_until <= @now)))
 ORDER BY y.next_due NULLS FIRST, s.id
 LIMIT @max;

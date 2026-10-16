@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"time"
 	"uuid"
 
@@ -34,7 +35,17 @@ const (
 	sweepBatch = 200
 	// releaseTimeout is how long giving a lease back may take once a round is over, whatever ended it.
 	releaseTimeout = 10 * time.Second
+	// maxBlockedWait is the longest a job waits, holding the supplier's lease, for the supplier's limits to reopen so
+	// that it can go on with the listing it was reading. It is shorter than leaseTTL, which the round's last commit
+	// started: the lease must not run out while the job sleeps.
+	maxBlockedWait = 4 * time.Minute
+	// roundsBudget is how long one job may go on running rounds while the limits hold it up. It ends before the
+	// queue's limit for a job (pg.Queue's jobTimeout, 10 minutes) cancels it.
+	roundsBudget = 8 * time.Minute
 )
+
+// syncable are the statuses of a supplier that is synced: the others are paused, being removed, or need a person.
+var syncable = []string{"connecting", "active", "low_balance"}
 
 // Config is what a node needs to sync suppliers.
 type Config struct {
@@ -135,7 +146,7 @@ func (s *Schedule) workSync(ctx context.Context, job *river.Job[SyncArgs]) error
 // sweep enqueues a round for each supplier that is due and not held, in the transaction that reads which they are.
 func (s *Schedule) sweep(ctx context.Context) error {
 	return s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
-		due, err := store.New().ListSyncDue(ctx, tx, store.ListSyncDueParams{Now: s.cfg.Now(), Max: sweepBatch})
+		due, err := store.New().ListSyncDue(ctx, tx, store.ListSyncDueParams{Statuses: syncable, Now: s.cfg.Now(), Max: sweepBatch})
 		if err != nil || len(due) == 0 {
 			return err
 		}
@@ -148,8 +159,9 @@ func (s *Schedule) sweep(ctx context.Context) error {
 	})
 }
 
-// sync runs a round of one supplier. A supplier another node is syncing is that node's, and a round whose lease was
-// taken over has stored nothing: neither is a failure.
+// sync runs the rounds of one supplier. A supplier another node is syncing is that node's, one that is no longer in a
+// status that is synced (it was paused or removed after its job was queued) is left alone, and a round whose lease was
+// taken over has stored nothing: none of these is a failure.
 func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 	session, err := s.node.Acquire(ctx, id)
 	if errors.Is(err, persist.ErrLeaseHeld) {
@@ -164,32 +176,69 @@ func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 			s.cfg.Logger.Error("giving back a supplier's lease", "supplier", id.String(), "err", err)
 		}
 	}()
-	engine, err := s.engine(ctx, session)
-	if err != nil {
-		return err
+	if !slices.Contains(syncable, session.Supplier.Status) {
+		return nil
 	}
-	if err := engine.Round(ctx); err != nil && !errors.Is(err, syncer.ErrFenced) {
+	if err := s.rounds(ctx, s.engine(ctx, session)); err != nil && !errors.Is(err, syncer.ErrFenced) {
 		return err
 	}
 	return nil
 }
 
-// engine makes the engine of a supplier over its adapter, which it logs in with only when a task first needs it.
-func (s *Schedule) engine(ctx context.Context, session *persist.Session) (*syncer.Engine, error) {
-	sup := session.Supplier
+// rounds runs the engine, and while the supplier's limits hold a task up for a while, waits for them to reopen and runs
+// it again over the same adapter: a Manager keeps how far a listing got only for as long as it lives, and a listing of
+// more pages than one window allows could otherwise never be finished. A job waits at most roundsBudget in all, so that
+// it does not hold a worker of the queue for longer; what is still held up after that is the next job's.
+func (s *Schedule) rounds(ctx context.Context, engine *syncer.Engine) error {
+	end := s.cfg.Now().Add(roundsBudget)
+	for {
+		if err := engine.Round(ctx); err != nil {
+			return err
+		}
+		now, until := s.cfg.Now(), engine.Blocked()
+		if until.IsZero() || until.Sub(now) > maxBlockedWait || until.After(end) {
+			return nil
+		}
+		timer := time.NewTimer(max(until.Sub(now), time.Second)) // a second at least, so that a limit that is already over cannot spin
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+// engine makes the engine of a supplier over its adapter, which it opens (it logs in) only when a task first needs it.
+// A supplier that cannot be reached at all, for it has an exit this node lacks or no adapter, fails there too, as a
+// failure of every task: the engine backs off and the supplier is not due again at once, instead of staying the
+// longest overdue and taking the place of the suppliers that can be synced in every sweep.
+func (s *Schedule) engine(ctx context.Context, session *persist.Session) *syncer.Engine {
+	m := &openOnUse{open: func() (adapter.Manager, error) {
+		a, c, err := s.reach(session.Supplier)
+		if err != nil {
+			s.cfg.Logger.Error("a supplier cannot be synced", "supplier", session.Supplier.ID.String(), "err", err)
+			return nil, err
+		}
+		return a.Open(ctx, c, session.Logins())
+	}}
+	return syncer.New(session.Store(), m, s.settings, s.cfg.Now)
+}
+
+// reach is the adapter of a supplier and the client that sends its requests.
+func (s *Schedule) reach(sup persist.Supplier) (adapter.Adapter, adapter.Client, error) {
 	if sup.Exit != string(egress.Direct) {
-		return nil, fmt.Errorf("schedule: supplier %s: the exit %q is not one this node has", sup.ID, sup.Exit)
+		return nil, nil, fmt.Errorf("schedule: supplier %s: the exit %q is not one this node has", sup.ID, sup.Exit)
 	}
 	a, ok := s.cfg.Registry.Get(sup.Kind)
 	if !ok {
-		return nil, fmt.Errorf("schedule: supplier %s: no adapter of kind %q", sup.ID, sup.Kind)
+		return nil, nil, fmt.Errorf("schedule: supplier %s: no adapter of kind %q", sup.ID, sup.Kind)
 	}
 	buckets := client.NewSharedLimiter(s.cfg.DB, s.cfg.Scope, a.Buckets(),
 		client.Scopes{Address: "ip:" + sup.Origin + "|" + sup.Exit, Account: "account:" + sup.ID.String()}, s.cfg.Now)
 	c, err := client.New(sup.Origin, s.cfg.Egress, buckets, s.cfg.Now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	m := &openOnUse{open: func() (adapter.Manager, error) { return a.Open(ctx, c, session.Logins()) }}
-	return syncer.New(session.Store(), m, s.settings, s.cfg.Now), nil
+	return a, c, nil
 }

@@ -264,6 +264,15 @@ func TestBlockedBucketsAreNotFailures(t *testing.T) {
 	if ts := st.state.Tasks[TaskKeys]; ts.Failures != 0 || !ts.Due.Equal(until) {
 		t.Errorf("keys task = %+v, want due at %v with no failure", ts, until)
 	}
+	if !e.Blocked().Equal(until) {
+		t.Errorf("Blocked = %v, want %v", e.Blocked(), until)
+	}
+	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	e.now = func() time.Time { return until }
+	round(t, e)
+	if !e.Blocked().IsZero() {
+		t.Errorf("Blocked = %v after a round nothing was held up in, want none", e.Blocked())
+	}
 }
 
 // TestSameAnswerTwiceChangesNothing and TestChangedRatioMakesOneEventAndOnePlan are the sync's idempotence: a repeat
