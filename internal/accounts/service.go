@@ -21,7 +21,12 @@ var ErrUnknownKey = errors.New("accounts: unknown API key")
 type Config struct {
 	Platform pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
 	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
+	Keyring  *secret.Keyring  // seals users' TOTP secrets
 	Now      func() time.Time // the clock; time.Now when nil
+	// HashConcurrency is how many password hashes the node computes at once, GOMAXPROCS when 0; one waits at most
+	// HashWait for a turn, 2 seconds when 0, and is then refused (README.md「登录前的资源」).
+	HashConcurrency int
+	HashWait        time.Duration
 }
 
 // Service is the module. One per node; several share a database.
@@ -29,6 +34,7 @@ type Service struct {
 	db       *pg.DB
 	platform pg.Scope
 	hashes   *secret.MACKeys
+	keyring  *secret.Keyring
 	versions []uint32 // of hashes, newest first
 	now      func() time.Time
 
@@ -38,6 +44,7 @@ type Service struct {
 	known   *lru[keyHash, Caller]
 	unknown *lru[keyHash, struct{}]
 	lookups singleflight.Group
+	guards  guards
 	queries *Queries
 }
 
@@ -64,8 +71,8 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		now = time.Now
 	}
 	return &Service{
-		db: db, platform: cfg.Platform, hashes: cfg.Hashes, versions: versions, now: now,
+		db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
-		queries: New(),
+		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
 	}, nil
 }
