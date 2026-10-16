@@ -236,19 +236,22 @@ func TestOnlyTheAutoRatioLeavesAGroupOut(t *testing.T) {
 	}
 }
 
-// TestTheFirstDailyPassDoesNotReadBeforeTheConnection: a scan that begins at t0 reads nothing from before t0, not even
-// by the daily pass a day later, which looks a day back from where the last one ended; records after t0 are read.
+// TestTheFirstDailyPassDoesNotReadBeforeTheConnection: a scan that begins at t0 reads nothing from before t0: not the
+// forward passes, which start a little before the watermark, nor the daily pass a day later, which looks a day back
+// from where the last one ended; records after t0 are read.
 func TestTheFirstDailyPassDoesNotReadBeforeTheConnection(t *testing.T) {
 	t.Parallel()
 	clk := &testClock{t: t0}
 	srv := newLogServer(clk, globalSpecs())
 	srv.add(t0.Add(-time.Hour), "before")
+	srv.add(t0.Add(-time.Minute), "just before") // inside the forward passes' overlap
 	srv.add(t0.Add(10*time.Minute), "after")
 	run := newScan(t, srv, nil) // the first scan: it begins now
 	run.run(10)
 	clk.set(t0.Add(25 * time.Hour)) // the first daily pass is due
 	run.run(200)
-	if run.seen["before"] != 0 || run.seen["after"] == 0 {
-		t.Errorf("read the record from before the connection %d times and the one after %d times, want 0 and at least 1", run.seen["before"], run.seen["after"])
+	if run.seen["before"] != 0 || run.seen["just before"] != 0 || run.seen["after"] == 0 {
+		t.Errorf("read the records from before the connection %d and %d times and the one after %d times, want 0, 0 and at least 1",
+			run.seen["before"], run.seen["just before"], run.seen["after"])
 	}
 }

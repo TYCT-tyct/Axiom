@@ -156,7 +156,7 @@ func nextPass(s scanState, now time.Time) *pass {
 	if end-s.Watermark < int64(minSpan/time.Second) {
 		return nil
 	}
-	return &pass{Start: s.Watermark - int64(overlap/time.Second), End: end, Page: 1}
+	return &pass{Start: max(s.Watermark-int64(overlap/time.Second), s.Connected), End: end, Page: 1}
 }
 
 // finish records a finished pass: the watermark moves to the pass's end, so it only ever rises, and the next forward
