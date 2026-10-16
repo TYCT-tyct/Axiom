@@ -45,6 +45,12 @@ func New(list ...adapter.Adapter) (*Registry, error) {
 	return r, nil
 }
 
+// Get returns the adapter of kind.
+func (r *Registry) Get(kind adapter.Kind) (adapter.Adapter, bool) {
+	a, ok := r.byKind[kind]
+	return a, ok
+}
+
 // Has reports whether an adapter of kind is registered.
 func (r *Registry) Has(kind adapter.Kind) bool { _, ok := r.byKind[kind]; return ok }
 

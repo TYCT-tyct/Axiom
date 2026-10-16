@@ -124,3 +124,6 @@ func (u Usage) OutputTotal() int64 { return u.q[ItemOutput] + u.q[ItemReasoning]
 
 // Count is the usage of one item, for billing's meter to read a count the upstream has reported so far.
 func (u Usage) Count(it Item) int64 { return u.q[it] }
+
+// ServiceTier is the service tier that served the request.
+func (u Usage) ServiceTier() ServiceTier { return u.serviceTier }
