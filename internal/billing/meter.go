@@ -20,7 +20,8 @@ type Progress struct {
 // MeterStep tells the meter's owner what to do before the next read: start Extend with Request, stop reading until
 // the extension in flight returns, or both, when one read crossed the extension point and the segment together. Left
 // is how many more output tokens the approved segments cover, which bounds how long the owner may stop reading
-// (internal/gateway/README.md「计量与追加」): math.MaxInt64 for an attempt reserved in full.
+// (internal/gateway/README.md「计量与追加」): math.MaxInt64 for an attempt reserved in full, or once the approved
+// segments cover the output limit, which the upstream does not pass.
 type MeterStep struct {
 	Extend    bool
 	Request   ExtendRequest
@@ -97,6 +98,9 @@ func (m *Meter) Observe(p Progress) MeterStep {
 	out, excess := m.used(p)
 	spend := sum(m.q.output.Mul(out), m.searchCost(excess))
 	step := MeterStep{Left: max(m.ceiling.tokens-out, 0)}
+	if m.ceiling.tokens >= m.q.outputCap {
+		step.Left = math.MaxInt64
+	}
 	if !m.flying && (m.asked || spend.Cmp(m.ask) > 0) {
 		if !m.asked {
 			c := m.ceiling

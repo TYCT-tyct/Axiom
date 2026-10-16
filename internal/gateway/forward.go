@@ -28,6 +28,8 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	// Billing settles with no extension in flight, and the extension's goroutine must not outlive the call, whose slots
 	// bound it; its outcome changes nothing now.
 	defer a.landed(true) //nolint:errcheck // see above
+	// Once the upstream is no longer read, a write that blocks lets it generate nothing more on the call's account.
+	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
 	for {
 		st, err := relay.Next()
 		if err != nil {

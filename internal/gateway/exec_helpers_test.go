@@ -259,8 +259,8 @@ type clientWriter struct {
 }
 
 type write struct {
-	at   time.Time
-	data string
+	at, deadline time.Time
+	data         string
 }
 
 func newClientWriter() *clientWriter { return &clientWriter{header: http.Header{}} }
@@ -292,7 +292,7 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.writes = append(w.writes, write{time.Now(), string(b)})
+	w.writes = append(w.writes, write{time.Now(), w.deadline, string(b)})
 	return len(b), nil
 }
 

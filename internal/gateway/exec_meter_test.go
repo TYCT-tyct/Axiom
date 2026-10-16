@@ -66,29 +66,31 @@ func checkExtensions(t *testing.T, h *harness) {
 	}
 }
 
-// TestASpentSegmentStopsTheReadUntilItsExtensionComes: the event that spends the segment is written only once the next
-// is approved, and the wait does not count as the upstream being idle.
+// TestASpentSegmentStopsTheReadUntilItsExtensionComes: the event that spends the segment, past its end or to its last
+// token, is written only once the next is approved, and the wait does not count as the upstream being idle.
 func TestASpentSegmentStopsTheReadUntilItsExtensionComes(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, segmented(options{
-			config: func(c *Config) { c.IdleTimeout, c.KeepAlive = 500*time.Millisecond, 100*time.Millisecond },
-			extend: func(context.Context, billing.ExtendRequest) error {
-				time.Sleep(900 * time.Millisecond)
-				return nil
-			},
-		}))
-		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(250)}, h.feed(evBlockStop, evMsgDelta, evMsgStop))}
-		h.run()
-		if !strings.Contains(h.w.body(), "message_stop") || h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
-			t.Fatalf("the stream did not end normally:\n%s", h.w.body())
-		}
-		h.w.mu.Lock()
-		first := h.w.writes[0]
-		h.w.mu.Unlock()
-		if got := first.at.Sub(h.started); got != 900*time.Millisecond || !strings.Contains(first.data, strings.Repeat("x", 250)) {
-			t.Errorf("the event that spent the segment was written after %v: %q", got, first.data)
-		}
-	})
+	for _, n := range []int{250, 200} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, segmented(options{
+				config: func(c *Config) { c.IdleTimeout, c.KeepAlive = 500*time.Millisecond, 100*time.Millisecond },
+				extend: func(context.Context, billing.ExtendRequest) error {
+					time.Sleep(900 * time.Millisecond)
+					return nil
+				},
+			}))
+			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(n)}, h.feed(evBlockStop, evMsgDelta, evMsgStop))}
+			h.run()
+			if !strings.Contains(h.w.body(), "message_stop") || h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
+				t.Fatalf("%d bytes: the stream did not end normally:\n%s", n, h.w.body())
+			}
+			h.w.mu.Lock()
+			first := h.w.writes[0]
+			h.w.mu.Unlock()
+			if got := first.at.Sub(h.started); got != 900*time.Millisecond || !strings.Contains(first.data, strings.Repeat("x", n)) {
+				t.Errorf("%d bytes: the event that spent the segment was written after %v", n, got)
+			}
+		})
+	}
 }
 
 // cutCase is an extension that fails, and how the call ends for it.
@@ -168,13 +170,35 @@ func checkCutStream(t *testing.T, h *harness, tc cutCase) {
 	if got := h.elapsed() - time.Second; got != tc.took { // the segment ran out a second in
 		t.Errorf("%s: cut %v after the segment ran out, want %v", tc.name, got, tc.took)
 	}
+	h.w.mu.Lock()
+	last := h.w.writes[len(h.w.writes)-1]
+	h.w.mu.Unlock()
+	if got := last.deadline.Sub(last.at); got != h.cfg.WriteTimeout { // not the nothing a spent segment leaves
+		t.Errorf("%s: the error event had %v to be written", tc.name, got)
+	}
 }
 
 // TestAnExtensionThatFailsEarlyCutsAtOnce: one that fails while the segment still has room cuts the stream at the next
-// read, without waiting for the segment to run out (docs/domains/billing.md「预留与结算」).
+// read, without waiting for the segment to run out (docs/domains/billing.md「预留与结算」); unless that read is the
+// upstream's normal end, when there is nothing left to stop.
 func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
+	failing := func(context.Context, billing.ExtendRequest) error { return errors.New("connection refused") }
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, segmented(options{extend: func(context.Context, billing.ExtendRequest) error { return errors.New("connection refused") }}))
+		late := func(context.Context, billing.ExtendRequest) error {
+			time.Sleep(time.Second) // the failure comes before the upstream's end, and is taken with it
+			return errors.New("connection refused")
+		}
+		h := newHarness(t, ctx, segmented(options{extend: late}))
+		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(130)},
+			h.feed(evBlockStop), h.feed(evMsgDelta), h.after(1500*time.Millisecond, evMsgStop))}
+		h.run()
+		if body := h.w.body(); strings.Contains(body, "event: error") || !strings.Contains(body, "message_stop") ||
+			h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
+			t.Errorf("a stream that ended was cut:\n%s", body)
+		}
+	})
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{extend: failing}))
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart), h.feed(evBlock), beat{data: text(130)}, beat{wait: time.Second, data: text(1)})}
 		h.run()
 		if h.elapsed() != time.Second || !strings.Contains(h.w.body(), `"error_type":"billing_unavailable"`) || strings.Contains(h.w.body(), `"x"`) {
@@ -224,8 +248,13 @@ func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
 		h := newHarness(t, ctx, segmented(options{}))
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), h.feed(evHello), h.feed(evBang), h.feed(evBlockStop, evMsgDelta, evMsgStop))}
 		h.run()
-		if h.w.status != http.StatusOK || h.w.deadline.Sub(h.started) >= h.cfg.WriteTimeout {
-			t.Errorf("status %d, the last deadline %v after the start", h.w.status, h.w.deadline.Sub(h.started))
+		h.w.mu.Lock()
+		first, last := h.w.writes[0], h.w.writes[len(h.w.writes)-1]
+		h.w.mu.Unlock()
+		// The content is written within what the segment covers; the ending, once the upstream is read no more, within
+		// the write timeout.
+		if h.w.status != http.StatusOK || first.deadline.Sub(first.at) != 1950*time.Millisecond || last.deadline.Sub(last.at) != h.cfg.WriteTimeout {
+			t.Errorf("status %d, deadlines %v and %v", h.w.status, first.deadline.Sub(first.at), last.deadline.Sub(last.at))
 		}
 	})
 }

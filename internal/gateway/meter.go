@@ -15,11 +15,11 @@ var errCut = errors.New("gateway: the reservation could not be extended")
 // metered meters what the relay has seen and acts on what the meter says (README.md「计量与追加」): it starts the
 // extension asked for, takes the outcome of one that came back, and when the approved segments are spent it stops
 // reading, idle timer included, until the extension in flight returns. It returns the error of an extension that
-// failed, which cuts the stream short. done is the upstream's normal end, after which there is nothing more to stop
-// reading for.
+// failed, which cuts the stream short. done is the upstream's normal end: there is nothing more to stop reading for,
+// so neither a spent segment nor a failed extension cuts it.
 func (a *attempt) metered(ctx context.Context, p protocol.Progress, done bool, idle *time.Timer, idleFor time.Duration) error {
 	for {
-		if came, err := a.landed(false); came && err != nil {
+		if came, err := a.landed(false); came && err != nil && !done {
 			return err
 		}
 		step := a.meter.Observe(billing.Progress{
@@ -29,8 +29,13 @@ func (a *attempt) metered(ctx context.Context, p protocol.Progress, done bool, i
 		if step.Extend {
 			a.extend(ctx, step.Request)
 		}
-		a.s.setWriteFor(a.writeFor(step.Left))
-		if !step.Exhausted || done {
+		// With nothing left of the segments, even a write that blocks would let the upstream pass them: the step
+		// waits as a spent one does, and an extension is in flight, since the meter asked at its extension point.
+		if done {
+			return nil
+		}
+		if !step.Exhausted && step.Left > 0 {
+			a.s.setWriteFor(a.writeFor(step.Left))
 			return nil
 		}
 		idle.Stop()

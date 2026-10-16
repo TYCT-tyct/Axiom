@@ -139,8 +139,11 @@ func TestALostAcknowledgementChargesOnce(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"cost":`) || strings.Contains(body, "billing_pending") {
 		t.Fatalf("%d:\n%s", resp.StatusCode, body)
 	}
-	if tries != 2 {
-		t.Errorf("%d tries", tries)
+	ledger.mu.Lock()
+	n := tries
+	ledger.mu.Unlock()
+	if n != 2 {
+		t.Errorf("%d tries", n)
 	}
 	if n := r.count("SELECT count(*) FROM billing.transactions WHERE kind = 'settle'"); n != 1 {
 		t.Errorf("%d settlements booked", n)

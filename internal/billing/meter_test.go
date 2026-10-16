@@ -128,7 +128,7 @@ func TestMeterOutput(t *testing.T) {
 }
 
 // TestMeterLeft: Left is what the approved segments still cover of the output, never below zero, and grows by the
-// segment an extension adds.
+// segment an extension adds; once they cover the output limit nothing more can come.
 func TestMeterLeft(t *testing.T) {
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	for _, tc := range []struct {
@@ -141,6 +141,11 @@ func TestMeterLeft(t *testing.T) {
 	m.Extended(2, nil) // asked for at 8 bytes: cover them and a segment, 16 tokens
 	if got := m.Observe(Progress{ContentBytes: 9}).Left; got != 7 {
 		t.Errorf("after the extension: Left %d, want 7", got)
+	}
+	limited := entry(t, true, 3)
+	limited.MaxOutput = 6
+	if got := meter(t, Demand{TextBytes: 80}, limited).Observe(Progress{ContentBytes: 6}).Left; got != math.MaxInt64 {
+		t.Errorf("at the output limit: Left %d, want no bound", got)
 	}
 }
 
