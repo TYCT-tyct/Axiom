@@ -13,3 +13,13 @@ UPDATE catalog.model SET status = @status, price_source = @price_source, spec = 
 
 -- name: ListModelsForSnapshot :many
 SELECT * FROM catalog.model WHERE status IN ('listed', 'retired');
+
+-- A dataset sync follows the models that take their prices from it, drafts too: a draft's first price is how it gets listed.
+-- name: ListModelsForSync :many
+SELECT * FROM catalog.model WHERE status IN ('draft', 'listed') AND price_source = @price_source ORDER BY id;
+
+-- name: ListModelsOfAuthors :many
+SELECT * FROM catalog.model WHERE author = ANY(@authors::text[]) AND status <> 'retired' ORDER BY slug;
+
+-- name: GetModel :one
+SELECT * FROM catalog.model WHERE id = @id;

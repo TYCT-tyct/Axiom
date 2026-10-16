@@ -27,7 +27,10 @@ func TestExtendAcrossAttempts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, read := range []int64{60, 250} { // attempt A, then attempt B after a fallback, each with a fresh meter
+	// The extension point is drawn per request between 400 and 600 per mille of the 100-token segment; the latest one
+	// is the boundary, and a read must pass it (60 tokens would not, strictly) for every draw to ask.
+	h.trigger = 600
+	for _, read := range []int64{61, 250} { // attempt A, then attempt B after a fallback, each with a fresh meter
 		step := h.Bind(0).Observe(Progress{ContentBytes: read})
 		if !step.Extend || step.Request.Seq != 2 {
 			t.Fatalf("attempt reading %d: %+v, want a request for segment 2", read, step)
