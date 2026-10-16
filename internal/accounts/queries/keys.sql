@@ -25,9 +25,9 @@ INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name
 VALUES (@id, @site_id, @account_id, @workspace_id, 'call', @name, @prefix, @last4, @secret_hash, @secret_version,
     @created_by, @expires_at, 'active', @spend_limit, 'daily');
 
--- name: DisableKey :execrows
-UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'active';
+-- name: DisableKey :many
+UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'active' RETURNING site_id, account_id;
 
--- name: DeleteKey :execrows
+-- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.
-UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id;
+UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id RETURNING site_id, account_id;

@@ -47,10 +47,24 @@ func hashKeys(t testing.TB, versions ...byte) *secret.MACKeys {
 	return keys
 }
 
+// keyring is a master keyring with one key, for sealing TOTP secrets.
+func keyring(t testing.TB) *secret.Keyring {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master-key")
+	if err := os.WriteFile(path, []byte("1:"+base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secret.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
 // node is the module as one node of the program runs it, its snapshot loaded, on db; now is its clock.
 func node(t testing.TB, db *pg.DB, hashes *secret.MACKeys, now func() time.Time) *accounts.Service {
 	t.Helper()
-	s, err := accounts.NewService(db, accounts.Config{Platform: platform, Hashes: hashes, Now: now})
+	s, err := accounts.NewService(db, accounts.Config{Platform: platform, Hashes: hashes, Keyring: keyring(t), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,12 +87,11 @@ func callSetup(t testing.TB) (*pg.DB, pgtest.Database, *accounts.Service, string
 	return db, database, s, createKey(t, db, s)
 }
 
-// createKey makes a key in a1's default workspace, in the platform scope: the only scope the audit log takes an entry
-// in until it is bound to tenants.
+// createKey makes a key in a1's default workspace, in a1's scope, which records the audit entry too.
 func createKey(t testing.TB, db *pg.DB, s *accounts.Service) string {
 	t.Helper()
 	var created accounts.CreatedKey
-	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+	if err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error {
 		var err error
 		created, err = s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
 			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: accounts.WorkspaceID(w1),
@@ -479,7 +492,7 @@ func TestKeyChangesAreRecorded(t *testing.T) {
 		want   error
 	}{{s.DisableKey, nil}, {s.DisableKey, accounts.ErrKeyNotFound}, {s.DeleteKey, nil}, {s.DeleteKey, accounts.ErrKeyNotFound}}
 	for i, step := range steps {
-		if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error { return step.change(t.Context(), tx, system, c.KeyID()) }); !errors.Is(err, step.want) {
+		if err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error { return step.change(t.Context(), tx, system, c.KeyID()) }); !errors.Is(err, step.want) {
 			t.Errorf("step %d: %v, want %v", i, err, step.want)
 		}
 	}
