@@ -102,7 +102,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	if rec.Result == billing.NotExecuted {
 		return
 	}
-	input, _ := billing.InputBound(routing.DemandOf(&s.c.Request), a.entry.Limits)
+	d := routing.DemandOf(&s.c.Request)
+	d.TextBytes = tokensOf(d.TextBytes, inputBytesPerToken)
+	input, _ := billing.InputBound(d, a.entry.Limits)
 	rec.Segments = estimated(a.usage, a.seen, input)
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
@@ -118,11 +120,11 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
-// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the
-// admission's bound of the first sampling, unless any input-side item was reported; the output by the text, reasoning
-// and tool input read, which bounds it as the meter does, never below a count reported so far; the web searches by
-// the events seen. Bounds stand in for the estimates by model the docs want, which have no data yet; so an estimate is
-// never above what the reservation covers, and a supplier's record corrects it.
+// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by input,
+// the first sampling's input with its text at inputBytesPerToken, unless any input-side item was reported; the output
+// by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far; the web
+// searches by the events seen. Fixed ratios stand in for the estimates by model the docs want, which have no data yet;
+// each is at most the bound the reservation covers, and a supplier's record corrects it.
 func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Segment {
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
 	for i, seg := range u.Segments {
@@ -137,7 +139,7 @@ func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Seg
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), p.ContentBytes) - counts[catalog.ItemReasoning]
+		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), tokensOf(p.ContentBytes, outputBytesPerToken)) - counts[catalog.ItemReasoning]
 	}
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
@@ -151,6 +153,22 @@ func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Seg
 	}
 	reply.Usage = usage
 	return segments
+}
+
+// The bytes per token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4 bytes a
+// token, and output is taken at 3 to lean the guess up, since no record may come to correct it.
+const (
+	inputBytesPerToken  = 4
+	outputBytesPerToken = 3
+)
+
+// tokensOf is bytes at perToken bytes a token, rounded up: a token begun is charged.
+func tokensOf(bytes, perToken int64) int64 {
+	n := bytes / perToken
+	if bytes%perToken != 0 {
+		n++
+	}
+	return n
 }
 
 // maxCount is the largest count catalog.NewUsage takes: what an estimate is capped at. The bytes of a stream, which an

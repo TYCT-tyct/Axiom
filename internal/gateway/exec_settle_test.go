@@ -172,8 +172,9 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 }
 
 // TestWhatIsCharged: the outcome of each attempt, as billing charges it. One known not to have run used and cost
-// nothing; one whose result is unknown is the input estimated, at the cost of that usage; an answer that broke after
-// the content began has the output read, the input it reported, and its cost.
+// nothing; one whose result is unknown is the input estimated, its text at 4 bytes a token, at the cost of that usage;
+// an answer that broke after the content began has the output read at 3 bytes a token, the input it reported, and its
+// cost.
 func TestWhatIsCharged(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 3, cost: 70})
@@ -191,14 +192,20 @@ func checkCharged(t *testing.T, h *harness) {
 	if len(a) != 3 {
 		t.Fatalf("attempts %+v", a)
 	}
-	input, _ := billing.InputBound(routing.DemandOf(&h.call.Request), h.call.Plan.Entries[1].Limits)
+	d := routing.DemandOf(&h.call.Request)
+	bound, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	d.TextBytes = (d.TextBytes + 3) / 4
+	input, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	if input >= bound {
+		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
+	}
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
 	}
 	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
 		t.Errorf("unknown: %+v", a[1])
 	}
-	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 5, 1<<catalog.ItemInput) || a[2].Cost != 70 {
+	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 2, 1<<catalog.ItemInput) || a[2].Cost != 70 {
 		t.Errorf("broken after the commit point: %+v", a[2])
 	}
 }
@@ -209,7 +216,8 @@ func usageIs(segments []billing.Segment, input, output int64, reported catalog.I
 		segments[0].Usage.OutputTotal() == output && segments[0].Reported == reported
 }
 
-// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated by its bound.
+// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated, the output at 3
+// bytes a token rounded up, never below a count reported.
 func TestEstimated(t *testing.T) {
 	t.Parallel()
 	usage := func(counts map[catalog.Item]int64) catalog.Usage {
@@ -233,7 +241,9 @@ func TestEstimated(t *testing.T) {
 			protocol.Progress{ContentBytes: 50, Searches: 2},
 			map[catalog.Item]int64{in: 10, out: 3},
 		},
-		{"nothing", protocol.Usage{}, protocol.Progress{ContentBytes: 50, Searches: 2}, map[catalog.Item]int64{in: 900, out: 50, search: 2}},
+		{"nothing", protocol.Usage{}, protocol.Progress{ContentBytes: 50, Searches: 2}, map[catalog.Item]int64{in: 900, out: 17, search: 2}},
+		{"no bytes", protocol.Usage{}, protocol.Progress{}, map[catalog.Item]int64{in: 900}},
+		{"bytes that divide", protocol.Usage{}, protocol.Progress{ContentBytes: 51}, map[catalog.Item]int64{in: 900, out: 17}},
 		{
 			"the input from the cache",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{cached: 400}), Reported: 1 << cached}}},
@@ -249,15 +259,16 @@ func TestEstimated(t *testing.T) {
 		{
 			"reasoning stays",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10, catalog.ItemReasoning: 30}), Reported: 1 << in}}},
-			protocol.Progress{ContentBytes: 50},
+			protocol.Progress{ContentBytes: 150},
 			map[catalog.Item]int64{in: 10, catalog.ItemReasoning: 30, out: 20},
 		},
 		{"bytes past any count", protocol.Usage{}, protocol.Progress{ContentBytes: 1 << 40}, map[catalog.Item]int64{in: 900, out: maxCount}},
+		{"a count reported above the ratio", protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{out: 40})}}}, protocol.Progress{ContentBytes: 30}, map[catalog.Item]int64{in: 900, out: 40}},
 		{
 			"a report found invalid",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10})}}, Invalid: errors.New("went down")},
 			protocol.Progress{ContentBytes: 7},
-			map[catalog.Item]int64{in: 900, out: 7},
+			map[catalog.Item]int64{in: 900, out: 3},
 		},
 	} {
 		got := estimated(tc.usage, tc.progress, 900)
