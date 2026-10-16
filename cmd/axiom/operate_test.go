@@ -189,6 +189,17 @@ func masterKeys(t testing.TB) *secret.Keyring {
 	return keys
 }
 
+// TestMainSiteIsInDollars: the main site's currency is USD, and a command that names another writes nothing.
+func TestMainSiteIsInDollars(t *testing.T) {
+	c := newCommandLine(t)
+	if _, err := c.site("init", "--name", "N", "--currency", "EUR", "--console", "c.x.example", "--api", "a.x.example"); err == nil || !strings.Contains(err.Error(), "want USD") {
+		t.Errorf("a main site in euros: %v", err)
+	}
+	if got := c.text("SELECT count(*)::text FROM accounts.sites"); got != "0" {
+		t.Errorf("%s sites after the refusal, want none", got)
+	}
+}
+
 // TestOperateCommandRefusals: what a command cannot do it says, and writes nothing.
 func TestOperateCommandRefusals(t *testing.T) {
 	c := newCommandLine(t)

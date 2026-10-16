@@ -61,9 +61,8 @@ func (q *Queries) InsertMainSite(ctx context.Context, db DBTX, arg InsertMainSit
 
 const insertPlatformGrant = `-- name: InsertPlatformGrant :execrows
 INSERT INTO accounts.platform_grants (id, site_id, account_id, user_id, role_id)
-SELECT $1, $2, $3, $4, $5
-WHERE NOT EXISTS (
-    SELECT 1 FROM accounts.platform_grants g WHERE g.user_id = $4 AND g.role_id = $5 AND g.revoked_at IS NULL)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (user_id, role_id) WHERE revoked_at IS NULL DO NOTHING
 `
 
 type InsertPlatformGrantParams struct {
@@ -74,7 +73,8 @@ type InsertPlatformGrantParams struct {
 	RoleID    uuid.UUID
 }
 
-// A user holds a role once: granting it again changes nothing.
+// A user holds a role once: granting it again changes nothing. The index platform_grants_held decides, so two
+// grants at once cannot both insert.
 func (q *Queries) InsertPlatformGrant(ctx context.Context, db DBTX, arg InsertPlatformGrantParams) (int64, error) {
 	result, err := db.Exec(ctx, insertPlatformGrant,
 		arg.ID,

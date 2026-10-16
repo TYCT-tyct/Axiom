@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func currency(t testing.TB, code string) core.Currency {
 
 func siteSpec(t testing.TB) accounts.SiteSpec {
 	return accounts.SiteSpec{
-		Name: "First", Currency: currency(t, "EUR"), KeyPrefix: "sk-ax-v1-",
+		Name: "First", Currency: currency(t, "USD"), KeyPrefix: "sk-ax-v1-",
 		Hosts: map[accounts.Surface]string{accounts.Console: opConsole, accounts.API: opAPI, accounts.Admin: opAdmin},
 	}
 }
@@ -46,7 +47,13 @@ func siteSpec(t testing.TB) accounts.SiteSpec {
 // emptyDatabase is a migrated database with no site at all, which only the command line can start.
 func emptyDatabase(t *testing.T) *pg.DB {
 	t.Helper()
-	db, err := pg.Open(t.Context(), pgtest.New(t, accounts.Module()).App)
+	return openPool(t, pgtest.New(t, accounts.Module()).App)
+}
+
+// openPool is a pool on url, closed when the test ends.
+func openPool(t *testing.T, url string) *pg.DB {
+	t.Helper()
+	db, err := pg.Open(t.Context(), url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +88,7 @@ func TestInitSiteChecksItsSpec(t *testing.T) {
 		{"no name", func(s *accounts.SiteSpec) { s.Name = "" }, "name"},
 		{"a name of 101 characters", func(s *accounts.SiteSpec) { s.Name = strings.Repeat("n", 101) }, "name"},
 		{"no currency", func(s *accounts.SiteSpec) { s.Currency = core.Currency{} }, "currency"},
+		{"a main site in euros", func(s *accounts.SiteSpec) { s.Currency = currency(t, "EUR") }, "want USD"},
 		{"a prefix without its hyphen", func(s *accounts.SiteSpec) { s.KeyPrefix = "sk-ax" }, "key prefix"},
 		{"an upper-case prefix", func(s *accounts.SiteSpec) { s.KeyPrefix = "SK-" }, "key prefix"},
 		{"no console", func(s *accounts.SiteSpec) { s.Hosts = hosts("", opAPI, "") }, "console host is required"},
@@ -102,7 +110,7 @@ func TestInitSiteChecksItsSpec(t *testing.T) {
 	}
 }
 
-// TestInitSite: the site, its first tier and its domains are made together, once, with the currency the command gave.
+// TestInitSite: the site, its first tier and its domains are made together, once, in the main site's currency.
 func TestInitSite(t *testing.T) {
 	t.Parallel()
 	db, o, _ := madeSite(t, nil)
@@ -112,7 +120,7 @@ func TestInitSite(t *testing.T) {
 		t.Errorf("a second main site: %v", err)
 	}
 	if got := texts(t, db, platform, "SELECT s.currency || ' ' || s.is_main::text || ' ' || (t.id = s.default_tier_id)::text || ' ' || s.registration "+
-		"FROM accounts.sites s JOIN accounts.tiers t ON t.site_id = s.id"); len(got) != 1 || got[0] != "EUR true true invite" {
+		"FROM accounts.sites s JOIN accounts.tiers t ON t.site_id = s.id"); len(got) != 1 || got[0] != "USD true true invite" {
 		t.Errorf("the site and its tier: %v", got)
 	}
 	want := []string{
@@ -373,6 +381,70 @@ func TestGrantPlatform(t *testing.T) {
 	if err := o.GrantPlatform(t.Context(), opEmail, "emperor"); !errors.Is(err, accounts.ErrNotFound) {
 		t.Errorf("a role that does not exist: %v", err)
 	}
+}
+
+// TestGrantPlatformConcurrently: two grants of one role at once leave one grant and one audit entry. A superuser
+// holds the grants table against inserts until both commands wait for it, so both start from a table with no grant.
+func TestGrantPlatformConcurrently(t *testing.T) {
+	t.Parallel()
+	database := pgtest.New(t, accounts.Module())
+	db, watcher := openPool(t, database.App), openPool(t, database.Superuser)
+	o := accounts.NewOperator(db, platform, nil)
+	if _, err := o.InitSite(t.Context(), siteSpec(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := o.CreateUser(t.Context(), opEmail, password); err != nil {
+		t.Fatal(err)
+	}
+	free, freed := holdLock(t, watcher, "LOCK TABLE accounts.platform_grants IN SHARE ROW EXCLUSIVE MODE")
+	defer free() // a failing test must not strand the held transaction
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- o.GrantPlatform(t.Context(), opEmail, "admin") }()
+	}
+	waiting := 0
+	for deadline := time.Now().Add(10 * time.Second); waiting < 2 && time.Now().Before(deadline); waiting = locksWaitedFor(t, watcher) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if waiting < 2 {
+		t.Errorf("%d grants waiting after 10 seconds, want both: they did not overlap", waiting)
+	}
+	free()
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Errorf("a grant: %v", err)
+		}
+	}
+	if err := <-freed; err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(t, watcher, pg.Scope{}, "SELECT (SELECT count(*) FROM accounts.platform_grants WHERE revoked_at IS NULL)::text || ' ' || "+
+		"(SELECT count(*) FROM platform.audit_log WHERE action = 'platform_grant.create')::text"); got[0] != "1 1" {
+		t.Errorf("active grants and audit entries after two grants at once: %q, want \"1 1\"", got[0])
+	}
+}
+
+// holdLock runs statement in a transaction of watcher, a superuser pool, that stays open until free is called; what the
+// transaction ends with arrives on freed.
+func holdLock(t *testing.T, watcher *pg.DB, statement string) (free func(), freed <-chan error) {
+	t.Helper()
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- watcher.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), statement); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	return sync.OnceFunc(func() { close(release) }), done
 }
 
 // TestUnknownUser: every command that names a user says so when there is none, and changes nothing.
