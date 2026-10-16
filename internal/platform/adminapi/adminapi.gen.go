@@ -1545,14 +1545,17 @@ type SupplierNativeUnit string
 
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
-	Kind   string `json:"kind"`
-	Name   string `json:"name"`
-	Origin string `json:"origin"`
+	Kind string `json:"kind"`
+
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
+	Login  SupplierLogin `json:"login"`
+	Name   string        `json:"name"`
+	Origin string        `json:"origin"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 
-	// SettlementCurrency The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it.        login: {$ref: "#/components/schemas/SupplierLogin"}
+	// SettlementCurrency The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it.
 	SettlementCurrency string `json:"settlement_currency"`
 	UpstreamAccount    string `json:"upstream_account"`
 }
@@ -1614,7 +1617,7 @@ type SupplierList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives `access_token`, `refresh_token` and `access_token_expires_at`: the refresh token keeps the login alive, since a password sign-in could not pass the check again. A kind that uses tokens lists all three in `login_fields`.
+// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
 type SupplierLogin struct {
 	AccessToken          *string    `json:"access_token,omitempty"`
 	AccessTokenExpiresAt *time.Time `json:"access_token_expires_at,omitempty"`
@@ -1627,7 +1630,7 @@ type SupplierLogin struct {
 
 // SupplierLoginUpdate defines model for SupplierLoginUpdate.
 type SupplierLoginUpdate struct {
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives `access_token`, `refresh_token` and `access_token_expires_at`: the refresh token keeps the login alive, since a password sign-in could not pass the check again. A kind that uses tokens lists all three in `login_fields`.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
 	Login SupplierLogin `json:"login"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
