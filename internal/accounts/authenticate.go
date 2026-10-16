@@ -6,8 +6,13 @@ import (
 	"time"
 	"uuid"
 
+	"golang.org/x/sync/singleflight"
+
 	"axiom/internal/platform/pg"
 )
+
+// lookupTimeout bounds a key lookup, which the gateway's first step must finish within a second.
+const lookupTimeout = time.Second
 
 // Caller is a key recognised on a site: who it belongs to, nothing about whether it may be used, which Admit reads
 // from the database on every call. Only AuthenticateKey makes one; the zero value is refused by Admit.
@@ -39,13 +44,23 @@ func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) 
 	if _, ok := s.unknown.get(at, now); ok {
 		return Caller{}, ErrUnknownKey
 	}
-	found, err, _ := s.lookups.Do(string(at.site[:])+string(at.hash[:]), func() (any, error) {
+	// The shared lookup runs detached from the request that started it, with its own deadline, so that request
+	// leaving does not fail the others waiting on it; each waiter still stops at its own context's end.
+	shared := s.lookups.DoChan(string(at.site[:])+string(at.hash[:]), func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lookupTimeout)
+		defer cancel()
 		return s.lookUp(ctx, at, raw)
 	})
-	if err != nil {
-		return Caller{}, err
+	var found singleflight.Result
+	select {
+	case <-ctx.Done():
+		return Caller{}, fmt.Errorf("look up an API key: %w", ctx.Err())
+	case found = <-shared:
 	}
-	c, _ := found.(Caller)
+	if found.Err != nil {
+		return Caller{}, found.Err
+	}
+	c, _ := found.Val.(Caller)
 	if c == (Caller{}) {
 		return Caller{}, ErrUnknownKey
 	}
