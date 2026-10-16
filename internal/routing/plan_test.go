@@ -2,6 +2,8 @@ package routing_test
 
 import (
 	"errors"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 	"uuid"
@@ -419,6 +421,55 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
 		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || !entry.Target.EncryptedReasoning || entry.Supplier != sup(1) {
 			t.Errorf("%s: supplier %v, target %+v, want format %d", c.name, entry.Supplier, entry.Target, c.want)
+		}
+	}
+}
+
+// TestTheOutputCapQuotedIsTheCapSent: a request that sets no output cap is reserved at the entry's limit, which the
+// context may have cut below the model's default, so that limit, not the default, is what the upstream is told, in
+// each way a request is called (I1). A model whose limit is unknown has no default to send.
+func TestTheOutputCapQuotedIsTheCapSent(t *testing.T) {
+	t.Parallel()
+	chat := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
+	cases := []struct {
+		name    string
+		client  protocol.Format
+		native  routing.FormatSet
+		body    string
+		member  string // where the cap is in the body sent
+		context int64  // the input is estimated at 1000 tokens
+		limit   int64  // the endpoint's output limit and default, 0 for unknown
+		want    int64  // the cap sent, 0 for none
+	}{
+		{"chat to messages, cut by the context", protocol.Chat, routing.Of(protocol.Messages), chat, `"max_tokens":`, 8000, 8000, 7000},
+		{"chat to responses, cut by the context", protocol.Chat, routing.Of(protocol.Responses), chat, `"max_output_tokens":`, 8000, 8000, 7000},
+		{"responses to responses, cut by the context", protocol.Responses, routing.Of(protocol.Responses), `{"model":"m","input":"hi"}`, `"max_output_tokens":`, 8000, 8000, 7000},
+		{"the default fits whole", protocol.Responses, routing.Of(protocol.Responses), `{"model":"m","input":"hi"}`, `"max_output_tokens":`, 100000, 8000, 8000},
+		{"the limit is unknown", protocol.Responses, routing.Of(protocol.Responses), `{"model":"m","input":"hi"}`, `"max_output_tokens":`, 8000, 0, 0},
+	}
+	for _, c := range cases {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served, e.Context, e.MaxOutput = c.native, c.native|routing.Of(protocol.Chat), c.context, c.limit
+		})
+		in := input()
+		in.Req.Format = c.client
+		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
+		r, err := protocol.Inspect(c.client, []byte(c.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := protocol.Prepare(&r, []byte(c.body), entry.Target, protocol.Rewrites{Identity: func(s string) string { return s }})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		sent := int64(0)
+		if m := regexp.MustCompile(regexp.QuoteMeta(c.member) + `(\d+)`).FindSubmatch(u.Body); m != nil {
+			if sent, err = strconv.ParseInt(string(m[1]), 10, 64); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sent != c.want || c.limit > 0 && sent != entry.MaxOutput {
+			t.Errorf("%s: the upstream is sent a cap of %d, the entry is quoted at %d, want %d\n%s", c.name, sent, entry.MaxOutput, c.want, u.Body)
 		}
 	}
 }

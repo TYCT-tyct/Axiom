@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: Prepare walks the body token by token
 	"errors"
 	"fmt"
+	"strconv"
 
 	"axiom/internal/catalog"
 )
@@ -21,7 +22,9 @@ type Target struct {
 	// The rest is what a conversion needs to know of a Messages model (README.md「跨格式转换」). The gateway fills it
 	// from the model's spec: it is data, never guessed from the model's name.
 	//
-	// MaxOutput is the model's default output cap, which Messages requires when the request sets none.
+	// MaxOutput is the output cap a request that sets none is sent with, 0 for none: the one it was quoted at, which
+	// the gateway takes from the route's entry. Messages requires one; Responses gets it as max_output_tokens, whether
+	// the request is converted or rewritten.
 	MaxOutput int64
 	// Thinking is how the model is asked to reason.
 	Thinking Thinking
@@ -132,15 +135,8 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
-	if w.IdentityLen == 0 {
-		w.IdentityLen = defaultIdentityLen
-	}
-	size := len(body) + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
-	for _, item := range w.History {
-		size += len(item) + 1
-	}
 	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
+		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
 	}
 	if err := p.top(rules); err != nil {
 		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
@@ -149,6 +145,39 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return p.out, nil
+}
+
+// rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
+func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
+	if w.IdentityLen == 0 {
+		w.IdentityLen = defaultIdentityLen
+	}
+	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
+	for _, item := range w.History {
+		size += len(item) + 1
+	}
+	return size
+}
+
+// convertFactor is how many times the body's size a conversion holds at once: the request read into a canon model, the
+// output grown by appending, and what the growth leaves for the collector. It is the heap's peak above its start,
+// sampled on 2026-10-16 while converting for Messages and Responses: 20 times for a body of 100,000 pairs of
+// one-character messages, the worst shape, 13 for messages with one text part, 9 for tool calls and results, 3 for one
+// long text; the result keeps up to 2.5 times (TestPrepareCost).
+const convertFactor = 32
+
+// PrepareCost is the most memory Prepare holds at once for a body of n bytes, besides the body itself, so that the
+// node's budget is asked for it before Prepare allocates it. A rewrite writes into one buffer whose capacity is known
+// before it starts; a conversion's working set is bounded by convertFactor. What stays is the capacity of
+// Upstream.Body, which is never more than the cost.
+func PrepareCost(r *Request, n int, t Target, w Rewrites) int64 {
+	switch {
+	case r.Format == t.Format:
+		return int64(rewriteSize(rewriteRules[r.Format], n, t, w))
+	case r.Format == Chat:
+		return int64(n) * convertFactor
+	}
+	return 0 // Prepare refuses at once: nothing is converted from another format
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
@@ -177,9 +206,10 @@ var (
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
 				"store": (*rewriter).store, "include": (*rewriter).include, "prompt_cache_key": (*rewriter).identity,
 				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
+				"max_output_tokens": (*rewriter).outputCap,
 			}),
 			add: (*rewriter).addResponses, identities: 3,
-			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}"),
+			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) + len(maxInt64),
 		},
 		Chat: {},
 	}
@@ -207,6 +237,9 @@ const (
 	addInclude = `,"include":["` + encrypted + `"]`
 	addInput   = `,"input":[`
 	wrapInput  = `,{"type":"message","role":"user","content":`
+	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
+	addOutputCap = `,"max_output_tokens":`
+	maxInt64     = "9223372036854775807"
 )
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
@@ -217,6 +250,7 @@ type rewriter struct {
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
+	capped                                bool            // max_output_tokens was given a value
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
 }
@@ -346,6 +380,16 @@ func (p *rewriter) store() error {
 	return err
 }
 
+// outputCap gives max_output_tokens the cap the request was quoted at when it is null, which stands for none.
+func (p *rewriter) outputCap() error {
+	v, err := p.dec.ReadValue()
+	if err == nil && v.Kind() == 'n' && p.t.MaxOutput > 0 {
+		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
+	}
+	p.capped = true
+	return err
+}
+
 func (p *rewriter) include() error {
 	p.included = true
 	if !p.t.EncryptedReasoning {
@@ -422,6 +466,9 @@ func (p *rewriter) addResponses() error {
 	}
 	if !p.stored {
 		p.out = append(p.out, addStore...)
+	}
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addOutputCap...), p.t.MaxOutput, 10)
 	}
 	if p.t.EncryptedReasoning && !p.included {
 		p.out = append(p.out, addInclude...)

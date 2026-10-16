@@ -71,7 +71,10 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	if err != nil {
 		return nil, err
 	}
-	target := protocol.Target{Format: to, Model: "up", MaxOutput: 4096, MidSystem: true}
+	target := protocol.Target{Format: to, Model: "up", MidSystem: true}
+	if to == protocol.Messages { // which requires a cap; for Responses it is the gateway's to give (TestPrepareOutputCap)
+		target.MaxOutput = 4096
+	}
 	if change != nil {
 		change(&target)
 	}
@@ -86,12 +89,17 @@ func noMidSystem(t *protocol.Target)    { t.MidSystem = false }
 func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = true }
 func encrypting(t *protocol.Target)     { t.EncryptedReasoning = true }
 func noDefaultCap(t *protocol.Target)   { t.MaxOutput = 0 }
+func quotedCap(t *protocol.Target)      { t.MaxOutput = 7000 }
 
 // messagesHead is a Messages body's start, for the model's default cap.
 const messagesHead = `{"model":"up","max_tokens":4096,`
 
 func TestConvertToMessages(t *testing.T) {
 	convertCases(t, protocol.Messages, []convertCase{
+		{
+			"the cap the request was quoted at", chatBody(`"messages":[` + userHi + `]`), quotedCap,
+			`{"model":"up","max_tokens":7000,"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
 		{
 			"system and text", chatBody(`"messages":[{"role":"developer","content":"Be brief."},{"role":"system","content":[{"type":"text","text":"Be kind."}]},` + userHi + `],"stream":true`), nil,
 			messagesHead + `"system":[{"type":"text","text":"Be brief."},{"type":"text","text":"Be kind."}],"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"stream":true}`,
@@ -230,6 +238,14 @@ func TestConvertToMessages(t *testing.T) {
 func TestConvertToResponses(t *testing.T) {
 	const head = `{"model":"up","input":[`
 	convertCases(t, protocol.Responses, []convertCase{
+		{
+			"the cap the request was quoted at", chatBody(`"messages":[` + userHi + `]`), quotedCap,
+			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],"store":false,"max_output_tokens":7000}`,
+		},
+		{
+			"the request's own cap, not the quoted one", chatBody(`"messages":[` + userHi + `],"max_completion_tokens":50`), quotedCap,
+			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],"store":false,"max_output_tokens":50}`,
+		},
 		{
 			"system, text and storage", chatBody(`"messages":[{"role":"developer","content":"Be brief."},` + userHi + `],"stream":true,"max_tokens":50`), encrypting,
 			head + `{"type":"message","role":"developer","content":[{"type":"input_text","text":"Be brief."}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],` +

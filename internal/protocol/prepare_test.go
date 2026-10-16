@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // the oracle keeps members raw, which jsonx's Go values cannot; jsonx still decodes
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -450,5 +451,71 @@ func TestPrepareUpstream(t *testing.T) {
 				t.Errorf("usage %+v, error %v", u.Usage, err)
 			}
 		})
+	}
+}
+
+// TestPrepareOutputCap: a Responses request without an output cap, or with null for it, is sent with Target.MaxOutput,
+// the cap it was quoted at, whose member the buffer has room for; one that sets a cap keeps it, and a target without
+// a cap to send leaves the request as it is (README.md「同格式改写」, I1).
+func TestPrepareOutputCap(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		max        int64
+		want       string
+	}{
+		{"none", `{"model":"m","input":"hi"}`, 7000, `{"model":"up","input":"hi","store":false,"max_output_tokens":7000}`},
+		{"the largest", `{"model":"m","input":"hi"}`, math.MaxInt64, `{"model":"up","input":"hi","store":false,"max_output_tokens":9223372036854775807}`},
+		{"null", `{"model":"m","max_output_tokens":null,"input":"hi"}`, 7000, `{"model":"up","max_output_tokens":7000,"input":"hi","store":false}`},
+		{"the largest for null", `{"model":"m","max_output_tokens":null}`, math.MaxInt64, `{"model":"up","max_output_tokens":9223372036854775807,"store":false}`},
+		{"set", `{"model":"m","max_output_tokens":50,"input":"hi"}`, 7000, `{"model":"up","max_output_tokens":50,"input":"hi","store":false}`},
+		{"nothing to send", `{"model":"m","input":"hi"}`, 0, `{"model":"up","input":"hi","store":false}`},
+	} {
+		r := inspected(t, protocol.Responses, []byte(c.body))
+		target, w := protocol.Target{Format: protocol.Responses, Model: "up", MaxOutput: c.max}, protocol.Rewrites{Identity: derive}
+		u, err := protocol.Prepare(&r, []byte(c.body), target, w)
+		if err != nil || string(u.Body) != c.want {
+			t.Errorf("%s: got %s (%v), want %s", c.name, u.Body, err, c.want)
+		}
+		if cost := protocol.PrepareCost(&r, len(c.body), target, w); int64(cap(u.Body)) != cost {
+			t.Errorf("%s: the buffer was %d bytes, the cost %d: the rewrite outgrew its room", c.name, cap(u.Body), cost)
+		}
+	}
+}
+
+// TestPrepareCost: a rewrite's cost is the capacity of the buffer it writes into, exactly, however much it adds; a
+// conversion's is more than its result keeps, even for a body of the smallest messages, the worst shape there is
+// (convertFactor); and a request that is not converted costs nothing, as it fails before it allocates.
+func TestPrepareCost(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	w := protocol.Rewrites{Identity: func(string) string { return id }, History: history}
+	rewritten := `{"model":"m","previous_response_id":"r","input":"next","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		body := `{"model":"m","metadata":{"user_id":"u"}}`
+		if f == protocol.Responses {
+			body = rewritten
+		}
+		r := inspected(t, f, []byte(body))
+		target := protocol.Target{Format: f, Model: "up", EncryptedReasoning: true, MaxOutput: math.MaxInt64}
+		u, err := protocol.Prepare(&r, []byte(body), target, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cost := protocol.PrepareCost(&r, len(body), target, w); int64(cap(u.Body)) != cost {
+			t.Errorf("format %d: a rewrite's buffer is %d bytes, its cost %d", f, cap(u.Body), cost)
+		}
+	}
+	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
+	tiny := []byte(chatBody(`"messages":[` + strings.Repeat(pair+",", 20000) + pair + `]`))
+	r := inspected(t, protocol.Chat, tiny)
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
+		u, err := protocol.Prepare(&r, tiny, target, w)
+		if cost := protocol.PrepareCost(&r, len(tiny), target, w); err != nil || int64(cap(u.Body)) > cost/4 {
+			t.Errorf("format %d: a conversion keeps %d bytes (%v) of the %d it costs", f, cap(u.Body), err, cost)
+		}
+	}
+	m := inspected(t, protocol.Messages, []byte(`{"model":"m"}`))
+	if cost := protocol.PrepareCost(&m, 1<<20, protocol.Target{Format: protocol.Responses}, w); cost != 0 {
+		t.Errorf("a Messages request for a Responses endpoint costs %d", cost)
 	}
 }
