@@ -44,7 +44,7 @@ func Public(routes http.Handler, logger *slog.Logger, bodyTimeout time.Duration,
 			if status == 0 && !abort {
 				status = http.StatusOK // the handler wrote nothing; the server sends an empty 200
 			}
-			finish(r.Pattern, status, time.Since(start))
+			finish(r.Pattern, status, abort, time.Since(start))
 			log.Info("request", "method", r.Method, "route", r.Pattern, "status", status,
 				"bytes", recorder.bytes, "duration", time.Since(start))
 			if abort {

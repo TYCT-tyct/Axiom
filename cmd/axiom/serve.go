@@ -22,7 +22,8 @@ import (
 // of 500 rows or 200 ms keep the insert rate low (internal/observability README「写入」).
 var callRecords = observability.Config{
 	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
-	RetryMax: 5 * time.Second,
+	RetryMax:     5 * time.Second,
+	WriteTimeout: 10 * time.Second,
 }
 
 // bodyTimeout bounds how long a client may take to send a request body. Generous for large uploads over slow
@@ -64,9 +65,11 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
 
-	callRecords := callRecords
-	callRecords.Meter = tel.Metrics.Meter("axiom/observability")
-	recorder := observability.NewRecorder(ctx, db, pg.PlatformScope(), callRecords, logger)
+	recorder := startRecorder(ctx, db, tel, logger)
+	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
+	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
+	// returns at once. It runs before db.Close, which was deferred first.
+	defer closeRecorder(ctx, recorder, shutdownTimeout, logger)
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
@@ -94,6 +97,22 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), recorder.Close(ctx))
+}
+
+// startRecorder starts the call-record writer, reporting to the node's metrics.
+func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
+	cfg := callRecords
+	cfg.Meter = tel.Metrics.Meter("axiom/observability")
+	return observability.NewRecorder(ctx, db, pg.PlatformScope(), cfg, logger)
+}
+
+// closeRecorder drains the recorder within timeout, on a context that outlives the one that ended the node.
+func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := recorder.Close(ctx); err != nil {
+		logger.Error("closing the call-record writer", "err", err)
+	}
 }
 
 // node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown

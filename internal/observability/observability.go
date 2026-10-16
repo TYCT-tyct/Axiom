@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io/fs"
 	"net/netip"
+	"strings"
 	"time"
+	"unicode/utf8"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -32,9 +34,10 @@ func Module() pg.Module {
 	return pg.Module{Name: "observability", Migrations: files}
 }
 
-// EndUserHash is the keyed hash of an end user's identifier. It can only be made by HashEndUser, so a raw identifier
-// cannot reach the log by mistake; the zero value means the request named no end user.
-type EndUserHash [sha256.Size]byte
+// EndUserHash is the keyed hash of an end user's identifier. Its array is private, so no code outside this package can
+// build a non-zero one except through HashEndUser, and a raw identifier cannot be stored in it; the zero value means the
+// request named no end user.
+type EndUserHash struct{ sum [sha256.Size]byte }
 
 // HashEndUser is HMAC-SHA256 of id under key: without the key, an identifier cannot be recovered by trying guesses.
 // The key belongs to the site, and rotating it makes earlier hashes unmatchable, which is the point of keeping it
@@ -42,7 +45,7 @@ type EndUserHash [sha256.Size]byte
 func HashEndUser(key []byte, id string) EndUserHash {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(id)) // hash.Hash.Write never fails
-	return EndUserHash(mac.Sum(nil))
+	return EndUserHash{sum: [sha256.Size]byte(mac.Sum(nil))}
 }
 
 // CallRecord is everything the log keeps of one request, known only while it happened. Amounts are in billing's
@@ -128,6 +131,15 @@ func newRow(r CallRecord) (row, error) {
 		}
 		usage[item.String()] = n
 	}
+	for name, text := range map[string]string{
+		"client app": r.ClientApp, "session": r.SessionID, "subagent": r.SubagentID,
+		"class": r.Class, "language": r.Language, "model": r.Model, "source class": r.SourceClass,
+		"finish reason": r.FinishReason, "error kind": r.ErrorKind, "consent version": r.ConsentVersion,
+	} {
+		if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+			return row{}, fmt.Errorf("%s: not valid text (bad UTF-8 or a NUL)", name)
+		}
+	}
 	if r.ServiceTier > catalog.ServiceTierFast {
 		return row{}, fmt.Errorf("service tier: unknown value %d", uint8(r.ServiceTier))
 	}
@@ -140,7 +152,7 @@ func newRow(r CallRecord) (row, error) {
 	}
 	endUser := ""
 	if r.EndUser != (EndUserHash{}) {
-		endUser = hex.EncodeToString(r.EndUser[:])
+		endUser = hex.EncodeToString(r.EndUser.sum[:])
 	}
 	return row{
 		ID: r.ID.String(), At: r.At, SiteID: r.Site.String(), AccountID: r.Account.String(),

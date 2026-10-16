@@ -3,21 +3,24 @@ package observability
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
 
+	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 var now = time.Now().UTC().Truncate(time.Millisecond)
 
-// store writes records through a real Recorder and waits for them to be stored.
-func store(t *testing.T, db *pg.DB, records ...CallRecord) {
+// keep writes records through a real Recorder and waits for them to be stored.
+func keep(t *testing.T, db *pg.DB, records ...CallRecord) {
 	t.Helper()
 	r := NewRecorder(t.Context(), db, platformScope, Config{
 		QueueSize: 16, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
-		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond,
+		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, quiet)
 	for _, rec := range records {
 		if err := r.Enqueue(t.Context(), rec); err != nil {
@@ -41,7 +44,10 @@ func list(t *testing.T, db *pg.DB, scope pg.Scope, q OwnQuery) []OwnCall {
 	return calls
 }
 
-var wholeDay = OwnQuery{Since: now.Add(-24 * time.Hour), Until: now.Add(24 * time.Hour)}
+// day is every call of account in the day around now.
+func day(account uuid.UUID) OwnQuery {
+	return OwnQuery{Account: account, Since: now.Add(-24 * time.Hour), Until: now.Add(24 * time.Hour)}
+}
 
 // TestTenantsReadOnlyTheirOwnCalls: an account's scope shows its own calls, in full, and nobody else's; an empty
 // scope shows nothing; a call of another account cannot be fetched by its ID.
@@ -50,17 +56,20 @@ func TestTenantsReadOnlyTheirOwnCalls(t *testing.T) {
 	db := openDB(t)
 	a, b := uuid.NewV7(), uuid.NewV7()
 	mine, theirs := record(a, now), record(b, now)
-	store(t, db, mine, theirs)
+	keep(t, db, mine, theirs)
 
-	got := list(t, db, accountScope(a), wholeDay)
+	got := list(t, db, accountScope(a), day(a))
 	if len(got) != 1 || got[0].ID != mine.ID || got[0].Usage["input"] != 120 || got[0].PriceNano != mine.PriceNano ||
 		got[0].Latency != mine.Latency || got[0].Key != mine.Key || got[0].IP != "203.0.113.7" {
 		t.Errorf("account A reads %+v, want exactly its own call %s", got, mine.ID)
 	}
-	if got := list(t, db, accountScope(a, b), wholeDay); len(got) != 2 {
-		t.Errorf("a scope of both accounts reads %d calls, want 2", len(got))
+	if got := list(t, db, accountScope(a), day(b)); len(got) != 0 {
+		t.Errorf("account A's scope asking for account B reads %d calls, want 0: the condition is not the access control", len(got))
 	}
-	if got := list(t, db, pg.Scope{}, wholeDay); len(got) != 0 {
+	if got := list(t, db, accountScope(a, b), day(b)); len(got) != 1 {
+		t.Errorf("a scope of both accounts reads %d calls of B, want 1", len(got))
+	}
+	if got := list(t, db, pg.Scope{}, day(a)); len(got) != 0 {
 		t.Errorf("an empty scope reads %d calls, want 0", len(got))
 	}
 	err := db.ReadTx(t.Context(), accountScope(a), func(tx pg.Tx) error {
@@ -88,7 +97,7 @@ func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 	}
 	insert := func(scope pg.Scope) error {
 		return db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-			_, err := New().InsertCallLogs(t.Context(), tx, payload)
+			_, err := store.New().InsertCallLogs(t.Context(), tx, payload)
 			return err
 		})
 	}
@@ -121,7 +130,7 @@ func TestRecordsAreStoredOnceAndNeverRefusedForLackOfAPartition(t *testing.T) {
 	rec := record(a, now)
 	early := record(a, time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC))
 	late := record(a, time.Date(2090, 1, 1, 0, 0, 0, 0, time.UTC))
-	store(t, db, rec, rec, early, late)
+	keep(t, db, rec, rec, early, late)
 
 	var inDefault, total int
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
@@ -148,10 +157,10 @@ func TestListOwnPagesAndFilters(t *testing.T) {
 		}
 		all = append(all, rec)
 	}
-	store(t, db, all...)
+	keep(t, db, all...)
 
 	var seen []uuid.UUID
-	q := wholeDay
+	q := day(a)
 	q.PageSize = 2
 	for {
 		var next *Cursor
@@ -177,9 +186,9 @@ func TestListOwnPagesAndFilters(t *testing.T) {
 	if !slices.Equal(seen, want) {
 		t.Errorf("pages read %v, want %v", seen, want)
 	}
-	byModel := list(t, db, accountScope(a), OwnQuery{Since: wholeDay.Since, Until: wholeDay.Until, Model: "gpt-5"})
-	byApp := list(t, db, accountScope(a), OwnQuery{Since: wholeDay.Since, Until: wholeDay.Until, ClientApp: "codex"})
-	byTime := list(t, db, accountScope(a), OwnQuery{Since: now.Add(-90 * time.Second), Until: wholeDay.Until})
+	byModel := list(t, db, accountScope(a), OwnQuery{Account: a, Since: day(a).Since, Until: day(a).Until, Model: "gpt-5"})
+	byApp := list(t, db, accountScope(a), OwnQuery{Account: a, Since: day(a).Since, Until: day(a).Until, ClientApp: "codex"})
+	byTime := list(t, db, accountScope(a), OwnQuery{Account: a, Since: now.Add(-90 * time.Second), Until: day(a).Until})
 	if len(byModel) != 1 || len(byApp) != 1 || len(byTime) != 2 {
 		t.Errorf("filters match %d, %d, %d calls; want 1, 1, 2", len(byModel), len(byApp), len(byTime))
 	}
@@ -243,5 +252,49 @@ func TestStartupCheckAcceptsTheModule(t *testing.T) {
 	t.Parallel()
 	if err := openDB(t).Check(t.Context(), Module()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestListFollowsTheAccountIndex: among many accounts, a page of one account's calls is read from the index by
+// account, newest first, touching about a page of rows and not the table, as the application role under row-level
+// security. The plan is logged for the PR record.
+func TestListFollowsTheAccountIndex(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
+			workspace_id, key_id, ip, request_class, used_tools, has_image, has_file, model, endpoint_id, attempt_count,
+			usage, service_tier, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms,
+			consent_version, training_allowed)
+		SELECT uuidv7(), now() - make_interval(secs => n), '00000000-0000-4000-8000-000000000001',
+			('00000000-0000-4000-8000-' || lpad((n % 300)::text, 12, '0'))::uuid, uuidv7(), uuidv7(), '203.0.113.7',
+			'chat', false, false, false, 'm', uuidv7(), 1, '{}', 'standard', 1, 1, 'USD', false, 1, 0, 'v', true
+		FROM generate_series(1, 90000) n`, "ANALYZE observability.call_log"); err != nil {
+		t.Fatal(err)
+	}
+	account := uuid.MustParse("00000000-0000-4000-8000-000000000007")
+	var plan []string
+	if err := db.Tx(t.Context(), accountScope(account), func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM observability.call_log
+			WHERE account_id = $1 AND at >= now() - interval '2 days' AND at < now() + interval '1 day'
+			ORDER BY at DESC, id DESC LIMIT 51`, account.String())
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan = append(plan, line)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(plan, "\n")
+	t.Log("\n" + text)
+	if !strings.Contains(text, "Index Cond: ((account_id") || strings.Contains(text, "Seq Scan") {
+		t.Errorf("the page is not read through the account index:\n%s", text)
 	}
 }

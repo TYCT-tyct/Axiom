@@ -78,6 +78,12 @@ func (s *sink) open() {
 }
 
 func recorderOf(s *sink, cfg Config) *Recorder {
+	if cfg.RetryBase == 0 {
+		cfg.RetryBase, cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = 5 * time.Second
+	}
 	return newRecorder(context.Background(), cfg, s.write, func(err error) bool { return errors.Is(err, errPoison) }, quiet)
 }
 
@@ -297,8 +303,8 @@ func TestRecorderWritesThroughTheDatabase(t *testing.T) {
 	db := openDB(t)
 	a := uuid.NewV7()
 	records := []CallRecord{record(a, now), record(a, now.Add(-time.Second)), record(uuid.NewV7(), now)}
-	store(t, db, records...)
-	if got := list(t, db, accountScope(a), wholeDay); len(got) != 2 {
+	keep(t, db, records...)
+	if got := list(t, db, accountScope(a), day(a)); len(got) != 2 {
 		t.Errorf("account A has %d calls stored, want 2", len(got))
 	}
 }
@@ -315,5 +321,85 @@ func TestEndUserHashIsKeyed(t *testing.T) {
 	r, err := newRow(rec)
 	if err != nil || len(r.EndUserHash) != 64 || strings.Contains(r.EndUserHash, "user-1") {
 		t.Errorf("row hash %q (%v)", r.EndUserHash, err)
+	}
+}
+
+// TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder: a row the encoder refuses (invalid UTF-8) between good ones is
+// found by splitting, left out and counted; the good rows reach the database. The row is put on the queue directly,
+// because Enqueue rejects such text at the boundary (TestEnqueueRejectsText).
+func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	a := uuid.NewV7()
+	r := newRecorder(t.Context(), Config{
+		QueueSize: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, dbWriter(db, platformScope), isBadRow, quiet)
+	var rows []row
+	for _, rec := range []CallRecord{record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))} {
+		rw, err := newRow(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, rw)
+	}
+	rows[1].ClientApp = "\xff\xfe"
+	for _, rw := range rows {
+		r.queue <- rw
+	}
+	if err := r.Close(t.Context()); err == nil || !strings.Contains(err.Error(), "1 call records") {
+		t.Errorf("Close = %v, want it to report the one lost row", err)
+	}
+	if got := list(t, db, accountScope(a), day(a)); len(got) != 2 {
+		t.Errorf("%d rows stored, want the 2 good ones", len(got))
+	}
+}
+
+// TestEnqueueRejectsText: text that cannot be stored is refused when it is queued, so it never reaches a batch.
+func TestEnqueueRejectsText(t *testing.T) {
+	t.Parallel()
+	r := recorderOf(&sink{}, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
+	defer r.Close(t.Context()) //nolint:errcheck // nothing was queued
+	for name, edit := range map[string]func(*CallRecord){
+		"bad UTF-8 in the client app": func(c *CallRecord) { c.ClientApp = "\xff" },
+		"a NUL in the model":          func(c *CallRecord) { c.Model = "a\x00b" },
+	} {
+		rec := record(uuid.NewV7(), now)
+		edit(&rec)
+		if err := r.Enqueue(t.Context(), rec); err == nil {
+			t.Errorf("%s was queued", name)
+		}
+	}
+}
+
+// TestHungWriteTimesOutAndRecovers: a write that never answers is cut off after WriteTimeout and retried, so the writer
+// is not held for good by one dead connection.
+func TestHungWriteTimesOutAndRecovers(t *testing.T) {
+	t.Parallel()
+	hung := make(chan struct{})
+	var once sync.Once
+	s := &sink{}
+	write := func(ctx context.Context, rows []row) error {
+		blocked := false
+		once.Do(func() { blocked = true })
+		if blocked {
+			close(hung)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return s.write(ctx, rows)
+	}
+	r := newRecorder(t.Context(), Config{
+		QueueSize: 4, BatchSize: 2, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
+		RetryMax: 2 * time.Millisecond, WriteTimeout: 30 * time.Millisecond,
+	}, write, func(error) bool { return false }, quiet)
+	records := calls(2)
+	enqueueAll(t, r, records)
+	<-hung
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
+		t.Errorf("stored %v after the hung write, want %v", got, ids(records))
 	}
 }

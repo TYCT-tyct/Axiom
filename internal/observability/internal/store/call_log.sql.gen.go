@@ -3,7 +3,7 @@
 //   sqlc v1.31.1
 // source: call_log.sql
 
-package observability
+package store
 
 import (
 	"context"
@@ -101,15 +101,16 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE at >= $1 AND at < $2
-    AND ($3::text = '' OR model = $3)
-    AND ($4::text = '' OR client_app = $4)
-    AND (at, id) < ($5::timestamptz, ($6::text)::uuid)
+WHERE account_id = ($1::text)::uuid AND at >= $2 AND at < $3
+    AND ($4::text = '' OR model = $4)
+    AND ($5::text = '' OR client_app = $5)
+    AND (at, id) < ($6::timestamptz, ($7::text)::uuid)
 ORDER BY at DESC, id DESC
-LIMIT $7
+LIMIT $8
 `
 
 type ListOwnCallsParams struct {
+	AccountID string
 	Since     time.Time
 	Until     time.Time
 	Model     string
@@ -142,9 +143,12 @@ type ListOwnCallsRow struct {
 }
 
 // What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
-// security limits the rows to the account; the keyset (at, id) pages stably while new calls arrive.
+// security limits the rows to the account, and the explicit account condition lets the planner walk the index
+// (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
+// stably while new calls arrive.
 func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsParams) ([]ListOwnCallsRow, error) {
 	rows, err := db.Query(ctx, listOwnCalls,
+		arg.AccountID,
 		arg.Since,
 		arg.Until,
 		arg.Model,

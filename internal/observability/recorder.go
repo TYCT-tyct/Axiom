@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -26,7 +27,8 @@ type Config struct {
 	FlushInterval time.Duration // how long the first record of a batch may wait for company
 	RetryBase     time.Duration // the first wait after a failed write; it doubles up to RetryMax
 	RetryMax      time.Duration
-	Meter         metric.Meter // nil for none
+	WriteTimeout  time.Duration // one write attempt; after it the batch is retried (the outcome of a timed-out write is unknown)
+	Meter         metric.Meter  // nil for none
 }
 
 // Recorder writes call records in the background. Enqueue is the only call on a request's path: it hands the record
@@ -55,28 +57,42 @@ type Recorder struct {
 // NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the rows of
 // many accounts. The writer takes ctx's values, such as the tracing provider, but not its end: only Close stops it.
 func NewRecorder(ctx context.Context, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) *Recorder {
-	write := func(ctx context.Context, rows []row) error {
+	return newRecorder(ctx, cfg, dbWriter(db, scope), isBadRow, logger)
+}
+
+// dbWriter writes a batch in one transaction in scope.
+func dbWriter(db *pg.DB, scope pg.Scope) func(context.Context, []row) error {
+	return func(ctx context.Context, rows []row) error {
 		payload, err := marshalRows(rows)
 		if err != nil {
 			return err
 		}
 		return db.Tx(ctx, scope, func(tx pg.Tx) error {
-			_, err := New().InsertCallLogs(ctx, tx, payload)
+			_, err := store.New().InsertCallLogs(ctx, tx, payload)
 			return err
 		})
 	}
-	return newRecorder(ctx, cfg, write, pg.IsDataError, logger)
 }
+
+// errEncoding marks a batch that cannot be encoded: the same rows fail the same way every time.
+var errEncoding = errors.New("encode call records")
+
+// isBadRow reports a failure that retrying the same rows cannot mend: the database refused a value, or encoding did.
+func isBadRow(err error) bool { return pg.IsDataError(err) || errors.Is(err, errEncoding) }
 
 func marshalRows(rows []row) ([]byte, error) {
 	payload, err := jsonx.MarshalCanonical(rows)
 	if err != nil {
-		return nil, fmt.Errorf("encode %d call records: %w", len(rows), err)
+		return nil, fmt.Errorf("%w (%d rows): %w", errEncoding, len(rows), err)
 	}
 	return payload, nil
 }
 
 func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []row) error, fatal func(error) bool, logger *slog.Logger) *Recorder {
+	if cfg.QueueSize <= 0 || cfg.BatchSize <= 0 || cfg.FlushInterval <= 0 || cfg.RetryBase <= 0 || cfg.RetryMax < cfg.RetryBase ||
+		cfg.WriteTimeout <= 0 {
+		panic("observability: Config needs positive sizes and durations") // a constant of cmd/axiom, fixed at build time
+	}
 	if cfg.Meter == nil {
 		cfg.Meter = noop.NewMeterProvider().Meter("observability")
 	}
@@ -207,7 +223,7 @@ func (r *Recorder) collect() (batch []row, open bool) {
 func (r *Recorder) flush(ctx context.Context, batch []row) {
 	delay := r.cfg.RetryBase
 	for {
-		err := r.write(ctx, batch)
+		err := r.attempt(ctx, batch)
 		if err == nil {
 			r.written.Add(ctx, int64(len(batch)))
 			return
@@ -235,6 +251,13 @@ func (r *Recorder) flush(ctx context.Context, batch []row) {
 		}
 		delay = min(delay*2, r.cfg.RetryMax)
 	}
+}
+
+// attempt is one write, cut off after WriteTimeout: a database that stops answering must not hold the only writer.
+func (r *Recorder) attempt(ctx context.Context, batch []row) error {
+	ctx, cancel := context.WithTimeout(ctx, r.cfg.WriteTimeout)
+	defer cancel()
+	return r.write(ctx, batch)
 }
 
 // abandon counts the rows of a batch that shutdown could not wait for.

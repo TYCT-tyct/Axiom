@@ -56,27 +56,31 @@ func WithTelemetry(t Telemetry) Option { return func(o *options) { o.telemetry =
 
 // start opens the request's span as a child of whatever ctx carries, and returns the function that closes it and
 // counts the request. A zero Telemetry does nothing.
-func (t Telemetry) start(ctx context.Context, requestID string) (context.Context, func(route string, status int, elapsed time.Duration)) {
+func (t Telemetry) start(ctx context.Context, requestID string) (context.Context, func(route string, status int, aborted bool, elapsed time.Duration)) {
 	if t.tracer == nil {
-		return ctx, func(string, int, time.Duration) {}
+		return ctx, func(string, int, bool, time.Duration) {}
 	}
 	ctx, span := t.tracer.Start(ctx, "http.request", trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(attribute.String("request_id", requestID)))
-	return ctx, func(route string, status int, elapsed time.Duration) {
+	return ctx, func(route string, status int, aborted bool, elapsed time.Duration) {
 		if route == "" {
 			route = "unmatched" // a pattern is a registered one; whatever else was asked is one label
 		}
-		class := "aborted"
+		class, outcome := "none", "completed" // none: the connection ended before any status was sent
 		if status != 0 {
 			class = strconv.Itoa(status/100) + "xx"
 		}
-		attrs := metric.WithAttributes(attribute.String("route", route), attribute.String("status_class", class))
+		if aborted {
+			outcome = "aborted" // the status may be a 200 already sent: the response is still broken
+		}
+		attrs := metric.WithAttributes(attribute.String("route", route), attribute.String("status_class", class),
+			attribute.String("outcome", outcome))
 		t.requests.Add(ctx, 1, attrs)
 		t.duration.Record(ctx, elapsed.Seconds(), attrs)
 		span.SetName(route)
-		span.SetAttributes(attribute.Int("http.response.status_code", status))
-		if status == 0 || status >= http.StatusInternalServerError {
-			span.SetStatus(codes.Error, class)
+		span.SetAttributes(attribute.Int("http.response.status_code", status), attribute.String("outcome", outcome))
+		if aborted || status >= http.StatusInternalServerError {
+			span.SetStatus(codes.Error, outcome+" "+class)
 		}
 		span.End()
 	}

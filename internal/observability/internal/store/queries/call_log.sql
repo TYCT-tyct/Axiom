@@ -20,12 +20,14 @@ ON CONFLICT (id, at) DO NOTHING;
 
 -- name: ListOwnCalls :many
 -- What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
--- security limits the rows to the account; the keyset (at, id) pages stably while new calls arrive.
+-- security limits the rows to the account, and the explicit account condition lets the planner walk the index
+-- (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
+-- stably while new calls arrive.
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE at >= @since AND at < @until
+WHERE account_id = (@account_id::text)::uuid AND at >= @since AND at < @until
     AND (@model::text = '' OR model = @model)
     AND (@client_app::text = '' OR client_app = @client_app)
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)

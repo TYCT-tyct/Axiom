@@ -18,12 +18,20 @@ var quiet = slog.New(slog.DiscardHandler)
 // openDB gives a test its own migrated database, logged in as the application.
 func openDB(t *testing.T) *pg.DB {
 	t.Helper()
-	db, err := pg.Open(t.Context(), pgtest.New(t, Module()).App)
+	db, _ := openDBWithURL(t)
+	return db
+}
+
+// openDBWithURL also gives the database's URLs, for a test that seeds as the superuser.
+func openDBWithURL(t *testing.T) (*pg.DB, pgtest.Database) {
+	t.Helper()
+	database := pgtest.New(t, Module())
+	db, err := pg.Open(t.Context(), database.App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	return db
+	return db, database
 }
 
 var platformScope = pg.NewScope(true, nil, nil)

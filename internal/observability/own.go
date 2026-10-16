@@ -6,6 +6,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -33,9 +34,11 @@ type Cursor struct {
 	ID uuid.UUID
 }
 
-// OwnQuery selects calls from the transaction's scope, newest first. Since is inclusive and Until exclusive; Model
+// OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
+// required: it is what the index is read by. Since is inclusive and Until exclusive; Model
 // and ClientApp, when not empty, must match exactly; After continues from a previous page.
 type OwnQuery struct {
+	Account          uuid.UUID
 	Since, Until     time.Time
 	Model, ClientApp string
 	After            *Cursor
@@ -59,14 +62,14 @@ func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, err
 	case size < 0 || size > MaxPageSize:
 		return nil, nil, fmt.Errorf("list calls: page size %d, want 1 to %d", size, MaxPageSize)
 	}
-	params := ListOwnCallsParams{
-		Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp, PageSize: int32(size) + 1,
+	params := store.ListOwnCallsParams{
+		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp, PageSize: int32(size) + 1,
 		AfterAt: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), AfterID: uuid.Max().String(), // before the newest call
 	}
 	if q.After != nil {
 		params.AfterAt, params.AfterID = q.After.At, q.After.ID.String()
 	}
-	rows, err := New().ListOwnCalls(ctx, tx, params)
+	rows, err := store.New().ListOwnCalls(ctx, tx, params)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list calls: %w", err)
 	}
@@ -92,14 +95,14 @@ func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, err
 // GetOwn returns one call of the scope by its request ID; a call of another account is not found, as if it did not
 // exist.
 func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
-	r, err := New().GetOwnCall(ctx, tx, id.String())
+	r, err := store.New().GetOwnCall(ctx, tx, id.String())
 	if err != nil {
 		return OwnCall{}, fmt.Errorf("get call %s: %w", id, err)
 	}
-	return ownCall(ListOwnCallsRow(r))
+	return ownCall(store.ListOwnCallsRow(r))
 }
 
-func ownCall(r ListOwnCallsRow) (OwnCall, error) {
+func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 	c := OwnCall{
 		At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
 		Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
