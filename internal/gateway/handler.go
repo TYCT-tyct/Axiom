@@ -100,7 +100,8 @@ type Call struct {
 	snap   *catalog.Snapshot
 	models []catalog.ModelID
 	sticky routing.EndpointID
-	rate   int // requests of the key in the rate window, counted before admission
+	over   routing.Override // what the request's provider object narrows the route by
+	rate   int              // requests of the key in the rate window, counted before admission
 
 	mu       sync.Mutex
 	releases []func()
@@ -258,6 +259,10 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if req.Previous != "" { // continuing a stored response is M2 (docs/domains/gateway.md「Responses 的会话状态」)
 		return invalid("previous_response_id is not supported yet.")
 	}
+	over, err := override(req.Provider)
+	if err != nil {
+		return err
+	}
 	snap, err := h.Catalog.Current()
 	if err != nil {
 		return err
@@ -266,7 +271,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	c.Body, c.Request, c.snap, c.models = body, req, snap, models
+	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
 	c.sticky, _ = h.Router.Stuck(c.Session)
 	c.rate = h.Limits.Rate.Count(keyKey(c.caller))

@@ -83,7 +83,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 		return ErrRateLimited
 	}
 	plan, wait, err := h.Router.Plan(routing.Input{
-		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Sticky: c.sticky,
+		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
 	})
 	if wait != nil {
 		return &errWait{wait.RetryAfter}

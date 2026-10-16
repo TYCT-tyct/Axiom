@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -29,7 +30,7 @@ type serverTool struct {
 var grammars = [...]grammar{
 	Messages: {
 		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
@@ -46,7 +47,7 @@ var grammars = [...]grammar{
 	},
 	Responses: {
 		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
 			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
 			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
@@ -64,7 +65,7 @@ var grammars = [...]grammar{
 	},
 	Chat: {
 		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
@@ -360,4 +361,24 @@ func (s *scanner) when(lit string, flag *bool) error {
 
 func hasPrefix(v []byte, prefix string) bool {
 	return len(v) >= len(prefix) && string(v[:len(prefix)]) == prefix
+}
+
+// maxProvider bounds the provider object a request carries: the gateway reads it whole, and the parameters it holds
+// are a handful of short names and numbers.
+const maxProvider = 4 << 10
+
+// provider keeps OpenRouter's provider object as written; what it means is for the gateway, which knows the routing.
+func (s *scanner) provider() error {
+	if ok, err := s.present('{', "an object"); !ok {
+		return err
+	}
+	v, err := s.dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	if len(v) > maxProvider {
+		return fmt.Errorf("%s is larger than %d bytes", s.name, maxProvider)
+	}
+	s.r.Provider = bytes.Clone(v)
+	return nil
 }

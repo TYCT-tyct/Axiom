@@ -53,6 +53,9 @@ type Request struct {
 	Stream bool
 	// Previous is Responses' previous_response_id. The stored history it names is input too.
 	Previous string
+	// Provider is OpenRouter's provider object as written, for the gateway to read: how the request narrows its route.
+	// Nil when the request has none; at most maxProvider bytes.
+	Provider []byte
 	// MaxOutput is the output cap the request sets, 0 when it sets none and the model's default applies. Choices is
 	// how many replies are generated, each under that cap: Chat's n, 1 otherwise.
 	MaxOutput, Choices int64
