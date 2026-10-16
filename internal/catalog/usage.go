@@ -125,3 +125,6 @@ func (u Usage) Unknown() []UnknownUsage { return slices.Clone(u.unknown) }
 // OutputTotal is the output the zero-output waiver reads, output plus reasoning (docs/domains/billing.md「免单规则」):
 // a reply that only reasoned is not an empty reply.
 func (u Usage) OutputTotal() int64 { return u.q[ItemOutput] + u.q[ItemReasoning] }
+
+// ServiceTier is the service tier that served the request.
+func (u Usage) ServiceTier() ServiceTier { return u.serviceTier }

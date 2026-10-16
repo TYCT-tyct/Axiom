@@ -46,7 +46,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 ## 尝试
 
 - 逐条目：先查本地持有者（上次心跳成功 + TTL − 5s 晚于现在），失效就不再发起尝试、按「结束与结算」收尾。`Acquire`（内存比较交换）→ `Prepare`；拿不到凭证或 `*NotSupported` 就跳过，不算尝试，写进路由记录。全部因 `*NotSupported` 跳过：`Settle` 只释放，400 附原因；全部因凭证名额跳过：`Settle` 只释放，429、`Retry-After: 1`。
-- **尝试的身份在进入 `Send` 时确定**：`Hold.Bind(seq, entry)` 分配序号（从 1 起，最多 3）、绑定不可变的报价条目，记开始时间（`priced_at`）。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「接口」](../suppliers/README.md#接口草图)。
+- **尝试的身份在进入 `Send` 时确定**：`Hold.Bind(seq, entry)` 分配序号（从 1 起，最多 3）、绑定不可变的报价条目，记开始时间（`priced_at`）。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「调用面」](../suppliers/README.md#调用面)。
 - 进入 `Send` 时、拿到响应头里的对账键时、尝试提交时，各调一次 `suppliers.Journal`（见 [suppliers 的「对账日志」](../suppliers/README.md#对账日志)）。
 - 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
 - 回退不追加预留：准入已按保留条目的最高报价预留。客户端断开后不再发起新尝试。
