@@ -21,6 +21,9 @@ type aggregator interface {
 	event(data []byte) error
 	// body returns the reply, after the ending: its success body, or, after an error ending, the failure body.
 	body() ([]byte, error)
+	// hold makes room for an event the relay withholds until the normal end, which is fed after seal: whatever it
+	// will start is charged now, so that the cap and the node's budget bind it too.
+	hold(data []byte) error
 	// seal ends the charging: the ending is built from bytes already charged and charges nothing, as Finish and
 	// Fail do.
 	seal()
@@ -47,8 +50,9 @@ func (a *aggBase) init(draw func(int) error) {
 	a.charge = func(n int) error { return a.take(n, 1) }
 }
 
-func (a *aggBase) seal()        { a.sealed = true }
-func (a *aggBase) taken() int64 { return a.drawn }
+func (a *aggBase) seal()           { a.sealed = true }
+func (*aggBase) hold([]byte) error { return nil }
+func (a *aggBase) taken() int64    { return a.drawn }
 
 // take accounts for n bytes of pieces, factor times over in the relay's budget.
 func (a *aggBase) take(n, factor int) error {

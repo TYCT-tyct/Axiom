@@ -295,3 +295,101 @@ func TestAggregateResponsesFailOpenReasoning(t *testing.T) {
 		t.Errorf("output (-want +got):\n%s", diff)
 	}
 }
+
+// TestAggregateChatFraming: a chunk is JSON however it is spaced: whitespace before it, a tab, and a chunk of several
+// lines all aggregate to the same reply; [DONE] and an event without data are the only events skipped.
+func TestAggregateChatFraming(t *testing.T) {
+	content := chatChunk(`[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]`)
+	for name, chunk := range map[string]string{
+		"plain":         content,
+		"spaces":        strings.Replace(content, "data: {", "data:   {", 1),
+		"a tab":         strings.Replace(content, "data: {", "data: \t{", 1),
+		"several lines": strings.Replace(content, `,"choices":`, ",\ndata:  \"choices\":", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := aggregateAll(t, protocol.Chat, chatRole+chunk+chatStop+chatDone)
+			choices := objects(got["choices"])
+			if len(choices) != 1 || obj(choices[0]["message"])["content"] != "Hi" || choices[0]["finish_reason"] != "stop" {
+				t.Errorf("choices %v", got["choices"])
+			}
+		})
+	}
+}
+
+// TestAggregateResponsesTypes: a part or an item whose type is not a string is the upstream's failure when it arrives,
+// not a panic when the failure is written from it; an escaped type is the type it spells.
+func TestAggregateResponsesTypes(t *testing.T) {
+	added := func(item string) string {
+		return responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":`+item)
+	}
+	message := added(`{"id":"msg_1","type":"message","content":[]}`)
+	part := func(kind string) string {
+		return responsesEvent("response.content_part.added", 2, `,"output_index":0,"content_index":0,"item_id":"msg_1","part":{"type":`+kind+`,"text":""}`) +
+			responsesEvent("response.output_text.delta", 3, `,"output_index":0,"content_index":0,"item_id":"msg_1","delta":"x"`)
+	}
+	head := responsesEvent("response.created", 0, responsesObject)
+	for name, c := range map[string]struct {
+		stream  string
+		wantErr bool
+	}{
+		"a part of a number":   {head + message + part(`1`), true},
+		"a part of null":       {head + message + part(`null`), true},
+		"a part of an object":  {head + message + part(`{}`), true},
+		"an item of a number":  {head + added(`{"id":"msg_1","type":7,"content":[]}`), true},
+		"an escaped part type": {head + message + part(`"output\u005ftext"`), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := aggregate(t, protocol.Responses, protocol.Responses, strings.NewReader(c.stream), protocol.NewMemory(0), unsettled)
+			if !errors.Is(got.err, protocol.ErrUpstream) {
+				t.Fatalf("error %v, want the upstream's", got.err)
+			}
+			if c.wantErr {
+				return
+			}
+			output := listOf(decode(t, got.body)["output"])
+			parts := listOf(obj(output[0])["content"])
+			if len(parts) != 1 || text(obj(parts[0])["text"]) != "x" || obj(parts[0])["annotations"] == nil {
+				t.Errorf("output %v", output)
+			}
+		})
+	}
+}
+
+// finishOnly is a Chat stream of n choices that only finish, per chunk of them.
+func finishOnly(n, per int) string {
+	var s strings.Builder
+	for first := 0; first < n; first += per {
+		list := make([]string, 0, per)
+		for i := first; i < min(first+per, n); i++ {
+			list = append(list, `{"index":`+strconv.Itoa(i)+`,"delta":{},"finish_reason":"stop"}`)
+		}
+		s.WriteString(chatChunk("[" + strings.Join(list, ",") + "]"))
+	}
+	return s.String() + chatDone
+}
+
+// TestAggregateChatHeld: the choices a Chat upstream finishes are held until its end and made into the reply after the
+// charging has ended, so they are charged when they are held: finish-only choices past the cap fail the stream with
+// ErrMemory before its end, and give back what they drew, though no chunk comes near the size of an event.
+func TestAggregateChatHeld(t *testing.T) {
+	const node, perChunk = 256 << 20, 10000
+	for _, c := range []struct {
+		name    string
+		choices int
+		memory  bool
+	}{{"within the cap", perChunk, false}, {"past the cap", 12 * perChunk, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			mem := protocol.NewMemory(node)
+			got := aggregate(t, protocol.Chat, protocol.Chat, strings.NewReader(finishOnly(c.choices, perChunk)), mem, unsettled)
+			if errors.Is(got.err, protocol.ErrMemory) != c.memory || errors.Is(got.err, protocol.ErrUpstream) || (got.err != nil) != c.memory {
+				t.Errorf("error %v, want a memory error: %v", got.err, c.memory)
+			}
+			if n := len(objects(decode(t, got.body)["choices"])); !c.memory && n != c.choices {
+				t.Errorf("%d choices, want %d", n, c.choices)
+			}
+			if mem.Left() != node {
+				t.Errorf("the node's budget is %d after the reply, was %d", mem.Left(), node)
+			}
+		})
+	}
+}

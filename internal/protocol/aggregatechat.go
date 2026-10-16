@@ -1,12 +1,14 @@
 package protocol
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
 
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol/internal/sse"
 )
 
 // chatAggregate builds a Chat completion from the chunks of a Chat stream, whether the upstream spoke Chat, Messages
@@ -112,14 +114,42 @@ var (
 	}
 )
 
-func (a *chatAggregate) event(data []byte) error {
-	if len(data) == 0 || data[0] != '{' { // [DONE]
-		return nil
+// read reads a chunk into the event and its pending choices, unless it is [DONE] or has no data. Anything else is
+// the JSON of a chunk, whatever whitespace leads it.
+func (a *chatAggregate) read(data []byte) (bool, error) {
+	if t := bytes.TrimSpace(data); len(t) == 0 || string(t) == sse.Done {
+		return false, nil
 	}
 	a.begin(data)
 	a.ev, a.pending = chatAggEvent{}, a.pending[:0]
 	if err := walk(&a.reader, a, chatAggFields); err != nil {
-		return upstreamFailure(err)
+		return false, upstreamFailure(err)
+	}
+	return true, nil
+}
+
+// hold makes room, as the relay withholds a chunk until the normal end, for the choices it starts and their finish
+// reasons: Finish feeds the chunk when the charging has ended, so the cap and the node's budget are asked now.
+func (a *chatAggregate) hold(data []byte) error {
+	if ok, err := a.read(data); !ok || err != nil {
+		return err
+	}
+	for _, s := range a.pending {
+		i, err := a.choice(s.index)
+		if err != nil {
+			return err
+		}
+		c := &a.choices[i]
+		if c.finish, err = grow(&a.aggBase, c.finish, max(0, len(s.finish)-len(c.finish)), 1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *chatAggregate) event(data []byte) error {
+	if ok, err := a.read(data); !ok || err != nil {
+		return err
 	}
 	if err := a.keep(); err != nil {
 		return err
