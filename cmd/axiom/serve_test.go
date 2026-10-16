@@ -93,7 +93,7 @@ func checkAdminScript(t *testing.T, public, admin, script string) {
 
 // checkMetrics: the ops listener serves Prometheus text with the request just made, counted by route pattern and
 // status class only, and the recorder's queue gauge; the public listener does not serve it. Unknown paths, one of them
-// with an identifier in it, share the series of the pages' catch-all route ("/") instead of making one each.
+// with an identifier in it, share the series of the pages' catch-all route ("GET /") instead of making one each.
 func checkMetrics(t *testing.T, addrs addresses) {
 	t.Helper()
 	for _, path := range []string{"/api/console/v1/nothing-here", "/api/console/v1/key_01hxyz0000000000000000000a"} {
@@ -111,7 +111,7 @@ func checkMetrics(t *testing.T, addrs addresses) {
 	text := string(resp.body)
 	for _, want := range []string{
 		`axiom_http_server_requests_total{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
-		`axiom_http_server_requests_total{outcome="completed",route="/",status_class="4xx"} 4`,
+		`axiom_http_server_requests_total{outcome="completed",route="GET /",status_class="4xx"} 4`,
 		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
 		"axiom_observability_queue_depth 0",
 	} {
