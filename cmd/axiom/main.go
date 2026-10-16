@@ -13,7 +13,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback" // root certificates for the scratch image, which has none (deploy/Dockerfile)
 )
 
-const usage = "usage: axiom serve | migrate | healthcheck | version | catalog <operation> <file>"
+const usage = "usage: axiom serve | migrate | healthcheck | version | catalog sync | check | <operation> <file>"
 
 func main() {
 	if !validArgs(os.Args) {
