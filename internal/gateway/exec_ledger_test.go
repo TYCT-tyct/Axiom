@@ -13,6 +13,8 @@ import (
 	"uuid"
 
 	"axiom/internal/billing"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -130,7 +132,7 @@ func TestALostAcknowledgementChargesOnce(t *testing.T) {
 		return true, nil
 	}}
 	up := withExecutor(r, ledger)
-	a := r.newAccount(1e12)
+	a := r.funded(1e12)
 	sample, _ := messagesSample(t)
 	for _, e := range up.eps {
 		e.script = []scripted{streamed(sample, 3, 50, false)}
@@ -173,7 +175,7 @@ func TestTheLedgerBalancesWhateverHappens(t *testing.T) {
 	}
 	ledger := &flakyLedger{extend: fault, settle: fault}
 	up := withExecutor(r, ledger)
-	accounts := []account{r.newAccount(1e12), r.newAccount(3e6), r.newAccount(1e6)}
+	accounts := []account{r.funded(1e12), r.funded(3e6), r.funded(1e6)}
 	for range 60 {
 		var script scripted
 		switch rng.IntN(4) {
@@ -194,6 +196,20 @@ func TestTheLedgerBalancesWhateverHappens(t *testing.T) {
 	}
 	r.exec.Drain(t.Context(), time.Minute) // the settlements still retrying in the background end
 	r.ledgerBalanced()
+}
+
+// funded is an account whose balance is a credit on the books, so that the reconciliation has it.
+func (r *rig) funded(amount int64) account {
+	r.t.Helper()
+	a := r.newAccount(0)
+	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
+		return billing.AddCredit(r.t.Context(), tx, billing.Credit{
+			ID: uuid.NewV7(), Site: siteID, Account: a.id, Amount: amount, Actor: audit.System("gateway.test"), Reason: "test",
+		})
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return a
 }
 
 // heldByAccount counts the balances whose reserved is not what their reservations still hold: all of a pending one,
