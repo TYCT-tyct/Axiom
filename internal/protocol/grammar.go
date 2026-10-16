@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -28,12 +29,12 @@ type serverTool struct {
 
 var grammars = [...]grammar{
 	Messages: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
 			"source": func(s *scanner) error { return s.object(sourceFields) },
@@ -45,12 +46,13 @@ var grammars = [...]grammar{
 		input:   1 << catalog.ItemInput,
 	},
 	Responses: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_output_tokens": (*scanner).maxOutput,
-			"input": (*scanner).content, "tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
+			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
 			"previous_response_id": (*scanner).previous,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "output": (*scanner).result,
 			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
@@ -62,13 +64,13 @@ var grammars = [...]grammar{
 		input:   openAIInput,
 	},
 	Chat: {
-		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
@@ -126,6 +128,20 @@ func (s *scanner) model() error {
 	v, err := s.str()
 	s.r.Model = string(v)
 	return err
+}
+
+// maxModels bounds the alternates a request lists, so what Inspect allocates for them does not grow with the body.
+const maxModels = 8
+
+func (s *scanner) models() error {
+	return s.array(func(s *scanner) error {
+		if len(s.r.Models) == maxModels {
+			return fmt.Errorf("models lists more than %d models", maxModels)
+		}
+		v, err := s.str()
+		s.r.Models = append(s.r.Models, string(v))
+		return err
+	})
 }
 
 func (s *scanner) stream() error {
@@ -345,4 +361,30 @@ func (s *scanner) when(lit string, flag *bool) error {
 
 func hasPrefix(v []byte, prefix string) bool {
 	return len(v) >= len(prefix) && string(v[:len(prefix)]) == prefix
+}
+
+// withProvider adds the provider member, which the three formats share, to the members of a format's top level.
+func withProvider(f fields) fields {
+	f["provider"] = (*scanner).provider
+	return f
+}
+
+// maxProvider bounds the provider object a request carries: the gateway reads it whole, and the parameters it holds
+// are a handful of short names and numbers.
+const maxProvider = 4 << 10
+
+// provider keeps OpenRouter's provider object as written; what it means is for the gateway, which knows the routing.
+func (s *scanner) provider() error {
+	if ok, err := s.present('{', "an object"); !ok {
+		return err
+	}
+	v, err := s.dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	if len(v) > maxProvider {
+		return fmt.Errorf("%s is larger than %d bytes", s.name, maxProvider)
+	}
+	s.r.Provider = bytes.Clone(v)
+	return nil
 }

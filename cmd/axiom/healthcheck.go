@@ -24,11 +24,11 @@ var probe = &http.Client{
 }
 
 // healthcheck asks the node on this machine whether it is ready. The container image has no shell or curl for
-// Docker's HEALTHCHECK, so the program checks itself. It reads only AXIOM_OPS_ADDR and does not report the other
+// Docker's HEALTHCHECK, so the program checks itself. It reads only AXIOM_PROBES_ADDR and does not report the other
 // variables as unknown: they belong to serve, which validates them.
 func healthcheck(ctx context.Context, environ []string) error {
-	// An invalid AXIOM_OPS_ADDR reads as the default, where nothing listens: serve refused to start with it.
-	host, port, err := net.SplitHostPort(opsAddr(config.New(environ)))
+	// An invalid AXIOM_PROBES_ADDR reads as the default, where nothing listens: serve refused to start with it.
+	host, port, err := net.SplitHostPort(probesListenAddr(config.New(environ)))
 	if err != nil {
 		return err
 	}
