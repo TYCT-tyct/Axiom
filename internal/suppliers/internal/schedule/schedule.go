@@ -98,6 +98,7 @@ type Schedule struct {
 	cfg      Config
 	node     *persist.Node
 	settings syncer.Settings
+	budget   time.Duration // roundsBudget; a test shortens it
 }
 
 // New adds the workers and the periodic sweep to the queue, before it starts.
@@ -114,7 +115,7 @@ func New(cfg Config) (*Schedule, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Schedule{cfg: cfg, node: node, settings: settings()}
+	s := &Schedule{cfg: cfg, node: node, settings: settings(), budget: roundsBudget}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(s.workSync)); err != nil {
 		return nil, err
 	}
@@ -188,15 +189,16 @@ func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 // rounds runs the engine, and while the supplier's limits hold a task up for a while, waits for them to reopen and runs
 // it again over the same adapter: a Manager keeps how far a listing got only for as long as it lives, and a listing of
 // more pages than one window allows could otherwise never be finished. A job waits at most roundsBudget in all, so that
-// it does not hold a worker of the queue for longer; what is still held up after that is the next job's.
+// it does not hold a worker of the queue for longer, which the time now says on its own: a limit whose time has already
+// passed would otherwise keep the loop going; what is still held up after that is the next job's.
 func (s *Schedule) rounds(ctx context.Context, engine *syncer.Engine) error {
-	end := s.cfg.Now().Add(roundsBudget)
+	end := s.cfg.Now().Add(s.budget)
 	for {
 		if err := engine.Round(ctx); err != nil {
 			return err
 		}
 		now, until := s.cfg.Now(), engine.Blocked()
-		if until.IsZero() || until.Sub(now) > maxBlockedWait || until.After(end) {
+		if until.IsZero() || !now.Before(end) || until.Sub(now) > maxBlockedWait || until.After(end) {
 			return nil
 		}
 		timer := time.NewTimer(max(until.Sub(now), time.Second)) // a second at least, so that a limit that is already over cannot spin

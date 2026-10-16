@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"errors"
 
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -11,7 +12,8 @@ import (
 // for the rest of the round. Opening logs in at the supplier, and it can fail like any request of the engine's tasks
 // (the account is rejected, the supplier is down): by failing inside a task it is recorded as the task's failure, with
 // the backoff or the stop that goes with it, instead of ending the round before the engine has seen it. One login a
-// round, not one for each task.
+// round, not one for each task. A refusal for want of allowance (adapter.ErrBucketsFull) is not kept: it asked nothing
+// of the supplier, and the caller that waits for the limits to reopen must be able to open again then.
 //
 // It does not forward adapter.Rescanner, which a removal asks the Manager for; a removal opens the adapter before it
 // begins.
@@ -25,7 +27,7 @@ type openOnUse struct {
 func (o *openOnUse) get() (adapter.Manager, error) {
 	if !o.opened {
 		o.manager, o.err = o.open()
-		o.opened = true
+		o.opened = !errors.Is(o.err, adapter.ErrBucketsFull)
 	}
 	return o.manager, o.err
 }

@@ -39,12 +39,21 @@ type system struct {
 	// as it says, as a listing of more pages than a window allows does; the second goes on and is counted as finished.
 	holdKeys     time.Duration
 	keysFinished atomic.Int32
+	// holdOpen, if set, makes the first Open end at the supplier's limits for as long as it says, as a login the
+	// supplier answers with a wait does; the next goes through.
+	holdOpen time.Duration
+	// stuckKeys, if not zero, makes every listing of keys end at limits that reopen that long from now (a time already
+	// past if negative), so that the round is held up for as long as the job goes on.
+	stuckKeys time.Duration
+	keysCalls atomic.Int32
 }
 
 func (*system) Kind() adapter.Kind            { return "fake" }
 func (*system) Buckets() []adapter.BucketSpec { return nil }
 func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adapter.Manager, error) {
-	s.opens.Add(1)
+	if s.opens.Add(1) == 1 && s.holdOpen > 0 {
+		return nil, adapter.Blocked{Until: time.Now().Add(s.holdOpen)}
+	}
 	if s.openErr != nil {
 		return nil, s.openErr
 	}
@@ -65,6 +74,10 @@ func (*manager) Offer(context.Context) (adapter.Offer, error) { return adapter.O
 
 func (m *manager) Keys(context.Context) ([]adapter.KeyState, error) {
 	m.keys++
+	m.s.keysCalls.Add(1)
+	if m.s.stuckKeys != 0 {
+		return nil, adapter.Blocked{Until: time.Now().Add(m.s.stuckKeys)}
+	}
 	if m.keys == 1 && m.s.holdKeys > 0 {
 		return nil, adapter.Blocked{Until: time.Now().Add(m.s.holdKeys)}
 	}
@@ -470,6 +483,40 @@ func TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter(t *testing.T) {
 	}
 	if s.opens.Load() != 1 || s.keysFinished.Load() != 1 {
 		t.Errorf("the adapter was opened %d times and finished the listing %d times, want once and once", s.opens.Load(), s.keysFinished.Load())
+	}
+}
+
+// TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen: an Open that the supplier's limits refuse is not remembered as
+// the round's failure: the job waits and opens again, and the round goes through.
+func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
+	t.Parallel()
+	s := &system{account: healthy(), holdOpen: 300 * time.Millisecond}
+	c := newCluster(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second) // a job that keeps the refusal waits here
+	defer cancel()
+	if err := c.node("a", time.Hour).s.sync(ctx, c.supplier); err != nil {
+		t.Fatal(err)
+	}
+	if s.opens.Load() < 2 || s.accounts.Load() != 1 {
+		t.Errorf("the adapter was opened %d times and the balance read %d times, want a second open and one read", s.opens.Load(), s.accounts.Load())
+	}
+}
+
+// TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp: a round that the limits keep holding up ends with the job's budget,
+// even when the time they name has already passed, which would otherwise keep it going until the queue cancels it.
+func TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp(t *testing.T) {
+	t.Parallel()
+	s := &system{account: healthy(), stuckKeys: -time.Hour}
+	c := newCluster(t, s)
+	n := c.node("a", time.Hour)
+	n.s.budget = 3 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if err := n.s.sync(ctx, c.supplier); err != nil {
+		t.Fatalf("the job did not end within its budget: %v", err)
+	}
+	if s.keysCalls.Load() < 2 {
+		t.Errorf("the listing was tried %d times, want it retried while the budget lasted", s.keysCalls.Load())
 	}
 }
 

@@ -275,6 +275,34 @@ func TestBlockedBucketsAreNotFailures(t *testing.T) {
 	}
 }
 
+// TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn: tasks held up by the limits until different times are waited for one
+// after the other, and a task still waiting is reported after another has gone on, so that a caller keeping the Manager
+// does not drop it, and with it how far its listing got, while a later one is not yet due.
+func TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn(t *testing.T) {
+	t.Parallel()
+	m := healthy()
+	early, late := t0.Add(2*time.Minute), t0.Add(5*time.Minute)
+	m.offer = func() (adapter.Offer, error) { return adapter.Offer{}, adapter.Blocked{Until: early} }
+	m.keys = func() ([]adapter.KeyState, error) { return nil, adapter.Blocked{Until: late} }
+	e, _, clk := engine(m)
+	round(t, e)
+	if !e.Blocked().Equal(early) {
+		t.Fatalf("Blocked = %v, want the earlier %v", e.Blocked(), early)
+	}
+	clk.advance(2 * time.Minute)
+	m.offer = healthy().offer
+	round(t, e)
+	if !e.Blocked().Equal(late) {
+		t.Errorf("Blocked = %v after the earlier task went on, want the later %v still waited for", e.Blocked(), late)
+	}
+	clk.advance(3 * time.Minute)
+	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	round(t, e)
+	if !e.Blocked().IsZero() {
+		t.Errorf("Blocked = %v after every task went on, want none", e.Blocked())
+	}
+}
+
 // TestSameAnswerTwiceChangesNothing and TestChangedRatioMakesOneEventAndOnePlan are the sync's idempotence: a repeat
 // is silent; a change is one event and one new plan version.
 func TestSameAnswerTwiceChangesNothing(t *testing.T) {
