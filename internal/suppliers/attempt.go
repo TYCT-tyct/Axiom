@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptrace"
 	"sync"
@@ -156,9 +157,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
-	for name, values := range call.Header {
-		req.Header[name] = values
-	}
+	maps.Copy(req.Header, call.Header)
 	req.Header.Set("Authorization", "Bearer "+a.cred.key.Reveal())
 	req.Header.Set("Content-Type", "application/json")
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
