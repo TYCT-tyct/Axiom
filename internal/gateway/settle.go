@@ -94,12 +94,13 @@ func permanent(err error) bool {
 
 // result is what billing takes of an attempt once it is over. The usage is the upstream's report with every item it did
 // not report estimated, and the cost is ours of that usage. An attempt known not to have run used nothing and cost
-// nothing.
+// nothing, which is known.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Key = receipt.Key()
 	if rec.Result == billing.NotExecuted {
+		rec.Costed = true
 		return
 	}
 	d := routing.DemandOf(&s.c.Request)
@@ -110,13 +111,13 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	cost, err := s.x.Costs.Cost(receipt, usage)
+	cost, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: reconciliation sets it from the supplier's record, and a settlement
 		// held back for it would leave a call that can be priced to the cleanup.
 		s.logger.Error("an attempt's cost could not be priced; it is booked as 0", "err", err)
 	}
-	rec.Cost = cost
+	rec.Cost, rec.Costed = cost, known
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the

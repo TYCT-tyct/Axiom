@@ -60,8 +60,8 @@ func (fakeQuirks) Classify(status int, _ http.Header, _ []byte) adapter.Failure 
 	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Unknown{Status: status}}
 }
 
-// world is a database with one supplier, group, credential and endpoint priced at 0.075 per input token and 0.3 per
-// output token, and a service that has loaded them.
+// world is a database with one supplier, settled in USD at 2 a unit, its group, credential and endpoint priced at 0.075
+// per input token and 0.3 per output token, and a service that has loaded them.
 type world struct {
 	t                                         *testing.T
 	db                                        *pg.DB
@@ -172,6 +172,9 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 		return err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active' WHERE id = $1", w.supplier); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 2, 'test', 'seed')", w.supplier); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = 'maple' WHERE id = $1", w.group)

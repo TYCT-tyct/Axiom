@@ -199,10 +199,10 @@ func checkCharged(t *testing.T, h *harness) {
 	if input >= bound {
 		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
 	}
-	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
+	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 || !a[0].Costed {
 		t.Errorf("not executed: %+v", a[0])
 	}
-	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
+	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 || !a[1].Costed {
 		t.Errorf("unknown: %+v", a[1])
 	}
 	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 2, 1<<catalog.ItemInput) || a[2].Cost != 70 {

@@ -12,6 +12,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -111,12 +112,15 @@ type credRuntime struct {
 	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
 }
 
-// endpoint is what is needed to call one endpoint.
+// endpoint is what is needed to call one endpoint, and to turn its costs into money: what a unit of its supplier's
+// balance is worth in the supplier's settlement currency.
 type endpoint struct {
 	id, supplier, schedule uuid.UUID
 	origin                 string
 	quirks                 adapter.CallQuirks
 	creds                  []*credential
+	currency               platform.Currency
+	unitValue              platform.UnitPrice
 }
 
 type credential struct {
@@ -177,7 +181,18 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		}
 		schedules[r.CostScheduleID] = &sched
 	}
-	ep := &endpoint{id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls()}
+	currency, err := platform.ParseCurrency(r.SettlementCurrency)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %s: its supplier's settlement currency: %w", r.EndpointID, err)
+	}
+	value, err := platform.ParseUnitPrice(r.UnitValue)
+	if err != nil || value.Cmp(platform.UnitPrice{}) == 0 {
+		return nil, fmt.Errorf("endpoint %s: its supplier's unit value %q is not above 0 and at most 1000 with at most 15 decimals", r.EndpointID, r.UnitValue)
+	}
+	ep := &endpoint{
+		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls(),
+		currency: currency, unitValue: value,
+	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
 }

@@ -512,8 +512,8 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 
 type fakeCosts int64
 
-func (c fakeCosts) Cost(suppliers.AttemptReceipt, []catalog.Usage) (int64, error) {
-	return int64(c), nil
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (int64, bool, error) {
+	return int64(c), true, nil
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no
