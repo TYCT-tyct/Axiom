@@ -25,6 +25,10 @@ FROM suppliers.suppliers s WHERE s.id = @id;
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
 FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id ORDER BY name, id;
 
+-- name: GetGroupOf :many
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
+
 -- name: ListCredentialsOf :many
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;

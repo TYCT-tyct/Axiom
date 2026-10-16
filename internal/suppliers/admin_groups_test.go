@@ -202,3 +202,20 @@ func TestMapModel(t *testing.T) {
 	_, err = a.mapIn(id, nil, "gpt-6", model)
 	refuses(t, "an alias for a supplier being removed", err, ErrStatusLocked)
 }
+
+// TestAChangeReadsOnlyWhatItAnswersWith: selecting a group and pausing a supplier answer from the supplier's row and the
+// one group, not from every group and credential of the supplier: with the credentials unreadable they still go through.
+func TestAChangeReadsOnlyWhatItAnswersWith(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	one := a.group(id, "1", true)
+	a.sql("REVOKE SELECT ON suppliers.credentials FROM axiom_app")
+	_, err := a.choose(id, one, true)
+	refuses(t, "selecting with the credentials unreadable", err, nil)
+	a.setStatus(id, "active")
+	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
+		return a.admin.SetStatus(ctx, tx, a.actor, id, Paused, "needed")
+	})
+	refuses(t, "pausing with the credentials unreadable", err, nil)
+}

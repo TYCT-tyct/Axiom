@@ -21,6 +21,56 @@ func (q *Queries) BumpConfigGen(ctx context.Context, db DBTX, id uuid.UUID) erro
 	return err
 }
 
+const getGroupOf = `-- name: GetGroupOf :many
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
+`
+
+type GetGroupOfParams struct {
+	SupplierID uuid.UUID
+	ID         uuid.UUID
+}
+
+type GetGroupOfRow struct {
+	ID          uuid.UUID
+	UpstreamRef string
+	Name        string
+	Ratio       string
+	Facts       []byte
+	Selected    bool
+	Codename    *string
+	Present     bool
+}
+
+func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams) ([]GetGroupOfRow, error) {
+	rows, err := db.Query(ctx, getGroupOf, arg.SupplierID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetGroupOfRow
+	for rows.Next() {
+		var i GetGroupOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UpstreamRef,
+			&i.Name,
+			&i.Ratio,
+			&i.Facts,
+			&i.Selected,
+			&i.Codename,
+			&i.Present,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getSupplierView = `-- name: GetSupplierView :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,

@@ -250,7 +250,7 @@ func supplierProblem(err error) error {
 // CreateSupplier connects a supplier. The sync logs in and moves it on from `connecting`.
 func (a adminAPI) CreateSupplier(ctx context.Context, request adminapi.CreateSupplierRequestObject) (adminapi.CreateSupplierResponseObject, error) {
 	b := request.Body
-	origin, err := a.suppliers.Origin(ctx, b.Origin)
+	origin, err := suppliers.NormalizeOrigin(b.Origin)
 	if err != nil {
 		return nil, supplierProblem(err)
 	}
@@ -263,6 +263,10 @@ func (a adminAPI) CreateSupplier(ctx context.Context, request adminapi.CreateSup
 	identity := []any{b.Name, b.Kind, origin, b.UpstreamAccount, b.SettlementCurrency, b.Reason, loginMembers(login)}
 	supplier, replayed, err := idempotently(ctx, a.db, "createSupplier", request.Params.IdempotencyKey, identity,
 		func(tx pg.Tx) (adminapi.Supplier, error) {
+			// Asked only by the request that makes the change: the network may differ when a lost response is retried.
+			if err := a.suppliers.CheckOrigin(ctx, origin); err != nil {
+				return adminapi.Supplier{}, supplierProblem(err)
+			}
 			made, err := a.suppliers.Connect(ctx, tx, actor(ctx), suppliers.ConnectRequest{
 				Name: b.Name, Kind: b.Kind, Origin: origin, UpstreamAccount: b.UpstreamAccount, SettlementCurrency: currency,
 				Login: login, Reason: b.Reason,
@@ -480,11 +484,12 @@ func (a adminAPI) MapSupplierModel(ctx context.Context, request adminapi.MapSupp
 		}
 		group = &id
 	}
-	if err := a.mappableModel(ctx, model); err != nil {
-		return nil, err
-	}
 	mapped, replayed, err := idempotently(ctx, a.db, "mapSupplierModel", request.Params.IdempotencyKey, []any{request.SupplierId, b},
 		func(tx pg.Tx) (adminapi.ModelMapping, error) {
+			// Checked by the request that makes the change only: a model retired since is no reason to refuse its retry.
+			if err := mappableModel(ctx, tx, model); err != nil {
+				return adminapi.ModelMapping{}, err
+			}
 			m, err := a.suppliers.MapModel(ctx, tx, actor(ctx), supplier, group, b.UpstreamName, model, b.Reason)
 			body := adminapi.ModelMapping{Id: m.ID.String(), SupplierId: m.Supplier.String(), UpstreamName: m.UpstreamName, ModelId: m.Model.String()}
 			if m.Group != nil {
@@ -500,8 +505,8 @@ func (a adminAPI) MapSupplierModel(ctx context.Context, request adminapi.MapSupp
 }
 
 // mappableModel refuses a model the catalog lacks or has retired: an alias to it would send traffic nowhere.
-func (a adminAPI) mappableModel(ctx context.Context, id uuid.UUID) error {
-	view, err := a.catalog.Model(ctx, catalog.ModelID(id))
+func mappableModel(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
+	view, err := catalog.ModelIn(ctx, tx, catalog.ModelID(id))
 	switch {
 	case errors.Is(err, catalog.ErrModelNotFound):
 		return unprocessable("the model is not in the catalog")

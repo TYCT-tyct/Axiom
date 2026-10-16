@@ -187,6 +187,10 @@ func TestOrigin(t *testing.T) {
 		"https://8.8.8.8":         "https://8.8.8.8",
 		"HTTPS://8.8.8.8:443":     "https://8.8.8.8",
 		"https://8.8.8.8:8443":    "https://8.8.8.8:8443",
+		"https://8.8.8.8:0443":    "https://8.8.8.8", // the same port, written with a leading zero
+		"https://8.8.8.8:08443":   "https://8.8.8.8:8443",
+		"https://8.8.8.8:0":       "",
+		"https://8.8.8.8:99999":   "",
 		"https://127.0.0.1:8443":  "https://127.0.0.1:8443", // the test client lets loopback through
 		"https://[2606:4700::1]":  "",                       // not a name this pattern takes
 		"http://8.8.8.8":          "",
@@ -199,12 +203,12 @@ func TestOrigin(t *testing.T) {
 		"https://169.254.169.254": "",
 		"https://192.168.1.1:81":  "",
 	} {
-		got, err := a.admin.Origin(t.Context(), raw)
-		same(t, fmt.Sprintf("Origin(%q) (error %v)", raw, err), want, got)
+		got, err := a.admin.checkedOrigin(t.Context(), raw)
+		same(t, fmt.Sprintf("checkedOrigin(%q) (error %v)", raw, err), want, got)
 	}
-	_, err := a.admin.Origin(t.Context(), "https://10.0.0.1")
+	_, err := a.admin.checkedOrigin(t.Context(), "https://10.0.0.1")
 	refuses(t, "a private address", err, ErrAddressRefused)
-	_, err = a.admin.Origin(t.Context(), "https://8.8.8.8/path")
+	_, err = a.admin.checkedOrigin(t.Context(), "https://8.8.8.8/path")
 	refuses(t, "a path", err, ErrBadOrigin)
 }
 

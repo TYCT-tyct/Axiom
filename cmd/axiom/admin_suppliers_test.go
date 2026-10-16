@@ -14,6 +14,8 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 )
 
 const publicOrigin = "https://8.8.8.8"
@@ -248,4 +250,29 @@ func TestWindowLimiter(t *testing.T) {
 			t.Errorf("step %d: %v, want a refusal to retry after %v", i, err, s.retry)
 		}
 	}
+}
+
+// TestCreateSupplierRetryAfterTheNetworkChanged: a connection that went through is answered again to its retry, though
+// the site's address would be refused now; a new request for it is refused.
+func TestCreateSupplierRetryAfterTheNetworkChanged(t *testing.T) {
+	c := newCommandLine(t)
+	if _, err := c.site(siteArgs...); err != nil {
+		t.Fatal(err)
+	}
+	clock := &testClock{now: time.Now()}
+	body := strings.Replace(createBody, publicOrigin, "https://127.0.0.1:8443", 1)
+	loopback := startAdminNodeVia(c, clock, egress.NewForTesting(egresstest.Loopback(t)))
+	loopback.addUser(ownerEmail, "admin")
+	key := newKey()
+	owner := loopback.owner()
+	expectAdmin(t, "the connection", loopback.change(owner, http.MethodPost, "/suppliers", body, key), http.StatusCreated, "")
+
+	restarted := loopback.restarted()
+	f := supplierFixture{restarted, owner}
+	rec := f.change(f.s, http.MethodPost, "/suppliers", body, key)
+	if expectAdmin(t, "the retry", rec, http.StatusCreated, ""); rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("the retry was not a replay")
+	}
+	expectAdmin(t, "a new request", f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(body, "ops", "other", 1), newKey()),
+		http.StatusUnprocessableEntity, codeUnprocessable)
 }

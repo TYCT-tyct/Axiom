@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"uuid"
@@ -27,22 +28,52 @@ import (
 // originPattern is the origin a supplier is connected at: https, a host in lower case, a port if it is not the default.
 var originPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$`)
 
-// Origin is the origin as it is stored: lower case, without the port https has by default, and one the outbound client
-// lets a connection through to. A supplier is identified by its origin and account, and its credentials go only there,
-// so the same site written two ways must not be two suppliers.
-func (a *Admin) Origin(ctx context.Context, raw string) (string, error) {
-	u, err := url.Parse(strings.ToLower(raw))
-	if err != nil || !originPattern.MatchString(strings.ToLower(raw)) || u.Hostname() == "" {
+// NormalizeOrigin is the origin as it is stored: lower case, with the port a decimal number from 1 to 65535 and left out
+// when it is the one https has by default. A supplier is identified by its origin and account, and its credentials go
+// only there, so the same site written two ways must not be two suppliers. It reads the text only; CheckOrigin asks the
+// network.
+func NormalizeOrigin(raw string) (string, error) {
+	raw = strings.ToLower(raw)
+	u, err := url.Parse(raw)
+	if err != nil || !originPattern.MatchString(raw) || u.Hostname() == "" {
 		return "", ErrBadOrigin
 	}
 	origin := "https://" + u.Hostname()
-	if port := u.Port(); port != "" && port != "443" {
-		origin += ":" + port
+	if p := u.Port(); p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return "", ErrBadOrigin
+		}
+		if port != 443 {
+			origin += ":" + strconv.Itoa(port)
+		}
+	}
+	return origin, nil
+}
+
+// CheckOrigin is whether the outbound client lets a connection through to the origin's host. It resolves the name, so it
+// answers for the network as it is now: a request that has been carried out does not ask it again.
+func (a *Admin) CheckOrigin(ctx context.Context, origin string) error {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return ErrBadOrigin
 	}
 	if err := a.egress.Check(ctx, u.Hostname()); errors.Is(err, egress.ErrAddressDenied) {
-		return "", fmt.Errorf("%w: %w", ErrAddressRefused, err)
+		return fmt.Errorf("%w: %w", ErrAddressRefused, err)
 	} else if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	return nil
+}
+
+// checkedOrigin is NormalizeOrigin and CheckOrigin together.
+func (a *Admin) checkedOrigin(ctx context.Context, raw string) (string, error) {
+	origin, err := NormalizeOrigin(raw)
+	if err != nil {
+		return "", err
+	}
+	if err := a.CheckOrigin(ctx, origin); err != nil {
+		return "", err
 	}
 	return origin, nil
 }
@@ -61,7 +92,7 @@ const detectTimeout = 45 * time.Second
 // Detect asks each adapter in turn whether the site is a system of its kind, through the outbound client, which refuses
 // private and internal addresses; nothing is stored. A site no adapter recognises is a Detection with no Kind.
 func (a *Admin) Detect(ctx context.Context, raw string) (Detection, error) {
-	origin, err := a.Origin(ctx, raw)
+	origin, err := a.checkedOrigin(ctx, raw)
 	if err != nil {
 		return Detection{}, err
 	}
@@ -290,17 +321,16 @@ func (*Admin) chooseGroup(ctx context.Context, tx pg.Tx, group uuid.UUID, select
 }
 
 // group reads one group of a supplier.
-func (a *Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Group, error) {
-	d, err := a.Supplier(ctx, tx, supplier)
+func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Group, error) {
+	rows, err := store.New().GetGroupOf(ctx, tx, store.GetGroupOfParams{SupplierID: supplier, ID: id})
 	if err != nil {
-		return Group{}, err
+		return Group{}, fmt.Errorf("read the group: %w", err)
 	}
-	for _, g := range d.Groups {
-		if g.ID == id {
-			return g, nil
-		}
+	if len(rows) == 0 {
+		return Group{}, ErrNoGroup
 	}
-	return Group{}, ErrNoGroup
+	g := rows[0]
+	return groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present)
 }
 
 // defaultMaxConcurrency is how many calls a key serves at once until a person sets another number.

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -130,4 +131,23 @@ func TestMapSupplierModel(t *testing.T) {
 	expectAdmin(t, "a group the supplier lacks", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/model-mappings", foreign, newKey()),
 		http.StatusUnprocessableEntity, codeUnprocessable)
 	f.expectAudit("supplier_alias.create", map[string]string{"reason": "it is the same model"})
+}
+
+// TestMappingRetryAfterTheModelRetires: a mapping that went through is answered again to its retry, though its model has
+// been retired since; a new request for the retired model is still refused.
+func TestMappingRetryAfterTheModelRetires(t *testing.T) {
+	f := newSupplierFixture(t)
+	supplier := f.connect().Id
+	catalog := catalogFixture(f)
+	model := catalog.ready("acme/gamma")
+	body := `{"upstream_name":"gamma","model_id":"` + model.Id + `","reason":"r"}`
+	key := newKey()
+	expectAdmin(t, "the mapping", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/model-mappings", body, key), http.StatusCreated, "")
+	f.run(fmt.Sprintf("UPDATE catalog.model SET status = 'retired' WHERE id = '%s'", model.Id))
+	rec := f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/model-mappings", body, key)
+	if expectAdmin(t, "the retry", rec, http.StatusCreated, ""); rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("the retry was not a replay")
+	}
+	expectAdmin(t, "a new request", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/model-mappings", strings.Replace(body, "gamma", "delta", 1), newKey()),
+		http.StatusUnprocessableEntity, codeUnprocessable)
 }

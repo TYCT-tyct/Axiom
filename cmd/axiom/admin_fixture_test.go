@@ -51,6 +51,16 @@ func newAdminFixture(t *testing.T) adminFixture {
 // startAdminNode starts a node of the program on the command line's database that serves the admin listener.
 func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	c.t.Helper()
+	exit, err := egress.New(egress.Direct)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return startAdminNodeVia(c, clock, exit)
+}
+
+// startAdminNodeVia is startAdminNode with the outbound client the node's suppliers go through.
+func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adminFixture {
+	c.t.Helper()
 	svc, err := accounts.NewService(c.db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
 	})
@@ -67,10 +77,6 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	cat, err := catalog.Open(c.db, pg.PlatformScope(), catalog.Config{Logger: logger})
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	exit, err := egress.New(egress.Direct)
 	if err != nil {
 		c.t.Fatal(err)
 	}

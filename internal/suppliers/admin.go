@@ -220,16 +220,13 @@ func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool,
 }
 
 // Supplier is one supplier with its groups and credentials; ErrNoSupplier when there is none.
-func (*Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
-	q := store.New()
-	rows, err := q.GetSupplierView(ctx, tx, id)
+func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
+	summary, err := a.view(ctx, tx, id)
 	if err != nil {
-		return Detail{}, fmt.Errorf("read the supplier: %w", err)
+		return Detail{}, err
 	}
-	if len(rows) == 0 {
-		return Detail{}, ErrNoSupplier
-	}
-	d := Detail{Supplier: supplierOf(rows[0])}
+	q := store.New()
+	d := Detail{Supplier: summary}
 	groups, err := q.ListGroupsOf(ctx, tx, id)
 	if err != nil {
 		return Detail{}, fmt.Errorf("read the groups: %w", err)
@@ -281,10 +278,17 @@ func (*Admin) record(ctx context.Context, tx pg.Tx, actor audit.Actor, action st
 	})
 }
 
-// view reads the supplier as it is.
-func (a *Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID) (Supplier, error) {
-	d, err := a.Supplier(ctx, tx, id)
-	return d.Supplier, err
+// view reads the supplier as it is, without its groups and credentials: a change answers with the supplier while it
+// holds the supplier's row lock, and must not read more than that.
+func (*Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID) (Supplier, error) {
+	rows, err := store.New().GetSupplierView(ctx, tx, id)
+	if err != nil {
+		return Supplier{}, fmt.Errorf("read the supplier: %w", err)
+	}
+	if len(rows) == 0 {
+		return Supplier{}, ErrNoSupplier
+	}
+	return supplierOf(rows[0]), nil
 }
 
 // SetStatus pauses a supplier that is in use or resumes one that is paused; another change of status is the sync's, or
