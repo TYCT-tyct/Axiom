@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+
+	_ "golang.org/x/crypto/x509roots/fallback" // root certificates for the scratch image, which has none (deploy/Dockerfile)
 )
 
 const usage = "usage: axiom serve | migrate | healthcheck | version | catalog <operation> <file>"

@@ -168,8 +168,40 @@ func TestReaderReadError(t *testing.T) {
 	}
 }
 
-// FuzzReader: however the stream is split into reads, the events and the final error are the same, and every event
-// is Done or strictly valid JSON.
+// pollAll is readAll calling Poll, which must read at most once and ask for 16 KiB at most.
+func pollAll(t *testing.T, src io.Reader, limit int) ([]string, error) {
+	t.Helper()
+	reads := &countReads{src: src}
+	r := sse.NewReader(reads, limit)
+	var events []string
+	for {
+		before := reads.n
+		data, err := r.Poll()
+		if reads.n > before+1 || reads.largest > 16<<10 {
+			t.Fatalf("one Poll read %d times, asking for %d bytes at most", reads.n-before, reads.largest)
+		}
+		switch {
+		case err != nil:
+			return events, err
+		case data != nil:
+			events = append(events, string(data))
+		}
+	}
+}
+
+type countReads struct {
+	src        io.Reader
+	n, largest int
+}
+
+func (c *countReads) Read(p []byte) (int, error) {
+	c.n++
+	c.largest = max(c.largest, len(p))
+	return c.src.Read(p)
+}
+
+// FuzzReader: however the stream is split into reads, the events and the final error are the same, whether read
+// with Next or with Poll, and every event is Done or strictly valid JSON.
 func FuzzReader(f *testing.F) {
 	f.Add([]byte("data: 1\r\n\r\ndata: {\"a\":\n: c\rdata: 2}\r\r"), []byte{0, 3, 9})
 	f.Add([]byte(bom+"data: [DONE]\n\n"), []byte{0, 1})
@@ -181,12 +213,78 @@ func FuzzReader(f *testing.F) {
 		if diff := cmp.Diff(wantEvents, events); diff != "" || fmt.Sprint(err) != fmt.Sprint(wantErr) {
 			t.Fatalf("split %v: error %v, want %v; events (-whole +split):\n%s", cuts, err, wantErr, diff)
 		}
+		polled, err := pollAll(t, &chunks{stream, cuts}, limit)
+		if diff := cmp.Diff(wantEvents, polled); diff != "" || fmt.Sprint(err) != fmt.Sprint(wantErr) {
+			t.Fatalf("polled, split %v: error %v, want %v; events (-whole +polled):\n%s", cuts, err, wantErr, diff)
+		}
 		for _, data := range events {
 			if data != sse.Done && jsonx.Validate([]byte(data)) != nil {
 				t.Fatalf("event %q is not valid JSON", data)
 			}
 		}
 	})
+}
+
+// TestPending counts what has arrived and is not yet an event: lines, their line endings and the unfinished line.
+func TestPending(t *testing.T) {
+	src := io.MultiReader(strings.NewReader("data: 1\n\n: c\r\ndata: [1,"), strings.NewReader("2"), strings.NewReader("]\n\n"))
+	r := sse.NewReader(src, 1<<10)
+	for _, want := range []struct {
+		data    string
+		pending int
+	}{{"1", len(": c\r\ndata: [1,")}, {"", len(": c\r\ndata: [1,2")}, {"[1,2]", 0}} {
+		data, err := r.Poll()
+		if err != nil || string(data) != want.data || r.Pending() != want.pending {
+			t.Fatalf("Poll = %q, %v with %d pending; want %q with %d", data, err, r.Pending(), want.data, want.pending)
+		}
+	}
+}
+
+// TestChargeGrowth: the reader asks before each buffer grows, so what it holds never passes what was granted, and a
+// refusal fails the reader with the refusal.
+func TestChargeGrowth(t *testing.T) {
+	errBudget := errors.New("budget spent")
+	event := `data: "` + strings.Repeat("x", 100<<10) + "\"\n\n"
+	for _, budget := range []int{64 << 10, 1 << 20} {
+		granted := 0
+		r := sse.NewReader(strings.NewReader(event), 1<<20)
+		r.ChargeGrowth(func(n int) error {
+			if granted+n > budget {
+				return errBudget
+			}
+			granted += n
+			return nil
+		})
+		data, err := r.Next()
+		if fits := budget > 4*len(event); fits != (err == nil) || !fits && !errors.Is(err, errBudget) {
+			t.Errorf("budget %d: error %v after granting %d", budget, err, granted)
+		}
+		if err == nil && granted < 2*len(data) { // the event's line and its data are both held
+			t.Errorf("budget %d: granted %d for an event of %d", budget, granted, len(data))
+		}
+	}
+}
+
+// TestAppendEvent: what AppendEvent writes reads back as the same data, in at most EventSize bytes, with an event line
+// only for a name that cannot change the framing.
+func TestAppendEvent(t *testing.T) {
+	for _, c := range []struct {
+		name, data string
+		eventLine  bool
+	}{
+		{"message_start", `{"a":1}`, true},
+		{"response.output_text.delta", "[1,\n2]", true},
+		{"", "{}", false},
+		{"a\ndata: 1", "{}", false},
+		{"a b", "{}", false},
+	} {
+		out := sse.AppendEvent([]byte("x"), c.name, []byte(c.data))[1:]
+		events, err := readAll(bytes.NewReader(out), 1<<10)
+		if !cmp.Equal(events, []string{c.data}) || !errors.Is(err, io.EOF) ||
+			len(out) > sse.EventSize(c.name, []byte(c.data)) || strings.HasPrefix(string(out), "event: ") != c.eventLine {
+			t.Errorf("AppendEvent(%q, %q) = %q, read back as %q, %v", c.name, c.data, out, events, err)
+		}
+	}
 }
 
 func BenchmarkReader(b *testing.B) {

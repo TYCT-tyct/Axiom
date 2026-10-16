@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol/internal/sse"
 )
 
 // Format is a call format.
@@ -109,11 +110,13 @@ func Inspect(f Format, body []byte) (Request, error) {
 // read 2026-10-14).
 const anyTier = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority)
 
-// reader reads a body token by token, holding every token to jsonx.MaxDepth. Inspect and Prepare share it.
+// reader reads a body token by token, holding every token to jsonx.MaxDepth. Inspect, Prepare and the relay share it.
 type reader struct {
 	dec  *jsontext.Decoder
 	name []byte // the member being read, unquoted; valid until the next read
 	buf  []byte // scratch for unquoting
+	// charge, unless nil, is asked first for what buf grows by: the relay's readers keep buf from event to event.
+	charge func(n int) error
 }
 
 // scanner reads one body. Members of an object may come in any order, so a part's meaning is gathered in p and
@@ -194,7 +197,11 @@ func (s *reader) open(kind jsontext.Kind, want string) (bool, error) {
 	return err == nil, err
 }
 
-func (s *scanner) object(f fields) error {
+func (s *scanner) object(f fields) error { return walk(&s.reader, s, f) }
+
+// eachMember reads an object, or null, calling read after reading each member's name into name; read reads the
+// value.
+func (s *reader) eachMember(read func() error) error {
 	if ok, err := s.open('{', "an object"); !ok {
 		return err
 	}
@@ -202,11 +209,7 @@ func (s *scanner) object(f fields) error {
 		if err := s.member(); err != nil {
 			return err
 		}
-		read := f[string(s.name)]
-		if read == nil {
-			read = (*scanner).skip
-		}
-		if err := read(s); err != nil {
+		if err := read(); err != nil {
 			return err
 		}
 	}
@@ -214,11 +217,16 @@ func (s *scanner) object(f fields) error {
 }
 
 func (s *scanner) array(each func(*scanner) error) error {
+	return s.eachElement(func() error { return each(s) })
+}
+
+// eachElement reads an array, or null, calling read for each element; read reads it.
+func (s *reader) eachElement(read func() error) error {
 	if ok, err := s.open('[', "an array"); !ok {
 		return err
 	}
 	for s.dec.PeekKind() != ']' {
-		if err := each(s); err != nil {
+		if err := read(); err != nil {
 			return err
 		}
 	}
@@ -255,7 +263,10 @@ func (s *reader) unquote(v jsontext.Value) (b []byte, err error) {
 	if bytes.IndexByte(v, '\\') < 0 {
 		return v[1 : len(v)-1], nil
 	}
-	s.buf, err = jsontext.AppendUnquote(s.buf[:0], v)
+	if s.buf, err = sse.Grow(s.buf[:0], len(v), s.charge); err != nil { // unquoting never lengthens a string
+		return nil, err
+	}
+	s.buf, err = jsontext.AppendUnquote(s.buf, v)
 	return s.buf, err
 }
 
