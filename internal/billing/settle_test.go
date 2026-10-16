@@ -125,7 +125,7 @@ func used(tb testing.TB, input, output, searches int64, estimated ...catalog.Ite
 }
 
 func outcome(result Result, finish FinishReason, cancelled bool, segments ...Segment) Outcome {
-	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
+	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Costed: true, Segments: segments, Result: result, Finish: finish}}}
 }
 
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
@@ -157,6 +157,39 @@ func TestSettleWaivers(t *testing.T) {
 			f, err := b.billing.Settle(t.Context(), b.hold(1000), tc.o)
 			if err != nil || f.Charged != platform.AmountExact(tc.want) {
 				t.Fatalf("Settle = %+v, %v; want %d charged", f, err, tc.want)
+			}
+			b.balanced()
+		})
+	}
+}
+
+// TestWaiverCapCountsCosts: the daily cap adds up the waived calls' costs, so the call that would take it past the cap
+// is charged by the zero-output waiver alone; an attempt whose cost is not all known counts at what its usage sells
+// for (80 here), which the 保本线 keeps at or above its cost.
+func TestWaiverCapCountsCosts(t *testing.T) {
+	full := used(t, 50, 20, 1)
+	waived := func(cost int64, costed bool) Outcome {
+		return Outcome{Attempts: []AttemptResult{{Seq: 1, Cost: cost, Costed: costed, Segments: []Segment{full}, Result: Unknown}}}
+	}
+	for _, tc := range []struct {
+		name  string
+		cap   int64
+		calls []Outcome
+		want  []int64
+	}{
+		{"costs under the cap are waived", 14, []Outcome{waived(7, true), waived(7, true)}, []int64{10, 10}},
+		{"the call past the cap is charged", 13, []Outcome{waived(7, true), waived(7, true)}, []int64{10, 80}},
+		{"a cost not known counts its sale price", 79, []Outcome{waived(7, false)}, []int64{80}},
+		{"a sale price within the cap is waived", 80, []Outcome{waived(7, false)}, []int64{10}},
+		{"a known part above the sale price counts as itself", 99, []Outcome{waived(100, false)}, []int64{80}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, WaiverCap: tc.cap})
+			for i, o := range tc.calls {
+				f, err := b.billing.Settle(t.Context(), b.hold(1000), o)
+				if err != nil || f.Charged != platform.AmountExact(tc.want[i]) {
+					t.Fatalf("call %d: Settle = %+v, %v; want %d charged", i, f, err, tc.want[i])
+				}
 			}
 			b.balanced()
 		})

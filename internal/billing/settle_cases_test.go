@@ -36,8 +36,8 @@ func (b *bank) correct(h *Hold, seq int, revision, cost int64, segments ...Segme
 func twoAttempts(t *testing.T, last Segment, result Result) Outcome {
 	t.Helper()
 	return Outcome{Attempts: []AttemptResult{
-		{Seq: 1, Cost: 5, Segments: []Segment{used(t, 50, 0, 0)}, Result: FailedBeforeCommit, Finish: FinishError},
-		{Seq: 2, Cost: 7, Segments: []Segment{last}, Result: result, Finish: FinishStop},
+		{Seq: 1, Cost: 5, Costed: true, Segments: []Segment{used(t, 50, 0, 0)}, Result: FailedBeforeCommit, Finish: FinishError},
+		{Seq: 2, Cost: 7, Costed: true, Segments: []Segment{last}, Result: result, Finish: FinishStop},
 	}}
 }
 

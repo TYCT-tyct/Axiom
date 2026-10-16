@@ -49,11 +49,14 @@ type Outcome struct {
 }
 
 // AttemptResult is one attempt: the route entry it bound, its reconciliation key, its cost to the platform in
-// billionths of a credit (suppliers' Cost estimates it), its usage by sampling, and how it ended.
+// billionths of a credit (suppliers' Cost estimates it) and whether that cost is all of it, its usage by sampling, and
+// how it ended. Costed false is a cost that leaves something out, or nothing known: the zero value, so a forgotten
+// cost never lets a waiver count less than it should.
 type AttemptResult struct {
 	Seq, Entry int
 	Key        string
 	Cost       int64
+	Costed     bool
 	Segments   []Segment
 	Result     Result
 	Finish     FinishReason
@@ -207,11 +210,11 @@ func (c *locked) price(ctx context.Context, tx pg.Tx, o Outcome, last AttemptRes
 	}
 	waived := false
 	if waivable(o, last) {
-		var cost int64
-		for _, at := range o.Attempts {
-			cost += at.Cost
+		cost, err := c.waiverCost(o)
+		if err != nil {
+			return priced{}, err
 		}
-		_, err := queries.AddWaiver(ctx, tx, AddWaiverParams{AccountID: c.row.AccountID, SiteID: c.row.SiteID, Cost: cost, Cap: c.b.config.WaiverCap})
+		_, err = queries.AddWaiver(ctx, tx, AddWaiverParams{AccountID: c.row.AccountID, SiteID: c.row.SiteID, Cost: cost, Cap: c.b.config.WaiverCap})
 		switch {
 		case errors.Is(err, pg.ErrNoRows): // over the cap: charged by the zero-output waiver alone
 			waived = zeroOutput(last)
@@ -224,6 +227,29 @@ func (c *locked) price(ctx context.Context, tx pg.Tx, o Outcome, last AttemptRes
 	p, err := priceSegments(s, last.Segments, waived)
 	p.waived = waived
 	return p, err
+}
+
+// waiverCost is what waiving the call costs the platform, as the daily cap counts it: each attempt's cost, or, for one
+// whose cost is not all known, what its usage sells for at its entry's locked price. The 保本线 keeps a sale price at or
+// above the cost, so the cap stops no later than it would at the true cost (docs/domains/billing.md「免单规则」).
+func (c *locked) waiverCost(o Outcome) (int64, error) {
+	var cost int64
+	for _, at := range o.Attempts {
+		if at.Costed {
+			cost = add(cost, at.Cost)
+			continue
+		}
+		s, err := schedule(c.row.Prices, at.Entry)
+		if err != nil {
+			return 0, err
+		}
+		p, err := priceSegments(s, at.Segments, false)
+		if err != nil {
+			return 0, err
+		}
+		cost = add(cost, max(p.price, at.Cost))
+	}
+	return cost, nil
 }
 
 // waivable: a call the platform may not charge for its model usage. A cancelled call never is; one whose content
