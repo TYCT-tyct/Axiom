@@ -51,6 +51,19 @@ const (
 	MaxPageSize     = 200
 )
 
+// ownParams are the parameters of the list query for a page of size calls: one more is asked for, to learn whether a
+// next page exists, and the first page starts after the newest possible call.
+func ownParams(q OwnQuery, size int) store.ListOwnCallsParams {
+	params := store.ListOwnCallsParams{
+		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp, PageSize: int32(size) + 1, //nolint:gosec // ListOwn has checked size is 1 to MaxPageSize
+		AfterAt: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), AfterID: uuid.Max().String(),
+	}
+	if q.After != nil {
+		params.AfterAt, params.AfterID = q.After.At, q.After.ID.String()
+	}
+	return params
+}
+
 // ListOwn returns one page of the calls the transaction's scope can see, and the cursor of the next page, nil when
 // this was the last. The scope is the whole of the access control: row-level security shows the account's own rows
 // and no others, so a caller that builds the scope from the user's authorization cannot ask for someone else's.
@@ -62,14 +75,7 @@ func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, err
 	case size < 0 || size > MaxPageSize:
 		return nil, nil, fmt.Errorf("list calls: page size %d, want 1 to %d", size, MaxPageSize)
 	}
-	params := store.ListOwnCallsParams{
-		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp, PageSize: int32(size) + 1,
-		AfterAt: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), AfterID: uuid.Max().String(), // before the newest call
-	}
-	if q.After != nil {
-		params.AfterAt, params.AfterID = q.After.At, q.After.ID.String()
-	}
-	rows, err := store.New().ListOwnCalls(ctx, tx, params)
+	rows, err := store.New().ListOwnCalls(ctx, tx, ownParams(q, size))
 	if err != nil {
 		return nil, nil, fmt.Errorf("list calls: %w", err)
 	}
