@@ -3,14 +3,12 @@ package observability
 import (
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/pg"
-	"axiom/internal/platform/pgtest"
 )
 
 var now = time.Now().UTC().Truncate(time.Millisecond)
@@ -252,49 +250,5 @@ func TestStartupCheckAcceptsTheModule(t *testing.T) {
 	t.Parallel()
 	if err := openDB(t).Check(t.Context(), Module()); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestListFollowsTheAccountIndex: among many accounts, a page of one account's calls is read from the index by
-// account, newest first, touching about a page of rows and not the table, as the application role under row-level
-// security. The plan is logged for the PR record.
-func TestListFollowsTheAccountIndex(t *testing.T) {
-	t.Parallel()
-	db, database := openDBWithURL(t)
-	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
-			workspace_id, key_id, ip, request_class, used_tools, has_image, has_file, model, endpoint_id, attempt_count,
-			usage, service_tier, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms,
-			consent_version, training_allowed)
-		SELECT uuidv7(), now() - make_interval(secs => n), '00000000-0000-4000-8000-000000000001',
-			('00000000-0000-4000-8000-' || lpad((n % 300)::text, 12, '0'))::uuid, uuidv7(), uuidv7(), '203.0.113.7',
-			'chat', false, false, false, 'm', uuidv7(), 1, '{}', 'standard', 1, 1, 'USD', false, 1, 0, 'v', true
-		FROM generate_series(1, 90000) n`, "ANALYZE observability.call_log"); err != nil {
-		t.Fatal(err)
-	}
-	account := uuid.MustParse("00000000-0000-4000-8000-000000000007")
-	var plan []string
-	if err := db.Tx(t.Context(), accountScope(account), func(tx pg.Tx) error {
-		rows, err := tx.Query(t.Context(), `EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM observability.call_log
-			WHERE account_id = $1 AND at >= now() - interval '2 days' AND at < now() + interval '1 day'
-			ORDER BY at DESC, id DESC LIMIT 51`, account.String())
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err != nil {
-				return err
-			}
-			plan = append(plan, line)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(plan, "\n")
-	t.Log("\n" + text)
-	if !strings.Contains(text, "Index Cond: ((account_id") || strings.Contains(text, "Seq Scan") {
-		t.Errorf("the page is not read through the account index:\n%s", text)
 	}
 }

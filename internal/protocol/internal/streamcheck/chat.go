@@ -10,7 +10,8 @@ import (
 // stream_options of "Create chat completion" (read 2026-10-14): every chunk is a chat.completion.chunk with the same
 // id; a choice gets no delta after its finish_reason; a tool call's first delta, the one that raises its index by
 // one, carries its id and function name; the usage chunk, when asked for, comes after every choice has finished and
-// has no choices; [DONE] ends the stream once every choice has finished. A chunk with a top-level error, the way
+// has no choices, or, as OpenRouter writes it, finished choices whose delta has no content (OpenRouter《Streaming》
+// "The final usage chunk", read 2026-10-15); [DONE] ends the stream once every choice has finished. A chunk with a top-level error, the way
 // OpenRouter reports a failure after the stream started ("Errors", read 2026-10-14), ends it too: OpenRouter closes
 // the stream right after it, and only a [DONE] may follow.
 func Chat(src io.Reader) error { return check(src, &chat{choices: map[int64]*choice{}}) }
@@ -37,6 +38,7 @@ type chatChunk struct {
 type chatChoice struct {
 	Index *int64 `json:"index"`
 	Delta struct {
+		Content   *string `json:"content"`
 		ToolCalls []struct {
 			Index    *int64 `json:"index"`
 			ID       string `json:"id"`
@@ -74,7 +76,7 @@ func (c *chat) chunk(k *chatChunk) error {
 	}
 	c.id = k.ID
 	if k.Usage != nil {
-		return c.usageChunk(len(k.Choices))
+		return c.usageChunk(k.Choices)
 	}
 	for i := range k.Choices {
 		if err := c.choice(&k.Choices[i]); err != nil {
@@ -110,9 +112,15 @@ func (c *chat) choice(d *chatChoice) error {
 	return nil
 }
 
-func (c *chat) usageChunk(choices int) error {
-	if choices > 0 || !c.allFinished() {
-		return invalid("a usage chunk with choices or before every choice finished")
+func (c *chat) usageChunk(choices []chatChoice) error {
+	if !c.allFinished() {
+		return invalid("a usage chunk before every choice finished")
+	}
+	for _, d := range choices {
+		if d.Index == nil || c.choices[*d.Index] == nil || d.Delta.Content != nil && *d.Delta.Content != "" ||
+			len(d.Delta.ToolCalls) > 0 {
+			return invalid("a usage chunk with a choice that did not finish or a delta with content")
+		}
 	}
 	c.usage = true
 	return nil

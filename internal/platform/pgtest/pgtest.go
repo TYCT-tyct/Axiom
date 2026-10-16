@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -119,11 +120,32 @@ func keepReaperAlive() error {
 	return os.Setenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT", "2m")
 }
 
+// windowsDockerHost is where Docker Desktop and the Windows engine listen.
+const windowsDockerHost = "npipe:////./pipe/docker_engine"
+
+// dockerHostFor returns the DOCKER_HOST to run with. On Windows without one, testcontainers finds Docker by checking
+// that the pipe's path exists with os.Stat, and that check fails while every instance of the pipe is busy, which it is
+// when many test binaries start together (each go test package is one): it then falls through to its rootless-Docker
+// strategy and fails with "rootless Docker is not supported on Windows", though Docker is running. With DOCKER_HOST set
+// it skips the check and dials the pipe, which waits for a free instance. The value is the one testcontainers would have
+// found.
+func dockerHostFor(goos, current string) string {
+	if current == "" && goos == "windows" {
+		return windowsDockerHost
+	}
+	return current
+}
+
 // start runs the container and builds the template. Durability is off for speed; tests of durability, migrations
 // under load and performance run elsewhere with it on.
 func start(ctx context.Context) error {
 	if err := keepReaperAlive(); err != nil {
 		return err
+	}
+	if host := dockerHostFor(runtime.GOOS, os.Getenv("DOCKER_HOST")); host != "" {
+		if err := os.Setenv("DOCKER_HOST", host); err != nil {
+			return err
+		}
 	}
 	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
 		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
