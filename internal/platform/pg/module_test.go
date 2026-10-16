@@ -165,6 +165,7 @@ func TestCheckAuditsWhatMigrationsBuilt(t *testing.T) {
 		{"row-level security not forced", []string{table, enable, policy}, tables},
 		{"no policy", []string{table, enable, force}, tables},
 		{"a protected table", []string{table, enable, force, policy}, ""},
+		{"a partitioned table without row-level security", []string{"CREATE TABLE platform.leak (note int) PARTITION BY RANGE (note)"}, tables},
 		{"a lookup function", definer("pg_catalog, pg_temp", "axiom_lookup", true), ""},
 		{"a definer owned by another role", definer("pg_catalog, pg_temp", "axiom_owner", true), definers},
 		{"a definer with another search_path", definer("pg_catalog, public, pg_temp", "axiom_lookup", true), definers},
