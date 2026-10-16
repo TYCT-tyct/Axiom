@@ -17,7 +17,7 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 		return nil, &NotSupported{Reason: "a reasoning budget has no Responses counterpart"}
 	}
 	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
-	out, err := input(append(out, `,"input":[`...), c)
+	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints)
 	if err != nil {
 		return nil, err
 	}
@@ -42,14 +42,14 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// input writes the messages as input items.
-func input(out []byte, c *canon) ([]byte, error) {
+// input writes the messages as input items; breakpoints says whether the model takes OpenAI's cache breakpoints.
+func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
 	var err error
 	for i, msg := range c.Messages {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		if out, err = inputItems(out, msg); err != nil {
+		if out, err = inputItems(out, msg, breakpoints); err != nil {
 			return nil, err
 		}
 	}
@@ -87,11 +87,11 @@ func responsesSettings(out []byte, c *canon) []byte {
 
 // inputItems writes one message as input items: system and developer messages in place, the reasoning an assistant
 // message hands back first, then its text and function calls.
-func inputItems(out []byte, msg canonMessage) ([]byte, error) {
+func inputItems(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
 	switch msg.Role {
 	case "system", "developer", "user":
 		out = append(append(append(out, `{"type":"message","role":"`...), msg.Role...), `","content":[`...)
-		out, err := inputParts(out, msg)
+		out, err := inputParts(out, msg, breakpoints)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +102,7 @@ func inputItems(out []byte, msg canonMessage) ([]byte, error) {
 		if msg.Content.Kind() == '"' {
 			return append(append(out, msg.Content...), '}'), nil
 		}
-		parts, err := inputParts(nil, msg)
+		parts, err := inputParts(nil, msg, breakpoints)
 		if err != nil {
 			return nil, err
 		}
@@ -114,26 +114,31 @@ func inputItems(out []byte, msg canonMessage) ([]byte, error) {
 }
 
 // inputParts writes a message's content parts as input content, comma-separated.
-func inputParts(out []byte, msg canonMessage) ([]byte, error) {
-	parts, err := msg.parts()
-	if err != nil {
-		return nil, err
-	}
-	for i, p := range parts {
+func inputParts(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
+	var err error
+	for i, p := range msg.Parts {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		if out, err = inputPart(out, p); err != nil {
+		if out, err = inputPart(out, p, breakpoints); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-func inputPart(out []byte, p canonPart) ([]byte, error) {
+// inputPart writes one part. A text part's cache_control becomes a cache breakpoint on a model that takes them;
+// elsewhere, and on other parts, it is left out, as OpenRouter does: OpenAI caches the prefix by itself, and the
+// marker changes nothing the model reads (OpenRouter《Prompt caching》"OpenAI", OpenAI《Prompt caching》"GPT-5.6 and
+// later", read 2026-10-16).
+func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 	switch {
 	case p.Type == "text":
-		return append(append(append(out, `{"type":"input_text","text":`...), p.Text...), '}'), nil
+		out = append(append(out, `{"type":"input_text","text":`...), p.Text...)
+		if breakpoints && !isNull(p.CacheControl) {
+			out = append(out, `,"prompt_cache_breakpoint":{"mode":"explicit"}`...)
+		}
+		return append(out, '}'), nil
 	case p.Type == "image_url" && p.ImageURL != nil:
 		out = appendQuoted(append(out, `{"type":"input_image","image_url":`...), p.ImageURL.URL)
 		if p.ImageURL.Detail != "" {
@@ -179,13 +184,11 @@ func assistantItems(out []byte, msg canonMessage) ([]byte, error) {
 
 // outputText is an assistant message's text as output_text parts, comma-separated; empty text writes nothing.
 func outputText(msg canonMessage) ([]byte, error) {
-	parts, err := msg.parts()
-	if err != nil {
-		return nil, err
-	}
 	var text []byte
-	for _, p := range parts {
+	for _, p := range msg.Parts {
 		switch {
+		case p.Type == "refusal":
+			text = append(append(append(commaAfter(text, 0), `{"type":"refusal","refusal":`...), p.Text...), '}')
 		case p.Type != "text":
 			return nil, &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
 		case string(p.Text) == `""`:
@@ -208,7 +211,7 @@ func reasoningItems(details []canonReasoningDetail) [][]byte {
 			continue
 		}
 		i := 0
-		for i < len(gathered) && string(gathered[i].id) != string(d.ID) {
+		for i < len(gathered) && !sameString(gathered[i].id, d.ID) {
 			i++
 		}
 		if i == len(gathered) {

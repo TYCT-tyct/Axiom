@@ -57,12 +57,14 @@ type canonMessage struct {
 	ToolCallID       *string                   `json:"tool_call_id"`
 	ReasoningDetails []canonReasoningDetail    `json:"reasoning_details"`
 	Unknown          map[string]jsontext.Value `json:",embed"`
-	// Read, not converted: a speaker's name has no place in the other formats, and reasoning in these members has
-	// no signature to replay it with.
+	// Name and Refusal go into Parts (settle). Reasoning in the other two members is read, not converted: it has no
+	// signature to replay it with.
 	Name             jsontext.Value `json:"name"`
 	Refusal          jsontext.Value `json:"refusal"`
 	ReasoningText    jsontext.Value `json:"reasoning"`
 	ReasoningContent jsontext.Value `json:"reasoning_content"`
+	// Parts is the content read once: a string is one text part, null none.
+	Parts []canonPart `json:"-"`
 }
 
 // canonPart is one content part.
@@ -138,56 +140,120 @@ func decodeCanon(body []byte) (*canon, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err) //nolint:errorlint // the decoding error describes the body, not a cause to match
 	}
 	for i := range c.Messages {
-		m := &c.Messages[i]
-		var err error
-		if m.ReasoningDetails, err = mergeDetails(m.ReasoningDetails); err != nil {
+		if err := c.Messages[i].settle(); err != nil {
 			return nil, err
 		}
 	}
 	return c, nil
 }
 
+// settle reads the message's content into Parts once, merges the reasoning details a client streamed back, and puts
+// what the other formats have no member for where OpenRouter puts it: a name before the text as "name: " (OpenRouter
+// 《API reference》"Requests", read 2026-10-16), and a refusal as a part of its own, which Messages writes as text and
+// Responses as its refusal part.
+func (m *canonMessage) settle() error {
+	var err error
+	if m.Parts, err = m.readParts(); err != nil {
+		return err
+	}
+	if m.ReasoningDetails, err = mergeDetails(m.ReasoningDetails); err != nil {
+		return err
+	}
+	switch {
+	case !isNull(m.Name) && m.Name.Kind() != '"', !isNull(m.Refusal) && m.Refusal.Kind() != '"':
+		return shapeError("a name or refusal that is not a string")
+	case !isNull(m.Refusal):
+		m.Parts = append(m.Parts, canonPart{Type: "refusal", Text: m.Refusal})
+	}
+	if !isNull(m.Name) && m.Role != "tool" { // a tool result's name is its call's, which its ID already says
+		m.prependName()
+	}
+	return nil
+}
+
+// prependName puts "name: " before the message's first text or refusal, or as text of its own when it has none.
+func (m *canonMessage) prependName() {
+	prefix := slices.Concat(m.Name[:len(m.Name)-1], []byte(`: "`))
+	for i, p := range m.Parts {
+		if (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() == '"' {
+			m.Parts[i].Text = slices.Concat(prefix[:len(prefix)-1], p.Text[1:])
+			return
+		}
+	}
+	m.Parts = slices.Insert(m.Parts, 0, canonPart{Type: "text", Text: prefix})
+}
+
 // mergeDetails joins the reasoning details a client hands back as it streamed them, an entry per chunk: entries of
 // the same type and index are one detail (OpenRouter《Reasoning tokens》"Streaming Response", read 2026-10-15), whose
 // text and summary are its pieces in order and whose signature, data, ID and format are the ones given. Entries
-// without an index stand alone.
+// without an index stand alone. Each piece is copied once, so many pieces cost what their bytes do.
 func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error) {
 	var out []canonReasoningDetail
+	var text, summary []joined
+	at := map[string]int{} // by type and index
 	for _, d := range details {
-		i := slices.IndexFunc(out, func(m canonReasoningDetail) bool {
-			return !isNull(d.Index) && m.Type == d.Type && string(m.Index) == string(d.Index)
-		})
-		if i < 0 {
-			out = append(out, d)
-			continue
+		key := d.Type + "\x00" + string(d.Index)
+		i, seen := at[key]
+		if !seen || isNull(d.Index) {
+			at[key], i = len(out), len(out)
+			out, text, summary = append(out, d), append(text, joined{}), append(summary, joined{})
+		} else {
+			m := &out[i]
+			m.Signature, m.Data, m.ID = given(m.Signature, d.Signature), given(m.Data, d.Data), given(m.ID, d.ID)
+			if m.Format == "" {
+				m.Format = d.Format
+			}
 		}
-		m := &out[i]
-		var err error
-		if m.Text, err = joinText(m.Text, d.Text); err != nil {
+		if err := text[i].add(d.Text); err != nil {
 			return nil, err
 		}
-		if m.Summary, err = joinText(m.Summary, d.Summary); err != nil {
+		if err := summary[i].add(d.Summary); err != nil {
 			return nil, err
 		}
-		m.Signature, m.Data, m.ID = given(m.Signature, d.Signature), given(m.Data, d.Data), given(m.ID, d.ID)
-		if m.Format == "" {
-			m.Format = d.Format
-		}
+	}
+	for i := range out {
+		out[i].Text, out[i].Summary = text[i].value(out[i].Text), summary[i].value(out[i].Summary)
 	}
 	return out, nil
 }
 
-// joinText is the JSON strings a and b as one: each escape lies whole within its piece.
-func joinText(a, b jsontext.Value) (jsontext.Value, error) {
+// joined gathers the pieces of a JSON string: their contents, quotes off, one after another, as each escape lies
+// whole within its piece.
+type joined struct {
+	pieces int
+	only   jsontext.Value // the piece, while there is one
+	body   []byte
+}
+
+func (j *joined) add(piece jsontext.Value) error {
 	switch {
-	case isNull(b):
-		return a, nil
-	case isNull(a):
-		return b, nil
-	case a.Kind() != '"' || b.Kind() != '"':
-		return nil, shapeError("a reasoning detail's text that is not a string")
+	case isNull(piece):
+		return nil
+	case piece.Kind() != '"':
+		return shapeError("a reasoning detail's text that is not a string")
 	}
-	return slices.Concat(a[:len(a)-1], b[1:]), nil
+	j.pieces++
+	j.only = piece
+	j.body = append(j.body, piece[1:len(piece)-1]...)
+	return nil
+}
+
+// value is the joined string: the piece as written when there was one, unset as it was when none.
+func (j *joined) value(unset jsontext.Value) jsontext.Value {
+	switch j.pieces {
+	case 0:
+		return unset
+	case 1:
+		return j.only
+	}
+	return slices.Concat([]byte{'"'}, j.body, []byte{'"'})
+}
+
+// sameString reports whether the JSON strings a and b say the same, however each escapes it.
+func sameString(a, b jsontext.Value) bool {
+	x, errA := jsontext.AppendUnquote(nil, a)
+	y, errB := jsontext.AppendUnquote(nil, b)
+	return errA == nil && errB == nil && string(x) == string(y)
 }
 
 // given is b when it was given, else a.
@@ -203,7 +269,7 @@ func given(a, b jsontext.Value) jsontext.Value {
 // string, and a JSON schema reply names itself and has an object for a schema. Anything else is the client's error.
 func (c *canon) checkShape() error {
 	for _, tool := range c.Tools {
-		if tool.Function.Name.Kind() != '"' {
+		if tool.Type == "function" && tool.Function.Name.Kind() != '"' {
 			return shapeError("a tool without a name")
 		}
 	}
@@ -221,15 +287,11 @@ func (c *canon) checkShape() error {
 
 func (m *canonMessage) checkShape() error {
 	for _, call := range m.ToolCalls {
-		if call.Function.Name.Kind() != '"' || call.Function.Arguments.Kind() != '"' {
+		if call.Type == "function" && (call.Function.Name.Kind() != '"' || call.Function.Arguments.Kind() != '"') {
 			return shapeError("a tool call without a name or string arguments")
 		}
 	}
-	parts, err := m.parts()
-	if err != nil {
-		return err
-	}
-	for _, p := range parts {
+	for _, p := range m.Parts {
 		if p.Type == "text" && p.Text.Kind() != '"' {
 			return shapeError("a text part without text")
 		}
@@ -239,8 +301,8 @@ func (m *canonMessage) checkShape() error {
 
 func shapeError(what string) error { return fmt.Errorf("%w: %s", ErrInvalid, what) }
 
-// parts reads a message's content: a string is one text part, null none.
-func (m *canonMessage) parts() ([]canonPart, error) {
+// readParts reads a message's content: a string is one text part, null none.
+func (m *canonMessage) readParts() ([]canonPart, error) {
 	if isNull(m.Content) {
 		return nil, nil
 	}

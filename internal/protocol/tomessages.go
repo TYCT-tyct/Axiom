@@ -310,13 +310,10 @@ func toolResults(out []byte, msgs []canonMessage) ([]byte, error) {
 // blocks writes a message's content parts as content blocks, comma-separated; text alone when textOnly. Empty text
 // writes nothing, as Anthropic refuses an empty text block.
 func blocks(msg canonMessage, textOnly bool) ([]byte, error) {
-	parts, err := msg.parts()
-	if err != nil {
-		return nil, err
-	}
 	var out []byte
-	for _, p := range parts {
-		if p.Type == "text" && (string(p.Text) == `""` || isNull(p.Text)) {
+	var err error
+	for _, p := range msg.Parts {
+		if (p.Type == "text" || p.Type == "refusal") && (string(p.Text) == `""` || isNull(p.Text)) {
 			continue
 		}
 		if len(out) > 0 {
@@ -332,7 +329,7 @@ func blocks(msg canonMessage, textOnly bool) ([]byte, error) {
 func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
 	var err error
 	switch {
-	case p.Type == "text":
+	case p.Type == "text", p.Type == "refusal": // a refusal is text the assistant said: Anthropic's own come as text
 		out = append(append(out, `{"type":"text","text":`...), p.Text...)
 	case textOnly:
 		return nil, &NotSupported{Reason: "a " + p.Type + " part where Messages takes text only"}

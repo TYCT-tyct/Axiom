@@ -51,6 +51,9 @@ func (c *canon) checkCalls() error {
 // checkCalls adds a message's calls to calls, or marks the one its result answers.
 func (m *canonMessage) checkCalls(calls map[string]bool) error {
 	for _, call := range m.ToolCalls {
+		if call.Type != "function" {
+			return &NotSupported{Reason: "a " + call.Type + " tool call is not converted"}
+		}
 		if _, seen := calls[call.ID]; seen || call.ID == "" {
 			return &NotSupported{Reason: "a tool call ID is empty or repeated: " + call.ID}
 		}

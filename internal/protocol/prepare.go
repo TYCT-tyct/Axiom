@@ -32,6 +32,9 @@ type Target struct {
 	// DefaultSamplingOnly is set when the model refuses a temperature or top_p other than the default and a forced
 	// tool choice, as Claude 5.5 models do.
 	DefaultSamplingOnly bool
+	// CacheBreakpoints is set for a Responses model that takes explicit cache breakpoints, as OpenAI's from GPT-5.6
+	// on do (OpenAI《Prompt caching》, read 2026-10-16).
+	CacheBreakpoints bool
 }
 
 // Thinking is how a Messages model is asked to reason.
@@ -80,6 +83,7 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // as it is. A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
+	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		u.Body, err = rewrite(r.Format, body, t, w)

@@ -35,7 +35,7 @@ func anthropicSchema(raw jsontext.Value) error {
 	if err := checkSchema(s); err != nil {
 		return &NotSupported{Reason: "a schema is outside the subset Anthropic accepts: " + err.Error()}
 	}
-	if err := noRecursion(s, defs, nil); err != nil {
+	if err := noRecursion(s, defs); err != nil {
 		return &NotSupported{Reason: "a schema is outside the subset Anthropic accepts: " + err.Error()}
 	}
 	return nil
@@ -143,19 +143,37 @@ func eachSubschema(s map[string]any, check func(map[string]any) error) error {
 	return nil
 }
 
-// noRecursion fails when following $ref from s comes back to a definition on the path, or to the root.
-func noRecursion(s map[string]any, defs map[string]any, path []string) error {
+// refWalk follows the $refs from a schema to look for recursion. Each definition is walked once: one already walked
+// is not walked again, so definitions that share others cost what the schema's size does, and one reached again while
+// its own walk is under way is recursion.
+type refWalk struct {
+	defs map[string]any
+	done map[string]bool // by $ref: false while its walk is under way, true once it is over
+}
+
+// noRecursion fails when following $ref from s comes back to a definition being walked, or to the root.
+func noRecursion(s map[string]any, defs map[string]any) error {
+	w := &refWalk{defs: defs, done: map[string]bool{}}
+	return w.walk(s)
+}
+
+func (w *refWalk) walk(s map[string]any) error {
 	if ref, ok := s["$ref"].(string); ok {
-		if ref == "#" || slices.Contains(path, ref) {
+		done, seen := w.done[ref]
+		switch {
+		case ref == "#" || seen && !done:
 			return fmt.Errorf("a recursive $ref %s", ref)
-		}
-		def, ok := defs[ref].(map[string]any)
-		if !ok {
-			return fmt.Errorf("$ref %s names no definition", ref)
-		}
-		if err := noRecursion(def, defs, append(path, ref)); err != nil {
-			return err
+		case !seen:
+			def, ok := w.defs[ref].(map[string]any)
+			if !ok {
+				return fmt.Errorf("$ref %s names no definition", ref)
+			}
+			w.done[ref] = false
+			if err := w.walk(def); err != nil {
+				return err
+			}
+			w.done[ref] = true
 		}
 	}
-	return eachSubschema(s, func(sub map[string]any) error { return noRecursion(sub, defs, path) })
+	return eachSubschema(s, w.walk)
 }
