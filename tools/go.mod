@@ -12,6 +12,7 @@ tool (
 )
 
 require (
+	github.com/getkin/kin-openapi v0.149.0
 	github.com/google/go-cmp v0.7.0
 	golang.org/x/perf v0.0.0-20260929162123-406019bb8b68
 )
@@ -88,7 +89,6 @@ require (
 	github.com/firefart/nonamedreturns v1.0.8 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
-	github.com/getkin/kin-openapi v0.149.0 // indirect
 	github.com/ghostiam/protogetter v1.0.1 // indirect
 	github.com/go-critic/go-critic v0.15.0 // indirect
 	github.com/go-openapi/jsonpointer v0.23.1 // indirect

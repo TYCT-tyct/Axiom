@@ -11,7 +11,7 @@
 | `admin/` | 管理后台 | 只在管理监听上，不进公网 |
 | `packages/ui/` | 设计系统：变量（`src/styles.css`）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
 | `theme.js` | 在首次绘制前应用保存的外观；构建时按内容哈希命名，插到每个入口页 `<head>` 的开头 | 各应用的 `assets/` |
-| `packages/api/` | 由 `api/console.yaml` 生成的类型（`*.gen.ts`）和调用它的客户端 | — |
+| `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端；管理后台的客户端随它的第一个页面加入 | — |
 | `e2e/` | Playwright 端到端测试 | — |
 | `scripts/budget.ts` | 体积预算检查 | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |

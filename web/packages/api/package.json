@@ -6,7 +6,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "generate": "openapi-typescript ../../../api/console.yaml --output src/console.gen.ts",
+    "generate": "openapi-typescript ../../../api/console.yaml --output src/console.gen.ts && openapi-typescript ../../../api/admin.yaml --output src/admin.gen.ts",
     "typecheck": "tsc"
   },
   "dependencies": {

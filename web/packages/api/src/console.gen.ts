@@ -24,10 +24,339 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with email and password
+         * @description Sets the session cookie. A user with two-step verification gets a pending session (`mfa_required`) that only `verifyMfa` accepts. An unknown email costs a password hash too, so the answer does not tell whether the email exists. Needs the `Origin` of the surface, but no session.
+         *
+         *     Limits: a token bucket per client IP shared by sign-in, registration and two-step verification (burst 20, 10 a minute), and failed sign-ins per email (10 in 15 minutes, then a wait; the account is never locked). A limit is a 429 with `Retry-After`. The values are site settings with defaults in code.
+         */
+        post: operations["signIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pass two-step verification
+         * @description Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same challenge give one session.
+         *
+         *     Limits: the per-IP bucket of `signIn`.
+         */
+        post: operations["verifyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/sign-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End the session
+         * @description Revokes the session of the cookie, whatever its level, and expires the cookie.
+         */
+        post: operations["signOut"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The current session
+         * @description Who is signed in and what the session may do. A page calls it on load to learn whether to show the sign-in page, and to get the CSRF token again (the cookie is HttpOnly, so the page keeps the token only in memory).
+         */
+        get: operations["getSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/totp/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start enabling two-step verification
+         * @description Makes a new TOTP secret and the URI for its QR code. Nothing is stored, so calling it again just makes another secret; `confirmTotpSetup` stores the one the user proved.
+         */
+        post: operations["beginTotpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/totp/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish enabling two-step verification
+         * @description Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Enabling twice replaces the old secret.
+         *
+         *     Limits: failed codes count against the user's 10 an hour.
+         */
+        post: operations["confirmTotpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make new recovery codes
+         * @description Needs a current TOTP code from a session that passed two-step verification. The old codes stop working, and the user's other sessions end.
+         *
+         *     Limits: failed codes count against the user's 10 an hour.
+         */
+        post: operations["regenerateRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/site": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site the request's domain belongs to
+         * @description What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain registered for the console; any other host gets a 404.
+         */
+        get: operations["getSite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register with an invite code
+         * @description Makes the user, their personal account, its default workspace and balance, in the site's default tier. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is `email_taken`, and the whole registration is undone. The email is not verified in M1.
+         *
+         *     Limits: the per-IP bucket of `signIn`.
+         */
+        post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's API keys
+         * @description Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a key is never returned again after `createKey`.
+         */
+        get: operations["listKeys"];
+        put?: never;
+        /**
+         * Make an API key
+         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it.
+         */
+        post: operations["createKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: components["schemas"]["KeyId"];
+            };
+            cookie?: never;
+        };
+        /** One API key */
+        get: operations["getKey"];
+        /**
+         * Change an API key's settings
+         * @description Replaces every setting the user may change: what the request leaves out is unrestricted (no spend limit, any model, any IP), so a page sends back all of the key's current settings with its edit. The expiry cannot be changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false` enables the key again.
+         */
+        put: operations["updateKey"];
+        post?: never;
+        /**
+         * Delete an API key
+         * @description Deletes the key for good; it cannot be restored, and its calls stay in the call list.
+         */
+        delete: operations["deleteKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's balance
+         * @description What the user sees on arrival: the balance and what is left to spend. OpenRouter's `GET /api/v1/credits` returns total credits and total usage; Axiom returns the figures a call is admitted by, so the page can say why a call was refused.
+         */
+        get: operations["getBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's calls
+         * @description The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read. A filter by model or client application reads that filter's index, so a rare model costs what it matches, not what the account holds. `since` is inclusive and `until` exclusive.
+         */
+        get: operations["listCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/calls/{call_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One call
+         * @description The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields when the modules that keep them can serve users.
+         */
+        get: operations["getCall"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response. */
+        Error: {
+            error: components["schemas"]["ErrorDetail"];
+        };
+        /** @description `code` is what a client branches on and translates; `message` is English text for logs and developers. */
+        ErrorDetail: {
+            code: components["schemas"]["ErrorCode"];
+            message: string;
+            /** @description Which parts of the request broke a constraint, for `invalid_request`. */
+            fields?: components["schemas"]["ErrorField"][];
+        };
+        ErrorField: {
+            /** @description JSON pointer into the request body, or the name of a query or path parameter. */
+            pointer: string;
+            message: string;
+        };
+        /**
+         * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
+         * @enum {string}
+         */
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
+        Money: {
+            /** @example 1500000000 */
+            amount: string;
+            /** @example USD */
+            currency: string;
+        };
         Version: {
             /**
              * @description The program's version line exactly as `axiom version` prints it: the main module's version, which the Go toolchain stamps from version control (such as a pseudo-version with the commit time and hash, +dirty for uncommitted changes). The console is stamped with the same line and only compares the two whole for equality.
@@ -35,11 +364,295 @@ export interface components {
              */
             version: string;
         };
+        /** @description A user's ID (TypeID). */
+        UserId: string;
+        /** @description An account's ID (TypeID). */
+        AccountId: string;
+        SignInRequest: {
+            email: string;
+            password: string;
+        };
+        SessionGrant: {
+            /**
+             * @description `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending session that only `verifyMfa` accepts, for 5 minutes.
+             * @enum {string}
+             */
+            status: "signed_in" | "mfa_required";
+            /** @description Sent as X-CSRF-Token on the requests that change data. */
+            csrf_token: string;
+        };
+        MfaRequest: {
+            /** @description A TOTP code (6 digits) or a recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape. */
+            code: string;
+        };
+        /**
+         * @description What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
+         * @enum {string}
+         */
+        SessionLevel: "pending_mfa" | "password" | "mfa";
+        Session: {
+            user: {
+                id: components["schemas"]["UserId"];
+                email: string;
+                /** @description The user's own invite code, which a new user registers with. */
+                invite_code: string;
+            };
+            account: components["schemas"]["AccountId"];
+            level: components["schemas"]["SessionLevel"];
+            /** @description Whether the user has a TOTP factor. */
+            mfa_enabled: boolean;
+            csrf_token: string;
+            /**
+             * Format: date-time
+             * @description When the session ends if it is not used again; the idle timeout moves it.
+             */
+            expires_at: string;
+            /** @description The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request. */
+            permissions: string[];
+        };
+        TotpSetup: {
+            /** @description The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back. */
+            secret: string;
+            /** @description The otpauth:// URI for a QR code. */
+            uri: string;
+        };
+        TotpConfirmRequest: {
+            secret: string;
+            /** @description The user's password, asked again. */
+            password: string;
+            /** @description A code from the new secret. */
+            code: string;
+        };
+        RecoveryCodesRequest: {
+            /** @description A current TOTP code. */
+            code: string;
+        };
+        /** @description A changed factor ends every other session of the user and every unused recovery code, and issues this device a new `mfa` session: the cookie of the response replaces the old one. */
+        FactorChange: {
+            csrf_token: string;
+            /** @description 10 one-time codes, each written xxxx-xxxx-xxxx-xxxx. They are shown only here. */
+            recovery_codes: string[];
+        };
+        /** @description An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month. */
+        Balance: {
+            balance: components["schemas"]["Money"];
+            reserved: components["schemas"]["Money"];
+            floor: components["schemas"]["Money"];
+            available: components["schemas"]["Money"];
+            spent_this_month: components["schemas"]["Money"];
+        };
+        /** @description An API key's ID (TypeID). */
+        KeyId: string;
+        /** @description A workspace's ID (TypeID). */
+        WorkspaceId: string;
+        /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
+        CallId: string;
+        Site: {
+            name: string;
+            /** @description Absent when the site has no logo. */
+            logo_url?: string;
+            /**
+             * @description What the site's API keys start with.
+             * @example sk-ax-v1-
+             */
+            key_prefix: string;
+            /**
+             * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+             * @enum {string}
+             */
+            registration: "invite" | "closed" | "open";
+        };
+        RegisterRequest: {
+            invite_code: string;
+            email: string;
+            password: string;
+        };
+        Registered: {
+            user_id: components["schemas"]["UserId"];
+        };
+        /** @description A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
+        Key: {
+            id: components["schemas"]["KeyId"];
+            name: string;
+            prefix: string;
+            last4: string;
+            workspace_id: components["schemas"]["WorkspaceId"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Absent for a key that does not expire.
+             */
+            expires_at?: string;
+            disabled: boolean;
+            spend_limit?: components["schemas"]["Money"];
+            limit_reset?: components["schemas"]["LimitReset"];
+            limit_remaining?: components["schemas"]["Money"];
+            /** @description The model names the key may call; absent means any model. */
+            models?: string[];
+            /** @description The client addresses (IP or CIDR) the key may be used from; absent means any. */
+            ip_allow?: string[];
+        };
+        /**
+         * @description When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
+         * @enum {string}
+         */
+        LimitReset: "daily" | "weekly" | "monthly";
+        KeyCreate: {
+            name: string;
+            /**
+             * Format: date-time
+             * @description UTC, in the future. It cannot be set later.
+             */
+            expires_at?: string;
+            spend_limit?: components["schemas"]["Money"];
+            limit_reset?: components["schemas"]["LimitReset"];
+            models?: string[];
+            ip_allow?: string[];
+        };
+        KeySettings: {
+            name: string;
+            disabled: boolean;
+            spend_limit?: components["schemas"]["Money"];
+            limit_reset?: components["schemas"]["LimitReset"];
+            models?: string[];
+            ip_allow?: string[];
+        };
+        CreatedKey: {
+            key: components["schemas"]["Key"];
+            /** @description The key's text, to copy now: it is never shown again. */
+            secret: string;
+        };
+        KeyList: {
+            data: components["schemas"]["Key"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. */
+        Call: {
+            id: components["schemas"]["CallId"];
+            /**
+             * Format: date-time
+             * @description When the request started.
+             */
+            at: string;
+            workspace_id: components["schemas"]["WorkspaceId"];
+            key_id: components["schemas"]["KeyId"];
+            /** @description The client address the call came from. */
+            ip: string;
+            /** @description The tool that made the call, such as Claude Code. */
+            client_app: string;
+            session_id: string;
+            subagent_id: string;
+            request_class: string;
+            /** @description The model name the client asked for. */
+            model: string;
+            /** @description How much of each billing item the call used (`input`, `output`, `cache_read`, …), by the item's name. An item the call did not use is absent. */
+            usage: {
+                [key: string]: number;
+            };
+            service_tier: string;
+            price: components["schemas"]["Money"];
+            /** @description Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」). */
+            free: boolean;
+            latency_ms: number;
+            first_token_ms: number;
+            finish_reason: string;
+            /** @description What failed, empty when the call succeeded. */
+            error_kind: string;
+        };
+        CallList: {
+            data: components["schemas"]["Call"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description The request is malformed or breaks a constraint of the contract (`invalid_request`). */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No valid session for this surface, or the credentials of a sign-in are wrong, alike for an unknown email, a wrong password and a disabled user (`unauthenticated`, `invalid_credentials`, `invalid_code`). */
+        Unauthenticated: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`). */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description There is no such resource, or the session's scope cannot see it. A malformed ID and an unknown one answer alike (`not_found`). */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`, `idempotency_key_reused`). */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`, `unprocessable`); `message` says which. */
+        Unprocessable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A limit on this operation is used up (`rate_limited`); wait `Retry-After` seconds. */
+        TooManyRequests: {
+            headers: {
+                "Retry-After": number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable` (503). A 500 never carries the internal error's text. */
+        Failure: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+        Cursor: string;
+        /** @description How many items a page holds at most. */
+        Limit: number;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description The new session cookie, or an expired one that ends the session. */
+        SetCookie: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -63,6 +676,467 @@ export interface operations {
                     "application/json": components["schemas"]["Version"];
                 };
             };
+            default: components["responses"]["Failure"];
+        };
+    };
+    signIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in, or waiting for the second factor. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    verifyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in with an `mfa` session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    signOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out. */
+            204: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginTotpSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpSetup"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    confirmTotpSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Enabled. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactorChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    regenerateRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryCodesRequest"];
+            };
+        };
+        responses: {
+            /** @description The new codes. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactorChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Site"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Registered"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listKeys: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyCreate"];
+            };
+        };
+        responses: {
+            /** @description The key and its text. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: components["schemas"]["KeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Key"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: components["schemas"]["KeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeySettings"];
+            };
+        };
+        responses: {
+            /** @description The key as changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Key"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: components["schemas"]["KeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The balance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Balance"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listCalls: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+                /** @description Exactly the model name the client asked for. */
+                model?: string;
+                client_app?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of calls */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getCall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: components["schemas"]["CallId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Call"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
         };
     };
 }
