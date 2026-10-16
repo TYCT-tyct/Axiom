@@ -68,6 +68,11 @@ var prepareCases = []struct {
 			`"prompt_cache_key":"h(conv_1)","stream":true}`,
 	},
 	{
+		"responses: empty previous_response_id with no history continues nothing", protocol.Responses, false, false,
+		`{"model":"m","previous_response_id":"","input":"next"}`,
+		`{"model":"up","input":"next","store":false}`,
+	},
+	{
 		"responses: history before input items, storage off, end users derived", protocol.Responses, true, true,
 		`{"model":"m","previous_response_id":"resp_1","input":[{"role":"user","content":"next"}],"store":true,` +
 			`"user":"u","safety_identifier":"s"}`,
@@ -118,6 +123,50 @@ func TestPrepare(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+// routingParameters are the members README.md「同格式改写」 lists, written out so that a name lost from Prepare's list shows.
+var routingParameters = []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
+
+// TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
+func TestPrepareDropsRoutingParameters(t *testing.T) {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		want := `{"model":"up"}`
+		if f == protocol.Responses {
+			want = `{"model":"up","store":false}`
+		}
+		for _, name := range routingParameters {
+			got, err := prepare(f, []byte(`{"model":"m","`+name+`":{}}`), false, false)
+			if err != nil || string(got) != want {
+				t.Errorf("format %d, %s: got %s (%v), want %s", f, name, got, err, want)
+			}
+		}
+	}
+}
+
+// TestPrepareBuffer holds the output buffer to the room README.md「同格式改写」 promises: whatever Prepare adds, with
+// derived identifiers as long as Rewrites.IdentityLen says, fits without the body being copied again. The body is small
+// so that the allocator's rounding up leaves less room than what is added.
+func TestPrepareBuffer(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef"
+	body := []byte(`{"model":"m","previous_response_id":"r","input":"next","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`)
+	allocs := func(identity string, identityLen int) float64 {
+		w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: identityLen, History: history}
+		return testing.AllocsPerRun(5, func() {
+			if _, err := protocol.Prepare(protocol.Responses, body, protocol.Target{Model: "up", EncryptedReasoning: true}, w); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	long := allocs(id, len(id))
+	// A one-byte identifier replaces a one-byte original: the body grows only by what is added.
+	if short := allocs("k", 0); long != short {
+		t.Errorf("%d allocations with long identifiers, %d with short ones", int(long), int(short))
+	}
+	// Room to spare for the identifiers, which the added members must fit in as well.
+	if roomy := allocs(id, 10*len(id)); long != roomy {
+		t.Errorf("%d allocations with room for the identifiers, %d with room to spare", int(long), int(roomy))
 	}
 }
 

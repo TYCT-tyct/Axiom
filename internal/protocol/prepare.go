@@ -21,6 +21,9 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
+	// IdentityLen is the most bytes Identity returns, 0 when it never returns more than it is given. It sizes the
+	// output so that identifiers longer than the ones they replace do not make Prepare copy the body again.
+	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
@@ -38,7 +41,7 @@ func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
-	size := len(body) + len(t.Model) + 64 // and room for the members added
+	size := len(body) + len(t.Model) + rules.room + rules.identities*(w.IdentityLen+len(`""`))
 	for _, item := range w.History {
 		size += len(item) + 1
 	}
@@ -60,18 +63,25 @@ type rule func(*rewriter) error
 type formatRules struct {
 	members map[string]rule
 	add     rule
+	// room is the most bytes the rewrites add besides the model and the identifiers; identities is how many
+	// identifiers there can be.
+	room, identities int
 }
 
 var (
 	rewriteRules = [...]formatRules{
-		Messages: {members: withRouting(map[string]rule{"model": (*rewriter).model, "metadata": object(metadataRules)})},
+		Messages: {
+			members:    withRouting(map[string]rule{"model": (*rewriter).model, "metadata": object(metadataRules)}),
+			identities: 1,
+		},
 		Responses: {
 			members: withRouting(map[string]rule{
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
 				"store": (*rewriter).store, "include": (*rewriter).include, "prompt_cache_key": (*rewriter).identity,
 				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
 			}),
-			add: (*rewriter).addResponses,
+			add: (*rewriter).addResponses, identities: 3,
+			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}"),
 		},
 		Chat: {},
 	}
@@ -81,15 +91,25 @@ var (
 // withRouting adds the members that are OpenRouter's routing parameters or our extensions, which the gateway has
 // used and no upstream defines: an official endpoint refuses a member it does not know (gateway.md「路由参数」).
 func withRouting(m map[string]rule) map[string]rule {
-	for _, name := range []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"} {
+	for _, name := range routingParameters {
 		m[name] = (*rewriter).drop
 	}
 	return m
 }
 
+var routingParameters = []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
+
 // encrypted asks Responses for reasoning items that can be sent again, the only way when the upstream stores
 // nothing (OpenAI《Create a model response》, include, read 2026-10-14).
 const encrypted = "reasoning.encrypted_content"
+
+// What Responses rewrites add to a body: the members it lacks, and the array that wraps a string input in the history.
+const (
+	addStore   = `,"store":false`
+	addInclude = `,"include":["` + encrypted + `"]`
+	addInput   = `,"input":[`
+	wrapInput  = `,{"type":"message","role":"user","content":`
+)
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
 type rewriter struct {
@@ -276,7 +296,7 @@ func (p *rewriter) input() error {
 		p.replace(len(v), "[")
 		p.history()
 		if v.Kind() == '"' {
-			p.out = append(append(append(p.out, `,{"type":"message","role":"user","content":`...), v...), '}')
+			p.out = append(append(append(p.out, wrapInput...), v...), '}')
 		}
 		p.out = append(p.out, ']')
 	default:
@@ -299,13 +319,13 @@ func (p *rewriter) addResponses() error {
 		return errHistory
 	}
 	if !p.stored {
-		p.out = append(p.out, `,"store":false`...)
+		p.out = append(p.out, addStore...)
 	}
 	if p.t.EncryptedReasoning && !p.included {
-		p.out = append(p.out, `,"include":["`+encrypted+`"]`...)
+		p.out = append(p.out, addInclude...)
 	}
 	if len(p.w.History) > 0 && !p.hasInput {
-		p.out = append(p.out, `,"input":[`...)
+		p.out = append(p.out, addInput...)
 		p.history()
 		p.out = append(p.out, ']')
 	}

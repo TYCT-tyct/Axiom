@@ -15,17 +15,18 @@
 
 ## 请求摘要
 
-`Inspect(f, body)` 一次扫描读出计费准入和路由要从请求里知道的全部事实，返回值 `Request`，不借用 `body`。它按 token 读，不把请求体解成树，不读的成员只检查是合规的 JSON，所以它自己的分配次数与请求体大小无关；`jsontext` 查重复键时，超过 64 个成员名或 1 KiB 名字的对象每个名字分配一次，这部分随这类宽对象的成员数增长，`jsonx.Validate` 同样如此（[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)）。`Request` 用目录的计费项和服务等级表达，不引用 billing：模块依赖里 protocol 在 billing 之下。字段名取自 Anthropic《Messages API reference》《Service tiers》《Fast mode》《Extended thinking》、OpenAI《Create chat completion》《Responses API reference》《Prompt caching》、OpenRouter《Reasoning tokens》《Prompt caching》（2026-10-14 读取）。
+`Inspect(f, body)` 一次扫描读出计费准入和路由要从请求里知道的全部事实，返回值 `Request`，不借用 `body`。它按 token 读，不把请求体解成树，不读的成员只检查是合规的 JSON，所以它自己的分配次数与请求体大小无关；`jsontext` 查重复键时，超过 64 个成员名或 1 KiB 名字的对象每个名字分配一次，这部分随这类宽对象的成员数增长，`jsonx.Validate` 同样如此（[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)）。`Request` 用目录的计费项和服务等级表达，不引用 billing：模块依赖里 protocol 在 billing 之下。字段名取自 Anthropic《Messages API reference》《Service tiers》《Fast mode》《Extended thinking》《Compaction》、OpenAI《Create chat completion》《Responses API reference》《Prompt caching》《Compaction》、OpenRouter《Reasoning tokens》《Prompt caching》（2026-10-14 读取）；`search_result` 取自 Anthropic《Search results》（2026-10-15 读取）：用户消息顶层和 `tool_result` 里都可以有，`content` 是文本块数组，所以沿 `content` 进入的部件规则照常适用。
 
 | 字段 | 谁用 | Messages | Responses | Chat |
 |---|---|---|---|---|
 | `Model`、`Stream` | 路由认模型；gateway 定回答方式 | `model`、`stream` | 同左 | 同左 |
 | `MaxOutput`：0 是没给，用模型的默认值 | [计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)的首段输出；路由的上下文过滤 | `max_tokens` | `max_output_tokens` | `max_tokens`、`max_completion_tokens` 取大 |
 | `Choices`：每个回答各有一份输出上限 | 同上 | 1 | 1 | `n` |
-| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据 | `input_image`、`computer_screenshot` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
+| `TextBytes`：请求体字节数减去图片、文件的数据；`Images`、`Documents`：部件个数 | 输入上界：文本 token 不多于字节数，图片按单张、文件按单页的最大值 | `image`、`document` 部件，含 `source.type` 是 `content` 的文档里的部件；`source.type` 是 `base64` 时 `data` 是数据；`search_result` 的 `source` 是字符串（URL 或标识），按值的形状认，不当对象读 | `input_image`、`computer_screenshot` 的 `image_url` 是 data URL 时、`input_file` 的 `file_data` | `image_url.url` 是 data URL 时、`file.file_data` |
 | `InputItems`：输入可能按哪些计费项收费 | 输入按其中最贵的单价预留 | `input`；有 `cache_control` 加 `cache_write`，其 `ttl` 是 `1h` 再加 `cache_write_1h` | `input`、`cache_write`：不写标记也会隐式缓存，GPT-5.6 起写入按输入价的 1.25 倍收，模型收不收由价目表定 | 同 Responses，再按 OpenRouter 写法的 `cache_control` 加 |
 | `ServiceTiers`：可能以哪些等级服务 | 按其中最贵的等级预留；路由排除没有这些等级的端点 | `service_tier` 的 `auto` 或不写 → standard、priority（有 Priority Tier 容量时就用），`standard_only` → standard；`speed: "fast"` → fast，优先于前者 | `auto` 或不写 → standard、priority（项目设置的等级），`default` → standard，`flex`、`priority` | 同 Responses |
 | `WebSearches`、`CodeExecutions`：0 是没给，用模型的默认最大次数 | 按次项目的最大次数 | 各 `web_search_*` 工具的 `max_uses` 相加 | `max_tool_calls`，只给请求启用了的那种工具 | 不限 |
+| `Compacts` | 开了服务端压缩，会多采样一次，billing 的 `Demand` 据此乘 2 | `context_management.edits` 里有 `type` 以 `compact_` 开头的项（`compact_20260112`）；只清理内容的 `clear_*` 不算 | `context_management` 里有 `type` 为 `compaction` 的项 | — |
 | `HidesReasoning` | 推理不在流里，进度看不到，要一次预留足 | `thinking.display` 是 `omitted` | — | `reasoning.exclude` 是 true |
 | `Previous` | gateway 把它指向的历史计入输入 | — | `previous_response_id` | — |
 | `Needs` | 路由的能力过滤（[路由的「一个请求的路由步骤」](../../docs/domains/routing.md#一个请求的路由步骤)） | 见下 | 见下 | 见下 |
@@ -49,6 +50,7 @@
 | `include` | — | `Target.EncryptedReasoning` 时保证含 `reasoning.encrypted_content`：没有就加，`null` 换成只含它的数组，数组里没有就插在开头；否则不动 | 上游不保存状态时，推理只能加密后带回下一轮；不推理的模型收到它返回 400 |
 
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
+- **输出缓冲**：一次分配，容量是原请求体加模型名、每个可换标识的 `Rewrites.IdentityLen`（`Identity` 返回的最大字节数，不写就当不比原值长）、以及表里新增成员的字节数（`store`、`include`、包住字符串 `input` 或补出 `input` 的字节），所以改写不会因为缓冲不够把整个请求体再拷一遍；`TestPrepareBuffer` 用带长派生标识和历史的大请求核对分配次数与短标识时相同。
 - **出错**：标识不是字符串、`metadata` 不是对象、要加 `include` 时它不是数组或含非字符串的元素、有历史时 `input` 不是字符串、数组或 `null`，返回 `ErrInvalid`；`previous_response_id` 非空与是否给了历史不一致是 gateway 的错，返回另一个错误，不当成客户端的 400。历史条目是本站存下的原样 JSON，不再校验。
 
 ## 读 SSE
@@ -97,7 +99,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 ```
 
 - **`Prepare` 的迁移**：现有的 `Prepare(f, body, t, w) ([]byte, error)` 改为 `Prepare(r *Request, body, t, w) (Upstream, error)`：`Upstream` 带改写后的请求体和 `UsageContext`。`ErrInvalid` 仍是客户端的错误（gateway 回 400），不换端点；新增的 `*NotSupported` 表示这个端点表达不了这个请求，gateway 跳过这个条目、不算尝试。改写沿用现有的实现和 `TestPrepare`、`TestPrepareSamples`、`FuzzPrepare`，不另写一份。
-- **`Inspect` 的后续**：billing 的 `Demand` 要请求里的事实来算内部采样次数：启用了哪些服务端工具、各自写没写最大次数，以及是否开启了服务端压缩或上下文管理（Anthropic 的 `context_management`、Responses 的 `compaction`）。`Request` 现在有工具次数，没有压缩这一项，由 protocol 的后续 PR 补上。
+- **`Inspect` 的后续**：billing 的 `Demand` 要请求里的事实来算内部采样次数：启用了哪些服务端工具、各自写没写最大次数，以及是否开启了服务端压缩（Anthropic 的 `context_management` 里的 `compact_*`、Responses 的 `context_management` 里的 `compaction`）。`Request` 的 `WebSearches`、`CodeExecutions`、`Compacts` 已交出这些事实，乘出采样次数是 billing 的事。
 - **拉取式**：调用方循环调用 `Next`。`Next` 每做一次底层读（至多 16 KiB）就返回；读到的字节还没凑成完整事件时返回 `Progress`，已到的原始字节记进 `Progress().PartialBytes`，所以调用方可以在每次读之后计量，一个越过当前段的大事件、一个持续到达却迟迟不结束的事件，都在读的过程中被看到。
 - **已报告的数是否最终**：输入侧（输入、缓存读写）一经报告就是最终值；输出侧（输出、推理、搜索）在格式规定的最后一个用量事件（Messages 带 `stop_reason` 的 `message_delta`、Chat 的用量块、Responses 的结尾快照）之前报告的只是下界，例如 Messages 在 `message_start` 里报 `output_tokens: 1`（`testdata/messages/text/upstream.sse`）。`Progress` 逐项标明哪些已是最终值，billing 据此决定是否还要按字节上界计量（[billing 的「接口」](../billing/README.md#接口草图)）。
 - **切片的有效期**：`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效；`Relay` 只由一个 goroutine 调用。
