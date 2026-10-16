@@ -171,7 +171,7 @@
 每个操作是 `Catalog` 的一个方法，带 `Op{Actor, Key, Reason}`，在一个事务里依次：
 
 0. `Key` 不能缺省或全零（`ErrNoOpKey`，数据库也拒绝），否则不同的操作会被当成第一个的重试。
-1. 按 `Key` 查 `change`：已有就返回第一次的 `Result`（`Replayed`），不再执行；种类不同报 `ErrOpKeyReused`。同一个 `Key` 的两个并发请求，后一个在唯一约束上失败，重试即得第一次的结果。
+1. 按 `Key` 查 `change`：已有就返回第一次的 `Result`（`Replayed`），不再执行；种类不同报 `ErrOpKeyReused`。带 `Op.Tx`（管理接口）时已有一律报 `ErrOpKeyReused`：接口自己的重发已由占键回答，到这里的键是别处（命令行）用过的，重放会替另一个操作者、目标或内容作答。同一个 `Key` 的两个并发请求，后一个在唯一约束上失败，重试即得第一次的结果。
 2. 锁模型行（`LockModel`），带 `rev` 的操作比较 `rev`，不同报 `ErrStaleRev`。
 3. 对着锁住的行检查，写入。
 4. 写 `change`（改前改后和证据）和 `audit.Record`（动作名与 `change` 同名，`detail` 只放 `change_id`）；审计写不进，操作不成立。影响快照的写入（模型不是草稿时的改动）把 `revision` 加一。

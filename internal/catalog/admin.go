@@ -22,7 +22,7 @@ var (
 	ErrNoOpKey       = errors.New("op_key is required and must not be the zero UUID")
 	ErrNameLength    = fmt.Errorf("a name is 1 to %d bytes", maxNameLen)
 	ErrReason        = errors.New("a reason of 1 to 1000 characters is required")
-	ErrOpKeyReused   = errors.New("op_key was already used by another kind of operation")
+	ErrOpKeyReused   = errors.New("op_key was already used by another operation")
 	ErrAuthorMissing = errors.New("the author does not exist")
 	ErrNameTaken     = errors.New("the name, normalized, is already taken")
 	ErrStaleRev      = errors.New("the model changed since it was reviewed")
@@ -72,7 +72,12 @@ func (c *Catalog) apply(ctx context.Context, op Op, kind string, do func(tx pg.T
 		return Result{}, ErrNoOpKey
 	}
 	if op.Tx != nil {
+		// The caller's idempotency claim already answers its own retries, so a key this one finds applied was used
+		// elsewhere (the command line): replaying it would answer for another actor, target or content.
 		res, _, err := once(ctx, *op.Tx, op, kind, do)
+		if err == nil && res.Replayed {
+			return Result{}, ErrOpKeyReused
+		}
 		return res, err
 	}
 	var res Result
