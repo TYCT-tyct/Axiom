@@ -1,0 +1,33 @@
+-- name: KeyTenant :many
+-- The key whose hash is one of hashes on site, found before any scope is known (README.md「登录前的查找」). sqlc
+-- cannot see a function's result columns, so the query names and types them.
+SELECT k.key_id::uuid AS key_id, k.account_id::uuid AS account_id, k.workspace_id::uuid AS workspace_id
+FROM accounts.key_tenant(@site_id::uuid, @hashes::bytea[]) AS k (key_id, account_id, workspace_id);
+
+-- name: AdmitKey :many
+-- What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
+-- request came to an enabled API domain of the key's site and the key, its workspace and account are all usable.
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id
+FROM accounts.api_keys k
+JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
+JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
+WHERE k.id = @key_id
+    AND accounts.domain_site(@domain::text, 'api') = k.site_id
+    AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
+    AND (k.expires_at IS NULL OR k.expires_at > now())
+    AND (k.ip_allow IS NULL OR @client_ip::inet <<= ANY (k.ip_allow))
+    AND w.status = 'active' AND w.deleted_at IS NULL
+    AND a.status = 'active';
+
+-- name: InsertKey :exec
+INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
+    secret_version, created_by, expires_at, status, spend_limit, limit_reset)
+VALUES (@id, @site_id, @account_id, @workspace_id, 'call', @name, @prefix, @last4, @secret_hash, @secret_version,
+    @created_by, @expires_at, 'active', @spend_limit, 'daily');
+
+-- name: DisableKey :many
+UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'active' RETURNING site_id, account_id;
+
+-- name: DeleteKey :many
+-- A deleted key is final: the table's policy updates only keys not yet deleted.
+UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id RETURNING site_id, account_id;

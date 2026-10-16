@@ -205,6 +205,30 @@ test("the theme chosen in the drawer is the one the sidebar shows once the windo
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
 });
 
+test("the page takes focus however the drawer's closing and the route's resolving are ordered", async ({ page }) => {
+  await answerVersion(page, built);
+  // The ordering in which the route has resolved while the drawer is still open: the drawer's own closing on the link
+  // click is swallowed once, so only the navigation can close it.
+  await page.addInitScript(() => {
+    const close = HTMLDialogElement.prototype.close;
+    let swallowed = false;
+    HTMLDialogElement.prototype.close = function (...args) {
+      if (!swallowed) {
+        swallowed = true;
+        return;
+      }
+      close.apply(this, args);
+    };
+  });
+  await page.setViewportSize({ width: 800, height: 800 });
+  await page.goto("/console/");
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await page.getByRole("dialog").getByRole("link", { name: "调用记录" }).click();
+  await expect(page).toHaveTitle("调用记录 · Axiom");
+  await expect(page.locator("#main")).toBeFocused();
+  await expect(page.getByRole("dialog")).toBeHidden();
+});
+
 test("an address no page answers says so and leads to the console's home", async ({ page }) => {
   await answerVersion(page, built);
   await page.goto("/console/no-such-page");

@@ -118,6 +118,23 @@ func TestPublicRequestID(t *testing.T) {
 	}
 }
 
+// TestPublicHandlersSetTheirOwnDeadlines: a handler reaches the connection under the recorder, which is how it sets the
+// deadline of its own stream (httpserver.New leaves that to each handler); without Unwrap the controller finds nothing
+// to set a deadline on and reports it.
+func TestPublicHandlersSetTheirOwnDeadlines(t *testing.T) {
+	errs := make(chan [2]error, 1)
+	node, _ := public(t, map[string]http.HandlerFunc{"GET /": func(w http.ResponseWriter, _ *http.Request) {
+		c := http.NewResponseController(w)
+		errs <- [2]error{c.SetReadDeadline(time.Now().Add(time.Second)), c.SetWriteDeadline(time.Now().Add(time.Second))}
+	}})
+	if _, err := get(t, node.URL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-errs; got[0] != nil || got[1] != nil {
+		t.Errorf("read deadline: %v, write deadline: %v", got[0], got[1])
+	}
+}
+
 // TestPublicAccessLog: one line per request, naming the route pattern, not the path, which may hold identifiers.
 func TestPublicAccessLog(t *testing.T) {
 	node, logs := public(t, map[string]http.HandlerFunc{

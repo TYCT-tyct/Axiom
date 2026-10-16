@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     env:
       # Pinned with the release's own checksum (SHA256SUMS), so a swapped download fails.
       JUST_VERSION: "1.58.0"
@@ -50,27 +50,12 @@ jobs:
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: just check
-      - run: just up # one command deploys this machine and waits for a ready node
-        timeout-minutes: 5
-      # The node answering runs the program built from this tree, not a stale image; the passwords are its owner's only
-      - run: |
-          deployed="$(curl -fsS http://127.0.0.1:8080/api/console/v1/version | jq -r .version)"
-          built="$(just axiom-version)"
-          [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
-          [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
-      # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
-      # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.
-      - run: |
-          docker compose -f deploy/compose.yaml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d axiom -c 'DROP OWNED BY axiom_migrator' -c 'DROP ROLE axiom_migrator'
-          kept="$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)"
-          printf '%s' "$kept" > deploy/.env && chmod 644 deploy/.env
-          just up
-          [ "$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)" = "$kept" ] && [ "$(grep -c '^AXIOM_MIGRATOR_PASSWORD=.' deploy/.env)" = 1 ] || { echo "::error::upgrading deploy/.env changed a password or did not add one"; exit 1; }
-          [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::upgrading left deploy/.env readable by others"; exit 1; }
-          just up # the next start, which repeats every grant on roles that now have it
-        timeout-minutes: 5
-      - if: always()
-        run: just down
+      # The deployment checks below start the stack on this host under fixed names (project axiom, port 8080, image
+      # axiom:local, volume axiom_postgres). Jobs on runners sharing a host take turns through a host-wide lock, and each
+      # turn ends with `just down -v`, so the next one starts from no database. On a hosted runner the lock is free.
+      # Waiting at most 20 minutes for the lock, then three `just up` of at most 5 minutes each, the checks and the teardown
+      - run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
+        timeout-minutes: 40
       - if: github.event_name == 'pull_request'
         run: just migrations "$BASE"
         env:
@@ -82,7 +67,7 @@ jobs:
 
   docs-impact:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
       pull-requests: read # the description, read when the job runs
