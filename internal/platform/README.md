@@ -99,9 +99,9 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；以后加模型调用接口、控制台页面、支付回调 |
 | 管理 `AXIOM_ADMIN_ADDR`（只在核心上，不设就没有） | 管理接口（`/api/admin/v1/…`），守卫只放行管理域名；以后加管理后台页面。管理接口的 40 个操作中，会话类、站点设置、等级、用户、账户、手动加额度、目录与定价规则已有处理器，其余还在写（见「接口约定」）。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
-| 探针 `AXIOM_OPS_ADDR` | 健康检查；`/metrics` |
+| 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_OPS_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`（见「凭证加密」），以及：`AXIOM_ADMIN_ADDR`（管理监听的地址，同 `AXIOM_PUBLIC_ADDR` 的写法；不设则节点不开管理监听）、`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`（见「凭证加密」），以及：`AXIOM_ADMIN_ADDR`（管理监听的地址，同 `AXIOM_PUBLIC_ADDR` 的写法；不设则节点不开管理监听）、`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -157,7 +157,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ## 健康检查
 
-探针监听 `AXIOM_OPS_ADDR` 默认只听本机，不对公网：
+探针监听 `AXIOM_PROBES_ADDR` 默认只听本机，不对公网：
 
 - `/livez`：进程在运行；
 - `/readyz`：能接新工作时 200，开始退出后 503。启动时监听在数据库检查通过后才打开，之前探针连不上，编排工具把连不上和 503 一样算作未就绪；这样启动失败的节点从不占用端口。退出时就绪先改为否，公网监听等在途请求完成期间，探针监听仍然应答（`/readyz` 返回 503），之后才关闭。

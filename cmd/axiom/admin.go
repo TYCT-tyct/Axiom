@@ -24,6 +24,7 @@ type adminAPI struct {
 	accounts *accounts.Service
 	catalog  *catalog.Catalog
 	db       *pg.DB
+	logger   *slog.Logger
 }
 
 // adminContract is the admin's contract as the generated code embeds it, with the rules read out of it.

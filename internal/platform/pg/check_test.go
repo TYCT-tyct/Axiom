@@ -152,7 +152,7 @@ func freshDatabase(t *testing.T) pgtest.Database {
 	template := pgtest.New(t)
 	name := strings.TrimPrefix(parse(t, template.Superuser).Path, "/") + "_fresh"
 	if err := pgtest.Run(t.Context(), template.Superuser, "CREATE DATABASE "+name,
-		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		"GRANT CREATE ON DATABASE "+name+" TO axiom_migrator"); err != nil {
 		t.Fatal(err)
 	}
 	at := func(databaseURL string) string {

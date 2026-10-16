@@ -75,6 +75,29 @@ func (q *Queries) EnableTOTP(ctx context.Context, db DBTX, arg EnableTOTPParams)
 	return err
 }
 
+const endSessionsOverSiteLimits = `-- name: EndSessionsOverSiteLimits :execrows
+UPDATE accounts.sessions SET revoked_at = now()
+WHERE id = $1 AND revoked_at IS NULL
+    AND (created_at + make_interval(secs => $2::bigint) <= now()
+        OR last_seen_at + make_interval(secs => $3::bigint) <= now())
+`
+
+type EndSessionsOverSiteLimitsParams struct {
+	ID            uuid.UUID
+	MaxAgeSeconds int64
+	IdleSeconds   int64
+}
+
+// A session the site's lifetimes now have cut ends for good, so that a site which loosens them again does not bring it
+// back (ValidSession only cuts, it does not write).
+func (q *Queries) EndSessionsOverSiteLimits(ctx context.Context, db DBTX, arg EndSessionsOverSiteLimitsParams) (int64, error) {
+	result, err := db.Exec(ctx, endSessionsOverSiteLimits, arg.ID, arg.MaxAgeSeconds, arg.IdleSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertAccount = `-- name: InsertAccount :exec
 INSERT INTO accounts.accounts (id, site_id, kind, name, status, tier_id)
 VALUES ($1, $2, 'personal', $3, 'active', $4)

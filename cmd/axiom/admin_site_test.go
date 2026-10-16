@@ -182,3 +182,16 @@ func TestTiers(t *testing.T) {
 	expectAdmin(t, "a malformed site", f.do(http.MethodGet, "/tiers?site_id=nonsense", "", as(s)), http.StatusBadRequest, codeInvalidRequest)
 	expectAdmin(t, "a site ID that is no ID", f.do(http.MethodGet, "/tiers?site_id=site_zzzzzzzzzzzzzzzzzzzzzzzzzz", "", as(s)), http.StatusBadRequest, codeInvalidRequest)
 }
+
+// TestSiteSettingsLogAFailedReload: a change that is saved still succeeds when this node cannot reload the sites at
+// once, and the failure is logged for whoever looks into the old settings it keeps using.
+func TestSiteSettingsLogAFailedReload(t *testing.T) {
+	f := newAdminFixture(t)
+	s := f.owner()
+	f.run("ALTER TABLE accounts.roles RENAME TO roles_away")
+	rec := f.change(s, http.MethodPut, "/sites/"+f.siteID()+"/settings", `{"settings":{},"reason":"r"}`, newKey())
+	expectAdmin(t, "a change whose reload fails", rec, http.StatusOK, "")
+	if !strings.Contains(f.logs.String(), "did not reload") {
+		t.Errorf("the failed reload was not logged: %s", f.logs)
+	}
+}
