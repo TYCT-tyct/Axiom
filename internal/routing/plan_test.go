@@ -392,3 +392,33 @@ func TestSnapshotRejectsBadData(t *testing.T) {
 		}
 	}
 }
+
+// TestEntryTellsHowToCallTheEndpoint: an entry carries the supplier and the endpoint's target, with the format the
+// request is called in: its own when the endpoint speaks it, otherwise the one a Chat request is converted to.
+func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		client protocol.Format
+		native routing.FormatSet
+		want   protocol.Format
+	}{
+		{"its own format", protocol.Messages, routing.Of(protocol.Messages, protocol.Chat), protocol.Messages},
+		{"chat to chat", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), protocol.Chat},
+		{"chat to messages", protocol.Chat, routing.Of(protocol.Messages), protocol.Messages},
+		{"chat to responses", protocol.Chat, routing.Of(protocol.Responses), protocol.Responses},
+		{"chat prefers messages", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages), protocol.Messages},
+	}
+	for _, c := range cases {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served = c.native, routing.Of(protocol.Chat)|c.native
+			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: true, Format: protocol.Responses}
+		})
+		in := input()
+		in.Req.Format = c.client
+		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
+		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || !entry.Target.EncryptedReasoning || entry.Supplier != sup(1) {
+			t.Errorf("%s: supplier %v, target %+v, want format %d", c.name, entry.Supplier, entry.Target, c.want)
+		}
+	}
+}

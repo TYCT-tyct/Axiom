@@ -135,7 +135,27 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// whose speed is unknown is reserved in full.
 	segmentable := c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
 		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
-	return Entry{Endpoint: c.ID, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out, Segmentable: segmentable}
+	target := c.Target
+	target.Format = c.callFormat(n.req.Format)
+	return Entry{
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
+		Segmentable: segmentable,
+	}
+}
+
+// callFormat is the format a request of format f is called in at the endpoint: its own when the endpoint speaks it,
+// otherwise the first format it speaks that protocol converts a Chat request to. A request that the endpoint serves
+// by conversion is Chat, which Native does not hold when it gets here, so Messages, then Responses.
+func (c *candidate) callFormat(f protocol.Format) protocol.Format {
+	if c.Native.Has(f) {
+		return f
+	}
+	for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+		if c.Native.Has(g) {
+			return g
+		}
+	}
+	return f // no such endpoint is a candidate: servesFormat held it out
 }
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
