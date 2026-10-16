@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, type Route, test } from "@playwright/test";
+import { mockConsole, signedInAs } from "./console-api.ts";
 
 // The version `just web` stamped the build with; a test that compares against it fails when it is missing.
 const built = process.env.AXIOM_VERSION ?? "";
@@ -16,11 +17,14 @@ function collectErrors(page: Page) {
   return errors;
 }
 
-const versionPath = "**/api/console/v1/version";
-
-function answerVersion(page: Page, version: string) {
-  return page.route(versionPath, (route) => route.fulfill({ json: { version } }));
+// A signed-in account, on a program running the given version.
+async function openConsole(page: Page, version: string) {
+  const state = await mockConsole(page, "usual", { version });
+  signedInAs(state);
+  return state;
 }
+
+const balancePath = "**/api/console/v1/balance";
 
 // Some private modes, and blocked site data, make even reading the storage throw.
 function blockStorage(page: Page, storage: "localStorage" | "sessionStorage") {
@@ -45,7 +49,7 @@ function chooseTheme(within: Locator, name: string) {
 test("the console offers a reload after a deployment, in either language", async ({ page }) => {
   const errors = collectErrors(page);
   // The program answering is not the one this build ships in.
-  await answerVersion(page, deployed);
+  await openConsole(page, deployed);
   await page.setViewportSize({ width: 1440, height: 900 });
 
   await page.goto("/console/");
@@ -62,21 +66,24 @@ test("the console offers a reload after a deployment, in either language", async
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
 
   // Another page loads as its own chunk, and the language choice outlives a reload.
-  await page.getByRole("link", { name: "Logs" }).click();
-  await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
-  await expect(page).toHaveTitle("Logs · Axiom");
+  await page.getByRole("link", { name: "Calls" }).click();
+  await expect(page.getByRole("heading", { name: "Calls" })).toBeVisible();
+  await expect(page).toHaveTitle("Calls · Axiom");
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Calls" })).toBeVisible();
 
   expect(errors).toEqual([]);
 });
 
 test("the console offers no reload while the program answering is the one it was built for", async ({ page }) => {
   expect(built, "run the end-to-end tests with `just web`, which stamps the build and passes its version").not.toBe("");
-  await answerVersion(page, built);
+  await openConsole(page, built);
+  const asked = page.waitForResponse("**/api/console/v1/version");
   await page.goto("/console/");
-  // The overview shows the version the program answered, so the answer has been compared once it appears.
-  await expect(page.getByText(built, { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  await asked;
+  // The answer is compared on the next frames; a notice would be on screen by the second.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(newVersionNotice(page)).toHaveCount(0);
 });
 
@@ -85,7 +92,7 @@ test("the console offers the reload and takes a language for the visit when its 
 }) => {
   const errors = collectErrors(page);
   await blockStorage(page, "localStorage");
-  await answerVersion(page, deployed);
+  await openConsole(page, deployed);
   await page.goto("/console/");
   await expect(newVersionNotice(page)).toBeVisible();
   await page.getByRole("group", { name: "语言" }).getByText("English").click();
@@ -93,11 +100,12 @@ test("the console offers the reload and takes a language for the visit when its 
   expect(errors).toEqual([]);
 });
 
-// The overview's version card shows each way a call can fail.
+// The overview's balance shows each way a call can fail.
 
 test("a refused call says the account may not see it, without asking again", async ({ page }) => {
+  await openConsole(page, built);
   let calls = 0;
-  await page.route(versionPath, (route) => {
+  await page.route(balancePath, (route) => {
     calls += 1;
     return route.fulfill({ status: 403 });
   });
@@ -106,24 +114,20 @@ test("a refused call says the account may not see it, without asking again", asy
   expect(calls).toBe(1);
 });
 
-test("a server failure is retried, then shows its request ID and no new version, and retrying asks again", async ({
-  page,
-}) => {
+test("a server failure is retried, then shows its request ID, and retrying asks again", async ({ page }) => {
+  await openConsole(page, built);
   let calls = 0;
-  await page.route(versionPath, (route) => {
+  await page.route(balancePath, (route) => {
     calls += 1;
-    return calls <= 3
-      ? route.fulfill({ status: 500, headers: { "X-Request-ID": "req-500" } })
-      : route.fulfill({ json: { version: built } });
+    return calls <= 3 ? route.fulfill({ status: 500, headers: { "X-Request-ID": "req-500" } }) : route.fallback();
   });
   await page.goto("/console/");
   await expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible();
   await expect(page.getByText("请求 ID req-500")).toBeVisible();
-  await expect(newVersionNotice(page)).toHaveCount(0);
   expect(calls).toBe(3);
 
   await page.getByRole("button", { name: "重试" }).click();
-  await expect(page.getByText(built, { exact: true })).toBeVisible();
+  await expect(page.getByText("US$11.75")).toBeVisible();
   expect(calls).toBe(4);
 });
 
@@ -135,7 +139,8 @@ for (const { cause, answer } of [
   test(`a call that gets no response because ${cause} ends in the network error`, async ({ page }) => {
     // The page's clock runs the timeouts and the pauses between retries in moments.
     await page.clock.install();
-    await page.route(versionPath, answer);
+    await openConsole(page, built);
+    await page.route(balancePath, answer);
     await page.goto("/console/");
     const failed = page.getByText("连不上 Axiom，请检查网络后重试。");
     await expect(async () => {
@@ -152,7 +157,7 @@ for (const storage of ["available", "blocked"] as const) {
     if (storage === "blocked") {
       await blockStorage(page, "sessionStorage");
     }
-    await answerVersion(page, built);
+    await openConsole(page, built);
     let loads = 0;
     page.on("load", () => {
       loads += 1;
@@ -161,9 +166,11 @@ for (const storage of ["available", "blocked"] as const) {
     await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
 
     // A deployment removed every page chunk this build knows.
-    await page.route(/\/assets\/(keys|logs|placeholder)-[\w-]+\.js$/, (route) => route.fulfill({ status: 404 }));
+    await page.route(/\/assets\/(keys|calls|call|balance|security)-[\w-]+\.js$/, (route) =>
+      route.fulfill({ status: 404 }),
+    );
     const logs = page.getByRole("link", { name: "调用记录" });
-    const preloaded = page.waitForResponse(/\/assets\/logs-/);
+    const preloaded = page.waitForResponse(/\/assets\/calls-/);
     await logs.hover();
     await preloaded;
     await logs.focus();
@@ -181,7 +188,7 @@ for (const storage of ["available", "blocked"] as const) {
 
 test("the theme chosen in the drawer is the one the sidebar shows once the window widens", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
-  await answerVersion(page, built);
+  await openConsole(page, built);
   await page.setViewportSize({ width: 800, height: 800 });
   await page.goto("/console/");
 
@@ -206,7 +213,7 @@ test("the theme chosen in the drawer is the one the sidebar shows once the windo
 });
 
 test("the page takes focus however the drawer's closing and the route's resolving are ordered", async ({ page }) => {
-  await answerVersion(page, built);
+  await openConsole(page, built);
   // The ordering in which the route has resolved while the drawer is still open: the drawer's own closing on the link
   // click is swallowed once, so only the navigation can close it.
   await page.addInitScript(() => {
@@ -230,7 +237,7 @@ test("the page takes focus however the drawer's closing and the route's resolvin
 });
 
 test("an address no page answers says so and leads to the console's home", async ({ page }) => {
-  await answerVersion(page, built);
+  await openConsole(page, built);
   await page.goto("/console/no-such-page");
   await expect(page.getByRole("heading", { level: 1, name: "找不到这个页面" })).toBeVisible();
   await expect(page).toHaveTitle("找不到这个页面 · Axiom");
