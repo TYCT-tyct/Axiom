@@ -39,6 +39,7 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error)
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者、校正窗口到期
 func (b *Billing) Correct(ctx context.Context, c Correction) error       // 已实现：ChargeSettled 的处理，按版本号只生效一次
 func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：只有赠送；tx 须是平台范围（审计日志要求）
+func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 做的批次（金额、过期、创建时间），管理接口回答赠送时读
 func (b *Billing) Reconcile(ctx context.Context) ([]string, error)    // 已实现：每日对账，列出不平的交易和与账本不符的余额
 type Suppliers interface{ RecordAttempts; CommittedAttempt; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试

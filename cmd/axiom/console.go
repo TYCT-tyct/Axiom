@@ -29,11 +29,11 @@ func (c consoleAPI) GetVersion(context.Context, consoleapi.GetVersionRequestObje
 }
 
 // writeError answers with the contract's error body, which every failure of the API has.
-func writeError(w http.ResponseWriter, status int, code consoleapi.ErrorCode, message string) {
-	writeErrorBody(w, status, consoleapi.Error{Error: consoleapi.ErrorDetail{Code: code, Message: message}})
+func writeError(w http.ResponseWriter, status int, code errorCode, message string) {
+	writeErrorBody(w, status, errorBody{Error: errorDetail{Code: code, Message: message}})
 }
 
-func writeErrorBody(w http.ResponseWriter, status int, body consoleapi.Error) {
+func writeErrorBody(w http.ResponseWriter, status int, body errorBody) {
 	encoded, err := jsonx.MarshalCanonical(body)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -45,25 +45,31 @@ func writeErrorBody(w http.ResponseWriter, status int, body consoleapi.Error) {
 	_, _ = w.Write(encoded) //nolint:errcheck // the client went away; nothing is left to tell it
 }
 
-// publicRoutes are the public listener's routes: so far the console's API. Every error path of the generated code
-// is set here, none left at its default, and each answers with the contract's error body: a malformed request gets a
-// 400 that describes only the request (the client's own input), a path or method the contract lacks a 404, a
-// refusal the status and code its error maps to, and any other handler failure is logged and answered with a bare
-// 500; the default would send the error's text, which may describe our internals, to the client. Every response is
-// uncached. The guard runs in front of the generated routes: they read the query before any middleware of theirs
-// would run, and its order of checks is the answer's.
-func publicRoutes(api consoleapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
-	console := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc:  invalidRequest,
-		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) { respond(w, r, logger, err) },
-	})
+// mounting is what the generated code of a contract needs to be mounted on the guarded router (apiRoutes): the router
+// and the answer to a handler that failed.
+type mounting struct {
+	mux           *http.ServeMux
+	handlerFailed func(http.ResponseWriter, *http.Request, error)
+}
+
+// apiRoutes are the routes of one contract, which mount registers on the router it is given and returns the handler of.
+// Every error path of the generated code is set here, none left at its default, and each answers with the contract's
+// error body: a malformed request gets a 400 that describes only the request (the client's own input), a path or method
+// the contract lacks a 404, a refusal the status and code its error maps to, and any other handler failure is logged
+// and answered with a bare 500; the default would send the error's text, which may describe our internals, to the
+// client. Every response is uncached. The guard runs in front of the generated routes: they read the query before any
+// middleware of theirs would run, and its order of checks is the answer's.
+func apiRoutes(g *guard, logger *slog.Logger, mount func(mounting) http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	routes := consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: mux, ErrorHandlerFunc: invalidRequest})
+	routes := mount(mounting{
+		mux:           mux,
+		handlerFailed: func(w http.ResponseWriter, r *http.Request, err error) { respond(w, r, logger, err) },
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		_, pattern := mux.Handler(r)
 		if pattern == "" {
-			writeError(w, http.StatusNotFound, consoleapi.ErrorCodeNotFound, "no such resource")
+			writeError(w, http.StatusNotFound, codeNotFound, "no such resource")
 			return
 		}
 		// The mux sets the pattern on the request it serves, which is a copy once the guard has given it a deadline;
@@ -73,9 +79,19 @@ func publicRoutes(api consoleapi.StrictServerInterface, g *guard, logger *slog.L
 	})
 }
 
+// publicRoutes are the public listener's routes: so far the console's API.
+func publicRoutes(api consoleapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
+	return apiRoutes(g, logger, func(m mounting) http.Handler {
+		console := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
+			RequestErrorHandlerFunc: invalidRequest, ResponseErrorHandlerFunc: m.handlerFailed,
+		})
+		return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
+	})
+}
+
 // invalidRequest answers a request the generated code could not read. The guard has checked the request against the
 // contract by then, so this is a corner the schemas do not reach; the error says what the parser saw, and a value
 // the client sent can be in it, so it is not repeated.
 func invalidRequest(w http.ResponseWriter, _ *http.Request, _ error) {
-	writeError(w, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest, "the request could not be read")
+	writeError(w, http.StatusBadRequest, codeInvalidRequest, "the request could not be read")
 }

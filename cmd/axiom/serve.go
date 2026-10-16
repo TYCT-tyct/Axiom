@@ -48,7 +48,9 @@ type listening struct {
 
 // nodeSettings are the node's configuration, all read from the environment before anything starts.
 type nodeSettings struct {
-	publicAddr, probesAddr          string
+	publicAddr, probesAddr string
+	// adminAddr is where the admin listener serves; empty, as on a node that is not the core, there is none.
+	adminAddr                       string
 	startupTimeout, shutdownTimeout time.Duration
 	databaseURL                     string
 	masterKeyFile, keyHashFile      string
@@ -63,6 +65,7 @@ func readSettings(environ []string) (nodeSettings, error) {
 	s := nodeSettings{
 		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
 		probesAddr:      opsAddr(env),
+		adminAddr:       env.Addr("AXIOM_ADMIN_ADDR", ""), // the admin API, only on the core
 		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
 		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
 		databaseURL:     env.Required("AXIOM_DATABASE_URL"),
@@ -113,12 +116,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger)
+	routes, adminRoutes, err := console.routes(ctx, db, tel, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, adminRoutes, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -127,7 +130,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		go func() { served <- s.server.Serve(s.listener) }()
 	}
 	health.SetReady(true)
-	logger.Info("serving", "public", servers[0].listener.Addr().String(), "ops", servers[1].listener.Addr().String())
+	logger.Info("serving", servedAddrs(servers)...)
 
 	var stopped error
 	select {
@@ -144,12 +147,13 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 
 // consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
 // read from protected files, whose errors name the variable and never the path or the contents, and the contract
-// the guard enforces.
+// the guard enforces. The admin API, when the node serves it, stands on the same accounts module and the same files.
 type consoleParts struct {
-	cfg      nodeSettings
-	master   *secret.Keyring // seals users' TOTP secrets
-	hashes   *secret.MACKeys // keys API keys are hashed with
-	contract *contract
+	cfg           nodeSettings
+	master        *secret.Keyring // seals users' TOTP secrets
+	hashes        *secret.MACKeys // keys API keys are hashed with
+	contract      *contract
+	adminContract *contract
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -161,25 +165,35 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
-	contract, err := consoleContract()
-	return consoleParts{cfg, master, hashes, contract}, err
+	console, err := consoleContract()
+	if err != nil {
+		return consoleParts{}, err
+	}
+	admin, err := adminContract()
+	return consoleParts{cfg, master, hashes, console, admin}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
-// ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+// ctx ends, and puts the console's API in front of it, and the admin API, which is nil unless the node serves one.
+// Opening an account also opens its balance (openBalance).
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (public, admin http.Handler, err error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := service.Load(ctx, logger); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger), nil
+	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger)
+	if p.cfg.adminAddr != "" {
+		admin = adminRoutes(adminAPI{version: version(), accounts: service, db: db},
+			&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, logger)
+	}
+	return public, admin, nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
@@ -198,13 +212,28 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 	}
 }
 
-// node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer.
-func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
-	return []*listening{
-		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
+// node returns the node's servers in the order shutdown stops them. The public and admin listeners come first, so at
+// shutdown they drain while the probes still answer. The admin listener is there when adminRoutes is.
+func node(publicAddr string, routes http.Handler, adminAddr string, adminRoutes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
+	server := func(routes http.Handler) *http.Server {
+		return httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
 	}
+	servers := []*listening{{"AXIOM_PUBLIC_ADDR", publicAddr, server(routes), nil}}
+	if adminRoutes != nil {
+		servers = append(servers, &listening{"AXIOM_ADMIN_ADDR", adminAddr, server(adminRoutes), nil})
+	}
+	return append(servers, &listening{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil})
+}
+
+// servedAddrs are the addresses the node listens on, named for the log line that reports them: public, admin when
+// the node serves one, and ops.
+func servedAddrs(servers []*listening) []any {
+	names := map[string]string{"AXIOM_PUBLIC_ADDR": "public", "AXIOM_ADMIN_ADDR": "admin", "AXIOM_OPS_ADDR": "ops"}
+	var attrs []any
+	for _, s := range servers {
+		attrs = append(attrs, names[s.variable], s.listener.Addr().String())
+	}
+	return attrs
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never

@@ -77,7 +77,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`。默认角色由迁移 00003 写入、00005 改成现在的集合：owner 有前五项，admin 七项全有，member 有两项 key 权限和 `calls.view`，finance 有 `api_keys.view` 和 `balance.view`，viewer 有 `api_keys.view`、`calls.view`、`balance.view`，support 有 `api_keys.view` 和 `calls.view`；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`，和管理接口的八个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 登录前的查找
@@ -215,6 +215,36 @@
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，删掉账户的租户登记后开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
+| 站点改短会话时长，已签发的会话也按新的算 | `ValidSession` 把存下的时长与站点现在的值取小；测试：改短后空闲过久的、年龄过大的会话下一个请求被拒，没超的不受影响 |
+| 站点设置的替换与审计同成同败，改前的值就是被替换的值 | 站点行锁内读改前、写、记审计；测试：越界的替换既不改设置也不留审计，替换两次有两条，条目有改前改后 |
+
+## 管理接口
+
+管理后台（`api/admin.yaml`）对站点、用户和账户做的读写。函数都收调用方的事务，事务要在平台范围（管理接口的守卫授权后给出），审计在同一个事务里写（[平台的「审计日志」](../platform/README.md#审计日志)）。
+
+| 函数 | 做什么 |
+|---|---|
+| `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
+| `Refresh` | 立即重载快照。改了站点设置的节点调用它；别的节点在重载间隔内（30 秒）跟上 |
+| `Site`、`MainSite` | 快照里的站点；管理接口用它取币种和默认站点 |
+| `Tiers` | 站点的等级，按名字 |
+| `Users` | 用户列表，新的在前，键集分页（上一页最后一个用户的 ID），可按站点、按邮箱前缀筛。前缀按字面匹配（`%`、`_` 不是通配符）、不分大小写，用 `users_email_prefix`（`text_pattern_ops`）的索引。创建时间取自 UUIDv7 的时间戳（ID 的顺序就是创建的顺序，没有 `created_at` 列） |
+| `Account` | 账户、等级、主人；账户没有成员时是 `ErrNotFound`（账户总有主人） |
+
+- **权限**：管理接口的八个（均在 `authorize.go` 声明，迁移 `00006` 给内置角色）：`users.view`、`suppliers.view`、`catalog.view`、`pricing.view`（非敏感）；`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage`（敏感，要做过两步验证的会话）。内置角色（迁移后）：
+
+  | 角色 | 权限 |
+  |---|---|
+  | owner | `api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view` |
+  | admin | owner 的全部，加 `sites.manage`、`platform_grants.manage` 和管理接口的八个 |
+  | member | `api_keys.view`、`api_keys.manage`、`calls.view` |
+  | finance | `api_keys.view`、`balance.view`、`users.view` |
+  | viewer | `api_keys.view`、`calls.view`、`balance.view`、`users.view`、`suppliers.view`、`catalog.view`、`pricing.view` |
+  | support | `api_keys.view`、`calls.view`、`users.view` |
+
+  只有 admin 能改钱、凭证、价格和目录；别的角色最多看。谁该有 `credits.grant` 这类权限是负责人的决定，现在只给 admin。
+- **管理会话的权限是平台授予的**：管理监听面的会话，`SessionInfo` 的权限列表取用户未撤销的平台授予的角色，不是账户里的成员关系；`Authorize` 对平台目标本来如此。
+- **站点缩短会话时长，已有的会话也缩短**：`ValidSession` 和 `SessionInfo` 把会话签发时存下的空闲时长、最长时长与站点现在的值取小（`least`），所以站点改短后，这个节点上每个会话的下一个请求就按新的算；只会缩短，不会延长已签发的会话。别的节点在快照重载间隔内跟上。
 
 ## 公开接口（草图）
 
@@ -235,6 +265,9 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error)    // 开了 TOTP 的得到待验证会话
 func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, ip netip.Addr, userAgent string) (Issued, error)
 func (s *Service) SignOut(ctx context.Context, p Principal) error
+func (s *Service) SiteSettings(ctx context.Context, tx pg.Tx, site SiteID) (SiteSettings, error) // 管理接口：平台范围的事务；见「管理接口」
+func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, v SiteSettings, reason string) error
+func (s *Service) Users(ctx context.Context, tx pg.Tx, q UserQuery) ([]UserSummary, bool, error) // 另有 Tiers、Account、Site、MainSite、Refresh
 func (*Service) BeginTOTP(p Principal) (secret, uri string)
 func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)

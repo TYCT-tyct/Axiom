@@ -1,0 +1,62 @@
+-- What the admin API reads and writes of sites, users and accounts (README.md「管理接口」). They run in the platform
+-- scope, which sees every tenant.
+
+-- name: LockSite :many
+-- Takes the site's turn, so two changes to its settings are applied one after the other and each audit entry names
+-- the values it really replaced.
+SELECT id FROM accounts.sites WHERE id = @id FOR NO KEY UPDATE;
+
+-- name: ReadSiteSettings :many
+-- A site with no settings row has none of its own; a site that does not exist has no row at all. A length of 0 is unset:
+-- the table's bounds keep a set one at 5 minutes or more.
+SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
+    coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
+    coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
+    coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
+    t.new_key_daily_limit
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
+
+-- name: WriteSiteSettings :exec
+-- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
+-- limits are not the admin API's and are left as they are.
+INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
+    new_key_daily_limit)
+VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
+    make_interval(secs => sqlc.narg(console_max_age_seconds)::bigint),
+    make_interval(secs => sqlc.narg(admin_idle_seconds)::bigint),
+    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint)
+ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
+    console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
+
+-- name: ListTiers :many
+SELECT id, name FROM accounts.tiers WHERE site_id = @site_id ORDER BY name, id;
+
+-- name: ListUsers :many
+-- Newest first: an ID is a UUIDv7, so its order is the order of making, and a page starts after the last ID of the one
+-- before. The prefix is matched literally (its % and _ are escaped by the caller) against the lower-cased email.
+SELECT u.id, u.account_id, u.site_id, u.email, u.status, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+    a.tier_id, t.name AS tier_name, uuid_extract_timestamp(u.id)::timestamptz AS created_at
+FROM accounts.users u
+JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
+JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
+WHERE (sqlc.narg(site_id)::uuid IS NULL OR u.site_id = sqlc.narg(site_id))
+    AND (sqlc.narg(email_prefix)::text IS NULL OR u.email LIKE sqlc.narg(email_prefix) || '%')
+    AND (sqlc.narg(after)::uuid IS NULL OR u.id < sqlc.narg(after))
+ORDER BY u.id DESC
+LIMIT @page_size::int;
+
+-- name: ReadAccount :many
+-- The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member.
+SELECT a.id, a.site_id, a.name, a.kind, a.status, a.tier_id, t.name AS tier_name,
+    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email
+FROM accounts.accounts a
+JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
+JOIN LATERAL (
+    SELECT u.id, u.email FROM accounts.members m
+    JOIN accounts.users u ON u.site_id = m.site_id AND u.account_id = m.user_account_id AND u.id = m.user_id
+    JOIN accounts.roles r ON r.id = m.role_id
+    WHERE m.account_id = a.id
+    ORDER BY (r.name = 'owner') DESC, m.user_id
+    LIMIT 1) o ON true
+WHERE a.id = @id;
