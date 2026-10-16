@@ -73,3 +73,21 @@ sql:
         omit_unused_structs: true
         overrides:
           - {db_type: timestamptz, go_type: {import: time, type: Time}}
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/billing/migrations]
+    queries: internal/billing/queries
+    gen:
+      go:
+        package: billing
+        out: internal/billing
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}

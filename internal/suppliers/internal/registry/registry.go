@@ -11,10 +11,12 @@ import (
 
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/newapi"
+	"axiom/internal/suppliers/internal/sub2api"
 )
 
 var adapters = []adapter.Adapter{
 	newapi.New(),
+	sub2api.New(),
 }
 
 // Registry finds an adapter by the kind stored in suppliers.kind.

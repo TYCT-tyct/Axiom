@@ -4,3 +4,4 @@ CREATE SCHEMA platform;
 CREATE SCHEMA catalog;
 CREATE SCHEMA observability;
 CREATE SCHEMA suppliers;
+CREATE SCHEMA billing;

@@ -1,0 +1,17 @@
+{
+ "method": "GET",
+ "path": "/api/v1/usage?page=2&page_size=1000&start_date=2026-10-15&end_date=2026-10-15&timezone=UTC&api_key_id=2&sort_by=created_at&sort_order=desc",
+ "status": 200,
+ "header": {},
+ "body": {
+  "code": 0,
+  "message": "success",
+  "data": {
+   "items": [],
+   "total": 2,
+   "page": 2,
+   "page_size": 1000,
+   "pages": 1
+  }
+ }
+}
