@@ -104,7 +104,8 @@ func (f *footprint) string(v reflect.Value) {
 }
 
 // heldStreams grow what a relay keeps from event to event: a Chat chunk finishing thousands of choices, thousands of
-// Responses output items, a long escaped member name, more unknown usage fields than the meter keeps.
+// Responses output items, a long escaped member name, more unknown usage fields than the meter keeps, a long service
+// tier repeated in every chunk; the last stream ends with a chunk that breaks after its usage was read.
 func heldStreams() map[string]struct {
 	f      Format
 	stream string
@@ -119,6 +120,8 @@ func heldStreams() map[string]struct {
 	for i := range 2 * maxUnknown {
 		fmt.Fprintf(&unknown, chat+`],"usage":{"prompt_tokens":1,"%s_%d":1}}`+"\n\n", strings.Repeat("u", maxUnknownLen-8), i)
 	}
+	tiered := chat[:len(chat)-len(`"choices":[`)] + `"service_tier":"` + strings.Repeat("t", 50000) +
+		`","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}` + "\n\n"
 	created := `data: {"type":"response.created","sequence_number":0,"response":{"id":"r","object":"response",` +
 		`"status":"in_progress","model":"m","output":[],"usage":null}}` + "\n\n"
 	completed := strings.Replace(strings.Replace(created, "response.created", "response.completed", 1), `"usage":null`,
@@ -133,6 +136,8 @@ func heldStreams() map[string]struct {
 		"escaped name": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` +
 			"\n\n" + `data: {"type":"ping","` + strings.Repeat(`\u0061`, 20000) + `":1}` + "\n\n" +
 			`data: {"type":"message_delta","delta":{},"usage":{"output_tokens":1}}` + "\n\n" + `data: {"type":"message_stop"}` + "\n\n"},
+		"long tier, bad chunk": {Chat, tiered + tiered + chat[:len(chat)-len(`"choices":[`)] +
+			`"usage":{"prompt_tokens":1,"x":` + strings.Repeat("9", 50000) + `},"choices":[1]}` + "\n\n"},
 		"unknown usage": {Chat, chat + `{"index":0,"delta":{"content":"x"},"finish_reason":"stop"}]}` + "\n\n" +
 			unknown.String() + "data: [DONE]\n\n"},
 	}
@@ -153,11 +158,11 @@ func TestRelayMemoryHeld(t *testing.T) {
 					RelayOptions{ID: "id", Model: "m", Memory: NewMemory(64 << 20)})
 				peak, err := readHeld(t, r)
 				switch n := held(r); {
-				case broken != (err != nil):
+				case (broken || name == "long tier, bad chunk") != (err != nil):
 					t.Fatalf("error %v", err)
 				case peak < 64<<10 && name != "unknown usage": // which the meter bounds
 					t.Errorf("the stream kept at most %d bytes, too few to show anything; charged %d", peak, r.held)
-				case broken && (n > int(r.held) || r.held != int64(cap(r.out))+meterMemory):
+				case err != nil && (n > int(r.held) || r.held != int64(cap(r.out))+meterMemory):
 					t.Errorf("after the failure the relay keeps %d bytes, charged %d, out %d", n, r.held, cap(r.out))
 				}
 			})

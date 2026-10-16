@@ -37,7 +37,6 @@ type chatStream struct {
 	more, failed, rewrites, noChoices bool
 	report                            *openAIUsage
 	reportErr                         error
-	tier                              *string
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -240,15 +239,6 @@ func (s *chatStream) usage() error {
 	return nil
 }
 
-func (s *chatStream) serviceTier() error {
-	v, err := s.str()
-	if v != nil {
-		t := string(v)
-		s.tier = &t
-	}
-	return err
-}
-
 func (s *chatStream) meter(m *meter) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
@@ -291,7 +281,7 @@ func (s *chatStream) usageEvent(dst []byte, u catalog.Usage, cost, top string) [
 
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.choices, s.held, s.finish, s.first = nil, nil, nil, ""
+	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
 }
 
 // chunk is the start of a chunk of ours with choices, missing its closing brace.
