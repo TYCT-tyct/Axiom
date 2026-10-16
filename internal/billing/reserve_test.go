@@ -218,7 +218,7 @@ func (b *bank) waitFor(query string, want int64) {
 func (b *bank) waitForLockWait() {
 	b.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for b.superCount("SELECT count(*) FROM pg_locks WHERE NOT granted") == 0 {
+	for b.superCount("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'") == 0 {
 		if time.Now().After(deadline) {
 			b.t.Fatal("nothing waits on a lock")
 		}

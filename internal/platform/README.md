@@ -15,7 +15,7 @@
 | `consoleapi` | 由 `api/console.yaml` 生成的控制台接口类型和服务端接口，除包说明外不手写 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
 | `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
-| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一个测试二进制里每次调用给的模块必须相同 |
+| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
@@ -193,7 +193,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 测试
 
-在 Windows 上，`pgtest` 没有 `DOCKER_HOST` 时先把它设成 Docker Desktop 的命名管道：不设的话 testcontainers 靠 `os.Stat` 管道路径找 Docker，所有管道实例都忙（很多测试二进制同时启动）时这个检查失败，转到无根 Docker 的分支，报“rootless Docker is not supported on Windows”，而 Docker 其实在运行；设了以后它直接拨管道，会等到有空闲实例。`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时在模板上执行它们的迁移并另存一份模板，之后的测试复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
+在 Windows 上，`pgtest` 没有 `DOCKER_HOST` 时先把它设成 Docker Desktop 的命名管道：不设的话 testcontainers 靠 `os.Stat` 管道路径找 Docker，所有管道实例都忙（很多测试二进制同时启动）时这个检查失败，转到无根 Docker 的分支，报“rootless Docker is not supported on Windows”，而 Docker 其实在运行；设了以后它直接拨管道，会等到有空闲实例。`pgtest` 的集群：`just test` 经 `internal/platform/pgtest/cmd/withcluster` 起一个 PostgreSQL 容器，把它的超级用户连接串放进环境变量 `PGTEST_CLUSTER_URL`，再运行 `go test`，结束后删除容器；这一次运行里所有测试包共用它，容器数是同时进行的运行数，不是运行数乘包数。没有这个变量时（直接 `go test ./某包`），`pgtest` 自己起一个容器，行为和以前一样。集群准备好时已建好角色，并用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，名字带本测试二进制的随机标识（共用集群里不同二进制不会重名），测试结束时不单个删库（`DROP DATABASE` 会强制做一次检查点，共用集群时会拖住其他包），整个集群在运行结束时连同这些库一起删掉。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时，在集群的 advisory lock 下复制模板、执行迁移，改名为最终名字（按模块名排序拼成），之后的二进制和测试直接复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里；先用固定的短名字建，做完再改名，建到一半退出的二进制不会留下看起来完整的模板。容器关闭 fsync 以求快，`max_connections` 调到 1000，因为所有二进制的连接池都在同一个集群里。连接串的主机用 `127.0.0.1` 而不是 `localhost`：`localhost` 让 pgx 先试 `::1`，Docker Desktop 的 IPv6 转发在负载下会卡几十秒，握手超时。会改集群范围状态的测试包要有自己的集群：`internal/platform/pg` 的测试创建、修改、改名角色，还数整个服务器的会话，它的 `TestMain` 清掉 `PGTEST_CLUSTER_URL`，自己起容器；其他包的测试不得依赖整个集群的状态，查 `pg_stat_activity` 要加 `datname = current_database()`。容器由 testcontainers 的 Ryuk 兜底删除：运行被强杀时，Ryuk 在最后一个客户端断开约 2 分钟后删掉容器，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
 
 ## 决策与理由
 
@@ -206,6 +206,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
 | 登录角色和密码由部署创建 | 密码不经过本程序。部署的初始化脚本用 `CREATE ROLE … PASSWORD` 设置它，语句里有明文密码，数据库开启 DDL 日志时会记下来，所以初始化时不开 | `axiom migrate` 按连接串设置密码：密码要经过程序 |
+| 一次 `just test` 的所有测试包共用一个 PostgreSQL 集群，由 `withcluster` 启动，连接串经 `PGTEST_CLUSTER_URL` 传入；没有变量就自己起容器 | 容器数从“包数 × 并发运行数”降到“并发运行数”：几个 worktree 同时检查时，每包一个容器会让 Docker 虚拟机里同时有几十个容器，连接握手超时、测试随机失败；变量缺省时 `go test ./某包` 照旧能单独跑；每个运行自己的容器，不同 worktree、不同 runner 互不串 | testcontainers 的复用（固定容器名加 reuse）：名字要带运行标识才不串，复用的容器没有明确的结束时刻，清不掉；一台机器一个常驻集群：并发运行共用同一份角色和模板，改集群范围状态的测试会互相影响 |
 | 模块把迁移作为 `pg.Module` 值交给 `cmd/axiom`，由它传给 `Migrate` 和 `Check`；执行顺序和合法的模块名在 `pg` 的清单里固定 | 依赖一眼可见，没有导入顺序决定的全局状态；顺序与调用方怎么排无关；拼错的模块名在迁移和启动时就失败 | 各模块在包初始化时登记到全局表：靠导入的副作用，gochecknoinits 也禁止；按传入的顺序执行：测试和生产可能以不同顺序迁移 |
 | 启动检查按模块名单（各模块同名的 schema）找表和函数，版本表按名字精确排除 | 名单就是 Axiom 自己的全部 schema，迁移不会建名单之外的；比程序新的模块只要在名单里也被检查 | 按 schema 所有者找：以别的角色建的 schema（例如手工修复）会漏查；按 `goose_` 前缀排除版本表：同名前缀的表会漏查 |
 | 镜像里的根证书由程序内嵌（`golang.org/x/crypto/x509roots/fallback`，系统没有根证书时 Go 才用它） | scratch 镜像没有证书库，出站 HTTPS 会全部失败；内嵌只多一行导入、不改镜像、不依赖构建机上有没有证书文件，根证书随依赖升级更新 | 往镜像里复制 `ca-certificates.crt`：要在构建机上找到这个文件，Windows 上没有；多一个构建阶段或基础镜像：违背“镜像只有程序” |

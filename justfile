@@ -70,9 +70,10 @@ deadcode:
     out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
-# Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
+# Tests, plus one iteration of every benchmark so benchmarks keep compiling and running. The packages share one
+# PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test ./pkg` alone starts its own.
 test:
-    go test -race -bench . -benchtime 1x ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -bench . -benchtime 1x ./...
     go test -C tools -race ./...
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
