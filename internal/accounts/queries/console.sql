@@ -97,3 +97,12 @@ SELECT role_id FROM accounts.members WHERE account_id = @account_id AND user_id 
 
 -- name: PlatformRoles :many
 SELECT role_id FROM accounts.platform_grants WHERE user_id = @user_id AND revoked_at IS NULL;
+
+-- name: SessionInfo :many
+-- What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
+-- whichever comes first.
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, s.csrf_token,
+    least(s.expires_at, now() + s.idle_timeout)::timestamptz AS expires_at
+FROM accounts.sessions s
+JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+WHERE s.id = @id;

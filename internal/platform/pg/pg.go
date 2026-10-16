@@ -36,17 +36,24 @@ func WithTracerProvider(tp trace.TracerProvider) Option {
 	return func(db *DB) { db.tracer = tp.Tracer("axiom/pg") }
 }
 
+// The variables that hold the connection strings: errors name them, so the code that reads them and the code that
+// reports on them agree on one spelling.
+const (
+	DatabaseURLVar        = "AXIOM_DATABASE_URL"
+	MigrateDatabaseURLVar = "AXIOM_MIGRATE_DATABASE_URL"
+)
+
 // Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
 func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, errors.New("AXIOM_DATABASE_URL: not a PostgreSQL connection string")
+		return nil, errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
 	}
 	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not
 	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
 	// or reads them as "never" or "at every check".
 	if config.HealthCheckPeriod <= 0 {
-		return nil, errors.New("AXIOM_DATABASE_URL: pool_health_check_period must be positive")
+		return nil, errors.New(DatabaseURLVar + ": pool_health_check_period must be positive")
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {

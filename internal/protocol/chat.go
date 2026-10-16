@@ -40,7 +40,7 @@ type chatStream struct {
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	s := &chatStream{choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
-	s.chatWriter = newChatWriter(o, "0")
+	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"} // quoted by init already
 	return s
 }
 

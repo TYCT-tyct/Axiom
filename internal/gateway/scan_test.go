@@ -67,9 +67,9 @@ type scanPart struct {
 }
 
 func scanParts(router *routing.Router, f protocol.Format, body []byte) []scanPart {
-	req, err := protocol.Inspect(f, body)
+	req, err := protocol.Inspect(f, body) // Prepare alone is measured on a summary read outside it
 	if err != nil {
-		panic(err) // the bodies are the ones above
+		panic(err)
 	}
 	return []scanPart{
 		{"all", func() error { return scan(router, f, body) }},

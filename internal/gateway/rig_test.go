@@ -20,6 +20,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -110,7 +111,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations)
+	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module())
 	var err error
 	dsn := r.database.App
 	if o.conns > 0 {
@@ -144,23 +145,6 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Cleanup(r.server.Close)
 	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
 	return r
-}
-
-// noSuppliers is the Suppliers billing writes to when it settles: the rig's Run only releases reservations, which
-// records no attempt and ends no request in suppliers' tables.
-type noSuppliers struct{}
-
-func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
-	return nil
-}
-
-func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
-	return billing.JournalAttempt{}, false, nil
-}
-func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error  { return nil }
-func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
-func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
-	return nil
 }
 
 // warmConnections opens n connections to the database at once, so the requests of a test do not wait for new ones to
@@ -376,4 +360,21 @@ func (r *rig) newKey(a account) (string, accounts.KeyID) {
 		r.t.Fatal(err)
 	}
 	return created.Text.Reveal(), created.ID
+}
+
+// noSuppliers stands in for suppliers' side of settlement, which admission never reaches: the rig's Run only releases
+// the reservation.
+type noSuppliers struct{}
+
+func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
+	return nil
+}
+
+func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
+	return billing.JournalAttempt{}, false, nil
+}
+func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error  { return nil }
+func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
+func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
+	return nil
 }

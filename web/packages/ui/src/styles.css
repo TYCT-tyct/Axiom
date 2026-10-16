@@ -38,9 +38,13 @@
   --ok-soft: light-dark(rgb(22 117 76 / 0.1), rgb(76 195 138 / 0.12));
   --warn-soft: light-dark(rgb(142 93 22 / 0.1), rgb(229 180 76 / 0.12));
   --bad-soft: light-dark(rgb(194 38 42 / 0.09), rgb(242 85 90 / 0.12));
+  --bad-ink: light-dark(#ffffff, #08090a);
   /* the primary button: black on light, white on dark */
   --btn: light-dark(#0d0e10, #f7f8f8);
   --btn-ink: light-dark(#ffffff, #08090a);
+  /* a code a phone scans: dark on light whatever the theme */
+  --paper: #ffffff;
+  --ink: #000000;
   --shade: light-dark(rgb(13 14 16 / 0.2), rgb(0 0 0 / 0.55));
   /* behind a modal */
   --scrim: light-dark(rgb(13 14 16 / 0.32), rgb(0 0 0 / 0.6));
@@ -85,6 +89,9 @@
   --color-ok-soft: var(--ok-soft);
   --color-warn-soft: var(--warn-soft);
   --color-bad-soft: var(--bad-soft);
+  --color-bad-ink: var(--bad-ink);
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
   --color-btn: var(--btn);
   --color-btn-ink: var(--btn-ink);
   --color-scrim: var(--scrim);

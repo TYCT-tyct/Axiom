@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
 	"slices"
 )
@@ -141,6 +142,9 @@ func (a *responsesAggregate) putItem(done bool) error {
 	if e.object == nil || e.item < 0 || e.item > int64(len(a.items)) {
 		return nil
 	}
+	if _, err := a.kindOf(e.object); err != nil { // before the item is added, which would leave it empty
+		return err
+	}
 	if e.item == int64(len(a.items)) {
 		var err error
 		if a.items, err = grow(&a.aggBase, a.items, 1, 1); err != nil {
@@ -187,6 +191,9 @@ func (a *responsesAggregate) addToItem() error {
 func (a *responsesAggregate) addPart(parts *[]responsePart, index int64, part []byte) error {
 	if part == nil || index != int64(len(*parts)) {
 		return nil
+	}
+	if _, err := a.kindOf(part); err != nil {
+		return err
 	}
 	b, err := grow(&a.aggBase, *parts, 1, 1)
 	if err != nil {
@@ -343,16 +350,16 @@ func (a *responsesAggregate) appendParts(out []byte, parts []responsePart) ([]by
 // copyMembers appends the members of the object obj but the ones its type has in skips, or else in other, and
 // returns the type.
 func (a *responsesAggregate) copyMembers(out, obj []byte, skips map[string][]string, other []string) ([]byte, string, error) {
-	var kind string
+	kind, err := a.kindOf(obj)
+	if err != nil {
+		return nil, "", err
+	}
 	var members []struct {
 		name string
 		v    []byte
 	}
-	err := a.each(obj, func() error {
+	err = a.each(obj, func() error {
 		v, err := a.value()
-		if string(a.name) == "type" {
-			kind = string(v[1 : len(v)-1])
-		}
 		members = append(members, struct {
 			name string
 			v    []byte
@@ -373,6 +380,28 @@ func (a *responsesAggregate) copyMembers(out, obj []byte, skips map[string][]str
 		}
 	}
 	return out, kind, nil
+}
+
+// kindOf is the type of the object obj, empty when it has none. A type that is not a string is the upstream's failure,
+// found when the object arrives, not when a failure is written from it.
+func (a *responsesAggregate) kindOf(obj []byte) (string, error) {
+	var kind string
+	err := a.each(obj, func() error {
+		if string(a.name) != "type" {
+			return a.skip()
+		}
+		v, err := a.value()
+		if err != nil {
+			return err
+		}
+		b, err := jsontext.AppendUnquote(nil, v)
+		kind = string(b)
+		return err
+	})
+	if err != nil {
+		return "", upstreamFailure(err)
+	}
+	return kind, nil
 }
 
 // failed has nothing to let go of: the items are what the failure writes.

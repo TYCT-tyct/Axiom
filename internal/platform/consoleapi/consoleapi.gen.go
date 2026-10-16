@@ -7,11 +7,502 @@ package consoleapi
 
 import (
 	"bytes"
+	"compress/flate"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
+	"axiom/internal/platform/jsonx"
+
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for ErrorCode.
+const (
+	ErrorCodeConflict             ErrorCode = "conflict"
+	ErrorCodeEmailTaken           ErrorCode = "email_taken"
+	ErrorCodeForbidden            ErrorCode = "forbidden"
+	ErrorCodeIdempotencyKeyReused ErrorCode = "idempotency_key_reused"
+	ErrorCodeInternal             ErrorCode = "internal"
+	ErrorCodeInvalidCode          ErrorCode = "invalid_code"
+	ErrorCodeInvalidCredentials   ErrorCode = "invalid_credentials"
+	ErrorCodeInvalidInvite        ErrorCode = "invalid_invite"
+	ErrorCodeInvalidRequest       ErrorCode = "invalid_request"
+	ErrorCodeMfaRequired          ErrorCode = "mfa_required"
+	ErrorCodeNameTaken            ErrorCode = "name_taken"
+	ErrorCodeNotFound             ErrorCode = "not_found"
+	ErrorCodeNotImplemented       ErrorCode = "not_implemented"
+	ErrorCodeNotReady             ErrorCode = "not_ready"
+	ErrorCodeOriginRejected       ErrorCode = "origin_rejected"
+	ErrorCodeRateLimited          ErrorCode = "rate_limited"
+	ErrorCodeStaleRevision        ErrorCode = "stale_revision"
+	ErrorCodeUnauthenticated      ErrorCode = "unauthenticated"
+	ErrorCodeUnavailable          ErrorCode = "unavailable"
+	ErrorCodeUnprocessable        ErrorCode = "unprocessable"
+	ErrorCodeWeakPassword         ErrorCode = "weak_password"
+)
+
+// Valid indicates whether the value is a known member of the ErrorCode enum.
+func (e ErrorCode) Valid() bool {
+	switch e {
+	case ErrorCodeConflict:
+		return true
+	case ErrorCodeEmailTaken:
+		return true
+	case ErrorCodeForbidden:
+		return true
+	case ErrorCodeIdempotencyKeyReused:
+		return true
+	case ErrorCodeInternal:
+		return true
+	case ErrorCodeInvalidCode:
+		return true
+	case ErrorCodeInvalidCredentials:
+		return true
+	case ErrorCodeInvalidInvite:
+		return true
+	case ErrorCodeInvalidRequest:
+		return true
+	case ErrorCodeMfaRequired:
+		return true
+	case ErrorCodeNameTaken:
+		return true
+	case ErrorCodeNotFound:
+		return true
+	case ErrorCodeNotImplemented:
+		return true
+	case ErrorCodeNotReady:
+		return true
+	case ErrorCodeOriginRejected:
+		return true
+	case ErrorCodeRateLimited:
+		return true
+	case ErrorCodeStaleRevision:
+		return true
+	case ErrorCodeUnauthenticated:
+		return true
+	case ErrorCodeUnavailable:
+		return true
+	case ErrorCodeUnprocessable:
+		return true
+	case ErrorCodeWeakPassword:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LimitReset.
+const (
+	Daily   LimitReset = "daily"
+	Monthly LimitReset = "monthly"
+	Weekly  LimitReset = "weekly"
+)
+
+// Valid indicates whether the value is a known member of the LimitReset enum.
+func (e LimitReset) Valid() bool {
+	switch e {
+	case Daily:
+		return true
+	case Monthly:
+		return true
+	case Weekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionGrantStatus.
+const (
+	SessionGrantStatusMfaRequired SessionGrantStatus = "mfa_required"
+	SessionGrantStatusSignedIn    SessionGrantStatus = "signed_in"
+)
+
+// Valid indicates whether the value is a known member of the SessionGrantStatus enum.
+func (e SessionGrantStatus) Valid() bool {
+	switch e {
+	case SessionGrantStatusMfaRequired:
+		return true
+	case SessionGrantStatusSignedIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLevel.
+const (
+	Mfa        SessionLevel = "mfa"
+	Password   SessionLevel = "password"
+	PendingMfa SessionLevel = "pending_mfa"
+)
+
+// Valid indicates whether the value is a known member of the SessionLevel enum.
+func (e SessionLevel) Valid() bool {
+	switch e {
+	case Mfa:
+		return true
+	case Password:
+		return true
+	case PendingMfa:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SiteRegistration.
+const (
+	Closed SiteRegistration = "closed"
+	Invite SiteRegistration = "invite"
+	Open   SiteRegistration = "open"
+)
+
+// Valid indicates whether the value is a known member of the SiteRegistration enum.
+func (e SiteRegistration) Valid() bool {
+	switch e {
+	case Closed:
+		return true
+	case Invite:
+		return true
+	case Open:
+		return true
+	default:
+		return false
+	}
+}
+
+// AccountId An account's ID (TypeID).
+type AccountId = string
+
+// Balance An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month.
+type Balance struct {
+	// Available An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Available Money `json:"available"`
+
+	// Balance An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Balance Money `json:"balance"`
+
+	// Floor An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Floor Money `json:"floor"`
+
+	// Reserved An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Reserved Money `json:"reserved"`
+
+	// SpentThisMonth An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	SpentThisMonth Money `json:"spent_this_month"`
+}
+
+// Call One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log.
+type Call struct {
+	// At When the request started.
+	At time.Time `json:"at"`
+
+	// ClientApp The tool that made the call, such as Claude Code.
+	ClientApp string `json:"client_app"`
+
+	// ErrorKind What failed, empty when the call succeeded.
+	ErrorKind    string `json:"error_kind"`
+	FinishReason string `json:"finish_reason"`
+	FirstTokenMs int    `json:"first_token_ms"`
+
+	// Free Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」).
+	Free bool `json:"free"`
+
+	// Id A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`.
+	Id CallId `json:"id"`
+
+	// Ip The client address the call came from.
+	Ip string `json:"ip"`
+
+	// KeyId An API key's ID (TypeID).
+	KeyId     KeyId `json:"key_id"`
+	LatencyMs int   `json:"latency_ms"`
+
+	// Model The model name the client asked for.
+	Model string `json:"model"`
+
+	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Price        Money  `json:"price"`
+	RequestClass string `json:"request_class"`
+	ServiceTier  string `json:"service_tier"`
+	SessionId    string `json:"session_id"`
+	SubagentId   string `json:"subagent_id"`
+
+	// Usage How much of each billing item the call used (`input`, `output`, `cache_read`, …), by the item's name. An item the call did not use is absent.
+	Usage map[string]int64 `json:"usage"`
+
+	// WorkspaceId A workspace's ID (TypeID).
+	WorkspaceId WorkspaceId `json:"workspace_id"`
+}
+
+// CallId A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`.
+type CallId = string
+
+// CallList defines model for CallList.
+type CallList struct {
+	Data []Call `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// CreatedKey defines model for CreatedKey.
+type CreatedKey struct {
+	// Key A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit.
+	Key Key `json:"key"`
+
+	// Secret The key's text, to copy now: it is never shown again.
+	Secret string `json:"secret"`
+}
+
+// Error The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Error struct {
+	// Error `code` is what a client branches on and translates; `message` is English text for logs and developers.
+	Error ErrorDetail `json:"error"`
+}
+
+// ErrorCode The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
+type ErrorCode string
+
+// ErrorDetail `code` is what a client branches on and translates; `message` is English text for logs and developers.
+type ErrorDetail struct {
+	// Code The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
+	Code ErrorCode `json:"code"`
+
+	// Fields Which parts of the request broke a constraint, for `invalid_request`.
+	Fields  *[]ErrorField `json:"fields,omitempty"`
+	Message string        `json:"message"`
+}
+
+// ErrorField defines model for ErrorField.
+type ErrorField struct {
+	Message string `json:"message"`
+
+	// Pointer JSON pointer into the request body, or the name of a query or path parameter.
+	Pointer string `json:"pointer"`
+}
+
+// FactorChange A changed factor ends every other session of the user and every unused recovery code, and issues this device a new `mfa` session: the cookie of the response replaces the old one.
+type FactorChange struct {
+	CsrfToken string `json:"csrf_token"`
+
+	// RecoveryCodes 10 one-time codes, each written xxxx-xxxx-xxxx-xxxx. They are shown only here.
+	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+// Key A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit.
+type Key struct {
+	CreatedAt time.Time `json:"created_at"`
+	Disabled  bool      `json:"disabled"`
+
+	// ExpiresAt Absent for a key that does not expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Id An API key's ID (TypeID).
+	Id KeyId `json:"id"`
+
+	// IpAllow The client addresses (IP or CIDR) the key may be used from; absent means any.
+	IpAllow *[]string `json:"ip_allow,omitempty"`
+	Last4   string    `json:"last4"`
+
+	// LimitRemaining An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	LimitRemaining *Money `json:"limit_remaining,omitempty"`
+
+	// LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
+	LimitReset *LimitReset `json:"limit_reset,omitempty"`
+
+	// Models The model names the key may call; absent means any model.
+	Models *[]string `json:"models,omitempty"`
+	Name   string    `json:"name"`
+	Prefix string    `json:"prefix"`
+
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	SpendLimit *Money `json:"spend_limit,omitempty"`
+
+	// WorkspaceId A workspace's ID (TypeID).
+	WorkspaceId WorkspaceId `json:"workspace_id"`
+}
+
+// KeyCreate defines model for KeyCreate.
+type KeyCreate struct {
+	// ExpiresAt UTC, in the future. It cannot be set later.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	IpAllow   *[]string  `json:"ip_allow,omitempty"`
+
+	// LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
+	LimitReset *LimitReset `json:"limit_reset,omitempty"`
+	Models     *[]string   `json:"models,omitempty"`
+	Name       string      `json:"name"`
+
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	SpendLimit *Money `json:"spend_limit,omitempty"`
+}
+
+// KeyId An API key's ID (TypeID).
+type KeyId = string
+
+// KeyList defines model for KeyList.
+type KeyList struct {
+	Data []Key `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// KeySettings defines model for KeySettings.
+type KeySettings struct {
+	Disabled bool      `json:"disabled"`
+	IpAllow  *[]string `json:"ip_allow,omitempty"`
+
+	// LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
+	LimitReset *LimitReset `json:"limit_reset,omitempty"`
+	Models     *[]string   `json:"models,omitempty"`
+	Name       string      `json:"name"`
+
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	SpendLimit *Money `json:"spend_limit,omitempty"`
+}
+
+// LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
+type LimitReset string
+
+// MfaRequest defines model for MfaRequest.
+type MfaRequest struct {
+	// Code A TOTP code (6 digits) or a recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape.
+	Code string `json:"code"`
+}
+
+// Money An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+type Money struct {
+	// Amount Example: 1500000000
+	Amount string `json:"amount"`
+
+	// Currency Example: USD
+	Currency string `json:"currency"`
+}
+
+// RecoveryCodesRequest defines model for RecoveryCodesRequest.
+type RecoveryCodesRequest struct {
+	// Code A current TOTP code.
+	Code string `json:"code"`
+}
+
+// RegisterRequest defines model for RegisterRequest.
+type RegisterRequest struct {
+	Email      string `json:"email"`
+	InviteCode string `json:"invite_code"`
+	Password   string `json:"password"`
+}
+
+// Registered defines model for Registered.
+type Registered struct {
+	// UserId A user's ID (TypeID).
+	UserId UserId `json:"user_id"`
+}
+
+// Session defines model for Session.
+type Session struct {
+	// Account An account's ID (TypeID).
+	Account   AccountId `json:"account"`
+	CsrfToken string    `json:"csrf_token"`
+
+	// ExpiresAt When the session ends if it is not used again; the idle timeout moves it.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Level What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
+	Level SessionLevel `json:"level"`
+
+	// MfaEnabled Whether the user has a TOTP factor.
+	MfaEnabled bool `json:"mfa_enabled"`
+
+	// Permissions The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
+	Permissions []string `json:"permissions"`
+	User        struct {
+		Email string `json:"email"`
+
+		// Id A user's ID (TypeID).
+		Id UserId `json:"id"`
+
+		// InviteCode The user's own invite code, which a new user registers with.
+		InviteCode string `json:"invite_code"`
+	} `json:"user"`
+}
+
+// SessionGrant defines model for SessionGrant.
+type SessionGrant struct {
+	// CsrfToken Sent as X-CSRF-Token on the requests that change data.
+	CsrfToken string `json:"csrf_token"`
+
+	// Status `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending session that only `verifyMfa` accepts, for 5 minutes.
+	Status SessionGrantStatus `json:"status"`
+}
+
+// SessionGrantStatus `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending session that only `verifyMfa` accepts, for 5 minutes.
+type SessionGrantStatus string
+
+// SessionLevel What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
+type SessionLevel string
+
+// SignInRequest defines model for SignInRequest.
+type SignInRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// Site defines model for Site.
+type Site struct {
+	// Currency The site's accounting currency, the one of every `Money` its API shows. It never changes.
+	//
+	// Example: USD
+	Currency string `json:"currency"`
+
+	// KeyPrefix What the site's API keys start with.
+	//
+	// Example: sk-ax-v1-
+	KeyPrefix string `json:"key_prefix"`
+
+	// LogoUrl Absent when the site has no logo.
+	LogoUrl *string `json:"logo_url,omitempty"`
+	Name    string  `json:"name"`
+
+	// Registration `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+	Registration SiteRegistration `json:"registration"`
+}
+
+// SiteRegistration `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+type SiteRegistration string
+
+// TotpConfirmRequest defines model for TotpConfirmRequest.
+type TotpConfirmRequest struct {
+	// Code A code from the new secret.
+	Code string `json:"code"`
+
+	// Password The user's password, asked again.
+	Password string `json:"password"`
+	Secret   string `json:"secret"`
+}
+
+// TotpSetup defines model for TotpSetup.
+type TotpSetup struct {
+	// Secret The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back.
+	Secret string `json:"secret"`
+
+	// Uri The otpauth:// URI for a QR code.
+	Uri string `json:"uri"`
+}
+
+// UserId A user's ID (TypeID).
+type UserId = string
 
 // Version defines model for Version.
 type Version struct {
@@ -21,8 +512,138 @@ type Version struct {
 	Version string `json:"version"`
 }
 
+// WorkspaceId A workspace's ID (TypeID).
+type WorkspaceId = string
+
+// Cursor defines model for Cursor.
+type Cursor = string
+
+// Limit defines model for Limit.
+type Limit = int
+
+// BadRequest The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type BadRequest = Error
+
+// Conflict The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Conflict = Error
+
+// Failure The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Failure = Error
+
+// Forbidden The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Forbidden = Error
+
+// NotFound The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type NotFound = Error
+
+// TooManyRequests The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type TooManyRequests = Error
+
+// Unauthenticated The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Unauthenticated = Error
+
+// Unprocessable The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+type Unprocessable = Error
+
+// ListCallsParams defines parameters for ListCalls.
+type ListCallsParams struct {
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
+	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
+
+	// Model Exactly the model name the client asked for.
+	Model     *string `form:"model,omitempty" json:"model,omitempty"`
+	ClientApp *string `form:"client_app,omitempty" json:"client_app,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListKeysParams defines parameters for ListKeys.
+type ListKeysParams struct {
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// VerifyMfaJSONRequestBody defines body for VerifyMfa for application/json ContentType.
+type VerifyMfaJSONRequestBody = MfaRequest
+
+// RegenerateRecoveryCodesJSONRequestBody defines body for RegenerateRecoveryCodes for application/json ContentType.
+type RegenerateRecoveryCodesJSONRequestBody = RecoveryCodesRequest
+
+// RegisterJSONRequestBody defines body for Register for application/json ContentType.
+type RegisterJSONRequestBody = RegisterRequest
+
+// SignInJSONRequestBody defines body for SignIn for application/json ContentType.
+type SignInJSONRequestBody = SignInRequest
+
+// ConfirmTotpSetupJSONRequestBody defines body for ConfirmTotpSetup for application/json ContentType.
+type ConfirmTotpSetupJSONRequestBody = TotpConfirmRequest
+
+// CreateKeyJSONRequestBody defines body for CreateKey for application/json ContentType.
+type CreateKeyJSONRequestBody = KeyCreate
+
+// UpdateKeyJSONRequestBody defines body for UpdateKey for application/json ContentType.
+type UpdateKeyJSONRequestBody = KeySettings
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// VerifyMfa Pass two-step verification
+	// (POST /api/console/v1/auth/mfa)
+	VerifyMfa(w http.ResponseWriter, r *http.Request)
+	// RegenerateRecoveryCodes Make new recovery codes
+	// (POST /api/console/v1/auth/recovery-codes)
+	RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
+	// Register Register with an invite code
+	// (POST /api/console/v1/auth/register)
+	Register(w http.ResponseWriter, r *http.Request)
+	// SignIn Sign in with email and password
+	// (POST /api/console/v1/auth/sign-in)
+	SignIn(w http.ResponseWriter, r *http.Request)
+	// SignOut End the session
+	// (POST /api/console/v1/auth/sign-out)
+	SignOut(w http.ResponseWriter, r *http.Request)
+	// ConfirmTotpSetup Finish enabling two-step verification
+	// (POST /api/console/v1/auth/totp/confirm)
+	ConfirmTotpSetup(w http.ResponseWriter, r *http.Request)
+	// BeginTotpSetup Start enabling two-step verification
+	// (POST /api/console/v1/auth/totp/setup)
+	BeginTotpSetup(w http.ResponseWriter, r *http.Request)
+	// GetBalance The account's balance
+	// (GET /api/console/v1/balance)
+	GetBalance(w http.ResponseWriter, r *http.Request)
+	// ListCalls The account's calls
+	// (GET /api/console/v1/calls)
+	ListCalls(w http.ResponseWriter, r *http.Request, params ListCallsParams)
+	// GetCall One call
+	// (GET /api/console/v1/calls/{call_id})
+	GetCall(w http.ResponseWriter, r *http.Request, callId CallId)
+	// ListKeys The account's API keys
+	// (GET /api/console/v1/keys)
+	ListKeys(w http.ResponseWriter, r *http.Request, params ListKeysParams)
+	// CreateKey Make an API key
+	// (POST /api/console/v1/keys)
+	CreateKey(w http.ResponseWriter, r *http.Request)
+	// DeleteKey Delete an API key
+	// (DELETE /api/console/v1/keys/{key_id})
+	DeleteKey(w http.ResponseWriter, r *http.Request, keyId KeyId)
+	// GetKey One API key
+	// (GET /api/console/v1/keys/{key_id})
+	GetKey(w http.ResponseWriter, r *http.Request, keyId KeyId)
+	// UpdateKey Change an API key's settings
+	// (PUT /api/console/v1/keys/{key_id})
+	UpdateKey(w http.ResponseWriter, r *http.Request, keyId KeyId)
+	// GetSession The current session
+	// (GET /api/console/v1/session)
+	GetSession(w http.ResponseWriter, r *http.Request)
+	// GetSite The site the request's domain belongs to
+	// (GET /api/console/v1/site)
+	GetSite(w http.ResponseWriter, r *http.Request)
 	// GetVersion The version of the running program
 	// (GET /api/console/v1/version)
 	GetVersion(w http.ResponseWriter, r *http.Request)
@@ -36,6 +657,408 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// VerifyMfa operation middleware
+func (siw *ServerInterfaceWrapper) VerifyMfa(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyMfa(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegenerateRecoveryCodes operation middleware
+func (siw *ServerInterfaceWrapper) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegenerateRecoveryCodes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Register operation middleware
+func (siw *ServerInterfaceWrapper) Register(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Register(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignIn operation middleware
+func (siw *ServerInterfaceWrapper) SignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignOut operation middleware
+func (siw *ServerInterfaceWrapper) SignOut(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignOut(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConfirmTotpSetup operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmTotpSetup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConfirmTotpSetup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginTotpSetup operation middleware
+func (siw *ServerInterfaceWrapper) BeginTotpSetup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginTotpSetup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetBalance operation middleware
+func (siw *ServerInterfaceWrapper) GetBalance(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetBalance(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListCalls operation middleware
+func (siw *ServerInterfaceWrapper) ListCalls(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListCallsParams
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "since", r.URL.Query(), &params.Since, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "since"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "since", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "until" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "until", r.URL.Query(), &params.Until, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "until"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "until", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "model" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "model", r.URL.Query(), &params.Model, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "model"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "model", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "client_app" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "client_app", r.URL.Query(), &params.ClientApp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "client_app"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "client_app", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCalls(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCall operation middleware
+func (siw *ServerInterfaceWrapper) GetCall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "call_id" -------------
+	var callId CallId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "call_id", r.PathValue("call_id"), &callId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "call_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCall(w, r, callId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListKeys operation middleware
+func (siw *ServerInterfaceWrapper) ListKeys(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListKeysParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListKeys(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateKey operation middleware
+func (siw *ServerInterfaceWrapper) CreateKey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateKey(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteKey operation middleware
+func (siw *ServerInterfaceWrapper) DeleteKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key_id" -------------
+	var keyId KeyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key_id", r.PathValue("key_id"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteKey(w, r, keyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetKey operation middleware
+func (siw *ServerInterfaceWrapper) GetKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key_id" -------------
+	var keyId KeyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key_id", r.PathValue("key_id"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetKey(w, r, keyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateKey operation middleware
+func (siw *ServerInterfaceWrapper) UpdateKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key_id" -------------
+	var keyId KeyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key_id", r.PathValue("key_id"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateKey(w, r, keyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSession operation middleware
+func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSite operation middleware
+func (siw *ServerInterfaceWrapper) GetSite(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSite(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetVersion(w http.ResponseWriter, r *http.Request) {
@@ -172,8 +1195,1466 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/version", wrapper.GetVersion)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/sign-in", wrapper.SignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/mfa", wrapper.VerifyMfa)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/sign-out", wrapper.SignOut)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/session", wrapper.GetSession)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/totp/setup", wrapper.BeginTotpSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/totp/confirm", wrapper.ConfirmTotpSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/recovery-codes", wrapper.RegenerateRecoveryCodes)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/site", wrapper.GetSite)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/register", wrapper.Register)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/keys", wrapper.ListKeys)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/keys", wrapper.CreateKey)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/keys/{key_id}", wrapper.DeleteKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/keys/{key_id}", wrapper.GetKey)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/console/v1/keys/{key_id}", wrapper.UpdateKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/balance", wrapper.GetBalance)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/calls", wrapper.ListCalls)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/calls/{call_id}", wrapper.GetCall)
 
 	return m
+}
+
+type BadRequestJSONResponse Error
+
+type ConflictJSONResponse Error
+
+type FailureJSONResponse Error
+
+type ForbiddenJSONResponse Error
+
+type NotFoundJSONResponse Error
+
+type TooManyRequestsResponseHeaders struct {
+	RetryAfter int
+}
+type TooManyRequestsJSONResponse struct {
+	Body Error
+
+	Headers TooManyRequestsResponseHeaders
+}
+
+type UnauthenticatedJSONResponse Error
+
+type UnprocessableJSONResponse Error
+
+type VerifyMfaRequestObject struct {
+	Body *VerifyMfaJSONRequestBody
+}
+
+type VerifyMfaResponseObject interface {
+	VisitVerifyMfaResponse(w http.ResponseWriter) error
+}
+
+type VerifyMfa200ResponseHeaders struct {
+	SetCookie string
+}
+
+type VerifyMfa200JSONResponse struct {
+	Body    SessionGrant
+	Headers VerifyMfa200ResponseHeaders
+}
+
+func (response VerifyMfa200JSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyMfa400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response VerifyMfa400JSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyMfa401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response VerifyMfa401JSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyMfa403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response VerifyMfa403JSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyMfa429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response VerifyMfa429JSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyMfadefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response VerifyMfadefaultJSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodesRequestObject struct {
+	Body *RegenerateRecoveryCodesJSONRequestBody
+}
+
+type RegenerateRecoveryCodesResponseObject interface {
+	VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error
+}
+
+type RegenerateRecoveryCodes200ResponseHeaders struct {
+	SetCookie string
+}
+
+type RegenerateRecoveryCodes200JSONResponse struct {
+	Body    FactorChange
+	Headers RegenerateRecoveryCodes200ResponseHeaders
+}
+
+func (response RegenerateRecoveryCodes200JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodes400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RegenerateRecoveryCodes400JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodes401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RegenerateRecoveryCodes401JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodes403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RegenerateRecoveryCodes403JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodes429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response RegenerateRecoveryCodes429JSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegenerateRecoveryCodesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RegenerateRecoveryCodesdefaultJSONResponse) VisitRegenerateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterRequestObject struct {
+	Body *RegisterJSONRequestBody
+}
+
+type RegisterResponseObject interface {
+	VisitRegisterResponse(w http.ResponseWriter) error
+}
+
+type Register201JSONResponse Registered
+
+func (response Register201JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response Register400JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response Register403JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register409JSONResponse struct{ ConflictJSONResponse }
+
+func (response Register409JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response Register422JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response Register429JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RegisterdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RegisterdefaultJSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInRequestObject struct {
+	Body *SignInJSONRequestBody
+}
+
+type SignInResponseObject interface {
+	VisitSignInResponse(w http.ResponseWriter) error
+}
+
+type SignIn200ResponseHeaders struct {
+	SetCookie string
+}
+
+type SignIn200JSONResponse struct {
+	Body    SessionGrant
+	Headers SignIn200ResponseHeaders
+}
+
+func (response SignIn200JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignIn400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SignIn400JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignIn401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SignIn401JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignIn403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SignIn403JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignIn429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response SignIn429JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SignIndefaultJSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignOutRequestObject struct {
+}
+
+type SignOutResponseObject interface {
+	VisitSignOutResponse(w http.ResponseWriter) error
+}
+
+type SignOut204ResponseHeaders struct {
+	SetCookie string
+}
+
+type SignOut204Response struct {
+	Headers SignOut204ResponseHeaders
+}
+
+func (response SignOut204Response) VisitSignOutResponse(w http.ResponseWriter) error {
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(204)
+	return nil
+}
+
+type SignOut401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SignOut401JSONResponse) VisitSignOutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignOut403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SignOut403JSONResponse) VisitSignOutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignOutdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SignOutdefaultJSONResponse) VisitSignOutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetupRequestObject struct {
+	Body *ConfirmTotpSetupJSONRequestBody
+}
+
+type ConfirmTotpSetupResponseObject interface {
+	VisitConfirmTotpSetupResponse(w http.ResponseWriter) error
+}
+
+type ConfirmTotpSetup200ResponseHeaders struct {
+	SetCookie string
+}
+
+type ConfirmTotpSetup200JSONResponse struct {
+	Body    FactorChange
+	Headers ConfirmTotpSetup200ResponseHeaders
+}
+
+func (response ConfirmTotpSetup200JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetup400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ConfirmTotpSetup400JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetup401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ConfirmTotpSetup401JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetup403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ConfirmTotpSetup403JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetup409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConfirmTotpSetup409JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetup429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response ConfirmTotpSetup429JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotpSetupdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConfirmTotpSetupdefaultJSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginTotpSetupRequestObject struct {
+}
+
+type BeginTotpSetupResponseObject interface {
+	VisitBeginTotpSetupResponse(w http.ResponseWriter) error
+}
+
+type BeginTotpSetup200JSONResponse TotpSetup
+
+func (response BeginTotpSetup200JSONResponse) VisitBeginTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginTotpSetup401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response BeginTotpSetup401JSONResponse) VisitBeginTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginTotpSetup403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response BeginTotpSetup403JSONResponse) VisitBeginTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginTotpSetupdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginTotpSetupdefaultJSONResponse) VisitBeginTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBalanceRequestObject struct {
+}
+
+type GetBalanceResponseObject interface {
+	VisitGetBalanceResponse(w http.ResponseWriter) error
+}
+
+type GetBalance200JSONResponse Balance
+
+func (response GetBalance200JSONResponse) VisitGetBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBalance401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetBalance401JSONResponse) VisitGetBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBalance403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetBalance403JSONResponse) VisitGetBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBalancedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetBalancedefaultJSONResponse) VisitGetBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCallsRequestObject struct {
+	Params ListCallsParams
+}
+
+type ListCallsResponseObject interface {
+	VisitListCallsResponse(w http.ResponseWriter) error
+}
+
+type ListCalls200JSONResponse CallList
+
+func (response ListCalls200JSONResponse) VisitListCallsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCalls400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListCalls400JSONResponse) VisitListCallsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCalls401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListCalls401JSONResponse) VisitListCallsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCalls403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListCalls403JSONResponse) VisitListCallsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCallsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListCallsdefaultJSONResponse) VisitListCallsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCallRequestObject struct {
+	CallId CallId `json:"call_id"`
+}
+
+type GetCallResponseObject interface {
+	VisitGetCallResponse(w http.ResponseWriter) error
+}
+
+type GetCall200JSONResponse Call
+
+func (response GetCall200JSONResponse) VisitGetCallResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCall401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetCall401JSONResponse) VisitGetCallResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCall403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetCall403JSONResponse) VisitGetCallResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCall404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetCall404JSONResponse) VisitGetCallResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCalldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetCalldefaultJSONResponse) VisitGetCallResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListKeysRequestObject struct {
+	Params ListKeysParams
+}
+
+type ListKeysResponseObject interface {
+	VisitListKeysResponse(w http.ResponseWriter) error
+}
+
+type ListKeys200JSONResponse KeyList
+
+func (response ListKeys200JSONResponse) VisitListKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListKeys400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListKeys400JSONResponse) VisitListKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListKeys401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListKeys401JSONResponse) VisitListKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListKeys403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListKeys403JSONResponse) VisitListKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListKeysdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListKeysdefaultJSONResponse) VisitListKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateKeyRequestObject struct {
+	Body *CreateKeyJSONRequestBody
+}
+
+type CreateKeyResponseObject interface {
+	VisitCreateKeyResponse(w http.ResponseWriter) error
+}
+
+type CreateKey201JSONResponse CreatedKey
+
+func (response CreateKey201JSONResponse) VisitCreateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateKey400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateKey400JSONResponse) VisitCreateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateKey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CreateKey401JSONResponse) VisitCreateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateKey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateKey403JSONResponse) VisitCreateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateKeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateKeydefaultJSONResponse) VisitCreateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteKeyRequestObject struct {
+	KeyId KeyId `json:"key_id"`
+}
+
+type DeleteKeyResponseObject interface {
+	VisitDeleteKeyResponse(w http.ResponseWriter) error
+}
+
+type DeleteKey204Response struct {
+}
+
+func (response DeleteKey204Response) VisitDeleteKeyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteKey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response DeleteKey401JSONResponse) VisitDeleteKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteKey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteKey403JSONResponse) VisitDeleteKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteKey404JSONResponse) VisitDeleteKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteKeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteKeydefaultJSONResponse) VisitDeleteKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKeyRequestObject struct {
+	KeyId KeyId `json:"key_id"`
+}
+
+type GetKeyResponseObject interface {
+	VisitGetKeyResponse(w http.ResponseWriter) error
+}
+
+type GetKey200JSONResponse Key
+
+func (response GetKey200JSONResponse) VisitGetKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetKey401JSONResponse) VisitGetKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetKey403JSONResponse) VisitGetKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetKey404JSONResponse) VisitGetKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetKeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetKeydefaultJSONResponse) VisitGetKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKeyRequestObject struct {
+	KeyId KeyId `json:"key_id"`
+	Body  *UpdateKeyJSONRequestBody
+}
+
+type UpdateKeyResponseObject interface {
+	VisitUpdateKeyResponse(w http.ResponseWriter) error
+}
+
+type UpdateKey200JSONResponse Key
+
+func (response UpdateKey200JSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKey400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateKey400JSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateKey401JSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateKey403JSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateKey404JSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateKeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateKeydefaultJSONResponse) VisitUpdateKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSessionRequestObject struct {
+}
+
+type GetSessionResponseObject interface {
+	VisitGetSessionResponse(w http.ResponseWriter) error
+}
+
+type GetSession200JSONResponse Session
+
+func (response GetSession200JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSession401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSession401JSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSessiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSessiondefaultJSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteRequestObject struct {
+}
+
+type GetSiteResponseObject interface {
+	VisitGetSiteResponse(w http.ResponseWriter) error
+}
+
+type GetSite200JSONResponse Site
+
+func (response GetSite200JSONResponse) VisitGetSiteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSite404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSite404JSONResponse) VisitGetSiteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSitedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSitedefaultJSONResponse) VisitGetSiteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type GetVersionRequestObject struct {
@@ -207,8 +2688,76 @@ func (response GetVersion200JSONResponse) VisitGetVersionResponse(w http.Respons
 	return err
 }
 
+type GetVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetVersiondefaultJSONResponse) VisitGetVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// VerifyMfa Pass two-step verification
+	// (POST /api/console/v1/auth/mfa)
+	VerifyMfa(ctx context.Context, request VerifyMfaRequestObject) (VerifyMfaResponseObject, error)
+	// RegenerateRecoveryCodes Make new recovery codes
+	// (POST /api/console/v1/auth/recovery-codes)
+	RegenerateRecoveryCodes(ctx context.Context, request RegenerateRecoveryCodesRequestObject) (RegenerateRecoveryCodesResponseObject, error)
+	// Register Register with an invite code
+	// (POST /api/console/v1/auth/register)
+	Register(ctx context.Context, request RegisterRequestObject) (RegisterResponseObject, error)
+	// SignIn Sign in with email and password
+	// (POST /api/console/v1/auth/sign-in)
+	SignIn(ctx context.Context, request SignInRequestObject) (SignInResponseObject, error)
+	// SignOut End the session
+	// (POST /api/console/v1/auth/sign-out)
+	SignOut(ctx context.Context, request SignOutRequestObject) (SignOutResponseObject, error)
+	// ConfirmTotpSetup Finish enabling two-step verification
+	// (POST /api/console/v1/auth/totp/confirm)
+	ConfirmTotpSetup(ctx context.Context, request ConfirmTotpSetupRequestObject) (ConfirmTotpSetupResponseObject, error)
+	// BeginTotpSetup Start enabling two-step verification
+	// (POST /api/console/v1/auth/totp/setup)
+	BeginTotpSetup(ctx context.Context, request BeginTotpSetupRequestObject) (BeginTotpSetupResponseObject, error)
+	// GetBalance The account's balance
+	// (GET /api/console/v1/balance)
+	GetBalance(ctx context.Context, request GetBalanceRequestObject) (GetBalanceResponseObject, error)
+	// ListCalls The account's calls
+	// (GET /api/console/v1/calls)
+	ListCalls(ctx context.Context, request ListCallsRequestObject) (ListCallsResponseObject, error)
+	// GetCall One call
+	// (GET /api/console/v1/calls/{call_id})
+	GetCall(ctx context.Context, request GetCallRequestObject) (GetCallResponseObject, error)
+	// ListKeys The account's API keys
+	// (GET /api/console/v1/keys)
+	ListKeys(ctx context.Context, request ListKeysRequestObject) (ListKeysResponseObject, error)
+	// CreateKey Make an API key
+	// (POST /api/console/v1/keys)
+	CreateKey(ctx context.Context, request CreateKeyRequestObject) (CreateKeyResponseObject, error)
+	// DeleteKey Delete an API key
+	// (DELETE /api/console/v1/keys/{key_id})
+	DeleteKey(ctx context.Context, request DeleteKeyRequestObject) (DeleteKeyResponseObject, error)
+	// GetKey One API key
+	// (GET /api/console/v1/keys/{key_id})
+	GetKey(ctx context.Context, request GetKeyRequestObject) (GetKeyResponseObject, error)
+	// UpdateKey Change an API key's settings
+	// (PUT /api/console/v1/keys/{key_id})
+	UpdateKey(ctx context.Context, request UpdateKeyRequestObject) (UpdateKeyResponseObject, error)
+	// GetSession The current session
+	// (GET /api/console/v1/session)
+	GetSession(ctx context.Context, request GetSessionRequestObject) (GetSessionResponseObject, error)
+	// GetSite The site the request's domain belongs to
+	// (GET /api/console/v1/site)
+	GetSite(ctx context.Context, request GetSiteRequestObject) (GetSiteResponseObject, error)
 	// GetVersion The version of the running program
 	// (GET /api/console/v1/version)
 	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
@@ -253,6 +2802,475 @@ type strictHandler struct {
 	options     StrictHTTPServerOptions
 }
 
+// VerifyMfa operation middleware
+func (sh *strictHandler) VerifyMfa(w http.ResponseWriter, r *http.Request) {
+	var request VerifyMfaRequestObject
+
+	var body VerifyMfaJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.VerifyMfa(ctx, request.(VerifyMfaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "VerifyMfa")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(VerifyMfaResponseObject); ok {
+		if err := validResponse.VisitVerifyMfaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegenerateRecoveryCodes operation middleware
+func (sh *strictHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	var request RegenerateRecoveryCodesRequestObject
+
+	var body RegenerateRecoveryCodesJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegenerateRecoveryCodes(ctx, request.(RegenerateRecoveryCodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegenerateRecoveryCodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegenerateRecoveryCodesResponseObject); ok {
+		if err := validResponse.VisitRegenerateRecoveryCodesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// Register operation middleware
+func (sh *strictHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var request RegisterRequestObject
+
+	var body RegisterJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.Register(ctx, request.(RegisterRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Register")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegisterResponseObject); ok {
+		if err := validResponse.VisitRegisterResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignIn operation middleware
+func (sh *strictHandler) SignIn(w http.ResponseWriter, r *http.Request) {
+	var request SignInRequestObject
+
+	var body SignInJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignIn(ctx, request.(SignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignInResponseObject); ok {
+		if err := validResponse.VisitSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignOut operation middleware
+func (sh *strictHandler) SignOut(w http.ResponseWriter, r *http.Request) {
+	var request SignOutRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignOut(ctx, request.(SignOutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignOut")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignOutResponseObject); ok {
+		if err := validResponse.VisitSignOutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConfirmTotpSetup operation middleware
+func (sh *strictHandler) ConfirmTotpSetup(w http.ResponseWriter, r *http.Request) {
+	var request ConfirmTotpSetupRequestObject
+
+	var body ConfirmTotpSetupJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConfirmTotpSetup(ctx, request.(ConfirmTotpSetupRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConfirmTotpSetup")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConfirmTotpSetupResponseObject); ok {
+		if err := validResponse.VisitConfirmTotpSetupResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginTotpSetup operation middleware
+func (sh *strictHandler) BeginTotpSetup(w http.ResponseWriter, r *http.Request) {
+	var request BeginTotpSetupRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginTotpSetup(ctx, request.(BeginTotpSetupRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginTotpSetup")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginTotpSetupResponseObject); ok {
+		if err := validResponse.VisitBeginTotpSetupResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetBalance operation middleware
+func (sh *strictHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
+	var request GetBalanceRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBalance(ctx, request.(GetBalanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBalance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetBalanceResponseObject); ok {
+		if err := validResponse.VisitGetBalanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListCalls operation middleware
+func (sh *strictHandler) ListCalls(w http.ResponseWriter, r *http.Request, params ListCallsParams) {
+	var request ListCallsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListCalls(ctx, request.(ListCallsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListCalls")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListCallsResponseObject); ok {
+		if err := validResponse.VisitListCallsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCall operation middleware
+func (sh *strictHandler) GetCall(w http.ResponseWriter, r *http.Request, callId CallId) {
+	var request GetCallRequestObject
+
+	request.CallId = callId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCall(ctx, request.(GetCallRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCall")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCallResponseObject); ok {
+		if err := validResponse.VisitGetCallResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListKeys operation middleware
+func (sh *strictHandler) ListKeys(w http.ResponseWriter, r *http.Request, params ListKeysParams) {
+	var request ListKeysRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListKeys(ctx, request.(ListKeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListKeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListKeysResponseObject); ok {
+		if err := validResponse.VisitListKeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateKey operation middleware
+func (sh *strictHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
+	var request CreateKeyRequestObject
+
+	var body CreateKeyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateKey(ctx, request.(CreateKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateKeyResponseObject); ok {
+		if err := validResponse.VisitCreateKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteKey operation middleware
+func (sh *strictHandler) DeleteKey(w http.ResponseWriter, r *http.Request, keyId KeyId) {
+	var request DeleteKeyRequestObject
+
+	request.KeyId = keyId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteKey(ctx, request.(DeleteKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteKeyResponseObject); ok {
+		if err := validResponse.VisitDeleteKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetKey operation middleware
+func (sh *strictHandler) GetKey(w http.ResponseWriter, r *http.Request, keyId KeyId) {
+	var request GetKeyRequestObject
+
+	request.KeyId = keyId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetKey(ctx, request.(GetKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetKeyResponseObject); ok {
+		if err := validResponse.VisitGetKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateKey operation middleware
+func (sh *strictHandler) UpdateKey(w http.ResponseWriter, r *http.Request, keyId KeyId) {
+	var request UpdateKeyRequestObject
+
+	request.KeyId = keyId
+
+	var body UpdateKeyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateKey(ctx, request.(UpdateKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateKeyResponseObject); ok {
+		if err := validResponse.VisitUpdateKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSession operation middleware
+func (sh *strictHandler) GetSession(w http.ResponseWriter, r *http.Request) {
+	var request GetSessionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSession(ctx, request.(GetSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSessionResponseObject); ok {
+		if err := validResponse.VisitGetSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSite operation middleware
+func (sh *strictHandler) GetSite(w http.ResponseWriter, r *http.Request) {
+	var request GetSiteRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSite(ctx, request.(GetSiteRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSite")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSiteResponseObject); ok {
+		if err := validResponse.VisitGetSiteResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetVersion operation middleware
 func (sh *strictHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 	var request GetVersionRequestObject
@@ -275,4 +3293,237 @@ func (sh *strictHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 	} else if response != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
 	}
+}
+
+// Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
+// Stored as a slice of fixed-width chunks rather than one concatenated
+// const string: with thousands of chunks the chained `+` fold is several
+// times slower for the Go compiler than parsing a slice literal.
+var swaggerSpec = []string{
+	"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",
+	"trh9d/v/BwA=",
+}
+
+// decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
+// after base64-decoding and flate-decompressing the embedded blob.
+func decodeSpec() ([]byte, error) {
+	encoded := strings.Join(swaggerSpec, "")
+	compressed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("error base64 decoding spec: %w", err)
+	}
+	zr := flate.NewReader(bytes.NewReader(compressed))
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(zr); err != nil {
+		return nil, fmt.Errorf("read flate: %w", err)
+	}
+	if err := zr.Close(); err != nil {
+		return nil, fmt.Errorf("close flate reader: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+var rawSpec = decodeSpecCached()
+
+// a naive cache of the decoded OpenAPI spec
+func decodeSpecCached() func() ([]byte, error) {
+	data, err := decodeSpec()
+	return func() ([]byte, error) {
+		return data, err
+	}
+}
+
+// Constructs a synthetic filesystem for resolving external references when loading openapi specifications.
+func PathToRawSpec(pathToFile string) map[string]func() ([]byte, error) {
+	res := make(map[string]func() ([]byte, error))
+	if len(pathToFile) > 0 {
+		res[pathToFile] = rawSpec
+	}
+
+	return res
+}
+
+// GetSpec returns the OpenAPI specification corresponding to the generated
+// code in this file. External references in the spec are resolved through
+// PathToRawSpec; externally-referenced files must be embedded in their
+// corresponding Go packages (via the import-mapping feature). URL-based
+// external refs are not supported.
+func GetSpec() (swagger *openapi3.T, err error) {
+	resolvePath := PathToRawSpec("")
+
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = true
+	loader.ReadFromURIFunc = func(loader *openapi3.Loader, url *url.URL) ([]byte, error) {
+		pathToFile := url.String()
+		pathToFile = path.Clean(pathToFile)
+		getSpec, ok := resolvePath[pathToFile]
+		if !ok {
+			err1 := fmt.Errorf("path not found: %s", pathToFile)
+			return nil, err1
+		}
+		return getSpec()
+	}
+	var specData []byte
+	specData, err = rawSpec()
+	if err != nil {
+		return
+	}
+	swagger, err = loader.LoadFromData(specData)
+	if err != nil {
+		return
+	}
+	return
+}
+
+// GetSpecJSON returns the raw JSON bytes of the embedded OpenAPI
+// specification: decompressed but not unmarshaled. External references
+// are not resolved here; the bytes are the spec exactly as embedded by
+// codegen. The result is cached at package init time, so repeated calls
+// are cheap.
+func GetSpecJSON() ([]byte, error) {
+	return rawSpec()
+}
+
+// GetSwagger returns the OpenAPI specification corresponding to the
+// generated code in this file.
+//
+// Deprecated: GetSwagger predates kin-openapi renaming openapi3.Swagger
+// to openapi3.T. Use [GetSpec] instead. This wrapper is retained for
+// backwards compatibility.
+func GetSwagger() (*openapi3.T, error) {
+	return GetSpec()
 }

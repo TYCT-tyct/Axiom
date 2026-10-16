@@ -46,10 +46,13 @@ func TestServeChecksTheDatabaseBeforeListening(t *testing.T) {
 	})
 	for name, ops := range map[string]string{"free addresses": addrs[1], "an address that is taken": taken.Addr().String()} {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		err := serve(ctx, []string{"AXIOM_PUBLIC_ADDR=" + addrs[0], "AXIOM_OPS_ADDR=" + ops, "AXIOM_DATABASE_URL=" + database.Superuser},
+		err := serve(ctx, []string{
+			"AXIOM_PUBLIC_ADDR=" + addrs[0], "AXIOM_PROBES_ADDR=" + ops, "AXIOM_DATABASE_URL=" + database.Superuser,
+			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		},
 			slog.New(slog.DiscardHandler))
 		cancel()
-		if err == nil || !strings.Contains(err.Error(), "database:") || strings.Contains(err.Error(), "AXIOM_OPS_ADDR") {
+		if err == nil || !strings.Contains(err.Error(), "database:") || strings.Contains(err.Error(), "AXIOM_PROBES_ADDR") {
 			t.Errorf("%s: %v, want the database's error", name, err)
 		}
 	}

@@ -1,17 +1,36 @@
 # The console's API: what the user console calls on the public listener. Code on both sides is generated from this
-# file (docs/architecture.md「仓库结构与契约文件」); change the contract here first.
+# file (docs/architecture.md「仓库结构与契约文件」); change the contract here first. The conventions it follows, and
+# the reasons, are in internal/platform/README.md「接口约定」; `just api` checks them.
 openapi: 3.0.3
 info:
   title: Axiom console API
   version: v1
+  description: >-
+    The API of the user console, under `/api/console/v1` on the public listener. A user signs in on a console domain
+    of a site and works on their own account.
+
+
+    Every operation that changes data needs the `Origin` of the site's console, `Content-Type: application/json`, and,
+    with a session, the `X-CSRF-Token` of the session (security schemes `session` and `csrf`). `x-axiom-level` says
+    what the session must have proved (`any`; `signed_in`, a password or better; `mfa`; `pending_mfa`) and
+    `x-axiom-permission` which permission it needs on its account (`none` for no permission). A request without a
+    session on an operation that needs one is a 401, one without the permission a 403. Every response carries
+    `X-Request-ID` and `Cache-Control: no-store`.
+tags:
+  - {name: Session, description: "Sign-in, two-step verification and the current session."}
+  - {name: Keys, description: "API keys."}
+  - {name: Balance, description: "The account's money."}
+  - {name: Calls, description: "The account's call log."}
 paths:
   /api/console/v1/version:
     get:
       operationId: getVersion
+      tags: [Session]
       summary: The version of the running program
       description: >-
         The console compares it with the version it was built as and offers a reload when they differ, so a page
         left open across a deployment does not keep calling an API it no longer matches.
+      security: []
       responses:
         "200":
           description: The running version
@@ -21,8 +40,620 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Version"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/sign-in:
+    post:
+      operationId: signIn
+      tags: [Session]
+      summary: Sign in with email and password
+      description: >-
+        Sets the session cookie. A user with two-step verification gets a pending session (`mfa_required`) that only
+        `verifyMfa` accepts. An unknown email costs a password hash too, so the answer does not tell whether the
+        email exists. Needs the `Origin` of the surface, but no session.
+
+
+        Limits: a token bucket per client IP shared by sign-in, registration and two-step verification (burst 20, 10 a
+        minute), and failed sign-ins per email (10 in 15 minutes, then a wait; the account is never locked). A limit
+        is a 429 with `Retry-After`. The values are site settings with defaults in code.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SignInRequest"}
+      responses:
+        "200":
+          description: Signed in, or waiting for the second factor.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/mfa:
+    post:
+      operationId: verifyMfa
+      tags: [Session]
+      summary: Pass two-step verification
+      description: >-
+        Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and
+        issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending
+        session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same
+        challenge give one session.
+
+
+        Limits: the per-IP bucket of `signIn`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MfaRequest"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/sign-out:
+    post:
+      operationId: signOut
+      tags: [Session]
+      summary: End the session
+      description: Revokes the session of the cookie, whatever its level, and expires the cookie.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: any
+      x-axiom-permission: none
+      responses:
+        "204":
+          description: Signed out.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/session:
+    get:
+      operationId: getSession
+      tags: [Session]
+      summary: The current session
+      description: >-
+        Who is signed in and what the session may do. A page calls it on load to learn whether to show the sign-in
+        page, and to get the CSRF token again (the cookie is HttpOnly, so the page keeps the token only in memory).
+      security:
+        - session: []
+      x-axiom-level: any
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/totp/setup:
+    post:
+      operationId: beginTotpSetup
+      tags: [Session]
+      summary: Start enabling two-step verification
+      description: >-
+        Makes a new TOTP secret and the URI for its QR code. Nothing is stored, so calling it again just makes another
+        secret; `confirmTotpSetup` stores the one the user proved.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: A new secret
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TotpSetup"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/totp/confirm:
+    post:
+      operationId: confirmTotpSetup
+      tags: [Session]
+      summary: Finish enabling two-step verification
+      description: >-
+        Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes
+        (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Only for a user
+        who has not enabled it: once on, it stays on and cannot be replaced from the console (409); the person
+        who runs the deployment can reset it from the command line.
+
+
+        Limits: failed codes count against the user's 10 an hour.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TotpConfirmRequest"}
+      responses:
+        "200":
+          description: Enabled.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      tags: [Session]
+      summary: Make new recovery codes
+      description: >-
+        Needs a current TOTP code from a session that passed two-step verification. The old codes stop working, and
+        the user's other sessions end.
+
+
+        Limits: failed codes count against the user's 10 an hour.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RecoveryCodesRequest"}
+      responses:
+        "200":
+          description: The new codes.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/site:
+    get:
+      operationId: getSite
+      tags: [Session]
+      summary: The site the request's domain belongs to
+      description: >-
+        What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the
+        brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain
+        registered for the console; any other host gets a 404.
+      security: []
+      responses:
+        "200":
+          description: The site
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Site"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/register:
+    post:
+      operationId: register
+      tags: [Session]
+      summary: Register with an invite code
+      description: >-
+        Makes the user, their personal account, its default workspace and balance, in the site's default tier. It
+        does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown,
+        its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is
+        `email_taken`, and the whole registration is undone. The email is not verified in M1.
+
+
+        Limits: the per-IP bucket of `signIn`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegisterRequest"}
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Registered"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/keys:
+    get:
+      operationId: listKeys
+      tags: [Keys]
+      summary: The account's API keys
+      description: >-
+        Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a
+        key is never returned again after `createKey`.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of keys
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createKey
+      tags: [Keys]
+      summary: Make an API key
+      description: >-
+        Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key
+        gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is
+        stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused,
+        and the user deletes it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyCreate"}
+      responses:
+        "201":
+          description: The key and its text.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedKey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/keys/{key_id}:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/KeyId"}
+    get:
+      operationId: getKey
+      tags: [Keys]
+      summary: One API key
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Key"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateKey
+      tags: [Keys]
+      summary: Change an API key's settings
+      description: >-
+        Replaces every setting the user may change: what the request leaves out is unrestricted (no spend limit, any
+        model, any IP), so a page sends back all of the key's current settings with its edit. The expiry cannot be
+        changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false`
+        enables the key again.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeySettings"}
+      responses:
+        "200":
+          description: The key as changed
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Key"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: deleteKey
+      tags: [Keys]
+      summary: Delete an API key
+      description: Deletes the key for good; it cannot be restored, and its calls stay in the call list.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "204": {description: Deleted.}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/balance:
+    get:
+      operationId: getBalance
+      tags: [Balance]
+      summary: The account's balance
+      description: >-
+        What the user sees on arrival: the balance and what is left to spend. OpenRouter's `GET /api/v1/credits`
+        returns total credits and total usage; Axiom returns the figures a call is admitted by, so the page can say
+        why a call was refused.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      responses:
+        "200":
+          description: The balance
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Balance"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls:
+    get:
+      operationId: listCalls
+      tags: [Calls]
+      summary: The account's calls
+      description: >-
+        The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no
+        cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read.
+        A filter by model or client application reads that filter's index, so a rare model costs what it matches, not
+        what the account holds. `since` is inclusive and `until` exclusive.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: model, in: query, required: false, description: "Exactly the model name the client asked for.", schema: {type: string, maxLength: 200}}
+        - {name: client_app, in: query, required: false, schema: {type: string, maxLength: 200}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of calls
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CallList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls/{call_id}:
+    get:
+      operationId: getCall
+      tags: [Calls]
+      summary: One call
+      description: >-
+        The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields
+        as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields
+        when the modules that keep them can serve users.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - name: call_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/CallId"}
+      responses:
+        "200":
+          description: The call
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Call"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-axiom_session
+      description: >-
+        The session cookie (HttpOnly, Secure, SameSite=Lax). Its name loses the `__Host-` prefix only where the site's
+        registered origin is `http://localhost`. The sign-in operations set it, and it is valid only on the surface
+        that issued it.
+    csrf:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: >-
+        The session's CSRF token, which sign-in, two-step verification and `getSession` return. Every request that
+        changes data and carries a session sends it; the request must also carry an `Origin` equal to the origin
+        registered for the site and surface, and `Content-Type: application/json`. The API sends no CORS headers.
+  headers:
+    SetCookie:
+      required: true
+      description: The new session cookie, or an expired one that ends the session.
+      schema: {type: string}
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for
+        the same filters, and a malformed one is a 400.
+      schema: {type: string, minLength: 1, maxLength: 512}
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: How many items a page holds at most.
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+  responses:
+    BadRequest:
+      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unauthenticated:
+      description: >-
+        No valid session for this surface, or the credentials of a sign-in are wrong, alike for an unknown email, a
+        wrong password and a disabled user (`unauthenticated`, `invalid_credentials`, `invalid_code`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: >-
+        The session may not do this: the permission is missing, the session has not passed two-step verification
+        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: >-
+        There is no such resource, or the session's scope cannot see it. A malformed ID and an unknown one answer
+        alike (`not_found`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: >-
+        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`,
+        `idempotency_key_reused`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unprocessable:
+      description: >-
+        The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
+        `unprocessable`); `message` says which.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooManyRequests:
+      description: A limit on this operation is used up (`rate_limited`); wait `Retry-After` seconds.
+      headers:
+        Retry-After:
+          required: true
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Failure:
+      description: >-
+        Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable`
+        (503). A 500 never carries the internal error's text.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    Error:
+      type: object
+      required: [error]
+      description: >-
+        The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+      properties:
+        error: {$ref: "#/components/schemas/ErrorDetail"}
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      description: >-
+        `code` is what a client branches on and translates; `message` is English text for logs and developers.
+      properties:
+        code: {$ref: "#/components/schemas/ErrorCode"}
+        message: {type: string}
+        fields:
+          type: array
+          description: Which parts of the request broke a constraint, for `invalid_request`.
+          items: {$ref: "#/components/schemas/ErrorField"}
+    ErrorField:
+      type: object
+      required: [pointer, message]
+      properties:
+        pointer: {type: string, description: "JSON pointer into the request body, or the name of a query or path parameter."}
+        message: {type: string}
+    ErrorCode:
+      type: string
+      description: >-
+        The closed list of failure codes. A code is added in a contract change, so a client that translates every code
+        fails to compile until it knows the new one.
+      enum:
+        - invalid_request
+        - unauthenticated
+        - invalid_credentials
+        - invalid_code
+        - forbidden
+        - mfa_required
+        - origin_rejected
+        - not_found
+        - conflict
+        - email_taken
+        - name_taken
+        - stale_revision
+        - idempotency_key_reused
+        - invalid_invite
+        - weak_password
+        - not_ready
+        - unprocessable
+        - rate_limited
+        - internal
+        - not_implemented
+        - unavailable
+    Money:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
+        one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
+        above 2^53 (about 9 million units) in the browser.
+      properties:
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Version:
       type: object
       required: [version]
@@ -35,3 +666,269 @@ components:
             uncommitted changes). The console is stamped with the same line and only compares the two whole for
             equality.
           example: axiom v0.0.0-20261014044725-4daa4538fcac
+    UserId: {type: string, pattern: '^user_[0-9a-hjkmnp-tv-z]{26}$', description: "A user's ID (TypeID)."}
+    AccountId: {type: string, pattern: '^acct_[0-9a-hjkmnp-tv-z]{26}$', description: "An account's ID (TypeID)."}
+    SignInRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, minLength: 3, maxLength: 254}
+        password: {type: string, minLength: 1, maxLength: 256}
+    SessionGrant:
+      type: object
+      required: [status, csrf_token]
+      properties:
+        status:
+          type: string
+          enum: [signed_in, mfa_required]
+          description: >-
+            `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending
+            session that only `verifyMfa` accepts, for 5 minutes.
+        csrf_token: {type: string, description: "Sent as X-CSRF-Token on the requests that change data."}
+    MfaRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          minLength: 6
+          maxLength: 19
+          description: >-
+            A TOTP code (6 digits) or a recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server
+            tells them apart by shape.
+    SessionLevel:
+      type: string
+      enum: [pending_mfa, password, mfa]
+      description: >-
+        What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a
+        sign-in that waits for its second factor.
+    Session:
+      type: object
+      required: [user, account, level, mfa_enabled, csrf_token, expires_at, permissions]
+      properties:
+        user:
+          type: object
+          required: [id, email, invite_code]
+          properties:
+            id: {$ref: "#/components/schemas/UserId"}
+            email: {type: string}
+            invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
+        account: {$ref: "#/components/schemas/AccountId"}
+        level: {$ref: "#/components/schemas/SessionLevel"}
+        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
+        csrf_token: {type: string}
+        expires_at: {type: string, format: date-time, description: "When the session ends if it is not used again; the idle timeout moves it."}
+        permissions:
+          type: array
+          description: >-
+            The permission names the session holds on its own scope (the user's account on the console, the platform
+            on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
+          items: {type: string}
+    TotpSetup:
+      type: object
+      required: [secret, uri]
+      properties:
+        secret: {type: string, description: "The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back."}
+        uri: {type: string, description: "The otpauth:// URI for a QR code."}
+    TotpConfirmRequest:
+      type: object
+      required: [secret, password, code]
+      properties:
+        secret: {type: string, maxLength: 128}
+        password: {type: string, maxLength: 256, description: "The user's password, asked again."}
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
+    RecoveryCodesRequest:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A current TOTP code."}
+    FactorChange:
+      type: object
+      required: [csrf_token, recovery_codes]
+      description: >-
+        A changed factor ends every other session of the user and every unused recovery code, and issues this device a
+        new `mfa` session: the cookie of the response replaces the old one.
+      properties:
+        csrf_token: {type: string}
+        recovery_codes:
+          type: array
+          description: "10 one-time codes, each written xxxx-xxxx-xxxx-xxxx. They are shown only here."
+          items: {type: string}
+    Balance:
+      type: object
+      required: [balance, reserved, floor, available, spent_this_month]
+      description: >-
+        An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted
+        while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls
+        settled for the current UTC calendar month.
+      properties:
+        balance: {$ref: "#/components/schemas/Money"}
+        reserved: {$ref: "#/components/schemas/Money"}
+        floor: {$ref: "#/components/schemas/Money"}
+        available: {$ref: "#/components/schemas/Money"}
+        spent_this_month: {$ref: "#/components/schemas/Money"}
+    KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
+    WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
+    CallId:
+      type: string
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      description: "A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`."
+    Site:
+      type: object
+      required: [name, key_prefix, registration, currency]
+      properties:
+        name: {type: string}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
+        logo_url: {type: string, description: "Absent when the site has no logo."}
+        key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
+        registration:
+          type: string
+          enum: [invite, closed, open]
+          description: "`invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1."
+    RegisterRequest:
+      type: object
+      required: [invite_code, email, password]
+      properties:
+        invite_code: {type: string, minLength: 1, maxLength: 64}
+        email: {type: string, minLength: 3, maxLength: 254}
+        password: {type: string, minLength: 12, maxLength: 256}
+    Registered:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: {$ref: "#/components/schemas/UserId"}
+    Key:
+      type: object
+      required: [id, name, prefix, last4, workspace_id, created_at, disabled]
+      description: >-
+        A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept
+        besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the
+        current window; both are absent for a key without a limit.
+      properties:
+        id: {$ref: "#/components/schemas/KeyId"}
+        name: {type: string, minLength: 1, maxLength: 100}
+        prefix: {type: string}
+        last4: {type: string}
+        workspace_id: {$ref: "#/components/schemas/WorkspaceId"}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, description: "Absent for a key that does not expire."}
+        disabled: {type: boolean}
+        spend_limit: {$ref: "#/components/schemas/Money"}
+        limit_reset: {$ref: "#/components/schemas/LimitReset"}
+        limit_remaining: {$ref: "#/components/schemas/Money"}
+        models:
+          type: array
+          description: The model names the key may call; absent means any model.
+          items: {type: string, maxLength: 200}
+        ip_allow:
+          type: array
+          description: The client addresses (IP or CIDR) the key may be used from; absent means any.
+          items: {type: string, maxLength: 64}
+    LimitReset:
+      type: string
+      enum: [daily, weekly, monthly]
+      description: >-
+        When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month.
+        Absent means never; it needs a `spend_limit`.
+    KeyCreate:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        expires_at: {type: string, format: date-time, description: "UTC, in the future. It cannot be set later."}
+        spend_limit: {$ref: "#/components/schemas/Money"}
+        limit_reset: {$ref: "#/components/schemas/LimitReset"}
+        models:
+          type: array
+          maxItems: 256
+          items: {type: string, maxLength: 200}
+        ip_allow:
+          type: array
+          maxItems: 64
+          items: {type: string, maxLength: 64}
+    KeySettings:
+      type: object
+      required: [name, disabled]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        disabled: {type: boolean}
+        spend_limit: {$ref: "#/components/schemas/Money"}
+        limit_reset: {$ref: "#/components/schemas/LimitReset"}
+        models:
+          type: array
+          maxItems: 256
+          items: {type: string, maxLength: 200}
+        ip_allow:
+          type: array
+          maxItems: 64
+          items: {type: string, maxLength: 64}
+    CreatedKey:
+      type: object
+      required: [key, secret]
+      properties:
+        key: {$ref: "#/components/schemas/Key"}
+        secret: {type: string, description: "The key's text, to copy now: it is never shown again."}
+    KeyList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Key"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    Call:
+      type: object
+      required:
+        - id
+        - at
+        - workspace_id
+        - key_id
+        - ip
+        - client_app
+        - session_id
+        - subagent_id
+        - request_class
+        - model
+        - usage
+        - service_tier
+        - price
+        - free
+        - latency_ms
+        - first_token_ms
+        - finish_reason
+        - error_kind
+      description: >-
+        One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not
+        have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log.
+      properties:
+        id: {$ref: "#/components/schemas/CallId"}
+        at: {type: string, format: date-time, description: When the request started.}
+        workspace_id: {$ref: "#/components/schemas/WorkspaceId"}
+        key_id: {$ref: "#/components/schemas/KeyId"}
+        ip: {type: string, description: The client address the call came from.}
+        client_app: {type: string, description: "The tool that made the call, such as Claude Code."}
+        session_id: {type: string}
+        subagent_id: {type: string}
+        request_class: {type: string}
+        model: {type: string, description: The model name the client asked for.}
+        usage:
+          type: object
+          description: >-
+            How much of each billing item the call used (`input`, `output`, `cache_read`, …), by the item's name. An
+            item the call did not use is absent.
+          additionalProperties: {type: integer, format: int64, minimum: 0}
+        service_tier: {type: string}
+        price: {$ref: "#/components/schemas/Money"}
+        free: {type: boolean, description: "Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」)."}
+        latency_ms: {type: integer, minimum: 0}
+        first_token_ms: {type: integer, minimum: 0}
+        finish_reason: {type: string}
+        error_kind: {type: string, description: "What failed, empty when the call succeeded."}
+    CallList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Call"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
