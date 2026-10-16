@@ -61,11 +61,14 @@ type RateBucketRow struct {
 
 const ensureRateBuckets = `
 INSERT INTO suppliers.rate_buckets (scope, name)
-SELECT * FROM unnest($1::text[], $2::text[])
+SELECT * FROM unnest($1::text[], $2::text[]) AS b (scope, name) ORDER BY b.scope, b.name
 ON CONFLICT (scope, name) DO NOTHING`
 
-// LockRateBucketsFor makes sure the buckets exist and locks them until the transaction ends, in key order, so that two
-// requests that name some of the same buckets wait for each other and cannot deadlock. It returns them in that order.
+// Every statement here that makes, locks or changes several buckets does it in key order, so that two requests that
+// name some of the same buckets, in any order, wait for each other and cannot deadlock.
+
+// LockRateBucketsFor makes sure the buckets exist and locks them until the transaction ends. It returns them in key
+// order.
 func LockRateBucketsFor(ctx context.Context, db DBTX, buckets []RateBucket) ([]RateBucketRow, error) {
 	scopes, names := splitBuckets(buckets)
 	if _, err := db.Exec(ctx, ensureRateBuckets, scopes, names); err != nil {
@@ -101,10 +104,11 @@ FOR UPDATE OF r`, scopes, names)
 
 const blockRateBuckets = `
 INSERT INTO suppliers.rate_buckets AS r (scope, name, blocked_until)
-SELECT b.scope, b.name, $3::timestamptz FROM unnest($1::text[], $2::text[]) AS b (scope, name)
+SELECT b.scope, b.name, $3::timestamptz FROM unnest($1::text[], $2::text[]) AS b (scope, name) ORDER BY b.scope, b.name
 ON CONFLICT (scope, name) DO UPDATE SET blocked_until = greatest(r.blocked_until, excluded.blocked_until)`
 
-// BlockRateBuckets closes the buckets until the time given, or for as long as they already are if that is longer.
+// BlockRateBuckets closes the buckets, making those that do not exist, until the time given, or for as long as they
+// already are if that is longer.
 func BlockRateBuckets(ctx context.Context, db DBTX, buckets []RateBucket, until time.Time) error {
 	scopes, names := splitBuckets(buckets)
 	_, err := db.Exec(ctx, blockRateBuckets, scopes, names, until)

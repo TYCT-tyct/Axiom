@@ -47,8 +47,9 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 }
 
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the
-// projection of the state onto the supplier, in one transaction that holds only if the lease is still the session's and
-// the stored version is expect. Otherwise nothing of the step is written, and the error is syncer.ErrFenced.
+// projection of the state onto the supplier, in one transaction that holds only if the lease is still the session's, the
+// supplier's credentials are still the generation it was taken in, and the stored version is expect. Otherwise nothing
+// of the step is written, and the error is syncer.ErrFenced.
 func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) error {
 	encoded, err := jsonx.MarshalCanonical(c.State)
 	if err != nil {
@@ -58,8 +59,12 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 	now := cfg.Now()
 	until := now.Add(cfg.LeaseTTL)
 	err = cfg.DB.Tx(ctx, cfg.Scope, func(tx pg.Tx) error {
+		cur, err := st.s.hold(ctx, tx)
+		if err != nil {
+			return err
+		}
 		changed, err := store.New().CommitSyncState(ctx, tx, store.CommitSyncStateParams{
-			SupplierID: id, Expect: expect, LeaseFence: st.s.fence, Version: c.State.Version, Format: format,
+			SupplierID: id, Expect: expect, Version: c.State.Version, Format: format,
 			State: encoded, NextDue: nextDue(c.State), LeaseUntil: &until,
 		})
 		if err != nil {
@@ -68,7 +73,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		return writeStep(ctx, tx, id, c)
+		return writeStep(ctx, tx, id, c, cur)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)
@@ -77,7 +82,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 }
 
 // writeStep writes what a step produced next to its state.
-func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit) error {
+func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow) error {
 	if len(c.Events) > 0 {
 		rows := make([]store.SyncEventRow, len(c.Events))
 		for i, e := range c.Events {
@@ -99,7 +104,7 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit) err
 	if _, err := reconcile.Ingest(ctx, tx, id, c.Charges); err != nil {
 		return fmt.Errorf("write the charge records: %w", err)
 	}
-	return project(ctx, tx, id, c.State)
+	return project(ctx, tx, id, c.State, cur)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the
@@ -126,18 +131,14 @@ func latest(a, b time.Time) time.Time {
 
 // project writes onto the supplier what routing and the back office read of the engine's state: the balance last seen
 // and the status. A supplier a person paused stays paused, a removal is not undone, and an engine that is polling again
-// brings back only a supplier that was still connecting or running.
-func project(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State) error {
+// brings back only a supplier that was still connecting or running. cur is the supplier as the step locked it.
+func project(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow) error {
 	q := store.New()
 	if !st.BalanceAt.IsZero() {
 		at := st.BalanceAt
 		if err := q.SetSupplierBalance(ctx, tx, store.SetSupplierBalanceParams{ID: id, Balance: string(st.Balance), ObservedAt: &at}); err != nil {
 			return fmt.Errorf("write the balance: %w", err)
 		}
-	}
-	cur, err := q.LockSupplierStatus(ctx, tx, id)
-	if err != nil {
-		return fmt.Errorf("read the status: %w", err)
 	}
 	status, reason := projectStatus(cur.Status, st)
 	if status == cur.Status {

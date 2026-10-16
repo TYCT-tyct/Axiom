@@ -46,7 +46,7 @@ func (q *Queries) AcquireSyncLease(ctx context.Context, db DBTX, arg AcquireSync
 const commitSyncState = `-- name: CommitSyncState :execrows
 UPDATE suppliers.sync_states
 SET version = $1, format = $2, state = $3, next_due = $4, lease_until = $5
-WHERE supplier_id = $6 AND version = $7 AND lease_fence = $8
+WHERE supplier_id = $6 AND version = $7
 `
 
 type CommitSyncStateParams struct {
@@ -57,11 +57,10 @@ type CommitSyncStateParams struct {
 	LeaseUntil *time.Time
 	SupplierID uuid.UUID
 	Expect     int64
-	LeaseFence int64
 }
 
-// Stores a step over the version it read, if the lease is still the one that read it, and keeps the lease for as long
-// as another step may take. No row changed means the step is void.
+// Stores a step over the version it read, and keeps the lease for as long as another step may take. No row changed
+// means the step is void.
 func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncStateParams) (int64, error) {
 	result, err := db.Exec(ctx, commitSyncState,
 		arg.Version,
@@ -71,7 +70,6 @@ func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncSt
 		arg.LeaseUntil,
 		arg.SupplierID,
 		arg.Expect,
-		arg.LeaseFence,
 	)
 	if err != nil {
 		return 0, err
@@ -147,20 +145,41 @@ func (q *Queries) GetSyncState(ctx context.Context, db DBTX, supplierID uuid.UUI
 	return i, err
 }
 
-const lockSupplierStatus = `-- name: LockSupplierStatus :one
-SELECT status, status_reason FROM suppliers.suppliers WHERE id = $1 FOR UPDATE
+const holdSyncLease = `-- name: HoldSyncLease :one
+SELECT lease_fence FROM suppliers.sync_states WHERE supplier_id = $1 AND lease_fence = $2 FOR UPDATE
 `
 
-type LockSupplierStatusRow struct {
-	Status       string
-	StatusReason *string
+type HoldSyncLeaseParams struct {
+	SupplierID uuid.UUID
+	LeaseFence int64
 }
 
-// The status the engine's state is projected onto, held until the step that projects it commits.
-func (q *Queries) LockSupplierStatus(ctx context.Context, db DBTX, id uuid.UUID) (LockSupplierStatusRow, error) {
-	row := db.QueryRow(ctx, lockSupplierStatus, id)
-	var i LockSupplierStatusRow
-	err := row.Scan(&i.Status, &i.StatusReason)
+// Locks the sync state of a supplier if its lease is still the one with this fence, until the transaction ends: a take-
+// over waits for the transaction, so a write that is let in by this statement is ordered before it.
+func (q *Queries) HoldSyncLease(ctx context.Context, db DBTX, arg HoldSyncLeaseParams) (int64, error) {
+	row := db.QueryRow(ctx, holdSyncLease, arg.SupplierID, arg.LeaseFence)
+	var lease_fence int64
+	err := row.Scan(&lease_fence)
+	return lease_fence, err
+}
+
+const lockSupplier = `-- name: LockSupplier :one
+SELECT status, status_reason, config_gen FROM suppliers.suppliers WHERE id = $1 FOR NO KEY UPDATE
+`
+
+type LockSupplierRow struct {
+	Status       string
+	StatusReason *string
+	ConfigGen    int64
+}
+
+// The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
+// transaction ends: a change of the configuration waits for it. FOR NO KEY UPDATE, as an UPDATE of these columns takes,
+// so that rows that refer to the supplier can still be written.
+func (q *Queries) LockSupplier(ctx context.Context, db DBTX, id uuid.UUID) (LockSupplierRow, error) {
+	row := db.QueryRow(ctx, lockSupplier, id)
+	var i LockSupplierRow
+	err := row.Scan(&i.Status, &i.StatusReason, &i.ConfigGen)
 	return i, err
 }
 
@@ -231,12 +250,9 @@ func (q *Queries) SetSupplierStatus(ctx context.Context, db DBTX, arg SetSupplie
 }
 
 const swapSupplierLogin = `-- name: SwapSupplierLogin :execrows
-UPDATE suppliers.supplier_logins l
-SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, version = l.version + 1
-FROM suppliers.sync_states y, suppliers.suppliers s
-WHERE l.supplier_id = $5 AND l.version = $6
-    AND y.supplier_id = l.supplier_id AND y.lease_fence = $7
-    AND s.id = l.supplier_id AND s.config_gen = $8
+UPDATE suppliers.supplier_logins
+SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, version = version + 1
+WHERE supplier_id = $5 AND version = $6
 `
 
 type SwapSupplierLoginParams struct {
@@ -246,12 +262,9 @@ type SwapSupplierLoginParams struct {
 	KeyVersion int64
 	SupplierID uuid.UUID
 	Version    int64
-	LeaseFence int64
-	ConfigGen  int64
 }
 
-// Replaces the sealed login over the version that was read, while the lease is still the reader's and the supplier's
-// credentials are still the generation it read them in.
+// Replaces the sealed login over the version that was read.
 func (q *Queries) SwapSupplierLogin(ctx context.Context, db DBTX, arg SwapSupplierLoginParams) (int64, error) {
 	result, err := db.Exec(ctx, swapSupplierLogin,
 		arg.Ciphertext,
@@ -260,8 +273,6 @@ func (q *Queries) SwapSupplierLogin(ctx context.Context, db DBTX, arg SwapSuppli
 		arg.KeyVersion,
 		arg.SupplierID,
 		arg.Version,
-		arg.LeaseFence,
-		arg.ConfigGen,
 	)
 	if err != nil {
 		return 0, err

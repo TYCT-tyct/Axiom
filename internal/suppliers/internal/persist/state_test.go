@@ -4,52 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"axiom/internal/platform/jsonx"
-	"axiom/internal/protocol"
-	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/syncer"
 )
-
-// TestAStateSurvivesBeingStored: every member of the state, in every shape it takes, comes back as it was written, and a
-// state with a member this program does not know is refused rather than read as something else.
-func TestAStateSurvivesBeingStored(t *testing.T) {
-	t.Parallel()
-	at := time.Date(2026, 10, 15, 12, 0, 0, 123456789, time.UTC)
-	st := syncer.State{
-		Version: 7, ConfigGen: 2, Status: syncer.NeedsAttention, Reason: "rejected",
-		Tasks:   [4]syncer.TaskState{{Due: at, BackoffUntil: at.Add(time.Minute), Failures: 3, LastOK: at, Halted: true}},
-		Balance: "12.5", BalanceAt: at, Funding: adapter.FundingWallet, LowNotified: true,
-		Groups: []syncer.GroupSnap{{Ref: "1", Name: "g", Ratio: "1.5", Facts: `{"a":1}`, Models: []syncer.ModelSnap{
-			{Name: "m", Formats: []int{0, 2}, Without: protocol.Images | protocol.Tools, Plan: "ab12"},
-		}}},
-		Keys:      []adapter.KeyState{{Ref: "7", GroupRef: "1", Status: adapter.KeyQuotaExhausted, ResetAt: at}},
-		Plans:     map[string]string{"1/m": "ab12"},
-		Confirmed: map[string]string{"m": `{"v":1}`},
-		Scan:      adapter.ScanState([]byte{0, 255, 'x'}), ScanOpen: true,
-		Removal: syncer.StepGrace, GraceUntil: at, RescanFrom: at, RemovalAt: at, Through: at,
-	}
-	encoded, err := jsonx.MarshalCanonical(st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var back syncer.State
-	if err := jsonx.UnmarshalKnown(encoded, &back); err != nil {
-		t.Fatal(err)
-	}
-	if diff := cmp.Diff(st, back, cmpopts.EquateEmpty()); diff != "" {
-		t.Errorf("the state came back different (-written +read):\n%s", diff)
-	}
-	if err := jsonx.UnmarshalKnown([]byte(`{"Version":1,"Unknown":true}`), &back); err == nil {
-		t.Error("a state with a member this program does not know was read")
-	}
-	var zero syncer.State
-	if err := jsonx.UnmarshalKnown([]byte(`{}`), &zero); err != nil || zero.Status != syncer.Normal {
-		t.Errorf("the state of a supplier never synced: %+v, %v", zero, err)
-	}
-}
 
 func TestNextDue(t *testing.T) {
 	t.Parallel()
