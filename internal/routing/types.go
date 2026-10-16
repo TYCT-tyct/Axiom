@@ -125,6 +125,7 @@ const (
 	MissingCapability
 	ContextTooSmall
 	FormatNotServed
+	ServiceTierNotServed // the request may only be served at tiers the endpoint does not offer
 	PresetFilter
 	OverrideFilter
 	NoPrice
@@ -136,7 +137,7 @@ const (
 var reasonNames = [...]string{
 	NoCandidates: "no_candidates", NotAllowed: "model_not_allowed", Disabled: "disabled", BreakerOpen: "breaker_open",
 	SupplierBalance: "supplier_balance", MissingCapability: "missing_capability", ContextTooSmall: "context_too_small",
-	FormatNotServed: "format_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
+	FormatNotServed: "format_not_served", ServiceTierNotServed: "service_tier_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
 	NoPrice: "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
 }
 
@@ -145,8 +146,8 @@ func (r Reason) String() string { return reasonNames[r] }
 // Permanent reports whether the reason is one that waiting does not cure.
 func (r Reason) Permanent() bool {
 	switch r {
-	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, PresetFilter,
-		OverrideFilter, NoPrice:
+	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
+		PresetFilter, OverrideFilter, NoPrice:
 		return true
 	case BreakerOpen, SupplierBalance, NoEgress, RetryBudget, Full:
 		return false

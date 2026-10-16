@@ -27,6 +27,9 @@ func id(n int) [16]byte {
 	return b
 }
 
+// standardAndPriority is what the helper endpoints offer.
+const standardAndPriority = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority)
+
 func ep(n int) routing.EndpointID  { return routing.EndpointID(id(n)) }
 func sup(n int) routing.SupplierID { return routing.SupplierID(id(n)) }
 
@@ -53,7 +56,7 @@ func endpoint(tb testing.TB, n int, mods ...func(*routing.Endpoint)) routing.End
 	e := routing.Endpoint{
 		ID: ep(n), Supplier: sup(n), Model: model, Enabled: true, BalanceOK: true, Egresses: 1,
 		Class: routing.ClassOfficial, Policy: routing.PolicyNoRetention, Verified: true, Quality: 1, Confidence: 1, Health: 1,
-		Throughput: 100, Latency: 500 * time.Millisecond, Native: all, Served: all, Caps: ^protocol.Capabilities(0),
+		Throughput: 100, Latency: 500 * time.Millisecond, ServiceTiers: standardAndPriority, Native: all, Served: all, Caps: ^protocol.Capabilities(0),
 		Context: 1_000_000, MaxOutput: 8192, Streams: true, Cancels: true, ReasoningVisible: all,
 		Price: routing.PriceRef{Version: uuid.UUID(id(100 + n)), Schedule: schedule(tb, "0.000001", "0.000002", "0.0000001")},
 	}
@@ -116,8 +119,11 @@ func (h *harness) replace(preset routing.Preset, endpoints ...routing.Endpoint) 
 func input() routing.Input {
 	return routing.Input{
 		Admission: routing.Admission{Account: acct, Site: site, Preset: pre},
-		Req:       &protocol.Request{Format: protocol.Messages, Model: "m", Choices: 1, TextBytes: 4000},
-		Models:    []catalog.ModelID{model},
+		Req: &protocol.Request{
+			Format: protocol.Messages, Model: "m", Choices: 1, TextBytes: 4000,
+			ServiceTiers: 1 << catalog.ServiceTierStandard,
+		},
+		Models: []catalog.ModelID{model},
 	}
 }
 

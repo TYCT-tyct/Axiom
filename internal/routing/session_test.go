@@ -34,7 +34,7 @@ func TestSessionKey(t *testing.T) {
 		{"the conversation's start", conv("hello there"), conv("hello there")},
 		{"the start only", conv("hello there") + strings.Repeat(" ", 100), `{"model":"m","messages":[{"role":"user","content":"hello there"},{"role":"assistant","content":"more"}]}`[:100]},
 	}
-	for _, c := range same[:4] {
+	for _, c := range same {
 		if key(t, r, acct, "m", c.a) != key(t, r, acct, "m", c.b) {
 			t.Errorf("%s: two bodies of one session have two keys", c.name)
 		}

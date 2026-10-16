@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // jsonx has no token-by-token reader; the prefix is cut mid-value, which only a token reader handles
 	"sync"
 	"time"
+	"unicode"
 
 	"axiom/internal/protocol"
 )
@@ -85,11 +86,39 @@ func (s *sessionScan) member() bool {
 		return true
 	case "messages", "input", "contents":
 		if s.head == nil {
-			start := s.dec.InputOffset()
-			s.head = s.body[start:min(start+conversationHead, int64(len(s.body)))]
+			s.head = firstItem(s.body[s.dec.InputOffset():])
 		}
 	}
 	return s.dec.SkipValue() == nil
+}
+
+// firstItem is the first element of the conversation that value starts: the first message of an array, or the whole value
+// when it is a string. It is what stays the same as the conversation grows, and it is cut to conversationHead bytes, or
+// to the end of the prefix when the item runs past it. value begins at the member's colon.
+func firstItem(value []byte) []byte {
+	value = bytes.TrimLeftFunc(bytes.TrimPrefix(bytes.TrimLeftFunc(value, unicode.IsSpace), []byte(":")), unicode.IsSpace)
+	dec := jsontext.NewDecoder(bytes.NewBuffer(value))
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return []byte{}
+	}
+	from := int64(0)
+	if tok.Kind() == '[' {
+		from = dec.InputOffset()
+		if dec.PeekKind() == ']' {
+			return []byte{}
+		}
+		if dec.SkipValue() != nil { // cut off by the prefix: the item is what is left
+			return bounded(value[from:])
+		}
+	}
+	return bounded(value[from:dec.InputOffset()])
+}
+
+// bounded trims the item and cuts it to conversationHead bytes.
+func bounded(item []byte) []byte {
+	item = bytes.TrimSpace(item)
+	return item[:min(len(item), conversationHead)]
 }
 
 func readString(dec *jsontext.Decoder) (string, bool) {

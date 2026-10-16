@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 )
 
@@ -36,7 +37,12 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	var rec Record
 	var order []ranked
+	var seen []catalog.ModelID
 	for _, m := range in.Models {
+		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
+			continue
+		}
+		seen = append(seen, m)
 		if !in.Admission.allows(m) {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
 			continue
@@ -47,7 +53,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		}
 		order = append(order, r.rank(cands, n, &rec)...)
 	}
+	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
 	entries := r.entries(order, n, &rec)
+	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
 		wait, err := r.nothing(&rec)
 		return Plan{Record: rec}, wait, err
@@ -56,7 +64,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		rec.Route = append(rec.Route, e.Endpoint)
 	}
 	return Plan{
-		Entries: entries, MaxAttempts: max(len(entries), orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)),
+		Entries: entries, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), Record: rec,
 	}, nil, nil
 }
@@ -86,6 +94,9 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 		if len(entries) == MaxEntries {
 			break
 		}
+		if slices.ContainsFunc(entries, func(e Entry) bool { return e.Endpoint == c.ID }) {
+			continue
+		}
 		if len(entries) > 0 && !r.budget.allow(c.Supplier, n.now) {
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, RetryBudget})
 			continue
@@ -98,10 +109,7 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 // entry works out what billing needs for one endpoint and this request: the output limit and whether the reservation can
 // be made in segments.
 func (r *Router) entry(c *candidate, n *need) Entry {
-	out := c.MaxOutput
-	if n.req.MaxOutput > 0 && (out == 0 || n.req.MaxOutput < out) {
-		out = n.req.MaxOutput
-	}
+	out, _ := c.outputLimit(n.req, n.tokens)
 	segmentable := c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
 		out > r.cfg.FirstSegment+r.cfg.Overshoot
 	return Entry{Endpoint: c.ID, Model: c.Model, Price: c.Price, MaxOutput: out, Segmentable: segmentable}
@@ -156,10 +164,37 @@ func (c *candidate) unfit(n *need) Reason {
 		return MissingCapability
 	case !c.servesFormat(n):
 		return FormatNotServed
-	case c.Context > 0 && n.tokens+max(n.req.MaxOutput, 0) > c.Context:
+	case n.req.ServiceTiers&c.ServiceTiers == 0:
+		return ServiceTierNotServed
+	}
+	if _, fits := c.outputLimit(n.req, n.tokens); !fits {
 		return ContextTooSmall
 	}
 	return 0
+}
+
+// outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
+// used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,
+// held to the endpoint's, or else the endpoint's default. The context holds the input and the output together: a limit
+// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context.
+func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int64, fits bool) {
+	limit = c.MaxOutput
+	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
+		limit = req.MaxOutput
+	}
+	if c.Context == 0 {
+		return limit, true
+	}
+	room := c.Context - tokens
+	switch {
+	case room <= 0:
+		return 0, false
+	case req.MaxOutput > 0 && limit > room:
+		return 0, false
+	case limit == 0 || limit > room:
+		limit = room
+	}
+	return limit, true
 }
 
 func (c *candidate) servesFormat(n *need) bool {
@@ -177,8 +212,8 @@ func (c *candidate) full() bool {
 func (n *need) presetAllows(c *candidate) bool {
 	p := n.preset
 	return p.Classes.Has(c.Class) && p.Policies.Has(c.Policy) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
-		(!p.VerifiedOnly || c.Verified) && p.MaxPrice.within(c.Price.Schedule) &&
-		(!p.NoFallbacks || len(n.over.Order) > 0 || listed(p.Order, c.Supplier))
+		(!p.VerifiedOnly || c.Verified) && p.MaxPrice.within(c.Price.Schedule, n.req.ServiceTiers, n.req.TextBytes) &&
+		(!p.NoFallbacks || listed(p.Order, c.Supplier))
 }
 
 // overrideAllows applies the request's filters. They only narrow what the preset allows: they are checked after it,
@@ -187,7 +222,7 @@ func (n *need) overrideAllows(c *candidate) bool {
 	o := n.over
 	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
-		o.MaxPrice.within(c.Price.Schedule) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
+		o.MaxPrice.within(c.Price.Schedule, n.req.ServiceTiers, n.req.TextBytes) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
 }
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }

@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 	"uuid"
 
@@ -100,8 +101,9 @@ type Endpoint struct {
 	Throughput    float64       // output tokens per second, measured
 	Latency       time.Duration // time to first token, measured
 
-	Native           FormatSet // formats it speaks itself
-	Served           FormatSet // formats it can serve, with protocol's conversion; includes Native
+	ServiceTiers     catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
+	Native           FormatSet              // formats it speaks itself
+	Served           FormatSet              // formats it can serve, with protocol's conversion; includes Native
 	Caps             protocol.Capabilities
 	Context          int64 // the most tokens a request may take, input plus output
 	MaxOutput        int64 // the model's output limit here, also its default
@@ -136,14 +138,21 @@ type PriceLimit struct {
 	Max [catalog.NumItems]platform.UnitPrice
 }
 
-// within reports whether the schedule's base rates are within the limit. An item the schedule does not price cannot
-// be compared and passes: billing prices what has no price at its fallback.
-func (p PriceLimit) within(s catalog.Schedule) bool {
+// within reports whether what a request may be charged per item is within the limit: the highest price over the service
+// tiers it may be served at and the context tiers a prompt of at most length tokens can fall in (Schedule.Ceiling), so
+// a priority or long-context price above the limit counts. An item the schedule does not price at some tier cannot be
+// compared and passes: billing prices what has no price at its fallback.
+func (p PriceLimit) within(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64) bool {
+	if tiers == 0 {
+		tiers.Add(catalog.ServiceTierStandard)
+	}
 	for it := range catalog.NumItems {
 		if !p.Set.Has(it) {
 			continue
 		}
-		if rate, ok := s.BaseRate(it); ok && rate.Cmp(p.Max[it]) > 0 {
+		var one catalog.ItemSet
+		one.Add(it)
+		if ceiling, ok := s.Ceiling(one, tiers, length); ok && ceiling.Cmp(p.Max[it]) > 0 {
 			return false
 		}
 	}
@@ -217,6 +226,10 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))
 		}
+		if p.NoFallbacks && len(p.Order) == 0 {
+			return nil, fmt.Errorf("routing snapshot: preset %s closes the fallbacks but names no suppliers", uuid.UUID(p.ID))
+		}
+		p.Order = slices.Clone(p.Order) // the caller keeps its slice; the snapshot never changes
 		if p.Classes == 0 || p.Policies == 0 {
 			return nil, fmt.Errorf("routing snapshot: preset %s allows no class or no data policy, which would filter out everything", uuid.UUID(p.ID))
 		}
@@ -228,6 +241,9 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	if e.Served&e.Native != e.Native {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s serves less than it speaks", uuid.UUID(e.ID))
+	}
+	if e.ServiceTiers == 0 {
+		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
 	c := &candidate{Endpoint: e, state: r.state.of(e.ID)}
 	if e.Price.Version == (uuid.UUID{}) {
