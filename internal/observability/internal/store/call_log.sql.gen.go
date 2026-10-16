@@ -102,19 +102,15 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid AND at >= $2 AND at < $3
-    AND ($4::text = '' OR model = $4)
-    AND ($5::text = '' OR client_app = $5)
-    AND (at, id) < ($6::timestamptz, ($7::text)::uuid)
+    AND (at, id) < ($4::timestamptz, ($5::text)::uuid)
 ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT $8
+LIMIT $6
 `
 
 type ListOwnCallsParams struct {
 	AccountID string
 	Since     time.Time
 	Until     time.Time
-	Model     string
-	ClientApp string
 	AfterAt   time.Time
 	AfterID   string
 	PageSize  int32
@@ -152,8 +148,6 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 		arg.AccountID,
 		arg.Since,
 		arg.Until,
-		arg.Model,
-		arg.ClientApp,
 		arg.AfterAt,
 		arg.AfterID,
 		arg.PageSize,
@@ -165,6 +159,194 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 	var items []ListOwnCallsRow
 	for rows.Next() {
 		var i ListOwnCallsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.WorkspaceID,
+			&i.KeyID,
+			&i.Ip,
+			&i.ClientApp,
+			&i.SessionID,
+			&i.SubagentID,
+			&i.RequestClass,
+			&i.Model,
+			&i.Usage,
+			&i.ServiceTier,
+			&i.PriceNano,
+			&i.Currency,
+			&i.FreeOfCharge,
+			&i.LatencyMs,
+			&i.FirstTokenMs,
+			&i.FinishReason,
+			&i.ErrorKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnCallsByApp = `-- name: ListOwnCallsByApp :many
+SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+FROM observability.call_log
+WHERE account_id = ($1::text)::uuid AND client_app = $2 AND at >= $3 AND at < $4
+    AND (at, id) < ($5::timestamptz, ($6::text)::uuid)
+ORDER BY call_log.at DESC, call_log.id DESC
+LIMIT $7
+`
+
+type ListOwnCallsByAppParams struct {
+	AccountID string
+	ClientApp string
+	Since     time.Time
+	Until     time.Time
+	AfterAt   time.Time
+	AfterID   string
+	PageSize  int32
+}
+
+type ListOwnCallsByAppRow struct {
+	ID           string
+	At           time.Time
+	WorkspaceID  string
+	KeyID        string
+	Ip           string
+	ClientApp    string
+	SessionID    string
+	SubagentID   string
+	RequestClass string
+	Model        string
+	Usage        string
+	ServiceTier  string
+	PriceNano    int64
+	Currency     string
+	FreeOfCharge bool
+	LatencyMs    int32
+	FirstTokenMs int32
+	FinishReason string
+	ErrorKind    string
+}
+
+// The same list for one client application, read from the index (account_id, client_app, at DESC, id DESC).
+func (q *Queries) ListOwnCallsByApp(ctx context.Context, db DBTX, arg ListOwnCallsByAppParams) ([]ListOwnCallsByAppRow, error) {
+	rows, err := db.Query(ctx, listOwnCallsByApp,
+		arg.AccountID,
+		arg.ClientApp,
+		arg.Since,
+		arg.Until,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOwnCallsByAppRow
+	for rows.Next() {
+		var i ListOwnCallsByAppRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.WorkspaceID,
+			&i.KeyID,
+			&i.Ip,
+			&i.ClientApp,
+			&i.SessionID,
+			&i.SubagentID,
+			&i.RequestClass,
+			&i.Model,
+			&i.Usage,
+			&i.ServiceTier,
+			&i.PriceNano,
+			&i.Currency,
+			&i.FreeOfCharge,
+			&i.LatencyMs,
+			&i.FirstTokenMs,
+			&i.FinishReason,
+			&i.ErrorKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnCallsByModel = `-- name: ListOwnCallsByModel :many
+SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+FROM observability.call_log
+WHERE account_id = ($1::text)::uuid AND model = $2 AND at >= $3 AND at < $4
+    AND ($5::text = '' OR client_app = $5)
+    AND (at, id) < ($6::timestamptz, ($7::text)::uuid)
+ORDER BY call_log.at DESC, call_log.id DESC
+LIMIT $8
+`
+
+type ListOwnCallsByModelParams struct {
+	AccountID string
+	Model     string
+	Since     time.Time
+	Until     time.Time
+	ClientApp string
+	AfterAt   time.Time
+	AfterID   string
+	PageSize  int32
+}
+
+type ListOwnCallsByModelRow struct {
+	ID           string
+	At           time.Time
+	WorkspaceID  string
+	KeyID        string
+	Ip           string
+	ClientApp    string
+	SessionID    string
+	SubagentID   string
+	RequestClass string
+	Model        string
+	Usage        string
+	ServiceTier  string
+	PriceNano    int64
+	Currency     string
+	FreeOfCharge bool
+	LatencyMs    int32
+	FirstTokenMs int32
+	FinishReason string
+	ErrorKind    string
+}
+
+// The same list for one model, read from the index (account_id, model, at DESC, id DESC). A client application may be
+// given as well; it is then checked on the rows of the model, which are the fewer.
+func (q *Queries) ListOwnCallsByModel(ctx context.Context, db DBTX, arg ListOwnCallsByModelParams) ([]ListOwnCallsByModelRow, error) {
+	rows, err := db.Query(ctx, listOwnCallsByModel,
+		arg.AccountID,
+		arg.Model,
+		arg.Since,
+		arg.Until,
+		arg.ClientApp,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOwnCallsByModelRow
+	for rows.Next() {
+		var i ListOwnCallsByModelRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.At,
