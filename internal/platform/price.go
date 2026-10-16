@@ -6,6 +6,7 @@ package platform
 import (
 	"cmp"
 	"errors"
+	"math"
 	"math/big"
 	"math/bits"
 	"strconv"
@@ -100,6 +101,16 @@ func (e Exact) Add(f Exact) (Exact, error) {
 		return Exact{}, errOverflow
 	}
 	return Exact{hi, lo}, nil
+}
+
+// Neg returns -e. Only the least value has no negation; amounts are far from it, so it panics rather than wrap.
+func (e Exact) Neg() Exact {
+	if e.hi == math.MinInt64 && e.lo == 0 {
+		panic("platform: the negation of the least exact amount")
+	}
+	lo, borrow := bits.Sub64(0, e.lo, 0)
+	hi, _ := bits.Sub64(0, uint64(e.hi), borrow) //nolint:gosec // two's complement: the bits are the value
+	return Exact{int64(hi), lo}                  //nolint:gosec // as above
 }
 
 // Cmp returns -1, 0 or +1 as e is less than, equal to or greater than f. The high words carry the sign, the low words
