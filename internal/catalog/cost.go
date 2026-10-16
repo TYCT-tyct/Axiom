@@ -65,33 +65,49 @@ func (l *level) rate(band int, it Item) (platform.UnitPrice, bool) {
 	return l.base.price[it], l.base.priced.Has(it)
 }
 
+// BaseRate is the standard tier's price of the item below the first context threshold, for comparing schedules by what
+// a typical request pays (routing's price limits and weights); it is not what a long or priority request pays.
+func (s Schedule) BaseRate(it Item) (platform.UnitPrice, bool) {
+	return s.price(ServiceTierStandard, 0, it)
+}
+
 // Ceiling is the highest unit price any of the items has at any of the service tiers, over every context tier a prompt
 // whose basis adds up to at most length can fall in, and false when one of them has no price. Billing reserves
 // count × Ceiling: the band follows the basis sum, which a split between basis and non-basis items can put anywhere
 // up to length, and prices need not rise with the band, so no single band or item bounds the cost.
 func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (ceiling platform.UnitPrice, ok bool) {
+	ceiling, missing := s.Highest(items, tiers, length)
+	return ceiling, !missing
+}
+
+// Highest is Ceiling that does not stop at a missing price: the highest of the prices the schedule has, and whether any
+// price was missing. Routing holds a price limit against the known prices even when some are absent.
+func (s Schedule) Highest(items ItemSet, tiers ServiceTierSet, length int64) (highest platform.UnitPrice, missing bool) {
 	for st := range numServiceTiers {
 		for it := range NumItems {
 			if tiers.Has(st) && items.Has(it) {
-				if ceiling, ok = s.highest(st, it, s.bandOf(length), ceiling); !ok {
-					return platform.UnitPrice{}, false
+				var ok bool
+				if highest, ok = s.highest(st, it, s.bandOf(length), highest); !ok {
+					missing = true
 				}
 			}
 		}
 	}
-	return ceiling, true
+	return highest, missing
 }
 
-// highest is the higher of floor and the item's prices at the service tier in bands 0 to last.
+// highest is the higher of floor and the item's prices at the service tier in bands 0 to last, and whether every band has
+// a price.
 func (s Schedule) highest(st ServiceTier, it Item, last int, floor platform.UnitPrice) (platform.UnitPrice, bool) {
+	complete := true
 	for band := range last + 1 {
 		p, ok := s.price(st, band, it)
-		if !ok {
-			return platform.UnitPrice{}, false
-		}
-		if p.Cmp(floor) > 0 {
+		switch {
+		case !ok:
+			complete = false
+		case p.Cmp(floor) > 0:
 			floor = p
 		}
 	}
-	return floor, true
+	return floor, complete
 }
