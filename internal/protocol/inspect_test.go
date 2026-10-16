@@ -37,6 +37,24 @@ var inspectCases = []struct {
 	body   string // or, when it names a file, the sample request in testdata
 	want   func(r *protocol.Request)
 }{
+	{"provider object, kept as written, in the three formats", protocol.Chat, `{"model":"a","provider":{ "sort":"price","only":["x"] },"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Provider = "a", []byte(`{ "sort":"price","only":["x"] }`)
+	}},
+	{"provider object of Messages", protocol.Messages, `{"model":"a","max_tokens":1,"provider":{"zdr":true},"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.MaxOutput, r.Provider = "a", 1, []byte(`{"zdr":true}`)
+	}},
+	{"provider object of Responses, null", protocol.Responses, `{"model":"a","provider":null,"input":"x"}`, func(r *protocol.Request) {
+		r.Model = "a"
+	}},
+	{"alternate models, in the three formats", protocol.Chat, `{"model":"a","models":["b","c"],"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Models = "a", []string{"b", "c"}
+	}},
+	{"alternate models of Messages", protocol.Messages, `{"models":["b"],"model":"a","max_tokens":1,"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Models, r.MaxOutput = "a", []string{"b"}, 1
+	}},
+	{"alternate models of Responses, null", protocol.Responses, `{"model":"a","models":null,"input":"x"}`, func(r *protocol.Request) {
+		r.Model = "a"
+	}},
 	{"messages sample with thinking", protocol.Messages, "messages/thinking/request.json", func(r *protocol.Request) {
 		r.Model, r.Stream, r.MaxOutput, r.Needs = "claude-opus-5-5", true, 20000, protocol.Reasoning
 	}},
@@ -121,6 +139,51 @@ var inspectCases = []struct {
 		"messages search limits adding up to the largest count", protocol.Messages, `{"model":"m",
 		"tools":[{"type":"web_search_20260209","max_uses":9223372036854775806},{"type":"web_search_20250305","max_uses":1}]}`,
 		func(r *protocol.Request) { r.Model, r.WebSearches, r.Needs = "m", math.MaxInt64, protocol.WebSearch },
+	},
+	{
+		// Anthropic《Search results》(https://platform.claude.com/docs/en/build-with-claude/search-results, read
+		// 2026-10-15): source is a string, content holds text blocks, and the block may sit in a user message or a tool result.
+		"messages search results", protocol.Messages, `{"model":"m","messages":[{"role":"user","content":[
+			{"type":"search_result","source":"https://example.com/a","title":"A","content":[{"type":"text","text":"t"}],
+				"citations":{"enabled":true},"cache_control":{"type":"ephemeral"}},
+			{"type":"tool_result","tool_use_id":"t","content":[{"type":"search_result","source":"kb://1","title":"B",
+				"content":[{"type":"text","text":"u"}]}]}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Needs = "m", protocol.PromptCache
+			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite)
+		},
+	},
+	{
+		"messages service tier standard only", protocol.Messages, `{"model":"m","service_tier":"standard_only"}`,
+		func(r *protocol.Request) { r.Model, r.ServiceTiers = "m", standard },
+	},
+	{
+		// Anthropic《Compaction》and OpenAI《Compaction》(read 2026-10-15); clearing tool results samples no more.
+		"messages compaction", protocol.Messages, `{"model":"m","context_management":{"edits":[
+			{"type":"clear_tool_uses_20250919"},{"type":"compact_20260112","trigger":{"type":"input_tokens","value":150000}}]}}`,
+		func(r *protocol.Request) { r.Model, r.Compacts = "m", true },
+	},
+	{
+		"messages context editing without compaction", protocol.Messages,
+		`{"model":"m","context_management":{"edits":[{"type":"clear_thinking_20251015"}]}}`,
+		func(r *protocol.Request) { r.Model = "m" },
+	},
+	{
+		"responses compaction", protocol.Responses,
+		`{"model":"m","context_management":[{"type":"compaction","compact_threshold":200000}]}`,
+		func(r *protocol.Request) { r.Model, r.Compacts = "m", true },
+	},
+	{
+		"responses null context management", protocol.Responses, `{"model":"m","context_management":null}`,
+		func(r *protocol.Request) { r.Model = "m" },
+	},
+	{
+		"chat reasoning effort low, no replies asked for", protocol.Chat, `{"model":"m","reasoning_effort":"low","n":0}`,
+		func(r *protocol.Request) { r.Model, r.Needs = "m", protocol.Reasoning },
+	},
+	{
+		"chat null replies", protocol.Chat, `{"model":"m","n":null}`,
+		func(r *protocol.Request) { r.Model = "m" },
 	},
 	{
 		"chat everything", protocol.Chat, `{"model":"m","n":3,"max_completion_tokens":200,"max_tokens":100,
@@ -240,6 +303,11 @@ func TestInspectRejects(t *testing.T) {
 		{"null", protocol.Chat, `null`},
 		{"no model", protocol.Chat, `{"stream":true}`},
 		{"model not a string", protocol.Chat, `{"model":1}`},
+		{"alternate model not a string", protocol.Chat, `{"model":"m","models":[1]}`},
+		{"alternate models not an array", protocol.Chat, `{"model":"m","models":"b"}`},
+		{"provider not an object", protocol.Chat, `{"model":"m","provider":["x"]}`},
+		{"provider larger than it may be", protocol.Chat, `{"model":"m","provider":{"order":["` + strings.Repeat("x", 4<<10) + `"]}}`},
+		{"too many alternate models", protocol.Chat, `{"model":"m","models":["1","2","3","4","5","6","7","8","9"]}`},
 		{"stream not a boolean", protocol.Chat, `{"model":"m","stream":"yes"}`},
 		{"negative cap", protocol.Chat, `{"model":"m","max_tokens":-1}`},
 		{"fractional cap", protocol.Responses, `{"model":"m","max_output_tokens":1.5}`},
@@ -249,6 +317,10 @@ func TestInspectRejects(t *testing.T) {
 		{"unknown speed", protocol.Messages, `{"model":"m","speed":"turbo"}`},
 		{"messages not an array", protocol.Messages, `{"model":"m","messages":{}}`},
 		{"part not an object", protocol.Messages, `{"model":"m","messages":[{"content":["x"]}]}`},
+		{"source a number", protocol.Messages, `{"model":"m","messages":[{"content":[{"type":"image","source":1}]}]}`},
+		{"context management not an object", protocol.Messages, `{"model":"m","context_management":[]}`},
+		{"compaction edits not an array", protocol.Messages, `{"model":"m","context_management":{"edits":{}}}`},
+		{"context management not an array", protocol.Responses, `{"model":"m","context_management":{}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if _, err := protocol.Inspect(c.format, []byte(c.body)); !errors.Is(err, protocol.ErrInvalid) {
@@ -281,6 +353,9 @@ func FuzzInspect(f *testing.F) {
 		}
 		if err := jsonx.Unmarshal(body, &full); err != nil || full.Model != r.Model || full.Stream != r.Stream {
 			t.Fatalf("decoded %+v (%v), inspected %q %v", full, err, r.Model, r.Stream)
+		}
+		if r.Choices < 1 {
+			t.Fatalf("Choices %d", r.Choices)
 		}
 		if r.TextBytes < 0 || r.TextBytes > int64(len(body)) {
 			t.Fatalf("TextBytes %d of a %d-byte body", r.TextBytes, len(body))
@@ -330,6 +405,10 @@ func body(f protocol.Format, size int, lead string) []byte {
 
 var sizes = []int{1 << 10, 1 << 20, 4 << 20}
 
+// allocSizes are the sizes TestAllocs reads: two tell a constant from growth with the body, and each costs seconds under
+// the race detector.
+var allocSizes = sizes[:2]
+
 // TestAllocs holds that reading or rewriting a request allocates a constant more than jsonx.Validate does on it,
 // whatever its size (README.md「不变量」): Inspect's and Prepare's own allocations do not grow with the body. The
 // tokenizer's grow with objects wider than 64 names, so the bodies come both without and with them.
@@ -349,7 +428,7 @@ func TestAllocs(t *testing.T) {
 			for _, lead := range []string{"", wideTurn} {
 				if extra := extraAllocs(t, f, lead, c.read); extra[0] != extra[len(extra)-1] {
 					t.Errorf("%s, format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
-						c.name, f, lead != "", extra, sizes)
+						c.name, f, lead != "", extra, allocSizes)
 				}
 			}
 		}
@@ -374,18 +453,18 @@ func prepareInspected() func(protocol.Format, []byte) error {
 	}
 }
 
-// extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of sizes.
+// extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of allocSizes.
 func extraAllocs(t *testing.T, f protocol.Format, lead string, read func(protocol.Format, []byte) error) []float64 {
 	t.Helper()
 	allocs := func(read func() error) float64 {
-		return testing.AllocsPerRun(5, func() {
+		return steadyAllocs(func() {
 			if err := read(); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 	var extra []float64
-	for _, size := range sizes {
+	for _, size := range allocSizes {
 		b := body(f, size, lead)
 		extra = append(extra, allocs(func() error { return read(f, b) })-allocs(func() error { return jsonx.Validate(b) }))
 	}

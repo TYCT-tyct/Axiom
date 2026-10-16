@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func masterKey(t *testing.T) string {
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
 	}
 	logs := make(records, 16)
@@ -48,6 +49,7 @@ func TestServe(t *testing.T) {
 		}
 	}
 	checkVersion(t, "http://"+addrs.Public+"/api/console/v1/version")
+	checkPages(t, addrs)
 	checkMetrics(t, addrs)
 	cancel()
 	select {
@@ -58,16 +60,52 @@ func TestServe(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the node did not shut down")
 	}
-	for _, addr := range []string{addrs.Public, addrs.Ops} {
+	for _, addr := range []string{addrs.Public, addrs.Admin, addrs.Ops} {
 		if _, err := get(t, "http://"+addr+"/"); err == nil {
 			t.Errorf("%s still answers after shutdown", addr)
 		}
 	}
 }
 
+// checkPages: the public listener serves the website and the console under the policy, and none of the admin's files;
+// the admin listener serves the admin. The admin's script is found from its own entry page, so the check holds for
+// whatever the build names it.
+func checkPages(t *testing.T, addrs addresses) {
+	t.Helper()
+	public, admin := "http://"+addrs.Public, "http://"+addrs.Admin
+	for _, path := range []string{"/", "/console/", "/console/keys"} {
+		resp, err := getAccepting(t, public+path, "text/html")
+		if err != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" ||
+			resp.Header.Get("Content-Security-Policy") == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+			t.Errorf("GET %s on the public listener: %v %v", path, resp.Response, err)
+		}
+	}
+	page, err := get(t, admin+"/")
+	if err != nil || page.StatusCode != http.StatusOK {
+		t.Fatalf("GET / on the admin listener: %v %v", page.Response, err)
+	}
+	script := regexp.MustCompile(`src="(/assets/index-[^"]+\.js)"`).FindSubmatch(page.body)
+	if script == nil {
+		t.Fatalf("the admin's entry page loads no script: %s", page.body)
+	}
+	checkAdminScript(t, public, admin, string(script[1]))
+}
+
+// checkAdminScript: the admin's script is cached for good on the admin listener and is not on the public one.
+func checkAdminScript(t *testing.T, public, admin, script string) {
+	t.Helper()
+	if resp, err := get(t, admin+script); err != nil || resp.StatusCode != http.StatusOK ||
+		resp.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Errorf("the admin's script on the admin listener: %v %v", resp.Response, err)
+	}
+	if resp, err := get(t, public+script); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("the admin's script on the public listener: %v %v, want 404", resp.Response, err)
+	}
+}
+
 // checkMetrics: the ops listener serves Prometheus text with the request just made, counted by route pattern and
 // status class only, and the recorder's queue gauge; the public listener does not serve it. Unknown paths, one of them
-// with an identifier in it, share one "unmatched" series instead of making one each.
+// with an identifier in it, share one series each (the pages' "/", or "unmatched" under the API) instead of making one each.
 func checkMetrics(t *testing.T, addrs addresses) {
 	t.Helper()
 	for _, path := range []string{"/api/console/v1/nothing-here", "/api/console/v1/key_01hxyz0000000000000000000a"} {
@@ -85,7 +123,8 @@ func checkMetrics(t *testing.T, addrs addresses) {
 	text := string(resp.body)
 	for _, want := range []string{
 		`axiom_http_server_requests_total{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
-		`axiom_http_server_requests_total{outcome="completed",route="unmatched",status_class="4xx"} 3`,
+		`axiom_http_server_requests_total{outcome="completed",route="/",status_class="4xx"} 2`,
+		`axiom_http_server_requests_total{outcome="completed",route="unmatched",status_class="4xx"} 2`,
 		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
 		"axiom_observability_queue_depth 0",
 	} {
@@ -128,13 +167,18 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	}{
 		{
 			"invalid and unknown variables",
-			[]string{"AXIOM_SHUTDOWN_TIMEOUT=planted-value", "AXIOM_OPS_ADDR=planted-value", "AXIOM_OPS_ADRR=planted-value"},
-			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_OPS_ADDR: want", "AXIOM_OPS_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT=planted-value", "AXIOM_PROBES_ADDR=planted-value", "AXIOM_PROBES_ADRR=planted-value"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_PROBES_ADDR: want", "AXIOM_PROBES_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
 		},
 		{
 			"a taken address",
-			[]string{"AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
-			[]string{"AXIOM_OPS_ADDR: "},
+			[]string{"AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_PROBES_ADDR: "},
+		},
+		{
+			"a taken admin address",
+			[]string{"AXIOM_ADMIN_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_ADMIN_ADDR: "},
 		},
 		{
 			"a database login that escapes row-level security",
@@ -155,7 +199,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
-		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0"}, c.environ...)
+		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0"}, c.environ...)
 		environ = append(environ, masterKey(t))
 		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
@@ -203,8 +247,8 @@ func checkVersion(t *testing.T, url string) {
 
 // addresses are where a node listens, as it logs them.
 type addresses struct {
-	Msg         string `json:"msg"`
-	Public, Ops string `json:",case:ignore"`
+	Msg                string `json:"msg"`
+	Public, Admin, Ops string `json:",case:ignore"`
 }
 
 // servingAddrs reads log records until the node reports the addresses it listens on.
@@ -236,11 +280,20 @@ type response struct {
 
 func get(t *testing.T, url string) (response, error) {
 	t.Helper()
+	return getAccepting(t, url, "")
+}
+
+// getAccepting is get with an Accept header, as a browser navigating to a page sends one.
+func getAccepting(t *testing.T, url, accept string) (response, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -264,7 +317,7 @@ func TestServeRefusesAMasterKeyItCannotUse(t *testing.T) {
 		"not a key":   {"AXIOM_MASTER_KEY_FILE=" + notAKey, "AXIOM_MASTER_KEY_FILE: line 1: want version:base64 key"},
 	} {
 		// The database is not reached, so none is made: a node that wrongly goes on fails on this one instead.
-		environ := []string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_DATABASE_URL=postgres://planted-value@127.0.0.1:1/x", c.environ}
+		environ := []string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_DATABASE_URL=postgres://planted-value@127.0.0.1:1/x", c.environ}
 		err := serve(t.Context(), environ, slog.New(slog.DiscardHandler))
 		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "planted-value") {
 			t.Errorf("%s: %v, want %q and no quoted value", name, err, c.want)
@@ -281,7 +334,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	}
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(),
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(),
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
 	}
 	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {

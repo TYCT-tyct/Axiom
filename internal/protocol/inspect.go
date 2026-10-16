@@ -48,9 +48,14 @@ func (s Capabilities) Has(c Capabilities) bool { return s&c == c }
 type Request struct {
 	Format Format
 	Model  string
+	// Models are OpenRouter's alternates, tried after Model when it cannot serve the request.
+	Models []string
 	Stream bool
 	// Previous is Responses' previous_response_id. The stored history it names is input too.
 	Previous string
+	// Provider is OpenRouter's provider object as written, for the gateway to read: how the request narrows its route.
+	// Nil when the request has none; at most maxProvider bytes.
+	Provider []byte
 	// MaxOutput is the output cap the request sets, 0 when it sets none and the model's default applies. Choices is
 	// how many replies are generated, each under that cap: Chat's n, 1 otherwise.
 	MaxOutput, Choices int64
@@ -68,7 +73,10 @@ type Request struct {
 	// HidesReasoning is set when the request asks for reasoning to be left out of the stream, whose progress then
 	// cannot be observed (docs/domains/billing.md「预留与结算」).
 	HidesReasoning bool
-	Needs          Capabilities
+	// Compacts is set when the request turns on server-side compaction, which samples the model a second time
+	// (docs/domains/billing.md「预留与结算」).
+	Compacts bool
+	Needs    Capabilities
 }
 
 // ErrInvalid reports a body Inspect cannot read: not strict JSON within jsonx's policy, or a member it reads with the

@@ -1,5 +1,8 @@
 import createClient from "openapi-fetch";
-import type { paths } from "./console.gen";
+import type { components, paths } from "./console.gen";
+
+export type Schemas = components["schemas"];
+export type ErrorCode = Schemas["ErrorCode"];
 
 // How long a call may take, body included, before it counts as having no response. A console call answers in well
 // under a second; ten seconds still lets one through a slow mobile network, while a half-open connection, which would
@@ -14,16 +17,51 @@ export const consoleApi = createClient<paths>({
     fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(requestTimeout)]) }),
 });
 
+// The session's CSRF token, which the page keeps in memory only (the session cookie is HttpOnly). Every request that
+// changes data sends it with the content type the contract requires; the browser adds the Origin itself.
+let csrfToken = "";
+
+export function setCsrfToken(token: string) {
+  csrfToken = token;
+}
+
+consoleApi.use({
+  onRequest({ request }) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      request.headers.set("Content-Type", "application/json");
+      if (csrfToken) {
+        request.headers.set("X-CSRF-Token", csrfToken);
+      }
+    }
+    return request;
+  },
+});
+
+// What a failed call says in its body (the contract's Error), if it has one; a gateway's page or an empty body has none.
+function errorDetail(body: unknown): Schemas["ErrorDetail"] | undefined {
+  const detail = (body as { error?: Partial<Schemas["ErrorDetail"]> } | undefined)?.error;
+  return typeof detail?.code === "string" ? (detail as Schemas["ErrorDetail"]) : undefined;
+}
+
 // ApiError is a call that did not succeed: status is the HTTP status, 0 when no response arrived, and requestId is the
-// server's X-Request-ID, which finds the call in the server's log.
-class ApiError extends Error {
+// server's X-Request-ID, which finds the call in the server's log. code is what the server says went wrong (a page
+// translates it), fields which parts of the request broke a constraint, and retryAfter the seconds a limit asks to wait.
+export class ApiError extends Error {
+  readonly code: ErrorCode | undefined;
+  readonly fields: Schemas["ErrorField"][];
+  readonly retryAfter: number | undefined;
+
   constructor(
     readonly status: number,
     readonly requestId: string | null,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { body?: unknown; retryAfter?: number },
   ) {
     super(status === 0 ? "no response" : `HTTP ${status}`, options);
     this.name = "ApiError";
+    const detail = errorDetail(options?.body);
+    this.code = detail?.code;
+    this.fields = detail?.fields ?? [];
+    this.retryAfter = options?.retryAfter;
   }
 }
 
@@ -36,11 +74,13 @@ function isLostResponse(error: unknown) {
   );
 }
 
-// unwrap turns an openapi-fetch call into its data, or throws ApiError, so a query's error has that shape. The one
-// exception is a response that arrived but could not be parsed, such as a page instead of JSON: openapi-fetch drops the
-// response when parsing fails, so there is no status to report.
-export async function unwrap<T>(call: Promise<{ data?: T; response: Response }>): Promise<T> {
-  let result: { data?: T; response: Response };
+type Settled<T> = { data?: T; error?: unknown; response: Response };
+
+// settle waits for a call and throws ApiError unless it succeeded. The one exception is a response that arrived but
+// could not be parsed, such as a page instead of JSON: openapi-fetch drops the response when parsing fails, so there is
+// no status to report.
+async function settle<T>(call: Promise<Settled<T>>): Promise<Settled<T>> {
+  let result: Settled<T>;
   try {
     result = await call;
   } catch (cause) {
@@ -49,11 +89,26 @@ export async function unwrap<T>(call: Promise<{ data?: T; response: Response }>)
     }
     throw new Error("the response could not be read", { cause });
   }
-  const { data, response } = result;
-  if (!response.ok || data === undefined) {
+  const { error, response } = result;
+  if (!response.ok) {
+    const retryAfter = Number(response.headers.get("Retry-After")) || undefined;
+    throw new ApiError(response.status, response.headers.get("X-Request-ID"), { body: error, retryAfter });
+  }
+  return result;
+}
+
+// unwrap turns an openapi-fetch call into its data, or throws ApiError, so a query's error has that shape.
+export async function unwrap<T>(call: Promise<Settled<T>>): Promise<T> {
+  const { data, response } = await settle(call);
+  if (data === undefined) {
     throw new ApiError(response.status, response.headers.get("X-Request-ID"));
   }
   return data;
+}
+
+// unwrapEmpty is unwrap for an operation that answers 204.
+export async function unwrapEmpty(call: Promise<Settled<unknown>>) {
+  await settle(call);
 }
 
 // isTransient tells whether a failed call may succeed when sent again: no response arrived, or the server failed. A

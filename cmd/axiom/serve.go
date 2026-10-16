@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
 )
 
@@ -35,8 +36,8 @@ const bodyTimeout = 2 * time.Minute
 // defaultStartupTimeout bounds how long a command waits for the database before it starts.
 const defaultStartupTimeout = 30 * time.Second
 
-// opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
+// probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
+func probesListenAddr(env *config.Env) string { return env.Addr("AXIOM_PROBES_ADDR", "127.0.0.1:8081") }
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
@@ -55,6 +56,10 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	shutdownTimeout := cfg.shutdownTimeout
+	frontend, err := webui.Embedded()
+	if err != nil {
+		return err
+	}
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
@@ -83,16 +88,11 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, publicRoutes(consoleAPI{version: version()}, logger), cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, publicRoutes(consoleAPI{version: version()}, frontend, logger), cfg.adminAddr, frontend.Admin(), cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
-	served := make(chan error, len(servers))
-	for _, s := range servers {
-		go func() { served <- s.server.Serve(s.listener) }()
-	}
-	health.SetReady(true)
-	logger.Info("serving", "public", servers[0].listener.Addr().String(), "ops", servers[1].listener.Addr().String())
+	served := startServing(servers, &health, logger)
 
 	var stopped error
 	select {
@@ -109,9 +109,9 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 
 // settings are what serve reads from its environment.
 type settings struct {
-	publicAddr, probesAddr, databaseURL string
-	startupTimeout, shutdownTimeout     time.Duration
-	keys                                *secret.Keyring
+	publicAddr, adminAddr, probesAddr, databaseURL string
+	startupTimeout, shutdownTimeout                time.Duration
+	keys                                           *secret.Keyring
 }
 
 // readSettings reads every variable of serve and the master key file they name, so that a node with anything wrong
@@ -119,8 +119,9 @@ type settings struct {
 func readSettings(environ []string) (settings, error) {
 	env := config.New(environ)
 	s := settings{
-		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
-		probesAddr:      opsAddr(env),
+		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"),         // model calls, the console, payment callbacks
+		adminAddr:       env.Addr("AXIOM_ADMIN_ADDR", "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
+		probesAddr:      probesListenAddr(env),
 		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
 		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
 		databaseURL:     env.Required("AXIOM_DATABASE_URL"),
@@ -164,6 +165,18 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	}
 }
 
+// startServing serves every listener and reports the node ready. The channel carries the error of the first listener to
+// stop.
+func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
+	served := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() { served <- s.server.Serve(s.listener) }()
+	}
+	health.SetReady(true)
+	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
+	return served
+}
+
 // startRecorder starts the call-record writer, reporting to the node's metrics.
 func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
 	cfg := callRecords
@@ -181,18 +194,20 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 }
 
 // node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer.
-func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
+// it drains while the probes still answer. The admin listener serves the admin app alone (docs/architecture.md
+// 「前端交付」); its API and the limits to the admin domain and to restricted sources come with the admin API.
+func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
 		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
+		{"AXIOM_ADMIN_ADDR", adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
 	}
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
+	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)

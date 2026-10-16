@@ -18,6 +18,19 @@ built="$(just axiom-version)"
 [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
 
+# The pages: the website and the console on the public port; the admin on its own port, and none of its files on the
+# public one. The admin's own script is asked for, so the embedded files, their caching and their compression are what
+# is checked.
+for path in / /console/ /console/keys; do
+  headers="$(curl -fsS -D - -o /dev/null -H 'Accept: text/html' "http://127.0.0.1:8080$path" | tr -d '\r')"
+  grep -qi '^cache-control: no-store$' <<< "$headers" || { echo "::error::the public listener does not serve $path uncached"; exit 1; }
+done
+admin_script="$(curl -fsS http://127.0.0.1:8082/ | grep -o '/assets/index-[^"]*\.js' | head -1)"
+[ -n "$admin_script" ] || { echo "::error::the admin listener serves no admin page"; exit 1; }
+headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "http://127.0.0.1:8082$admin_script" | tr -d '\r')"
+grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::the admin script is not served cached and compressed"; exit 1; }
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$admin_script")" = 404 ] || { echo "::error::the public listener serves the admin's files"; exit 1; }
+
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.
 docker compose -f deploy/compose.yaml exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d axiom -c 'DROP OWNED BY axiom_migrator' -c 'DROP ROLE axiom_migrator'
