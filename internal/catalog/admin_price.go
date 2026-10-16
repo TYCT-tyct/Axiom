@@ -246,12 +246,16 @@ type SourcePrice struct {
 // currency the new source has gets a new version (even an identical schedule, since the source differs), and every
 // currency it lacks is withdrawn, so no price of the old source stays in force. No price may be lost on the way: each
 // new schedule must keep every price the current one has, or the operator must confirm a changed threshold basis.
-// Only the sources whose prices an operator supplies, official and manual, can be selected until the dataset sync is
-// built.
+// Only the sources whose prices an operator supplies, official and manual, are selected with this: a dataset's prices
+// are taken from its entry, by SelectDatasetSource.
 func (c *Catalog) SelectPriceSource(ctx context.Context, r SelectPriceSourceRequest) (Result, error) {
 	if r.Source != SourceOfficial && r.Source != SourceManual {
 		return Result{}, fmt.Errorf("%w: %s", ErrSourceUnsupported, r.Source)
 	}
+	return c.selectSource(ctx, r)
+}
+
+func (c *Catalog) selectSource(ctx context.Context, r SelectPriceSourceRequest) (Result, error) {
 	news, err := parseSourcePrices(r.Prices)
 	if err != nil {
 		return Result{}, err

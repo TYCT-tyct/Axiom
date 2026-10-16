@@ -11,6 +11,26 @@ import (
 	"uuid"
 )
 
+const getModel = `-- name: GetModel :one
+SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE id = $1
+`
+
+func (q *Queries) GetModel(ctx context.Context, db DBTX, id uuid.UUID) (CatalogModel, error) {
+	row := db.QueryRow(ctx, getModel, id)
+	var i CatalogModel
+	err := row.Scan(
+		&i.ID,
+		&i.Author,
+		&i.Slug,
+		&i.Status,
+		&i.VersionBasis,
+		&i.PriceSource,
+		&i.Spec,
+		&i.Rev,
+	)
+	return i, err
+}
+
 const insertModel = `-- name: InsertModel :one
 INSERT INTO catalog.model (author, slug, version_basis, price_source, spec)
 VALUES ($1, $2, $3, $4, $5)
@@ -53,6 +73,73 @@ SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM cat
 
 func (q *Queries) ListModelsForSnapshot(ctx context.Context, db DBTX) ([]CatalogModel, error) {
 	rows, err := db.Query(ctx, listModelsForSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CatalogModel
+	for rows.Next() {
+		var i CatalogModel
+		if err := rows.Scan(
+			&i.ID,
+			&i.Author,
+			&i.Slug,
+			&i.Status,
+			&i.VersionBasis,
+			&i.PriceSource,
+			&i.Spec,
+			&i.Rev,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listModelsForSync = `-- name: ListModelsForSync :many
+SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE status IN ('draft', 'listed') AND price_source = $1 ORDER BY id
+`
+
+// A dataset sync follows the models that take their prices from it, drafts too: a draft's first price is how it gets listed.
+func (q *Queries) ListModelsForSync(ctx context.Context, db DBTX, priceSource string) ([]CatalogModel, error) {
+	rows, err := db.Query(ctx, listModelsForSync, priceSource)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CatalogModel
+	for rows.Next() {
+		var i CatalogModel
+		if err := rows.Scan(
+			&i.ID,
+			&i.Author,
+			&i.Slug,
+			&i.Status,
+			&i.VersionBasis,
+			&i.PriceSource,
+			&i.Spec,
+			&i.Rev,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listModelsOfAuthors = `-- name: ListModelsOfAuthors :many
+SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE author = ANY($1::text[]) AND status <> 'retired' ORDER BY slug
+`
+
+func (q *Queries) ListModelsOfAuthors(ctx context.Context, db DBTX, authors []string) ([]CatalogModel, error) {
+	rows, err := db.Query(ctx, listModelsOfAuthors, authors)
 	if err != nil {
 		return nil, err
 	}
