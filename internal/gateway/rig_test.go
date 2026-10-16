@@ -81,7 +81,7 @@ type rigOptions struct {
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
 // on the clock (a second for a key lookup, the admission budget), so a machine with every test at once is slower than
 // the clock allows and they fail for that alone.
-var rigs = make(chan struct{}, 4)
+var rigs = make(chan struct{}, 3)
 
 func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Helper()
@@ -96,7 +96,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r := &rig{t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.
-	r.cfg.AdmissionBudget, r.cfg.KeyLookup = 10*time.Second, 10*time.Second
+	r.cfg.AdmissionBudget, r.cfg.KeyLookup = 30*time.Second, 30*time.Second
 	// Nothing refreshes the catalog or the routing snapshot while a test runs, and on a busy machine a test outlives the
 	// 30 seconds they are good for; the test of a stale snapshot sets its own.
 	if o.routing.MaxStale == 0 {
@@ -111,6 +111,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.db.Close)
+	r.warmConnections(12)
 	r.seedSite()
 	r.seedCatalog()
 	r.seedRouting(o)
@@ -135,6 +136,24 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	return r
 }
 
+// warmConnections opens n connections to the database at once, so the requests of a test do not wait for new ones to
+// be made: with many databases being made at the same time on one machine that takes seconds.
+func (r *rig) warmConnections(n int) {
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
+				_, err := tx.Exec(r.t.Context(), "SELECT pg_sleep(0.2)")
+				return err
+			})
+			if err != nil {
+				r.t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
 // run answers an admitted call the way a call that never reached the upstream ends: its reservation is released and
 // its slots are given back. It records the call and, when hold is set, waits for it first.
 func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
@@ -145,7 +164,7 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	if hold != nil {
 		<-hold
 	}
-	ctx, cancel := SettleContext(req.Context(), 5*time.Second)
+	ctx, cancel := SettleContext(req.Context(), 30*time.Second)
 	defer cancel()
 	release, err := r.limits.Funds.Complete(ctx, accountKey(c.caller))
 	if err == nil {

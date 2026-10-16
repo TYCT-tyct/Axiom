@@ -78,6 +78,40 @@ func TestUnrecognisedKeyIsRefusedBeforeTheBodyIsRead(t *testing.T) {
 	r.idle(1 << 30)
 }
 
+// TestSlowBodyOfAnUnknownKeyIsNeverWaitedFor: over a real connection, a client that announces a body and never sends it
+// is told 401 at once, because the key is judged by the headers alone (the slow-body attack the order is for).
+func TestSlowBodyOfAnUnknownKeyIsNeverWaitedFor(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { quietly(pw) })
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, r.server.URL+"/v1/messages", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host, req.ContentLength = apiHost, 1<<20
+	req.Header.Set("Authorization", "Bearer sk-ax-v1-"+strings.Repeat("A", 49))
+	done := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Error(err)
+			close(done)
+			return
+		}
+		resp.Body.Close() //nolint:errcheck,gosec // nothing was sent to read
+		done <- resp.StatusCode
+	}()
+	select {
+	case status, ok := <-done:
+		if ok && status != http.StatusUnauthorized {
+			t.Errorf("status %d", status)
+		}
+	case <-time.After(time.Minute): // the pipe is never written, so only a handler that waits for it takes longer
+		t.Fatal("the 401 did not arrive while the body was still being awaited")
+	}
+}
+
 // TestWaysToSendTheKey: the key may come as a Bearer token in any case or as x-api-key; a Bearer token wins, and an
 // Authorization of another scheme does not hide x-api-key. A recognised request's body is read.
 func TestWaysToSendTheKey(t *testing.T) {

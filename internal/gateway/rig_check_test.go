@@ -65,7 +65,7 @@ func (l *Limiter) size() int {
 // asked waits until n calls have been admitted, or fails.
 func (r *rig) asked(n int) []*Call {
 	r.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		if calls := r.calls(); len(calls) >= n {
 			return calls
