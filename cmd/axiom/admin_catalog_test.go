@@ -346,7 +346,7 @@ func TestCatalogKeyUsedByTheCommandLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := cli.UpdateSpec(t.Context(), catalog.UpdateSpecRequest{
-		Op: catalog.Op{Actor: audit.System("catalog.cli"), Key: uuid.MustParse(key), Reason: "r"}, Model: catalog.ModelID(uuid.MustParse(a.Id)), Rev: a.Rev, Spec: jsonx.Raw(specBody),
+		Actor: audit.System("catalog.cli"), Key: uuid.MustParse(key), Reason: "r", Model: catalog.ModelID(uuid.MustParse(a.Id)), Rev: a.Rev, Spec: jsonx.Raw(specBody),
 	}); err != nil {
 		t.Fatal(err)
 	}
