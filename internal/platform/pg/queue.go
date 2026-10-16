@@ -21,6 +21,10 @@ const (
 	queueWorkers = 10
 	// jobTimeout bounds one run of a job; River's own default of a minute is shorter than a round of syncing.
 	jobTimeout = 10 * time.Minute
+	// rescueAfter is how long a job may run before the queue takes it for lost. A node that crashes leaves its jobs
+	// running, and a unique job in that state keeps its twin from being enqueued, so this is how long such a job holds
+	// its supplier up. River needs it longer than jobTimeout, and its default would be an hour.
+	rescueAfter = jobTimeout + 5*time.Minute
 	// stopCancelGrace is how long jobs still running get, after the deadline given to Stop, to notice they are cancelled.
 	stopCancelGrace = 5 * time.Second
 )
@@ -57,7 +61,8 @@ func (q *Queue) Every(interval time.Duration, args func() river.JobArgs) {
 func (q *Queue) Start(ctx context.Context) error {
 	client, err := river.NewClient(riverpgxv5.New(q.db.pool), &river.Config{
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
-		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: queueWorkers}},
+		RescueStuckJobsAfter: rescueAfter,
+		Queues:               map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: queueWorkers}},
 	})
 	if err != nil {
 		return fmt.Errorf("queue: %w", err)

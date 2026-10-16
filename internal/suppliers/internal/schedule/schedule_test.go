@@ -306,14 +306,14 @@ func TestASupplierAnotherNodeIsSyncingIsLeftToIt(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Errorf("the first node's job: %v", err)
 	}
-	if _, err := b.s.node.Acquire(t.Context(), c.supplier); err != nil {
-		t.Errorf("the lease was not given back after the round: %v", err)
-	}
 	if err := b.s.sync(t.Context(), c.supplier); err != nil { // free again, but not due for a minute: nothing to read
 		t.Fatal(err)
 	}
 	if got := s.accounts.Load(); got != 1 {
 		t.Errorf("the balance was read %d times, want once", got)
+	}
+	if _, err := b.s.node.Acquire(t.Context(), c.supplier); err != nil {
+		t.Errorf("the lease was not given back after the rounds: %v", err)
 	}
 }
 
