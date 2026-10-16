@@ -3,6 +3,7 @@ package billing
 import (
 	"bytes"
 	"errors"
+	"math"
 	"os"
 	"slices"
 	"testing"
@@ -126,6 +127,23 @@ func TestMeterOutput(t *testing.T) {
 	}
 }
 
+// TestMeterLeft: Left is what the approved segments still cover of the output, never below zero, and grows by the
+// segment an extension adds.
+func TestMeterLeft(t *testing.T) {
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	for _, tc := range []struct {
+		bytes, left int64
+	}{{0, 8}, {3, 5}, {8, 0}} {
+		if got := m.Observe(Progress{ContentBytes: tc.bytes}).Left; got != tc.left {
+			t.Errorf("after %d bytes: Left %d, want %d", tc.bytes, got, tc.left)
+		}
+	}
+	m.Extended(2, nil) // asked for at 8 bytes: cover them and a segment, 16 tokens
+	if got := m.Observe(Progress{ContentBytes: 9}).Left; got != 7 {
+		t.Errorf("after the extension: Left %d, want 7", got)
+	}
+}
+
 // TestMeterLargeEvent: one read of 30 bytes passes the extension point and the whole segment at once, so the step
 // carries both; the request covers the 30 tokens already read plus a segment, so once approved the meter continues.
 func TestMeterLargeEvent(t *testing.T) {
@@ -234,7 +252,7 @@ func TestMeterSearches(t *testing.T) {
 
 // TestMeterFull: an entry reserved in full is never extended or truncated.
 func TestMeterFull(t *testing.T) {
-	if step := meter(t, Demand{TextBytes: 80}, entry(t, false, 3)).Observe(Progress{ContentBytes: 1e6, Searches: 50}); step != (MeterStep{}) {
+	if step := meter(t, Demand{TextBytes: 80}, entry(t, false, 3)).Observe(Progress{ContentBytes: 1e6, Searches: 50}); step != (MeterStep{Left: math.MaxInt64}) {
 		t.Errorf("Observe = %+v, want to continue", step)
 	}
 }
