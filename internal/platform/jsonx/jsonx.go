@@ -62,6 +62,20 @@ func Unmarshal(data []byte, v any) error {
 	return unmarshal(data, v)
 }
 
+// Decode reads r to its end and unmarshals it into v as Unmarshal does, for the request bodies that generated handlers
+// decode. A body with nothing in it is io.EOF, as encoding/json's decoder reports it. The caller bounds how much r
+// can give.
+func Decode(r io.Reader, v any) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return io.EOF
+	}
+	return Unmarshal(data, v)
+}
+
 // UnmarshalKnown is Unmarshal that refuses members v does not name, for stored forms we define ourselves: there a
 // member we do not know is a condition we cannot honour, and skipping it would silently change the meaning.
 func UnmarshalKnown(data []byte, v any) error {

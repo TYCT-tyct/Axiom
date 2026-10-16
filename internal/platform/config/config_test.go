@@ -122,3 +122,58 @@ func FuzzDuration(f *testing.F) {
 		}
 	})
 }
+
+func TestIntAndPrefixes(t *testing.T) {
+	const (
+		wantInt      = "AXIOM_COUNT: want a whole number of at least 1"
+		wantPrefixes = "AXIOM_PROXIES: want IP addresses and networks such as 10.0.0.0/8, separated by commas"
+	)
+	cases := []struct {
+		name     string
+		environ  []string
+		count    int
+		prefixes []string
+		problems []string
+	}{
+		{"defaults", nil, 4, nil, nil},
+		{"set", []string{"AXIOM_COUNT=8", "AXIOM_PROXIES=10.0.0.0/8, 2001:db8::1"}, 8, []string{"10.0.0.0/8", "2001:db8::1/128"}, nil},
+		{"a network is masked", []string{"AXIOM_PROXIES=10.1.2.3/8"}, 4, []string{"10.0.0.0/8"}, nil},
+		{"zero is below the least", []string{"AXIOM_COUNT=0"}, 4, nil, []string{wantInt}},
+		{"not a number, never quoted", []string{"AXIOM_COUNT=planted-value"}, 4, nil, []string{wantInt}},
+		{"a host name is no address", []string{"AXIOM_PROXIES=10.0.0.1,proxy.example"}, 4, nil, []string{wantPrefixes}},
+		{"an empty item", []string{"AXIOM_PROXIES=10.0.0.1,"}, 4, nil, []string{wantPrefixes}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := New(c.environ)
+			count, prefixes := env.Int("AXIOM_COUNT", 4, 1), env.Prefixes("AXIOM_PROXIES")
+			var got []string
+			for _, p := range prefixes {
+				got = append(got, p.String())
+			}
+			if count != c.count || cmp.Diff(c.prefixes, got) != "" {
+				t.Errorf("got %d and %v, want %d and %v", count, got, c.count, c.prefixes)
+			}
+			var problems []string
+			if err := env.Err(); err != nil {
+				problems = strings.Split(err.Error(), "\n")
+			}
+			if diff := cmp.Diff(c.problems, problems); diff != "" {
+				t.Errorf("problems (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestProblemsIgnoresVariablesNothingRead(t *testing.T) {
+	env := New([]string{"AXIOM_URL=x", "AXIOM_OTHER=y", "AXIOM_TIMEOUT=planted-value"})
+	env.Required("AXIOM_URL")
+	env.Duration("AXIOM_TIMEOUT", time.Second)
+	err := env.Problems()
+	if err == nil || strings.Contains(err.Error(), "AXIOM_OTHER") || !strings.Contains(err.Error(), "AXIOM_TIMEOUT: want") {
+		t.Errorf("Problems = %v, want only the invalid AXIOM_TIMEOUT", err)
+	}
+	if err := env.Err(); err == nil || !strings.Contains(err.Error(), "AXIOM_OTHER: unknown variable") {
+		t.Errorf("Err = %v, want it to report AXIOM_OTHER too", err)
+	}
+}

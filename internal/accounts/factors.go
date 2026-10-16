@@ -159,8 +159,27 @@ type FactorChange struct {
 // ConfirmTOTP turns on two-step verification for p with the secret BeginTOTP gave, when password is the user's and
 // code is the secret's, and the user has none yet: under the user's lock, one already on is ErrTOTPOn and changes
 // nothing. The factor version goes up, so every other session and recovery code stops working; the new recovery codes
-// and a two-step-verified session for this device are returned.
+// and a two-step-verified session for this device are returned. A wrong code or password spends one of the user's
+// code failures, as in VerifyMFA.
 func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error) {
+	l := s.snapshot.Load().sites[p.site].limits
+	var issued Issued
+	var codes []string
+	var refused error
+	err := failing(s, s.guards.users, uuid.UUID(p.user), l.codeFailures, codeWindow, func() error {
+		issued, codes, refused = s.confirmTOTP(ctx, p, c)
+		if errors.Is(refused, ErrBadCode) || errors.Is(refused, ErrBadCredentials) {
+			return refused // a wrong guess is the only thing that counts; the bucket is the user's, shared with sign-in's
+		}
+		return nil
+	})
+	if err == nil {
+		err = refused
+	}
+	return issued, codes, err
+}
+
+func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error) {
 	key, err := totpBase32.DecodeString(strings.ToUpper(c.Secret))
 	if err != nil || len(key) != 20 {
 		return Issued{}, nil, ErrBadSecret
