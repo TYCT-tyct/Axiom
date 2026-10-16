@@ -17,6 +17,10 @@ type Config struct {
 	MaxStale  time.Duration // how long a snapshot may go unconfirmed before the node stops resolving; default 30s
 	PollEvery time.Duration // how often a node asks the database for the revision; default 5s
 	Logger    *slog.Logger  // default slog.Default()
+	// PriceChangeLimit is the percent by which a dataset's price for an item may differ from the current one before the
+	// sync holds it for a person; default 25. billing's reference-price safety valve (docs/domains/billing.md「定价」)
+	// is above the catalog and cannot be called from here, so the catalog keeps its own until that valve exists.
+	PriceChangeLimit int
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
@@ -45,6 +49,12 @@ func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) {
 	cfg.PollEvery = cmpOr(cfg.PollEvery, 5*time.Second)
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.PriceChangeLimit == 0 {
+		cfg.PriceChangeLimit = 25
+	}
+	if cfg.PriceChangeLimit < 0 {
+		return nil, errors.New("catalog: the price change limit must be positive")
 	}
 	if cfg.MaxStale <= 0 || cfg.PollEvery <= 0 {
 		return nil, errors.New("catalog: the staleness limit and the polling period must be positive")

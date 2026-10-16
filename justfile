@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules adapters-removable scope tidy generated lint deadcode test vuln secrets web
+check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -54,6 +54,11 @@ modules:
 # the program building and passing go vet (internal/suppliers/internal/removable)
 adapters-removable:
     go run ./internal/suppliers/internal/removable .
+
+# Every contract in api/ is valid OpenAPI 3.0.3 and follows the conventions of internal/platform/README.md「接口约定」:
+# security and permission declared, the error body, cursors, idempotency keys, and what two contracts share defined alike
+api:
+    go run -C tools ./checkapi ..
 
 # Only internal/platform/pg sets the tenant scope or switches the role, in Go and SQL, tests and migrations included;
 # scripts/check_scope.py holds the rule and its reasons

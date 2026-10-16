@@ -12,7 +12,7 @@
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
-| `consoleapi` | 由 `api/console.yaml` 生成的控制台接口类型和服务端接口，除包说明外不手写 |
+| `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
 | `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
@@ -98,6 +98,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 监听 | 提供什么 |
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 控制台接口（`/api/console/v1/…`）；以后加模型调用接口、控制台页面、支付回调 |
+| 管理（尚未实现） | 管理接口（`/api/admin/v1/…`）和管理后台，只对管理域名和受限来源开放；接口见 `api/admin.yaml` |
 | 探针 `AXIOM_OPS_ADDR` | 健康检查；`/metrics` |
 
 公网的每个请求都经过 `httpserver.Public`：
@@ -108,6 +109,38 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 - **panic**：还没发出响应时返回 500（带请求 ID）；响应已经开始时（写过内容，或只刷新过响应头）中断连接，让客户端看到响应不完整，而不是一个状态码错误却"完整"的响应。被中断的请求也记访问日志。
 - 包装响应时实现 `FlushError` 和 `Unwrap`，流式处理器通过 `http.ResponseController` 刷新和设置期限，刷新也算响应已开始。
 - 生成的接口代码的每条出错路径都在 `cmd/axiom` 里设定，不留默认值：请求本身不合法时返回 400，说明只涉及客户端自己发来的内容；处理器出错时记日志、只返回 500，不把内部错误原文发给客户端。
+
+## 接口约定
+
+控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
+
+| 约定 | 内容 | 检查 |
+|---|---|---|
+| 路径与版本 | 路径以 `/api/<文件名>/v1/` 开头。加操作、加字段、加可选参数向后兼容，不升版本；改变含义或删除才升 v2 | 检查前缀 |
+| 安全声明 | 每个操作显式写 `security`：`[]` 是公开；要会话的写 `session`，改数据的再加 `csrf`。`x-axiom-level` 写会话要证明到哪一步（`any`、`pending_mfa`、`signed_in`、`mfa`），`x-axiom-permission` 写在该会话的范围上需要的权限名（不需要写 `none`）。管理接口的操作都作用于平台，所以都要 `mfa` | 检查 |
+| 改数据的请求 | 带站点登记的 `Origin`、`Content-Type: application/json`，有会话的再带 `X-CSRF-Token`；不满足返回 403 `origin_rejected`。接口不开放 CORS | 改数据的操作必须有 403 |
+| 错误体 | 所有失败都是 `{"error": {"code", "message", "fields"}}`，`code` 取自封闭的枚举 `ErrorCode`，前端按它翻译，`message` 是写给日志和开发者的英文；请求 ID 在 `X-Request-ID` 头里。`default` 响应和每个非 2xx 响应都用这个体 | 检查 |
+| 分页 | 键集游标：`cursor`（不透明，原样传回，只对同一组筛选有效）、`limit`（默认 50，最大 200），响应 `{data, next_cursor}`，最后一页的 `next_cursor` 是 null。游标里放什么由实现定，只要沿用所在查询的排序键（如调用记录的 `(at, id)`），不用 OFFSET | 返回 `next_cursor` 的操作必须带这两个参数 |
+| 金额 | `Money`：`amount` 是有符号整数的十进制文本，单位是币种的十亿分之一，`currency` 是站点的记账币种。写成文本是因为 JSON 数字在浏览器里超过 2⁵³（约 900 万个单位）就失真，而账户余额、站长的总额会超过 | — |
+| 比率与十进制数 | 倍率、单位价值、余额的原生数量都是十进制文本（`Decimal`），单价是 `UnitPrice`（至多 15 位小数），不经过浮点数 | — |
+| ID | 账户模块的实体用 TypeID（`user_…`、`acct_…`、`key_…`、`ws_…`、`site_…`、`tier_…`）；调用编号、目录、供应商、定价的行用 UUID 文本。路径里格式不对和不存在一样返回 404 | 模式写在契约里 |
+| 缺省与空 | 响应里没有的值就不出现，不写 null（`next_cursor` 是唯一的例外）；`PUT` 整体替换，请求里没写的可选项取「没有限制」或默认值，所以页面把读到的设置连同修改一起送回 | — |
+| 管理接口的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID，对应目录的 `op_key`；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别种改动用过是 409 `idempotency_key_reused`）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
+| 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`cmd/axiom` 嵌入 `tools/pendingapi` 生成的类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同嵌入一起删掉 | `just generated` |
+| 两份契约共有的部分 | 会话与两步验证的操作和 `Error`、`Money`、`Balance` 等模式在两份契约里各写一遍，不引用外部文件（生成器要为外部引用另做一个包，每份契约才不自成一体）。两份里同名的操作和定义必须完全相同 | 检查 |
+| 契约的约束谁来强制 | 契约里的 `pattern`、长度、枚举、`required` 生成的 Go 类型不会检查。**待定**：建议在处理器之前用一层按契约校验的中间件统一强制（kin-openapi 的请求校验），不在每个处理器里重写；第一个处理器 PR 决定，并在这里改成定论 | — |
+
+契约用到的权限名，处理器的 PR 在 `accounts` 的代码和迁移里声明（权限在代码里声明名字和是否敏感，角色快照里有代码不认识的权限就不启动）：
+
+| 面 | 权限 | 敏感 |
+|---|---|---|
+| 控制台 | `api_keys.view`、`api_keys.manage`（已有）；`calls.view`、`balance.view` | 否 |
+| 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
+| 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
+
+契约也要模块里还没有的读写，由写处理器的 PR 一并加：`accounts` 的读取和整体替换一把 key 的设置（现在只有创建、停用、删除）、用户和账户的列表、站点设置的读写；`billing` 的余额与本月花费、赠送批次；`observability` 的 `OwnCall` 加游标的编码与解码；`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
+
+M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
 ## 遥测
 
@@ -229,3 +262,10 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 审计条目的租户由平台自有的登记表 `platform.tenants` 核对，accounts 在创建租户的事务里登记 | 平台在依赖的最底层，不能对 accounts 的表建外键；一张登记表加一个外键就把站点和账户绑到同一租户 | 从 `audit_log` 到 accounts 表的外键：平台的表依赖上层模块的表；只靠代码保证：任何一处写错就把条目记到别的租户 |
 | 审计条目的规则只写在表的约束上 | 一处规则，不论从哪写都守住 | Go 先校验一遍：两份规则会分叉 |
 | 不设整体写超时，只设读请求头超时和空闲超时 | 流式响应的时长取决于模型，由处理器设自己的期限；请求头超时挡住迟迟不发完请求头的连接，空闲超时关掉客户端丢下的长连接 | 统一的写超时：会切断长流 |
+| 接口里的金额是整数文本，不是 JSON 数字 | 浏览器在任何代码运行之前就把超过 2⁵³ 的数字舍入；余额、站长的总额和累计流水会超过约 900 万个单位。文本让前端用 BigInt 处理，错了是报错而不是悄悄少一位 | JSON 数字：舍入无声无息；浮点的「额度」：汇总出现误差，违背[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
+| 错误体沿用 OpenRouter 的 `{"error": {…}}` 外壳，`code` 是封闭的字符串枚举 | OpenRouter 的 `error.code` 是与 HTTP 状态相同的数字，细节放在 `metadata`（OpenRouter《Errors and Debugging》，2026-10-15 查）。外壳相同，习惯那种写法的客户端不用改；数字重复了状态码，区分不了同一个状态下的 `email_taken` 与 `conflict`，而前端要按原因翻译，所以用枚举。枚举封闭：加一个码要改契约，前端的翻译表编译不过就会发现 | 数字 `code`；RFC 9457 的 `problem+json`：外壳不同，没有现成的客户端依赖 |
+| 列表用键集游标，所有列表同一套 | 不用 OFFSET，新记录到达时翻页不重不漏，深页不变慢（[observability 的「读」](../observability/README.md#读)）；OpenRouter 的 key 列表用 offset，但我们的列表里有会增长到几十万行的调用记录。一套约定，前端一个分页组件 | OFFSET：深页读得多；按列表分别约定：每个页面一套分页代码 |
+| 每个监听面一份自成一体的契约，会话操作在两份里各写一遍，检查保证两份相同 | 会话属于签发它的面（域名、Cookie、路径各一套），管理接口不能被挂到公网（上一节）。跨文件引用在 oapi-codegen 里要 `--import-mapping`，还得为共享部分另生成一个包（2026-10-15 实测：不给映射直接报错）；共享一份会话契约、两个前缀各挂一次，则前端要为同一组操作维护两套路径 | 外部引用加共享包：多一个包、三条生成命令，换来省下约十个操作的重复；一份大契约：管理接口容易挂错监听 |
+| 契约先行，没有处理器的操作由生成的桩返回 501 | 处理器分几个 PR 并行写；生成的 `StrictServerInterface` 要求每个操作都有方法，没有桩则契约一加操作构建就断，有了桩，每个 PR 只加自己的方法 | 手写桩：并行的 PR 改同一个文件；嵌入空接口：未实现的操作调用时 panic；等所有处理器写完再合契约：前后端不能并行 |
+| 管理接口的写操作一律带 `Idempotency-Key` 和 `reason` | [运营](../../docs/domains/operations.md#运营接口)要求所有写操作能防重复、能审计；目录的 `op_key`、`reason`、`rev` 已经是这个形状，接口原样透传；一个形状，agent 和管理后台用同一套 | 只给花钱的操作加：agent 要判断哪些要加 |
+| 设置用 `PUT` 整体替换，不用带 `null` 的 `PATCH` | Go 生成的类型分不清「没写」和「写成了 null」；整体替换没有这个歧义，页面本来就提交整张表单 | JSON Merge Patch：要引入可空类型，两端的语义要对齐 |
