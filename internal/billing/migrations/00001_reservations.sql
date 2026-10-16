@@ -59,15 +59,24 @@ CREATE TABLE billing.reservations (
 CREATE INDEX pending_by_holder ON billing.reservations (holder_id) WHERE state = 'pending';
 CREATE INDEX pending_by_deadline ON billing.reservations (deadline) WHERE state = 'pending';
 
--- The start of a limit's window by the database's clock: the UTC day, week or month for accounts' daily, weekly and
--- monthly; every day for a limit that never resets.
-CREATE FUNCTION billing.window_from(reset text) RETURNS timestamptz
-    LANGUAGE sql VOLATILE PARALLEL SAFE
+-- The window of a limit that holds the moment at: the UTC day, week or month for accounts' daily, weekly and monthly,
+-- from its start up to the next one; every day for a limit that never resets. The arithmetic is on UTC wall-clock
+-- time, so the session's time zone cannot move a boundary.
+CREATE FUNCTION billing.window_from(reset text, at timestamptz) RETURNS timestamptz
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
     RETURN CASE reset
-        WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
-        WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
-        WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
+        WHEN 'daily' THEN date_trunc('day', at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        WHEN 'weekly' THEN date_trunc('week', at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        WHEN 'monthly' THEN date_trunc('month', at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
         ELSE '-infinity' END;
+
+CREATE FUNCTION billing.window_to(reset text, at timestamptz) RETURNS timestamptz
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    RETURN CASE reset
+        WHEN 'daily' THEN (date_trunc('day', at AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC'
+        WHEN 'weekly' THEN (date_trunc('week', at AT TIME ZONE 'UTC') + interval '1 week') AT TIME ZONE 'UTC'
+        WHEN 'monthly' THEN (date_trunc('month', at AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC'
+        ELSE 'infinity' END;
 
 -- One policy per command, never FOR ALL (see the accounts migration). A holder is no tenant's: any scope reads it and
 -- takes FOR KEY SHARE on it, which needs an UPDATE policy to pass, but only the platform scope writes it.

@@ -544,3 +544,39 @@ func TestReserveNoBalanceRow(t *testing.T) {
 		t.Errorf("%d rows written", n)
 	}
 }
+
+// TestExtendAcrossWindows: an extension checks the limit in the window of its reservation's day, the one it books
+// to, so a reservation admitted before a UTC day, week or month boundary cannot outgrow its limit by extending after
+// it, when the new window is still empty; nor does it count what the new window holds.
+func TestExtendAcrossWindows(t *testing.T) {
+	for _, r := range []Reset{ResetDaily, ResetWeekly, ResetMonthly} {
+		t.Run(string(r), func(t *testing.T) {
+			b := newBank(t, 1e6, 0, Config{})
+			a := b.admitted
+			a.KeyLimit = &Limit{Amount: 1000, Reset: r}
+			h, err := b.reserve(a, 600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// As if admitted on the last day of the previous window.
+			before := fmt.Sprintf("billing.window_from('%s', clock_timestamp()) - interval '1 day'", r)
+			b.sql("UPDATE billing.reservations SET workspace_window = "+before+", key_window = "+before,
+				"UPDATE billing.spend SET window_start = "+before)
+			if _, err := b.reserve(a, 600); err != nil { // the current window's own 600, which the old one must not count
+				t.Fatal(err)
+			}
+			for _, step := range []struct {
+				target int64
+				ok     bool
+			}{{900, true}, {1200, false}} {
+				err := b.billing.Extend(t.Context(), h, ExtendRequest{Seq: 2, Target: platform.AmountExact(step.target)})
+				if (err == nil) != step.ok {
+					t.Errorf("extending to %d: %v, want allowed %v", step.target, err, step.ok)
+				}
+			}
+			if n := b.count("SELECT sum(reserved) FROM billing.spend WHERE window_start < " + "billing.window_from('" + string(r) + "', clock_timestamp())"); n != 1800 {
+				t.Errorf("the previous window holds %d, want 900 for the key and 900 for the workspace", n)
+			}
+		})
+	}
+}

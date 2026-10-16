@@ -269,13 +269,16 @@ func (q *Queries) LockExpiredHolders(ctx context.Context, db DBTX, graceSeconds 
 }
 
 const readUsage = `-- name: ReadUsage :one
+WITH d AS (SELECT date_trunc('day', coalesce($5::timestamptz, clock_timestamp()), 'UTC') AS day)
 SELECT
-    date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day,
+    d.day::timestamptz AS day,
     coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
-        WHERE s.subject = $1 AND s.window_start >= billing.window_from($2::text)), 0)::bigint
-        AS workspace_used,
+        WHERE s.subject = $1 AND s.window_start >= billing.window_from($2::text, d.day)
+            AND s.window_start < billing.window_to($2::text, d.day)), 0)::bigint AS workspace_used,
     coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
-        WHERE s.subject = $3 AND s.window_start >= billing.window_from($4::text)), 0)::bigint AS key_used
+        WHERE s.subject = $3 AND s.window_start >= billing.window_from($4::text, d.day)
+            AND s.window_start < billing.window_to($4::text, d.day)), 0)::bigint AS key_used
+FROM d
 `
 
 type ReadUsageParams struct {
@@ -283,6 +286,7 @@ type ReadUsageParams struct {
 	WorkspaceReset string
 	KeyID          uuid.UUID
 	KeyReset       string
+	Day            *time.Time
 }
 
 type ReadUsageRow struct {
@@ -292,15 +296,17 @@ type ReadUsageRow struct {
 }
 
 // Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
-// Counters are kept per UTC day by the database's clock; a limit's window is the days since the start of its UTC day,
-// week or month, or every day for a limit that never resets, so changing how often a limit resets counts all that
-// the new window covers.
+// Counters are kept per UTC day; a limit counts the days of its window that holds day, its UTC day, week or month,
+// or every day for a limit that never resets, so changing how often a limit resets counts all that the new window
+// covers. Admission passes no day, meaning today by the database's clock; an extension passes its reservation's day,
+// which it writes back to, so it checks and books in the same window.
 func (q *Queries) ReadUsage(ctx context.Context, db DBTX, arg ReadUsageParams) (ReadUsageRow, error) {
 	row := db.QueryRow(ctx, readUsage,
 		arg.WorkspaceID,
 		arg.WorkspaceReset,
 		arg.KeyID,
 		arg.KeyReset,
+		arg.Day,
 	)
 	var i ReadUsageRow
 	err := row.Scan(&i.Day, &i.WorkspaceUsed, &i.KeyUsed)
