@@ -14,14 +14,14 @@ permissions:
 
 jobs:
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v7
       - run: python3 -m unittest discover -s scripts/workflow
       - run: python3 scripts/workflow/check_docs.py
 
   secrets:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     env:
       # The gitleaks CLI needs no license, unlike gitleaks-action on organization repos. Bumped by hand in project-workflow;
       # the checksum is the release's own (gitleaks_<version>_checksums.txt), so a swapped download fails.
@@ -43,7 +43,7 @@ jobs:
 
   pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v7
       - run: python3 scripts/workflow/check_pr.py describe
@@ -55,7 +55,7 @@ jobs:
   review:
     # Comments do not trigger pull_request events: after posting a review or an answer, rerun this job (review method).
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
       pull-requests: read # the PR's comments
