@@ -1,11 +1,11 @@
 import type { Schemas } from "@axiom/api";
+import { Stat } from "@axiom/app";
 import { Badge, DataState, EmptyState, PageHeader, Panel, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { maskedKey } from "../parts";
 import { balanceQuery, callsQuery, keysQuery } from "../queries";
-import { Stat } from "../stat";
 
 export default function Overview() {
   const { t } = useTranslation();

@@ -1,11 +1,10 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
+import { accountKey, useErrors } from "@axiom/app";
 import { Button, CopyButton, Dialog, FormError, SubmitButton } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "./errors";
 import { KeyForm } from "./key-form";
 import { balanceQuery } from "./queries";
-import { accountKey } from "./session";
 
 type Key = Schemas["Key"];
 
@@ -90,7 +89,7 @@ export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () 
         <p className="text-t2 [overflow-wrap:anywhere]">{t("keys.delete.body", { name: apiKey.name })}</p>
         <div className="flex justify-end gap-2">
           <Button size="md" onClick={onClose}>
-            {t("cancel")}
+            {t("cancel", { ns: "common" })}
           </Button>
           <SubmitButton
             pending={remove.isPending}

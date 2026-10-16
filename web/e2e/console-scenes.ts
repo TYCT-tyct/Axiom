@@ -1,11 +1,10 @@
 import type { Page } from "@playwright/test";
-import { type MockData, mockConsole, signedInAs } from "./console-api.ts";
-import { knownPassword } from "./console-data.ts";
+import { mockConsole, signedInAs } from "./console-api.ts";
+import type { MockData } from "./mock.ts";
+import { knownPassword } from "./mock-auth.ts";
+import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 
-// The screens of the console M1, each reached the way a user reaches it. The accessibility and layout checks and the
-// screenshots of the acceptance gate (docs/frontend.md「验收门槛」) walk the same list, so a new screen is added once.
-
-export type Scene = { name: string; signedIn: boolean; open: (page: Page) => Promise<void> };
+// The screens of the console M1.
 
 const pageHeading = (page: Page) => page.getByRole("heading", { level: 1 });
 
@@ -15,15 +14,8 @@ async function goto(page: Page, path: string) {
 }
 
 // A screen whose dialog opens after a click on the page.
-const dialogScene = (name: string, path: string, open: (page: Page) => Promise<void>): Scene => ({
-  name,
-  signedIn: true,
-  open: async (page) => {
-    await goto(page, path);
-    await open(page);
-    await page.getByRole("dialog").waitFor();
-  },
-});
+const dialogScene = (name: string, path: string, open: (page: Page) => Promise<void>): Scene =>
+  scene(name, (page) => goto(page, path), open);
 
 const scenes: Scene[] = [
   { name: "sign-in", signedIn: false, open: (page) => goto(page, "sign-in") },
@@ -73,7 +65,7 @@ const mfaScene: Scene = {
 };
 
 // prepare mocks the API for a scene on a page: with the data the scene is shown with, and the session it needs.
-export async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
+async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
   const state = await mockConsole(page, data);
   if (scene.name === "mfa") {
     state.level = "pending_mfa";
@@ -84,4 +76,9 @@ export async function prepare(page: Page, scene: Scene, data: MockData = "usual"
   return state;
 }
 
-export const allScenes = [...scenes, mfaScene];
+export const consoleSuite: Suite = {
+  app: "console",
+  scenes: [...scenes, mfaScene],
+  prepare,
+  brands: ["sign-in", "overview", "keys", "key-create"],
+};

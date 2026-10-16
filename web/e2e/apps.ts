@@ -8,3 +8,6 @@ export const apps = [
   { name: "console", filter: "@axiom/console", url: preview(ports.console, "/console/") },
   { name: "admin", filter: "@axiom/admin", url: preview(ports.admin) },
 ] as const;
+
+// An address of the admin app.
+export const adminUrl = (path = "") => new URL(path, apps[2].url).href;

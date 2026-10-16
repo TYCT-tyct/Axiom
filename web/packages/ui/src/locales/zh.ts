@@ -1,3 +1,30 @@
+import type { ErrorCode } from "@axiom/api";
+
+// What each failure code tells the user. The list is the contract's, so a new code stops the build until it has words.
+const codes = {
+  invalid_request: "有些内容不符合要求，请检查后再试。",
+  unauthenticated: "登录已失效，请重新登录。",
+  invalid_credentials: "邮箱或密码不对。",
+  invalid_code: "验证码不对，或这条恢复码已经用过。",
+  forbidden: "你的账户没有做这件事的权限。",
+  mfa_required: "这个操作需要先完成两步验证。",
+  origin_rejected: "请求没有被接受。刷新页面后再试。",
+  not_found: "找不到这一项，可能已经被删除。",
+  conflict: "内容和现有的冲突，刷新后再试。",
+  email_taken: "这个邮箱已经注册过了。",
+  name_taken: "这个名称已经有了，换一个。",
+  stale_revision: "这一项刚在别处被改过，刷新后再试。",
+  idempotency_key_reused: "请求重复了，刷新后再试。",
+  invalid_invite: "邀请码无效，或本站目前不接受邀请码注册。",
+  weak_password: "密码太弱。换一个更长、更不常见的密码。",
+  not_ready: "这个功能暂时还不能用。",
+  unprocessable: "没能处理这个请求，请检查填写的内容。",
+  rate_limited: "尝试得太频繁了，请 {{seconds}} 秒后再试。",
+  internal: "服务出了问题，请稍后重试。",
+  not_implemented: "这个功能还没有开放。",
+  unavailable: "服务暂时不可用，请稍后重试。",
+} satisfies Record<ErrorCode, string>;
+
 // Messages the shared components show, in Chinese: the source every other language follows.
 export default {
   brand: "Axiom",
@@ -13,6 +40,59 @@ export default {
     skipToContent: "跳到正文",
   },
   dialog: { close: "关闭" },
+  cancel: "取消",
+  loadMore: "加载更多",
+  loadingMore: "正在加载",
+  nav: { signOut: "退出登录" },
+  errors: {
+    ...codes,
+    network: "连不上 Axiom，请检查网络后重试。",
+    unknown: "出了点问题，请稍后重试。",
+    field: "这一项不符合要求。",
+  },
+  auth: {
+    email: "邮箱",
+    password: "密码",
+    missing: "请填写邮箱和密码。",
+    signIn: { title: "登录", submit: "登录" },
+    mfa: {
+      title: "两步验证",
+      description: "输入验证器 App 里的 6 位验证码，或一条恢复码。",
+      code: "验证码或恢复码",
+      hint: "恢复码形如 xxxx-xxxx-xxxx-xxxx，每条只能用一次。",
+      submit: "验证",
+      otherAccount: "换一个账户登录",
+    },
+    enroll: {
+      title: "先开启两步验证",
+      description: "这里的操作都需要两步验证。用验证器 App 设置一次，之后登录时输入它的验证码。",
+      start: "开启两步验证",
+    },
+  },
+  security: {
+    setup: {
+      title: "开启两步验证",
+      scan: "用验证器 App 扫描二维码。",
+      qr: "两步验证的二维码",
+      manual: "无法扫描时，手动输入这串密钥",
+      code: "验证器里的 6 位验证码",
+      enable: "开启",
+    },
+    codes: {
+      title: "保存你的恢复码",
+      body: "每条恢复码只能用一次，只显示这一次。请存到密码管理器或打印出来。",
+      done: "我已保存",
+    },
+    regenerate: {
+      title: "重新生成恢复码",
+      body: "旧的恢复码会立刻作废，其他设备上的登录也会退出。",
+      confirm: "重新生成",
+    },
+  },
+  newVersion: {
+    message: "Axiom 已经更新。刷新页面就能用上新版本。",
+    reload: "刷新",
+  },
   copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中" },
   state: {
     loading: "正在加载",

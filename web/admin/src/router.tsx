@@ -1,73 +1,82 @@
-import {
-  AppShell,
-  EmptyState,
-  focusPage,
-  Icon,
-  type IconName,
-  Logo,
-  PageHeader,
-  PreferenceSwitches,
-  routerDefaults,
-  SideNavItem,
-} from "@axiom/ui";
-import { createRootRoute, createRoute, createRouter, Link, Outlet } from "@tanstack/react-router";
-import { useTranslation } from "react-i18next";
+import { safeNext } from "@axiom/app";
+import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import type { ReactNode } from "react";
+import { Layout } from "./layout";
+import { modelStatus } from "./models/catalog";
+import { supplierStatus } from "./suppliers/statuses";
 
-type Page = "overview" | "suppliers" | "models" | "pricing" | "users";
+const root = createRootRoute({ component: Outlet });
 
-const pages: { page: Page; path: string; icon: IconName }[] = [
-  { page: "overview", path: "/", icon: "grid" },
-  { page: "suppliers", path: "/suppliers", icon: "cube" },
-  { page: "models", path: "/models", icon: "list" },
-  { page: "pricing", path: "/pricing", icon: "sliders" },
-  { page: "users", path: "/users", icon: "card" },
-];
+// The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
+// in.
+const guestSearch = (search: Record<string, unknown>) => ({ next: safeNext(search.next) });
 
-function Layout() {
-  const { t } = useTranslation();
-  return (
-    <AppShell
-      sidebar={
-        <>
-          <Logo className="mb-4 px-2 py-1" />
-          {pages.map(({ page, path, icon }) => (
-            <SideNavItem key={page}>
-              <Link to={path} activeOptions={{ exact: path === "/" }}>
-                <Icon name={icon} />
-                {t(`nav.${page}`)}
-              </Link>
-            </SideNavItem>
-          ))}
-          <PreferenceSwitches className="mt-auto flex flex-wrap gap-2 pt-4" />
-        </>
-      }
-    >
-      <Outlet />
-    </AppShell>
-  );
-}
+const app = createRoute({ getParentRoute: () => root, id: "app", component: Layout });
 
-// Placeholder stands in for a page that Issue #30 builds.
-function Placeholder({ page }: { page: Page }) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <PageHeader title={t(`nav.${page}`)} />
-      <EmptyState>
-        <p>{t("comingSoon")}</p>
-      </EmptyState>
-    </>
-  );
-}
+const guestPage = (path: "/sign-in" | "/mfa" | "/enroll", load: () => Promise<{ default: () => ReactNode }>) =>
+  createRoute({
+    getParentRoute: () => root,
+    path,
+    validateSearch: guestSearch,
+    component: lazyRouteComponent(load),
+  });
 
-const root = createRootRoute({ component: Layout });
+// A page of the shell, its own chunk, loaded when the user is about to open it.
+const shellPage = <S extends Record<string, unknown> = Record<never, never>>(
+  path: string,
+  load: () => Promise<{ default: () => ReactNode }>,
+  validateSearch?: (search: Record<string, unknown>) => S,
+) => createRoute({ getParentRoute: () => app, path, validateSearch, component: lazyRouteComponent(load) });
 
-const routeTree = root.addChildren(
-  pages.map(({ page, path }) =>
-    createRoute({ getParentRoute: () => root, path, component: () => <Placeholder page={page} /> }),
-  ),
-);
+// A filter in the address is text, or nothing.
+const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value : undefined);
 
-export const router = createRouter({ ...routerDefaults, routeTree });
+const routeTree = root.addChildren([
+  guestPage("/sign-in", () => import("./auth/sign-in")),
+  guestPage("/mfa", () => import("./auth/mfa")),
+  guestPage("/enroll", () => import("./auth/enroll")),
+  app.addChildren([
+    shellPage("/", () => import("./pages/home")),
+    shellPage(
+      "/users",
+      () => import("./pages/users"),
+      (search) => ({ q: text(search.q) }),
+    ),
+    shellPage("/accounts/$accountId", () => import("./pages/account")),
+    shellPage(
+      "/suppliers",
+      () => import("./pages/suppliers"),
+      (search) => ({ status: supplierStatus(search.status) }),
+    ),
+    shellPage("/suppliers/$supplierId", () => import("./pages/supplier")),
+    shellPage(
+      "/mappings",
+      () => import("./pages/mappings"),
+      (search) => ({ supplier: text(search.supplier) }),
+    ),
+    shellPage(
+      "/models",
+      () => import("./pages/models"),
+      (search) => ({
+        status: modelStatus(search.status),
+        author: text(search.author),
+        q: text(search.q),
+      }),
+    ),
+    shellPage("/models/$modelId", () => import("./pages/model")),
+    shellPage("/pricing", () => import("./pages/pricing")),
+    shellPage("/settings", () => import("./pages/settings")),
+    createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
+  ]),
+]);
+
+export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
 
 router.subscribe("onResolved", focusPage);
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}

@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { contentSecurityPolicy } from "../vite.shared.ts";
+import { mockAdmin } from "./admin-api.ts";
 import { apps } from "./apps.ts";
-import { mockConsole, signedInAs } from "./console-api.ts";
+import { mockConsole } from "./console-api.ts";
+import { signedInAs } from "./mock-auth.ts";
 
 for (const app of apps) {
   test(`the ${app.name} works under the content security policy`, async ({ page }) => {
@@ -12,8 +14,9 @@ for (const app of apps) {
       }
     });
     page.on("pageerror", (error) => errors.push(error.message));
-    // The console asks its API who is signed in, and shows the page the answer leads to.
+    // The console and the admin ask their APIs who is signed in, and show the page the answer leads to.
     signedInAs(await mockConsole(page));
+    signedInAs(await mockAdmin(page), "mfa");
 
     const response = await page.goto(app.url);
     const policy = response?.headers()["content-security-policy"];

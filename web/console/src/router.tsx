@@ -1,7 +1,7 @@
+import { safeNext } from "@axiom/app";
 import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { Layout } from "./layout";
-import { safeNext } from "./session";
 
 const root = createRootRoute({ component: Outlet });
 

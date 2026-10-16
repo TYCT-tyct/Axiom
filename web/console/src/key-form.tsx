@@ -1,4 +1,5 @@
 import type { Schemas } from "@axiom/api";
+import { readForm, useErrors } from "@axiom/app";
 import {
   Button,
   CheckField,
@@ -12,8 +13,6 @@ import {
 } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "./errors";
-import { readForm } from "./forms";
 
 // What the form collects. A key is made with an expiry and changed with an on/off switch; the contract's two requests
 // share the rest.
@@ -185,7 +184,7 @@ export function KeyForm({
       )}
       <div className="flex justify-end gap-2 pt-2">
         <Button size="md" onClick={onCancel}>
-          {t("cancel")}
+          {t("cancel", { ns: "common" })}
         </Button>
         <SubmitButton pending={pending}>{apiKey ? t("keys.form.save") : t("keys.form.create")}</SubmitButton>
       </div>

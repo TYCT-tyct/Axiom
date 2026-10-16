@@ -1,33 +1,21 @@
 import type { components } from "../packages/api/src/console.gen.ts";
+import type { AuthState } from "./mock.ts";
+import { authState } from "./mock-auth.ts";
 
 // The data the mocked console API starts from, written as the contract's own types, so a field the contract changes
 // stops this file compiling. Three sets: a usual account, an empty one, and the worst realistic one (the longest values
 // the contract allows, the biggest amounts, the most items), which the screenshots of the acceptance gate use.
 
 export type Schemas = components["schemas"];
-export type Level = "none" | "pending_mfa" | "password" | "mfa";
 
-export type MockState = {
-  level: Level;
-  csrf: string;
-  csrfCount: number;
-  user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
-  mfaEnabled: boolean;
-  permissions: string[];
+export type MockState = AuthState & {
   site: Schemas["Site"];
   balance: Schemas["Balance"];
   keys: Schemas["Key"][];
   calls: Schemas["Call"][];
-  version: string;
-  // every request the page made, as "METHOD /path", for tests that count them
-  log: string[];
 };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "calls.view"];
-export const knownEmail = "user@example.com";
-export const knownPassword = "correct horse battery";
-export const mfaEmail = "mfa@example.com";
-export const limitedEmail = "limited@example.com";
 export const goodInvite = "INVITE-OK";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
@@ -82,18 +70,7 @@ const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 
 export function usualState(): MockState {
   return {
-    level: "none",
-    csrf: "",
-    csrfCount: 0,
-    user: {
-      email: knownEmail,
-      password: knownPassword,
-      inviteCode: "AXIOM-7K2Q",
-      mfaCode: "123456",
-      recoveryCode: "aaaa-bbbb-cccc-dddd",
-    },
-    mfaEnabled: false,
-    permissions: allPermissions,
+    ...authState(allPermissions),
     site: { name: "Axiom", key_prefix: "sk-ax-v1-", registration: "invite" },
     balance: {
       balance: usd("12"),
@@ -108,8 +85,6 @@ export function usualState(): MockState {
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
     calls: range(120).map((n) => aCall(n)),
-    version: process.env.AXIOM_VERSION ?? "",
-    log: [],
   };
 }
 

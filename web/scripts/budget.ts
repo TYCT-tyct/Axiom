@@ -11,7 +11,7 @@ const kB = 1000;
 const budgets: Record<string, { firstScreen: number; perPage?: number; firstPage?: string }> = {
   site: { firstScreen: 150 * kB },
   console: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/overview.tsx" },
-  admin: { firstScreen: 200 * kB, perPage: 50 * kB },
+  admin: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/home.tsx" },
 };
 const fontBudget = 60 * kB;
 // Fontsource names each file by its Unicode subset; the basic Latin one carries Latin letters and digits.
