@@ -22,6 +22,9 @@ func User(id uuid.UUID) Actor { return Actor{"user", id.String()} }
 // System is a job of ours acting on its own, named <module>.<job> such as catalog.sync.
 func System(job string) Actor { return Actor{"system", job} }
 
+// String is the actor as <kind>:<id>, such as user:<uuid> or system:catalog.cli, for a module's own history table.
+func (a Actor) String() string { return a.kind + ":" + a.id }
+
 // Target is what a change was made to. It names no tenant: the table refuses tenant entries until accounts can tie
 // them to one, and the tenant fields come with that (internal/platform/README.md「审计日志」).
 type Target struct{ Module, Kind, ID string }

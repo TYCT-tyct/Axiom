@@ -14,8 +14,8 @@ import (
 func TestMigrateBringsWhatServeChecks(t *testing.T) {
 	database := pgtest.New(t)
 	if _, err := openDatabase(t.Context(), database.App, 10*time.Second); err == nil ||
-		!strings.Contains(err.Error(), "accounts (run axiom migrate first)") {
-		t.Fatalf("before migrating: %v, want the accounts migrations missing", err)
+		!strings.Contains(err.Error(), "(run axiom migrate first)") {
+		t.Fatalf("before migrating: %v, want a module's migrations missing", err)
 	}
 	if err := migrate(t.Context(), []string{"AXIOM_MIGRATE_DATABASE_URL=" + database.Migrator}); err != nil {
 		t.Fatal(err)
