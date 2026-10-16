@@ -31,15 +31,20 @@ func TestMigrateEndsItsSessionsAtTheDeadline(t *testing.T) {
 	slow := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_deaf.sql": {Data: []byte(up + deaf)}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	go func() {
-		waitRunning(t, database.Superuser, "%PERFORM pg_sleep(1)%")
-		cancel()
+	watchCtx, stopWatching := context.WithCancel(t.Context())
+	observed := watchRunning(watchCtx, database.Superuser, "%PERFORM pg_sleep(1)%")
+	defer func() {
+		stopWatching()
+		for range observed { // the poller has ended before the test does
+		}
 	}()
+	done := make(chan error, 1)
+	go func() { done <- pg.Migrate(ctx, database.Migrator, slow) }()
+	requireSeen(t, observed, done)
+	cancel()
 	var err error
-	ended := make(chan struct{})
-	go func() { err = pg.Migrate(ctx, database.Migrator, slow); close(ended) }()
 	select {
-	case <-ended:
+	case err = <-done:
 	case <-time.After(time.Minute):
 		t.Fatal("the run did not return within a minute of its context ending")
 	}
@@ -67,29 +72,51 @@ func TestMigrateEndsItsSessionsAtTheDeadline(t *testing.T) {
 	}
 }
 
-// waitRunning returns when the server shows a session of a migration run in the test database executing a statement like query, or the
-// test ends.
-func waitRunning(t *testing.T, superuserURL, query string) {
+// requireSeen fails the test unless observed reports the statement running before the run in done returns or a minute
+// passes.
+func requireSeen(t *testing.T, observed, done <-chan error) {
 	t.Helper()
-	conn, err := pgx.Connect(t.Context(), superuserURL)
-	if err != nil {
-		t.Error(err)
-		return
+	select {
+	case err := <-observed:
+		if err != nil {
+			t.Fatalf("watching for the statement that swallows a cancel: %v", err)
+		}
+	case err := <-done:
+		t.Fatalf("the run returned before the statement that swallows a cancel was seen running: %v", err)
+	case <-time.After(time.Minute):
+		t.Fatal("the statement that swallows a cancel was not seen running within a minute")
 	}
-	defer conn.Close(context.WithoutCancel(t.Context())) //nolint:errcheck // a read-only poll
+}
+
+// watchRunning polls until the server shows a session of a migration run in the test database executing a statement like
+// query. The channel then carries nil, or the error that ended the poll (ctx included), and is closed.
+func watchRunning(ctx context.Context, superuserURL, query string) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		defer close(result)
+		result <- poll(ctx, superuserURL, query)
+	}()
+	return result
+}
+
+func poll(ctx context.Context, superuserURL, query string) error {
+	conn, err := pgx.Connect(ctx, superuserURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // a read-only poll
 	for {
 		var n int
-		if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE state = 'active'
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE state = 'active'
 			AND datname = current_database() AND application_name LIKE 'axiom-migrate-%' AND query LIKE $1`, query).Scan(&n); err != nil {
-			t.Error(err)
-			return
+			return err
 		}
 		if n > 0 {
-			return
+			return nil
 		}
 		select {
-		case <-t.Context().Done():
-			return
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
@@ -135,7 +162,7 @@ func TestMigrateKeepsItsWorkErrorWhenItCannotEndItsSessions(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
-		waitRunning(t, database.Superuser, "%pg_sleep(20)%")
+		<-watchRunning(ctx, database.Superuser, "%pg_sleep(20)%")
 		listener.Close() //nolint:errcheck,gosec // refusing new connections is the point
 		cancel()
 	}()
