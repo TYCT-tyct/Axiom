@@ -23,3 +23,12 @@ func BeginScan(start, end time.Time) ScanState {
 	}
 	return b
 }
+
+// Window reads the engine's part of s.
+func (s ScanState) Window() (Scan, error) {
+	var w Scan
+	if err := jsonx.Unmarshal(s, &w); err != nil {
+		return Scan{}, err
+	}
+	return w, nil
+}
