@@ -165,7 +165,7 @@ func TestSinglePageFallback(t *testing.T) {
 		{"a path with no Accept at all", request{target: "/pricing"}, 404, "Not Found\n"},
 		{"an API path, whatever is accepted", navigate("/api/console/v1/nothing-here"), 404, "Not Found\n"},
 		{"an API path of the model calls", navigate("/v1/chat/completions"), 404, "Not Found\n"},
-		{"an API path with the wrong method", request{method: http.MethodPut, target: "/api/console/v1/keys"}, 404, "Not Found\n"},
+		{"another method on an API path", request{method: http.MethodPut, target: "/api/console/v1/keys"}, 405, "Method Not Allowed\n"},
 		{"a method pages do not take", request{method: http.MethodPost, target: "/"}, 405, "Method Not Allowed\n"},
 	}
 	h := frontend(t).Public()
@@ -222,8 +222,12 @@ func TestSecurityHeaders(t *testing.T) {
 		"Permissions-Policy":      "camera=(), microphone=(), geolocation=()",
 	}
 	f := frontend(t)
+	// The public mux answers another method itself, with no page behind it, so only the admin has a 405 of its own.
 	for _, h := range []http.Handler{f.Public(), f.Admin()} {
-		for _, req := range []request{{target: "/"}, {target: "/assets/index-ZZZZZZZZ.js"}, {method: http.MethodPost, target: "/"}, {target: "/api/x"}} {
+		for _, req := range []request{{target: "/"}, {target: "/assets/index-ZZZZZZZZ.js"}, {target: "/api/x"}, {method: http.MethodPost, target: "/"}} {
+			if req.method != "" && h != f.Admin() {
+				continue
+			}
 			resp, _ := req.serve(t, h)
 			for name, value := range want {
 				if resp.Header.Get(name) != value {

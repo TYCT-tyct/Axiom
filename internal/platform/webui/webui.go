@@ -66,17 +66,19 @@ func (f *Frontend) Public() http.Handler {
 }
 
 // RegisterPublic adds the website and the console to mux, for a listener that serves more than the pages: the
-// website answers every path no other pattern of mux claims, except those of an API (see apiPrefixes).
+// website answers every GET or HEAD no other pattern of mux claims, except those of an API (see apiPrefixes). The
+// patterns name their method so that another method on an API path finds no match and gets the mux's own 405 with
+// the methods that path takes, as it did before there were pages.
 func (f *Frontend) RegisterPublic(mux *http.ServeMux) {
-	mux.Handle(consoleMount+"/", f.console)
-	mux.HandleFunc(consoleMount, func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET "+consoleMount+"/", f.console)
+	mux.HandleFunc("GET "+consoleMount, func(w http.ResponseWriter, r *http.Request) {
 		target := consoleMount + "/"
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}
 		http.Redirect(w, r, target, http.StatusPermanentRedirect) //nolint:gosec // the path is constant; the query is the caller's own, sent back to the caller
 	})
-	mux.Handle("/", f.site)
+	mux.Handle("GET /", f.site)
 }
 
 // Admin serves the admin app, for the admin listener alone.
@@ -212,17 +214,11 @@ func isVariant(name string, contents map[string][]byte) bool {
 // contentTypes are the types of the files a build holds. A file of another type fails the start: it needs a type
 // chosen, not a guess by the browser.
 var contentTypes = map[string]string{
-	".html":        "text/html; charset=utf-8",
-	".js":          "text/javascript; charset=utf-8",
-	".css":         "text/css; charset=utf-8",
-	".svg":         "image/svg+xml",
-	".json":        "application/json",
-	".txt":         "text/plain; charset=utf-8",
-	".woff2":       "font/woff2",
-	".png":         "image/png",
-	".ico":         "image/x-icon",
-	".webp":        "image/webp",
-	".webmanifest": "application/manifest+json",
+	".html":  "text/html; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".woff2": "font/woff2",
 }
 
 // file is one file with the encodings it was precompressed to.

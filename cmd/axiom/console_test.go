@@ -88,6 +88,12 @@ func TestPublicRoutesServePagesBesideTheAPI(t *testing.T) {
 		{"a path of the admin, which the website's router does not know either", "/admin/", "text/html", 200, "<site>"},
 	}
 	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	// Another method on an API path is the API's 405, naming the method the path takes, not a page and not a 404.
+	rec := httptest.NewRecorder()
+	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/console/v1/version", nil))
+	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Header().Get("Allow"), "GET") {
+		t.Errorf("PUT on an API path: %d, Allow %q, want 405 allowing GET", rec.Code, rec.Header().Get("Allow"))
+	}
 	for _, c := range cases {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, c.target, nil)
 		req.Header.Set("Accept", c.accept)
