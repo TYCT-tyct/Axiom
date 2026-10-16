@@ -44,6 +44,7 @@ export default {
   loadMore: "加载更多",
   loadingMore: "正在加载",
   nav: { signOut: "退出登录" },
+  signOutFailed: "没能退出登录，你仍在登录状态。{{reason}}请重试。",
   errors: {
     ...codes,
     network: "连不上 Axiom，请检查网络后重试。",

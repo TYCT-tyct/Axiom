@@ -1,6 +1,7 @@
 import { Button, Icon, Panel } from "@axiom/ui";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useErrors } from "./errors";
 import { useSession, useSignOut } from "./session";
 
 // LoadMore asks for the next page of a list, which is only there while the last page gave a cursor.
@@ -36,6 +37,18 @@ export function Stat({ label, value, note }: { label: string; value: string; not
   );
 }
 
+// Signing out that did not happen leaves the session open; the reason and that fact are said next to the button, which
+// stays there to try again.
+export function SignOutError({ error }: { error: unknown }) {
+  const { t } = useTranslation("common");
+  const errors = useErrors();
+  return error ? (
+    <span role="alert" className="block text-label text-bad [overflow-wrap:anywhere]">
+      {t("signOutFailed", { reason: errors.message(error) })}
+    </span>
+  ) : null;
+}
+
 // SignedInAs says who is signed in and ends the session; it sits at the foot of an app's sidebar.
 export function SignedInAs() {
   const { t } = useTranslation("common");
@@ -55,6 +68,9 @@ export function SignedInAs() {
         <Icon name="logout" />
         {t("nav.signOut")}
       </Button>
+      <div className="px-2">
+        <SignOutError error={signOut.error} />
+      </div>
     </div>
   );
 }

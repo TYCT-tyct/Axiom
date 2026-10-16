@@ -13,10 +13,13 @@ type Change = Schemas["FactorChange"];
 // Recovery codes exist only in the answer that makes them. The dialog that shows them does not close on Escape or a
 // click outside, so they cannot be lost by accident, and it lives above the pages: changing a factor gives this device
 // a new session, which can move the page underneath (a first factor ends the sign-in's setup step), and the codes must
-// stay until the user has kept them. Closing it adopts the new session.
+// stay until the user has kept them. Keeping them adopts the new session; if that fails the codes stay, with the
+// reason, and the button tries again.
 function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => void }) {
   const { t } = useTranslation("common");
+  const errors = useErrors();
   const start = useStartSession();
+  const keep = useMutation({ mutationFn: () => start(change.csrf_token), onSuccess: onClose });
   return (
     <Dialog title={t("security.codes.title")} onClose={onClose} dismissible={false}>
       <div className="space-y-4">
@@ -26,18 +29,12 @@ function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => voi
             <li key={code}>{code}</li>
           ))}
         </ul>
+        {keep.isError ? <FormError>{errors.message(keep.error)}</FormError> : null}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <CopyButton text={change.recovery_codes.join("\n")} />
           </div>
-          <Button
-            variant="primary"
-            size="md"
-            onClick={async () => {
-              await start(change.csrf_token);
-              onClose();
-            }}
-          >
+          <Button variant="primary" size="md" onClick={() => keep.mutate()} disabled={keep.isPending}>
             {t("security.codes.done")}
           </Button>
         </div>
@@ -87,7 +84,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
     },
   });
   return (
-    <Dialog title={t("security.setup.title")} onClose={onClose}>
+    <Dialog title={t("security.setup.title")} onClose={onClose} dismissible={!confirm.isPending}>
       <div className="space-y-4">
         <p className="text-t2">{t("security.setup.scan")}</p>
         <div className="flex flex-col items-start gap-4 min-[420px]:flex-row">
@@ -124,7 +121,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
             error={errors.field(confirm.error, "code")}
           />
           <div className="flex justify-end gap-2">
-            <Button size="md" onClick={onClose}>
+            <Button size="md" onClick={onClose} disabled={confirm.isPending}>
               {t("cancel")}
             </Button>
             <SubmitButton pending={confirm.isPending}>{t("security.setup.enable")}</SubmitButton>
@@ -148,7 +145,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
     },
   });
   return (
-    <Dialog title={t("security.regenerate.title")} onClose={onClose}>
+    <Dialog title={t("security.regenerate.title")} onClose={onClose} dismissible={!regenerate.isPending}>
       <form
         noValidate
         className="space-y-4"
@@ -169,7 +166,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
           error={errors.field(regenerate.error, "code")}
         />
         <div className="flex justify-end gap-2">
-          <Button size="md" onClick={onClose}>
+          <Button size="md" onClick={onClose} disabled={regenerate.isPending}>
             {t("cancel")}
           </Button>
           <SubmitButton pending={regenerate.isPending}>{t("security.regenerate.confirm")}</SubmitButton>

@@ -19,6 +19,7 @@ export default {
   loadMore: "Load more",
   loadingMore: "Loading",
   nav: { signOut: "Sign out" },
+  signOutFailed: "Couldn’t sign out. You’re still signed in. {{reason}} Try again.",
   errors: {
     invalid_request: "Some of what you entered isn’t valid. Check it and try again.",
     unauthenticated: "You’ve been signed out. Sign in again.",

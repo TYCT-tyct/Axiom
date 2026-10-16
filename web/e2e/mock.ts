@@ -19,6 +19,9 @@ type Stored = { operation: string; status: number; json: unknown };
 // What every surface keeps about the person at the keyboard.
 export type AuthState = {
   level: Level;
+  // which account is signed in: the digit its user and account IDs are made of, so a test can hand the browser's session
+  // to another account the way a second tab does
+  account: number;
   csrf: string;
   csrfCount: number;
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };

@@ -1,6 +1,7 @@
 import { Button, Logo, PreferenceSwitches, usePageTitle } from "@axiom/ui";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { SignOutError } from "../parts";
 import { useSignOut } from "../session";
 
 // What names the site on a page of the app: its name and logo, which the app's site settings give (none yet: the
@@ -50,8 +51,11 @@ export function OtherAccount() {
   const { t } = useTranslation("common");
   const signOut = useSignOut();
   return (
-    <Button variant="ghost" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
-      {t("auth.mfa.otherAccount")}
-    </Button>
+    <>
+      <Button variant="ghost" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+        {t("auth.mfa.otherAccount")}
+      </Button>
+      <SignOutError error={signOut.error} />
+    </>
   );
 }

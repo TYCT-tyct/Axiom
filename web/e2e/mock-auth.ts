@@ -17,6 +17,7 @@ export const accountId = (n: number) => `acct_${String(n).repeat(26)}` as Schema
 export function authState(permissions: string[]): AuthState {
   return {
     level: "none",
+    account: 0,
     csrf: "",
     csrfCount: 0,
     user: {
@@ -42,8 +43,8 @@ function grant(state: AuthState, status: Schemas["SessionGrant"]["status"]): Sch
 }
 
 export const session = (state: AuthState): Schemas["Session"] => ({
-  user: { id: userId(0), email: state.user.email, invite_code: state.user.inviteCode },
-  account: accountId(0),
+  user: { id: userId(state.account), email: state.user.email, invite_code: state.user.inviteCode },
+  account: accountId(state.account),
   level: state.level === "none" ? "password" : state.level,
   mfa_enabled: state.mfaEnabled,
   csrf_token: state.csrf,

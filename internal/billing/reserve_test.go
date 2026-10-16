@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -10,6 +11,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -23,6 +25,7 @@ type bank struct {
 	platform pg.Scope
 	billing  *Billing
 	admitted Admitted
+	supplies *supplies
 }
 
 var exact = Quotable{MaxOutput: 0, Model: Model{ContextLength: 1e12}}
@@ -43,7 +46,9 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	if config == (Config{}) {
 		config = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour}
 	}
-	if b.billing, err = Start(t.Context(), app, b.platform, config); err != nil {
+	config.CorrectionWindow = cmp.Or(config.CorrectionWindow, time.Hour)
+	b.supplies = newSupplies()
+	if b.billing, err = Start(t.Context(), app, b.platform, config, b.supplies); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
@@ -51,9 +56,25 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d", balance))
+	if balance > 0 {
+		b.credit(balance)
+	}
 	exact.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0"}}`)
 	return b
+}
+
+// credit adds amount to the account as a gift, through the ledger, in the platform scope.
+func (b *bank) credit(amount int64) {
+	b.t.Helper()
+	a := b.admitted
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		return AddCredit(b.t.Context(), tx, Credit{
+			ID: uuid.NewV7(), Site: a.Site, Account: a.Account, Amount: amount,
+			Actor: audit.System("billing.test"), Reason: "test credit",
+		})
+	}); err != nil {
+		b.t.Fatal(err)
+	}
 }
 
 // sql runs statements as the superuser, for what the application may not do, such as crediting a balance.
@@ -87,12 +108,17 @@ func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 // are the sums of the pending amounts, and the balance never passes its floor.
 func (b *bank) consistent() {
 	b.t.Helper()
+	// What a reservation still holds: all of it while pending or awaiting a supplier record, the rest of an estimate
+	// until its window ends; and what it charged, which its windows have spent.
+	const held = `CASE r.state WHEN 'pending' THEN r.amount WHEN 'cleanup_pending' THEN r.amount
+		WHEN 'estimated' THEN greatest(r.amount - r.charged, 0) ELSE 0 END`
+	const window = `((r.workspace_id, r.workspace_window) = (s.subject, s.window_start)
+		OR (r.key_id, r.key_window) = (s.subject, s.window_start))`
 	for name, query := range map[string]string{
-		"balance": `SELECT b.reserved - coalesce((SELECT sum(amount) FROM billing.reservations WHERE state = 'pending'), 0)
-			FROM billing.balances b`,
-		"windows": `SELECT count(*) FROM billing.spend s WHERE s.reserved <> coalesce((SELECT sum(amount)
-			FROM billing.reservations r WHERE r.state = 'pending' AND (r.workspace_id, r.workspace_window) = (s.subject, s.window_start)
-			OR r.state = 'pending' AND (r.key_id, r.key_window) = (s.subject, s.window_start)), 0)`,
+		"balance": `SELECT b.reserved - coalesce((SELECT sum(` + held + `) FROM billing.reservations r), 0) FROM billing.balances b`,
+		"windows": `SELECT count(*) FROM billing.spend s WHERE s.reserved <> coalesce((SELECT sum(` + held + `)
+			FROM billing.reservations r WHERE ` + window + `), 0)
+			OR s.spent <> coalesce((SELECT sum(r.charged) FROM billing.reservations r WHERE ` + window + `), 0)`,
 		"floor": `SELECT count(*) FROM billing.balances WHERE balance - reserved < floor`,
 	} {
 		if n := b.count(query); n != 0 {
@@ -218,7 +244,7 @@ func (b *bank) waitFor(query string, want int64) {
 func (b *bank) waitForLockWait() {
 	b.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for b.superCount("SELECT count(*) FROM pg_locks WHERE NOT granted") == 0 {
+	for b.superCount("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'") == 0 {
 		if time.Now().After(deadline) {
 			b.t.Fatal("nothing waits on a lock")
 		}

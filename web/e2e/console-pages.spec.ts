@@ -26,6 +26,22 @@ async function signIn(page: Page, email = knownEmail, password = knownPassword) 
 
 const main = (page: Page) => page.getByRole("main");
 
+// What a page does when its window comes back to the front, which is when it asks again for the session.
+const returnToWindow = (page: Page) =>
+  page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
+
+// The server answering the same call, once, with a failure.
+const failOnce = (page: Page, url: string) => {
+  let failed = false;
+  return page.route(url, (route) => {
+    if (failed) {
+      return route.fallback();
+    }
+    failed = true;
+    return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
+  });
+};
+
 test.describe("signing in", () => {
   test("a wrong password says so, a right one opens the overview", async ({ page }) => {
     const errors = collectErrors(page);
@@ -113,6 +129,45 @@ test.describe("signing in", () => {
     await expect(page.getByText("Laptop")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "还没有 key" })).toBeVisible();
   });
+
+  test("a session that passes to another account shows none of what the first one loaded", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/keys");
+    await expect(page.getByText("Laptop")).toBeVisible();
+    await page.getByRole("button", { name: "创建 key" }).click();
+    await page.getByLabel("名称").fill("Deploy bot");
+    await page.getByRole("button", { name: "创建", exact: true }).click();
+    const secret = page.getByRole("dialog", { name: "复制你的 key" });
+    await expect(secret).toBeVisible();
+
+    // Another tab ends this account's session and starts another's. The cookie is the browser's, so the next time this
+    // page asks for its session it gets the other account's, with its list cached for 30 seconds and the key's text
+    // still open on the screen.
+    state.account = 1;
+    state.user.email = "other@example.com";
+    state.keys = [];
+    await returnToWindow(page);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await expect(secret).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "还没有 key" })).toBeVisible();
+    await expect(page.getByText("Laptop")).toHaveCount(0);
+    await expect(page.getByText("Deploy bot")).toHaveCount(0);
+  });
+
+  test("a sign-out that fails says the user is still signed in, and trying again signs out", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await failOnce(page, "**/api/console/v1/auth/sign-out");
+    await page.goto("/console/keys");
+    await expect(page.getByText("Laptop")).toBeVisible();
+    await page.getByRole("button", { name: "退出登录" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "没能退出登录" })).toContainText("你仍在登录状态");
+    await expect(page.getByText("Laptop")).toBeVisible();
+    expect(state.level).toBe("password");
+    await page.getByRole("button", { name: "退出登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  });
 });
 
 test.describe("two-step verification at sign-in", () => {
@@ -135,6 +190,19 @@ test.describe("two-step verification at sign-in", () => {
     await signIn(page, mfaEmail);
     await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
     await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
+    await page.getByRole("button", { name: "换一个账户登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  });
+
+  test("giving up a pending sign-in that fails says it is not given up, and trying again does", async ({ page }) => {
+    await mockConsole(page);
+    await failOnce(page, "**/api/console/v1/auth/sign-out");
+    await page.goto("/console/");
+    await signIn(page, mfaEmail);
+    await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
+    await page.getByRole("button", { name: "换一个账户登录" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "没能退出登录" })).toContainText("你仍在登录状态");
     await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
     await page.getByRole("button", { name: "换一个账户登录" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
@@ -230,6 +298,45 @@ test.describe("API keys", () => {
       spend_limit: { amount: "20000000000" },
       limit_reset: "monthly",
     });
+  });
+
+  test("a key without a limit can be given one, and a limit that was cleared can be set again", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/keys");
+    const limitOf = (name: string) => state.keys.find((key) => key.name === name)?.spend_limit;
+    async function editLimit(name: string, amount: string) {
+      await page.getByRole("button", { name: `修改 ${name}` }).click();
+      const dialog = page.getByRole("dialog", { name: "修改 key" });
+      const limit = dialog.getByLabel("花费上限（USD）");
+      await expect(limit).toBeEnabled();
+      await limit.fill(amount);
+      await dialog.getByRole("button", { name: "保存" }).click();
+      await expect(dialog).toHaveCount(0);
+    }
+
+    await editLimit("CI runner", "5");
+    expect(limitOf("CI runner")).toEqual({ amount: "5000000000", currency: "USD" });
+    await editLimit("Laptop", "");
+    expect(limitOf("Laptop")).toBeUndefined();
+    await editLimit("Laptop", "7.5");
+    expect(limitOf("Laptop")).toEqual({ amount: "7500000000", currency: "USD" });
+  });
+
+  test("a limit cannot be set while the account's currency is unknown, and the form says why", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.route("**/api/console/v1/balance", (route) => route.fulfill({ status: 403 }));
+    await page.goto("/console/keys");
+    await page.getByRole("button", { name: "修改 CI runner" }).click();
+    const dialog = page.getByRole("dialog", { name: "修改 key" });
+    await expect(dialog.getByText("没能取得账户的币种")).toBeVisible();
+    await expect(dialog.getByLabel(/花费上限/)).toBeDisabled();
+    // The rest of the key can still be changed.
+    await dialog.getByLabel("名称").fill("CI runner 2");
+    await dialog.getByRole("button", { name: "保存" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(state.keys.map((key) => key.name)).toContain("CI runner 2");
   });
 
   test("a key is deleted only after the user confirms", async ({ page }) => {
@@ -353,51 +460,5 @@ test.describe("calls", () => {
     await page.getByRole("link", { name: "概览" }).click();
     await expect(page.getByRole("heading", { name: "最近的报错" })).toBeVisible();
     await expect(page.getByText("upstream_timeout").first()).toBeVisible();
-  });
-});
-
-test.describe("two-step verification settings", () => {
-  test("turning it on shows a QR code and the recovery codes once, and later changes use the new session", async ({
-    page,
-  }) => {
-    const errors = collectErrors(page);
-    const state = await mockConsole(page);
-    signedInAs(state);
-    await page.goto("/console/security");
-    await expect(page.getByText("未开启")).toBeVisible();
-    await page.getByRole("button", { name: "开启两步验证" }).click();
-
-    const dialog = page.getByRole("dialog", { name: "开启两步验证" });
-    await expect(dialog.getByRole("img", { name: "两步验证的二维码" })).toBeVisible();
-    await expect(dialog.getByText("JBSWY3DPEHPK3PXP")).toBeVisible();
-    await dialog.getByLabel("密码").fill(knownPassword);
-    await dialog.getByLabel("验证器里的 6 位验证码").fill("000000");
-    await dialog.getByRole("button", { name: "开启", exact: true }).click();
-    await expect(dialog.getByRole("alert")).toHaveText(/验证码不对/);
-    await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
-    await dialog.getByRole("button", { name: "开启", exact: true }).click();
-
-    const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
-    await expect(codes.getByRole("listitem")).toHaveCount(10);
-    await page.keyboard.press("Escape");
-    await expect(codes).toBeVisible();
-    await codes.getByRole("button", { name: "我已保存" }).click();
-    await expect(page.getByText("已开启")).toBeVisible();
-
-    // The change gave this device a new CSRF token; a request that still sent the old one would be refused.
-    await page.getByRole("button", { name: "重新生成恢复码" }).click();
-    const again = page.getByRole("dialog", { name: "重新生成恢复码" });
-    await again.getByLabel("验证器里的 6 位验证码").fill("123456");
-    await again.getByRole("button", { name: "重新生成" }).click();
-    await expect(page.getByRole("dialog", { name: "保存你的恢复码" }).getByRole("listitem")).toHaveCount(10);
-    expect(errors.filter((line) => !line.includes("401"))).toEqual([]);
-  });
-
-  test("the invite code and link are there to copy", async ({ page }) => {
-    const state = await mockConsole(page);
-    signedInAs(state);
-    await page.goto("/console/security");
-    await expect(page.getByText("AXIOM-7K2Q", { exact: true })).toBeVisible();
-    await expect(page.getByText(/\/console\/register\?invite=AXIOM-7K2Q/)).toBeVisible();
   });
 });

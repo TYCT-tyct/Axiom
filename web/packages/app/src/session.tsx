@@ -32,31 +32,47 @@ export function useAuth() {
 
 const sessionKey = ["session"] as const;
 
+// Everything under this key belongs to one account's session and goes when it ends or passes to another account, so
+// the next person to sign in on this browser never sees it.
+export const accountKey = "account";
+
+// Whose session it is. The cookie is shared by every tab of the browser, so another tab can end one person's session and
+// start another's while this page is open; the session this page then reads is the other's.
+const identityOf = (session: Session | null) => (session ? `${session.user.id}/${session.account}` : "");
+
+async function fetchSession(api: AuthApi, signal: AbortSignal) {
+  try {
+    const session = await api.session(signal);
+    setCsrfToken(session.csrf_token);
+    return session;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      setCsrfToken("");
+      return null;
+    }
+    throw error;
+  }
+}
+
 // The current session, or null when nobody is signed in. A 401 is the answer "no session", not a failure, and the page
-// keeps the CSRF token it carries in memory (@axiom/api) because the cookie itself is HttpOnly.
+// keeps the CSRF token it carries in memory (@axiom/api) because the cookie itself is HttpOnly. A session of someone
+// else than the one before it drops what the previous one loaded, and the requests still out for it: the same cache key
+// would otherwise show one person's balance under another's name.
 function sessionQuery(api: AuthApi) {
   return queryOptions({
     queryKey: sessionKey,
-    queryFn: async ({ signal }) => {
-      try {
-        const session = await api.session(signal);
-        setCsrfToken(session.csrf_token);
-        return session;
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          setCsrfToken("");
-          return null;
-        }
-        throw error;
+    queryFn: async ({ client, signal }) => {
+      const before = identityOf(client.getQueryData<Session | null>(sessionKey) ?? null);
+      const session = await fetchSession(api, signal);
+      if (identityOf(session) !== before) {
+        await client.cancelQueries({ queryKey: [accountKey] });
+        client.removeQueries({ queryKey: [accountKey] });
       }
+      return session;
     },
     refetchOnWindowFocus: "always",
   });
 }
-
-// Everything under this key belongs to one account's session and goes when it ends, so the next person to sign in on
-// this browser never sees it.
-export const accountKey = "account";
 
 // endSession drops the session and what it loaded. Pages see the null session and send the visitor to sign in again,
 // to come back to the page they were on.
@@ -66,13 +82,12 @@ export function endSession(queryClient: QueryClient) {
   queryClient.removeQueries({ queryKey: [accountKey] });
 }
 
-// useStartSession adopts the CSRF token of a new session and loads it; the previous account's data is dropped first.
+// useStartSession adopts the CSRF token of a new session and loads it.
 export function useStartSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return async (csrfToken: string) => {
     setCsrfToken(csrfToken);
-    queryClient.removeQueries({ queryKey: [accountKey] });
     await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
   };
 }
@@ -160,10 +175,14 @@ function Redirect({ stage, here }: { stage: Stage; here: string }) {
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member
-// whose session ends while a page is open lands on the sign-in page and comes back to that page after signing in.
+// whose session ends while a page is open lands on the sign-in page and comes back to that page after signing in. Page
+// state is the account's too: a session of another account starts the pages afresh.
 export function Gate({ stage, children }: { stage: Stage; children: ReactNode }) {
   const { api, requiresMfa } = useAuth();
-  const session = useQuery(sessionQuery(api));
+  const result = useQuery(sessionQuery(api));
+  // A refresh that fails leaves the session the page already has in place: the server ends a session by saying so (401),
+  // and a page open on something the user must act on, such as recovery codes, is not taken away for a bad moment.
+  const session = result.data === undefined ? result : { ...result, status: "success" as const };
   // The page on screen, not the address the router is moving to: while the next page loads the current one stays, and
   // a gate that read the new address would redirect again from there.
   const here = useRouterState({ select: (state) => (state.resolvedLocation ?? state.location).href });
@@ -171,7 +190,9 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
     <DataState query={session}>
       {(data) =>
         stageOf(data, requiresMfa) === stage ? (
-          <SessionContext value={data}>{children}</SessionContext>
+          <SessionContext key={identityOf(data)} value={data}>
+            {children}
+          </SessionContext>
         ) : (
           <Redirect stage={stageOf(data, requiresMfa)} here={here} />
         )

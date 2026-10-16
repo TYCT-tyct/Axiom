@@ -11,8 +11,10 @@ import {
   TextAreaField,
   TextField,
 } from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { balanceQuery } from "./queries";
 
 // What the form collects. A key is made with an expiry and changed with an on/off switch; the contract's two requests
 // share the rest.
@@ -69,15 +71,31 @@ function readValues(form: HTMLFormElement, currency: string | undefined): KeyVal
 
 type Section = { apiKey?: Schemas["Key"]; error: unknown };
 
-function Limit({ apiKey, error, currency, invalid }: Section & { currency: string | undefined; invalid: Invalid }) {
+// The currency a limit is in is the account's, which the balance tells; a key that has a limit also carries it. A key
+// without one is where a limit is first set (or set again after it was cleared), so the field waits for the balance and
+// says why when it cannot have it.
+function useCurrency(apiKey: Schemas["Key"] | undefined) {
+  const balance = useQuery(balanceQuery);
+  const unit = apiKey?.spend_limit?.currency ?? balance.data?.balance.currency;
+  return { unit, unavailable: !unit && balance.isError };
+}
+
+function Limit({
+  apiKey,
+  error,
+  invalid,
+  unit,
+  unavailable,
+}: Section & { invalid: Invalid; unit: string | undefined; unavailable: boolean }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const unit = apiKey?.spend_limit?.currency ?? currency;
+  const waiting = unavailable ? t("keys.form.limitCurrencyFailed") : t("keys.form.limitCurrencyLoading");
+  const usual = apiKey ? t("keys.form.limitHintEdit") : t("keys.form.limitHintCreate");
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <TextField
         label={t("keys.form.limit", { currency: unit ?? "" })}
-        hint={apiKey ? t("keys.form.limitHintEdit") : t("keys.form.limitHintCreate")}
+        hint={unit ? usual : waiting}
         name="spend_limit"
         inputMode="decimal"
         autoComplete="off"
@@ -128,13 +146,11 @@ function Restrictions({ apiKey, error }: Section) {
 // because the contract replaces them all). The expiry is asked once, when the key is made.
 export function KeyForm({
   apiKey,
-  currency,
   pending,
   error,
   onSubmit,
   onCancel,
 }: Section & {
-  currency: string | undefined;
   pending: boolean;
   onSubmit: (values: KeyValues) => void;
   onCancel: () => void;
@@ -142,13 +158,14 @@ export function KeyForm({
   const { t } = useTranslation();
   const errors = useErrors();
   const [invalid, setInvalid] = useState<Invalid>(null);
+  const currency = useCurrency(apiKey);
   return (
     <form
       noValidate
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
-        const values = readValues(event.currentTarget, apiKey?.spend_limit?.currency ?? currency);
+        const values = readValues(event.currentTarget, currency.unit);
         setInvalid(typeof values === "object" ? null : values);
         if (typeof values === "object" && !pending) {
           onSubmit(values);
@@ -164,7 +181,7 @@ export function KeyForm({
         autoComplete="off"
         error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
       />
-      <Limit apiKey={apiKey} error={error} currency={currency} invalid={invalid} />
+      <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
       <Restrictions apiKey={apiKey} error={error} />
       {apiKey ? (
         <CheckField

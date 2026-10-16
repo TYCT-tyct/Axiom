@@ -74,6 +74,8 @@ export default {
       limit: "Spend limit ({{currency}})",
       limitHintCreate: "Leave empty to use the site’s default limit for new keys.",
       limitHintEdit: "Leave empty for no limit.",
+      limitCurrencyLoading: "Getting the account’s currency.",
+      limitCurrencyFailed: "Couldn’t get the account’s currency, so a spend limit can’t be set right now.",
       limitInvalid: "Enter an amount with up to 9 decimals, like 12.5.",
       reset: "Resets",
       resetNever: "Never",
