@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/jsonx"
@@ -32,6 +33,7 @@ func (p PricePoint) String() string {
 type price struct {
 	id       uuid.UUID
 	schedule *Schedule
+	at       time.Time // when it was published
 }
 
 // prices are a model's heads by currency: the current price is the row nothing replaces.
@@ -44,7 +46,7 @@ func currentPrices(ctx context.Context, tx pg.Tx, model uuid.UUID) (prices, erro
 	}
 	heads := make(prices, len(rows))
 	for _, row := range rows {
-		p := price{id: row.ID}
+		p := price{id: row.ID, at: row.PublishedAt}
 		if row.Schedule != nil {
 			s, err := ParseSchedule(row.Schedule)
 			if err != nil {

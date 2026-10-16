@@ -34,12 +34,15 @@ const (
 // SyncResult is one model's outcome. Candidate is the schedule the dataset gives when it is a valid one that was not
 // published, for a person to publish with publish-price.
 type SyncResult struct {
-	Model     ModelID   `json:"model"`
-	Slug      string    `json:"slug"`
-	Entry     string    `json:"entry,omitempty"`
-	Outcome   Outcome   `json:"outcome"`
-	Reason    string    `json:"reason,omitempty"`
-	Candidate jsonx.Raw `json:"candidate,omitempty"`
+	Model ModelID `json:"model"`
+	Slug  string  `json:"slug"`
+	Entry string  `json:"entry,omitempty"`
+	// Base is the current price row the result was worked out against, nil when the model has no history: a person
+	// publishes a candidate with it, so a price published since the round is refused, not overwritten.
+	Base      *uuid.UUID `json:"base"`
+	Outcome   Outcome    `json:"outcome"`
+	Reason    string     `json:"reason,omitempty"`
+	Candidate jsonx.Raw  `json:"candidate,omitempty"`
 }
 
 // SyncReport is a round over one dataset: one result per model that takes its price from it.
@@ -166,6 +169,9 @@ func followerOf(ctx context.Context, tx pg.Tx, row CatalogModel) (syncModel, err
 // held result.
 func (c *Catalog) syncOne(ctx context.Context, f Fetched, bodySum string, index map[string][]*Entry, m syncModel, publish bool) (SyncResult, error) {
 	r := SyncResult{Model: ModelID(m.row.ID), Slug: m.row.Slug, Outcome: OutcomeHeld}
+	if m.has {
+		r.Base = &m.head.id
+	}
 	entry, err := pickEntry(index, m)
 	if err != nil {
 		return r.heldBy(err, nil), nil
@@ -192,7 +198,7 @@ func (c *Catalog) syncOne(ctx context.Context, f Fetched, bodySum string, index 
 		return r, err
 	}
 	// The publish makes these two checks again on the locked row; making them here as well gives a dry run the answer.
-	if err := errors.Join(c.safe(current, next), checkPublish(m.row, spec, n, m.head, false)); err != nil {
+	if err := errors.Join(outdated(m, f), c.safe(current, next), checkPublish(m.row, spec, n, m.head, false)); err != nil {
 		return r.heldBy(err, n.canonical), nil
 	}
 	if !publish {
@@ -226,6 +232,15 @@ func (c *Catalog) publishSynced(ctx context.Context, f Fetched, bodySum string, 
 // syncOp is the operation of one publish: a fresh key, since the base it carries already stops a retry from publishing twice.
 func syncOp(src PriceSource, entry string) Op {
 	return Op{Actor: syncActor, Key: uuid.NewV7(), Reason: fmt.Sprintf("dataset sync: %s %s", src, entry)}
+}
+
+// outdated refuses a round that fetched before the current price was published: it would put an older price after a
+// newer one, and the base and the limit would not notice (two rounds fetching at different times, finishing in the other order).
+func outdated(m syncModel, f Fetched) error {
+	if m.has && m.head.at.After(f.At) {
+		return errors.New("the current price was published after this dataset was fetched")
+	}
+	return nil
 }
 
 // heldBy is the result with why it was held and, if the dataset gave a valid schedule, the one a person could publish.

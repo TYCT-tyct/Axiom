@@ -55,8 +55,6 @@ func (s *store) priceCount(id catalog.ModelID) int {
 	return query[int](s, platformScope, "SELECT count(*) FROM catalog.reference_price WHERE model_id = $1", uuid.UUID(id))
 }
 
-var fetchedAt = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-
 // litellm is a LiteLLM table of the given entries, each a key and the fields after its provider and mode.
 func litellm(entries ...string) catalog.Fetched {
 	var b strings.Builder
@@ -70,7 +68,7 @@ func litellm(entries ...string) catalog.Fetched {
 		fmt.Fprintf(&b, `%q:{"litellm_provider":"openai","mode":"chat",%s}`, key, fields)
 	}
 	b.WriteString("}")
-	return catalog.Fetched{Source: catalog.SourceLiteLLM, Body: []byte(b.String()), At: fetchedAt}
+	return catalog.Fetched{Source: catalog.SourceLiteLLM, Body: []byte(b.String()), At: time.Now()}
 }
 
 const (
@@ -155,6 +153,7 @@ func TestSyncHolds(t *testing.T) {
 			s := newStore(t)
 			id := s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, xSpec, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
 			before := s.usd(id)
+			tc.data.At = time.Now() // fetched after the model's price was published
 			report, err := s.c.SyncDataset(t.Context(), tc.data, true)
 			if err != nil {
 				t.Fatal(err)
@@ -182,11 +181,36 @@ func TestSyncHoldKeepsTheCandidate(t *testing.T) {
 	if want := `{"currency":"USD","rates":{"cache_read":"0.0000002","input":"0.000002","output":"0.000004"},"v":1}`; string(r.Candidate) != want {
 		t.Errorf("candidate %s, want %s", r.Candidate, want)
 	}
-	// and it publishes as it is, by the admin operation
+	// a price published after the report makes its candidate stale: the report's base is refused, and the model's own is not what was reviewed
 	id := r.Model
+	publish := func() error {
+		_, err := s.c.PublishPrice(t.Context(), catalog.PublishPriceRequest{
+			Op: op(), Model: id, Base: r.Base, Source: catalog.SourceLiteLLM, Schedule: r.Candidate, Evidence: raw(evidence),
+		})
+		return err
+	}
 	s.must(s.c.PublishPrice(t.Context(), catalog.PublishPriceRequest{
-		Op: op(), Model: id, Base: new(s.head(id, "USD")), Source: catalog.SourceLiteLLM, Schedule: r.Candidate, Evidence: raw(evidence),
+		Op: op(), Model: id, Base: r.Base, Source: catalog.SourceLiteLLM, Schedule: raw(xCurrent), Evidence: raw(evidence),
 	}))
+	wantErr(t, publish(), "not the one the request was decided on")
+}
+
+// TestSyncHoldsADatasetOlderThanThePrice: a round that fetched before the current price was published cannot put its older
+// price after the newer one.
+func TestSyncHoldsADatasetOlderThanThePrice(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id := s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, xSpec, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
+	before := s.usd(id)
+	data := litellm(`"gpt-x-2025-01-01"=` + xPrices("1.1e-06", "2.2e-06", "1.1e-07"))
+	data.At = time.Now().Add(-time.Hour)
+	report, err := s.c.SyncDataset(t.Context(), data, true)
+	if err != nil || report.Results[0].Outcome != catalog.OutcomeHeld || !strings.Contains(report.Results[0].Reason, "published after") {
+		t.Fatalf("round: %+v, %v", report, err)
+	}
+	if s.usd(id) != before {
+		t.Error("an older dataset replaced a newer price")
+	}
 }
 
 // TestSyncMatchesOnlyVersionEvidence: an undated name of a model fixed to one version is not what the dataset's entry of that
@@ -325,6 +349,24 @@ func TestSelectDatasetSource(t *testing.T) {
 	}
 }
 
+// TestSelectDatasetSourceKeepsTiers: a dataset price without the context tiers the current price has is refused, though
+// its base price covers every range.
+func TestSelectDatasetSourceKeepsTiers(t *testing.T) {
+	t.Parallel()
+	const tiered = `{"v":1,"currency":"USD","rates":{"cache_read":"0.0000001","input":"0.000001","output":"0.000002"},
+		"context_tiers":{"basis":["input","cache_read"],"method":"whole","tiers":[{"above":200000,"rates":{"input":"0.000002","output":"0.000004"}}]}}`
+	s := newStore(t)
+	id, _ := s.seed("openai/gpt-x@20250101", xSpec, tiered)
+	s.must(s.c.AddName(t.Context(), catalog.AddNameRequest{Op: op(), Model: id, Name: "gpt-x-2025-01-01", Visibility: catalog.VisibilityPublic}))
+	before := s.priceCount(id)
+	_, err := s.c.SelectDatasetSource(t.Context(), litellm(`"gpt-x-2025-01-01"=`+xPrices("1e-06", "2e-06", "1e-07")),
+		catalog.SelectDatasetSourceRequest{Op: op(), Model: id, Source: catalog.SourceLiteLLM})
+	wantErr(t, err, "lacks the context tiers")
+	if s.priceCount(id) != before || query[string](s, platformScope, "SELECT price_source FROM catalog.model WHERE id = $1", uuid.UUID(id)) != "manual" {
+		t.Error("a refused switch changed the model")
+	}
+}
+
 // TestSelectPriceSourceTakesNoDatasetPrices: the operator's own prices are never filed under a dataset.
 func TestSelectPriceSourceTakesNoDatasetPrices(t *testing.T) {
 	t.Parallel()
@@ -376,11 +418,13 @@ func TestUnrecognized(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceManual, xSpec, xCurrent, "openai/gpt-x")
+	s.follow("openai/gpt-y@20990101", catalog.VersionDated, catalog.SourceManual, xSpec, xCurrent, "openai/gpt-y", "openai/gpt-y-20990101")
 	model := func(id, output string) string {
 		return fmt.Sprintf(`{"id":%q,"canonical_slug":%q,"architecture":{"output_modalities":[%q]},"pricing":{"prompt":"0.000001","completion":"0.000002"}}`, id, id+"-20990101", output)
 	}
 	entries, err := catalog.ParseOpenRouter([]byte(`{"data":[` + strings.Join([]string{
-		model("openai/gpt-x", "text"),      // known by its standard ID
+		model("openai/gpt-x", "text"),      // known only by an undated name, which says nothing of the version (its dated one is new)
+		model("openai/gpt-y", "text"),      // known by the dated name
 		model("openai/gpt-new", "text"),    // not known
 		model("openai/gpt-image", "image"), // not a text model
 		model("other/model", "text"),       // not a checked vendor
@@ -392,7 +436,7 @@ func TestUnrecognized(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.c.Unrecognized(entries, []string{"openai"})
-	if err != nil || fmt.Sprint(got) != "[openai/gpt-new]" {
+	if err != nil || fmt.Sprint(got) != "[openai/gpt-new openai/gpt-x]" {
 		t.Errorf("Unrecognized = %v, %v", got, err)
 	}
 }

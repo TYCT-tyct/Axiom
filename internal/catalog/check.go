@@ -98,7 +98,7 @@ func (c *Catalog) Unrecognized(entries []Entry, authors []string) ([]string, err
 		if !e.Text || !slices.Contains(authors, author) {
 			continue
 		}
-		if !slices.ContainsFunc(e.Names, func(name string) bool { _, ok := snap.Recognize(name); return ok }) {
+		if !slices.ContainsFunc(e.Names, func(name string) bool { r, ok := snap.Recognize(name); return ok && r.Exact }) {
 			missing = append(missing, e.Key)
 		}
 	}

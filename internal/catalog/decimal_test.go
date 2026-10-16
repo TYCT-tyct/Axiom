@@ -1,6 +1,9 @@
 package catalog
 
-import "testing"
+import (
+	"math/big"
+	"testing"
+)
 
 func TestPlainDecimal(t *testing.T) {
 	t.Parallel()
@@ -33,6 +36,10 @@ func FuzzPlainDecimal(f *testing.F) {
 		got, err := plainDecimal(s)
 		if err != nil {
 			return
+		}
+		want, ok := new(big.Rat).SetString(s)
+		if have, _ := new(big.Rat).SetString(got); !ok || have.Cmp(want) != 0 {
+			t.Fatalf("plainDecimal(%q) = %q, which is a different number", s, got)
 		}
 		again, err := plainDecimal(got)
 		if err != nil || again != got {

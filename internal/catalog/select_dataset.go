@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -46,7 +47,7 @@ func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDa
 	}
 	next, err := entry.schedule(current)
 	if err == nil {
-		err = sane(next)
+		err = errors.Join(sane(next), keepsTiers(m.heads, next))
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: entry %s: %w", m.row.Slug, entry.Key, err)
@@ -60,6 +61,17 @@ func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDa
 		Op: r.Op, Model: r.Model, Rev: m.row.Rev, Source: r.Source, Bases: bases, ConfirmBasisChange: r.ConfirmBasisChange,
 		Prices: []SourcePrice{{Schedule: mustJSON(next), Evidence: datasetEvidence(f, hex.EncodeToString(sum[:]), entry)}},
 	})
+}
+
+// keepsTiers refuses a schedule without the context tiers a current price has: the other checks see only whether a price
+// exists in each range, which the base price satisfies, so long requests would be charged the base price.
+func keepsTiers(heads prices, next Schedule) error {
+	for currency, head := range heads {
+		if s := head.schedule; s != nil && len(s.above) > 0 && (s.basis != next.basis || !slices.Equal(s.above, next.above)) {
+			return fmt.Errorf("the dataset's price lacks the context tiers of the current %s price", currency)
+		}
+	}
+	return nil
 }
 
 // followerByID reads one model as the sync does. The switch locks the row and compares rev and the heads again, so a
