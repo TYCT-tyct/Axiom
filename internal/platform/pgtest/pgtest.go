@@ -1,7 +1,7 @@
 // Package pgtest gives tests a PostgreSQL database prepared the way a deployment prepares one: a login role for the
-// application, a migration administrator that is not a superuser, and the migrations of platform and the modules a
-// test names applied by it. One container serves a whole test binary; each set of modules is migrated once into a
-// template, and each test gets its own copy of one, so tests run in parallel and never see each other's rows.
+// application, a migration administrator that is not a superuser, and every migration applied by it. One container
+// serves a whole test binary; each test gets its own copy of a migrated template, so tests run in parallel and
+// never see each other's rows.
 package pgtest
 
 import (
@@ -35,20 +35,19 @@ var (
 	startErr  error
 	databases atomic.Int64
 
-	// templates holds each set of modules' template, or why it could not be built, by template name. One lock covers
-	// building them: migrations create roles, which belong to the whole cluster, so two at once would race.
-	templates   = map[string]error{}
 	templatesMu sync.Mutex
+	templates   = map[string]bool{} // module templates already built, by name
 )
 
-// New returns a database of its own for one test, with platform's migrations and those of modules applied.
+// New returns a database of its own for one test. Given modules, it also holds their migrations: the database is a
+// copy of a template that has them, built the first time a set of modules is asked for.
 func New(t testing.TB, modules ...pg.Module) Database {
 	t.Helper()
 	once.Do(func() { startErr = start(context.Background()) })
 	if startErr != nil {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
-	template, err := migrated(modules)
+	template, err := templateFor(t.Context(), modules)
 	if err != nil {
 		t.Fatalf("test database template: %v", err)
 	}
@@ -62,6 +61,35 @@ func New(t testing.TB, modules ...pg.Module) Database {
 		Migrator:  at("migrator", "migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
+}
+
+// templateFor is the template a database with modules is copied from. Migrate grants roles cluster-wide and so must
+// not run twice at once, which the lock here keeps; a template is built once per set of module names, and the
+// modules of a test binary are the same in every test.
+func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
+	if len(modules) == 0 {
+		return "axiom_template", nil
+	}
+	names := make([]string, len(modules))
+	for i, m := range modules {
+		names[i] = m.Name
+	}
+	slices.Sort(names)
+	name := "axiom_template_" + strings.Join(names, "_")
+	templatesMu.Lock()
+	defer templatesMu.Unlock()
+	if templates[name] {
+		return name, nil
+	}
+	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
+		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		return "", err
+	}
+	if err := pg.Migrate(ctx, at("migrator", "migrator", name), modules...); err != nil {
+		return "", err
+	}
+	templates[name] = true
+	return name, nil
 }
 
 // Run executes statements one after another on a new connection to databaseURL.
@@ -91,42 +119,8 @@ func keepReaperAlive() error {
 	return os.Setenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT", "2m")
 }
 
-// migrated returns the name of the template migrated with modules, building it the first time. The name is the
-// sorted module names, so one set gets one template whatever order it is given in; Migrate orders them itself.
-func migrated(modules []pg.Module) (string, error) {
-	names := []string{"axiom_template"}
-	for _, m := range modules {
-		names = append(names, m.Name)
-	}
-	slices.Sort(names[1:])
-	template := strings.Join(names, "_")
-	templatesMu.Lock()
-	defer templatesMu.Unlock()
-	err, built := templates[template]
-	if !built {
-		err = migrate(template, modules)
-		templates[template] = err
-	}
-	return template, err
-}
-
-// migrate creates the template and migrates it twice: the second run must find nothing to do.
-func migrate(template string, modules []pg.Module) error {
-	ctx := context.Background()
-	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+template,
-		"GRANT CREATE ON DATABASE "+template+" TO migrator"); err != nil {
-		return err
-	}
-	for range 2 {
-		if err := pg.Migrate(ctx, at("migrator", "migrator", template), modules...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// start runs the container and creates the roles a deployment creates. Durability is off for speed; tests of
-// durability, migrations under load and performance run elsewhere with it on.
+// start runs the container and builds the template. Durability is off for speed; tests of durability, migrations
+// under load and performance run elsewhere with it on.
 func start(ctx context.Context) error {
 	if err := keepReaperAlive(); err != nil {
 		return err
@@ -144,8 +138,19 @@ func start(ctx context.Context) error {
 	if cluster, err = url.Parse(connection); err != nil {
 		return err
 	}
-	return Run(ctx, at("postgres", "postgres", "postgres"),
-		`CREATE ROLE axiom_app LOGIN PASSWORD 'app'`, `CREATE ROLE migrator LOGIN CREATEROLE PASSWORD 'migrator'`)
+	if err := Run(ctx, at("postgres", "postgres", "postgres"),
+		`CREATE ROLE axiom_app LOGIN PASSWORD 'app'`,
+		`CREATE ROLE migrator LOGIN CREATEROLE PASSWORD 'migrator'`,
+		`CREATE DATABASE axiom_template`,
+		`GRANT CREATE ON DATABASE axiom_template TO migrator`); err != nil {
+		return err
+	}
+	for range 2 { // the second run finds nothing to do
+		if err := pg.Migrate(ctx, at("migrator", "migrator", "axiom_template")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // at is the URL of database in the cluster as user.

@@ -113,7 +113,7 @@ const (
 // open returns the application's pool on a fresh, seeded database.
 func open(t *testing.T) (*pg.DB, pgtest.Database) {
 	t.Helper()
-	database := pgtest.New(t, accounts.Migrations())
+	database := pgtest.New(t, accounts.Module())
 	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(strings.Join(seed, ";\n"))); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestStartupCheckCoversTheTables(t *testing.T) {
 		if err := pgtest.Run(t.Context(), database.Superuser, c.statements...); err != nil {
 			t.Fatal(err)
 		}
-		err := db.Check(t.Context(), accounts.Migrations())
+		err := db.Check(t.Context(), accounts.Module())
 		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}

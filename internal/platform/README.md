@@ -14,7 +14,7 @@
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi` | 由 `api/console.yaml` 生成的控制台接口类型和服务端接口，除包说明外不手写 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`ErrNoRows` 让不能导入 pgx 的模块分得清"没有这一行"和失败 |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
@@ -58,7 +58,7 @@
 | 审计条目暂不属于任何租户 | 表上的 `no_tenant` 约束要求 `site_id`、`account_id` 都为空，理由见下文「审计日志」的「谁能读写」。测试：平台范围里直接写入只带站点、只带账户、两者都带的条目，都被拒 |
 | 审计条目必有操作者、动作和对象，补充信息小 | 表上的 CHECK，Go 不另查。测试：缺操作者、动作、模块、对象种类或 ID，动作只有一个词，补充信息超过 8 KiB，都被拒 |
 | 单价取值 0 … 1000，单位 10⁻¹⁵；录入的单价只来自十进制文本；同一单价只有一种写法 | 规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)；算出来的单价从分数向上取整，本包还没有这个构造方式。`ParseUnitPrice` 拒绝符号、指数、超过 15 位小数（是 0 也拒绝）和超出上限的值；`String` 的输出没有前导零，小数末尾不留零。模糊测试对照 `math/big`：任意文本的解析，以及整个取值范围的格式化往返 |
-| 精确金额的运算精确、不回绕 | `Exact` 是 128 位有符号整数，单位同单价。`UnitPrice.Mul` 的乘积小于 2¹²³，不会溢出；用量为负是调用方的错误，直接 panic。`Exact.Add` 溢出时返回错误。`Exact.Rat` 转成精确分数；`AmountExact` 把以十亿分之一为单位的金额转成 `Exact`，`Exact.CeilAmount` 向上取整回金额，超出 int64 是程序错误、panic，不回绕；模糊测试对照 `math/big` 覆盖整个 128 位范围（含两种金额换算），转分数的测试覆盖 128 位的两端和乘 10/71 后向上取整的边界 |
+| 精确金额的运算精确、不回绕 | `Exact` 是 128 位有符号整数，单位同单价。`UnitPrice.Mul` 的乘积小于 2¹²³，不会溢出；用量为负是调用方的错误，直接 panic。`Exact.Add` 溢出时返回错误。`Exact.Rat` 转成精确分数；模糊测试对照 `math/big` 覆盖整个 128 位范围，转分数的测试覆盖 128 位的两端和乘 10/71 后向上取整的边界 |
 
 ## 凭证加密
 
@@ -135,7 +135,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ### 迁移
 
-- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Migrations()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
+- 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Module()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。
@@ -147,7 +147,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 模块的 SQL 写在自己目录的 `queries/*.sql`，由 [sqlc](https://sqlc.dev) 生成类型化的 Go 代码，不用 ORM（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）。
 
 - **配置**：根目录的 `sqlc.yaml`，每个有查询的模块一项：`schema` 是 `sqlc/schemas.sql`（各模块的 schema 由迁移之前的步骤建好，迁移里没有 `CREATE SCHEMA`，sqlc 只读迁移，所以在这里补上；模块加第一条查询时加一行）加这个模块自己的迁移目录，只列这两样：模块只读写自己的表（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)），别的模块的数据经它的公开接口取得。查询若写到别的模块的表，sqlc 报表不存在而生成失败，所以这一条由生成本身守住；解析本模块的迁移不需要别的模块的建表语句（指向 `platform` 函数的策略照样能解析）。
-- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。生成的文件不手改。
+- **生成物**：写进模块的包里，一律以 `.gen.go` 结尾（`output_files_suffix`）：每个查询文件一个 `<名>.sql.gen.go`，加 `db.gen.go`、`models.gen.go`（没有查询用到的表就没有结构体）。方法把事务作为参数：`New().Insert…(ctx, tx, 参数)`，`Queries` 不持有连接，`tx` 就是 `pg.Tx`（它满足 sqlc 的 `DBTX`，见上文「不变量」），所以查询只能在带范围的事务里执行。模块的 `sqlc.yaml` 项用 `overrides` 把 `uuid`、`numeric`、`timestamptz`、`int8` 生成成 `uuid.UUID`、`string`、`time.Time`、`int64`（可空的为指针），模块的手写代码和测试就不必引用 pgx 的类型；要判断错误的 SQLSTATE（唯一冲突、被拒绝的行）用 `pg.SQLState(err)`。查询没有找到行用 `pg.ErrNoRows` 判断（模块不能引用 pgx）；模块原样保存、不解析的 JSON 字段用 `jsonx.Raw`；模块自己的改动历史要记操作者时用 `audit.Actor.String()`（`<种类>:<ID>`）。生成的文件不手改。
 - **重新生成**：`just generate`（`go tool sqlc generate`，版本钉在 `tools/go.mod`）。`just generated` 先删掉已提交的全部 `*.gen.go`、`*.gen.ts`，再重新生成，看有没有变化或没提交：手写却起了这种名字的文件会显示为被删，过期的也一样。删除会丢掉未提交的改动，所以这些文件有未提交的改动或是新文件时，它先失败并列出文件，一个也不删。生成之后，它还拒绝名字不是 `.gen.go`、却带 `// Code generated ... DO NOT EDIT.` 头的 Go 文件（不限 sqlc；头可以缩进、跟在块注释后面，与 Go 解析器的认法一致），生成器首次写出的错名文件（如 sqlc 条目漏了后缀的 `db.go`）也在其内，否则改了查询却忘了重新生成，没有检查看得见。生成器中途失败会留下被删的文件，`git restore` 即可找回。
 - **豁免**：生成的文件整体不进 lint（`.golangci.yml` 的 `exclusions.generated`，唯一的一处）。其中包括「pgx 只能在 `internal/platform` 里导入」：`platform` 之外模块的生成代码要导入 pgx 的类型，手写代码仍然不能。lint 凭文件头认生成代码，所以豁免的前提由 `just generated` 守住：带这个头的只有生成器写的 `.gen.go`。前端的 `*.gen.ts` 本来就按文件名免检，同样靠先删后生成证明名字没被冒用。
 
@@ -177,7 +177,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 测试
 
-`pgtest` 每个测试二进制起一个 PostgreSQL 容器。`pgtest.New(t, 模块…)` 用非超级用户的迁移管理员执行 `platform` 和所给模块的迁移（各执行两遍，第二遍应无事可做），做成这组模块的模板，同一组模块只建一次；每个测试复制一个独立的库，可以并行。模块只测自己的迁移，不受上层模块迁移的影响；建模板串行进行，因为迁移会建整个实例共用的角色。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
+`pgtest` 每个测试二进制起一个 PostgreSQL 容器，用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，可以并行。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时在模板上执行它们的迁移并另存一份模板，之后的测试复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里。容器关闭 fsync 以求快。容器由 testcontainers 的 Ryuk 删除：默认在它的最后一个客户端（用到容器的测试二进制）断开约 2 分钟后，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
 
 ## 决策与理由
 
