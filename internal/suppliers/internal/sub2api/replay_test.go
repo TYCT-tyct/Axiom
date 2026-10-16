@@ -149,6 +149,46 @@ func (s *store) current(t testing.TB) Login {
 	return l
 }
 
+// clock is a time the test moves.
+type clock struct{ t time.Time }
+
+func (c *clock) now() time.Time          { return c.t }
+func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// managerAt opens a manager whose clock is clk.
+func managerAt(t testing.TB, srv adapter.Client, st *store, clk *clock) adapter.Manager {
+	t.Helper()
+	m, err := NewWithClock(clk.now).Open(t.Context(), srv, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// scanPass reads one whole pass of the charge records as the module does: the first call, made with no position, only
+// marks where the connection began; an hour later the next call reads what came after, page by page.
+func scanPass(t *testing.T, m adapter.Manager, clk *clock) (all []adapter.Charge) {
+	t.Helper()
+	first, state, err := m.Charges(t.Context(), nil)
+	if err != nil || !first.Done || len(first.Charges) != 0 || len(state) == 0 {
+		t.Fatalf("the first scan: %+v, %q, %v; want an empty page, Done, and a position", first, state, err)
+	}
+	clk.advance(time.Hour)
+	for calls := 0; ; calls++ {
+		if calls > 8 {
+			t.Fatal("the pass does not end")
+		}
+		page, next, err := m.Charges(t.Context(), state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, state = append(all, page.Charges...), next
+		if page.Done {
+			return all
+		}
+	}
+}
+
 func manager0(t testing.TB, srv *server, st *store) adapter.Manager {
 	t.Helper()
 	m, err := NewWithClock(func() time.Time { return epoch }).Open(t.Context(), srv, st)

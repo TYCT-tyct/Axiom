@@ -63,26 +63,40 @@ func decode(body []byte, v any) error {
 	return nil
 }
 
-// envelope is sub2api's {code, message, data} wrapper of a successful answer.
+// envelope is sub2api's {code, message, data} wrapper of a successful answer. Data is a pointer, so that an answer
+// without it is told from one with an empty value.
 type envelope[T any] struct {
 	Code number `json:"code"`
-	Data T      `json:"data"`
+	Data *T     `json:"data"`
 }
 
-// open decodes a successful answer's data. A 2xx whose code is not 0 is not one.
+// open decodes a successful answer's data. A 2xx whose code is not 0, or that has no data, is not one: an answer in
+// another form than the one known must stop the task, not read as "nothing there".
 func open[T any](resp adapter.Response) (T, error) {
 	var e envelope[T]
 	if err := decode(resp.Body, &e); err != nil {
-		return e.Data, err
+		var zero T
+		return zero, err
 	}
-	if e.Code != "0" {
-		return e.Data, fmt.Errorf("%w: a success status with a non-zero code", adapter.ErrUnrecognised)
+	if e.Code != "0" || e.Data == nil {
+		var zero T
+		return zero, fmt.Errorf("%w: a success status without code 0 and data", adapter.ErrUnrecognised)
 	}
-	return e.Data, nil
+	return *e.Data, nil
 }
 
-// errorCode is the machine-readable code of an error answer: the reason when there is one, else the code when it is
-// a string. The three forms seen are {"code":"X"}, {"code":401,"reason":"X"} and {"error":..}, which has none.
+// knownCodes are the machine-readable codes sub2api's answers are known to carry. Only these ever leave errorCode: an
+// answer may echo a credential in any member, so a code that is not on the list is not passed on, not even in an error.
+var knownCodes = map[string]bool{
+	"TOKEN_EXPIRED": true, "INVALID_TOKEN": true, "UNAUTHORIZED": true, "TOKEN_REVOKED": true, "USER_INACTIVE": true,
+	"SESSION_BINDING_MISMATCH": true, "INVALID_CREDENTIALS": true, "REFRESH_TOKEN_INVALID": true,
+	"INSUFFICIENT_BALANCE": true, "INVALID_API_KEY": true, "API_KEY_QUOTA_EXHAUSTED": true, "USAGE_LIMIT_EXCEEDED": true,
+	"rate_limit_exceeded": true,
+}
+
+// errorCode is the known code of an error answer: the reason when there is one, else the code when it is a string. The
+// forms seen are {"code":"X"}, {"code":401,"reason":"X"} and {"error":..}, which has none. A code that is not on
+// knownCodes is "".
 func errorCode(body []byte) string {
 	var e struct {
 		Code   any    `json:"code"`
@@ -91,10 +105,21 @@ func errorCode(body []byte) string {
 	if jsonx.Unmarshal(body, &e) != nil {
 		return ""
 	}
-	if e.Reason != "" {
-		return e.Reason
+	code := e.Reason
+	if code == "" {
+		code, _ = e.Code.(string)
 	}
-	code, _ := e.Code.(string)
+	if !knownCodes[code] {
+		return ""
+	}
+	return code
+}
+
+// codeName is a code for an error message: the known code, or a fixed word.
+func codeName(code string) string {
+	if code == "" {
+		return "no known code"
+	}
 	return code
 }
 
@@ -109,8 +134,17 @@ func retryAfter(h http.Header) time.Duration {
 
 // page is sub2api's {items, total, page, page_size, pages} list.
 type page[T any] struct {
-	Items []T `json:"items"`
-	Pages int `json:"pages"`
+	Items []T  `json:"items"`
+	Pages *int `json:"pages"`
+}
+
+// checked returns the page's items, or ErrUnrecognised if the list or its page count is missing: a page without them is
+// not an empty page.
+func (p page[T]) checked() ([]T, int, error) {
+	if p.Items == nil || p.Pages == nil {
+		return nil, 0, fmt.Errorf("%w: a page without its items or page count", adapter.ErrUnrecognised)
+	}
+	return p.Items, *p.Pages, nil
 }
 
 // pathID builds a path segment from an id the supplier gave, refusing anything but digits so that an id cannot add

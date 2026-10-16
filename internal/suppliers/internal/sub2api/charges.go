@@ -13,59 +13,153 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// usagePageSize is how many charge records one request lists. A page also carries the key, user and group of each
-// record, so a page of 1000 would be megabytes; 200 keeps an answer well under the response limit.
-const usagePageSize = 200
+// The scan of the usage list (internal/suppliers/README.md 「sub2api」). The scan state is the adapter's own, kept by
+// the module as opaque bytes between calls and stored with each page's records, so a restart continues at the next
+// page. It follows the same protocol as the other adapters: an empty state is the first scan, Charges returns Done when
+// a pass has ended (also when there was nothing to read yet), and the next call starts the next pass.
+//
+// /api/v1/usage lists newest first and by offset, and takes dates, not times. A record created while a pass runs goes
+// to the head and pushes the rest back: a later page may repeat the end of the one before but never skips a record, so
+// the reader removes repeats by the request id and a page number can be kept. A pass covers a window and reads every
+// record from its first day on, key by key, ending a key at the first page that is short or whose oldest record is
+// before the window.
+const (
+	usagePageSize = 200 // each record also carries its key, user and group, so a larger page would not fit a response
+	overlap       = 5 * time.Minute
+	lag           = 30 * time.Second // keeps a pass from asking for records still being written
+	minPass       = time.Minute      // less than this beyond the watermark is not worth a pass
+	lateEvery     = 24 * time.Hour   // how often the last day is read again, for records that appeared later than expected
+)
 
-// scanState is the adapter's position in a pass: the engine's window (adapter.Scan) and where the pass has got to.
-// The list is newest first and paged by offset, so a record that arrives during the pass pushes older ones to later
-// pages: a page may repeat the end of the one before (the engine removes it by the record's id) but never skips a
-// record. The list only takes days, so a pass reads every record from the window's first day on, key by key, and
-// stops a key at the first page that is short or whose oldest record is before the window.
+// scanState is the adapter's position. Watermark is everything read so far and only rises; LastLate and LateEnd keep
+// the late passes, which read the last day again and leave the watermark alone.
 type scanState struct {
-	adapter.Scan
+	V         int   `json:"v"`
+	Watermark int64 `json:"watermark"`
+	LastLate  int64 `json:"last_late"`
+	LateEnd   int64 `json:"late_end"`
+	Pass      *pass `json:"pass,omitempty"`
+}
+
+// pass is the pass under way: the time it covers, the keys it reads (listed when it starts) and where in them it is.
+type pass struct {
+	Late   bool     `json:"late"`
+	Start  int64    `json:"start"`
+	End    int64    `json:"end"`
 	Keys   []string `json:"keys,omitempty"`
 	Listed bool     `json:"listed,omitempty"`
 	Key    int      `json:"key"`
 	Page   int      `json:"page"`
 }
 
-// Charges reads one page of the pass in scan and returns the position after it.
-func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
-	var st scanState
-	if err := jsonx.UnmarshalKnown(scan, &st); err != nil || st.Start.IsZero() || st.End.Before(st.Start) {
-		return adapter.ChargePage{}, nil, fmt.Errorf("%w: a scan that was not begun with adapter.BeginScan", adapter.ErrUnrecognised)
+func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
+	if len(raw) == 0 { // the first scan: nothing before the connection is ours
+		return scanState{V: 1, Watermark: now.Unix(), LastLate: now.Unix(), LateEnd: now.Unix()}, nil
 	}
-	if !st.Listed {
-		keys, err := m.listKeys(ctx)
-		if err != nil {
-			return adapter.ChargePage{}, nil, err
-		}
-		for _, k := range keys {
-			st.Keys = append(st.Keys, string(k.ID))
-		}
-		st.Listed, st.Page = true, 1
+	var s scanState
+	if err := jsonx.UnmarshalKnown(raw, &s); err != nil || s.V != 1 {
+		return scanState{}, fmt.Errorf("%w: the saved scan position", adapter.ErrUnrecognised)
 	}
-	var out adapter.ChargePage
-	if st.Key < len(st.Keys) {
-		charges, end, err := m.usagePage(ctx, st)
-		if err != nil {
-			return adapter.ChargePage{}, nil, err
-		}
-		out.Charges = charges
-		if end {
-			st.Key, st.Page = st.Key+1, 1
-		} else {
-			st.Page++
-		}
-	}
-	out.Done = st.Key >= len(st.Keys)
-	next, err := jsonx.MarshalCanonical(st)
-	return out, next, err
+	return s, nil
 }
 
-// usageItem is a charge record. Count fields are pointers: one that is absent is not reported, which is not the same
-// as reported as zero.
+func (s scanState) encode() (adapter.ScanState, error) { return jsonx.MarshalCanonical(s) }
+
+// nextPass picks what to read next: the last day again when that is due, otherwise the stretch after the watermark,
+// which starts a little before it. Nothing is returned while less than a minute has passed beyond the watermark.
+func nextPass(s scanState, now time.Time) *pass {
+	if now.Sub(time.Unix(s.LastLate, 0)) >= lateEvery {
+		// From a day before where the last late pass ended, so every stretch is read again a day after, whatever time
+		// the passes run at.
+		return &pass{Late: true, Start: s.LateEnd - int64(lateEvery/time.Second), End: now.Add(-lag).Unix(), Page: 1}
+	}
+	end := now.Add(-lag).Unix()
+	if end-s.Watermark < int64(minPass/time.Second) {
+		return nil
+	}
+	return &pass{Start: s.Watermark - int64(overlap/time.Second), End: end, Page: 1}
+}
+
+// finish records a finished pass: the watermark moves to the pass's end, so it only ever rises.
+func finish(s scanState, now time.Time) scanState {
+	p := s.Pass
+	s.Pass = nil
+	if p.Late {
+		s.LastLate, s.LateEnd = now.Unix(), max(s.LateEnd, p.End)
+		return s
+	}
+	s.Watermark = max(s.Watermark, p.End)
+	return s
+}
+
+// Rescan begins a late pass over [since, now), for a removal that reads the last records after the grace period.
+func (m *manager) Rescan(since time.Time) adapter.ScanState {
+	now := m.s.now()
+	s := scanState{
+		V: 1, Watermark: now.Unix(), LastLate: now.Unix(), LateEnd: now.Unix(),
+		Pass: &pass{Late: true, Start: since.Unix(), End: now.Add(-lag).Unix(), Page: 1},
+	}
+	b, err := s.encode()
+	if err != nil {
+		panic(err) // integers and booleans always encode
+	}
+	return b
+}
+
+// Charges reads one page of the pass under way, or starts the next pass. The state it returns is the one to keep with
+// the page's records; on an error it is the state it was given, so nothing is skipped.
+func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+	now := m.s.now()
+	s, err := decodeScan(scan, now)
+	if err != nil {
+		return adapter.ChargePage{}, scan, err
+	}
+	if s.Pass == nil {
+		if s.Pass = nextPass(s, now); s.Pass == nil {
+			state, err := s.encode()
+			return adapter.ChargePage{Done: true}, state, err
+		}
+	}
+	charges, done, err := m.passPage(ctx, s.Pass)
+	if err != nil {
+		return adapter.ChargePage{}, scan, err
+	}
+	if done {
+		s = finish(s, now)
+	}
+	state, err := s.encode()
+	return adapter.ChargePage{Charges: charges, Done: done}, state, err
+}
+
+// passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended.
+func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool, error) {
+	if !p.Listed {
+		keys, err := m.listKeys(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, k := range keys {
+			p.Keys = append(p.Keys, string(k.ID))
+		}
+		p.Listed, p.Page = true, 1
+	}
+	if p.Key >= len(p.Keys) {
+		return nil, true, nil
+	}
+	charges, end, err := m.usagePage(ctx, p)
+	if err != nil {
+		return nil, false, err
+	}
+	if end {
+		p.Key, p.Page = p.Key+1, 1
+	} else {
+		p.Page++
+	}
+	return charges, p.Key >= len(p.Keys), nil
+}
+
+// usageItem is a charge record. Count fields are numbers that may be absent: one that is absent is not reported, which
+// is not the same as reported as zero.
 type usageItem struct {
 	RequestID   string `json:"request_id"`
 	KeyID       number `json:"api_key_id"`
@@ -82,15 +176,16 @@ type usageItem struct {
 	CacheWrite1 number `json:"cache_creation_1h_tokens"`
 }
 
-// usagePage reads the page st points at and reports whether it was the last of its key.
-func (m *manager) usagePage(ctx context.Context, st scanState) ([]adapter.Charge, bool, error) {
-	id, err := pathID(st.Keys[st.Key])
+// usagePage reads the page p points at and reports whether it was the last of its key.
+func (m *manager) usagePage(ctx context.Context, p *pass) ([]adapter.Charge, bool, error) {
+	id, err := pathID(p.Keys[p.Key])
 	if err != nil {
 		return nil, false, err
 	}
+	start, end := time.Unix(p.Start, 0).UTC(), time.Unix(p.End, 0).UTC()
 	q := url.Values{
-		"page": {strconv.Itoa(st.Page)}, "page_size": {strconv.Itoa(usagePageSize)}, "api_key_id": {id},
-		"start_date": {st.Start.UTC().Format(time.DateOnly)}, "end_date": {st.End.UTC().Format(time.DateOnly)},
+		"page": {strconv.Itoa(p.Page)}, "page_size": {strconv.Itoa(usagePageSize)}, "api_key_id": {id},
+		"start_date": {start.Format(time.DateOnly)}, "end_date": {end.Format(time.DateOnly)},
 		"timezone": {"UTC"}, "sort_by": {"created_at"}, "sort_order": {"desc"},
 	}
 	resp, err := m.get(ctx, "/api/v1/usage?"+q.Encode(), bucketUsage, bucketPanel)
@@ -104,17 +199,21 @@ func (m *manager) usagePage(ctx context.Context, st scanState) ([]adapter.Charge
 	if err != nil {
 		return nil, false, err
 	}
-	charges := make([]adapter.Charge, 0, len(pg.Items))
-	end := len(pg.Items) < usagePageSize
-	for _, it := range pg.Items {
+	items, _, err := pg.checked()
+	if err != nil {
+		return nil, false, err
+	}
+	charges := make([]adapter.Charge, 0, len(items))
+	last := len(items) < usagePageSize
+	for _, it := range items {
 		c, at, err := it.charge()
 		if err != nil {
 			return nil, false, err
 		}
 		charges = append(charges, c)
-		end = end || at.Before(st.Start)
+		last = last || at.Before(start)
 	}
-	return charges, end, nil
+	return charges, last, nil
 }
 
 // charge turns a record into a Charge. Only the fields the reconciliation needs are kept; the key, user and address

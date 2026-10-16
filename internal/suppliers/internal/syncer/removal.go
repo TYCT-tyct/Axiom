@@ -42,7 +42,7 @@ func (e *Engine) advance(ctx context.Context, st *State, h Hooks) (wait bool, er
 	switch st.Removal {
 	case StepNone:
 		c.State.Status, c.State.Removal, c.State.ConfigGen = Removing, StepLeaving, st.ConfigGen+1
-		c.State.Scan = nil // a pass in progress belongs to a round that is void now
+		c.State.RescanFrom = e.now().Add(-e.set.Grace)
 		c.Events = append(c.Events, Event{Kind: RemovalStarted})
 	case StepLeaving:
 		c.State.Removal, c.State.GraceUntil = StepDraining, e.now().Add(e.set.DrainLimit)
@@ -51,8 +51,13 @@ func (e *Engine) advance(ctx context.Context, st *State, h Hooks) (wait bool, er
 	case StepFinalScan, StepLateScan:
 		wait, err = e.finalScan(ctx, st, &c)
 	case StepGrace:
-		wait = e.now().Before(st.GraceUntil)
+		if e.now().Before(st.GraceUntil) {
+			return true, nil
+		}
 		c.State.Removal = StepLateScan
+		if r, ok := e.mgr.(adapter.Rescanner); ok {
+			c.State.Scan = r.Rescan(st.RescanFrom) // read again from before the grace period, not from the watermark
+		}
 	case StepDelete:
 		err = finish(ctx, &c, h)
 	case StepDone:
@@ -100,10 +105,10 @@ func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool
 		return true, nil
 	case errors.Is(err, adapter.ErrAuthRejected):
 		c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Why: "the last charge records could not be read: the credentials are rejected"})
-		c.State.Scan = nil
+		c.State.Scan, c.State.ScanOpen = nil, false
 	case err != nil:
 		return false, err
-	case st.Scan != nil:
+	case st.ScanOpen:
 		return true, nil // pages remain beyond this call's share
 	}
 	if st.Removal == StepFinalScan {

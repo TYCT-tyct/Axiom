@@ -137,8 +137,8 @@ func TestChargesScanARecordedPage(t *testing.T) {
 		}
 		return resp, nil
 	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	all := scanAll(t, m, adapter.BeginScan(time.Date(2026, 10, 15, 15, 0, 0, 0, time.UTC), time.Date(2026, 10, 15, 16, 0, 0, 0, time.UTC)))
+	clk := &clock{t: time.Date(2026, 10, 15, 15, 0, 0, 0, time.UTC)}
+	all := scanPass(t, managerAt(t, srv, login(t, clk.t.Add(24*time.Hour)), clk), clk)
 	if len(all) != 2 {
 		t.Fatalf("%d charges, want the 2 recorded", len(all))
 	}
@@ -165,39 +165,6 @@ func checkUsage(t *testing.T, c adapter.Charge) {
 	}
 }
 
-// scanAll reads a whole pass.
-func scanAll(t *testing.T, m adapter.Manager, state adapter.ScanState) (all []adapter.Charge) {
-	t.Helper()
-	for calls := 0; ; calls++ {
-		if calls > 5 {
-			t.Fatal("the scan does not end")
-		}
-		page, next, err := m.Charges(t.Context(), state)
-		if err != nil {
-			t.Fatal(err)
-		}
-		all, state = append(all, page.Charges...), next
-		if page.Done {
-			return all
-		}
-	}
-}
-
-// usageOf reads a count back through a one-line schedule that prices only that item at 1 per unit.
-func usageOf(t *testing.T, c adapter.Charge, item catalog.Item) int64 {
-	t.Helper()
-	s, err := catalog.ParseSchedule([]byte(fmt.Sprintf(`{"currency":"XXX","rates":{%q:"1"},"v":1}`, item.String())))
-	if err != nil {
-		t.Fatal(err)
-	}
-	total, _, err := s.Cost(c.Usage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, _ := total.Rat().Float64()
-	return int64(n)
-}
-
 // TestScanCoversEveryKeyAndPage: a full page asks for the next; a short page ends the key; a page whose oldest record
 // is before the window ends it too; the pass ends after the last key, across midnight with both days asked for.
 func TestScanCoversEveryKeyAndPage(t *testing.T) {
@@ -222,8 +189,10 @@ func TestScanCoversEveryKeyAndPage(t *testing.T) {
 		}
 		return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":` + body + `,"pages":9}}`)}, nil
 	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	state := adapter.BeginScan(time.Date(2026, 10, 14, 23, 50, 0, 0, time.UTC), time.Date(2026, 10, 15, 0, 10, 0, 0, time.UTC))
+	clk := &clock{t: time.Date(2026, 10, 14, 23, 50, 0, 0, time.UTC)}
+	m := managerAt(t, srv, login(t, clk.t.Add(24*time.Hour)), clk)
+	state := begin(t, m)
+	clk.advance(20 * time.Minute) // the pass covers 23:45 to 00:09:30, across midnight
 	var pages int
 	for done := false; !done; pages++ {
 		page, next, err := m.Charges(t.Context(), state)
@@ -240,8 +209,8 @@ func TestScanCoversEveryKeyAndPage(t *testing.T) {
 			t.Errorf("%s does not ask for both days of a window across midnight", p)
 		}
 	}
-	if _, _, err := m.Charges(t.Context(), nil); !errors.Is(err, adapter.ErrUnrecognised) {
-		t.Errorf("a scan that was not begun: %v", err)
+	if _, _, err := m.Charges(t.Context(), []byte(`{"v":2}`)); !errors.Is(err, adapter.ErrUnrecognised) {
+		t.Errorf("a position of another version: %v", err)
 	}
 }
 
@@ -341,8 +310,8 @@ func TestAbsentFieldsAreNotReported(t *testing.T) {
 			{"request_id":"client:a","api_key_id":7,"model":"m","created_at":"2026-10-15T12:00:00Z","actual_cost":0.25,"billing_type":0,"billing_mode":"token","input_tokens":10,"output_tokens":0},
 			{"request_id":"client:b","api_key_id":7,"model":"m","created_at":"2026-10-15T12:00:00Z","actual_cost":1,"billing_type":1,"billing_mode":"per_request"}],"pages":1}}`)}, nil
 	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	got := scanAll(t, m, adapter.BeginScan(epoch.Add(-time.Hour), epoch))
+	clk := &clock{t: epoch}
+	got := scanPass(t, managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk), clk)
 	if len(got) != 2 {
 		t.Fatalf("%d charges", len(got))
 	}
@@ -353,4 +322,29 @@ func TestAbsentFieldsAreNotReported(t *testing.T) {
 	if b.Reported.Has(catalog.ItemInput) || b.Funding != adapter.FundingOther || len(b.Usage.Unknown()) != 1 {
 		t.Errorf("a per-request subscription record: reported %v, funding %v, unknown %v", b.Reported, b.Funding, b.Usage.Unknown())
 	}
+}
+
+// begin makes the first scan, which only marks the start, and returns its position.
+func begin(t *testing.T, m adapter.Manager) adapter.ScanState {
+	t.Helper()
+	page, state, err := m.Charges(t.Context(), nil)
+	if err != nil || !page.Done {
+		t.Fatalf("the first scan: %+v, %v", page, err)
+	}
+	return state
+}
+
+// usageOf reads a count back through a one-line schedule that prices only that item at 1 per unit.
+func usageOf(t *testing.T, c adapter.Charge, item catalog.Item) int64 {
+	t.Helper()
+	s, err := catalog.ParseSchedule([]byte(fmt.Sprintf(`{"currency":"XXX","rates":{%q:"1"},"v":1}`, item.String())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, _, err := s.Cost(c.Usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := total.Rat().Float64()
+	return int64(n)
 }

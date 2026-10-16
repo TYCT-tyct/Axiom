@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -16,7 +17,28 @@ import (
 // keyPageSize is how many keys one request lists. Every page is also one request of the panel bucket.
 const keyPageSize = 100
 
-type manager struct{ s *session }
+// maxPages bounds a listing: a supplier whose pages never end would otherwise keep the task busy.
+const maxPages = 100
+
+// progressLife is how long what a listing has read stays good. A listing that takes more requests than a rate bucket
+// allows in a window cannot finish in one go; the manager keeps how far it got when a request was refused for want of
+// allowance, and the call made again on the same manager continues. The module keeps a manager through the retries of
+// a round. What was kept is dropped when the listing finishes, and when it is older than this, since the pages of an
+// old listing no longer belong to the new one.
+const progressLife = 10 * time.Minute
+
+type manager struct {
+	s *session
+
+	mu    sync.Mutex
+	keys  *keysProgress
+	offer *offerProgress
+}
+
+var (
+	_ adapter.Manager   = (*manager)(nil)
+	_ adapter.Rescanner = (*manager)(nil)
+)
 
 func (m *manager) get(ctx context.Context, path string, buckets ...string) (adapter.Response, error) {
 	return m.s.authed(ctx, adapter.Request{Method: http.MethodGet, Path: path, Buckets: buckets})
@@ -57,6 +79,9 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 	if err != nil {
 		return adapter.Account{}, err
 	}
+	if subscriptions == nil {
+		return adapter.Account{}, fmt.Errorf("%w: no list of subscriptions", adapter.ErrUnrecognised)
+	}
 	funding := adapter.FundingWallet
 	if len(subscriptions) > 0 {
 		funding = adapter.FundingOther
@@ -74,26 +99,66 @@ type keyDTO struct {
 	Reset7d string `json:"reset_7d_at"`
 }
 
-// listKeys reads every page of our keys. The list carries each key's text; it is used here and never kept.
+// keysProgress is how far a listing of keys got.
+type keysProgress struct {
+	at    time.Time
+	page  int
+	items []keyDTO
+	seen  map[number]bool // a key created during the listing shifts the pages, so one may repeat the last of the page before
+}
+
+// listKeys reads every page of our keys. The list carries each key's text; it is used here and never kept past the
+// call that asked. It is resumable: see progressLife.
 func (m *manager) listKeys(ctx context.Context) ([]keyDTO, error) {
-	var all []keyDTO
-	for p := 1; ; p++ {
-		resp, err := m.get(ctx, "/api/v1/keys?page="+strconv.Itoa(p)+"&page_size="+strconv.Itoa(keyPageSize), bucketPanel)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.keys
+	if p == nil || m.s.now().Sub(p.at) > progressLife {
+		p = &keysProgress{page: 1, seen: map[number]bool{}}
+	}
+	for ; p.page <= maxPages; p.page++ {
+		items, pages, err := m.keyPage(ctx, p.page)
 		if err != nil {
+			p.at, m.keys = m.s.now(), p
 			return nil, err
 		}
-		if resp.Status != http.StatusOK {
-			return nil, statusError("keys", resp)
+		for _, k := range items {
+			if !p.seen[k.ID] {
+				p.seen[k.ID] = true
+				p.items = append(p.items, k)
+			}
 		}
-		pg, err := open[page[keyDTO]](resp)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, pg.Items...)
-		if p >= pg.Pages || len(pg.Items) == 0 {
-			return all, nil
+		if p.page >= pages || len(items) == 0 {
+			m.keys = nil
+			return p.items, nil
 		}
 	}
+	m.keys = nil
+	return nil, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
+}
+
+func (m *manager) keyPage(ctx context.Context, p int) ([]keyDTO, int, error) {
+	resp, err := m.get(ctx, "/api/v1/keys?page="+strconv.Itoa(p)+"&page_size="+strconv.Itoa(keyPageSize), bucketPanel)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.Status != http.StatusOK {
+		return nil, 0, statusError("keys", resp)
+	}
+	pg, err := open[page[keyDTO]](resp)
+	if err != nil {
+		return nil, 0, err
+	}
+	items, pages, err := pg.checked()
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, k := range items {
+		if !k.ID.present() || k.Status == "" {
+			return nil, 0, fmt.Errorf("%w: a key without its id or status", adapter.ErrUnrecognised)
+		}
+	}
+	return items, pages, nil
 }
 
 // Keys lists our keys with their state.
@@ -177,38 +242,87 @@ type facts struct {
 	Peak         bool   `json:"peak_rate_enabled"`
 }
 
+// offerProgress is how far an offer got: what is nil has not been read yet, and built holds the groups finished.
+type offerProgress struct {
+	at        time.Time
+	groups    []groupDTO
+	overrides map[string]number
+	keys      []keyDTO
+	keysRead  bool
+	built     []adapter.Group
+}
+
 // Offer reads the groups, their multipliers and, from one of our keys in each group, the models it lists. Prices are
 // not read: sub2api shows none to an ordinary user in a default installation, so the cost of a model stays unknown
-// until a person confirms a base price (adapter.ScaleSchedule drafts the figure).
+// until a person confirms a base price (adapter.ScaleSchedule drafts the figure). It is resumable: see progressLife.
 func (m *manager) Offer(ctx context.Context) (adapter.Offer, error) {
-	resp, err := m.get(ctx, "/api/v1/groups/available", bucketPanel)
+	m.mu.Lock()
+	p := m.offer
+	if p == nil || m.s.now().Sub(p.at) > progressLife {
+		p = &offerProgress{}
+	}
+	m.mu.Unlock()
+	offer, err := m.build(ctx, p)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err != nil {
+		p.at, m.offer = m.s.now(), p
 		return adapter.Offer{}, err
 	}
-	if resp.Status != http.StatusOK {
-		return adapter.Offer{}, statusError("groups", resp)
+	m.offer = nil
+	return offer, nil
+}
+
+func (m *manager) build(ctx context.Context, p *offerProgress) (adapter.Offer, error) {
+	var err error
+	if p.groups == nil {
+		if p.groups, err = m.groupList(ctx); err != nil {
+			return adapter.Offer{}, err
+		}
 	}
-	groups, err := open[[]groupDTO](resp)
-	if err != nil {
-		return adapter.Offer{}, err
+	if p.overrides == nil {
+		if p.overrides, err = m.userMultipliers(ctx); err != nil {
+			return adapter.Offer{}, err
+		}
 	}
-	overrides, err := m.userMultipliers(ctx)
-	if err != nil {
-		return adapter.Offer{}, err
+	if !p.keysRead {
+		if p.keys, err = m.listKeys(ctx); err != nil {
+			return adapter.Offer{}, err
+		}
+		p.keysRead = true
 	}
-	keys, err := m.listKeys(ctx)
-	if err != nil {
-		return adapter.Offer{}, err
-	}
-	var offer adapter.Offer
-	for _, g := range groups {
-		group, err := m.group(ctx, g, overrides, firstActiveKey(keys, g.ID))
+	for len(p.built) < len(p.groups) {
+		g := p.groups[len(p.built)]
+		group, err := m.group(ctx, g, p.overrides, firstActiveKey(p.keys, g.ID))
 		if err != nil {
 			return adapter.Offer{}, err
 		}
-		offer.Groups = append(offer.Groups, group)
+		p.built = append(p.built, group)
 	}
-	return offer, nil
+	return adapter.Offer{Groups: p.built}, nil
+}
+
+func (m *manager) groupList(ctx context.Context) ([]groupDTO, error) {
+	resp, err := m.get(ctx, "/api/v1/groups/available", bucketPanel)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != http.StatusOK {
+		return nil, statusError("groups", resp)
+	}
+	groups, err := open[[]groupDTO](resp)
+	if err != nil {
+		return nil, err
+	}
+	if groups == nil {
+		return nil, fmt.Errorf("%w: no list of groups", adapter.ErrUnrecognised)
+	}
+	for _, g := range groups {
+		if !g.ID.present() || !g.Multiplier.present() || g.Name == "" {
+			return nil, fmt.Errorf("%w: a group without its id, name or multiplier", adapter.ErrUnrecognised)
+		}
+	}
+	return groups, nil
 }
 
 func firstActiveKey(keys []keyDTO, group number) *keyDTO {
@@ -229,7 +343,14 @@ func (m *manager) userMultipliers(ctx context.Context) (map[string]number, error
 	if resp.Status != http.StatusOK {
 		return nil, statusError("group multipliers", resp)
 	}
-	return open[map[string]number](resp)
+	rates, err := open[map[string]number](resp)
+	if err != nil {
+		return nil, err
+	}
+	if rates == nil {
+		return nil, fmt.Errorf("%w: no map of multipliers", adapter.ErrUnrecognised)
+	}
+	return rates, nil
 }
 
 func (m *manager) group(ctx context.Context, g groupDTO, overrides map[string]number, key *keyDTO) (adapter.Group, error) {
@@ -304,6 +425,9 @@ func (m *manager) modelNames(ctx context.Context, key *keyDTO) ([]string, bool, 
 	}
 	if err := decode(resp.Body, &list); err != nil {
 		return nil, false, err
+	}
+	if list.Data == nil {
+		return nil, false, fmt.Errorf("%w: a model list without data", adapter.ErrUnrecognised)
 	}
 	names := make([]string, len(list.Data))
 	for i, d := range list.Data {

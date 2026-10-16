@@ -156,7 +156,7 @@ func (s *session) passwordLogin(ctx context.Context) error {
 	}
 	switch {
 	case resp.Status == http.StatusUnauthorized, resp.Status == http.StatusForbidden:
-		return fmt.Errorf("%w: login refused (%s)", adapter.ErrAuthRejected, errorCode(resp.Body))
+		return fmt.Errorf("%w: login refused (%s)", adapter.ErrAuthRejected, codeName(errorCode(resp.Body)))
 	case resp.Status == http.StatusTooManyRequests:
 		return s.blocked(resp)
 	case resp.Status != http.StatusOK:
@@ -236,10 +236,10 @@ func (s *session) authed(ctx context.Context, r adapter.Request) (adapter.Respon
 func (s *session) afterRefusal(ctx context.Context, resp adapter.Response, attempt int) error {
 	code := errorCode(resp.Body)
 	if code != "TOKEN_EXPIRED" && code != "INVALID_TOKEN" && code != "UNAUTHORIZED" {
-		return fmt.Errorf("%w: %s", adapter.ErrAuthRejected, code)
+		return fmt.Errorf("%w: %s", adapter.ErrAuthRejected, codeName(code))
 	}
 	if attempt > 0 {
-		return fmt.Errorf("%w: the new token was refused too (%s)", adapter.ErrAuthRejected, code)
+		return fmt.Errorf("%w: the new token was refused too (%s)", adapter.ErrAuthRejected, codeName(code))
 	}
 	return s.renew(ctx)
 }

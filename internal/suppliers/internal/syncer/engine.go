@@ -36,12 +36,6 @@ type Settings struct {
 	BackoffMax  time.Duration
 	// Jitter spreads a backoff so suppliers that failed together do not retry together; nil means none.
 	Jitter func(time.Duration) time.Duration
-	// Overlap is how far before the watermark a pass starts again, to catch records that were written late.
-	Overlap time.Duration
-	// Safety keeps a pass away from the present: records of the last moments may not be visible yet.
-	Safety time.Duration
-	// Backfill is how far back the first pass of a new supplier reads.
-	Backfill time.Duration
 	// MaxPages bounds the pages one round reads; the pass continues in the next.
 	MaxPages int
 	// LowBalance is the balance under which BalanceLow is sent; Reserve is held back from a routable balance.
@@ -55,7 +49,7 @@ func Defaults() Settings {
 	return Settings{
 		Interval:    [numTasks]time.Duration{time.Minute, 5 * time.Minute, 5 * time.Minute, 2 * time.Minute},
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
-		Overlap: 5 * time.Minute, Safety: 30 * time.Second, Backfill: 24 * time.Hour, MaxPages: 50,
+		MaxPages:   50,
 		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute,
 	}
 }
@@ -137,7 +131,7 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 	switch {
 	case err == nil:
 		*ts = TaskState{Due: now.Add(e.set.Interval[t]), LastOK: now}
-		if t == TaskCharges && c.State.Scan != nil {
+		if t == TaskCharges && c.State.ScanOpen {
 			ts.Due = now // the pass is not finished: the next round goes on with it
 		}
 	case errors.Is(err, adapter.ErrAuthRejected):
@@ -183,15 +177,31 @@ func (e *Engine) balance(ctx context.Context, c *Commit) error {
 		return err
 	}
 	s := &c.State
+	if !s.BalanceAt.IsZero() { // what changed since the last read; the first read changes nothing
+		if s.Funding != acc.Funding {
+			c.Events = append(c.Events, Event{Kind: FundingChanged, Old: fundingName(s.Funding), New: fundingName(acc.Funding)})
+		}
+		if was, now := rat(s.Balance).Cmp(rat(e.set.Reserve)) > 0, rat(acc.Balance).Cmp(rat(e.set.Reserve)) > 0; was != now {
+			c.Events = append(c.Events, Event{Kind: BalanceCrossed, Old: string(s.Balance), New: string(acc.Balance), Why: map[bool]string{true: "above", false: "below"}[now]})
+		}
+	}
 	s.Balance, s.Funding, s.BalanceAt = acc.Balance, acc.Funding, e.now()
 	switch low := rat(acc.Balance).Cmp(rat(e.set.LowBalance)) < 0; {
 	case low && !s.LowNotified:
 		s.LowNotified = true
 		c.Events = append(c.Events, Event{Kind: BalanceLow, New: string(acc.Balance)})
-	case !low:
+	case !low && s.LowNotified:
 		s.LowNotified = false
+		c.Events = append(c.Events, Event{Kind: BalanceRecovered, New: string(acc.Balance)})
 	}
 	return nil
+}
+
+func fundingName(f adapter.Funding) string {
+	if f == adapter.FundingWallet {
+		return "wallet"
+	}
+	return "other"
 }
 
 func (e *Engine) keys(ctx context.Context, c *Commit) error {
@@ -270,7 +280,7 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 			if err != nil {
 				return snap, err
 			}
-			snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Plan: plan})
+			snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan})
 		}
 		return snap, nil
 	}
@@ -283,7 +293,7 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 		for i, f := range m.Formats {
 			formats[i] = int(f)
 		}
-		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: formats, Plan: plan})
+		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: formats, Without: m.Without, Plan: plan})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
 	return snap, nil
@@ -334,8 +344,13 @@ func diffGroups(c *Commit, prev map[string]GroupSnap, now []GroupSnap) {
 		before, ok := prev[g.Ref]
 		if !ok {
 			c.Events = append(c.Events, Event{Kind: GroupAdded, Subject: g.Ref, New: g.Name})
-		} else if before.Ratio != g.Ratio {
-			c.Events = append(c.Events, Event{Kind: RatioChanged, Subject: g.Ref, Old: before.Ratio, New: g.Ratio})
+		} else {
+			if before.Ratio != g.Ratio {
+				c.Events = append(c.Events, Event{Kind: RatioChanged, Subject: g.Ref, Old: before.Ratio, New: g.Ratio})
+			}
+			if before.Facts != g.Facts {
+				c.Events = append(c.Events, Event{Kind: GroupChanged, Subject: g.Ref})
+			}
 		}
 		diffModels(c, g, before)
 	}
@@ -346,15 +361,20 @@ func diffGroups(c *Commit, prev map[string]GroupSnap, now []GroupSnap) {
 	}
 }
 
-// diffModels sends ModelAdded and ModelRemoved for the models of g against those of before.
+// diffModels sends ModelAdded and ModelRemoved for the models of g against those of before, and ModelChanged for one
+// whose formats or capability limits differ.
 func diffModels(c *Commit, g, before GroupSnap) {
-	had := map[string]bool{}
+	had := map[string]ModelSnap{}
 	for _, m := range before.Models {
-		had[m.Name] = true
+		had[m.Name] = m
 	}
 	for _, m := range g.Models {
-		if !had[m.Name] {
+		old, ok := had[m.Name]
+		switch {
+		case !ok:
 			c.Events = append(c.Events, Event{Kind: ModelAdded, Subject: g.Ref + "/" + m.Name})
+		case !slices.Equal(old.Formats, m.Formats) || old.Without != m.Without:
+			c.Events = append(c.Events, Event{Kind: ModelChanged, Subject: g.Ref + "/" + m.Name})
 		}
 		delete(had, m.Name)
 	}

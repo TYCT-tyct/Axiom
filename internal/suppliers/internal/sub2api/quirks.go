@@ -81,6 +81,8 @@ func refusal(status int, code, nested string, h http.Header) (adapter.Failure, b
 	case status == http.StatusTooManyRequests:
 		scope, cause := tooMany(code, h)
 		return refused(scope, cause)
+	case status >= http.StatusInternalServerError:
+		return adapter.Failure{}, false // whatever its code, a 5xx may have run: it stays "unknown"
 	case nested == "context_length_exceeded":
 		return refused(adapter.ScopeRequest, adapter.ContextTooLong{})
 	case nested == "model_not_found":
@@ -122,5 +124,9 @@ func nestedCode(body []byte) string {
 	if jsonx.Unmarshal(body, &e) != nil {
 		return ""
 	}
-	return strings.ToLower(cmp.Or(e.Error.Code, e.Error.Type))
+	switch code := strings.ToLower(cmp.Or(e.Error.Code, e.Error.Type)); code {
+	case "context_length_exceeded", "model_not_found":
+		return code
+	}
+	return ""
 }

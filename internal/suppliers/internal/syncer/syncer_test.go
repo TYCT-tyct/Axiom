@@ -356,11 +356,12 @@ func pagedSupplier(t *testing.T, blockAt int) (*supplier, *[]int) {
 	m, served := healthy(), new([]int)
 	m.charges = func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 		var pos struct {
-			adapter.Scan
 			Page int `json:"page"`
 		}
-		if err := jsonx.Unmarshal(scan, &pos); err != nil {
-			t.Fatal(err)
+		if len(scan) > 0 { // the first call has no position
+			if err := jsonx.Unmarshal(scan, &pos); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if pos.Page == blockAt {
 			blockAt = -1
@@ -377,38 +378,24 @@ func pagedSupplier(t *testing.T, blockAt int) (*supplier, *[]int) {
 	return m, served
 }
 
-// TestChargePassIsCommittedPageByPageAndResumes: every page is stored with the position after it; a limit in the middle
-// ends the round with the progress kept and the next round goes on from the next page, not the first; the watermark
-// moves only at the end, to the window's end, and never back; a record read twice is one.
+// TestChargePassIsCommittedPageByPageAndResumes: the first call has no position; every page is stored with the position
+// after it; a limit in the middle ends the round with the progress kept, and the next round goes on from the next page,
+// not the first; a record read twice is one.
 func TestChargePassIsCommittedPageByPageAndResumes(t *testing.T) {
 	t.Parallel()
 	m, served := pagedSupplier(t, 2)
 	e, st, clk := engine(m)
 	round(t, e)
-	if st.state.Scan == nil || !st.state.Watermark.IsZero() || len(st.charges) != 3 {
-		t.Fatalf("after the limit: scan open %v, watermark %v, %d records", st.state.Scan != nil, st.state.Watermark, len(st.charges))
+	if !st.state.ScanOpen || len(st.state.Scan) == 0 || len(st.charges) != 3 {
+		t.Fatalf("after the limit: scan open %v, position %q, %d records", st.state.ScanOpen, st.state.Scan, len(st.charges))
 	}
-	w := window(t, st.state.Scan)
 	clk.advance(time.Minute)
 	round(t, e)
 	if !slices.Equal(*served, []int{0, 1, 2, 3}) {
 		t.Errorf("pages read %v, want 0 to 3 once each: the pass must resume where it stopped", *served)
 	}
-	if st.state.Scan != nil || !st.state.Watermark.Equal(w.End) || len(st.charges) != 5 {
-		t.Errorf("after resuming: scan open %v, watermark %v (window end %v), %d records", st.state.Scan != nil, st.state.Watermark, w.End, len(st.charges))
-	}
-	if !w.Start.Equal(t0.Add(-24 * time.Hour)) {
-		t.Errorf("the first pass starts %v, want the backfill", w.Start)
-	}
-	clk.advance(10 * time.Minute) // the next pass starts at the watermark less the overlap
-	var starts []time.Time
-	m.charges = func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
-		starts = append(starts, window(t, scan).Start)
-		return adapter.ChargePage{Done: true}, scan, nil
-	}
-	round(t, e)
-	if len(starts) != 1 || !starts[0].Equal(w.End.Add(-5*time.Minute)) {
-		t.Errorf("second pass starts %v, want %v", starts, w.End.Add(-5*time.Minute))
+	if st.state.ScanOpen || len(st.charges) != 5 {
+		t.Errorf("after resuming: scan open %v, %d records", st.state.ScanOpen, len(st.charges))
 	}
 }
 
@@ -495,13 +482,4 @@ func TestEndpointIsRoutableOnlyWhenEveryConditionHolds(t *testing.T) {
 	if negative.Check() != NoBalance {
 		t.Error("an overdrawn supplier is routable")
 	}
-}
-
-func window(t *testing.T, scan adapter.ScanState) adapter.Scan {
-	t.Helper()
-	w, err := scan.Window()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return w
 }

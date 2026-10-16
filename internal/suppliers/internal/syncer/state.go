@@ -10,6 +10,7 @@ package syncer
 import (
 	"time"
 
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
@@ -64,11 +65,13 @@ const (
 	StepDone
 )
 
-// ModelSnap is a model of a group as last read. Plan is the fingerprint of its cost plan, empty while the cost is
+// ModelSnap is a model of a group as last read. Without are the capabilities its cost plan does not cover, which
+// routing keeps requests that need them away from. Plan is the fingerprint of its cost plan, empty while the cost is
 // unknown.
 type ModelSnap struct {
 	Name    string
 	Formats []int
+	Without protocol.Capabilities
 	Plan    string
 }
 
@@ -96,11 +99,16 @@ type State struct {
 	Plans     map[string]string // "group/model" -> fingerprint of the current cost plan
 	Confirmed map[string]string // model -> a person's confirmed base schedule (JSON); scaled by the group's ratio
 
-	Watermark time.Time // every record before it has been read
-	Scan      adapter.ScanState
+	// Scan is the adapter's position in the charge records, opaque to the engine and stored with each page. ScanOpen
+	// is whether a pass is still under way; the adapter keeps the watermark in Scan.
+	Scan     adapter.ScanState
+	ScanOpen bool
 
 	Removal    RemovalStep
 	GraceUntil time.Time
+	// RescanFrom is where the second read of a removal starts: before the removal began by the grace period, so that a
+	// record that appears late within it is read.
+	RescanFrom time.Time
 }
 
 // Kind names an event.
@@ -121,6 +129,11 @@ const (
 	TaskHalted
 	RemovalStarted
 	RemovalDone
+	GroupChanged     // the facts that decide what a group serves
+	ModelChanged     // a model's formats or capability limits
+	FundingChanged   // where calls are paid from
+	BalanceCrossed   // the balance went above or below the reserve a route needs
+	BalanceRecovered // the balance rose back over the low-balance line
 )
 
 // Event is something that changed. The text fields are names and fingerprints, and a short reason of ours: never text

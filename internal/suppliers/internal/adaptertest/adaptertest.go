@@ -4,6 +4,7 @@
 package adaptertest
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,6 +49,10 @@ var bodies = map[string][]byte{
 	"unrecognised":  []byte(`{"error":{"code":"never_heard_of_it","message":"?"}}`),
 	"oversized":     []byte(strings.Repeat("x", 64<<10)),
 	"an error page": []byte(htmlPage),
+	// answers that name a known refusal: whatever the code, a 5xx must stay "may have run" (the 5xx rule below)
+	"model not found":    []byte(`{"error":{"code":"model_not_found"}}`),
+	"context too long":   []byte(`{"error":{"code":"context_length_exceeded"}}`),
+	"insufficient funds": []byte(`{"code":"INSUFFICIENT_BALANCE"}`),
 }
 
 var headers = map[string]http.Header{
@@ -148,4 +153,30 @@ func quirkProblems(q adapter.CallQuirks) (problems []string) {
 		}
 	}
 	return problems
+}
+
+// RunScan checks the scan protocol on a Manager whose supplier has no charge records: the first call has no position
+// and is not refused; each call returns a position, which is accepted back; and a pass ends (Done) within a few calls.
+// The module's sync relies on all three: it starts with no position, stores what comes back with each page, and reads
+// until Done.
+func RunScan(t testing.TB, m adapter.Manager) {
+	t.Helper()
+	var state adapter.ScanState
+	for call := range 20 {
+		page, next, err := m.Charges(context.Background(), state)
+		if err != nil {
+			t.Fatalf("Charges call %d: %v; the first call has no position and every later one has the last returned", call+1, err)
+		}
+		if len(next) == 0 {
+			t.Fatalf("Charges call %d returned no position to keep", call+1)
+		}
+		if len(page.Charges) != 0 {
+			t.Fatalf("Charges call %d returned records from a supplier that has none", call+1)
+		}
+		state = next
+		if page.Done {
+			return
+		}
+	}
+	t.Fatal("a pass over a supplier with no records does not end within 20 calls")
 }
