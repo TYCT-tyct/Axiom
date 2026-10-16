@@ -131,17 +131,19 @@ func MigrateWith(ctx context.Context, adminURL string, connectTimeout time.Durat
 	}
 	config, err := pgx.ParseConfig(adminURL)
 	if err != nil {
-		return redactConnect("AXIOM_MIGRATE_DATABASE_URL", errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string"))
+		return errors.New(migrateVariable + ": not a PostgreSQL connection string")
 	}
 	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
 	// Every session of this run carries a name of its own, so that the run can end its sessions, and only those, at the
 	// deadline.
 	name := "axiom-migrate-" + uuid.NewV4().String()
 	config.RuntimeParams["application_name"] = name
-	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", runBounded(ctx, stopGrace,
+	return runBounded(ctx, stopGrace,
 		func() error { return endSessions(ctx, config, name, connectTimeout) },
-		func() error { return migrate(ctx, config, connectTimeout, all) }))
+		func() error { return migrate(ctx, config, connectTimeout, all) })
 }
+
+const migrateVariable = "AXIOM_MIGRATE_DATABASE_URL"
 
 // runBounded runs f and returns its result. When ctx ends first it runs stop, which must end what f is waiting for, then
 // gives f grace to return and gives up on it if it does not, leaving it running: the caller is about to exit. stop's
@@ -175,7 +177,7 @@ func endSessions(ctx context.Context, config *pgx.ConnConfig, name string, conne
 	conn, err := pgx.ConnectConfig(connectCtx, config)
 	connectCancel()
 	if err != nil {
-		return fmt.Errorf("connect to end the migration's sessions: %w", err)
+		return fmt.Errorf("connect to end the migration's sessions: %w", redactConnect(migrateVariable, err))
 	}
 	defer conn.Close(ctx) //nolint:errcheck // the sessions are already told to end
 	if _, err := conn.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
@@ -194,7 +196,8 @@ type timedConnector struct {
 func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	return c.Connector.Connect(ctx)
+	conn, err := c.Connector.Connect(ctx)
+	return conn, redactConnect(migrateVariable, err)
 }
 
 func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
@@ -244,7 +247,7 @@ func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	conn, err := pgx.ConnectConfig(connectCtx, config)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("connect as the migration administrator: %w", err)
+		return fmt.Errorf("connect as the migration administrator: %w", redactConnect(migrateVariable, err))
 	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
