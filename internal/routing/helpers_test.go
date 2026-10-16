@@ -23,7 +23,7 @@ var (
 // id makes the n-th identifier of a kind, stable across a run.
 func id(n int) [16]byte {
 	var b [16]byte
-	b[0], b[15] = 0x10, byte(n) //nolint:gosec // n is a small test number
+	b[0], b[14], b[15] = 0x10, byte(n>>8), byte(n) //nolint:gosec // n is a test number below 2¹⁶
 	return b
 }
 
