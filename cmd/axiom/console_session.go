@@ -29,7 +29,8 @@ func grant(issued accounts.Issued) consoleapi.SessionGrant {
 func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
 	site := callOf(ctx).site
 	return consoleapi.GetSite200JSONResponse(consoleapi.Site{
-		Name: site.Name, KeyPrefix: site.KeyPrefix, Registration: consoleapi.SiteRegistration(site.Registration),
+		Name: site.Name, Currency: site.Currency.String(), KeyPrefix: site.KeyPrefix,
+		Registration: consoleapi.SiteRegistration(site.Registration),
 	}), nil
 }
 

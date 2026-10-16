@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -66,6 +67,9 @@ func invalidField(pointer, message string) *apiError {
 func failure(err error) *apiError {
 	if apiErr, ok := errors.AsType[*apiError](err); ok {
 		return apiErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errDeadline
 	}
 	if errors.Is(err, observability.ErrBadCursor) {
 		return invalidField("cursor", "not a cursor this API gave out")

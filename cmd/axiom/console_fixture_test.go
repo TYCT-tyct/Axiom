@@ -57,12 +57,13 @@ func newConsoleFixture(t *testing.T) consoleFixture {
 	if _, err := c.user(ownerPassword+"\n", "create", "--email", ownerEmail); err != nil {
 		t.Fatal(err)
 	}
-	return startNode(c, &testClock{now: time.Now()})
+	return startNode(c, &testClock{now: time.Now()}, 0)
 }
 
 // startNode starts a node of the program on the command line's database: the accounts module, which has read the
-// sites, domains and roles as they are now, and the console's routes in front of it.
-func startNode(c commandLine, clock *testClock) consoleFixture {
+// sites, domains and roles as they are now, and the console's routes in front of it. A request deadline of 0 is the
+// program's.
+func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleFixture {
 	c.t.Helper()
 	svc, err := accounts.NewService(c.db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
@@ -75,13 +76,18 @@ func startNode(c commandLine, clock *testClock) consoleFixture {
 	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger}, logger)
+	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds: it sees
 // the roles and domains as they are now.
-func (f consoleFixture) restarted() consoleFixture { return startNode(f.commandLine, f.clock) }
+func (f consoleFixture) restarted() consoleFixture { return startNode(f.commandLine, f.clock, 0) }
+
+// withDeadline is a node on the same database whose requests have the deadline d.
+func (f consoleFixture) withDeadline(d time.Duration) consoleFixture {
+	return startNode(f.commandLine, f.clock, d)
+}
 
 // session is what a page holds after signing in: the cookie it cannot read and the CSRF token it can.
 type session struct {

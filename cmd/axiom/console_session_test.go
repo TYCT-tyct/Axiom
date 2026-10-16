@@ -183,6 +183,27 @@ func TestTwoStepVerification(t *testing.T) {
 	expect(t, "the session from the confirmation, replaced", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusUnauthorized, "")
 }
 
+// TestTwoStepVerificationStaysOn: once it is on, confirming another secret is a 409, as the contract says, and changes
+// nothing: the first secret and the recovery codes still work, and the session that asked is still the user's.
+func TestTwoStepVerificationStaysOn(t *testing.T) {
+	f := newConsoleFixture(t)
+	secret, verified, codes := f.totpSetup(f.owner())
+	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(verified))
+	expect(t, "beginTotpSetup", rec, http.StatusOK, "")
+	var other consoleapi.TotpSetup
+	decode(t, rec, &other)
+	f.clock.Advance(time.Minute)
+	confirm := `{"secret":"` + other.Secret + `","password":"` + ownerPassword + `","code":"` + totpCode(t, other.Secret, f.clock.Now()) + `"}`
+	expect(t, "confirming a second secret", f.do(http.MethodPost, "/auth/totp/confirm", confirm, as(verified)), http.StatusConflict, consoleapi.ErrorCodeConflict)
+	expect(t, "the session that asked", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusOK, "")
+
+	rec = f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	pending := f.sessionOf(rec)
+	expect(t, "a code of the first secret", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+totpCode(t, secret, f.clock.Now())+`"}`, as(pending)), http.StatusOK, "")
+	rec = f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	expect(t, "a recovery code from before", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+codes[0]+`"}`, as(f.sessionOf(rec))), http.StatusOK, "")
+}
+
 // TestLevelsAreEnforced: an operation that needs two-step verification refuses a session that proved only the
 // password, with the code that says why, before it looks at the body.
 func TestLevelsAreEnforced(t *testing.T) {

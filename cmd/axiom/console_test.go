@@ -47,7 +47,6 @@ func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
 		{"a handler fails", "/api/console/v1/version", http.StatusInternalServerError, consoleapi.ErrorCodeInternal},
 		{"a path the contract lacks", "/api/console/v1/nothing-here", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
 		{"a method the contract lacks", "POST /api/console/v1/version", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
-		{"a parameter is malformed", "/api/console/v1/calls?limit=many", http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

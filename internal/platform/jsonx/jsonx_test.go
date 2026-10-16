@@ -1,10 +1,12 @@
 package jsonx
 
 import (
+	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -62,7 +64,11 @@ func TestUnmarshal(t *testing.T) {
 			name      string
 			unmarshal func([]byte, any) error
 			err       error
-		}{{"Unmarshal", Unmarshal, tc.err}, {"UnmarshalKnown", UnmarshalKnown, tc.knownErr}} {
+		}{
+			{"Unmarshal", Unmarshal, tc.err},
+			{"UnmarshalKnown", UnmarshalKnown, tc.knownErr},
+			{"Decode", func(data []byte, v any) error { return Decode(bytes.NewReader(data), v) }, tc.err},
+		} {
 			t.Run(f.name+"/"+tc.name, func(t *testing.T) {
 				var got event
 				err := f.unmarshal([]byte(tc.data), &got)
@@ -75,6 +81,15 @@ func TestUnmarshal(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestDecodeEmpty: a body with nothing in it is io.EOF, which a generated handler with an optional body takes for "no
+// body".
+func TestDecodeEmpty(t *testing.T) {
+	var v struct{}
+	if err := Decode(strings.NewReader(""), &v); !errors.Is(err, io.EOF) {
+		t.Errorf("Decode of nothing = %v, want io.EOF", err)
 	}
 }
 

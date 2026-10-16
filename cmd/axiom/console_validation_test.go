@@ -94,3 +94,25 @@ func TestBodiesFollowTheJSONPolicy(t *testing.T) {
 		t.Errorf("%s keys made from refused bodies", got)
 	}
 }
+
+// TestMemberNamesMatchExactly: the schema check and the handler read a body's members by the same rule, the project's:
+// names match exactly, case included. A member that differs from a declared one only in case is an unknown member,
+// ignored, so it can neither carry a value past the schema's bounds nor overwrite one that passed them.
+func TestMemberNamesMatchExactly(t *testing.T) {
+	f := newConsoleFixture(t)
+	s := f.owner()
+	models := `["` + strings.Repeat(`a","`, 256) + `a"]` // 257 names, one past the bound
+	for name, body := range map[string]string{
+		"257 models under another case": `{"name":"k","MODELS":` + models + `}`,
+		"a name overwritten by another": `{"name":"k","NAME":""}`,
+		"mixed case in a nested object": `{"name":"k","spend_limit":{"amount":"1","currency":"USD","Currency":"x"}}`,
+	} {
+		created := f.createKey(s, body)
+		if created.Key.Name != "k" || created.Key.Models != nil && len(*created.Key.Models) > 0 {
+			t.Errorf("%s: made %+v", name, created.Key)
+		}
+	}
+	if got := f.text("SELECT count(*)::text FROM accounts.api_keys WHERE name <> 'k' OR cardinality(models) > 0"); got != "0" {
+		t.Errorf("%s keys made from the other cases' values", got)
+	}
+}

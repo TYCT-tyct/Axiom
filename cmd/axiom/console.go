@@ -50,27 +50,32 @@ func writeErrorBody(w http.ResponseWriter, status int, body consoleapi.Error) {
 // 400 that describes only the request (the client's own input), a path or method the contract lacks a 404, a
 // refusal the status and code its error maps to, and any other handler failure is logged and answered with a bare
 // 500; the default would send the error's text, which may describe our internals, to the client. Every response is
-// uncached.
+// uncached. The guard runs in front of the generated routes: they read the query before any middleware of theirs
+// would run, and its order of checks is the answer's.
 func publicRoutes(api consoleapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
-	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
-		writeError(w, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest, err.Error())
-	}
 	console := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
-		RequestErrorHandlerFunc:  badRequest,
+		RequestErrorHandlerFunc:  invalidRequest,
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) { respond(w, r, logger, err) },
 	})
 	mux := http.NewServeMux()
-	routes := consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
-		BaseRouter:       mux,
-		Middlewares:      []consoleapi.MiddlewareFunc{g.middleware},
-		ErrorHandlerFunc: badRequest,
-	})
+	routes := consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: mux, ErrorHandlerFunc: invalidRequest})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if _, pattern := mux.Handler(r); pattern == "" {
+		_, pattern := mux.Handler(r)
+		if pattern == "" {
 			writeError(w, http.StatusNotFound, consoleapi.ErrorCodeNotFound, "no such resource")
 			return
 		}
-		routes.ServeHTTP(w, r)
+		// The mux sets the pattern on the request it serves, which is a copy once the guard has given it a deadline;
+		// httpserver.Public labels its metrics with the pattern of the request it handed over.
+		r.Pattern = pattern
+		g.serve(w, r, pattern, routes)
 	})
+}
+
+// invalidRequest answers a request the generated code could not read. The guard has checked the request against the
+// contract by then, so this is a corner the schemas do not reach; the error says what the parser saw, and a value
+// the client sent can be in it, so it is not repeated.
+func invalidRequest(w http.ResponseWriter, _ *http.Request, _ error) {
+	writeError(w, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest, "the request could not be read")
 }

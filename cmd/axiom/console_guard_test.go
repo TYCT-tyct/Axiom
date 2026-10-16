@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/pg"
 )
 
 // endpoint is a request to one operation of the console's API, with a body the contract accepts.
@@ -211,12 +217,126 @@ func TestHostsOfNoConsole(t *testing.T) {
 	}
 	var site consoleapi.Site
 	decode(t, f.do(http.MethodGet, "/site", ""), &site)
-	if site.Name != "Main" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil {
+	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil {
 		t.Errorf("the site: %+v", site)
 	}
 	f.run(`UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '` + consoleHost + `'`)
 	f = f.restarted()
 	expect(t, "a disabled domain", f.do(http.MethodGet, "/site", ""), http.StatusNotFound, consoleapi.ErrorCodeNotFound)
+}
+
+// TestAnswersFollowTheGuardsOrder: a request that is also malformed is answered by the first check it fails, in the
+// order the guard declares, so a client without a session or at a host of no console learns nothing about its query or
+// body; a request that passes them all is told what is wrong with it.
+func TestAnswersFollowTheGuardsOrder(t *testing.T) {
+	f := newConsoleFixture(t)
+	_, verified, _ := f.totpSetup(f.owner())
+	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	pending := f.sessionOf(rec)
+	const badCode = `{"code":"x"}`
+	cases := []struct {
+		name, method, path, body string
+		mods                     []mod
+		status                   int
+		code                     consoleapi.ErrorCode
+	}{
+		{"a bad query without a session", http.MethodGet, "/keys?limit=many", "", nil, http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated},
+		{"a bad query at no console", http.MethodGet, "/keys?limit=many", "", []mod{atHost("unknown.example")}, http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a bad query and no permission for it", http.MethodGet, "/calls?limit=many", "", []mod{as(pending)}, http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated},
+		{"a bad code without a session", http.MethodPost, "/auth/mfa", badCode, nil, http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated},
+		{"a bad code at no console", http.MethodPost, "/auth/mfa", badCode, []mod{as(pending), atHost("unknown.example")}, http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a bad code from a session past verification", http.MethodPost, "/auth/mfa", badCode, []mod{as(verified)}, http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated},
+		{"a bad code with another token", http.MethodPost, "/auth/mfa", badCode, []mod{as(pending), header("X-Csrf-Token", "not-the-token")}, http.StatusForbidden, consoleapi.ErrorCodeOriginRejected},
+		{"a bad code from another origin", http.MethodPost, "/auth/mfa", badCode, []mod{as(pending), header("Origin", "https://evil.example")}, http.StatusForbidden, consoleapi.ErrorCodeOriginRejected},
+		{"a bad code, all else in order", http.MethodPost, "/auth/mfa", badCode, []mod{as(pending)}, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest},
+	}
+	for _, c := range cases {
+		expect(t, c.name, f.do(c.method, c.path, c.body, c.mods...), c.status, c.code)
+	}
+}
+
+// TestInvalidRequestRepeatsNothing: the answer to a request the generated code could not read says that it could not,
+// and not what the parser saw, which can include what the client sent.
+func TestInvalidRequestRepeatsNothing(t *testing.T) {
+	rec := httptest.NewRecorder()
+	invalidRequest(rec, nil, errors.New(`parsing "planted-value" as integer failed`))
+	expect(t, "an unreadable request", rec, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	if strings.Contains(rec.Body.String(), "planted-value") {
+		t.Errorf("the answer repeats the client's value: %s", rec.Body)
+	}
+}
+
+// holdRow runs statement, which locks rows, in a transaction on the superuser's pool that stays open until free is
+// called; what the transaction ends with arrives on freed.
+func holdRow(t *testing.T, db *pg.DB, statement string) (free func(), freed <-chan error) {
+	t.Helper()
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- db.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), statement); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	return sync.OnceFunc(func() { close(release) }), done
+}
+
+// TestRequestsHaveADeadline: a request that waits for a row another transaction holds ends at the deadline with a 503
+// that says to check before retrying, and gives its connection back: nothing of the application is left waiting or open
+// in a transaction, and the node serves the next request.
+func TestRequestsHaveADeadline(t *testing.T) {
+	f := newConsoleFixture(t)
+	s := f.owner()
+	key := f.createKey(s, `{"name":"held"}`).Key.Id
+	slow := f.withDeadline(300 * time.Millisecond)
+	watcher, err := pg.Open(t.Context(), f.database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watcher.Close)
+	free, freed := holdRow(t, watcher, "SELECT 1 FROM accounts.api_keys WHERE name = 'held' FOR UPDATE")
+	defer free() // a failing test must not strand the held transaction
+
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- slow.do(http.MethodPut, "/keys/"+key, `{"name":"renamed","disabled":false}`, as(s))
+	}()
+	select {
+	case rec := <-answered:
+		expect(t, "a key update waiting for the key's row", rec, http.StatusServiceUnavailable, consoleapi.ErrorCodeUnavailable)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request outlived its deadline of 300 ms by 10 seconds")
+	}
+	free()
+	if err := <-freed; err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var open string
+		if err := watcher.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), "SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND usename = 'axiom_app' AND state <> 'idle'").Scan(&open)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if open == "0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s connections of the application still busy 10 seconds after the deadline", open)
+		}
+	}
+	if name := f.text("SELECT name FROM accounts.api_keys WHERE name IN ('held', 'renamed')"); name != "held" {
+		t.Errorf("the key is %q after the update that timed out", name)
+	}
+	expect(t, "the next request", slow.do(http.MethodGet, "/keys", "", as(s)), http.StatusOK, "")
 }
 
 // TestClientIP: only the connection's address is believed unless it is a trusted proxy, and then the header is read

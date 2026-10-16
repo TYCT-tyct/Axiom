@@ -4684,6 +4684,20 @@ func (response ConfirmTotpSetup403JSONResponse) VisitConfirmTotpSetupResponse(w 
 	return err
 }
 
+type ConfirmTotpSetup409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConfirmTotpSetup409JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ConfirmTotpSetup429JSONResponse struct{ TooManyRequestsJSONResponse }
 
 func (response ConfirmTotpSetup429JSONResponse) VisitConfirmTotpSetupResponse(w http.ResponseWriter) error {

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
@@ -41,50 +42,74 @@ func callOf(ctx context.Context) call {
 // 「接口约定」): the host is a console of a site; a request that changes data comes from the site's origin as JSON; a
 // session operation has a session of the level it names, carrying the CSRF token if it changes data, and the
 // permission it needs on the session's account; and the request keeps to the contract's schemas. The first thing
-// that fails is the answer, in that order, so what a client without a session can learn is only that it has none.
+// that fails is the answer, in that order, so what a client without a session can learn is only that it has none. It
+// runs in front of the generated routes, which read the query before any middleware would run, and gives the whole
+// request a deadline.
 type guard struct {
 	contract *contract
 	accounts *accounts.Service
 	proxies  []netip.Prefix
 	logger   *slog.Logger
+	// timeout is the request's deadline when a test wants another than consoleDeadline.
+	timeout time.Duration
+}
+
+// consoleDeadline bounds a console request from the moment it is read: a sign-in waiting for the user's row, a key
+// update waiting for the key's row, or a database that stopped answering would otherwise hold the request and its
+// connection until the client gives up, and enough of them exhaust the pool. The slowest legitimate request, an
+// argon2id hash after its wait for a slot (accounts.Config.HashWait), takes a few seconds.
+const consoleDeadline = 15 * time.Second
+
+// errDeadline is a request that ran out of time. The work may or may not have been done, so the client is told to
+// look before it tries again.
+var errDeadline = &apiError{
+	status: http.StatusServiceUnavailable, code: consoleapi.ErrorCodeUnavailable,
+	message: "the request took too long; check whether it took effect before trying again",
 }
 
 // unscoped are the operations that belong to no site, which the deployment checks ask by address. They are named as the
 // generated code names them (its embedded contract capitalizes the operation IDs, so they are the Go method names).
 var unscoped = map[string]bool{"GetVersion": true}
 
-func (g *guard) middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rl, ok := g.contract.byPattern[r.Pattern]
-		if !ok { // every route is registered from the contract, so this is a bug
-			respond(w, r, g.logger, errors.New("a route the contract does not declare: "+r.Pattern))
-			return
-		}
-		if unscoped[rl.operation] {
-			next.ServeHTTP(w, r)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
-		c, err := g.admit(r, rl)
-		if err != nil {
+// serve answers the request, or passes it to routes (the generated routes) with what it learned in its context.
+// pattern is the route the request matched.
+func (g *guard) serve(w http.ResponseWriter, r *http.Request, pattern string, routes http.Handler) {
+	timeout := g.timeout
+	if timeout == 0 {
+		timeout = consoleDeadline
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	rl, ok := g.contract.byPattern[pattern]
+	if !ok { // every route is registered from the contract, so this is a bug
+		respond(w, r, g.logger, errors.New("a route the contract does not declare: "+pattern))
+		return
+	}
+	if unscoped[rl.operation] {
+		routes.ServeHTTP(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	c, err := g.admit(r, rl)
+	if err != nil {
+		respond(w, r, g.logger, err)
+		return
+	}
+	if rl.body != nil {
+		if err := checkBody(r); err != nil {
 			respond(w, r, g.logger, err)
 			return
 		}
-		if rl.body != nil {
-			if err := checkBody(r); err != nil {
-				respond(w, r, g.logger, err)
-				return
-			}
-		}
-		if fields := rl.validate(r.Context(), r); len(fields) > 0 {
-			respond(w, r, g.logger, &apiError{
-				status: http.StatusBadRequest, code: consoleapi.ErrorCodeInvalidRequest,
-				message: "the request breaks the contract", fields: fields,
-			})
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callKey{}, c)))
-	})
+	}
+	if fields := rl.validate(ctx, r); len(fields) > 0 {
+		respond(w, r, g.logger, &apiError{
+			status: http.StatusBadRequest, code: consoleapi.ErrorCodeInvalidRequest,
+			message: "the request breaks the contract", fields: fields,
+		})
+		return
+	}
+	routes.ServeHTTP(w, r.WithContext(context.WithValue(ctx, callKey{}, c)))
 }
 
 // notJSON is a body the project's JSON policy refuses (internal/platform/jsonx): not UTF-8, a member name twice, or
@@ -123,9 +148,7 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 	switch {
 	case !rl.session && rl.changes:
 		return c, g.accounts.CheckOrigin(r)
-	case !rl.session, rl.level == levelPendingMFA:
-		// A pending session is checked by VerifyMFA itself, together with the Origin and its own CSRF token, under
-		// the user's lock.
+	case !rl.session:
 		return c, nil
 	}
 	if c.principal, err = g.authenticate(r, rl); err != nil {
@@ -145,8 +168,17 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 
 // authenticate is the session of the request, of the level the operation needs.
 func (g *guard) authenticate(r *http.Request, rl *rules) (accounts.Principal, error) {
-	if rl.level == levelAny {
+	switch rl.level {
+	case levelAny:
 		return g.accounts.AuthenticateAny(r.Context(), r)
+	case levelPendingMFA:
+		// Checked here, before the body is read, so that a client without a pending session learns only that it has
+		// none; VerifyMFA checks it again under the user's lock, which is what keeps one challenge to one session.
+		p, err := g.accounts.AuthenticateAny(r.Context(), r)
+		if err == nil && !p.Pending() {
+			return accounts.Principal{}, accounts.ErrNoSession
+		}
+		return p, err
 	}
 	p, err := g.accounts.Authenticate(r.Context(), r)
 	if err == nil && rl.level == levelMFA && !p.Verified() {
