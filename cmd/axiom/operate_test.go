@@ -37,9 +37,10 @@ func keyFile(t testing.TB, fill byte) string {
 
 // commandLine runs `axiom site` and `axiom user` against one fresh database.
 type commandLine struct {
-	t       *testing.T
-	environ []string
-	db      *pg.DB
+	t        *testing.T
+	environ  []string
+	db       *pg.DB
+	database pgtest.Database
 }
 
 func newCommandLine(t *testing.T) commandLine {
@@ -50,7 +51,7 @@ func newCommandLine(t *testing.T) commandLine {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	return commandLine{t, []string{"AXIOM_DATABASE_URL=" + database.App}, db}
+	return commandLine{t, []string{"AXIOM_DATABASE_URL=" + database.App}, db, database}
 }
 
 // site runs `axiom site args...` and returns the line it printed.

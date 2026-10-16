@@ -69,6 +69,44 @@ func (e *Env) Duration(name string, def time.Duration) time.Duration {
 	return d
 }
 
+// Int returns the variable as a whole number of at least least, or def when it is unset.
+func (e *Env) Int(name string, def, least int) int {
+	value := e.String(name, "")
+	if value == "" {
+		return def
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < least {
+		e.errs = append(e.errs, fmt.Errorf("%s: want a whole number of at least %d", name, least))
+		return def
+	}
+	return n
+}
+
+// Prefixes returns the variable as a comma-separated list of IP addresses and networks such as 10.0.0.0/8 (a bare
+// address is its own network); none when it is unset.
+func (e *Env) Prefixes(name string) []netip.Prefix {
+	value := e.String(name, "")
+	if value == "" {
+		return nil
+	}
+	var prefixes []netip.Prefix
+	for item := range strings.SplitSeq(value, ",") {
+		item = strings.TrimSpace(item)
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(item)
+			if addrErr != nil {
+				e.errs = append(e.errs, fmt.Errorf("%s: want IP addresses and networks such as 10.0.0.0/8, separated by commas", name))
+				return nil
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes
+}
+
 // Addr returns the variable as an address to listen on, an IP and a port such as 127.0.0.1:8081 or [::1]:8081, or a
 // bare port such as :8081 for every address; def when it is unset. Host names are not accepted, so listening never
 // waits on a name lookup.
@@ -89,6 +127,10 @@ func isIP(host string) bool {
 	_, err := netip.ParseAddr(host)
 	return err == nil
 }
+
+// Problems reports every invalid variable read so far, but not the variables nothing read. A command run in a node's
+// own environment (docker compose exec) uses it: the node's variables are set there too, and are not the command's.
+func (e *Env) Problems() error { return errors.Join(e.errs...) }
 
 // Err reports every invalid variable read so far and every set variable that was not read, one per line.
 func (e *Env) Err() error {

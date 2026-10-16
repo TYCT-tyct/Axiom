@@ -40,6 +40,26 @@ services:
       postgres: {condition: service_healthy}
     <<: *hardened
 
+  # Makes the two key files the program reads at start (internal/platform/README.md「凭证加密」, internal/accounts/README.md
+  # 「格式与哈希」) once, in a volume that lives as long as the database does: the master key seals users' TOTP secrets
+  # and the hashing key makes API key hashes, so losing either with the database kept would lock users out of their
+  # factors and keys. Each file is owned by the program's user and readable by it alone, which the program requires.
+  keys:
+    image: postgres:18.6-alpine # any image with a shell; this one is pulled for the database anyway
+    user: root # only to make the files and hand them over
+    entrypoint: [sh, -ec]
+    command:
+      - |
+        umask 277
+        for name in master hash; do
+          [ -f /keys/$$name ] || echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
+        done
+        chown 65532:65532 /keys/master /keys/hash
+    volumes:
+      - keys:/keys
+    <<: *hardened
+    cap_add: [CHOWN]
+
   axiom:
     build: .
     image: axiom:local
@@ -47,11 +67,17 @@ services:
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+      AXIOM_MASTER_KEY_FILE: /keys/master
+      AXIOM_KEY_HASH_FILE: /keys/hash
+    volumes:
+      - keys:/keys:ro
     ports:
       - 127.0.0.1:8080:8080 # the public listener, reachable from this machine only
     depends_on:
       migrate: {condition: service_completed_successfully}
+      keys: {condition: service_completed_successfully}
     <<: *hardened
 
 volumes:
   postgres:
+  keys:
