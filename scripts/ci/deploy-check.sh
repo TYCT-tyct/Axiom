@@ -6,7 +6,9 @@ set -euo pipefail
 # A job cancelled or killed mid-deployment can leave the stack and its volume behind, and no exit handler survives a
 # SIGKILL; so each turn first removes whatever the last one left, then always tears down when it ends.
 just down -v
-trap 'just down -v' EXIT INT TERM
+trap 'just down -v' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 timeout 300 just up # one command deploys this machine and waits for a ready node
 
