@@ -177,12 +177,12 @@ func TestQuote(t *testing.T) {
 		{"an amount equal to the quote suffices", []Quotable{oneFull}, []Available{balance(14180)}, "14180", []int{0}, nil},
 		{"unaffordable entries dropped", []Quotable{threeSegmented, threeFull, oneFull}, []Available{balance(17000)}, "16180", []int{0, 2}, nil},
 		{"only the segment affordable", []Quotable{threeSegmented, threeFull}, []Available{balance(16180)}, "16180", []int{0}, nil},
-		{"preferred dropped", []Quotable{threeFull, threeSegmented}, []Available{balance(17000)}, "", nil, &Insufficient{SourceBalance}},
+		{"preferred dropped", []Quotable{threeFull, threeSegmented}, []Available{balance(17000)}, "", nil, &Insufficient{Source: SourceBalance}},
 		{
 			"the first source short",
 			[]Quotable{oneFull},
 			[]Available{balance(1e6), {SourceSiteBalance, amount(t, 1e6)}, {SourceKey, amount(t, 100)}, {SourceWorkspace, amount(t, 1)}},
-			"", nil, &Insufficient{SourceKey},
+			"", nil, &Insufficient{Source: SourceKey},
 		},
 	} {
 		r, err := Quote(d, tc.route, segments, tc.avail)

@@ -30,23 +30,23 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 3 | 有上限地读请求体 | gateway | — | 2 分钟 | 413 / 408 |
 | 4 | `protocol.Inspect`；catalog 解析名字（含 `models`）；`routing.SessionKey` | protocol、catalog、routing | 0 | — | 400 / 404 |
 | 5 | 预检：限流计数加一（速率计数，不需释放），读会话粘性；只计数不判定 | gateway | M1 0；M2 1 C | 20ms | 保守计数、无粘性 |
-| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 6 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
+| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 8 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
 | 7 | 尝试：本地持有者检查 → `Acquire` → `Prepare` → `Bind` → `Send` → 写对账日志；从读到第一个字节起计量，暂存开头事件到提交点 | suppliers、protocol、billing | 上游 | 见「超时与限额」 | 提交前按 `routing.Decide` 换条目 |
-| 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段约 5 DB | 追加 1s | 截断 |
-| 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 5 DB | 2s × 重试 | 「结束与结算」 |
+| 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
+| 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 15 DB（一次尝试） | 2s × 重试 | 「结束与结算」 |
 | 10 | 每条退出路径释放凭证、名额；异步写调用记录、quality 观测、粘性 | gateway、observability、quality | 0 | — | 「并发、背压与共享状态」 |
 
 ## 准入
 
 - `fn` 由本模块组装，依次：用预检计数对照限额（M1 只有平台配置的防滥用限额；以后的 key、等级速率值从 `Admission` 读，判定位置不变）；`routing.Plan`；最后 `billing.Reserve`。`Reserve` 返回保留条目在原路线里的下标，本模块按它裁剪路线；首选条目被删就是 402。
-- 往返 6 次，分解见[性能的「延迟预算」](../../docs/performance.md#延迟预算)；锁与读同批时的语义见 [billing 的「准入里的预留」](../billing/README.md#准入里的预留)，B2 的测试不成立就拆开，准入变 7 次。
+- 往返 8 次，分解见[性能的「延迟预算」](../../docs/performance.md#延迟预算)；锁与读依次发出的语义见 [billing 的「准入里的预留」](../billing/README.md#准入里的预留)，`pg.Tx` 有批量后可减到 6 次。
 - `Plan` 返回 `*Wait`：`Admit` 回滚（还没有预留），在事务外按 FIFO 等进程内名额，醒来只重做第 6 步，不访问缓存、不重复计限流。
 - **准入的 COMMIT 确认丢失**：返回 503、不发上游，交 `billing.SettleOrphan(adm, id)` 收尾（见 [billing 的「追加与结算」](../billing/README.md#追加与结算)）。
 
 ## 尝试
 
 - 逐条目：先查本地持有者（上次心跳成功 + TTL − 5s 晚于现在），失效就不再发起尝试、按「结束与结算」收尾。`Acquire`（内存比较交换）→ `Prepare`；拿不到凭证或 `*NotSupported` 就跳过，不算尝试，写进路由记录。全部因 `*NotSupported` 跳过：`Settle` 只释放，400 附原因；全部因凭证名额跳过：`Settle` 只释放，429、`Retry-After: 1`。
-- **尝试的身份在进入 `Send` 时确定**：`Hold.Bind(seq, entry)` 分配序号（从 1 起，最多 3）、绑定不可变的报价条目，记开始时间（`priced_at`）。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「接口」](../suppliers/README.md#接口草图)。
+- **尝试的身份在进入 `Send` 时确定**：`Hold.Bind(seq, entry)` 分配序号（从 1 起，最多 3）、绑定不可变的报价条目，记开始时间（`priced_at`）。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「调用面」](../suppliers/README.md#调用面)。
 - 进入 `Send` 时、拿到响应头里的对账键时、尝试提交时，各调一次 `suppliers.Journal`（见 [suppliers 的「对账日志」](../suppliers/README.md#对账日志)）。
 - 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
 - 回退不追加预留：准入已按保留条目的最高报价预留。客户端断开后不再发起新尝试。
@@ -158,9 +158,9 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 入口转核心 | 1ms | M1 同进程 | 达标 |
 | 认 key、读请求、路由 | 2ms | 缓存命中 + `Inspect`（全扫一遍）+ `SessionKey`（有界前缀）+ 名字解析 + `Plan`；`Prepare` 另扫一遍，在事务外 | **风险**：两遍全扫，1–4 MiB 估 4–16ms。G1 对组合路径做基准；超标先让 `Inspect` 产出可复用的位置表给 `Prepare` |
 | 限流和粘性 | 2ms | M1 为 0；M2 1 C | 达标 |
-| 准入 | 5ms | 6 DB + 提交 | 约 2–4ms；RTT 1ms 即超标，核心与库必须同机房 |
+| 准入 | 5ms | 8 DB（含提交） | 约 3–5ms，待实测；RTT 1ms 即超标，核心与库必须同机房 |
 | 出口发请求、首字节 | 2ms + 1ms | `Prepare` 在事务外，复用长连接 | 达标；转换单独基准 |
-| 追加、结算 | 不在首字路径 | 追加约 5 DB，结算 5 DB | 结算尾延迟目标 p95 10ms，单独报告 |
+| 追加、结算 | 不在首字路径 | 追加 9 DB（已覆盖时 6），结算 15 DB（一次尝试） | 结算尾延迟目标 p95 10ms，单独报告 |
 
 ## PR 拆分
 
@@ -190,7 +190,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 - 两家中转站的逐条记录 1 小时内可查（S9）。
 - 联网搜索在流式 `message_delta` 里的累计输入（G11，决定输入上界能否收紧）。
 - sub2api 是否回显客户端发来的 `X-Client-Request-Id`（S8；是则发请求前就知道对账键）。
-- 同批的锁语句与读语句按 billing 的语义执行（B2；不成立就拆开，准入变 7 次往返）。
+- 锁语句与读语句依次发出（`pg.Tx` 还没有批量），语义见 billing 的「准入里的预留」，准入 8 次往返；有批量后可减到 6 次。
 
 ## 决策与理由
 

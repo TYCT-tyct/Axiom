@@ -18,6 +18,25 @@ sql:
         emit_methods_with_db_argument: true
         omit_unused_structs: true
   - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/accounts/migrations]
+    queries: internal/accounts/queries
+    gen:
+      go:
+        package: accounts
+        out: internal/accounts
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        # IDs are the standard library's uuid.UUID, as everywhere in Go (README.md「ID」).
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
+  - engine: postgresql
     schema: [sqlc/schemas.sql, internal/catalog/migrations]
     queries: internal/catalog/queries
     gen:
@@ -57,6 +76,7 @@ sql:
           - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
           - {db_type: "pg_catalog.int8", go_type: int64}
           - {db_type: "pg_catalog.int8", nullable: true, go_type: {type: int64, pointer: true}}
+          - {db_type: text, nullable: true, go_type: {type: string, pointer: true}}
   - engine: postgresql
     schema: [sqlc/schemas.sql, internal/observability/migrations]
     queries: internal/observability/internal/store/queries
@@ -72,3 +92,24 @@ sql:
         omit_unused_structs: true
         overrides:
           - {db_type: timestamptz, go_type: {import: time, type: Time}}
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/billing/migrations]
+    queries: internal/billing/queries
+    gen:
+      go:
+        package: billing
+        out: internal/billing
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
+          - {db_type: "pg_catalog.int8", go_type: int64}
+          - {db_type: "pg_catalog.int8", nullable: true, go_type: {type: int64, pointer: true}}
+          - {db_type: "pg_catalog.int4", nullable: true, go_type: {type: int32, pointer: true}}

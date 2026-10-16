@@ -199,18 +199,26 @@ func (s *messagesToChat) blockStart() error {
 		return s.addEntry(&s.draft.details, []byte(`{"type":"reasoning.encrypted","data":`), s.ev.data,
 			[]byte(anthropicFormat), detailIndex(s.details-1), []byte("}"))
 	case toolBlock:
-		s.leading, s.tool = false, s.tools
-		s.tools++
-		var err error
-		if s.stash, err = sse.Grow(s.stash, len(s.ev.input), s.walk.charge); err != nil {
-			return err
-		}
-		s.stash = append(s.stash, s.ev.input...)
-		return s.addEntry(&s.draft.tools, toolIndex(s.tool), []byte(`,"id":`), s.ev.id,
-			[]byte(`,"type":"function","function":{"name":`), s.ev.name, []byte(`,"arguments":""}}`))
+		return s.toolStart()
 	case otherBlock, inputDelta, signatureDelta:
 	}
 	return fmt.Errorf("block %d of a type a converted request does not ask for", s.ev.index)
+}
+
+// toolStart starts a tool call, which needs the id and the name it is written with.
+func (s *messagesToChat) toolStart() error {
+	if nonEmpty(s.ev.id) == nil || nonEmpty(s.ev.name) == nil {
+		return fmt.Errorf("block %d is a tool call without an id or a name", s.ev.index)
+	}
+	s.leading, s.tool = false, s.tools
+	s.tools++
+	var err error
+	if s.stash, err = sse.Grow(s.stash, len(s.ev.input), s.walk.charge); err != nil {
+		return err
+	}
+	s.stash = append(s.stash, s.ev.input...)
+	return s.addEntry(&s.draft.tools, toolIndex(s.tool), []byte(`,"id":`), s.ev.id,
+		[]byte(`,"type":"function","function":{"name":`), s.ev.name, []byte(`,"arguments":""}}`))
 }
 
 func (s *messagesToChat) blockDelta() error {
@@ -272,7 +280,7 @@ func (s *messagesToChat) arguments(piece []byte) error {
 
 func (s *messagesToChat) dropBuffers() {
 	s.converted.dropBuffers()
-	s.stash = nil
+	s.ev, s.stash = messagesEvent{}, nil
 }
 
 // nonEmpty is the JSON string piece, or nil when it is null or empty.

@@ -107,9 +107,12 @@ func renderError(f Format, e Error, charged *charges) (status int, body []byte) 
 // appendCharged appends the reply's usage of fin in format f's fields, with its cost, and the pending flag when the
 // settlement was not written.
 func appendCharged(dst []byte, f Format, c *charges) []byte {
-	if f == Messages {
+	switch f {
+	case Messages:
 		dst = appendMessagesUsage(dst, c.usage, c.cost)
-	} else {
+	case Responses:
+		dst = appendOpenAIUsage(dst, responsesNames, c.usage, c.cost)
+	case Chat:
 		dst = appendOpenAIUsage(dst, chatNames, c.usage, c.cost)
 	}
 	if c.pending {

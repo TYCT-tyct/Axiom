@@ -23,30 +23,45 @@ type Keyring struct {
 
 // Load validates the entire file before publishing a usable keyring, so configuration errors stop startup.
 func Load(path string) (*Keyring, error) {
-	if path == "" {
-		return nil, fmt.Errorf("%s: required", keyFileVariable)
-	}
-	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the master key file.
+	keys, latest, err := readKeyFile(keyFileVariable, path)
 	if err != nil {
-		return nil, fileError("open", err)
+		return nil, err
+	}
+	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest}
+	for version, key := range keys {
+		ring.keys[version] = newGCM(key[:])
+	}
+	return ring, nil
+}
+
+// readKeyFile reads a protected file of version:base64 lines, each a 32-byte key, and returns the keys by version
+// and the highest version. Errors name variable, the setting that chose the file, and never its path or contents.
+func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
+	if path == "" {
+		return nil, 0, fmt.Errorf("%s: required", variable)
+	}
+	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	if err != nil {
+		return nil, 0, fileError(variable, "open", err)
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
 	info, err := file.Stat()
 	if err != nil {
-		return nil, fileError("stat", err)
+		return nil, 0, fileError(variable, "stat", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: want a regular file", keyFileVariable)
+		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
 	}
 	// Windows mode bits cannot express NTFS ACLs; deployment must restrict the file's ACL instead.
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%s: permissions must deny all group and other access", keyFileVariable)
+		return nil, 0, fmt.Errorf("%s: permissions must deny all group and other access", variable)
 	}
-	return readKeys(file)
+	return readKeys(variable, file)
 }
 
-func readKeys(reader io.Reader) (*Keyring, error) {
-	ring := &Keyring{keys: make(map[uint32]cipher.AEAD)}
+func readKeys(variable string, reader io.Reader) (map[uint32][32]byte, uint32, error) {
+	keys := make(map[uint32][32]byte)
+	var latest uint32
 	// The random-nonce limit counts uses of the key material, not of a version, so a reused key must not hide behind a
 	// new version number.
 	versions := make(map[[32]byte]uint32)
@@ -54,25 +69,25 @@ func readKeys(reader io.Reader) (*Keyring, error) {
 	for line := 1; scanner.Scan(); line++ {
 		version, key, err := parseKey(scanner.Text())
 		if err != nil {
-			return nil, fmt.Errorf("%s: line %d: %w", keyFileVariable, line, err)
+			return nil, 0, fmt.Errorf("%s: line %d: %w", variable, line, err)
 		}
-		if _, exists := ring.keys[version]; exists {
-			return nil, fmt.Errorf("%s: line %d: duplicate version", keyFileVariable, line)
+		if _, exists := keys[version]; exists {
+			return nil, 0, fmt.Errorf("%s: line %d: duplicate version", variable, line)
 		}
 		if previous, exists := versions[key]; exists {
-			return nil, fmt.Errorf("%s: line %d: key already used by version %d", keyFileVariable, line, previous)
+			return nil, 0, fmt.Errorf("%s: line %d: key already used by version %d", variable, line, previous)
 		}
 		versions[key] = version
-		ring.keys[version] = newGCM(key[:])
-		ring.latest = max(ring.latest, version)
+		keys[version] = key
+		latest = max(latest, version)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fileError("read", err)
+		return nil, 0, fileError(variable, "read", err)
 	}
-	if len(ring.keys) == 0 {
-		return nil, fmt.Errorf("%s: want at least one key", keyFileVariable)
+	if len(keys) == 0 {
+		return nil, 0, fmt.Errorf("%s: want at least one key", variable)
 	}
-	return ring, nil
+	return keys, latest, nil
 }
 
 func parseKey(line string) (uint32, [32]byte, error) {
@@ -94,7 +109,7 @@ func parseKey(line string) (uint32, [32]byte, error) {
 	return uint32(version), [32]byte(key), nil
 }
 
-func fileError(operation string, err error) error {
+func fileError(variable, operation string, err error) error {
 	// OS errors can carry the path, which may itself be an accidentally pasted key.
 	reason := "failed"
 	switch {
@@ -105,5 +120,5 @@ func fileError(operation string, err error) error {
 	case errors.Is(err, bufio.ErrTooLong):
 		reason = "line too long"
 	}
-	return fmt.Errorf("%s: %s: %s", keyFileVariable, operation, reason)
+	return fmt.Errorf("%s: %s: %s", variable, operation, reason)
 }

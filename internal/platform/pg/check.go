@@ -32,6 +32,11 @@ var loginAudit = audit{
 
 // schemaAudits check what migrations built.
 var schemaAudits = []audit{
+	// The audits below name the lookup role, and a database the first migration never ran on lacks it.
+	{
+		"SELECT CASE WHEN to_regrole('axiom_lookup') IS NULL THEN 'it does not exist' ELSE '' END",
+		"the lookup role axiom_lookup (run axiom migrate first)",
+	},
 	// Every table in Axiom's schemas but the version tables, which hold no tenant's rows, forces row-level security,
 	// or its owner reads every row, and has policies: a table without any shows nothing, a step its migration forgot
 	// that would otherwise surface as empty results.
@@ -55,13 +60,16 @@ var schemaAudits = []audit{
 				WHERE privilege_type = 'EXECUTE' AND grantee NOT IN (p.proowner, 'axiom_app'::regrole)))`,
 		"SECURITY DEFINER functions not owned by axiom_lookup, with search_path pg_catalog, pg_temp, run only by axiom_app",
 	},
-	// The lookup role reads only through its functions: it cannot log in or escape row-level security, and owns no
-	// table, which its owner would read past the policies of.
+	// The lookup role reads only through its functions: it cannot log in or escape row-level security, owns no table,
+	// which its owner would read past the policies of, and can create nothing, which would let it own such a table or
+	// a function of its choosing.
 	{
 		`SELECT coalesce(string_agg(problem, ', '), '') FROM (
 		SELECT 'it can log in or escape row-level security' FROM pg_roles
 			WHERE rolname = 'axiom_lookup' AND (rolcanlogin OR rolsuper OR rolbypassrls)
 		UNION ALL SELECT 'it owns ' || oid::regclass::text FROM pg_class WHERE relowner = 'axiom_lookup'::regrole
+		UNION ALL SELECT 'it may create objects in ' || nspname FROM pg_namespace
+			WHERE has_schema_privilege('axiom_lookup', oid, 'CREATE')
 	) problems (problem)`,
 		"the lookup role axiom_lookup breaks its limits",
 	},

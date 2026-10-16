@@ -11,10 +11,12 @@ import (
 
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/newapi"
+	"axiom/internal/suppliers/internal/sub2api"
 )
 
 var adapters = []adapter.Adapter{
 	newapi.New(),
+	sub2api.New(),
 }
 
 // Registry finds an adapter by the kind stored in suppliers.kind.
@@ -43,6 +45,12 @@ func New(list ...adapter.Adapter) (*Registry, error) {
 		r.byKind[kind] = a
 	}
 	return r, nil
+}
+
+// Get returns the adapter of kind.
+func (r *Registry) Get(kind adapter.Kind) (adapter.Adapter, bool) {
+	a, ok := r.byKind[kind]
+	return a, ok
 }
 
 // Has reports whether an adapter of kind is registered.

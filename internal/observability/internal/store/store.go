@@ -3,5 +3,9 @@
 // (internal/observability/README.md「表」).
 package store
 
-// ListQuery is the text of ListOwnCalls as it runs, for the plan test to explain.
-const ListQuery = listOwnCalls
+// The texts of the three list queries as they run, for the plan test to explain.
+const (
+	ListQuery        = listOwnCalls
+	ListByModelQuery = listOwnCallsByModel
+	ListByAppQuery   = listOwnCallsByApp
+)

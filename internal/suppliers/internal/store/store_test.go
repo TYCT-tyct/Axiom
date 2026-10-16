@@ -474,7 +474,15 @@ func TestRowRules(t *testing.T) {
 		{"a codename once set stays", []string{group("codename = 'maple-{group}'"), group("codename = 'oak-{group}'")}, checkViolation},
 		{"a codename may be set again to itself", []string{group("codename = 'maple-{group}'"), group("codename = 'maple-{group}', present = false")}, ""},
 		{"a known cost needs a schedule", []string{endpoint(", cost_state", ", 'known'")}, checkViolation},
-		{"a known cost with one", []string{endpoint(", cost_state, cost_schedule_id", ", 'known', gen_random_uuid()")}, ""},
+		{"a known cost with a schedule that does not exist", []string{endpoint(", cost_state, cost_schedule_id", ", 'known', gen_random_uuid()")}, foreignKeyViolation},
+		{"a known cost with its schedule", []string{
+			endpoint("", ""),
+			"INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint) " +
+				"SELECT supplier_id, id, 'quota', '{}', 'published', 'f' FROM suppliers.endpoints WHERE supplier_group_id = '" + g + "'",
+			"UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = (SELECT id FROM suppliers.cost_schedules " +
+				"WHERE endpoint_id = endpoints.id) WHERE supplier_group_id = '" + g + "'",
+		}, ""},
+
 		{"an unknown format", []string{strings.Replace(endpoint("", ""), "'{chat}'", "'{grpc}'", 1)}, checkViolation},
 		{"no format", []string{strings.Replace(endpoint("", ""), "'{chat}'", "'{}'", 1)}, checkViolation},
 		{"an https origin with a port", []string{supplier("https://x.example:8443", "newapi", "USD")}, ""},

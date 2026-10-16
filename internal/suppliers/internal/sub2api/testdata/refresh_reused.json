@@ -1,0 +1,11 @@
+{
+ "method": "POST",
+ "path": "/api/v1/auth/refresh",
+ "status": 401,
+ "header": {},
+ "body": {
+  "code": 401,
+  "message": "invalid refresh token",
+  "reason": "REFRESH_TOKEN_INVALID"
+ }
+}
