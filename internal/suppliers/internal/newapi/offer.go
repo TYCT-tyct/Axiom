@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,9 @@ type priceEntry struct {
 	ImageRatio      *number  `json:"image_ratio"`
 	Endpoints       []string `json:"supported_endpoint_types"`
 }
+
+// autoRatio is the ratio new-api writes for its "auto" group.
+const autoRatio number = "auto"
 
 // offerProgress is how far a reading of the offer got: the groups and prices, then the models of one group after
 // another. Reading them takes one request per group, more than a window of the rate bucket may allow.
@@ -61,9 +65,12 @@ func (m *manager) Offer(ctx context.Context) (adapter.Offer, error) {
 	}
 	for ; p.next < len(p.names); p.next++ {
 		name := p.names[p.next]
-		ratio, ok := p.groups[name].Ratio.rat()
-		if !ok { // "auto" picks among groups per request and has no ratio of its own
+		if p.groups[name].Ratio == autoRatio { // picks among groups per request and has no ratio of its own
 			continue
+		}
+		ratio, ok := p.groups[name].Ratio.rat()
+		if !ok { // missing, null or not a number: another form than the one known, not a group to leave out
+			return adapter.Offer{}, errMissing("ratio of group " + strconv.Quote(name))
 		}
 		var models struct {
 			Data []string `json:"data"`

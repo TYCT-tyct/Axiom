@@ -180,3 +180,58 @@ func TestALateStretchIsReadHoweverLateThePassRuns(t *testing.T) {
 		t.Error("a record written late in a stretch the daily pass came late for was never read")
 	}
 }
+
+// TestARecordWrittenLateIntoAStretchAlreadyReadIsFoundADayLater: the daily pass reads from a day before where the last
+// one ended, so a record that belongs to a stretch the last pass covered and was written after it, up to a day late, is
+// found by the next; the overlap of five minutes the forward passes have is not enough for it.
+func TestARecordWrittenLateIntoAStretchAlreadyReadIsFoundADayLater(t *testing.T) {
+	t.Parallel()
+	d1 := t0.Add(25 * time.Hour)
+	clk := &testClock{t: d1}
+	srv := newLogServer(clk, globalSpecs())
+	run := newScan(t, srv, startState(t, t0))
+	run.run(200) // the daily pass of the first day, and the forward passes up to it
+	clk.set(d1.Add(2 * time.Hour))
+	run.run(200)
+	srv.add(d1.Add(-3*time.Hour), "late-y") // belongs to the stretch the daily pass covered, written 80 minutes after it
+	clk.set(d1.Add(26 * time.Hour))
+	run.run(400)
+	if run.seen["late-y"] == 0 {
+		t.Error("a record written an hour after the daily pass that belongs to its stretch was never read")
+	}
+}
+
+// groupsOf answers the offer's reads with the groups given, an empty price list and one model for each group.
+func groupsOf(groups string) adapter.Client {
+	return funcClient(func(r adapter.Request) (adapter.Response, error) {
+		switch mustParse(r.Path).Path {
+		case "/api/user/self/groups":
+			return answer(200, `{"success":true,"data":`+groups+`}`), nil
+		case "/api/pricing":
+			return answer(200, `{"success":true,"data":[]}`), nil
+		}
+		return answer(200, `{"success":true,"data":["m"]}`), nil
+	})
+}
+
+// TestOnlyTheAutoRatioLeavesAGroupOut: a group whose ratio is "auto" has none of its own and is not offered; one without
+// a ratio, with null, or with anything else is a response in another form, not a group to leave out.
+func TestOnlyTheAutoRatioLeavesAGroupOut(t *testing.T) {
+	t.Parallel()
+	for name, groups := range map[string]string{
+		"a missing ratio":            `{"g":{"desc":"x"}}`,
+		"an empty group":             `{"g":{}}`,
+		"a null ratio":               `{"g":{"ratio":null}}`,
+		"a word":                     `{"g":{"ratio":"cheap"}}`,
+		"an empty string":            `{"g":{"ratio":""}}`,
+		"a good group and a bad one": `{"a":{"ratio":1},"b":{}}`,
+	} {
+		if _, err := open(t, groupsOf(groups), t0).Offer(t.Context()); !errors.Is(err, adapter.ErrUnrecognised) {
+			t.Errorf("%s: %v, want an unrecognised answer", name, err)
+		}
+	}
+	offer, err := open(t, groupsOf(`{"a":{"ratio":1.5},"auto":{"ratio":"auto"}}`), t0).Offer(t.Context())
+	if err != nil || len(offer.Groups) != 1 || offer.Groups[0].Ref != "a" {
+		t.Errorf("a group and the auto group: %+v, %v, want only the group", offer.Groups, err)
+	}
+}

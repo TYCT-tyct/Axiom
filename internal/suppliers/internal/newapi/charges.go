@@ -146,10 +146,10 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 // which starts a little before it. Nothing is returned while less than a minute has passed beyond the watermark.
 func nextPass(s scanState, now time.Time) *pass {
 	if now.Sub(time.Unix(s.LastLate, 0)) >= lateEvery {
-		// The day before now, or, when passes have come late, from where the last one ended: the stretches overlap, so no
-		// time goes unread however late a pass is run, and a record that appears up to a day late is read by the pass
-		// after it.
-		return &pass{Late: true, Start: min(now.Add(-lateEvery).Unix(), s.lateEnd()-int64(overlap/time.Second)), End: now.Add(-lag).Unix(), Page: 1}
+		// From a day before where the last late pass ended, so every stretch is read again a day after, whatever time the
+		// passes run at: a record that appears up to a day late is read by the pass after it, and the stretches overlap, so
+		// no time goes unread however late a pass is run.
+		return &pass{Late: true, Start: s.lateEnd() - int64(lateEvery/time.Second), End: now.Add(-lag).Unix(), Page: 1}
 	}
 	end := min(s.Watermark+s.Span, now.Add(-lag).Unix())
 	if end-s.Watermark < int64(minSpan/time.Second) {

@@ -169,7 +169,7 @@ func TestClassifyReadsRecordedFailures(t *testing.T) {
 		{"the same for a key used up", sample(t, "59-err-key-exhausted"), adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialRejected{}}},
 		{"no balance", sample(t, "64-err-insufficient-wallet"), adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeSupplier, Cause: adapter.SupplierBalanceLow{}}},
 		{"no channel for the model", sample(t, "51-err-no-model-access"), adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Overloaded{}}},
-		{"a rate limit", sample(t, "66-reveal-rate-limit-429"), adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: 1200 * time.Second}}},
+		{"a rate limit", sample(t, "66-reveal-rate-limit-429"), adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: 1200 * time.Second}}},
 		{"a web page", html, adapter.Failure{Scope: adapter.ScopeEgress, Cause: adapter.Unknown{Status: 403, SuspectedEgressBlock: true}}},
 		{
 			"a 401 that is the channel's own", answer(401, `{"error":{"code":"","message":"bad provider key","type":"upstream_error"}}`),
@@ -181,6 +181,8 @@ func TestClassifyReadsRecordedFailures(t *testing.T) {
 			"a 429 with a body", answer(429, `{"error":{"code":"x","type":"upstream_error"}}`),
 			adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{}},
 		},
+		{"a 429 of spaces, whose source is not known", answer(429, "  \n"), adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{}}},
+		{"a 429 whose body was not read", adapter.Response{Status: 429, Header: http.Header{"Retry-After": {"7"}}}, adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: 7 * time.Second}}},
 	}
 	for _, c := range cases {
 		got := New().Calls().Classify(c.resp.Status, c.resp.Header, c.resp.Body)
