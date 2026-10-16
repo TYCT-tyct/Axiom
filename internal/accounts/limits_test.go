@@ -78,6 +78,12 @@ func TestCodeFailuresSpanChallenges(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
 	_, _, codes := x.enableTOTP(t, console, x.signIn(t, console))
+	// Turning it on tried a wrong password and a wrong code, which count against the user as wrong codes do (2 of the
+	// 10); two failures refill in 12 minutes.
+	x.clock.Advance(2 * time.Hour / 10)
+	if err := x.s.Reload(t.Context()); err != nil { // as the reload loop keeps the snapshot fresh
+		t.Fatal(err)
+	}
 	for range 2 {
 		challenge := x.signIn(t, console)
 		for range 5 {
