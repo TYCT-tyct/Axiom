@@ -83,20 +83,43 @@ func explain(t *testing.T, db *pg.DB, q OwnQuery) string {
 	return strings.Join(lines, "\n")
 }
 
-var topBuffers = regexp.MustCompile(`Buffers: shared hit=(\d+)`)
+var (
+	topBuffers  = regexp.MustCompile(`Buffers: shared((?: \w+=\d+)+)`)
+	bufferCount = regexp.MustCompile(` (hit|read)=(\d+)`)
+)
 
-// buffers is the buffers the plan touched: the first Buffers line is the top node's, which counts everything below.
+// buffers is the buffers the plan touched, from cache or disk: the first Buffers line is the top node's, which counts
+// everything below.
 func buffers(t *testing.T, plan string) int {
 	t.Helper()
 	m := topBuffers.FindStringSubmatch(plan)
 	if m == nil {
 		t.Fatalf("no buffers in the plan:\n%s", plan)
 	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		t.Fatal(err)
+	n := 0
+	for _, c := range bufferCount.FindAllStringSubmatch(m[1], -1) {
+		k, err := strconv.Atoi(c[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += k
 	}
 	return n
+}
+
+func TestBuffersCountsCacheAndDisk(t *testing.T) {
+	t.Parallel()
+	for line, want := range map[string]int{
+		"Buffers: shared hit=3":                                    3,
+		"Buffers: shared hit=3 read=7000":                          7003,
+		"Buffers: shared read=7000":                                7000,
+		"Buffers: shared hit=3 read=4 dirtied=9":                   7,
+		"Limit\n  Buffers: shared hit=1\n  Buffers: shared hit=99": 1,
+	} {
+		if got := buffers(t, line); got != want {
+			t.Errorf("buffers(%q) = %d, want %d", line, got, want)
+		}
+	}
 }
 
 // nextCursor is the cursor ListOwn returns after the first page of q, for the plan of a later page.
@@ -230,11 +253,15 @@ func TestListIsPlannedForItsValues(t *testing.T) {
 	since, until := window()
 	for name, c := range map[string]struct {
 		q   OwnQuery
-		max int // tuples fetched: about a page, or for a sparse filter its 100 matches, read twice (index and table)
+		max int
 	}{
-		"unfiltered":         {OwnQuery{Account: heavy}, 3 * pageSize},
-		"dense model":        {OwnQuery{Account: heavy, Model: "m"}, 3 * pageSize},
-		"sparse application": {OwnQuery{Account: heavy, ClientApp: "codex"}, 300},
+		// A generic plan fetches every one of the account's 60,000 calls in the window. A plan made for the values fetches
+		// about a page, or for a sparse filter its 100 matches, but which page-bounded plan the planner picks depends on
+		// statistics ANALYZE samples at random, and the counts move between runs (150 to 202 seen unfiltered). The bound
+		// only has to tell the two apart, so it is twenty pages: far from 60,000, and no sampled plan reaches it.
+		"unfiltered":         {OwnQuery{Account: heavy}, 20 * pageSize},
+		"dense model":        {OwnQuery{Account: heavy, Model: "m"}, 20 * pageSize},
+		"sparse application": {OwnQuery{Account: heavy, ClientApp: "codex"}, 20 * pageSize},
 	} {
 		q := c.q
 		q.Since, q.Until, q.PageSize = since, until, pageSize
