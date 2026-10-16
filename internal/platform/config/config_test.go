@@ -1,6 +1,9 @@
 package config
 
 import (
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +67,60 @@ func TestEnv(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An accepted address is an IP or nothing, and a 16-bit port, so listening never waits on a lookup; a refused one is
+// reported and reads as the default.
+func FuzzAddr(f *testing.F) {
+	for _, seed := range []string{"127.0.0.1:8081", "[::1]:8081", ":8081", "localhost:1", "1.2.3.4", ":65536", "[::1%eth0]:1", ""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		const def = "127.0.0.1:1"
+		env := New([]string{"AXIOM_ADDR=" + value})
+		got := env.Addr("AXIOM_ADDR", def)
+		want, refused := def, false
+		if value != "" {
+			if validAddr(value) {
+				want = value
+			} else {
+				refused = true
+			}
+		}
+		if got != want || (env.Err() != nil) != refused {
+			t.Fatalf("%q: got %q, err %v; want %q, refused %v", value, got, env.Err(), want, refused)
+		}
+	})
+}
+
+func validAddr(value string) bool {
+	host, port, err := net.SplitHostPort(value)
+	_, portErr := strconv.ParseUint(port, 10, 16)
+	_, ipErr := netip.ParseAddr(host)
+	return err == nil && portErr == nil && (host == "" || ipErr == nil)
+}
+
+// A valid duration is returned exactly; an empty one is the default; anything else is reported and reads as the default.
+func FuzzDuration(f *testing.F) {
+	for _, seed := range []string{"30s", "1m30s", "-1s", "0", "30", "9223372036854775807h", ""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		const def = time.Second
+		env := New([]string{"AXIOM_TIMEOUT=" + value})
+		got := env.Duration("AXIOM_TIMEOUT", def)
+		want, refused := def, false
+		if value != "" {
+			if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+				want = parsed
+			} else {
+				refused = true
+			}
+		}
+		if got != want || (env.Err() != nil) != refused {
+			t.Fatalf("%q: got %v, err %v; want %v, refused %v", value, got, env.Err(), want, refused)
+		}
+	})
 }
 
 func TestIntAndPrefixes(t *testing.T) {
