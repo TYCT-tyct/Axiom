@@ -40,6 +40,30 @@ services:
       postgres: {condition: service_healthy}
     <<: *hardened
 
+  # Makes the master key (docs/security.md「密钥管理」) once, in a volume of its own, for the program to read: the program
+  # refuses a key file that others can read, and the container it runs in has no user of the host's to own one. This is
+  # for the machine `just up` sets up; a deployment keeps the key in a protected file with a backup, since the data sealed
+  # with it cannot be opened without it.
+  keys:
+    image: postgres:18.6-alpine # any image with a shell; this one is already pulled for the database
+    user: root
+    command:
+      - sh
+      - -c
+      - |
+        [ -s /keys/master ] || {
+          umask 077
+          printf '1:%s\n' "$$(head -c 32 /dev/urandom | base64)" > /keys/master
+          chmod 0400 /keys/master
+          chown 65532:65532 /keys /keys/master # the program's user, not root, owns it; root cannot change it afterwards
+        }
+    volumes:
+      - keys:/keys
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+
   axiom:
     build: .
     image: axiom:local
@@ -47,11 +71,16 @@ services:
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+      AXIOM_MASTER_KEY_FILE: /run/keys/master
+    volumes:
+      - keys:/run/keys:ro
     ports:
       - 127.0.0.1:8080:8080 # the public listener, reachable from this machine only
     depends_on:
       migrate: {condition: service_completed_successfully}
+      keys: {condition: service_completed_successfully}
     <<: *hardened
 
 volumes:
   postgres:
+  keys:

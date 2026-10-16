@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,12 +19,22 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
+// masterKey is the environment entry that names a master key file the node can read, made for the test.
+func masterKey(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master-key")
+	if err := os.WriteFile(path, []byte("1:"+strings.Repeat("A", 43)+"=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return "AXIOM_MASTER_KEY_FILE=" + path
+}
+
 // TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
-		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -144,6 +156,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
 		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0"}, c.environ...)
+		environ = append(environ, masterKey(t))
 		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
@@ -237,6 +250,28 @@ func get(t *testing.T, url string) (response, error) {
 	return response{resp, body}, errors.Join(err, resp.Body.Close())
 }
 
+// TestServeRefusesAMasterKeyItCannotUse: without a master key file the node does not start, whether the variable is
+// missing or the file is absent or not a key, and the error names the variable and what is wrong but quotes neither the
+// path nor the file.
+func TestServeRefusesAMasterKeyItCannotUse(t *testing.T) {
+	notAKey := filepath.Join(t.TempDir(), "master-key")
+	if err := os.WriteFile(notAKey, []byte("planted-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ environ, want string }{
+		"no variable": {"", "AXIOM_MASTER_KEY_FILE: required"},
+		"no file":     {"AXIOM_MASTER_KEY_FILE=" + filepath.Join(t.TempDir(), "planted-value"), "AXIOM_MASTER_KEY_FILE: open: file not found"},
+		"not a key":   {"AXIOM_MASTER_KEY_FILE=" + notAKey, "AXIOM_MASTER_KEY_FILE: line 1: want version:base64 key"},
+	} {
+		// The database is not reached, so none is made: a node that wrongly goes on fails on this one instead.
+		environ := []string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_DATABASE_URL=postgres://planted-value@127.0.0.1:1/x", c.environ}
+		err := serve(t.Context(), environ, slog.New(slog.DiscardHandler))
+		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "planted-value") {
+			t.Errorf("%s: %v, want %q and no quoted value", name, err, c.want)
+		}
+	}
+}
+
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
 // address, closes it on the way out, so no writer goroutine outlives serve.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
@@ -247,7 +282,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(),
-		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, masterKey(t),
 	}
 	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("the node started on a taken address")

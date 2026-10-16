@@ -63,7 +63,7 @@
 
 ## 凭证加密
 
-`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。当前包尚未接入 `cmd/axiom`。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
+`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 接入了它（解密供应商的登录令牌需要它），`migrate` 不需要；错误只含变量名、行号和原因，不含路径和文件内容。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
 文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同；数值最大的版本用于写入，读取按记录的 `KeyVersion` 选择，旧版本需保留至存量数据迁移完成。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 

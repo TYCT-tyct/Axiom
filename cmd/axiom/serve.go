@@ -11,8 +11,10 @@ import (
 
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/suppliers"
 )
@@ -44,25 +46,21 @@ type listening struct {
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
-// and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
-// login escapes row-level security, that lacks this program's migrations, or that does not answer within
-// AXIOM_STARTUP_TIMEOUT.
+// and requests in flight and the jobs of the queue get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start
+// without a master key file it can read (AXIOM_MASTER_KEY_FILE), or against a database whose login escapes row-level
+// security, that lacks this program's migrations, or that does not answer within AXIOM_STARTUP_TIMEOUT.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	env := config.New(environ)
-	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080") // model calls, the console, payment callbacks
-	probesAddr := opsAddr(env)
-	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
-	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
-	databaseURL := env.Required("AXIOM_DATABASE_URL")
-	if err := env.Err(); err != nil {
-		return fmt.Errorf("configuration:\n%w", err)
+	cfg, err := readSettings(environ)
+	if err != nil {
+		return err
 	}
+	shutdownTimeout := cfg.shutdownTimeout
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithTracerProvider(tel.Traces))
+	db, err := openDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, pg.WithTracerProvider(tel.Traces))
 	if err != nil {
 		return err
 	}
@@ -73,12 +71,19 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, shutdownTimeout, logger)
+	queue, err := startSync(ctx, db, cfg.keys, tel, logger)
+	if err != nil {
+		return err
+	}
+	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
+	// deadline, and a second Stop does nothing.
+	defer stopQueue(ctx, queue, shutdownTimeout, logger)
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(publicAddr, publicRoutes(consoleAPI{version: version()}, logger), probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, publicRoutes(consoleAPI{version: version()}, logger), cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -99,7 +104,64 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), recorder.Close(ctx))
+	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
+}
+
+// settings are what serve reads from its environment.
+type settings struct {
+	publicAddr, probesAddr, databaseURL string
+	startupTimeout, shutdownTimeout     time.Duration
+	keys                                *secret.Keyring
+}
+
+// readSettings reads every variable of serve and the master key file they name, so that a node with anything wrong
+// starts no part of itself, and reports all the wrong variables at once.
+func readSettings(environ []string) (settings, error) {
+	env := config.New(environ)
+	s := settings{
+		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
+		probesAddr:      opsAddr(env),
+		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
+		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
+		databaseURL:     env.Required("AXIOM_DATABASE_URL"),
+	}
+	masterKeyFile := env.Required("AXIOM_MASTER_KEY_FILE")
+	if err := env.Err(); err != nil {
+		return s, fmt.Errorf("configuration:\n%w", err)
+	}
+	var err error
+	if s.keys, err = secret.Load(masterKeyFile); err != nil { // after Err: a missing variable is reported once
+		return s, fmt.Errorf("configuration:\n%w", err)
+	}
+	return s, nil
+}
+
+// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
+// address (egress.Direct).
+func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, err
+	}
+	queue := db.NewQueue(logger)
+	if err := suppliers.RegisterSync(suppliers.SyncConfig{
+		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+	}); err != nil {
+		return nil, err
+	}
+	if err := queue.Start(ctx); err != nil {
+		return nil, err
+	}
+	return queue, nil
+}
+
+// stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
+func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := queue.Stop(ctx); err != nil {
+		logger.Error("stopping the job queue", "err", err)
+	}
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
