@@ -141,7 +141,13 @@ function Redirect({ stage, here }: { stage: Stage; here: string }) {
   if (stage === "member") {
     return <Resume next={next ?? "/"} />;
   }
-  return <Navigate to={stage === "guest" ? "/sign-in" : "/mfa"} search={{ next: next ?? here }} replace />;
+  const to = stage === "guest" ? "/sign-in" : "/mfa";
+  // The router may already be on the page this goes to while the old page is still mounted; going there again from
+  // here would replace its address with one that no longer says where the visitor was going.
+  if (here === to || here.startsWith(`${to}?`)) {
+    return null;
+  }
+  return <Navigate to={to} search={{ next: next ?? here }} replace />;
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member
