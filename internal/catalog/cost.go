@@ -36,7 +36,7 @@ func (s Schedule) band(u Usage) int {
 	return s.bandOf(length)
 }
 
-// bandOf is the context tier a prompt whose basis adds up to length falls in.
+// bandOf is the context tier a prompt of the given length falls in.
 func (s Schedule) bandOf(length int64) int {
 	band := 0
 	for band < len(s.above) && length > s.above[band] {
