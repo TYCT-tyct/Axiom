@@ -37,6 +37,7 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 | `Admission` | accounts 的 `Admission` | 只取账户、站点、预设 ID、key 可用的模型 |
 | `Endpoint` | suppliers（分组 × 模型、凭证余额、出口数）、quality（熔断、健康度、质量、置信度、吞吐、延迟、工具错误率、实测取消）、catalog（最快输出速度 `OutputSpeed`、可上报的计费项 `Reports`）、billing（价格版本） | 快照重建时从各处合并成一份 |
 | `Failure`、`Scope` | suppliers 的 `Failure`、`Scope`（在 `suppliers/internal/adapter`，顺序相同） | 调用处转换 |
+| `Endpoint.Target` | suppliers 的端点（`upstream_name`、可用格式）加 catalog 的模型规格（推理的写法、系统消息的位置等） | 还没有谁组装：suppliers 的 `ListRoutable` 没有取 `upstream_name`，模型规格的这些字段 catalog 还没有；空的 `Target.Model` 会让尝试发出 `"model":""`，所以组装快照的代码必须填 |
 | `PriceRef` | billing 的价格版本 | 版本号加锁定的 `catalog.Schedule`，正是 `billing.Quotable.Price` 要的 |
 
 ## 决策与理由

@@ -128,6 +128,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 - `SettleFunc`（G7）：收 `Ending`（每次尝试的序号、预留里的条目下标、回执、`billing.Result`、结束原因、用量，和客户端是否已走），交回结尾要报的费用；错误表示结算没写进去。重试、`billing_pending` 之外的路径、`suppliers.Settled`、账户闸的完成类都在它里面；现在 `Run` 在它返回后就 `Call.Done`，G7 要改成结算还在重试时名额不放。
 - `Meter`（G6）：`bind` 把它绑好存在尝试上，读循环里还没有 `Observe`，没有追加、暂停、截断，写期限也还是固定的 `WriteTimeout`。
 - `Alive`：`billing.Alive`，由 cmd 接上；`Upstreams`：`NewUpstreams(*suppliers.Service)`。
+- `Endpoint.Target` 没有生产者（见 routing README 的「现在的输入类型」），`ExecDeps.IdentitySecret` 要由 cmd 从配置文件读出：所有节点必须相同，否则会话的上游缓存换节点就断。两者都补上之前，`Executor` 接不进 `cmd/axiom`。
 - 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。粘性的写回（`Router.Stick`）和 quality 的观测在 G10。
 - 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接。
 

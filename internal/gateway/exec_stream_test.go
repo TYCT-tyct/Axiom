@@ -324,3 +324,21 @@ func TestAnEventArrivingInPiecesKeepsTheUpstreamAlive(t *testing.T) {
 		}
 	})
 }
+
+// TestAnUpstreamsPingsDoNotKeepItAlive: after the commit point too, only content is news; the pings an upstream sends
+// are passed on but the idle timeout runs from the last content.
+func TestAnUpstreamsPingsDoNotKeepItAlive(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		var beats []beat
+		beats = append(beats, h.feed(evStart, evBlock, evHello))
+		for range 5 {
+			beats = append(beats, h.after(50*time.Second, evPing))
+		}
+		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(beats...)}
+		h.run()
+		if got := h.elapsed(); got != h.cfg.IdleTimeout || strings.Count(h.w.body(), "event: ping") < 3 {
+			t.Errorf("took %v, %d pings", got, strings.Count(h.w.body(), "event: ping"))
+		}
+	})
+}

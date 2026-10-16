@@ -34,7 +34,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 		// The upstream is idle when it sends nothing new: a keep-alive, a comment and a repeated snapshot do not
 		// count, bytes that make progress on an event and content do (docs/domains/gateway.md「路径与格式」).
 		p := relay.Progress()
-		if st.Kind == protocol.StepCommit || st.Kind == protocol.StepData || p.ContentBytes != seen.ContentBytes ||
+		if st.Kind == protocol.StepCommit || p.ContentBytes != seen.ContentBytes ||
 			p.PartialBytes > seen.PartialBytes || p.Searches != seen.Searches {
 			idle.Reset(idleFor)
 		}
