@@ -46,6 +46,7 @@ type scanState struct {
 	Fast      int   `json:"fast"`      // short passes in a row
 	LastLate  int64 `json:"last_late"` // when the last late pass finished
 	LateEnd   int64 `json:"late_end"`  // the end of the time the late passes have covered, so the next starts there
+	Connected int64 `json:"connected"` // when the scan began: nothing before it is ours, so no pass reads from before
 	Pass      *pass `json:"pass,omitempty"`
 }
 
@@ -61,7 +62,7 @@ type pass struct {
 
 func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 	if len(raw) == 0 { // the first scan: nothing before the connection is ours
-		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix()}, nil
+		return scanState{V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix(), Connected: now.Unix()}, nil
 	}
 	var s scanState
 	if err := jsonx.UnmarshalKnown(raw, &s); err != nil || s.V != 1 || s.Span <= 0 {
@@ -149,7 +150,7 @@ func nextPass(s scanState, now time.Time) *pass {
 		// From a day before where the last late pass ended, so every stretch is read again a day after, whatever time the
 		// passes run at: a record that appears up to a day late is read by the pass after it, and the stretches overlap, so
 		// no time goes unread however late a pass is run.
-		return &pass{Late: true, Start: s.lateEnd() - int64(lateEvery/time.Second), End: now.Add(-lag).Unix(), Page: 1}
+		return &pass{Late: true, Start: max(s.lateEnd()-int64(lateEvery/time.Second), s.Connected), End: now.Add(-lag).Unix(), Page: 1}
 	}
 	end := min(s.Watermark+s.Span, now.Add(-lag).Unix())
 	if end-s.Watermark < int64(minSpan/time.Second) {
