@@ -1,20 +1,10 @@
 import { expect, type Locator, type Page, type Route, test } from "@playwright/test";
+import { collectErrors } from "./collect-errors.ts";
 
 // The version `just web` stamped the build with; a test that compares against it fails when it is missing.
 const built = process.env.AXIOM_VERSION ?? "";
 // A program this build does not ship in.
 const deployed = "axiom v0.0.0-20991231000000-000000000000";
-
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  return errors;
-}
 
 const versionPath = "**/api/console/v1/version";
 
@@ -236,7 +226,7 @@ test("an address no page answers says so and leads to the console's home", async
   await expect(page).toHaveTitle("找不到这个页面 · Axiom");
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
 
-  // The console's own home, not the website's: the preview server would redirect "/" to the console and hide it.
+  // The console's own home, not the website's.
   const home = page.getByRole("link", { name: "回到首页" });
   await expect(home).toHaveAttribute("href", "/console/");
   await home.click();

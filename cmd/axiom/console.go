@@ -9,6 +9,7 @@ import (
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/webui"
 )
 
 //go:generate go run -C ../../tools ./pendingapi ../api/console.yaml ../cmd/axiom console_pending.gen.go axiom/internal/platform/consoleapi consoleAPI pendingConsole
@@ -45,12 +46,13 @@ func writeError(w http.ResponseWriter, status int, code consoleapi.ErrorCode, me
 	_, _ = w.Write(body) //nolint:errcheck // the client went away; nothing is left to tell it
 }
 
-// publicRoutes are the public listener's routes: so far the console's API. Every error path of the generated code
+// publicRoutes are the public listener's routes: the console's API, with its large JSON answers gzipped, and the
+// website and console pages for every path the API does not claim. Every error path of the generated code
 // is set here, none left at its default, and each answers with the contract's error body: a malformed request gets a
 // 400 that describes only the request (the client's own input), an operation without a handler a 501, and any other
 // handler failure is logged and answered with a bare 500; the default would send the error's text, which may describe
 // our internals, to the client.
-func publicRoutes(api consoleapi.StrictServerInterface, logger *slog.Logger) http.Handler {
+func publicRoutes(api consoleapi.StrictServerInterface, frontend *webui.Frontend, logger *slog.Logger) http.Handler {
 	badRequest := func(w http.ResponseWriter, _ *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest, err.Error())
 	}
@@ -65,8 +67,15 @@ func publicRoutes(api consoleapi.StrictServerInterface, logger *slog.Logger) htt
 			writeError(w, http.StatusInternalServerError, consoleapi.ErrorCodeInternal, "internal error")
 		},
 	})
-	return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
+	handler := consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{
 		BaseRouter:       http.NewServeMux(),
+		Middlewares:      []consoleapi.MiddlewareFunc{httpserver.Compress},
 		ErrorHandlerFunc: badRequest,
 	})
+	// The API owns its prefix for every method, so what it does not route is its own 404 or 405 with the methods the
+	// path takes; the pages get the rest.
+	routes := http.NewServeMux()
+	routes.Handle("/api/", handler)
+	routes.Handle("/", frontend.Public())
+	return frontend.Secured(routes) // outermost: the redirect for an unclean path is the router's own answer
 }

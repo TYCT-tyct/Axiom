@@ -9,13 +9,16 @@ import (
 	"time"
 )
 
-// Refusal is a call the gateway turns away because a limit is full. The error exit writes Status and Code, plus
-// Retry-After when RetryAfter is not zero (docs/domains/gateway.md「错误」). A refusal that has an estimate of its
-// wait, such as the queue's 429, gets that estimate from the caller that has it.
+// Refusal is a call the gateway turns away. The error exit writes Status and Code, plus Retry-After when RetryAfter
+// is not zero (docs/domains/gateway.md「错误」). A refusal that has an estimate of its wait, such as the queue's 429,
+// gets that estimate from the caller that has it, as a copy; the shared ones below are never changed. Message, when
+// set, replaces the text of the code, and Details are members added beside error_type.
 type Refusal struct {
 	Status     int
 	Code       string
 	RetryAfter int // seconds
+	Message    string
+	Details    map[string]any
 }
 
 func (r *Refusal) Error() string { return r.Code }

@@ -94,7 +94,7 @@ func catalogCommand(ctx context.Context, environ, args []string, out io.Writer) 
 // withCatalog opens the catalog on the database and a fetcher for the datasets, and closes them after do.
 func withCatalog(ctx context.Context, environ []string, do func(*catalog.Catalog, *catalog.Fetcher) error) error {
 	env := config.New(environ)
-	databaseURL := env.Required("AXIOM_DATABASE_URL")
+	databaseURL := env.Required(pg.DatabaseURLVar)
 	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)

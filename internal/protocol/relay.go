@@ -120,7 +120,9 @@ func NewMemory(size int64) *Memory {
 	return m
 }
 
-func (m *Memory) take(n int64) bool {
+// Charge draws n bytes from the budget and reports whether it had them; Refund gives them back. The gateway charges
+// the request body it holds, the relay what its buffers hold past their base allowance.
+func (m *Memory) Charge(n int64) bool {
 	for {
 		left := m.left.Load()
 		if left < n {
@@ -131,6 +133,9 @@ func (m *Memory) take(n int64) bool {
 		}
 	}
 }
+
+// Refund returns n bytes Charge drew.
+func (m *Memory) Refund(n int64) { m.left.Add(n) }
 
 // state is where a relay is in its stream.
 type state uint8
@@ -422,7 +427,7 @@ func (r *Relay) grow(b []byte, n int) ([]byte, error) { return sse.Grow(b, n, r.
 func (r *Relay) charge(n int) error {
 	over := r.held + int64(n) - baseMemory - r.charged
 	if over > 0 {
-		if !r.o.Memory.take(over) {
+		if !r.o.Memory.Charge(over) {
 			return ErrMemory
 		}
 		r.charged += over
