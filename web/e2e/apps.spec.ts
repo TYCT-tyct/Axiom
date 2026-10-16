@@ -1,17 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { contentSecurityPolicy } from "../vite.shared.ts";
 import { apps } from "./apps.ts";
+import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
 
 for (const app of apps) {
   test(`the ${app.name} works under the content security policy`, async ({ page }) => {
-    const errors: string[] = [];
-    page.on("console", (message) => {
-      if (message.type() === "error") {
-        errors.push(message.text());
-      }
-    });
-    page.on("pageerror", (error) => errors.push(error.message));
+    const errors = collectErrors(page);
     // The console asks its API who is signed in, and shows the page the answer leads to.
     signedInAs(await mockConsole(page));
 

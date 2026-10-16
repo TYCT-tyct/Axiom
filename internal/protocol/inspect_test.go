@@ -37,6 +37,24 @@ var inspectCases = []struct {
 	body   string // or, when it names a file, the sample request in testdata
 	want   func(r *protocol.Request)
 }{
+	{"provider object, kept as written, in the three formats", protocol.Chat, `{"model":"a","provider":{ "sort":"price","only":["x"] },"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Provider = "a", []byte(`{ "sort":"price","only":["x"] }`)
+	}},
+	{"provider object of Messages", protocol.Messages, `{"model":"a","max_tokens":1,"provider":{"zdr":true},"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.MaxOutput, r.Provider = "a", 1, []byte(`{"zdr":true}`)
+	}},
+	{"provider object of Responses, null", protocol.Responses, `{"model":"a","provider":null,"input":"x"}`, func(r *protocol.Request) {
+		r.Model = "a"
+	}},
+	{"alternate models, in the three formats", protocol.Chat, `{"model":"a","models":["b","c"],"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Models = "a", []string{"b", "c"}
+	}},
+	{"alternate models of Messages", protocol.Messages, `{"models":["b"],"model":"a","max_tokens":1,"messages":[]}`, func(r *protocol.Request) {
+		r.Model, r.Models, r.MaxOutput = "a", []string{"b"}, 1
+	}},
+	{"alternate models of Responses, null", protocol.Responses, `{"model":"a","models":null,"input":"x"}`, func(r *protocol.Request) {
+		r.Model = "a"
+	}},
 	{"messages sample with thinking", protocol.Messages, "messages/thinking/request.json", func(r *protocol.Request) {
 		r.Model, r.Stream, r.MaxOutput, r.Needs = "claude-opus-5-5", true, 20000, protocol.Reasoning
 	}},
@@ -240,6 +258,11 @@ func TestInspectRejects(t *testing.T) {
 		{"null", protocol.Chat, `null`},
 		{"no model", protocol.Chat, `{"stream":true}`},
 		{"model not a string", protocol.Chat, `{"model":1}`},
+		{"alternate model not a string", protocol.Chat, `{"model":"m","models":[1]}`},
+		{"alternate models not an array", protocol.Chat, `{"model":"m","models":"b"}`},
+		{"provider not an object", protocol.Chat, `{"model":"m","provider":["x"]}`},
+		{"provider larger than it may be", protocol.Chat, `{"model":"m","provider":{"order":["` + strings.Repeat("x", 4<<10) + `"]}}`},
+		{"too many alternate models", protocol.Chat, `{"model":"m","models":["1","2","3","4","5","6","7","8","9"]}`},
 		{"stream not a boolean", protocol.Chat, `{"model":"m","stream":"yes"}`},
 		{"negative cap", protocol.Chat, `{"model":"m","max_tokens":-1}`},
 		{"fractional cap", protocol.Responses, `{"model":"m","max_output_tokens":1.5}`},
