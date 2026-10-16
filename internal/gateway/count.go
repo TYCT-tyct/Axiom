@@ -10,9 +10,9 @@ import (
 )
 
 // The count of POST /messages/count_tokens, which never reaches an upstream (internal/gateway/README.md「辅助接口」).
-// The text is the request's bytes less the image and file data, a third of a token each; an image counts as the most
-// one costs, and a file, whose pages are not known without decoding it, as a flat few pages: a file of more pages is
-// undercounted, so only text and images are bounded from above.
+// The text is the request's bytes less the image and file data, a third of a token each: an empirical ratio that usually
+// overcounts (English runs about four bytes a token) but bounds nothing. An image counts as the most one costs, and a
+// file, whose pages are not known without decoding it, as a flat few pages, so a file of more pages is undercounted.
 const (
 	bytesPerToken  = 3
 	imageTokens    = 1600
