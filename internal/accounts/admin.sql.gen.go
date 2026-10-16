@@ -12,6 +12,35 @@ import (
 	"uuid"
 )
 
+const cutSessions = `-- name: CutSessions :exec
+UPDATE accounts.sessions
+SET expires_at = least(expires_at, created_at + make_interval(secs => $1::bigint)),
+    idle_timeout = least(idle_timeout, make_interval(secs => $2::bigint))
+WHERE site_id = $3 AND surface = $4 AND revoked_at IS NULL AND expires_at > now()
+    AND (created_at + make_interval(secs => $1::bigint) < expires_at
+        OR make_interval(secs => $2::bigint) < idle_timeout)
+`
+
+type CutSessionsParams struct {
+	MaxAgeSeconds int64
+	IdleSeconds   int64
+	SiteID        uuid.UUID
+	Surface       string
+}
+
+// A site that shortens its sessions writes the shorter lifetimes into the ones already made, so that loosening it again
+// later does not bring back a session the shorter ones ended, even one that made no request in between. least() only
+// shortens: loosening leaves every session as it was.
+func (q *Queries) CutSessions(ctx context.Context, db DBTX, arg CutSessionsParams) error {
+	_, err := db.Exec(ctx, cutSessions,
+		arg.MaxAgeSeconds,
+		arg.IdleSeconds,
+		arg.SiteID,
+		arg.Surface,
+	)
+	return err
+}
+
 const listTiers = `-- name: ListTiers :many
 SELECT id, name FROM accounts.tiers WHERE site_id = $1 ORDER BY name, id
 `

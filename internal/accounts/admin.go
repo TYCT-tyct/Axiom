@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -127,7 +128,8 @@ func (s *Service) SiteSettings(ctx context.Context, tx pg.Tx, site SiteID) (Site
 }
 
 // SetSiteSettings replaces the site's own settings with set and records the change, in the site's turn so that the
-// entry names the values it replaced. A setting outside its bounds is a *SettingError, and no site ErrNotFound.
+// entry names the values it replaced. Shorter session lifetimes are written into the site's sessions in the same
+// transaction (CutSessions). A setting outside its bounds is a *SettingError, and no site ErrNotFound.
 func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, set SiteSettings, reason string) error {
 	if err := set.Check(); err != nil {
 		return err
@@ -148,6 +150,17 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 		AdminIdleSeconds: seconds64(set.AdminIdle), AdminMaxAgeSeconds: seconds64(set.AdminMaxAge), NewKeyDailyLimit: set.NewKeyDailyLimit,
 	}); err != nil {
 		return fmt.Errorf("write the site's settings: %w", err)
+	}
+	for surface, life := range map[Surface]lifetime{
+		Console: {cmp.Or(set.ConsoleIdle, defaultLifetimes[Console].idle), cmp.Or(set.ConsoleMaxAge, defaultLifetimes[Console].max)},
+		Admin:   {cmp.Or(set.AdminIdle, defaultLifetimes[Admin].idle), cmp.Or(set.AdminMaxAge, defaultLifetimes[Admin].max)},
+	} {
+		maxAge, idle := life.seconds()
+		if err := s.queries.CutSessions(ctx, tx, CutSessionsParams{
+			SiteID: uuid.UUID(site), Surface: string(surface), MaxAgeSeconds: maxAge, IdleSeconds: idle,
+		}); err != nil {
+			return fmt.Errorf("cut the site's sessions: %w", err)
+		}
 	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: "site_settings.update", Reason: reason,

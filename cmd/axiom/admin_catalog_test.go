@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,7 +12,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
 )
 
 const (
@@ -327,6 +332,29 @@ func TestCatalogKeys(t *testing.T) {
 	}
 	if got := f.text("SELECT count(*)::text FROM catalog.model"); got != "2" || f.auditCount("model.create") != audits {
 		t.Errorf("the all-zero key wrote: %s models, audits %s -> %s", got, audits, f.auditCount("model.create"))
+	}
+}
+
+// TestCatalogKeyUsedByTheCommandLine: a key the command line already used for a change of one model is refused for the
+// same kind of change of another, which stays as it was.
+func TestCatalogKeyUsedByTheCommandLine(t *testing.T) {
+	f := newCatalogFixture(t)
+	a, b := f.create("acme/alpha"), f.create("acme/beta")
+	key := newKey()
+	cli, err := catalog.Open(f.db, pg.PlatformScope(), catalog.Config{Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.UpdateSpec(t.Context(), catalog.UpdateSpecRequest{
+		Op: catalog.Op{Actor: audit.System("catalog.cli"), Key: uuid.MustParse(key), Reason: "r"}, Model: catalog.ModelID(uuid.MustParse(a.Id)), Rev: a.Rev, Spec: jsonx.Raw(specBody),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"rev":` + strconv.FormatInt(b.Rev, 10) + `,"spec":` + specBody + `,"reason":"r"}`
+	expectAdmin(t, "the command line's key for another model", f.change(f.s, http.MethodPut, "/models/"+b.Id+"/spec", body, key),
+		http.StatusConflict, codeIdempotencyReuse)
+	if got := f.text("SELECT rev::text FROM catalog.model WHERE id = '" + b.Id + "'"); got != strconv.FormatInt(b.Rev, 10) {
+		t.Errorf("the other model's rev is %s, want %d", got, b.Rev)
 	}
 }
 
