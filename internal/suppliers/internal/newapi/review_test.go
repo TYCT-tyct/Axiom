@@ -61,7 +61,7 @@ func limited(clk *testClock, inner funcClient) (adapter.Client, *int) {
 	limiter := client.NewLimiter(globalSpecs(), clk.now)
 	served := new(int)
 	return funcClient(func(r adapter.Request) (adapter.Response, error) {
-		if err := limiter.Take(r.Buckets); err != nil {
+		if err := limiter.Take(context.Background(), r.Buckets); err != nil {
 			return adapter.Response{}, err
 		}
 		*served++

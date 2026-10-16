@@ -56,7 +56,7 @@ describe("isFree", () => {
 });
 
 describe("freeFirstPort", () => {
-  it("returns a first port whose three apps and their preview ports can be listened on", async () => {
+  it("returns a first port whose three apps and their test server ports can be listened on", async () => {
     const first = await freeFirstPort();
     expect(first).toBeGreaterThanOrEqual(20_000);
     for (const app of [0, 1, 2]) {

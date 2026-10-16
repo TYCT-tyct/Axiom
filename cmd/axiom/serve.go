@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
 )
 
@@ -48,20 +49,21 @@ type listening struct {
 
 // nodeSettings are the node's configuration, all read from the environment before anything starts.
 type nodeSettings struct {
-	publicAddr, probesAddr          string
-	startupTimeout, shutdownTimeout time.Duration
-	databaseURL                     string
-	masterKeyFile, keyHashFile      string
-	hashConcurrency                 int
-	hashWait                        time.Duration
-	trustedProxies                  []netip.Prefix
+	publicAddr, adminAddr, probesAddr string
+	startupTimeout, shutdownTimeout   time.Duration
+	databaseURL                       string
+	masterKeyFile, keyHashFile        string
+	hashConcurrency                   int
+	hashWait                          time.Duration
+	trustedProxies                    []netip.Prefix
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
+		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"),         // model calls, the console, payment callbacks
+		adminAddr:       env.Addr("AXIOM_ADMIN_ADDR", "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:      probesListenAddr(env),
 		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
 		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
@@ -93,6 +95,10 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	frontend, err := webui.Embedded()
+	if err != nil {
+		return err
+	}
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
@@ -113,21 +119,16 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger)
+	routes, err := console.routes(ctx, db, tel, frontend, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, frontend.Admin(), cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
-	served := make(chan error, len(servers))
-	for _, s := range servers {
-		go func() { served <- s.server.Serve(s.listener) }()
-	}
-	health.SetReady(true)
-	logger.Info("serving", "public", servers[0].listener.Addr().String(), "ops", servers[1].listener.Addr().String())
+	served := startServing(servers, &health, logger)
 
 	var stopped error
 	select {
@@ -167,7 +168,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
 // ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, frontend *webui.Frontend, logger *slog.Logger) (http.Handler, error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
@@ -179,7 +180,19 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nil, err
 	}
 	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger), nil
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, frontend, logger), nil
+}
+
+// startServing serves every listener and reports the node ready. The channel carries the error of the first listener to
+// stop.
+func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
+	served := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() { served <- s.server.Serve(s.listener) }()
+	}
+	health.SetReady(true)
+	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
+	return served
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
@@ -199,10 +212,12 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 }
 
 // node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer.
-func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
+// it drains while the probes still answer. The admin listener serves the admin app alone (docs/architecture.md
+// 「前端交付」); its API and the limits to the admin domain and to restricted sources come with the admin API.
+func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
 		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{"AXIOM_ADMIN_ADDR", adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
 		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
 	}
 }

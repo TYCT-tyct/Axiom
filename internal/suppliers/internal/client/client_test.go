@@ -44,27 +44,27 @@ func TestARequestTakesEveryBucketOrNone(t *testing.T) {
 	t.Parallel()
 	c := newClock()
 	l := client.NewLimiter(specs, c.now)
-	if err := l.Take([]string{"global", "critical"}); err != nil {
+	if err := l.Take(t.Context(), []string{"global", "critical"}); err != nil {
 		t.Fatal(err)
 	}
 	for range 5 { // critical is full: these take nothing from global
-		if until := blockedUntil(t, l.Take([]string{"global", "critical"})); !until.Equal(c.t.Add(1200 * time.Second)) {
+		if until := blockedUntil(t, l.Take(t.Context(), []string{"global", "critical"})); !until.Equal(c.t.Add(1200 * time.Second)) {
 			t.Errorf("reopens at %v, want after the critical window", until)
 		}
 	}
 	for i := range 2 { // two of global's three requests remain
-		if err := l.Take([]string{"global"}); err != nil {
+		if err := l.Take(t.Context(), []string{"global"}); err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
 	}
-	blockedUntil(t, l.Take([]string{"global"}))
+	blockedUntil(t, l.Take(t.Context(), []string{"global"}))
 	c.advance(180 * time.Second) // global's window passes, critical's does not
-	if err := l.Take([]string{"global"}); err != nil {
+	if err := l.Take(t.Context(), []string{"global"}); err != nil {
 		t.Errorf("after the window: %v", err)
 	}
-	blockedUntil(t, l.Take([]string{"critical"}))
+	blockedUntil(t, l.Take(t.Context(), []string{"critical"}))
 	c.advance(1020 * time.Second)
-	if err := l.Take([]string{"critical"}); err != nil {
+	if err := l.Take(t.Context(), []string{"critical"}); err != nil {
 		t.Errorf("critical after its window: %v", err)
 	}
 }
@@ -72,7 +72,7 @@ func TestARequestTakesEveryBucketOrNone(t *testing.T) {
 func TestABucketNobodyDeclaredIsAnError(t *testing.T) {
 	t.Parallel()
 	l := client.NewLimiter(specs, newClock().now)
-	if err := l.Take([]string{"typo"}); err == nil || errors.Is(err, adapter.ErrBucketsFull) {
+	if err := l.Take(t.Context(), []string{"typo"}); err == nil || errors.Is(err, adapter.ErrBucketsFull) {
 		t.Errorf("an undeclared bucket: %v, want a plain error", err)
 	}
 }

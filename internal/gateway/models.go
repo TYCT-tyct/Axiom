@@ -43,7 +43,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	_, caller, err := h.authenticate(r)
 	if err == nil {
-		err = h.authorise(r, caller)
+		err = h.authorise(r, caller, func(context.Context, pg.Tx, accounts.Admission) error { return nil })
 	}
 	if err != nil {
 		h.fail(w, r, format, err)
@@ -65,8 +65,9 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 
 // authorise asks the database whether the key may be used now, as an admission does but with nothing to reserve: the
 // key may have been disabled, expired or limited to other addresses since it was recognised, and recognising it says
-// none of that. It takes a connection of the admission class and no account gate, as it moves no money.
-func (h *Handler) authorise(r *http.Request, caller accounts.Caller) error {
+// none of that. It takes a connection of the admission class and no account gate, as it moves no money. fn reads in
+// the same transaction, whose scope is the key's account, under the admission's budget.
+func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(context.Context, pg.Tx, accounts.Admission) error) error {
 	ctx, cancel := context.WithTimeout(r.Context(), h.Limits.cfg.AdmissionBudget)
 	defer cancel()
 	release, err := h.Limits.Pool.Acquire(ctx, Admission)
@@ -74,7 +75,7 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller) error {
 		return err
 	}
 	defer release()
-	return h.admitTx(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: clientIP(r)}, func(pg.Tx, accounts.Admission) error { return nil })
+	return h.admitTx(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
 }
 
 func (l *modelList) of(snap *catalog.Snapshot) ([]byte, error) {

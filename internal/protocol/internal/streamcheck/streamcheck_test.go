@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
+	"axiom/internal/protocol/internal/sse"
 	"axiom/internal/protocol/internal/streamcheck"
 )
 
@@ -183,6 +185,8 @@ func TestResponses(t *testing.T) {
 		{"unlisted type naming a done item_id", with(later(`"item_id":"msg_1"`)), "later for an output item that is not open"},
 		{"unlisted type naming an unknown item_id", stream(seq(created, msgAdded, later(`"item_id":"msg_2"`))...), "later for an output item that is not open"},
 		{"unlisted type with content_index but no item", stream(seq(created, msgAdded, partAdded, later(`"content_index":0`))...), "later for an output item that is not open"},
+		{"unlisted type with content_index to a part not open", stream(seq(created, msgAdded, partAdded, later(`"output_index":0,"content_index":5`))...), "part that is not open"},
+		{"unlisted type with summary_index to a part not open", stream(seq(created, rsAdded, sumAdded, later(`"output_index":0,"summary_index":5`))...), "part that is not open"},
 		{"unlisted type with summary_index but no item", stream(seq(created, rsAdded, sumAdded, later(`"summary_index":0`))...), "later for an output item that is not open"},
 		{"unknown types and gaps in sequence_number", stream(seq(created)[0], `{"sequence_number":5,"type":"later"}`, `{"sequence_number":9,"type":"response.failed"}`), ""},
 		{"failed with an open item", stream(seq(created, msgAdded, `{"type":"response.failed"}`)...), ""},
@@ -260,6 +264,40 @@ func TestChat(t *testing.T) {
 		{"an event after [DONE]", stream(finish, "[DONE]", "[DONE]"), "after [DONE]"},
 		{"cut short", stream(finish), "ends before [DONE]"},
 	})
+}
+
+// TestReadErrors holds every checker to returning the stream's own errors as they are: a truncated or malformed
+// event and a failing source are not breaks of the format's structure.
+func TestReadErrors(t *testing.T) {
+	boom := errors.New("connection reset")
+	opening := map[string]string{
+		"messages": msgStart, "responses": seq(created)[0], "chat": choice(`{"index":0,"delta":{"content":"Hi"}}`),
+	}
+	for _, tc := range []struct {
+		name string
+		src  func() io.Reader
+		want error
+	}{
+		{"event cut short", func() io.Reader { return strings.NewReader("data: {") }, io.ErrUnexpectedEOF},
+		{"data not JSON", func() io.Reader { return strings.NewReader("data: {not json}\n\n") }, sse.ErrInvalid},
+		{"data truncated JSON", func() io.Reader { return strings.NewReader("data: {\n\n") }, sse.ErrInvalid},
+		{"source fails", nil, boom},
+	} {
+		for format, check := range checks {
+			t.Run(tc.name+"/"+format, func(t *testing.T) {
+				src := tc.src
+				if src == nil { // after a first event the format accepts
+					src = func() io.Reader {
+						return io.MultiReader(strings.NewReader(stream(opening[format])), iotest.ErrReader(boom))
+					}
+				}
+				err := check(src())
+				if !errors.Is(err, tc.want) || errors.Is(err, streamcheck.ErrInvalid) {
+					t.Errorf("got %v, want %v as it is", err, tc.want)
+				}
+			})
+		}
+	}
 }
 
 // FuzzCheck feeds every checker arbitrary streams, seeded with the samples: a hostile index or event order must
