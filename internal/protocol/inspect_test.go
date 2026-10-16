@@ -395,10 +395,7 @@ func TestAllocs(t *testing.T) {
 			_, err := protocol.Inspect(f, b)
 			return err
 		}},
-		{"Prepare", protocol.Chat, func(f protocol.Format, b []byte) error {
-			_, err := prepare(f, b, true, false)
-			return err
-		}},
+		{"Prepare", protocol.Chat, prepareInspected()},
 	} {
 		for f := range c.formats {
 			for _, lead := range []string{"", wideTurn} {
@@ -408,6 +405,24 @@ func TestAllocs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// prepareInspected prepares a body with the summary Inspect read from it the first time, which AllocsPerRun's warm-up
+// run is, so that only Prepare's allocations are counted.
+func prepareInspected() func(protocol.Format, []byte) error {
+	seen := map[*byte]protocol.Request{}
+	return func(f protocol.Format, b []byte) error {
+		r, ok := seen[&b[0]]
+		if !ok {
+			var err error
+			if r, err = protocol.Inspect(f, b); err != nil {
+				return err
+			}
+			seen[&b[0]] = r
+		}
+		_, err := protocol.Prepare(&r, b, protocol.Target{Format: f, Model: "up", EncryptedReasoning: true}, protocol.Rewrites{Identity: derive})
+		return err
 	}
 }
 
