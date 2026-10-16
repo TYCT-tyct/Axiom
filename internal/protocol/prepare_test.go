@@ -153,7 +153,11 @@ func TestPrepareDropsRoutingParameters(t *testing.T) {
 			want = `{"model":"up","store":false}`
 		}
 		for _, name := range routingParameters {
-			got, err := prepare(f, []byte(`{"model":"m","`+name+`":{}}`), false, false)
+			value := "{}"
+			if name == "models" { // the one routing parameter whose shape Inspect checks: an array of model names
+				value = `["alt"]`
+			}
+			got, err := prepare(f, []byte(`{"model":"m","`+name+`":`+value+`}`), false, false)
 			if err != nil || string(got) != want {
 				t.Errorf("format %d, %s: got %s (%v), want %s", f, name, got, err, want)
 			}
