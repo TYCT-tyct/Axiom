@@ -127,7 +127,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedRouting(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
-	}); err != nil {
+	}, noSuppliers{}); err != nil {
 		t.Fatal(err)
 	}
 	r.memory = protocol.NewMemory(o.memory)
@@ -141,6 +141,22 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Cleanup(r.server.Close)
 	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
 	return r
+}
+
+// noSuppliers is the Suppliers billing writes to when it settles: the rig's Run only releases reservations, which
+// records no attempt and ends no request in suppliers' tables.
+type noSuppliers struct{}
+
+func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
+	return nil
+}
+func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
+	return billing.JournalAttempt{}, false, nil
+}
+func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error  { return nil }
+func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
+func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
+	return nil
 }
 
 // warmConnections opens n connections to the database at once, so the requests of a test do not wait for new ones to
