@@ -96,7 +96,7 @@
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` | `authentication_error` | — |
 | 余额、工作区预算或 key 上限不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`、`workspace_budget` 或 `key_limit`；会重置的上限带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
 | 进行中的请求或暂估待校正的保留暂时占满了余额 | 402 同上，`limit_source` 为 `pending` 或 `pending_correction`，`Retry-After` 是最早释放的时间（待定：见「待定问题」） | `billing_error` | 同上 |
-| 追加预留时数据库出错 | — | `api_error` | `billing_unavailable`，不带费用 |
+| 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
 | 限流；按 IP、按账户的在途上限；同一账户的资金操作排队超时 | 429 `rate_limited` | `rate_limit_error` | — |
 | 端点都满载、排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
