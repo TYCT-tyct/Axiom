@@ -238,6 +238,7 @@ func (r *rig) seedSite() {
 	r.sql(
 		"INSERT INTO accounts.sites (id, name, status, key_prefix, registration, default_tier_id) VALUES ('"+siteID.String()+"', 'Main', 'active', 'sk-ax-v1-', 'invite', '"+tier.String()+"')",
 		"INSERT INTO accounts.tiers VALUES ('"+tier.String()+"', '"+siteID.String()+"', 'Standard')",
+		"INSERT INTO platform.tenants VALUES ('"+siteID.String()+"', '"+siteID.String()+"'), ('"+siteID.String()+"', '"+account.String()+"')", // the audit log names tenants that are registered
 		"INSERT INTO accounts.accounts VALUES ('"+account.String()+"', '"+siteID.String()+"', 'personal', 'Owner', 'active', '"+tier.String()+"')",
 		"INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default) VALUES ('"+workspace.String()+"', '"+siteID.String()+"', '"+account.String()+"', 'Default', 'active', true)",
 		"INSERT INTO accounts.site_domains VALUES ('"+apiHost+"', '"+siteID.String()+"', 'api', 'https://"+apiHost+"', NULL), ('"+consoleHost+"', '"+siteID.String()+"', 'console', 'https://"+consoleHost+"', NULL)",
@@ -271,6 +272,7 @@ func (r *rig) newAccount(balance int64) account {
 	r.t.Helper()
 	a := account{id: uuid.NewV7(), workspace: uuid.NewV7()}
 	r.sql(
+		"INSERT INTO platform.tenants VALUES ('"+siteID.String()+"', '"+a.id.String()+"')",
 		"INSERT INTO accounts.accounts VALUES ('"+a.id.String()+"', '"+siteID.String()+"', 'personal', 'A', 'active', '"+tier.String()+"')",
 		"INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default) VALUES ('"+a.workspace.String()+"', '"+siteID.String()+"', '"+a.id.String()+"', 'Default', 'active', true)",
 	)
