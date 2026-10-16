@@ -19,3 +19,7 @@ ALTER TABLE accounts.roles FORCE ROW LEVEL SECURITY;
 -- The admin lists users by the start of the email (the column is lower case, and the pattern ops class lets a prefix
 -- match use the index in any collation).
 CREATE INDEX users_email_prefix ON accounts.users (email text_pattern_ops);
+
+-- A site that shortens its sessions writes the shorter lifetimes into the ones already made (CutSessions), which only
+-- ever lowers these two columns.
+GRANT UPDATE (expires_at, idle_timeout) ON accounts.sessions TO axiom_app;

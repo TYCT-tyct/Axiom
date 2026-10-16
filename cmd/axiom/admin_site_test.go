@@ -128,8 +128,8 @@ func TestSiteSettingsRefusals(t *testing.T) {
 	}
 }
 
-// TestShorterSessionsEndOnTheNextRequest: a site that shortens its sessions shortens the ones already made, on the
-// next request of this node, by their idle time and by their age; it never lengthens one.
+// TestShorterSessionsEndOnTheNextRequest: a site that shortens its sessions shortens the ones already made, by their
+// idle time and by their age, from their next request on; it never lengthens one.
 func TestShorterSessionsEndOnTheNextRequest(t *testing.T) {
 	f := newAdminFixture(t)
 	f.addUser("idle@example.com", "viewer")
@@ -147,6 +147,11 @@ func TestShorterSessionsEndOnTheNextRequest(t *testing.T) {
 	rec := f.change(owner, http.MethodPut, "/sites/"+site+"/settings",
 		`{"settings":{"admin_idle_timeout_seconds":300,"admin_max_age_seconds":3600},"reason":"shorter"}`, newKey())
 	expectAdmin(t, "updateSiteSettings", rec, http.StatusOK, "")
+	// The handler's scope reaches every account's sessions: each one carries the shorter lifetimes itself.
+	if n := f.text(`SELECT count(*)::text FROM accounts.sessions WHERE surface = 'admin' AND revoked_at IS NULL
+		AND (idle_timeout > interval '300 seconds' OR expires_at > created_at + interval '3600 seconds')`); n != "0" {
+		t.Errorf("%s admin sessions still hold the longer lifetimes", n)
+	}
 	expectAdmin(t, "the session idle past the new idle time", f.do(http.MethodGet, "/users", "", as(idle)), http.StatusUnauthorized, codeUnauthenticated)
 	expectAdmin(t, "the session older than the new age", f.do(http.MethodGet, "/users", "", as(old)), http.StatusUnauthorized, codeUnauthenticated)
 	expectAdmin(t, "the owner's, new enough and in use", f.do(http.MethodGet, "/users", "", as(owner)), http.StatusOK, "")

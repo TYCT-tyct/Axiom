@@ -34,7 +34,8 @@ VALUES (@id, @site_id, @account_id, @user_id, @surface, @token_hash, @csrf_token
 -- name: ValidSession :many
 -- A session holds while it is not revoked, expired or idle too long, its user is enabled, and its factor version is
 -- the user's. The site's lifetimes now (the caller's, in seconds) cut what the session was issued with, never extend it:
--- a site that shortens its sessions shortens the ones already made.
+-- a site that shortens its sessions writes that into the ones already made (CutSessions), and this cut also holds a
+-- session another node issued from its snapshot before reloading the change.
 SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
@@ -42,14 +43,6 @@ WHERE s.id = @id AND s.revoked_at IS NULL AND s.expires_at > now()
     AND s.created_at + make_interval(secs => @max_age_seconds::bigint) > now()
     AND s.last_seen_at + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)) > now()
     AND u.status = 'active' AND u.factor_version = s.factor_version;
-
--- name: EndSessionsOverSiteLimits :execrows
--- A session the site's lifetimes now have cut ends for good, so that a site which loosens them again does not bring it
--- back (ValidSession only cuts, it does not write).
-UPDATE accounts.sessions SET revoked_at = now()
-WHERE id = @id AND revoked_at IS NULL
-    AND (created_at + make_interval(secs => @max_age_seconds::bigint) <= now()
-        OR last_seen_at + make_interval(secs => @idle_seconds::bigint) <= now());
 
 -- name: TouchSession :exec
 -- Idle time counts from the last request, written at most once a minute.

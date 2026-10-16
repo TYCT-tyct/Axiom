@@ -75,29 +75,6 @@ func (q *Queries) EnableTOTP(ctx context.Context, db DBTX, arg EnableTOTPParams)
 	return err
 }
 
-const endSessionsOverSiteLimits = `-- name: EndSessionsOverSiteLimits :execrows
-UPDATE accounts.sessions SET revoked_at = now()
-WHERE id = $1 AND revoked_at IS NULL
-    AND (created_at + make_interval(secs => $2::bigint) <= now()
-        OR last_seen_at + make_interval(secs => $3::bigint) <= now())
-`
-
-type EndSessionsOverSiteLimitsParams struct {
-	ID            uuid.UUID
-	MaxAgeSeconds int64
-	IdleSeconds   int64
-}
-
-// A session the site's lifetimes now have cut ends for good, so that a site which loosens them again does not bring it
-// back (ValidSession only cuts, it does not write).
-func (q *Queries) EndSessionsOverSiteLimits(ctx context.Context, db DBTX, arg EndSessionsOverSiteLimitsParams) (int64, error) {
-	result, err := db.Exec(ctx, endSessionsOverSiteLimits, arg.ID, arg.MaxAgeSeconds, arg.IdleSeconds)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const insertAccount = `-- name: InsertAccount :exec
 INSERT INTO accounts.accounts (id, site_id, kind, name, status, tier_id)
 VALUES ($1, $2, 'personal', $3, 'active', $4)
@@ -656,7 +633,8 @@ type ValidSessionRow struct {
 
 // A session holds while it is not revoked, expired or idle too long, its user is enabled, and its factor version is
 // the user's. The site's lifetimes now (the caller's, in seconds) cut what the session was issued with, never extend it:
-// a site that shortens its sessions shortens the ones already made.
+// a site that shortens its sessions writes that into the ones already made (CutSessions), and this cut also holds a
+// session another node issued from its snapshot before reloading the change.
 func (q *Queries) ValidSession(ctx context.Context, db DBTX, arg ValidSessionParams) ([]ValidSessionRow, error) {
 	rows, err := db.Query(ctx, validSession, arg.ID, arg.MaxAgeSeconds, arg.IdleSeconds)
 	if err != nil {

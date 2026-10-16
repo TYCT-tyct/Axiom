@@ -29,6 +29,17 @@ ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
     admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
 
+-- name: CutSessions :exec
+-- A site that shortens its sessions writes the shorter lifetimes into the ones already made, so that loosening it again
+-- later does not bring back a session the shorter ones ended, even one that made no request in between. least() only
+-- shortens: loosening leaves every session as it was.
+UPDATE accounts.sessions
+SET expires_at = least(expires_at, created_at + make_interval(secs => @max_age_seconds::bigint)),
+    idle_timeout = least(idle_timeout, make_interval(secs => @idle_seconds::bigint))
+WHERE site_id = @site_id AND surface = @surface AND revoked_at IS NULL AND expires_at > now()
+    AND (created_at + make_interval(secs => @max_age_seconds::bigint) < expires_at
+        OR make_interval(secs => @idle_seconds::bigint) < idle_timeout);
+
 -- name: ListTiers :many
 SELECT id, name FROM accounts.tiers WHERE site_id = @site_id ORDER BY name, id;
 
