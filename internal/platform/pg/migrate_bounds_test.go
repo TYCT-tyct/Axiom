@@ -79,12 +79,12 @@ func requireSeen(t *testing.T, observed, done <-chan error) {
 	select {
 	case err := <-observed:
 		if err != nil {
-			t.Fatalf("watching for the statement that swallows a cancel: %v", err)
+			t.Fatalf("watching for the running statement: %v", err)
 		}
 	case err := <-done:
-		t.Fatalf("the run returned before the statement that swallows a cancel was seen running: %v", err)
+		t.Fatalf("the run returned before its statement was seen running: %v", err)
 	case <-time.After(time.Minute):
-		t.Fatal("the statement that swallows a cancel was not seen running within a minute")
+		t.Fatal("the statement was not seen running within a minute")
 	}
 }
 
@@ -129,11 +129,52 @@ func poll(ctx context.Context, superuserURL, query string) error {
 func TestMigrateKeepsItsWorkErrorWhenItCannotEndItsSessions(t *testing.T) {
 	database := pgtest.New(t)
 	u := parse(t, database.Migrator)
+	listener := proxy(t, u.Host)
+	t.Cleanup(func() {
+		listener.Close() //nolint:errcheck,gosec // already closed once the migration was running
+		// The sleeping statement the cancelled run left behind.
+		if err := pgtest.Run(context.WithoutCancel(t.Context()), database.Superuser, `SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity WHERE application_name LIKE 'axiom-migrate-%' AND pid <> pg_backend_pid()`); err != nil {
+			t.Error(err)
+		}
+	})
+	u.Host = listener.Addr().String()
+	sleeper := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_sleep.sql": {Data: []byte(up + "SELECT pg_sleep(20);")}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	watchCtx, stopWatching := context.WithCancel(t.Context())
+	observed := watchRunning(watchCtx, database.Superuser, "%pg_sleep(20)%")
+	defer func() {
+		stopWatching()
+		for range observed { // the poller has ended before the test does
+		}
+	}()
+	// The connect timeout is long: this test is about the end of the run, and a connection that is slow on a loaded
+	// machine (#113) must not end it early.
+	done := make(chan error, 1)
+	go func() { done <- pg.MigrateWith(ctx, u.String(), time.Minute, sleeper) }()
+	requireSeen(t, observed, done)
+	listener.Close() //nolint:errcheck,gosec // refusing new connections is the point
+	cancel()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(time.Minute):
+		t.Fatal("the run did not return within a minute of its context ending")
+	}
+	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "AXIOM_MIGRATE_DATABASE_URL: cannot reach the server") {
+		t.Errorf("Migrate: %v, want the cancelled work and the refused connection that ends the sessions", err)
+	}
+}
+
+// proxy forwards connections from a new local address to server until the listener is closed; connections already
+// made go on.
+func proxy(t *testing.T, server string) net.Listener {
+	t.Helper()
 	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := u.Host
 	go func() {
 		for {
 			client, err := listener.Accept()
@@ -149,29 +190,7 @@ func TestMigrateKeepsItsWorkErrorWhenItCannotEndItsSessions(t *testing.T) {
 			go pipe(client, upstream)
 		}
 	}()
-	t.Cleanup(func() {
-		listener.Close() //nolint:errcheck,gosec // already closed once the migration was running
-		// The sleeping statement the cancelled run left behind.
-		if err := pgtest.Run(context.WithoutCancel(t.Context()), database.Superuser, `SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity WHERE application_name LIKE 'axiom-migrate-%' AND pid <> pg_backend_pid()`); err != nil {
-			t.Error(err)
-		}
-	})
-	u.Host = listener.Addr().String()
-	sleeper := pg.Module{Name: "quality", Migrations: fstest.MapFS{"00001_sleep.sql": {Data: []byte(up + "SELECT pg_sleep(20);")}}}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		<-watchRunning(ctx, database.Superuser, "%pg_sleep(20)%")
-		listener.Close() //nolint:errcheck,gosec // refusing new connections is the point
-		cancel()
-	}()
-	// The connect timeout is long: this test is about the end of the run, and a connection that is slow on a loaded
-	// machine (#113) must not end it early.
-	err = pg.MigrateWith(ctx, u.String(), time.Minute, sleeper)
-	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "AXIOM_MIGRATE_DATABASE_URL: cannot reach the server") {
-		t.Errorf("Migrate: %v, want the cancelled work and the refused connection that ends the sessions", err)
-	}
+	return listener
 }
 
 // pipe copies src to dst until either side closes, then closes dst.
