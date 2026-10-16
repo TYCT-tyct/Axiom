@@ -82,6 +82,9 @@ type RelayOptions struct {
 	Created int64
 	// Memory is the node's budget for what streams hold beyond their base allowance. It must not be nil.
 	Memory *Memory
+	// Aggregate is set for a client that did not ask for a stream: nothing is written until the end, Next gives no
+	// Out, and Finish and Fail return the reply's body, whose HTTP status Status gives (README.md「非流式聚合」).
+	Aggregate bool
 }
 
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
@@ -169,6 +172,11 @@ type Relay struct {
 	progress                                      Progress
 	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
 	held, charged int64
+	// For a reply that is aggregated: its aggregator, the data of an event of several lines, joined, and the HTTP
+	// status of the body returned.
+	agg    aggregator
+	lines  []byte
+	status int
 }
 
 // relayFormat is what the relay needs to know of a format.
@@ -211,6 +219,9 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		return r
 	}
 	r.up = r.format.newUpstream(u, o, r.charge)
+	if o.Aggregate {
+		r.agg = newAggregator(client, r.charge)
+	}
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
@@ -238,6 +249,9 @@ func (r *Relay) Next() (Step, error) {
 	var step Step
 	if err == nil {
 		step, err = r.event(data)
+	}
+	if err == nil && r.agg != nil {
+		step, err = r.aggregate(step)
 	}
 	if err != nil {
 		return Step{}, r.fail(err)
@@ -317,6 +331,9 @@ func (r *Relay) observe(e event) {
 // hold keeps an ending event for Finish. An earlier one, which a stream may have, is withheld as it is, without a
 // cost, and the events that followed it after it.
 func (r *Relay) hold(name string, data []byte, usageAt int) (Step, error) {
+	if r.agg != nil && len(data) > aggregateLimit { // Responses' ending is the reply: the cap is on it too
+		return Step{}, fmt.Errorf("%w: the ending of %d bytes passes the %d a reply may hold", ErrMemory, len(data), aggregateLimit)
+	}
 	var err error
 	if len(r.ending) > 0 {
 		if _, err = r.withhold(r.endingName, r.ending); err != nil {
@@ -347,6 +364,9 @@ func (r *Relay) trail(e event, data []byte) (Step, error) {
 func (r *Relay) withhold(name string, data []byte) (Step, error) {
 	var err error
 	r.withheld, err = r.appendEvent(r.withheld, name, data)
+	if err == nil && r.agg != nil {
+		err = r.agg.hold(data)
+	}
 	return Step{Kind: StepBuffered}, err
 }
 
@@ -456,9 +476,13 @@ func (r *Relay) fail(err error) error {
 		err = fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	r.state, r.err = failed, err
-	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited = nil, nil, nil, nil, nil, nil
+	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited, r.lines = nil, nil, nil, nil, nil, nil, nil
 	r.up.dropBuffers()
 	r.held = int64(cap(r.out)) + meterMemory
+	if r.agg != nil {
+		r.agg.failed()
+		r.held += r.agg.taken()
+	}
 	keep := max(0, r.held-baseMemory)
 	r.o.Memory.left.Add(r.charged - keep)
 	r.charged = keep
@@ -493,6 +517,9 @@ func (r *Relay) Finish(f Final) []byte {
 	out = append(out, r.trailing...)
 	if r.stop != nil {
 		out = sse.AppendEvent(out, r.stopName, r.stop)
+	}
+	if r.agg != nil {
+		return r.finishAggregate(out, f)
 	}
 	r.state = ended
 	r.release()
@@ -531,7 +558,10 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 		u = f.Usage
 	}
 	var out []byte
-	if r.up != nil { // nil for a pair of formats not relayed
+	switch {
+	case r.agg != nil:
+		out = r.failAggregate(e, f, u)
+	case r.up != nil: // nil for a pair of formats not relayed
 		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
 	}
 	r.state = ended
