@@ -227,7 +227,7 @@ type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段�
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
 func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲染客户端看到的用量，billing 的计量读已报告的数
-func (u Usage) ServiceTier() ServiceTier // billing 结算时只给按次项目计价要用
+func (u Usage) ServiceTier() ServiceTier // 实际服务的等级，供应商记录扣费所报的等级
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
 
