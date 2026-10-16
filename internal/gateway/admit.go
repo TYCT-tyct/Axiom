@@ -187,7 +187,7 @@ func (h *Handler) isStopped() bool {
 }
 
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := SettleContext(ctx, 2*time.Second)
+	ctx, cancel := SettleContext(ctx, settleAttempt)
 	defer cancel()
 	release, err := h.Limits.Funds.Complete(ctx, accountKey(c.caller))
 	if err != nil {

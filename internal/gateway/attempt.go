@@ -221,8 +221,8 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream) (*http.Respons
 	s := a.s
 	defer s.x.Memory.Refund(int64(len(up.Body)))
 	wait := time.AfterFunc(s.x.Limits.cfg.HeaderWait, func() { a.cancel(errHeaderWait) })
-	defer wait.Stop()
 	resp, fail := a.conn.Send(ctx, suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header})
+	wait.Stop() // at once: a late firing would cancel the stream the headers began
 	s.journal(a, false)
 	return resp, fail
 }

@@ -379,7 +379,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	}
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
-		Settle: func(context.Context, *Call, Ending) (*protocol.Final, error) { return nil, nil }, Alive: func() bool { return true },
+		Settle: func(context.Context, *Call, Ending) (*protocol.Final, error) { return &protocol.Final{}, nil }, Alive: func() bool { return true },
 		IdentitySecret: []byte("0123456789abcdef"),
 	}
 	if _, err := NewExecutor(full); err != nil {

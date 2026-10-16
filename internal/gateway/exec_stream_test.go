@@ -76,7 +76,9 @@ func TestContentKeepsAnUpstreamAlive(t *testing.T) {
 // the attempt that was committed.
 func TestAfterTheCommitPointTheStreamIsKeptAliveAndThenEndedInPlace(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2})
+		// An idle timeout that is not a whole number of keep-alive intervals, or the last keep-alive and the end would be
+		// due in the same instant.
+		h := newHarness(t, ctx, options{entries: 2, config: func(c *Config) { c.IdleTimeout = 100 * time.Second }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart, evBlock), h.after(time.Second, evHello))}
 		h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
 		h.run()
