@@ -106,16 +106,13 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 	return best, bestN
 }
 
-// NotExecuted reports whether the failure says the supplier did not run the request: the whole of the decision whether
-// the attempt costs anything (README.md「调用面」).
-func NotExecuted(f *Failure) bool { return f.Executed == adapter.NotExecuted }
+// NotExecuted is the Executed of a failure after which the supplier is known not to have run the request; any other
+// value is unknown, and the cost is then estimated (README.md「调用面」).
+const NotExecuted = adapter.NotExecuted
 
-// RateLimited reports whether the supplier answered that there were too many requests, which routing weighs the
-// endpoint down for.
-func RateLimited(f *Failure) bool {
-	_, ok := f.Cause.(adapter.RateLimited)
-	return ok
-}
+// RateLimited is the Cause of a supplier's answer that there were too many requests, which routing weighs the endpoint
+// down for. gateway cannot name the adapter's own types, so the two it needs are named here.
+type RateLimited = adapter.RateLimited
 
 // Policy is how this attempt's endpoint behaves: the adapter's default, over which quality's measurement of
 // cancellation stands.

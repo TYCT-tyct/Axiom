@@ -143,8 +143,8 @@ func New(cfg Config) (*Service, error)                        // DB、平台范�
 func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；key 打不开或缺适配器就失败，旧快照不动
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较交换；ErrNoEndpoint、ErrNoSlot
 func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Body, Header}
-func NotExecuted(f *Failure) bool // 失败是否确知上游没有执行；gateway 够不到适配器的类型，只问这两个
-func RateLimited(f *Failure) bool // 上游是否回了“请求过多”，路由据此给端点降权
+const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
+type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
 func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
 func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、已到的对账键
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
