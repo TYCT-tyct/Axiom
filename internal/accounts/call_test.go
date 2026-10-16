@@ -437,6 +437,9 @@ func TestAdmissionStaysInTheKeysAccount(t *testing.T) {
 		t.Errorf("Admission.Scope sees %v, want a1", got)
 	}
 	checkAdmission(t, admitted, c)
+	if c.AccountID() != accounts.AccountID(a1) || c.WorkspaceID() != accounts.WorkspaceID(w1) {
+		t.Errorf("the key's account %v and workspace %v, want a1 and w1", c.AccountID(), c.WorkspaceID())
+	}
 }
 
 var errUndo = errors.New("undo")

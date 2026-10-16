@@ -10,14 +10,17 @@ import (
 	"time"
 )
 
+// queueWait is the wait limit the tests of the queue use.
+const queueWait = 20 * time.Second
+
 func wait(ctx context.Context, q *Queue, key string) *pending {
-	epoch := q.Epoch()
-	return start(func() (func(), error) { return nil, q.Wait(ctx, key, epoch) })
+	epoch, deadline := q.Epoch(), time.Now().Add(queueWait)
+	return start(func() (func(), error) { return nil, q.Wait(ctx, key, epoch, deadline) })
 }
 
 func TestQueueWakesOneWaiterPerSlotInArrivalOrder(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 10, 10)
+		q := newQueue(10, 10)
 		first := wait(ctx, q, "a")
 		first.mustWait(t) // each is parked before the next arrives, which fixes the order
 		second := wait(ctx, q, "b")
@@ -39,7 +42,7 @@ func TestQueueWakesOneWaiterPerSlotInArrivalOrder(t *testing.T) {
 
 func TestQueueCaps(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 3, 2)
+		q := newQueue(3, 2)
 		wait(ctx, q, "a").mustWait(t)
 		wait(ctx, q, "a").mustWait(t)
 		overKey := wait(ctx, q, "a")
@@ -57,7 +60,7 @@ func TestQueueCaps(t *testing.T) {
 // A waiter that leaves gives its place and its share back, and the wake it would have had goes to the next waiter.
 func TestQueueWaiterThatLeavesLeavesNoTrace(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 2, 1)
+		q := newQueue(2, 1)
 		leaveCtx, cancel := context.WithCancel(ctx)
 		leaving := wait(leaveCtx, q, "a")
 		next := wait(ctx, q, "b")
@@ -76,9 +79,9 @@ func TestQueueWaiterThatLeavesLeavesNoTrace(t *testing.T) {
 
 func TestQueueWaitEndsAfterTheLimit(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 2, 2)
+		q := newQueue(2, 2)
 		w := wait(ctx, q, "a")
-		time.Sleep(20*time.Second - time.Nanosecond)
+		time.Sleep(queueWait - time.Nanosecond)
 		w.mustWait(t)
 		time.Sleep(time.Nanosecond)
 		if !w.finished() || !errors.Is(w.err, ErrRateLimited) {
@@ -94,10 +97,10 @@ func TestQueueWaitEndsAfterTheLimit(t *testing.T) {
 // while others wait goes to them and does not let a newcomer overtake.
 func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 5, 5)
+		q := newQueue(5, 5)
 		epoch := q.Epoch()
 		q.Wake() // nobody waits: recorded
-		late := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch) })
+		late := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)) })
 		late.mustGranted(t)
 
 		queued := wait(ctx, q, "a")
@@ -105,7 +108,7 @@ func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 		epoch = q.Epoch()
 		q.Wake() // goes to queued
 		queued.mustGranted(t)
-		newcomer := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch) })
+		newcomer := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)) })
 		newcomer.mustWait(t)
 	})
 }
@@ -115,7 +118,7 @@ func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 // scheduler's, so this is a stress test of that invariant.)
 func TestQueueSurvivesCancellationsRacingWakes(t *testing.T) {
 	const waiters, wakes = 40, 20
-	q := newQueue(time.Hour, waiters, waiters)
+	q := newQueue(waiters, waiters)
 	for round := range 100 {
 		var woken atomic.Int64
 		cancels, wg := parkWaiters(t, q, waiters, &woken)
@@ -150,7 +153,7 @@ func parkWaiters(t *testing.T, q *Queue, n int, woken *atomic.Int64) ([]context.
 		cancels[i] = cancel
 		epoch := q.Epoch()
 		wg.Go(func() {
-			if q.Wait(ctx, "k", epoch) == nil {
+			if q.Wait(ctx, "k", epoch, time.Now().Add(time.Hour)) == nil {
 				woken.Add(1)
 			}
 			returned.Add(1)
@@ -180,7 +183,7 @@ func eventually(cond func() bool) bool {
 // A client that has already gone gets its own error from every way out of Wait, not a retry (nil) and not a 429.
 func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		q := newQueue(20*time.Second, 1, 1)
+		q := newQueue(1, 1)
 		stale := q.Epoch()
 		q.Wake()                      // nobody waits: the epoch moves on, so stale would return nil
 		wait(ctx, q, "a").mustWait(t) // fills the queue and the share of key a
@@ -195,9 +198,30 @@ func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
 			"queue full":     {"b", q.Epoch()},
 			"key share full": {"a", q.Epoch()},
 		} {
-			if err := q.Wait(gone, tc.key, tc.epoch); !errors.Is(err, context.Canceled) {
+			if err := q.Wait(gone, tc.key, tc.epoch, time.Now().Add(queueWait)); !errors.Is(err, context.Canceled) {
 				t.Errorf("%s: Wait = %v, want context.Canceled", name, err)
 			}
+		}
+	})
+}
+
+// A call whose time is spent is refused 429 whatever else Wait could answer: a release that found nobody waiting makes
+// the epoch stale, and that must not send a call past its deadline for another attempt.
+func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		q := newQueue(5, 5)
+		stale := q.Epoch()
+		q.Wake() // nobody waits: the epoch moves on, so a call with a live deadline is told to retry
+		if err := q.Wait(ctx, "a", stale, time.Now().Add(queueWait)); err != nil {
+			t.Fatalf("with time left and a stale epoch: %v, want a retry", err)
+		}
+		for name, deadline := range map[string]time.Time{"now": time.Now(), "past": time.Now().Add(-time.Second)} {
+			if err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, ErrRateLimited) {
+				t.Errorf("a deadline that is %s, with a stale epoch: %v, want ErrRateLimited", name, err)
+			}
+		}
+		if q.queued() != 0 {
+			t.Errorf("%d still queued", q.queued())
 		}
 	})
 }
