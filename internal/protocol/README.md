@@ -70,7 +70,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 | 音频等其他部件 | `*NotSupported` | `*NotSupported` |
 | 工具调用 | `tool_use`，ID 见下；`arguments` 必须是 JSON 对象，空串当 `{}` | `function_call`，`call_id`、`arguments` 原样 |
 | 工具结果 | 连续的几条合成一条用户消息的 `tool_result` 块 | `function_call_output` |
-| 回放的推理（OpenRouter `reasoning_details`） | 只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文 |
+| 回放的推理（OpenRouter `reasoning_details`） | 先把客户端按流式收到的样子交回的条目合并：类型和 `index` 相同的是一条，文本和摘要按顺序拼接，签名、密文、ID 取给了的那个（OpenRouter《Reasoning tokens》「Streaming Response」，2026-10-15）；只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 同左合并后，只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文 |
 | 空的助手消息 | 不写（Anthropic 拒绝空内容，前后的用户消息由它合并） | 一个空的 `output_text` |
 | 函数工具 | `input_schema`，没有就是空对象；`strict: true` 只在 schema 属于 Anthropic 的子集时写，否则 `*NotSupported` | `strict` 总是写，Chat 没写就写 `false`：Responses 把没写当成 `true` 并改写 schema（OpenAI《Function calling》「Strict mode」） |
 | `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `DefaultSamplingOnly` 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |

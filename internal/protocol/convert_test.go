@@ -175,6 +175,13 @@ func TestConvertToMessages(t *testing.T) {
 				`{"type":"redacted_thinking","data":"red"},{"type":"text","text":"x"}]},{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
 		},
 		{
+			"reasoning streamed and handed back as it came", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":"x","reasoning_details":[` +
+				`{"type":"reasoning.text","format":"anthropic-claude-v1","text":"h","index":0},{"type":"reasoning.text","format":"anthropic-claude-v1","text":"m","index":0},` +
+				`{"type":"reasoning.text","format":"anthropic-claude-v1","text":"","signature":"sig","index":0},{"type":"reasoning.text","format":"anthropic-claude-v1","text":"later","index":1}]},` + userHi + `]`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"hm","signature":"sig"},` +
+				`{"type":"text","text":"x"}]},{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
+		{
 			"a structured reply", chatBody(`"messages":[` + userHi + `],"response_format":{"type":"json_schema","json_schema":{"name":"r","schema":{"type":"object","properties":{},"additionalProperties":false}}}`), nil,
 			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{},"additionalProperties":false}}}}`,
 		},
@@ -228,6 +235,15 @@ func TestConvertToResponses(t *testing.T) {
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]},{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"enc"},` +
 				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x"}]}],"store":false}`,
 		},
+		{
+			"reasoning streamed and handed back as it came", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":"x","reasoning_details":[` +
+				`{"type":"reasoning.summary","format":"openai-responses-v1","id":"rs_1","summary":"tho","index":0},{"type":"reasoning.summary","format":"openai-responses-v1","id":"rs_1","summary":"ught","index":0},` +
+				`{"type":"reasoning.encrypted","format":"openai-responses-v1","id":"rs_1","data":"enc","index":1}]}]`), nil,
+			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]},{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"enc"},` +
+				`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x"}]}],"store":false}`,
+		},
+		{"reasoning text that is not a string", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":"x","reasoning_details":[` +
+			`{"type":"reasoning.text","text":"a","index":0},{"type":"reasoning.text","text":1,"index":0}]}]`), nil, "invalid"},
 		{
 			"tools", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}},{"type":"function","function":{"name":"g","strict":true}}],` +
 				`"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false`), nil,

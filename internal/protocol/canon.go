@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: strings are kept as written, never decoded and encoded again
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -117,6 +118,7 @@ type canonReasoningDetail struct {
 	Summary   jsontext.Value `json:"summary"`
 	Signature jsontext.Value `json:"signature"`
 	Data      jsontext.Value `json:"data"`
+	Index     jsontext.Value `json:"index"`
 }
 
 type canonFormat struct {
@@ -135,7 +137,65 @@ func decodeCanon(body []byte) (*canon, error) {
 	if err := jsonx.Unmarshal(body, c); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err) //nolint:errorlint // the decoding error describes the body, not a cause to match
 	}
+	for i := range c.Messages {
+		m := &c.Messages[i]
+		var err error
+		if m.ReasoningDetails, err = mergeDetails(m.ReasoningDetails); err != nil {
+			return nil, err
+		}
+	}
 	return c, nil
+}
+
+// mergeDetails joins the reasoning details a client hands back as it streamed them, an entry per chunk: entries of
+// the same type and index are one detail (OpenRouter《Reasoning tokens》"Streaming Response", read 2026-10-15), whose
+// text and summary are its pieces in order and whose signature, data, ID and format are the ones given. Entries
+// without an index stand alone.
+func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error) {
+	var out []canonReasoningDetail
+	for _, d := range details {
+		i := slices.IndexFunc(out, func(m canonReasoningDetail) bool {
+			return !isNull(d.Index) && m.Type == d.Type && string(m.Index) == string(d.Index)
+		})
+		if i < 0 {
+			out = append(out, d)
+			continue
+		}
+		m := &out[i]
+		var err error
+		if m.Text, err = joinText(m.Text, d.Text); err != nil {
+			return nil, err
+		}
+		if m.Summary, err = joinText(m.Summary, d.Summary); err != nil {
+			return nil, err
+		}
+		m.Signature, m.Data, m.ID = given(m.Signature, d.Signature), given(m.Data, d.Data), given(m.ID, d.ID)
+		if m.Format == "" {
+			m.Format = d.Format
+		}
+	}
+	return out, nil
+}
+
+// joinText is the JSON strings a and b as one: each escape lies whole within its piece.
+func joinText(a, b jsontext.Value) (jsontext.Value, error) {
+	switch {
+	case isNull(b):
+		return a, nil
+	case isNull(a):
+		return b, nil
+	case a.Kind() != '"' || b.Kind() != '"':
+		return nil, shapeError("a reasoning detail's text that is not a string")
+	}
+	return slices.Concat(a[:len(a)-1], b[1:]), nil
+}
+
+// given is b when it was given, else a.
+func given(a, b jsontext.Value) jsontext.Value {
+	if isNull(b) {
+		return a
+	}
+	return b
 }
 
 // checkShape holds the members the conversions copy as written to the type Chat gives them (OpenAI《Create chat
