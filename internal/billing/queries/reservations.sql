@@ -28,17 +28,21 @@ INSERT INTO billing.balances (account_id, site_id, floor) VALUES (@account_id, @
 SELECT balance, floor, reserved FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
 
 -- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
--- Counters are kept per UTC day by the database's clock; a limit's window is the days since the start of its UTC day,
--- week or month, or every day for a limit that never resets, so changing how often a limit resets counts all that
--- the new window covers.
+-- Counters are kept per UTC day; a limit counts the days of its window that holds day, its UTC day, week or month,
+-- or every day for a limit that never resets, so changing how often a limit resets counts all that the new window
+-- covers. Admission passes no day, meaning today by the database's clock; an extension passes its reservation's day,
+-- which it writes back to, so it checks and books in the same window.
 -- name: ReadUsage :one
+WITH d AS (SELECT date_trunc('day', coalesce(sqlc.narg(day)::timestamptz, clock_timestamp()), 'UTC') AS day)
 SELECT
-    date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day,
+    d.day::timestamptz AS day,
     coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
-        WHERE s.subject = @workspace_id AND s.window_start >= billing.window_from(@workspace_reset::text)), 0)::bigint
-        AS workspace_used,
+        WHERE s.subject = @workspace_id AND s.window_start >= billing.window_from(@workspace_reset::text, d.day)
+            AND s.window_start < billing.window_to(@workspace_reset::text, d.day)), 0)::bigint AS workspace_used,
     coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
-        WHERE s.subject = @key_id AND s.window_start >= billing.window_from(@key_reset::text)), 0)::bigint AS key_used;
+        WHERE s.subject = @key_id AND s.window_start >= billing.window_from(@key_reset::text, d.day)
+            AND s.window_start < billing.window_to(@key_reset::text, d.day)), 0)::bigint AS key_used
+FROM d;
 
 -- One statement writes the reservation and its three counters.
 -- name: InsertReservation :exec

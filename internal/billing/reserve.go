@@ -84,7 +84,7 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	if err := b.fence(ctx, tx); err != nil {
 		return nil, nil, err
 	}
-	usage, err := a.usage(ctx, tx)
+	usage, err := a.usage(ctx, tx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -140,7 +140,7 @@ func (b *Billing) extend(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest
 	if delta <= 0 {
 		return nil
 	}
-	usage, err := a.usage(ctx, tx)
+	usage, err := a.usage(ctx, tx, &row.WorkspaceWindow) // the reservation's day, which the extension books to
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,9 @@ func (b *Billing) extend(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest
 	} else if n != 1 {
 		return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
 	}
-	return h.addReserved(ctx, tx, delta)
+	// Book to the windows the row holds, the same ones the limits were just checked in.
+	booked := Hold{id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
+	return booked.addReserved(ctx, tx, delta)
 }
 
 // SettleOrphan ends the reservation of a request whose admission's COMMIT went unacknowledged (README.md「追加与结算」).
@@ -212,10 +214,11 @@ func lockAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (LockBalanceR
 	return row, nil
 }
 
-// usage reads what the workspace and the key have spent and hold reserved in their limits' current windows.
-func (a Admitted) usage(ctx context.Context, tx pg.Tx) (ReadUsageRow, error) {
+// usage reads what the workspace and the key have spent and hold reserved in the windows of their limits that hold
+// day, or today when day is nil.
+func (a Admitted) usage(ctx context.Context, tx pg.Tx, day *time.Time) (ReadUsageRow, error) {
 	u, err := queries.ReadUsage(ctx, tx, ReadUsageParams{
-		WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
+		Day: day, WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
 	})
 	if err != nil {
 		return u, fmt.Errorf("billing: read the counters: %w", err)
