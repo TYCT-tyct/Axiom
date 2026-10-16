@@ -352,6 +352,7 @@ type options struct {
 	alive       func() bool
 	mutate      func(*Call)
 	noSlot      []int
+	memory      int64 // the node's budget; memorySize when zero
 }
 
 type harness struct {
@@ -360,6 +361,7 @@ type harness struct {
 	up      *fakeUpstreams
 	router  *routing.Router
 	memory  *protocol.Memory
+	budget  int64
 	w       *clientWriter
 	call    *Call
 	req     *http.Request
@@ -399,7 +401,8 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.memory = protocol.NewMemory(memorySize)
+	h.budget = cmpOr(o.memory, memorySize)
+	h.memory = protocol.NewMemory(h.budget)
 	alive := o.alive
 	if alive == nil {
 		alive = func() bool { return true }
@@ -563,10 +566,10 @@ func (h *harness) check() {
 	if held := h.up.outstanding(); held != 0 {
 		h.t.Errorf("%d credentials still held", held)
 	}
-	if !h.memory.Charge(memorySize) {
+	if !h.memory.Charge(h.budget) {
 		h.t.Error("the node's memory budget was not given back whole")
 	}
-	h.memory.Refund(memorySize)
+	h.memory.Refund(h.budget)
 }
 
 // ended is the last try of the settlement, or fails.
