@@ -166,25 +166,34 @@ func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
 	return size
 }
 
-// convertFactor is how many times the body's size a conversion holds at once: the request read into a canon model, the
-// output grown by appending, and what the growth leaves for the collector. It is the heap's peak above its start,
-// sampled on 2026-10-16 while converting for Messages and Responses: 20 times for a body of 100,000 pairs of
-// one-character messages, the worst shape, 13 for messages with one text part, 9 for tool calls and results, 3 for one
-// long text; the result keeps up to 2.5 times (TestPrepareCost).
-const convertFactor = 32
+// What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
+// reads them into structures, one for every object and, in an object whose members it does not know, one for every
+// member; a body of nothing but "{}," makes 224 bytes of message of every 3. The body does not say how many objects and
+// members there are, but counting its braces and colons bounds them: those inside strings only add. The constants are
+// the structures' sizes, doubled for the growth of the slices they sit in, with room to spare (measured 2026-10-16, a
+// body of "{}," allocates 1.3 KiB for each object, and 100,000 unknown members 485 bytes each); TestPrepareCost holds
+// them to what bodies of the worst shapes allocate.
+const (
+	convertPerByte   = 6
+	convertPerObject = 2048
+	convertPerMember = 1024
+)
 
-// PrepareCost is the most memory Prepare holds at once for a body of n bytes, besides the body itself, so that the
-// node's budget is asked for it before Prepare allocates it. A rewrite writes into one buffer whose capacity is known
-// before it starts; a conversion's working set is bounded by convertFactor. What stays is the capacity of
-// Upstream.Body, which is never more than the cost.
-func PrepareCost(r *Request, n int, t Target, w Rewrites) int64 {
+// PrepareCost is the most memory Prepare holds at once for a request, besides the body itself, so that the node's
+// budget is asked for it before Prepare allocates it. A rewrite writes into one buffer whose capacity is known before
+// it starts, and unquotes an identifier or a response ID into a scratch, copies it to a string and grows the scratch by
+// doubling, which the body's size bounds three times over (2.5 measured, for an identifier of escapes); a conversion's
+// working set is bounded by the body's size, braces and colons (above). What stays is the capacity of Upstream.Body,
+// which is never more than the cost.
+func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
+	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rewriteRules[r.Format], n, t, w))
+		return int64(rewriteSize(rewriteRules[r.Format], len(body), t, w)) + 3*n
 	}
 	if r.Format != Chat {
 		return 0 // Prepare refuses at once: nothing is converted from another format
 	}
-	return int64(n) * convertFactor
+	return convertPerByte*n + convertPerObject*int64(bytes.Count(body, []byte("{"))) + convertPerMember*int64(bytes.Count(body, []byte(":")))
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that

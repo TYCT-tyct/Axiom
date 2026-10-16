@@ -138,7 +138,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 // attempt gives back once the request is sent. A refusal is ErrOverloaded.
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
 	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
-	cost := protocol.PrepareCost(&s.c.Request, len(s.c.Body), entry.Target, w)
+	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, entry.Target, w)
 	if !s.x.Memory.Charge(cost) {
 		return up, 0, ErrOverloaded
 	}

@@ -55,7 +55,7 @@ func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
 			mutate := func(call *Call) { chatForResponses(t, call) }
 			probe := newHarness(t, ctx, options{mutate: mutate}) // only to see what the request costs
-			cost := protocol.PrepareCost(&probe.call.Request, len(probe.call.Body), probe.call.Plan.Entries[0].Target, protocol.Rewrites{})
+			cost := protocol.PrepareCost(&probe.call.Request, probe.call.Body, probe.call.Plan.Entries[0].Target, protocol.Rewrites{})
 			h := newHarness(t, ctx, options{mutate: mutate, memory: cost + c.spare})
 			h.run()
 			if h.w.status != c.status {
@@ -80,7 +80,8 @@ func TestMemoryHoldsARequestByItsCapacityWhileItIsSent(t *testing.T) {
 		}}
 		h.run()
 		sent := h.up.endpoint(1).calls[0].Body
-		capacity := protocol.PrepareCost(&h.call.Request, len(h.call.Body), h.call.Plan.Entries[0].Target, protocol.Rewrites{})
+		// A rewrite's cost is its buffer and three times the body, which is given back once the buffer is made.
+		capacity := protocol.PrepareCost(&h.call.Request, h.call.Body, h.call.Plan.Entries[0].Target, protocol.Rewrites{}) - 3*int64(len(h.call.Body))
 		if during != capacity || during <= int64(len(sent)) {
 			t.Errorf("%d bytes were held while a request of %d bytes was sent, want its capacity, %d", during, len(sent), capacity)
 		}
@@ -97,26 +98,27 @@ func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		probe := newHarness(t, ctx, options{})
 		entry := probe.call.Plan.Entries[0]
-		cost := protocol.PrepareCost(&probe.call.Request, len(probe.call.Body), entry.Target, protocol.Rewrites{})
+		cost := protocol.PrepareCost(&probe.call.Request, probe.call.Body, entry.Target, protocol.Rewrites{})
 		h := newHarness(t, ctx, options{memory: 3 * cost})
 		s := &session{x: h.exec, c: h.call}
+		buffer := cost - 3*int64(len(h.call.Body))
 		var wg sync.WaitGroup
 		var made, refused atomic.Int64
 		for range 8 {
 			wg.Go(func() {
 				switch _, held, err := s.prepare(entry); {
-				case err == nil && held == cost:
+				case err == nil && held == buffer:
 					made.Add(1)
 				case errors.Is(err, ErrOverloaded):
 					refused.Add(1)
 				default:
-					t.Errorf("held %d of %d, %v", held, cost, err)
+					t.Errorf("held %d, want %d: %v", held, buffer, err)
 				}
 			})
 		}
 		wg.Wait()
-		if made.Load() != 3 || refused.Load() != 5 || left(h.memory) != 0 {
-			t.Errorf("%d requests made, %d refused, %d bytes left of the budget", made.Load(), refused.Load(), left(h.memory))
+		if rest := 3 * (cost - buffer); made.Load() != 3 || refused.Load() != 5 || left(h.memory) != rest {
+			t.Errorf("%d requests made, %d refused, %d bytes left of the budget, want %d", made.Load(), refused.Load(), left(h.memory), rest)
 		}
 	})
 }

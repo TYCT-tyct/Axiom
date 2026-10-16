@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -476,15 +477,17 @@ func TestPrepareOutputCap(t *testing.T) {
 		if err != nil || string(u.Body) != c.want {
 			t.Errorf("%s: got %s (%v), want %s", c.name, u.Body, err, c.want)
 		}
-		if cost := protocol.PrepareCost(&r, len(c.body), target, w); int64(cap(u.Body)) != cost {
+		if cost := protocol.PrepareCost(&r, []byte(c.body), target, w); int64(cap(u.Body))+3*int64(len(c.body)) != cost {
 			t.Errorf("%s: the buffer was %d bytes, the cost %d: the rewrite outgrew its room", c.name, cap(u.Body), cost)
 		}
 	}
 }
 
-// TestPrepareCost: a rewrite's cost is the capacity of the buffer it writes into, exactly, however much it adds; a
-// conversion's is more than its result keeps, even for a body of the smallest messages, the worst shape there is
-// (convertFactor); and a request that is not converted costs nothing, as it fails before it allocates.
+// TestPrepareCost: a rewrite's cost is the capacity of the buffer it writes into, exactly, however much it adds, and
+// three times the body for what it unquotes; a request that is not converted costs nothing, as it fails before it
+// allocates; and what Prepare allocates, for bodies of the worst shapes there are (nothing but empty objects, the
+// smallest messages, members it does not know, an identifier of escapes), stays within the cost. The allocation counted
+// is the total, garbage included, which bounds the peak.
 func TestPrepareCost(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	w := protocol.Rewrites{Identity: func(string) string { return id }, History: history}
@@ -500,22 +503,49 @@ func TestPrepareCost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cost := protocol.PrepareCost(&r, len(body), target, w); int64(cap(u.Body)) != cost {
+		if cost := protocol.PrepareCost(&r, []byte(body), target, w); int64(cap(u.Body))+3*int64(len(body)) != cost {
 			t.Errorf("format %d: a rewrite's buffer is %d bytes, its cost %d", f, cap(u.Body), cost)
 		}
 	}
-	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
-	tiny := []byte(chatBody(`"messages":[` + strings.Repeat(pair+",", 20000) + pair + `]`))
-	r := inspected(t, protocol.Chat, tiny)
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
-		target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
-		u, err := protocol.Prepare(&r, tiny, target, w)
-		if cost := protocol.PrepareCost(&r, len(tiny), target, w); err != nil || int64(cap(u.Body)) > cost/4 {
-			t.Errorf("format %d: a conversion keeps %d bytes (%v) of the %d it costs", f, cap(u.Body), err, cost)
-		}
-	}
 	m := inspected(t, protocol.Messages, []byte(`{"model":"m"}`))
-	if cost := protocol.PrepareCost(&m, 1<<20, protocol.Target{Format: protocol.Responses}, w); cost != 0 {
+	if cost := protocol.PrepareCost(&m, make([]byte, 1<<20), protocol.Target{Format: protocol.Responses}, w); cost != 0 {
 		t.Errorf("a Messages request for a Responses endpoint costs %d", cost)
+	}
+	bs := "\\"
+	var members []string
+	for i := range 20000 {
+		members = append(members, fmt.Sprintf(`"k%05d":1`, i))
+	}
+	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
+	for _, c := range []struct {
+		name string
+		from protocol.Format
+		body string
+	}{
+		{"empty messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat("{},", 20000) + `{}]`)},
+		{"the smallest messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat(pair+",", 20000) + pair + `]`)},
+		{"members of a message it does not know", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]`)},
+		{"members of the request it does not know", protocol.Chat, chatBody(`"messages":[` + userHi + `],` + strings.Join(members, ","))},
+		{"one long text", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]`)},
+		{"escapes in a text", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"` + strings.Repeat(bs+`u0041`, 1<<18) + `"}]`)},
+		{"an identifier of escapes", protocol.Responses, `{"model":"m","input":"hi","user":"` + strings.Repeat(bs+`n`, 1<<19) + `"}`},
+		{"an identifier of plain bytes", protocol.Messages, `{"model":"m","max_tokens":5,"metadata":{"user_id":"` + strings.Repeat("a", 1<<20) + `"}}`},
+	} {
+		r := inspected(t, c.from, []byte(c.body))
+		targets := []protocol.Format{c.from}
+		if c.from == protocol.Chat {
+			targets = []protocol.Format{protocol.Messages, protocol.Responses}
+		}
+		for _, f := range targets {
+			target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
+			cost := protocol.PrepareCost(&r, []byte(c.body), target, w)
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			u, _ := protocol.Prepare(&r, []byte(c.body), target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
+			runtime.ReadMemStats(&after)
+			if allocated := int64(after.TotalAlloc - before.TotalAlloc); allocated > cost || int64(cap(u.Body)) > cost {
+				t.Errorf("%s, format %d: %d bytes allocated, %d kept, of the %d it costs, for a body of %d", c.name, f, allocated, cap(u.Body), cost, len(c.body))
+			}
+		}
 	}
 }
