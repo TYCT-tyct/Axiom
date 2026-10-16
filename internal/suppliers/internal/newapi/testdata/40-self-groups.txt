@@ -1,0 +1,7 @@
+# 40-self-groups
+GET /api/user/self/groups
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.03s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"default":{"desc":"Default group","ratio":1},"vip":{"desc":"VIP group","ratio":1}},"message":"","success":true}
