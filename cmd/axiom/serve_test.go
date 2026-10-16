@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
@@ -235,6 +236,47 @@ func get(t *testing.T, url string) (response, error) {
 	}
 	body, err := io.ReadAll(resp.Body)
 	return response{resp, body}, errors.Join(err, resp.Body.Close())
+}
+
+// TestStartupTimeoutCoversTheFallbackCheck: a node whose check of the fallback prices waits on a lock fails within
+// AXIOM_STARTUP_TIMEOUT, as one whose database does not answer, instead of hanging before its listeners open.
+func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
+	database := pgtest.New(t, modules()...)
+	admin, err := pg.Open(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	locked, unlock, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- admin.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE billing.fallbacks IN ACCESS EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			close(locked)
+			<-unlock
+			return nil
+		})
+	}()
+	<-locked
+	environ := []string{
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
+		"AXIOM_DATABASE_URL=" + database.App,
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
+	select {
+	case err := <-served:
+		if !errors.Is(err, errNoAnswer) {
+			t.Errorf("serve = %v, want errNoAnswer", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("serve still waits on the lock 10s past a startup timeout of 1s")
+	}
+	close(unlock)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken

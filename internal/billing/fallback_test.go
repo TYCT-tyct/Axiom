@@ -119,6 +119,31 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 	}
 }
 
+// TestPriceSegmentsSaturates: the dearest valid defaults (one credit a use) at the most uses an unknown value counts,
+// alone, twice in a sampling or over two samplings, price past what an amount holds: the charge is the most an amount
+// holds, not a panic.
+func TestPriceSegmentsSaturates(t *testing.T) {
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
+	f := mustFallbacks(t, `{"currency":"USD","markup":"10","per_use":{"code_execution":"1","web_search":"1"}}`)
+	most := func(field string) catalog.UnknownUsage {
+		return catalog.UnknownUsage{Field: field, Value: "10000000000"}
+	}
+	for name, segments := range map[string][]Segment{
+		"one field":     {segment(t, nil, most("a"))},
+		"two fields":    {segment(t, nil, most("a"), most("b"))},
+		"two samplings": {segment(t, nil, most("a")), segment(t, nil, most("a"))},
+		"just inside":   {segment(t, nil, catalog.UnknownUsage{Field: "a", Value: "9223372035"})},
+	} {
+		want := int64(math.MaxInt64)
+		if name == "just inside" {
+			want = 9223372035e9
+		}
+		if p, err := priceSegments(s, f, segments, false); err != nil || p.price != want || !p.estimated {
+			t.Errorf("%s: priceSegments = %+v, %v; want %d estimated", name, p, err, want)
+		}
+	}
+}
+
 // TestFillPricesPerUse: a schedule filled with the defaults prices a known per-use item it lacks exactly, not as an
 // estimate, and keeps its own price where it has one.
 func TestFillPricesPerUse(t *testing.T) {

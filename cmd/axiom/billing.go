@@ -41,20 +41,45 @@ var billingOperations = map[string]billingOperation{
 	"close-hold":         runBilling(billing.CloseHold),
 }
 
-// billingLists are the read-only listings, a line per row.
-var billingLists = map[string]func(ctx context.Context, tx pg.Tx) ([]any, error){
-	"unknown-items":  listOf(billing.UnknownItems),
-	"fallback-holds": listOf(billing.FallbackHolds),
+// billingLists are the read-only listings, each writing a line per row.
+var billingLists = map[string]func(ctx context.Context, db *pg.DB, write func(any) error) error{
+	"unknown-items":  listUnknownItems,
+	"fallback-holds": listFallbackHolds,
 }
 
-func listOf[T any](list func(context.Context, pg.Tx) ([]T, error)) func(context.Context, pg.Tx) ([]any, error) {
-	return func(ctx context.Context, tx pg.Tx) ([]any, error) {
-		rows, err := list(ctx, tx)
-		out := make([]any, len(rows))
-		for i, r := range rows {
-			out[i] = r
+// listUnknownItems writes them from one read: a row is a model's field, so they are few.
+func listUnknownItems(ctx context.Context, db *pg.DB, write func(any) error) error {
+	return db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		items, err := billing.UnknownItems(ctx, tx)
+		for _, it := range items {
+			if err == nil {
+				err = write(it)
+			}
 		}
-		return out, err
+		return err
+	})
+}
+
+// listFallbackHolds writes them a page per read, so neither memory nor a transaction grows with their number.
+func listFallbackHolds(ctx context.Context, db *pg.DB, write func(any) error) error {
+	var after *billing.FallbackHold
+	for {
+		var page []billing.FallbackHold
+		if err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+			page, err = billing.FallbackHolds(ctx, tx, after, billing.FallbackHoldsPage)
+			return err
+		}); err != nil {
+			return err
+		}
+		for _, h := range page {
+			if err := write(h); err != nil {
+				return err
+			}
+		}
+		if len(page) < billing.FallbackHoldsPage {
+			return nil
+		}
+		after = &page[len(page)-1]
 	}
 }
 
@@ -68,14 +93,8 @@ func billingCommand(ctx context.Context, environ, args []string, out io.Writer) 
 		if !ok {
 			return fmt.Errorf("unknown listing %q; %w", args[0], usage)
 		}
-		return withPlatformTx(ctx, environ, func(tx pg.Tx) error {
-			rows, err := list(ctx, tx)
-			for _, r := range rows {
-				if err == nil {
-					err = writeLine(out, r)
-				}
-			}
-			return err
+		return withDatabase(ctx, environ, func(db *pg.DB) error {
+			return list(ctx, db, func(row any) error { return writeLine(out, row) })
 		})
 	}
 	if len(args) != 2 {
@@ -89,16 +108,18 @@ func billingCommand(ctx context.Context, environ, args []string, out io.Writer) 
 	if err != nil {
 		return err
 	}
-	return withPlatformTx(ctx, environ, func(tx pg.Tx) error {
-		if err := do(ctx, tx, audit.System("billing.cli"), doc); err != nil {
-			return fmt.Errorf("%s: %w", args[0], err)
-		}
-		return writeLine(out, map[string]any{"done": args[0]})
+	return withDatabase(ctx, environ, func(db *pg.DB) error {
+		return db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+			if err := do(ctx, tx, audit.System("billing.cli"), doc); err != nil {
+				return fmt.Errorf("%s: %w", args[0], err)
+			}
+			return writeLine(out, map[string]any{"done": args[0]})
+		})
 	})
 }
 
-// withPlatformTx runs do in one platform-scope transaction on the database.
-func withPlatformTx(ctx context.Context, environ []string, do func(pg.Tx) error) error {
+// withDatabase runs use on the database.
+func withDatabase(ctx context.Context, environ []string, use func(*pg.DB) error) error {
 	env := config.New(environ)
 	databaseURL := env.Required("AXIOM_DATABASE_URL")
 	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
@@ -110,5 +131,5 @@ func withPlatformTx(ctx context.Context, environ []string, do func(pg.Tx) error)
 		return err
 	}
 	defer db.Close()
-	return db.Tx(ctx, pg.PlatformScope(), do)
+	return use(db)
 }

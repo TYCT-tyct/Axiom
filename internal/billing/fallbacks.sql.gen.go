@@ -62,7 +62,7 @@ func (q *Queries) ClearUnknownItem(ctx context.Context, db DBTX, arg ClearUnknow
 const closeHold = `-- name: CloseHold :one
 UPDATE billing.reservations SET correct_by = clock_timestamp()
 WHERE request_id = $1 AND state = 'estimated' AND correct_by > clock_timestamp()
-RETURNING account_id, (amount - charged)::bigint AS held
+RETURNING account_id, greatest(amount - charged, 0)::bigint AS held
 `
 
 type CloseHoldRow struct {
@@ -71,7 +71,8 @@ type CloseHoldRow struct {
 }
 
 // Run under the account's balance row lock, as every change to a reservation is: the window ends now, by the
-// database's clock, so cleanup settles the estimate and corrections leave the user's charge alone.
+// database's clock, so cleanup settles the estimate and corrections leave the user's charge alone. It may hold
+// nothing, when a correction by cost charged past the reservation.
 func (q *Queries) CloseHold(ctx context.Context, db DBTX, requestID uuid.UUID) (CloseHoldRow, error) {
 	row := db.QueryRow(ctx, closeHold, requestID)
 	var i CloseHoldRow
@@ -82,7 +83,7 @@ func (q *Queries) CloseHold(ctx context.Context, db DBTX, requestID uuid.UUID) (
 const fallbackHoldTotals = `-- name: FallbackHoldTotals :one
 SELECT count(*)::bigint AS holds, coalesce(sum(r.amount - r.charged), 0)::bigint AS held
 FROM billing.reservations r
-WHERE r.state = 'estimated' AND jsonb_path_exists(r.final_usage, '$[*].unknown')
+WHERE r.state = 'estimated' AND r.amount > r.charged AND jsonb_path_exists(r.final_usage, '$[*].unknown')
 `
 
 type FallbackHoldTotalsRow struct {
@@ -98,23 +99,34 @@ func (q *Queries) FallbackHoldTotals(ctx context.Context, db DBTX) (FallbackHold
 }
 
 const fallbackHolds = `-- name: FallbackHolds :many
-SELECT r.request_id, r.site_id, r.account_id, (r.amount - r.charged)::bigint AS held, r.correct_by
+SELECT r.request_id, r.site_id, r.account_id, (r.amount - r.charged)::bigint AS held, r.correct_by::timestamptz AS correct_by
 FROM billing.reservations r
-WHERE r.state = 'estimated' AND jsonb_path_exists(r.final_usage, '$[*].unknown')
+WHERE r.state = 'estimated' AND r.amount > r.charged AND jsonb_path_exists(r.final_usage, '$[*].unknown')
+    AND (r.correct_by, r.request_id) > ($1::timestamptz, $2::uuid)
 ORDER BY r.correct_by, r.request_id
+LIMIT $3
 `
+
+type FallbackHoldsParams struct {
+	AfterBy  time.Time
+	AfterID  uuid.UUID
+	PageSize int32
+}
 
 type FallbackHoldsRow struct {
 	RequestID uuid.UUID
 	SiteID    uuid.UUID
 	AccountID uuid.UUID
 	Held      int64
-	CorrectBy *time.Time
+	CorrectBy time.Time
 }
 
-// Estimates that still hold part of their reservation and rest on usage only a fallback price covers, oldest first.
-func (q *Queries) FallbackHolds(ctx context.Context, db DBTX) ([]FallbackHoldsRow, error) {
-	rows, err := db.Query(ctx, fallbackHolds)
+// A page of the estimates that still hold part of their reservation and rest on usage only a fallback price covers,
+// after the given one in (correct_by, request_id) order, which the partial index walks and which pages stably while
+// windows open and close. An estimate a correction by cost charged past its reservation holds nothing and is left out.
+// An estimate always has its window, so correct_by is never null here.
+func (q *Queries) FallbackHolds(ctx context.Context, db DBTX, arg FallbackHoldsParams) ([]FallbackHoldsRow, error) {
+	rows, err := db.Query(ctx, fallbackHolds, arg.AfterBy, arg.AfterID, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}

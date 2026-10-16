@@ -24,12 +24,16 @@ VALUES ('USD', '{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.
 
 -- Each kept route entry's fallbacks as admission locked them, by route index like prices ('' for a dropped entry),
 -- and each entry's model, so settlement, cleanup and corrections price and report unknown usage without the process
--- that admitted it. unpriced is no longer written: every reservation now locks its fallbacks, so all usage is priced.
+-- that admitted it. attempt_entries is the route index each attempt bound, by attempt number (attempt_entries[seq],
+-- -1 for a number not seen), as Settle or cleanup learnt it: a supplier record of an attempt the user is not charged
+-- for still finds the model whose unknown usage it reports. unpriced is no longer written: every reservation now
+-- locks its fallbacks, so all usage is priced.
 ALTER TABLE billing.reservations
     ADD COLUMN fallbacks text[] NOT NULL DEFAULT '{}',
-    ADD COLUMN models uuid[] NOT NULL DEFAULT '{}';
--- The held estimates, which the fallback-hold gauges read on every scrape.
-CREATE INDEX estimated_by_correct_by ON billing.reservations (correct_by) WHERE state = 'estimated';
+    ADD COLUMN models uuid[] NOT NULL DEFAULT '{}',
+    ADD COLUMN attempt_entries integer[] NOT NULL DEFAULT '{}';
+-- The held estimates in the order the fallback-hold listing pages them, which the gauges also read on every scrape.
+CREATE INDEX estimated_by_correct_by ON billing.reservations (correct_by, request_id) WHERE state = 'estimated';
 
 -- A usage field a model's upstream reported that nothing prices, from its first appearance: the model takes no new
 -- requests (routing's unknown_item) until an administrator prices it and clears the row. The first call's tenant is
@@ -61,3 +65,4 @@ CREATE POLICY updates ON billing.unknown_items FOR UPDATE USING (platform.in_pla
 GRANT SELECT, INSERT ON billing.fallbacks, billing.unknown_items TO axiom_app;
 GRANT UPDATE (body, updated_at) ON billing.fallbacks TO axiom_app;
 GRANT UPDATE (cleared_at) ON billing.unknown_items TO axiom_app;
+GRANT UPDATE (attempt_entries) ON billing.reservations TO axiom_app;

@@ -104,13 +104,20 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 }
 
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
-// (docs/domains/billing.md「价目表缺项」); billing reports its gauges from it.
+// (docs/domains/billing.md「价目表缺项」); billing reports its gauges from it. One deadline covers the connection and
+// every check, so a database that stops answering, or a lock held on the fallbacks, fails the start instead of holding
+// it. The other commands open the database without the check: save-fallbacks is how a refused row is repaired.
 func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry) (*pg.DB, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
+	defer cancel()
 	db, err := openDatabase(ctx, url, timeout, pg.WithTracerProvider(tel.Traces))
 	if err != nil {
 		return nil, err
 	}
 	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return billing.CheckFallbacks(ctx, tx) })
+	if err != nil && errors.Is(context.Cause(ctx), errNoAnswer) {
+		err = errNoAnswer
+	}
 	if err == nil {
 		err = billing.RegisterMetrics(tel.Metrics.Meter("axiom/billing"), db, pg.PlatformScope())
 	}
@@ -146,11 +153,12 @@ func node(publicAddr string, routes http.Handler, probesAddr string, health *htt
 	}
 }
 
+var errNoAnswer = errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
+
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
-	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
@@ -158,8 +166,8 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	}
 	if err := db.Check(ctx, modules()...); err != nil {
 		db.Close()
-		if errors.Is(context.Cause(ctx), noAnswer) {
-			return nil, noAnswer // pgx reports only that the context ended
+		if errors.Is(context.Cause(ctx), errNoAnswer) {
+			return nil, errNoAnswer // pgx reports only that the context ended
 		}
 		return nil, fmt.Errorf("database: %w", err)
 	}

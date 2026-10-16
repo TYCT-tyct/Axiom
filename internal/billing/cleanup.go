@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"slices"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -77,9 +78,11 @@ func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
 		}
 		return c.release(ctx, tx, "cleanup_released", c.row.Amount)
 	}
-	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}); err != nil {
+	records := []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}
+	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
 		return err
 	}
+	c.entries = attemptEntries(records)
 	w := c.kept("cleanup_pending")
 	w.seq, w.entry, w.estimated, w.holdSeconds = int32p(j.Seq), int32p(j.Entry), true, c.b.config.CorrectionWindow.Seconds()
 	return c.write(ctx, tx, w)
@@ -168,17 +171,17 @@ func (c *locked) recharges(k Correction) bool {
 // therefore never passes the floor; past the hold the platform bears it. A charge by cost, for usage nothing prices,
 // may also take what the account has free above its floor (「价目表缺项」: the reservation and the available balance).
 // An estimate keeps holding the rest until its window ends, for a later revision; a cleaned-up call releases it.
-// Whatever the window, the record's unknown fields on the charged attempt are noted against its model.
+// Whatever the attempt and the window, the record's unknown fields are noted against the model of the attempt's
+// entry once Settle or cleanup has recorded it; a record before either leaves that to Settle, which notes the
+// attempt's own usage.
 func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	r := c.row
-	if !c.charges(k) {
-		return nil
-	}
-	p, segments, byCost, err := c.priceRecord(k)
-	if err == nil {
-		err = c.noteUnknown(ctx, tx, int(*r.Entry), segments)
-	}
+	segments, err := c.noteRecord(ctx, tx, k)
 	if err != nil || !c.recharges(k) {
+		return err
+	}
+	p, byCost, err := c.priceRecord(segments, k.Cost)
+	if err != nil {
 		return err
 	}
 	usage, err := encodeUsage(segments)
@@ -209,25 +212,34 @@ func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	return c.write(ctx, tx, w)
 }
 
-// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver.
-// Usage protocol could not map has no price but a fallback, which need not cover what the supplier charged, so a
-// record with any is charged its cost × the locked markup, byCost; a waived call keeps its waiver instead, charging
-// only the per-use items and the unknown uses at their fallback prices, since the cost is mostly model usage.
-func (c *locked) priceRecord(k Correction) (p priced, segments []Segment, byCost bool, err error) {
-	s, f, err := c.pricing(int(*c.row.Entry))
-	if err != nil {
-		return priced{}, nil, false, err
-	}
-	segments = make([]Segment, len(k.Usage))
+// noteRecord is the record's usage by sampling, all of it reported, whose unknown fields it notes against the model of
+// the attempt's entry, when attempt_entries has it.
+func (c *locked) noteRecord(ctx context.Context, tx pg.Tx, k Correction) ([]Segment, error) {
+	segments := make([]Segment, len(k.Usage))
 	for i, u := range k.Usage {
 		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
-		byCost = byCost || len(u.Unknown()) > 0
 	}
-	if p, err = priceSegments(s, f, segments, c.row.Waived); err != nil {
-		return priced{}, nil, false, err
+	entries := c.row.AttemptEntries
+	if k.Seq < 1 || k.Seq > len(entries) || entries[k.Seq-1] < 0 {
+		return segments, nil
 	}
-	if byCost = byCost && !c.row.Waived; byCost {
-		p.price = f.byCost(k.Cost)
+	return segments, c.noteUnknown(ctx, tx, int(entries[k.Seq-1]), segments)
+}
+
+// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver.
+// Usage protocol could not map has no price but a fallback, which need not cover what the supplier charged, so a
+// record with any is charged its cost × the locked markup, byCost, without pricing the fallbacks it does not charge;
+// a waived call keeps its waiver instead, charging only the per-use items and the unknown uses at their fallback
+// prices, since the cost is mostly model usage.
+func (c *locked) priceRecord(segments []Segment, cost int64) (p priced, byCost bool, err error) {
+	s, f, err := c.pricing(int(*c.row.Entry))
+	if err != nil {
+		return priced{}, false, err
 	}
-	return p, segments, byCost, nil
+	unknown := slices.ContainsFunc(segments, func(seg Segment) bool { return len(seg.Usage.Unknown()) > 0 })
+	if unknown && !c.row.Waived {
+		return priced{price: f.byCost(cost), estimated: true}, true, nil
+	}
+	p, err = priceSegments(s, f, segments, c.row.Waived)
+	return p, false, err
 }

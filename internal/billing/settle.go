@@ -149,8 +149,8 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 		}
 	}
 	p, err := c.price(ctx, tx, o, last)
-	if err == nil && last.Result != NotExecuted { // a call known not to have run used nothing, and its entry is not priced
-		err = c.noteUnknown(ctx, tx, last.Entry, last.Segments)
+	if err == nil {
+		err = c.noteAttempts(ctx, tx, o)
 	}
 	if err != nil {
 		return Final{}, err
@@ -164,7 +164,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 }
 
 // recordAttempts books each attempt's cost, unless a supplier record has set it already (a correction can arrive
-// before a late Settle), and writes the attempts to suppliers.
+// before a late Settle), writes the attempts to suppliers and keeps their entries for the reservation.
 func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
 	records := make([]AttemptRecord, len(o.Attempts))
 	for i, at := range o.Attempts {
@@ -186,7 +186,21 @@ func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error 
 	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
 		return fmt.Errorf("billing: record the attempts: %w", err)
 	}
+	c.entries = attemptEntries(records)
 	return nil
+}
+
+// attemptEntries is attempt_entries: the entry each attempt bound, by attempt number from 1, -1 for a number not
+// among records.
+func attemptEntries(records []AttemptRecord) []int32 {
+	var entries []int32
+	for _, r := range records {
+		for len(entries) < r.Seq {
+			entries = append(entries, -1)
+		}
+		entries[r.Seq-1] = *int32p(r.Entry)
+	}
+	return entries
 }
 
 // priced is what 免单规则 charges: the price, whether it rests on usage the upstream did not report or only a fallback
@@ -277,7 +291,7 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 		}
 		p.estimated = p.estimated || guessed(seg, charged, missing)
 	}
-	p.price = total.CeilAmount()
+	p.price = ceilAmount(total)
 	return p, nil
 }
 
@@ -357,12 +371,29 @@ func (c *locked) pricing(entry int) (catalog.Schedule, fallbacks, error) {
 	return s, f, err
 }
 
-// noteUnknown records each field of segments protocol could not map against the entry's model. The first time the
-// model shows a field it leaves routing (「价目表缺项」), and seen collects it for the alert once the transaction
-// commits. pricing has checked the entry: admission locks a model with every price.
+// noteAttempts notes the unknown fields of every attempt that ran, not only the charged one: a model whose upstream
+// reported one leaves routing however its attempt ended. An attempt known not to have run used nothing.
+func (c *locked) noteAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
+	for _, at := range o.Attempts {
+		if at.Result == NotExecuted {
+			continue
+		}
+		if err := c.noteUnknown(ctx, tx, at.Entry, at.Segments); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// noteUnknown records each field of segments protocol could not map against the entry's model, whichever attempt
+// reported it. The first time the model shows a field it leaves routing (「价目表缺项」), and seen collects it for the
+// alert once the transaction commits.
 func (c *locked) noteUnknown(ctx context.Context, tx pg.Tx, entry int, segments []Segment) error {
 	for _, seg := range segments {
 		for _, u := range seg.Usage.Unknown() {
+			if entry < 0 || entry >= len(c.row.Models) || entry >= len(c.row.Fallbacks) || c.row.Fallbacks[entry] == "" {
+				return ErrNoAttempt // admission locks a model on every kept entry, and only kept entries are attempted
+			}
 			model := c.row.Models[entry]
 			n, err := queries.NoteUnknownItem(ctx, tx, NoteUnknownItemParams{
 				ModelID: model, Field: u.Field, RequestID: c.id, SiteID: c.row.SiteID, AccountID: c.row.AccountID,
@@ -445,6 +476,7 @@ type locked struct {
 	balance LockBalanceRow
 	charged int64
 	seen    []UnknownItem // unknown items first seen in this transaction
+	entries []int32       // the attempts' entries to write, nil to keep the recorded ones
 }
 
 // stored is the Final the reservation holds.
@@ -460,13 +492,20 @@ func (c *locked) cap(held int64) int64 {
 	b := c.balance
 	left := sum(platform.AmountExact(b.Balance), platform.AmountExact(b.Floor).Neg(), platform.AmountExact(b.Reserved).Neg(),
 		platform.AmountExact(held))
-	switch {
-	case left.Cmp(platform.Exact{}) < 0:
+	if left.Cmp(platform.Exact{}) < 0 {
 		return 0
-	case left.Cmp(platform.AmountExact(math.MaxInt64)) > 0:
+	}
+	return ceilAmount(left)
+}
+
+// ceilAmount is e in billionths, rounded up, at most math.MaxInt64. Valid settings can price past what an amount
+// holds, such as 10¹⁰ unknown uses at a default of one credit each; what the account pays is capped by its balance
+// anyway, so saturating loses nothing a charge could collect.
+func ceilAmount(e platform.Exact) int64 {
+	if e.Cmp(platform.AmountExact(math.MaxInt64)) > 0 {
 		return math.MaxInt64
 	}
-	return left.CeilAmount()
+	return e.CeilAmount()
 }
 
 func (c *locked) event(kind string, revision int64) event {
@@ -569,6 +608,7 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, HoldSeconds: w.holdSeconds,
+		AttemptEntries: c.entries,
 	})
 	if err != nil {
 		return fmt.Errorf("billing: end the reservation: %w", err)

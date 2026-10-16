@@ -317,12 +317,22 @@ func ClearUnknownItem(ctx context.Context, tx pg.Tx, r ClearUnknownItemRequest) 
 type FallbackHold struct {
 	Request, Site, Account uuid.UUID
 	Held                   int64 // billionths of a credit
-	By                     *time.Time
+	By                     time.Time
 }
 
-// FallbackHolds lists them, oldest window first; tx must be in the platform scope to see every tenant's.
-func FallbackHolds(ctx context.Context, tx pg.Tx) ([]FallbackHold, error) {
-	rows, err := queries.FallbackHolds(ctx, tx)
+// FallbackHoldsPage is the most holds FallbackHolds returns at once (docs/performance.md「后台与数据」: every list
+// pages by cursor, with a bound on the page).
+const FallbackHoldsPage = 500
+
+// FallbackHolds lists them by window, oldest first, a page of at most limit (1 to FallbackHoldsPage) after the hold
+// after, or from the first when after is nil; a page shorter than limit is the last. tx must be in the platform scope
+// to see every tenant's.
+func FallbackHolds(ctx context.Context, tx pg.Tx, after *FallbackHold, limit int) ([]FallbackHold, error) {
+	params := FallbackHoldsParams{PageSize: int32(min(max(limit, 1), FallbackHoldsPage))}
+	if after != nil {
+		params.AfterBy, params.AfterID = after.By, after.Request
+	}
+	rows, err := queries.FallbackHolds(ctx, tx, params)
 	if err != nil {
 		return nil, fmt.Errorf("billing: list the fallback holds: %w", err)
 	}

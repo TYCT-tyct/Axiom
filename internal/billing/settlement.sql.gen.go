@@ -143,28 +143,29 @@ const endReservation = `-- name: EndReservation :one
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
     charged = $4, price = $5, waived = $6, estimated = $7,
-    final_usage = $8,
-    correct_by = CASE WHEN $9::float8 > 0
-        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $9::float8) ELSE correct_by END
-WHERE request_id = $10
+    final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries),
+    correct_by = CASE WHEN $10::float8 > 0
+        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8) ELSE correct_by END
+WHERE request_id = $11
 RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
 type EndReservationParams struct {
-	State       string
-	ChargedSeq  *int32
-	Entry       *int32
-	Charged     int64
-	Price       int64
-	Waived      bool
-	Estimated   bool
-	FinalUsage  []byte
-	HoldSeconds float64
-	RequestID   uuid.UUID
+	State          string
+	ChargedSeq     *int32
+	Entry          *int32
+	Charged        int64
+	Price          int64
+	Waived         bool
+	Estimated      bool
+	FinalUsage     []byte
+	AttemptEntries []int32
+	HoldSeconds    float64
+	RequestID      uuid.UUID
 }
 
 // Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state. The charged
-// attempt and entry stay as they were when none is given. It returns the database's time, which a terminal state's
+// attempt and entry, and the attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's
 // EndRequest records, so every clock the request's end is judged by is the database's.
 func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) (time.Time, error) {
 	row := db.QueryRow(ctx, endReservation,
@@ -176,6 +177,7 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.Waived,
 		arg.Estimated,
 		arg.FinalUsage,
+		arg.AttemptEntries,
 		arg.HoldSeconds,
 		arg.RequestID,
 	)
@@ -276,7 +278,7 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
+    r.fallbacks, r.models, r.attempt_entries, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
 FROM billing.reservations r
 WHERE r.request_id = $1
 `
@@ -300,6 +302,7 @@ type LockReservationRow struct {
 	FinalUsage       []byte
 	Fallbacks        []string
 	Models           []uuid.UUID
+	AttemptEntries   []int32
 	CorrectionClosed bool
 }
 
@@ -326,6 +329,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.FinalUsage,
 		&i.Fallbacks,
 		&i.Models,
+		&i.AttemptEntries,
 		&i.CorrectionClosed,
 	)
 	return i, err

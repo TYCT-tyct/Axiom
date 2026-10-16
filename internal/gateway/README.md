@@ -30,7 +30,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 3 | 有上限地读请求体 | gateway | — | 2 分钟 | 413 / 408 |
 | 4 | `protocol.Inspect`；catalog 解析名字（含 `models`）；`routing.SessionKey` | protocol、catalog、routing | 0 | — | 400 / 404 |
 | 5 | 预检：限流计数加一（速率计数，不需释放），读会话粘性；只计数不判定 | gateway | M1 0；M2 1 C | 20ms | 保守计数、无粘性 |
-| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 8 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
+| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 9 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
 | 7 | 尝试：本地持有者检查 → `Acquire` → `Prepare` → `Bind` → `Send` → 写对账日志；从读到第一个字节起计量，暂存开头事件到提交点 | suppliers、protocol、billing | 上游 | 见「超时与限额」 | 提交前按 `routing.Decide` 换条目 |
 | 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
 | 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 15 DB（一次尝试） | 2s × 重试 | 「结束与结算」 |
@@ -39,7 +39,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 ## 准入
 
 - `fn` 由本模块组装，依次：用预检计数对照限额（M1 只有平台配置的防滥用限额；以后的 key、等级速率值从 `Admission` 读，判定位置不变）；`routing.Plan`；最后 `billing.Reserve`。`Reserve` 返回保留条目在原路线里的下标，本模块按它裁剪路线；首选条目被删就是 402。
-- 往返 8 次，分解见[性能的「延迟预算」](../../docs/performance.md#延迟预算)；锁与读依次发出的语义见 [billing 的「准入里的预留」](../billing/README.md#准入里的预留)，`pg.Tx` 有批量后可减到 6 次。
+- 往返 9 次，分解与锁、读依次发出的语义见 [billing 的「准入里的预留」](../billing/README.md#准入里的预留)，`pg.Tx` 有批量后可减到 7 次。
 - `Plan` 返回 `*Wait`：`Admit` 回滚（还没有预留），在事务外按 FIFO 等进程内名额，醒来只重做第 6 步，不访问缓存、不重复计限流。
 - **准入的 COMMIT 确认丢失**：返回 503、不发上游，交 `billing.SettleOrphan(adm, id)` 收尾（见 [billing 的「追加与结算」](../billing/README.md#追加与结算)）。
 
@@ -190,7 +190,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 - 两家中转站的逐条记录 1 小时内可查（S9）。
 - 联网搜索在流式 `message_delta` 里的累计输入（G11，决定输入上界能否收紧）。
 - sub2api 是否回显客户端发来的 `X-Client-Request-Id`（S8；是则发请求前就知道对账键）。
-- 锁语句与读语句依次发出（`pg.Tx` 还没有批量），语义见 billing 的「准入里的预留」，准入 8 次往返；有批量后可减到 6 次。
+- 锁语句与读语句依次发出（`pg.Tx` 还没有批量），语义见 billing 的「准入里的预留」，准入 9 次往返；有批量后可减到 7 次。
 
 ## 决策与理由
 

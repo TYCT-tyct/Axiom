@@ -2,7 +2,7 @@
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
+    r.fallbacks, r.models, r.attempt_entries, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
 
@@ -11,12 +11,12 @@ SELECT account_id FROM billing.reservations WHERE request_id = @request_id;
 
 -- name: EndReservation :one
 -- Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state. The charged
--- attempt and entry stay as they were when none is given. It returns the database's time, which a terminal state's
+-- attempt and entry, and the attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's
 -- EndRequest records, so every clock the request's end is judged by is the database's.
 UPDATE billing.reservations
 SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq), entry = coalesce(sqlc.narg(entry), entry),
     charged = @charged, price = @price, waived = @waived, estimated = @estimated,
-    final_usage = @final_usage,
+    final_usage = @final_usage, attempt_entries = coalesce(sqlc.narg(attempt_entries)::integer[], attempt_entries),
     correct_by = CASE WHEN @hold_seconds::float8 > 0
         THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @hold_seconds::float8) ELSE correct_by END
 WHERE request_id = @request_id

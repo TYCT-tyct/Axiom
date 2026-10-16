@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"uuid"
-
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -110,6 +108,8 @@ func TestFallbackPrices(t *testing.T) {
 		{"a late Settle after cleanup released charges the uses", fallbackLate},
 		{"a late Settle past the floor", fallbackLateFloor},
 		{"a waiver keeps the uses, also when corrected", fallbackWaiver},
+		{"the dearest fallbacks at the most uses: capped, then corrected by cost", fallbackHuge},
+		{"a correction past the hold holds nothing", fallbackPastTheHold},
 	} {
 		t.Run(tc.name, tc.run)
 	}
@@ -241,6 +241,61 @@ func fallbackWaiver(t *testing.T) {
 	}
 	b.correct(h, 1, 1, 1000, fetches(t, 400, "3")) // waived: by the record's uses, not by cost
 	b.expect("estimated", 150)
+}
+
+// fallbackHuge: valid settings price two unknown fields of 10¹⁰ uses at a default of one credit each past what an
+// amount holds; the charge saturates instead of failing, the account pays what it has above the floor, and a
+// correction by cost replaces it without pricing the fallbacks again.
+func fallbackHuge(t *testing.T) {
+	b := fallbackBank(t, 10_000, 0, fallbackWindow)
+	if err := b.saveFallbacks(`{"currency":"USD","markup":"1.2","per_use":{"code_execution":"1","web_search":"1"}}`); err != nil {
+		t.Fatal(err)
+	}
+	h := b.hold(1000)
+	huge := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
+		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "10000000000"},
+		catalog.UnknownUsage{Field: "usage.server_tool_use.map_requests", Value: "10000000000"})
+	if f := b.settleWith(h, outcome(Committed, FinishStop, false, huge)); f.Charged != platform.AmountExact(10_000) || !f.Estimated {
+		t.Errorf("Settle = %+v, want the whole balance, 10000, estimated", f)
+	}
+	b.expect("estimated", 10_000)
+	if n := b.borne(); n != math.MaxInt64-10_000 {
+		t.Errorf("the platform bore %d, want the saturated price less the balance", n)
+	}
+	b.correct(h, 1, 1, 100, huge) // ⌈1.2 × 100⌉
+	b.expect("estimated", 120)
+	if n := b.borne(); n != 0 {
+		t.Errorf("the platform bore %d after the correction, want 0", n)
+	}
+}
+
+// fallbackPastTheHold: a correction by cost charged past the reservation (1500 of 1100) leaves nothing held, so the
+// listing, the gauges' totals and a close's audit entry show none, not a negative hold.
+func fallbackPastTheHold(t *testing.T) {
+	b := fallbackBank(t, 10_000, 0, fallbackWindow)
+	h := b.hold(1000)
+	b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
+	b.correct(h, 1, 1, 1000, fetches(t, 400, "2"))
+	b.expect("estimated", 1500)
+	if holds := b.fallbackHolds(); len(holds) != 0 {
+		t.Errorf("FallbackHolds = %+v, want none", holds)
+	}
+	var totals FallbackHoldTotalsRow
+	if err := b.app.ReadTx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
+		totals, err = queries.FallbackHoldTotals(t.Context(), tx)
+		return err
+	}); err != nil || totals.Holds != 0 || totals.Held != 0 {
+		t.Errorf("totals %+v, %v; want 0 and 0", totals, err)
+	}
+	if err := b.closeHold(h.id, "no record is coming"); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.count("SELECT (detail->>'held')::bigint FROM platform.audit_log WHERE action = 'hold.close'"); n != 0 {
+		t.Errorf("the close audited a hold of %d, want 0", n)
+	}
+	if n := b.count("SELECT reserved FROM billing.balances"); n != 0 {
+		t.Errorf("%d reserved, want 0", n)
+	}
 }
 
 // TestConcurrentCorrections: revisions delivered at once in any order leave the newest one's charge by cost, once.
@@ -436,83 +491,4 @@ func TestStartChecksFallbacks(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestCloseHold: the fallback holds are listed and counted on the gauges, an estimate on unreported usage is not; an
-// operator closes one, audited, and cleanup settles it at its charge and releases the rest.
-func TestCloseHold(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, Config{})
-	reader := sdkmetric.NewManualReader()
-	if err := RegisterMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("billing"), b.app, b.platform); err != nil {
-		t.Fatal(err)
-	}
-	fallback, guessed := b.hold(1000), b.hold(1000)
-	b.settleWith(fallback, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.settleWith(guessed, outcome(Committed, FinishStop, false, used(t, 300, 20, 0, in)))
-	if holds := b.fallbackHolds(); len(holds) != 1 || holds[0].Request != fallback.id || holds[0].Held != 1100-170 || holds[0].By == nil {
-		t.Fatalf("FallbackHolds = %+v; want the fallback estimate holding 930", holds)
-	}
-	wantGauges(t, reader, 1, 930)
-	if err := b.closeHold(fallback.id, " "); err == nil {
-		t.Error("a close without a reason went through")
-	}
-	if err := b.closeHold(fallback.id, "no record is coming"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.closeHold(fallback.id, "again"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("closing again = %v, want ErrNotFound", err)
-	}
-	b.cleanup()
-	if s := b.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND charged = 170 AND request_id = '" + fallback.id.String() + "'"); s != 1 {
-		t.Error("the closed hold did not settle at 170")
-	}
-	if n := b.count("SELECT reserved FROM billing.balances"); n != 1100-320 {
-		t.Errorf("%d reserved, want the other estimate's 780 alone", n)
-	}
-	wantGauges(t, reader, 0, 0)
-	if n := b.count("SELECT count(*) FROM platform.audit_log WHERE action = 'hold.close'"); n != 1 {
-		t.Errorf("%d audit entries, want 1", n)
-	}
-	b.balanced()
-}
-
-func (b *bank) fallbackHolds() (holds []FallbackHold) {
-	b.t.Helper()
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		holds, err = FallbackHolds(b.t.Context(), tx)
-		return err
-	}); err != nil {
-		b.t.Fatal(err)
-	}
-	return holds
-}
-
-func (b *bank) closeHold(request uuid.UUID, reason string) error {
-	r := CloseHoldRequest{Request: request, Reason: reason}
-	r.SetActor(audit.System("billing.test"))
-	return b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error { return CloseHold(b.t.Context(), tx, r) })
-}
-
-func wantGauges(t *testing.T, reader *sdkmetric.ManualReader, holds, held int64) {
-	t.Helper()
-	if g := gauges(t, reader); g["axiom.billing.fallback_holds"] != holds || g["axiom.billing.fallback_holds.held"] != held {
-		t.Errorf("gauges %v, want %d and %d", g, holds, held)
-	}
-}
-
-func gauges(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	var data metricdata.ResourceMetrics
-	if err := reader.Collect(t.Context(), &data); err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]int64{}
-	for _, sm := range data.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if g, ok := m.Data.(metricdata.Gauge[int64]); ok && len(g.DataPoints) == 1 {
-				seen[m.Name] = g.DataPoints[0].Value
-			}
-		}
-	}
-	return seen
 }
