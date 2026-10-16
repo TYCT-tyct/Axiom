@@ -37,6 +37,16 @@ UPDATE suppliers.suppliers SET status = @status, status_reason = sqlc.narg(statu
 -- name: SetSupplierBalance :exec
 UPDATE suppliers.suppliers SET balance_native = @balance::numeric, balance_observed_at = @observed_at WHERE id = @id;
 
+-- name: ListSyncDue :many
+-- The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
+-- whose lease is free or has run out. A supplier in any state but connecting, active or low_balance is not synced.
+SELECT s.id FROM suppliers.suppliers s
+LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
+WHERE s.status IN ('connecting', 'active', 'low_balance')
+    AND (y.supplier_id IS NULL OR (y.next_due <= @now AND (y.lease_until IS NULL OR y.lease_until <= @now)))
+ORDER BY y.next_due NULLS FIRST, s.id
+LIMIT @max;
+
 -- name: GetSupplierLogin :one
 SELECT ciphertext, nonce, wrapped_dek, key_version, version FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;
 

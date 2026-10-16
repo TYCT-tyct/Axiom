@@ -147,6 +147,42 @@ func (q *Queries) GetSyncState(ctx context.Context, db DBTX, supplierID uuid.UUI
 	return i, err
 }
 
+const listSyncDue = `-- name: ListSyncDue :many
+SELECT s.id FROM suppliers.suppliers s
+LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
+WHERE s.status IN ('connecting', 'active', 'low_balance')
+    AND (y.supplier_id IS NULL OR (y.next_due <= $1 AND (y.lease_until IS NULL OR y.lease_until <= $1)))
+ORDER BY y.next_due NULLS FIRST, s.id
+LIMIT $2
+`
+
+type ListSyncDueParams struct {
+	Now time.Time
+	Max int32
+}
+
+// The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
+// whose lease is free or has run out. A supplier in any state but connecting, active or low_balance is not synced.
+func (q *Queries) ListSyncDue(ctx context.Context, db DBTX, arg ListSyncDueParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, listSyncDue, arg.Now, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockSupplierStatus = `-- name: LockSupplierStatus :one
 SELECT status, status_reason FROM suppliers.suppliers WHERE id = $1 FOR UPDATE
 `
