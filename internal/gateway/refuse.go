@@ -43,6 +43,7 @@ var messages = map[string]string{
 	"invalid_request":      "The request is not valid.",
 	"request_too_large":    "The request body is larger than the limit.",
 	"timeout":              "The request body was not received in time.",
+	"generation_not_found": "No call with this ID is visible to this key.",
 }
 
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words.

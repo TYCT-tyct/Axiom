@@ -1,0 +1,88 @@
+package gateway
+
+import (
+	"context"
+	"net/http"
+
+	"axiom/internal/accounts"
+	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
+)
+
+// The count of POST /messages/count_tokens, which never reaches an upstream (internal/gateway/README.md「辅助接口」).
+// The text is the request's bytes less the image and file data, a third of a token each; an image counts as the most
+// one costs, and a file, whose pages are not known without decoding it, as a flat few pages.
+const (
+	bytesPerToken  = 3
+	imageTokens    = 1600
+	documentTokens = 3000
+)
+
+// countInput is the estimate of a request's input tokens. It rounds up, and errs on the high side for English, so a
+// client that trims to a window stays inside it.
+func countInput(r protocol.Request) int64 {
+	return (r.TextBytes+bytesPerToken-1)/bytesPerToken + r.Images*imageTokens + r.Documents*documentTokens
+}
+
+// countTokens answers Anthropic's count_tokens: {"input_tokens": n}. It takes what a call takes before admission (the
+// address's limit, the key, the account's slot, the body's memory, the key's rate), then asks the database only whether
+// the key may be used and may use the model. Nothing is reserved, charged or recorded.
+func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
+	release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+	if err != nil {
+		h.fail(w, r, protocol.Messages, err)
+		return
+	}
+	defer release()
+	n, err := h.count(w, r)
+	if err != nil {
+		h.fail(w, r, protocol.Messages, err)
+		return
+	}
+	writeJSON(w, map[string]any{"input_tokens": n})
+}
+
+func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
+	if r.Header.Get("Upgrade") != "" {
+		return 0, errUpgrade
+	}
+	_, caller, err := h.authenticate(r)
+	if err != nil {
+		return 0, err
+	}
+	c := &Call{caller: caller}
+	defer c.Done()
+	slot, err := h.Limits.InFlight.Acquire(accountKey(caller), 0)
+	if err != nil {
+		return 0, err
+	}
+	c.hold(slot)
+	body, err := h.readBody(w, r, c)
+	if err != nil {
+		return 0, err
+	}
+	req, err := protocol.Inspect(protocol.Messages, body)
+	if err != nil {
+		return 0, err
+	}
+	if h.Limits.Rate.Count(keyKey(caller)) > h.Limits.cfg.KeyRate {
+		return 0, ErrRateLimited
+	}
+	snap, err := h.Catalog.Current()
+	if err != nil {
+		return 0, err
+	}
+	model, err := snap.ResolvePublic(req.Model)
+	if err != nil {
+		return 0, err
+	}
+	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
+		if names := a.Models(); names != nil { // a key that may not use the model is told it does not exist
+			if _, ok := allowedModels(snap, names)[model.Model]; !ok {
+				return errNoModel
+			}
+		}
+		return nil
+	})
+	return countInput(req), err
+}
