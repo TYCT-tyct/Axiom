@@ -159,12 +159,8 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	tiers := d.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard)
 	uses, samplings := serverToolUses(d, e.Model)
-	first := min(window, add(d.TextBytes, add(mul(d.Images, e.Model.ImageTokens), mul(d.Documents, fileTokens(e.Model)))))
+	first, longest := inputBound(d, e.Model, samplings)
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
-	longest := first // the longest prompt any sampling can have, which bounds the band
-	if samplings > 1 || searchable {
-		longest = window // every later sampling, and one a search beyond the quote adds, rereads the whole context
-	}
 	rest := mul(samplings-1, window)
 	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
 	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
@@ -224,6 +220,24 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		q.rereads = mul(window, 2)
 	}
 	return nil
+}
+
+// InputBound returns the most input tokens the first sampling of the request can have, and the most any sampling can
+// have, which is what bounds the context tier a charge falls in. Quote prices with them, and routing holds a price limit
+// against the same bound, so the two never read a request's length differently.
+func InputBound(d Demand, m Model) (first, longest int64) {
+	_, samplings := serverToolUses(d, m)
+	return inputBound(d, m, samplings)
+}
+
+func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
+	window := m.ContextLength
+	first = min(window, add(d.TextBytes, add(mul(d.Images, m.ImageTokens), mul(d.Documents, fileTokens(m)))))
+	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
+	if samplings > 1 || searchable {
+		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
+	}
+	return first, first
 }
 
 // fileTokens bounds one file: Documents counts files, not pages (protocol does not parse PDFs), so a file takes its
