@@ -159,7 +159,7 @@ func modelBody(v catalog.ModelView) (adminapi.Model, error) {
 }
 
 // readModelIn is the model as it is in tx, the transaction of a change.
-func (a adminAPI) readModelIn(ctx context.Context, tx pg.Tx, id catalog.ModelID) (adminapi.Model, error) {
+func (adminAPI) readModelIn(ctx context.Context, tx pg.Tx, id catalog.ModelID) (adminapi.Model, error) {
 	view, err := catalog.ModelIn(ctx, tx, id)
 	if err != nil {
 		return adminapi.Model{}, err
