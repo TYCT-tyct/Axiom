@@ -485,9 +485,7 @@ func TestPrepareOutputCap(t *testing.T) {
 
 // TestPrepareCost: a rewrite's cost is the capacity of the buffer it writes into, exactly, however much it adds, and
 // three times the body for what it unquotes; a request that is not converted costs nothing, as it fails before it
-// allocates; and what Prepare allocates, for bodies of the worst shapes there are (nothing but empty objects, the
-// smallest messages, members it does not know, an identifier of escapes), stays within the cost. The allocation counted
-// is the total, garbage included, which bounds the peak.
+// allocates.
 func TestPrepareCost(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	w := protocol.Rewrites{Identity: func(string) string { return id }, History: history}
@@ -511,6 +509,13 @@ func TestPrepareCost(t *testing.T) {
 	if cost := protocol.PrepareCost(&m, make([]byte, 1<<20), protocol.Target{Format: protocol.Responses}, w); cost != 0 {
 		t.Errorf("a Messages request for a Responses endpoint costs %d", cost)
 	}
+}
+
+// TestPrepareCostBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
+// objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
+// allocation counted is the total, garbage included, which bounds the peak.
+func TestPrepareCostBoundsTheAllocation(t *testing.T) {
+	w := protocol.Rewrites{Identity: func(string) string { return "0123456789abcdef0123456789abcdef" }}
 	bs := "\\"
 	var members []string
 	for i := range 20000 {
@@ -543,7 +548,8 @@ func TestPrepareCost(t *testing.T) {
 			runtime.ReadMemStats(&before)
 			u, _ := protocol.Prepare(&r, []byte(c.body), target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
 			runtime.ReadMemStats(&after)
-			if allocated := int64(after.TotalAlloc - before.TotalAlloc); allocated > cost || int64(cap(u.Body)) > cost {
+			allocated := int64(after.TotalAlloc - before.TotalAlloc) //nolint:gosec // G115: bytes allocated by one call, far below 2⁶³
+			if allocated > cost || int64(cap(u.Body)) > cost {
 				t.Errorf("%s, format %d: %d bytes allocated, %d kept, of the %d it costs, for a body of %d", c.name, f, allocated, cap(u.Body), cost, len(c.body))
 			}
 		}
