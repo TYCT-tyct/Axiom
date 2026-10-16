@@ -62,17 +62,17 @@ func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor i
 // indexes, or *Insufficient when the preferred entry is unaffordable.
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
 	balance, err := lockAccount(ctx, tx, a.Account)
-	if err != nil {
+	if errors.Is(err, errNoBalance) {
+		return nil, nil, &Insufficient{Source: SourceBalance} // nothing to reserve against, not even a zero price
+	} else if err != nil {
 		return nil, nil, err
 	}
 	if err := b.fence(ctx, tx); err != nil {
 		return nil, nil, err
 	}
-	usage, err := queries.ReadUsage(ctx, tx, ReadUsageParams{
-		WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
-	})
+	usage, err := a.usage(ctx, tx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("billing: read the counters: %w", err)
+		return nil, nil, err
 	}
 	r, err := Quote(d, q, b.config.Segments, a.available(balance, usage.WorkspaceUsed, usage.KeyUsed))
 	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
@@ -80,10 +80,10 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	} else if err != nil {
 		return nil, nil, err
 	}
-	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.WorkspaceWindow, keyWindow: usage.KeyWindow}
+	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
-		WorkspaceWindow: usage.WorkspaceWindow, KeyWindow: usage.KeyWindow, Amount: r.Amount.CeilAmount(),
+		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
@@ -91,47 +91,53 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	return h, r.Kept, nil
 }
 
-// Extend writes segment r.Seq of h's reservation with the cumulative target r.Target, in a transaction of its own
-// (README.md「追加与结算」). The amount only grows. A retry of a segment already written succeeds and changes
-// nothing; a reservation that ended, or a holder that was reaped, gives ErrTerminated; an increase a source cannot
-// afford gives *Insufficient.
+// Extend makes h's reservation cover the cumulative target r.Target, in a transaction of its own (README.md「追加与结算」):
+// it succeeds only when the amount reserved is at least the target once it commits. A target already covered, as
+// on a retry whose acknowledgement was lost or by an earlier attempt's extensions, changes nothing; otherwise the
+// difference is checked against every source and written with a compare and write on the segment read under the
+// lock. The amount only grows. A reservation that ended, or a holder that was reaped, gives ErrTerminated; an
+// increase a source cannot afford gives *Insufficient.
 func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error {
+	return b.db.Tx(ctx, h.admitted.Scope, func(tx pg.Tx) error { return b.extend(ctx, tx, h, r) })
+}
+
+func (b *Billing) extend(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest) error {
 	a := h.admitted
-	return b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
-		balance, err := lockAccount(ctx, tx, a.Account)
-		if err != nil {
-			return err
-		}
-		if err := b.fence(ctx, tx); err != nil {
-			return err
-		}
-		row, err := queries.GetReservation(ctx, tx, h.id)
-		if err != nil {
-			return fmt.Errorf("billing: read the reservation: %w", err)
-		}
-		switch {
-		case row.State != "pending":
-			return ErrTerminated
-		case int(row.Segment) >= r.Seq:
-			return nil // written by an earlier try whose acknowledgement was lost
-		case int(row.Segment) != r.Seq-1:
-			return fmt.Errorf("billing: extension %d of a reservation at segment %d", r.Seq, row.Segment)
-		}
-		delta := max(r.Target.CeilAmount()-row.Amount, 0)
-		avail := a.available(balance, row.WorkspaceUsed, row.KeyUsed)
-		if short := shortSource(platform.AmountExact(delta), avail); short >= 0 {
-			return a.transient(&Insufficient{Source: avail[short].Source})
-		}
-		// Under the balance row lock nothing changed the row since it was read, so the compare must hold.
-		if n, err := queries.ExtendReservation(ctx, tx, ExtendReservationParams{
-			RequestID: h.id, PreviousSegment: row.Segment, Delta: delta,
-		}); err != nil {
-			return fmt.Errorf("billing: write the extension: %w", err)
-		} else if n != 1 {
-			return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
-		}
-		return h.addReserved(ctx, tx, delta)
-	})
+	balance, err := lockAccount(ctx, tx, a.Account)
+	if err != nil {
+		return err
+	}
+	if err := b.fence(ctx, tx); err != nil {
+		return err
+	}
+	row, err := queries.GetReservation(ctx, tx, h.id)
+	if err != nil {
+		return fmt.Errorf("billing: read the reservation: %w", err)
+	}
+	if row.State != "pending" {
+		return ErrTerminated
+	}
+	delta := r.Target.CeilAmount() - row.Amount
+	if delta <= 0 {
+		return nil
+	}
+	usage, err := a.usage(ctx, tx)
+	if err != nil {
+		return err
+	}
+	avail := a.available(balance, usage.WorkspaceUsed, usage.KeyUsed)
+	if short := shortSource(platform.AmountExact(delta), avail); short >= 0 {
+		return a.transient(&Insufficient{Source: avail[short].Source})
+	}
+	// Under the balance row lock nothing changed the row since it was read, so the compare must hold.
+	if n, err := queries.ExtendReservation(ctx, tx, ExtendReservationParams{
+		RequestID: h.id, PreviousSegment: row.Segment, Delta: delta,
+	}); err != nil {
+		return fmt.Errorf("billing: write the extension: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
+	}
+	return h.addReserved(ctx, tx, delta)
 }
 
 // SettleOrphan ends the reservation of a request whose admission's COMMIT went unacknowledged (README.md「追加与结算」).
@@ -173,24 +179,47 @@ func (h *Hold) addReserved(ctx context.Context, tx pg.Tx, delta int64) error {
 	return nil
 }
 
-// lockAccount locks the account's balance row; an account without one has nothing to reserve against.
+// errNoBalance is an account without a balance row: no lock to take, so no money may move.
+var errNoBalance = errors.New("billing: the account has no balance row")
+
+// lockAccount locks the account's balance row, the one serialisation point of its money.
 func lockAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (LockBalanceRow, error) {
 	row, err := queries.LockBalance(ctx, tx, account)
-	if err != nil && !errors.Is(err, pg.ErrNoRows) {
+	if errors.Is(err, pg.ErrNoRows) {
+		return row, errNoBalance
+	} else if err != nil {
 		return row, fmt.Errorf("billing: lock the balance: %w", err)
 	}
 	return row, nil
 }
 
+// usage reads what the workspace and the key have spent and hold reserved in their limits' current windows.
+func (a Admitted) usage(ctx context.Context, tx pg.Tx) (ReadUsageRow, error) {
+	u, err := queries.ReadUsage(ctx, tx, ReadUsageParams{
+		WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
+	})
+	if err != nil {
+		return u, fmt.Errorf("billing: read the counters: %w", err)
+	}
+	return u, nil
+}
+
 // available is what each source still allows: the balance less its reservations down to the floor, and each limit
-// less what its window has spent and holds reserved.
+// less what its window has spent and holds reserved. Exact, so no combination of stored values can wrap.
 func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64) []Available {
-	avail := []Available{{SourceBalance, platform.AmountExact(balance.Balance - balance.Reserved - balance.Floor)}}
+	left := func(have int64, less ...int64) platform.Exact {
+		e := platform.AmountExact(have)
+		for _, n := range less {
+			e = sum(e, platform.AmountExact(n).Neg())
+		}
+		return e
+	}
+	avail := []Available{{SourceBalance, left(balance.Balance, balance.Reserved, balance.Floor)}}
 	if a.WorkspaceBudget != nil {
-		avail = append(avail, Available{SourceWorkspace, platform.AmountExact(a.WorkspaceBudget.Amount - workspaceUsed)})
+		avail = append(avail, Available{SourceWorkspace, left(a.WorkspaceBudget.Amount, workspaceUsed)})
 	}
 	if a.KeyLimit != nil {
-		avail = append(avail, Available{SourceKey, platform.AmountExact(a.KeyLimit.Amount - keyUsed)})
+		avail = append(avail, Available{SourceKey, left(a.KeyLimit.Amount, keyUsed)})
 	}
 	return avail
 }

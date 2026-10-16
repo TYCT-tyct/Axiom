@@ -25,8 +25,8 @@ CREATE TABLE billing.balances (
     reserved bigint NOT NULL DEFAULT 0 CHECK (reserved >= 0)
 );
 
--- What a workspace or a key has spent and holds reserved in one window of its limit: the start of the UTC day, week
--- or month, or the epoch for a limit that never resets. Rows change only under the account's balance row lock.
+-- What a workspace or a key has spent and holds reserved, per UTC day (window_start is the day's start). A limit sums
+-- the days of its window, whatever window the limit had before. Rows change only under the account's balance row lock.
 CREATE TABLE billing.spend (
     subject uuid NOT NULL, -- a workspace or a key
     window_start timestamptz NOT NULL,
@@ -37,9 +37,9 @@ CREATE TABLE billing.spend (
     PRIMARY KEY (subject, window_start)
 );
 
--- A request's reservation. segment counts the approved segments, 0 for the tombstone SettleOrphan writes when the
+-- A request's reservation. segment counts the extensions written, a guard for compare and write, 0 for the tombstone SettleOrphan writes when the
 -- admission never committed; amount is cumulative and only grows while pending. The windows are the ones admission
--- locked, which extensions and settlement write back to. Settlement and cleanup add their states.
+-- locked (its UTC day), which extensions and settlement write back to. Settlement and cleanup add their states.
 CREATE TABLE billing.reservations (
     request_id uuid PRIMARY KEY,
     site_id uuid NOT NULL,
@@ -58,6 +58,16 @@ CREATE TABLE billing.reservations (
 );
 CREATE INDEX pending_by_holder ON billing.reservations (holder_id) WHERE state = 'pending';
 CREATE INDEX pending_by_deadline ON billing.reservations (deadline) WHERE state = 'pending';
+
+-- The start of a limit's window by the database's clock: the UTC day, week or month for accounts' daily, weekly and
+-- monthly; every day for a limit that never resets.
+CREATE FUNCTION billing.window_from(reset text) RETURNS timestamptz
+    LANGUAGE sql VOLATILE PARALLEL SAFE
+    RETURN CASE reset
+        WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
+        WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
+        WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
+        ELSE '-infinity' END;
 
 -- One policy per command, never FOR ALL (see the accounts migration). A holder is no tenant's: any scope reads it and
 -- takes FOR KEY SHARE on it, which needs an UPDATE policy to pass, but only the platform scope writes it.

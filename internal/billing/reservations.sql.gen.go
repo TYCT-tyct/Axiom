@@ -54,7 +54,7 @@ type ExtendReservationParams struct {
 	PreviousSegment int32
 }
 
-// Compare and write: only the next segment of a pending reservation, so a retried extension changes nothing.
+// Compare and write on the segment read under the lock.
 func (q *Queries) ExtendReservation(ctx context.Context, db DBTX, arg ExtendReservationParams) (int64, error) {
 	result, err := db.Exec(ctx, extendReservation, arg.Delta, arg.RequestID, arg.PreviousSegment)
 	if err != nil {
@@ -78,13 +78,7 @@ func (q *Queries) FenceHolder(ctx context.Context, db DBTX, id uuid.UUID) (uuid.
 }
 
 const getReservation = `-- name: GetReservation :one
-SELECT r.segment, r.amount, r.state, r.workspace_window, r.key_window,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = r.workspace_id AND s.window_start = r.workspace_window), 0)::bigint AS workspace_used,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = r.key_id AND s.window_start = r.key_window), 0)::bigint AS key_used
-FROM billing.reservations r
-WHERE r.request_id = $1
+SELECT segment, amount, state, workspace_window, key_window FROM billing.reservations WHERE request_id = $1
 `
 
 type GetReservationRow struct {
@@ -93,8 +87,6 @@ type GetReservationRow struct {
 	State           string
 	WorkspaceWindow time.Time
 	KeyWindow       time.Time
-	WorkspaceUsed   int64
-	KeyUsed         int64
 }
 
 func (q *Queries) GetReservation(ctx context.Context, db DBTX, requestID uuid.UUID) (GetReservationRow, error) {
@@ -106,8 +98,6 @@ func (q *Queries) GetReservation(ctx context.Context, db DBTX, requestID uuid.UU
 		&i.State,
 		&i.WorkspaceWindow,
 		&i.KeyWindow,
-		&i.WorkspaceUsed,
-		&i.KeyUsed,
 	)
 	return i, err
 }
@@ -208,7 +198,8 @@ const insertTombstone = `-- name: InsertTombstone :exec
 INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
     workspace_window, key_window, segment, amount, state, deadline)
 VALUES ($1, $2, $3, $4, $5, $6,
-    'epoch', 'epoch', 0, 0, 'released', clock_timestamp())
+    date_trunc('day', clock_timestamp(), 'UTC'), date_trunc('day', clock_timestamp(), 'UTC'), 0, 0, 'released',
+    clock_timestamp())
 `
 
 type InsertTombstoneParams struct {
@@ -278,60 +269,41 @@ func (q *Queries) LockExpiredHolders(ctx context.Context, db DBTX, graceSeconds 
 }
 
 const readUsage = `-- name: ReadUsage :one
-WITH windows AS (
-    SELECT
-        CASE $3::text
-            WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
-            WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
-            WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
-            ELSE 'epoch' END AS workspace_window,
-        CASE $4::text
-            WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
-            WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
-            WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
-            ELSE 'epoch' END AS key_window
-)
 SELECT
-    w.workspace_window::timestamptz AS workspace_window,
-    w.key_window::timestamptz AS key_window,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = $1 AND s.window_start = w.workspace_window), 0)::bigint AS workspace_used,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = $2 AND s.window_start = w.key_window), 0)::bigint AS key_used
-FROM windows w
+    date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day,
+    coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
+        WHERE s.subject = $1 AND s.window_start >= billing.window_from($2::text)), 0)::bigint
+        AS workspace_used,
+    coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
+        WHERE s.subject = $3 AND s.window_start >= billing.window_from($4::text)), 0)::bigint AS key_used
 `
 
 type ReadUsageParams struct {
 	WorkspaceID    uuid.UUID
-	KeyID          uuid.UUID
 	WorkspaceReset string
+	KeyID          uuid.UUID
 	KeyReset       string
 }
 
 type ReadUsageRow struct {
-	WorkspaceWindow time.Time
-	KeyWindow       time.Time
-	WorkspaceUsed   int64
-	KeyUsed         int64
+	Day           time.Time
+	WorkspaceUsed int64
+	KeyUsed       int64
 }
 
-// Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it. A
-// window is the UTC day, week or month of a limit that resets (accounts' daily, weekly, monthly) by the database's
-// clock, and the epoch, which no window of a limit that resets can start at, for one that never resets or no limit.
+// Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
+// Counters are kept per UTC day by the database's clock; a limit's window is the days since the start of its UTC day,
+// week or month, or every day for a limit that never resets, so changing how often a limit resets counts all that
+// the new window covers.
 func (q *Queries) ReadUsage(ctx context.Context, db DBTX, arg ReadUsageParams) (ReadUsageRow, error) {
 	row := db.QueryRow(ctx, readUsage,
 		arg.WorkspaceID,
-		arg.KeyID,
 		arg.WorkspaceReset,
+		arg.KeyID,
 		arg.KeyReset,
 	)
 	var i ReadUsageRow
-	err := row.Scan(
-		&i.WorkspaceWindow,
-		&i.KeyWindow,
-		&i.WorkspaceUsed,
-		&i.KeyUsed,
-	)
+	err := row.Scan(&i.Day, &i.WorkspaceUsed, &i.KeyUsed)
 	return i, err
 }
 
