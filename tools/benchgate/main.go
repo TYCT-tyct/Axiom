@@ -32,6 +32,31 @@ import (
 
 const allocsUnit = "allocs/op"
 
+// noisy are the benchmarks whose allocation count carries noise that cannot be removed, and the share of the count each
+// may rise by without failing. Everywhere else the count is exact and any rise fails. Protocol's Relay benchmark relays
+// streams of up to 16 MiB, so a run is two to four iterations long, and the runtime adds a few allocations of its own
+// to a run now and then (up to ten in all, seen in about one run in six after the benchmark keeps the collector
+// and the other processors out of the timed region; no allocation site in the code accounts for them, which a
+// memory profile at rate 1 shows): spread over so few iterations, that is a rise of one or two allocations per
+// iteration of a count of 400 to 7000. A tenth of a percent covers it; a relay that allocates once more per event rises
+// by 16 or 256 events' worth, several percent, and fails (docs/performance.md「怎么验证」).
+var noisy = []struct {
+	prefix   string
+	fraction float64
+}{
+	{"axiom/internal/protocol.Relay/", 0.001},
+}
+
+// allowance is how far above the base count a benchmark's count may be without failing.
+func allowance(name string, base float64) float64 {
+	for _, n := range noisy {
+		if strings.HasPrefix(name, n.prefix) {
+			return base * n.fraction
+		}
+	}
+	return 0
+}
+
 var bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", "100ms", "./..."}
 
 func main() {
@@ -238,7 +263,7 @@ func gate(base, head measurements) (problems, removed []string) {
 			continue
 		}
 		compared++
-		if median(samples) > median(before) {
+		if median(samples) > median(before)+allowance(name, median(before)) {
 			problems = append(problems, fmt.Sprintf("more allocations: %s: %g -> %g %s", name, median(before), median(samples), allocsUnit))
 		}
 	}
