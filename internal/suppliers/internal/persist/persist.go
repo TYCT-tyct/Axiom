@@ -105,6 +105,29 @@ func (s *Session) Release(ctx context.Context) error {
 	})
 }
 
+// hold locks what a write needs to be still true until its transaction ends, in an order every writer keeps: the
+// lease, then the supplier, then the rows that depend on them. It returns syncer.ErrFenced when the lease was taken
+// over, or when the supplier's credentials were changed since it was taken: the write is a round's, and a round that
+// began before is void. Anyone who changes either has to wait for the transaction, so a write that passes is ordered
+// before the change, and one that does not never lands after it. Whoever replaces credentials takes the supplier's row
+// before the login's, as this does.
+func (s *Session) hold(ctx context.Context, tx pg.Tx) (store.LockSupplierRow, error) {
+	q := store.New()
+	if _, err := q.HoldSyncLease(ctx, tx, store.HoldSyncLeaseParams{SupplierID: s.Supplier.ID, LeaseFence: s.fence}); errors.Is(err, pg.ErrNoRows) {
+		return store.LockSupplierRow{}, syncer.ErrFenced
+	} else if err != nil {
+		return store.LockSupplierRow{}, fmt.Errorf("hold the lease: %w", err)
+	}
+	row, err := q.LockSupplier(ctx, tx, s.Supplier.ID)
+	if err != nil {
+		return store.LockSupplierRow{}, fmt.Errorf("hold the supplier: %w", err)
+	}
+	if row.ConfigGen != s.Supplier.ConfigGen {
+		return store.LockSupplierRow{}, syncer.ErrFenced
+	}
+	return row, nil
+}
+
 // Store is the engine's view of the session.
 func (s *Session) Store() syncer.Store { return stateStore{s} }
 

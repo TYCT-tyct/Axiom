@@ -16,20 +16,27 @@ WHERE supplier_id = @supplier_id AND lease_fence = @lease_fence;
 -- name: GetSyncState :one
 SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = @supplier_id;
 
+-- name: HoldSyncLease :one
+-- Locks the sync state of a supplier if its lease is still the one with this fence, until the transaction ends: a take-
+-- over waits for the transaction, so a write that is let in by this statement is ordered before it.
+SELECT lease_fence FROM suppliers.sync_states WHERE supplier_id = @supplier_id AND lease_fence = @lease_fence FOR UPDATE;
+
 -- name: CommitSyncState :execrows
--- Stores a step over the version it read, if the lease is still the one that read it, and keeps the lease for as long
--- as another step may take. No row changed means the step is void.
+-- Stores a step over the version it read, and keeps the lease for as long as another step may take. No row changed
+-- means the step is void.
 UPDATE suppliers.sync_states
 SET version = @version, format = @format, state = @state, next_due = @next_due, lease_until = @lease_until
-WHERE supplier_id = @supplier_id AND version = @expect AND lease_fence = @lease_fence;
+WHERE supplier_id = @supplier_id AND version = @expect;
 
 -- name: GetSupplierForSync :one
 -- The supplier as a round needs it, and the configuration generation a write of its credentials must still find.
 SELECT id, kind, origin, mgmt_egress_id, config_gen FROM suppliers.suppliers WHERE id = @id;
 
--- name: LockSupplierStatus :one
--- The status the engine's state is projected onto, held until the step that projects it commits.
-SELECT status, status_reason FROM suppliers.suppliers WHERE id = @id FOR UPDATE;
+-- name: LockSupplier :one
+-- The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
+-- transaction ends: a change of the configuration waits for it. FOR NO KEY UPDATE, as an UPDATE of these columns takes,
+-- so that rows that refer to the supplier can still be written.
+SELECT status, status_reason, config_gen FROM suppliers.suppliers WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: SetSupplierStatus :exec
 UPDATE suppliers.suppliers SET status = @status, status_reason = sqlc.narg(status_reason) WHERE id = @id;
@@ -51,14 +58,10 @@ LIMIT @max;
 SELECT ciphertext, nonce, wrapped_dek, key_version, version FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;
 
 -- name: SwapSupplierLogin :execrows
--- Replaces the sealed login over the version that was read, while the lease is still the reader's and the supplier's
--- credentials are still the generation it read them in.
-UPDATE suppliers.supplier_logins l
-SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version, version = l.version + 1
-FROM suppliers.sync_states y, suppliers.suppliers s
-WHERE l.supplier_id = @supplier_id AND l.version = @version
-    AND y.supplier_id = l.supplier_id AND y.lease_fence = @lease_fence
-    AND s.id = l.supplier_id AND s.config_gen = @config_gen;
+-- Replaces the sealed login over the version that was read.
+UPDATE suppliers.supplier_logins
+SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version, version = version + 1
+WHERE supplier_id = @supplier_id AND version = @version;
 
 -- name: SetRateBucket :exec
 UPDATE suppliers.rate_buckets SET window_start = @window_start, used = @used WHERE scope = @scope AND name = @name;
