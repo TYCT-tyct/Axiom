@@ -127,7 +127,7 @@ func conventions(file string, doc *openapi3.T) []string {
 			found = append(found, "the path must start with "+prefix)
 		}
 		found = append(found, identity(o)...)
-		found = append(found, security(o)...)
+		found = append(found, security(file, o)...)
 		found = append(found, responses(o)...)
 		found = append(found, requests(doc, o)...)
 		for _, f := range found {
@@ -152,17 +152,21 @@ func identity(o operation) []string {
 	return found
 }
 
+// platformOperation: every admin operation outside the Session tag acts on the platform, so it takes the strongest
+// proof (internal/platform/README.md「接口约定」), and a downgrade of one is a security regression.
+func platformOperation(file string, o operation) bool {
+	return file == "admin.yaml" && !slices.Contains(o.op.Tags, sessionTag)
+}
+
 // security: the session, the CSRF token for a change, the level and the permission, all written down.
-func security(o operation) []string {
+func security(file string, o operation) []string {
 	level, permission := o.op.Extensions["x-axiom-level"], o.op.Extensions["x-axiom-permission"]
+	platform := platformOperation(file, o)
 	switch {
 	case o.op.Security == nil:
 		return []string{"security is not declared (write security: [] for a public operation)"}
 	case o.public():
-		if level != nil || permission != nil {
-			return []string{"a public operation has no x-axiom-level or x-axiom-permission"}
-		}
-		return nil
+		return publicProblems(platform, level != nil || permission != nil)
 	}
 	want := []string{"session"}
 	if o.mutating() {
@@ -175,8 +179,33 @@ func security(o operation) []string {
 	if l, _ := level.(string); !slices.Contains(levels, l) {
 		found = append(found, fmt.Sprintf("x-axiom-level must be one of %v", levels))
 	}
-	if p, _ := permission.(string); p == "" {
+	p, _ := permission.(string)
+	if p == "" {
 		found = append(found, "x-axiom-permission is missing (none for no permission)")
+	}
+	if platform {
+		found = append(found, platformProof(level, p)...)
+	}
+	return found
+}
+
+func publicProblems(platform, proofs bool) []string {
+	switch {
+	case platform:
+		return []string{"an admin operation outside the Session tag needs a session"}
+	case proofs:
+		return []string{"a public operation has no x-axiom-level or x-axiom-permission"}
+	}
+	return nil
+}
+
+func platformProof(level any, permission string) []string {
+	var found []string
+	if level != "mfa" {
+		found = append(found, "an admin operation outside the Session tag needs x-axiom-level: mfa")
+	}
+	if permission == "none" {
+		found = append(found, "an admin operation outside the Session tag needs a permission name")
 	}
 	return found
 }

@@ -170,6 +170,26 @@ func TestCheck(t *testing.T) {
 			[]string{`console.yaml: invalid paths: operations "GET /api/console/v1/things" and "POST /api/console/v1/things" have the same operation id "listThings"`},
 		},
 		{
+			"an admin change downgraded to signed_in",
+			map[string]string{"admin.yaml": strings.Replace(contract("admin"), "csrf: []}]\n      x-axiom-level: mfa", "csrf: []}]\n      x-axiom-level: signed_in", 1)},
+			[]string{"admin.yaml: POST /api/admin/v1/things: an admin operation outside the Session tag needs x-axiom-level: mfa"},
+		},
+		{
+			"an admin read downgraded to any",
+			map[string]string{"admin.yaml": strings.Replace(contract("admin"), "[{session: []}]\n      x-axiom-level: mfa", "[{session: []}]\n      x-axiom-level: any", 1)},
+			[]string{"admin.yaml: GET /api/admin/v1/things: an admin operation outside the Session tag needs x-axiom-level: mfa"},
+		},
+		{
+			"an admin change without a permission name",
+			map[string]string{"admin.yaml": strings.Replace(contract("admin"), "x-axiom-permission: things.manage", "x-axiom-permission: none", 1)},
+			[]string{"admin.yaml: POST /api/admin/v1/things: an admin operation outside the Session tag needs a permission name"},
+		},
+		{
+			"an admin read opened to the public",
+			map[string]string{"admin.yaml": strings.Replace(contract("admin"), "      security: [{session: []}]\n      x-axiom-level: mfa\n      x-axiom-permission: things.view\n", "      security: []\n", 1)},
+			[]string{"admin.yaml: GET /api/admin/v1/things: an admin operation outside the Session tag needs a session"},
+		},
+		{
 			"two contracts agree", map[string]string{"console.yaml": contract("console"), "admin.yaml": contract("admin")}, nil,
 		},
 		{

@@ -742,7 +742,7 @@ export interface paths {
         put?: never;
         /**
          * Preview prices and margins
-         * @description What each of up to 100 models would sell for to a user of one tier, with the stored rules, or with `rule` added (or replacing `replaces_rule_id`) when given, and the margin over cost. Nothing is stored.
+         * @description What each of up to 100 models would sell for, one row per model and endpoint since endpoints differ in cost, to one account (with its tier and the rules for it alone) or to a user of one tier, with the stored rules, or with `rule` added (or replacing `replaces_rule_id`) when given, and the margin over each endpoint's cost. Nothing is stored. There is no per-model summary: a model's lowest margin is the least of its rows.
          */
         post: operations["previewPricing"];
         delete?: never;
@@ -996,16 +996,18 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. */
+        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives `access_token`, `refresh_token` and `access_token_expires_at`: the refresh token keeps the login alive, since a password sign-in could not pass the check again. A kind that uses tokens lists all three in `login_fields`. */
         SupplierLogin: {
             email?: string;
             password?: string;
             access_token?: string;
+            /** @description With `access_token`, so Axiom renews the login itself when the access token ends. */
+            refresh_token?: string;
             /** Format: date-time */
             access_token_expires_at?: string;
         };
         /** @enum {string} */
-        LoginField: "email" | "password" | "access_token" | "access_token_expires_at";
+        LoginField: "email" | "password" | "access_token" | "refresh_token" | "access_token_expires_at";
         DetectionRequest: {
             origin: string;
         };
@@ -1024,7 +1026,8 @@ export interface components {
             kind: string;
             origin: string;
             upstream_account: string;
-            login: components["schemas"]["SupplierLogin"];
+            /** @description The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it.        login: {$ref: "#/components/schemas/SupplierLogin"} */
+            settlement_currency: string;
             reason: components["schemas"]["Reason"];
         };
         SupplierLoginUpdate: {
@@ -1037,7 +1040,7 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         UnitValueUpdate: {
-            /** @description What one unit of the supplier's balance is worth, in its settlement currency; greater than 0 and at most 1000. */
+            /** @description What one unit of the supplier's balance is worth, in the supplier's `settlement_currency` (fixed when it was added); greater than 0 and at most 1000. */
             value: components["schemas"]["Decimal"];
             reason: components["schemas"]["Reason"];
         };
@@ -1121,6 +1124,8 @@ export interface components {
             model_id: components["schemas"]["Uuid"];
         };
         AuthorSlug: string;
+        /** @description `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it. */
+        ModelSlug: string;
         Author: {
             slug: components["schemas"]["AuthorSlug"];
             name: string;
@@ -1225,7 +1230,7 @@ export interface components {
         };
         ModelSummary: {
             id: components["schemas"]["Uuid"];
-            slug: string;
+            slug: components["schemas"]["ModelSlug"];
             author: components["schemas"]["AuthorSlug"];
             status: components["schemas"]["ModelStatus"];
             version_basis: components["schemas"]["VersionBasis"];
@@ -1240,7 +1245,7 @@ export interface components {
         };
         Model: {
             id: components["schemas"]["Uuid"];
-            slug: string;
+            slug: components["schemas"]["ModelSlug"];
             author: components["schemas"]["AuthorSlug"];
             status: components["schemas"]["ModelStatus"];
             version_basis: components["schemas"]["VersionBasis"];
@@ -1252,7 +1257,7 @@ export interface components {
             prices: components["schemas"]["ReferencePrice"][];
         };
         ModelCreate: {
-            slug: string;
+            slug: components["schemas"]["ModelSlug"];
             version_basis: components["schemas"]["VersionBasis"];
             price_source: components["schemas"]["PriceSource"];
             spec: components["schemas"]["ModelSpec"];
@@ -1374,22 +1379,26 @@ export interface components {
         };
         PricingPreviewRequest: {
             model_ids: components["schemas"]["Uuid"][];
-            /** @description The tier whose price to show. Absent: the site's default tier. */
+            /** @description The tier whose price to show. Absent, and without `account_id`: the site's default tier. Not with `account_id`. */
             tier_id?: components["schemas"]["TierId"];
+            /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
+            account_id?: components["schemas"]["AccountId"];
             /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };
         PricingPreviewRow: {
             model_id: components["schemas"]["Uuid"];
-            slug: string;
+            slug: components["schemas"]["ModelSlug"];
+            /** @description The endpoint this row prices. Absent for a model with no endpoint, which has the one row. */
+            endpoint_id?: components["schemas"]["Uuid"];
             /**
-             * @description `priced`: a price; `cost_unknown`: no endpoint of the model has a known cost, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
              * @enum {string}
              */
             status: "priced" | "cost_unknown" | "below_floor" | "unpriced";
             sale?: components["schemas"]["PriceSchedule"];
-            /** @description The dearest known cost among the model's endpoints, in the site's currency. */
+            /** @description The endpoint's cost, in the site's currency. */
             cost?: components["schemas"]["PriceSchedule"];
             /** @description The lowest margin of `sale` over `cost` across billing items and tiers; negative would be a loss. */
             margin_ratio?: components["schemas"]["Decimal"];

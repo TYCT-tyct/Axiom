@@ -197,6 +197,7 @@ const (
 	LoginFieldAccessTokenExpiresAt LoginField = "access_token_expires_at"
 	LoginFieldEmail                LoginField = "email"
 	LoginFieldPassword             LoginField = "password"
+	LoginFieldRefreshToken         LoginField = "refresh_token"
 )
 
 // Valid indicates whether the value is a known member of the LoginField enum.
@@ -209,6 +210,8 @@ func (e LoginField) Valid() bool {
 	case LoginFieldEmail:
 		return true
 	case LoginFieldPassword:
+		return true
+	case LoginFieldRefreshToken:
 		return true
 	default:
 		return false
@@ -929,7 +932,9 @@ type Model struct {
 	PriceSource PriceSource      `json:"price_source"`
 	Prices      []ReferencePrice `json:"prices"`
 	Rev         int64            `json:"rev"`
-	Slug        string           `json:"slug"`
+
+	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	Slug ModelSlug `json:"slug"`
 
 	// Spec The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes on sale only if both are present, even if empty.
 	Spec ModelSpec `json:"spec"`
@@ -947,7 +952,9 @@ type ModelCreate struct {
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
-	Slug   string `json:"slug"`
+
+	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	Slug ModelSlug `json:"slug"`
 
 	// Spec The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes on sale only if both are present, even if empty.
 	Spec ModelSpec `json:"spec"`
@@ -1007,6 +1014,9 @@ type ModelName struct {
 // ModelNameVisibility Only public names can be called by users.
 type ModelNameVisibility string
 
+// ModelSlug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+type ModelSlug = string
+
 // ModelSpec The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes on sale only if both are present, even if empty.
 type ModelSpec struct {
 	Items                *[]BillingItem         `json:"items,omitempty"`
@@ -1036,7 +1046,9 @@ type ModelSummary struct {
 	Id          Uuid        `json:"id"`
 	PriceSource PriceSource `json:"price_source"`
 	Rev         int64       `json:"rev"`
-	Slug        string      `json:"slug"`
+
+	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	Slug ModelSlug `json:"slug"`
 
 	// Status `draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good.
 	Status ModelStatus `json:"status"`
@@ -1201,7 +1213,9 @@ type PricingPreview struct {
 
 // PricingPreviewRequest defines model for PricingPreviewRequest.
 type PricingPreviewRequest struct {
-	ModelIds []Uuid `json:"model_ids"`
+	// AccountId Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400).
+	AccountId *AccountId `json:"account_id,omitempty"`
+	ModelIds  []Uuid     `json:"model_ids"`
 
 	// ReplacesRuleId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ReplacesRuleId *Uuid `json:"replaces_rule_id,omitempty"`
@@ -1209,14 +1223,17 @@ type PricingPreviewRequest struct {
 	// Rule A rule to add, or to put in place of `replaces_rule_id`, for this preview only.
 	Rule *PricingRuleInput `json:"rule,omitempty"`
 
-	// TierId The tier whose price to show. Absent: the site's default tier.
+	// TierId The tier whose price to show. Absent, and without `account_id`: the site's default tier. Not with `account_id`.
 	TierId *TierId `json:"tier_id,omitempty"`
 }
 
 // PricingPreviewRow defines model for PricingPreviewRow.
 type PricingPreviewRow struct {
-	// Cost The dearest known cost among the model's endpoints, in the site's currency.
+	// Cost The endpoint's cost, in the site's currency.
 	Cost *PriceSchedule `json:"cost,omitempty"`
+
+	// EndpointId The endpoint this row prices. Absent for a model with no endpoint, which has the one row.
+	EndpointId *Uuid `json:"endpoint_id,omitempty"`
 
 	// MarginRatio The lowest margin of `sale` over `cost` across billing items and tiers; negative would be a loss.
 	MarginRatio *Decimal `json:"margin_ratio,omitempty"`
@@ -1226,13 +1243,15 @@ type PricingPreviewRow struct {
 
 	// Sale A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Sale *PriceSchedule `json:"sale,omitempty"`
-	Slug string         `json:"slug"`
 
-	// Status `priced`: a price; `cost_unknown`: no endpoint of the model has a known cost, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	Slug ModelSlug `json:"slug"`
+
+	// Status `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
 	Status PricingPreviewRowStatus `json:"status"`
 }
 
-// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: no endpoint of the model has a known cost, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
 type PricingPreviewRowStatus string
 
 // PricingRule defines model for PricingRule.
@@ -1526,16 +1545,16 @@ type SupplierNativeUnit string
 
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
-	Kind string `json:"kind"`
-
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned.
-	Login  SupplierLogin `json:"login"`
-	Name   string        `json:"name"`
-	Origin string        `json:"origin"`
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Origin string `json:"origin"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
-	Reason          Reason `json:"reason"`
-	UpstreamAccount string `json:"upstream_account"`
+	Reason Reason `json:"reason"`
+
+	// SettlementCurrency The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it.        login: {$ref: "#/components/schemas/SupplierLogin"}
+	SettlementCurrency string `json:"settlement_currency"`
+	UpstreamAccount    string `json:"upstream_account"`
 }
 
 // SupplierCredential defines model for SupplierCredential.
@@ -1595,17 +1614,20 @@ type SupplierList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned.
+// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives `access_token`, `refresh_token` and `access_token_expires_at`: the refresh token keeps the login alive, since a password sign-in could not pass the check again. A kind that uses tokens lists all three in `login_fields`.
 type SupplierLogin struct {
 	AccessToken          *string    `json:"access_token,omitempty"`
 	AccessTokenExpiresAt *time.Time `json:"access_token_expires_at,omitempty"`
 	Email                *string    `json:"email,omitempty"`
 	Password             *string    `json:"password,omitempty"`
+
+	// RefreshToken With `access_token`, so Axiom renews the login itself when the access token ends.
+	RefreshToken *string `json:"refresh_token,omitempty"`
 }
 
 // SupplierLoginUpdate defines model for SupplierLoginUpdate.
 type SupplierLoginUpdate struct {
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives `access_token`, `refresh_token` and `access_token_expires_at`: the refresh token keeps the login alive, since a password sign-in could not pass the check again. A kind that uses tokens lists all three in `login_fields`.
 	Login SupplierLogin `json:"login"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
@@ -1667,7 +1689,7 @@ type UnitValueUpdate struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 
-	// Value What one unit of the supplier's balance is worth, in its settlement currency; greater than 0 and at most 1000.
+	// Value What one unit of the supplier's balance is worth, in the supplier's `settlement_currency` (fixed when it was added); greater than 0 and at most 1000.
 	Value Decimal `json:"value"`
 }
 
