@@ -10,9 +10,12 @@ import (
 	"slices"
 
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/newapi"
 )
 
-var adapters = []adapter.Adapter{}
+var adapters = []adapter.Adapter{
+	newapi.New(),
+}
 
 // Registry finds an adapter by the kind stored in suppliers.kind.
 type Registry struct {

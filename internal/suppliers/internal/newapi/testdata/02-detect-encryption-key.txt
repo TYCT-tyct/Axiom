@@ -1,0 +1,6 @@
+# 02-detect-encryption-key
+GET /api/user/login/encryption-key
+< status: 200  (elapsed 0.00s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"data":{"enabled":false},"message":"","success":true}

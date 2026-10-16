@@ -1,0 +1,9 @@
+# 64-err-insufficient-wallet
+POST /v1/chat/completions
+> Authorization: Bearer <DAVE_KEY>
+> Content-Type: application/json
+> body: {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+< status: 403  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"error":{"message":"Insufficient user quota, remaining quota: ＄0.000000 (request id: 202610140454418085814458268d9d6LJkPxYZr)","type":"new_api_error","param":"","code":"insufficient_user_quota"}}

@@ -1,0 +1,9 @@
+package catalog
+
+import "time"
+
+// Publish and SetClock let a test replace a snapshot out of order and move the clock.
+func (c *Catalog) Publish(s *Snapshot, confirmed time.Time) { c.publish(s, confirmed) }
+
+// SetClock replaces the clock the staleness limit reads.
+func (c *Catalog) SetClock(now func() time.Time) { c.now = now }
