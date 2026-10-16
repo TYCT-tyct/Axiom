@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -22,6 +23,11 @@ type Config struct {
 	Platform pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
 	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
 	Now      func() time.Time // the clock; time.Now when nil
+	// LookupSlot, when set, is asked for a slot before each lookup of a key in the database, and the slot is given back
+	// when the lookup ends. The lookup is shared by every request waiting for the key and outlives the one that started
+	// it, so it is the lookup that holds the slot, once. The gateway passes a connection of its admission class. Nil
+	// leaves lookups unbounded, for a service with no gateway in front of it.
+	LookupSlot func(ctx context.Context) (release func(), err error)
 }
 
 // Service is the module. One per node; several share a database.
@@ -31,6 +37,8 @@ type Service struct {
 	hashes   *secret.MACKeys
 	versions []uint32 // of hashes, newest first
 	now      func() time.Time
+	slot     func(ctx context.Context) (func(), error) // the lookups' slot; never nil
+	gated    bool                                      // whether Config.LookupSlot was set
 
 	snapshot atomic.Pointer[snapshot]
 	// Key identities never change once made, so a hit needs no database. A miss of a key that does not exist is
@@ -63,9 +71,18 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
+	slot := cfg.LookupSlot
+	if slot == nil {
+		slot = func(context.Context) (func(), error) { return func() {}, nil }
+	}
 	return &Service{
 		db: db, platform: cfg.Platform, hashes: cfg.Hashes, versions: versions, now: now,
+		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		queries: New(),
 	}, nil
 }
+
+// GatesLookups reports whether key lookups take a slot (Config.LookupSlot), which a node serving the model API must
+// have: without it a flood of unknown keys is bounded by nothing but the database's own connection limit.
+func (s *Service) GatesLookups() bool { return s.gated }

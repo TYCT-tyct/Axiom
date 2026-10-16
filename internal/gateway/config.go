@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -97,6 +98,13 @@ func (c Config) Validate() error {
 	relation(c.ReclaimGrace >= c.HolderTTL, "ReclaimGrace %v must be at least HolderTTL %v", c.ReclaimGrace, c.HolderTTL)
 	relation(c.SettleGrace > c.SettleBackground, "SettleGrace %v must exceed SettleBackground %v", c.SettleGrace, c.SettleBackground)
 	return errors.Join(errs...)
+}
+
+// KeyLookupSlot is accounts.Config.LookupSlot: a lookup of a key that is not cached uses a database connection like an
+// admission does, so it takes one of the admission class, for as long as the lookup runs (internal/gateway/README.md
+// 「并发、背压与共享状态」). NewHandler refuses an accounts service that was not given it.
+func (b *Backpressure) KeyLookupSlot(ctx context.Context) (release func(), err error) {
+	return b.Pool.Acquire(ctx, Admission)
 }
 
 // Backpressure is the node's in-process limits, built from one validated Config.

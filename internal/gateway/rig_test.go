@@ -77,6 +77,7 @@ type rigOptions struct {
 	routing   routing.Config
 	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
 	memory    int64
+	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 }
 
@@ -109,10 +110,17 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations)
 	var err error
-	if r.db, err = pg.Open(t.Context(), r.database.App); err != nil {
+	dsn := r.database.App
+	if o.conns > 0 {
+		dsn += "&pool_max_conns=" + itoa(int64(o.conns))
+	}
+	if r.db, err = pg.Open(t.Context(), dsn); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.db.Close)
+	if r.limits, err = New(r.cfg); err != nil {
+		t.Fatal(err)
+	}
 	r.warmConnections(12)
 	r.seedSite()
 	r.seedCatalog()
@@ -120,9 +128,6 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if r.limits, err = New(r.cfg); err != nil {
 		t.Fatal(err)
 	}
 	r.memory = protocol.NewMemory(o.memory)
@@ -247,7 +252,7 @@ func (r *rig) seedSite() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	if r.accounts, err = accounts.NewService(r.db, accounts.Config{Platform: platformScope, Hashes: keys}); err != nil {
+	if r.accounts, err = accounts.NewService(r.db, accounts.Config{Platform: platformScope, Hashes: keys, LookupSlot: r.limits.KeyLookupSlot}); err != nil {
 		r.t.Fatal(err)
 	}
 	if err := r.accounts.Load(r.t.Context(), slog.New(slog.DiscardHandler)); err != nil {
@@ -276,16 +281,7 @@ func (r *rig) newAccount(balance int64) account {
 		r.t.Fatal(err)
 	}
 	r.sql("UPDATE billing.balances SET balance = " + itoa(balance) + " WHERE account_id = '" + a.id.String() + "'")
-	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
-		created, err := r.accounts.CreateKey(r.t.Context(), tx, audit.System("gateway.test"), accounts.KeyRequest{
-			Site: accounts.SiteID(siteID), Account: accounts.AccountID(a.id), Workspace: accounts.WorkspaceID(a.workspace),
-			CreatedBy: accounts.UserID(userID), Name: "Test",
-		})
-		a.key, a.keyID = created.Text.Reveal(), created.ID
-		return err
-	}); err != nil {
-		r.t.Fatal(err)
-	}
+	a.key, a.keyID = r.newKey(a)
 	// Recognise the key once, so the requests find it in the cache: a cold key is looked up in the database within a
 	// second (accounts' tests cover that), which a busy machine under the race detector does not always keep to.
 	if _, err := r.accounts.AuthenticateKey(r.t.Context(), accounts.SiteID(siteID), a.key); err != nil {
@@ -339,3 +335,19 @@ func messageBody(model string) string {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// newKey makes another key of the account, one the gateway has not seen.
+func (r *rig) newKey(a account) (string, accounts.KeyID) {
+	r.t.Helper()
+	var created accounts.CreatedKey
+	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		created, err = r.accounts.CreateKey(r.t.Context(), tx, audit.System("gateway.test"), accounts.KeyRequest{
+			Site: accounts.SiteID(siteID), Account: accounts.AccountID(a.id), Workspace: accounts.WorkspaceID(a.workspace),
+			CreatedBy: accounts.UserID(userID), Name: "Test",
+		})
+		return err
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return created.Text.Reveal(), created.ID
+}
