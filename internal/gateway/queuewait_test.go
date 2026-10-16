@@ -20,9 +20,10 @@ func TestQueueLimitCoversAllTheWaitsOfACall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := &Handler{Deps: Deps{Limits: bp}, admitTx: func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error {
+		h := &Handler{admitTx: func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error {
 			return &errWait{after: time.Second} // every candidate endpoint stays full
 		}}
+		h.Limits = bp
 		began := time.Now()
 		var ended time.Time
 		call := start(func() (func(), error) {

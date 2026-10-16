@@ -29,12 +29,12 @@ type serverTool struct {
 
 var grammars = [...]grammar{
 	Messages: {
-		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
 			"source": func(s *scanner) error { return s.object(sourceFields) },
@@ -46,13 +46,13 @@ var grammars = [...]grammar{
 		input:   1 << catalog.ItemInput,
 	},
 	Responses: {
-		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
 			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
 			"previous_response_id": (*scanner).previous,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "output": (*scanner).result,
 			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
@@ -64,13 +64,13 @@ var grammars = [...]grammar{
 		input:   openAIInput,
 	},
 	Chat: {
-		top: fields{
-			"model": (*scanner).model, "models": (*scanner).models, "provider": (*scanner).provider, "stream": (*scanner).stream,
+		top: withProvider(fields{
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
-		},
+		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
@@ -361,6 +361,12 @@ func (s *scanner) when(lit string, flag *bool) error {
 
 func hasPrefix(v []byte, prefix string) bool {
 	return len(v) >= len(prefix) && string(v[:len(prefix)]) == prefix
+}
+
+// withProvider adds the provider member, which the three formats share, to the members of a format's top level.
+func withProvider(f fields) fields {
+	f["provider"] = (*scanner).provider
+	return f
 }
 
 // maxProvider bounds the provider object a request carries: the gateway reads it whole, and the parameters it holds

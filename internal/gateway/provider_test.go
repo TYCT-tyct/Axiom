@@ -65,6 +65,11 @@ func TestOverride(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOverrideRefuses: a member that cannot be kept, or is not valid, is a 400 that names it.
+func TestOverrideRefuses(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ provider, named string }{
 		"suppliers to use":              {`{"only":["acme"]}`, "provider.only"},
 		"suppliers to leave out":        {`{"ignore":["acme"]}`, "provider.ignore"},
@@ -89,7 +94,7 @@ func TestOverride(t *testing.T) {
 		"zdr as text":                   {`{"zdr":"yes"}`, "provider.zdr"},
 		"a list that is not":            {`{"only":"acme"}`, "provider.only"},
 	} {
-		t.Run("refuses "+name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := override([]byte(tc.provider))
 			var ref *Refusal
@@ -105,9 +110,23 @@ func withProvider(body, provider string) string {
 	return strings.Replace(body, `{"model"`, `{"provider":`+provider+`,"model"`, 1)
 }
 
+// sendWith posts a request for acme/alpha with the provider object and returns the route it was admitted with, if it
+// was.
+func (r *rig) sendWith(a account, provider string) (route []routing.EndpointID, resp reply, body string) {
+	r.t.Helper()
+	before := len(r.calls())
+	resp, body = r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(withProvider(messageBody("acme/alpha"), provider)))
+	if calls := r.calls(); len(calls) > before {
+		for _, e := range calls[len(calls)-1].Plan.Entries {
+			route = append(route, e.Endpoint)
+		}
+	}
+	return route, resp, body
+}
+
 // TestProviderNarrowsTheRoute: the provider object of a request reaches routing through the HTTP entry. The route is
-// cut by the data policy and the price the request asks for, a limit nothing meets is a 404 that says the override
-// did it, and a member that cannot be kept is a 400 that reserves nothing.
+// cut by the data policy and the price the request asks for, and a limit nothing meets is a 404 that says the override
+// did it.
 func TestProviderNarrowsTheRoute(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
@@ -118,17 +137,6 @@ func TestProviderNarrowsTheRoute(t *testing.T) {
 		}
 	})
 	a := r.newAccount(1e9)
-	routeOf := func(provider string) ([]routing.EndpointID, reply, string) {
-		before := len(r.calls())
-		resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(withProvider(messageBody("acme/alpha"), provider)))
-		var route []routing.EndpointID
-		if calls := r.calls(); len(calls) > before {
-			for _, e := range calls[len(calls)-1].Plan.Entries {
-				route = append(route, e.Endpoint)
-			}
-		}
-		return route, resp, body
-	}
 	both := []routing.EndpointID{r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID}
 	only1 := []routing.EndpointID{r.endpoints["alpha-1"].ID}
 	// alpha-1 charges 1 and 2 credits per million tokens, alpha-2 1 and 4, and alpha-2 may train on the data.
@@ -141,28 +149,32 @@ func TestProviderNarrowsTheRoute(t *testing.T) {
 		"zero data retention":     {`{"zdr":true}`, only1},
 		"a completion price cap":  {`{"max_price":{"completion":3}}`, only1},
 		"a cap both meet":         {`{"max_price":{"prompt":1,"completion":4}}`, both},
-		"a cap on the prompt":     {`{"max_price":{"prompt":0.5}}`, nil},
 		"data collection allowed": {`{"data_collection":"allow"}`, both},
 	} {
-		route, resp, body := routeOf(tc.provider)
-		switch {
-		case tc.route == nil:
-			if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "no_endpoint" || !strings.Contains(body, "override_filter") {
-				t.Errorf("%s: %d %s, want a 404 no_endpoint by the override", name, resp.StatusCode, body)
-			}
-		case resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.route):
+		if route, resp, body := r.sendWith(a, tc.provider); resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.route) {
 			t.Errorf("%s: %d, route %v, want %v: %s", name, resp.StatusCode, route, tc.route, body)
 		}
 	}
+	_, resp, body := r.sendWith(a, `{"max_price":{"prompt":0.5}}`)
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "no_endpoint" || !strings.Contains(body, "override_filter") {
+		t.Errorf("a cap nothing meets: %d %s, want a 404 no_endpoint by the override", resp.StatusCode, body)
+	}
+	r.idle(1 << 30)
+}
+
+// TestProviderRefusedMembersReserveNothing: a member that cannot be kept is a 400 before anything is reserved.
+func TestProviderRefusedMembersReserveNothing(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
 	for _, provider := range []string{`{"only":["acme"]}`, `{"allow_fallbacks":false}`, `{"max_price":{"request":1}}`} {
-		before := len(r.calls())
-		_, resp, body := routeOf(provider)
-		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" || len(r.calls()) != before {
+		_, resp, body := r.sendWith(a, provider)
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 			t.Errorf("%s: %d %s", provider, resp.StatusCode, body)
 		}
 	}
-	if r.count(pendingCount) != 0 {
-		t.Errorf("%d reservations are pending", r.count(pendingCount))
+	if r.count(allRows) != 0 || len(r.calls()) != 0 {
+		t.Errorf("%d reservation rows, %d calls", r.count(allRows), len(r.calls()))
 	}
 	r.idle(1 << 30)
 }
