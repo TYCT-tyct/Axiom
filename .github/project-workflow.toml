@@ -3,3 +3,6 @@
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
 source = "aebdf5361828e3b9aa50a3d5caff342046009988"
+
+[review]
+waiver = false # CONTRIBUTING.md: every PR, upgrades included, gets an independent review
