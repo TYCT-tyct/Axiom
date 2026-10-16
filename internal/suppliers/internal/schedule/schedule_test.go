@@ -98,6 +98,7 @@ type cluster struct {
 	database pgtest.Database
 	system   *system
 	keys     *secret.Keyring
+	reader   *pg.DB // one pool for all the reads of a test, which polls
 	supplier uuid.UUID
 }
 
@@ -112,6 +113,7 @@ func newCluster(t *testing.T, s *system) *cluster {
 		t.Fatal(err)
 	}
 	c := &cluster{t: t, database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}), system: s, keys: keys}
+	c.reader = c.open()
 	c.supplier = c.addSupplier("fake.example", "connecting")
 	return c
 }
@@ -194,7 +196,7 @@ func (c *cluster) start(n *node) {
 // row reads one value about the supplier.
 func (c *cluster) row(query string, dest ...any) {
 	c.t.Helper()
-	err := c.open().ReadTx(c.t.Context(), platform, func(tx pg.Tx) error {
+	err := c.reader.ReadTx(c.t.Context(), platform, func(tx pg.Tx) error {
 		return tx.QueryRow(c.t.Context(), query, c.supplier).Scan(dest...)
 	})
 	if err != nil {
