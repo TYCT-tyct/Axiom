@@ -1,7 +1,7 @@
 // Command benchgate runs the benchmarks at a base commit and in the working tree, and fails if a benchmark allocates
 // more per operation, was skipped, or if no measurement can be compared any more. Allocations per operation are stable
-// from run to run; time and bytes are noisy on shared CI machines, so they are only reported through benchstat
-// (docs/performance.md「怎么验证」).
+// from run to run, up to noise that only adds, so the smallest of the runs is compared; time and bytes are noisy on
+// shared CI machines, so they are only reported through benchstat (docs/performance.md「怎么验证」).
 //
 // The go command reports in its JSON form, so skipped benchmarks arrive as events rather than as text that only verbose
 // mode prints, and the benchmark lines are read with golang.org/x/perf/benchfmt, the reader benchstat itself uses.
@@ -31,31 +31,6 @@ import (
 )
 
 const allocsUnit = "allocs/op"
-
-// noisy are the benchmarks whose allocation count carries noise that cannot be removed, and the share of the count each
-// may rise by without failing. Everywhere else the count is exact and any rise fails. Protocol's Relay benchmark relays
-// streams of up to 16 MiB, so a run is two to four iterations long, and the runtime adds a few allocations of its own
-// to a run now and then (up to ten in all, seen in about one run in six after the benchmark keeps the collector
-// and the other processors out of the timed region; no allocation site in the code accounts for them, which a
-// memory profile at rate 1 shows): spread over so few iterations, that is a rise of one or two allocations per
-// iteration of a count of 400 to 7000. A tenth of a percent covers it; a relay that allocates once more per event rises
-// by 16 or 256 events' worth, several percent, and fails (docs/performance.md「怎么验证」).
-var noisy = []struct {
-	prefix   string
-	fraction float64
-}{
-	{"axiom/internal/protocol.Relay/", 0.001},
-}
-
-// allowance is how far above the base count a benchmark's count may be without failing.
-func allowance(name string, base float64) float64 {
-	for _, n := range noisy {
-		if strings.HasPrefix(name, n.prefix) {
-			return base * n.fraction
-		}
-	}
-	return 0
-}
 
 var bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", "100ms", "./..."}
 
@@ -263,8 +238,8 @@ func gate(base, head measurements) (problems, removed []string) {
 			continue
 		}
 		compared++
-		if median(samples) > median(before)+allowance(name, median(before)) {
-			problems = append(problems, fmt.Sprintf("more allocations: %s: %g -> %g %s", name, median(before), median(samples), allocsUnit))
+		if lowest(samples) > lowest(before) {
+			problems = append(problems, fmt.Sprintf("more allocations: %s: %g -> %g %s", name, lowest(before), lowest(samples), allocsUnit))
 		}
 	}
 	for _, name := range slices.Compact(slices.Sorted(slices.Values(head.skipped))) { // each -count repeats a skip
@@ -283,14 +258,12 @@ func gate(base, head measurements) (problems, removed []string) {
 	return problems, removed
 }
 
-func median(samples []float64) float64 {
+// lowest is the allocation count of a benchmark: the runtime only ever adds allocations of its own to a run (after
+// a garbage collection, for one), never removes any, so the smallest of the -count samples is the code's own count,
+// while a real regression raises every sample and so raises the smallest too.
+func lowest(samples []float64) float64 {
 	if len(samples) == 0 {
-		panic("median of no samples") // every key is created with its first sample
+		panic("lowest of no samples") // every key is created with its first sample
 	}
-	sorted := slices.Sorted(slices.Values(samples))
-	middle := len(sorted) / 2
-	if len(sorted)%2 == 0 {
-		return (sorted[middle-1] + sorted[middle]) / 2
-	}
-	return sorted[middle]
+	return slices.Min(samples)
 }
