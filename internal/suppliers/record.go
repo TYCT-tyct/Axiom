@@ -195,6 +195,9 @@ func ResolveLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, si
 // ReconcileConfig is what reconciliation reads from the operator's settings.
 type ReconcileConfig = reconcile.Config
 
+// ReconcileCursor is where the list of waiting attempts goes on from, between runs.
+type ReconcileCursor = reconcile.Cursor
+
 // ReconcileReport is what a run did and what needs a person.
 type ReconcileReport = reconcile.Report
 

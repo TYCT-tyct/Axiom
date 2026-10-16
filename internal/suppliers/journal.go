@@ -249,7 +249,25 @@ func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalE
 // seqOf reads an attempt number from its column, which holds 1 to 3.
 func seqOf(n int16) platform.AttemptSeq { return platform.AttemptSeq(n) } //nolint:gosec // the column holds 1 to 3
 
-// PurgeJournal removes the rows written before the time given, which a settled request no longer needs.
-func PurgeJournal(ctx context.Context, tx pg.Tx, before time.Time) (int64, error) {
-	return store.New().PurgeJournal(ctx, tx, before)
+// JournalRetention is how long the journal of a request that ended is kept.
+const JournalRetention = 48 * time.Hour
+
+// EndRequest tells the module that a request ended for good at the time given, and so that its journal is of no use
+// after JournalRetention: billing calls it in the transaction that ends the request, when it is settled, or cleaned up
+// and its time for correction is over. Not when the attempt costs are written, which cleanup does while the request
+// still waits to be corrected. Telling it again changes nothing.
+func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, account *uuid.UUID, at time.Time) error {
+	err := store.New().InsertEndedRequest(ctx, tx, store.InsertEndedRequestParams{
+		RequestID: uuid.UUID(id), SiteID: site, AccountID: account, EndedAt: at,
+	})
+	if err != nil {
+		return fmt.Errorf("end the request %s: %w", id, err)
+	}
+	return nil
+}
+
+// PurgeJournal removes the journal of the requests that ended more than JournalRetention before now. A request that
+// was not told to have ended keeps its journal.
+func PurgeJournal(ctx context.Context, tx pg.Tx, now time.Time) (int64, error) {
+	return store.New().PurgeJournal(ctx, tx, now.Add(-JournalRetention))
 }

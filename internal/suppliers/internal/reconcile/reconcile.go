@@ -23,6 +23,8 @@ type Config struct {
 	Grace time.Duration
 	// Relative is the share of the estimate by which the charge may differ from it, on top of the supplier's rounding.
 	Relative *big.Rat
+	// After is where the list of waiting attempts goes on from: the Next of the last report, or the zero value to begin.
+	After Cursor
 	// Batch is the most rows a single statement of a run takes, and MaxBatches the most statements of each kind, so that
 	// a backlog is worked off over several runs and no run holds a transaction open for long.
 	Batch, MaxBatches int
@@ -44,10 +46,21 @@ type Report struct {
 	Delisted  []uuid.UUID // endpoints whose cost proved lower than the supplier's charge
 	Over      []uuid.UUID // charges lower than the estimate by more than the tolerance: only reported
 	Unmatched []Unmatched // attempts that reached the supplier and are still without a charge after the grace
+	// Next is where the list of waiting attempts stopped when it was cut at a batch, for the next run to go on from; the
+	// zero value when the list reached its end, and then the next run begins again at the oldest.
+	Next Cursor
 	// More is set when a run stopped at its limit with work left: matching or holding of charges, or the list of attempts
 	// waiting, which then holds the oldest of them.
 	More       bool
 	Violations []string // attempts the verdict could not be made for
+}
+
+// Cursor is a position in the list of waiting attempts: the last one reported. The list is in a fixed order, so going on
+// from a cursor reaches every attempt once, however many batches that takes.
+type Cursor struct {
+	At      time.Time
+	Request uuid.UUID
+	Seq     int16
 }
 
 // Unmatched is an attempt with a key and no charge.
@@ -131,14 +144,21 @@ func Run(ctx context.Context, tx store.DBTX, now time.Time, cfg Config) (Report,
 	if err := holdOverdue(ctx, tx, q, now, cfg, &report); err != nil {
 		return report, err
 	}
-	waiting, err := q.ListUnmatchedAttempts(ctx, tx, store.ListUnmatchedAttemptsParams{Before: now.Add(-cfg.Grace), Batch: int32(cfg.Batch)}) //nolint:gosec // a batch size set in configuration
+	waiting, err := q.ListUnmatchedAttempts(ctx, tx, store.ListUnmatchedAttemptsParams{
+		Before: now.Add(-cfg.Grace), AfterAt: cfg.After.At, AfterRequest: cfg.After.Request, AfterSeq: cfg.After.Seq,
+		Batch: int32(cfg.Batch), //nolint:gosec // a batch size set in configuration
+	})
 	if err != nil {
 		return report, fmt.Errorf("list unmatched attempts: %w", err)
 	}
 	for _, w := range waiting {
 		report.Unmatched = append(report.Unmatched, Unmatched{Request: w.RequestID, Seq: w.AttemptSeq, Ref: *w.ChargeRef})
 	}
-	report.More = report.More || len(waiting) == cfg.Batch
+	if len(waiting) == cfg.Batch {
+		last := waiting[len(waiting)-1]
+		report.Next = Cursor{At: last.FinishedAt, Request: last.RequestID, Seq: last.AttemptSeq}
+		report.More = true
+	}
 	return report, nil
 }
 

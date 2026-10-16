@@ -27,12 +27,17 @@ SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id,
 FROM suppliers.attempt_journal WHERE request_id = @request_id ORDER BY attempt_seq;
 
 -- name: PurgeJournal :execrows
--- Only the journal of a request that settled is of no use any more: one that has attempt costs, or was given up as lost.
--- A request that did not settle keeps its rows however old, since they are what cleanup recovers it from.
+-- The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
+-- end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
+-- its rows however old, since they are what cleanup recovers it from.
 DELETE FROM suppliers.attempt_journal j
-WHERE j.written_at < @before
-    AND (EXISTS (SELECT FROM suppliers.attempt_costs a WHERE a.request_id = j.request_id)
-        OR EXISTS (SELECT FROM suppliers.lost_requests l WHERE l.request_id = j.request_id));
+USING suppliers.ended_requests e
+WHERE e.request_id = j.request_id AND e.ended_at < @before;
+
+-- name: InsertEndedRequest :exec
+INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
+VALUES (@request_id, @site_id, @account_id, @ended_at)
+ON CONFLICT (request_id) DO NOTHING;
 
 -- name: InsertLostRequest :exec
 INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endpoint_ids)
@@ -113,7 +118,9 @@ UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'unde
 WHERE id = @id AND cost_state = 'known';
 
 -- name: ListUnmatchedAttempts :many
-SELECT request_id, attempt_seq, charge_ref FROM suppliers.attempt_costs
+-- One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
+SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before
+    AND (finished_at, request_id, attempt_seq) > (@after_at::timestamptz, @after_request::uuid, @after_seq::smallint)
 ORDER BY finished_at, request_id, attempt_seq
 LIMIT @batch::int;

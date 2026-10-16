@@ -35,8 +35,9 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `supplier_aliases` | 供应商别名，分组可空（整个供应商有效） | `UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)` |
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
-| `attempt_journal` | 进行中的尝试：对账键、是否已提交 | PK `(request_id, attempt_seq)`；只增不减的合并；已结算（有尝试成本，或已记为丢失）的请求的行过期后清除，没结算的保留；平台范围 |
+| `attempt_journal` | 进行中的尝试：对账键、是否已提交 | PK `(request_id, attempt_seq)`；只增不减的合并；请求终结满两天（`ended_requests` 里 billing 告知的时刻）后清除，没告知终结的保留；平台范围 |
 | `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
+| `ended_requests` | billing 告知的请求终结时刻，日志按它保留两天 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |
 | `charge_events` | 给 billing 的事件，每个版本一行 | `UNIQUE (charge_record_id, revision)`；平台范围 |
@@ -120,6 +121,8 @@ func (s *Service) Settled(id platform.RequestID)
 func (s *Service) Run(ctx context.Context) error               // 每秒写一次日志，结束时再写一次
 func RecordAttempts(ctx context.Context, tx pg.Tx, rows []AttemptRecord) error
 func RecordLostRequest / ResolveLostRequest(ctx, tx, id, site, account ...) error
+func EndRequest(ctx, tx, id, site, account, at) error                // billing 在终结请求的事务里调用
+func PurgeJournal(ctx context.Context, tx pg.Tx, now time.Time) (int64, error) // 删终结满 JournalRetention 的请求的日志
 func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalEntry, error) // 清理读崩溃节点留下的日志
 func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
 ```
@@ -144,7 +147,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 3. **暂挂**：宽限（默认 30 分钟）内没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效。
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）和等级，因为只有声明了的项才能校正暂估。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。
-6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表只列最早的一批。
+6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表一批一批地列，`Config.After` 和报告里的 `Next`（按完成时间、请求、序号排序的游标）把它跨轮推进，列到末尾 `Next` 归零、下一遍从头开始，所以超过一批、始终对不上的尝试最终都会被报告一次。
 7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复；billing 按它幂等处理。没有消息队列时这张表就是事件的出口，billing 读它。
 
 ## 对账日志
@@ -154,6 +157,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 - **何时追加**：进入 `Send` 时、拿到响应头里的对账键时、尝试提交（第一次向客户端写出内容）时，gateway 各调一次 `Journal`，追加一行到进程内缓冲：请求 ID、尝试序号、账户、端点、凭证、成本计划版本、`priced_at`、对账键、是否已提交。
 - **怎么写**：后台每秒一条多行 `INSERT … ON CONFLICT`，在本模块的平台范围事务里，一个节点每秒一个事务，不在请求路径上。主键 `(request_id, attempt_seq)`；同一行只插入或补上对账键、已提交标记。写失败退避重试，不丢。
 - **有界**：日志只对还没结算的请求有用。结算提交后（结算事务里已有对账键），gateway 调 `Settled`，这个请求还没写出的条目直接丢弃。一个请求的节点名额在它执行期间和结算后台重试期间一直占着，只在结算提交，或交给清理（结算永久性错误、到截止时间放弃重试）且执行器已停止上游、不再追加条目、不再重试结算、`JournalFlushed` 已关闭之后才释放（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。所以缓冲里只有占着名额的请求的条目，至多是节点名额 × 3 次尝试 × 3 行。日志持续写不进时，交给清理的请求名额不释放，节点占满后新请求得 503，这就是上界。表里的行在结算后 2 天删除。
+- **什么时候清理**：只有终结了的请求的日志才可以删，终结由 billing 经 `EndRequest` 告诉我们（结算完成，或清理完成且校正期过去的时刻，不是写入尝试行的时刻：清理待定时也写尝试行，请求还在等校正），按"终结后 `JournalRetention`（2 天）"删，不按写入时间；没告知终结的请求，日志不论多旧都保留，因为清理要靠它恢复。选这种做法而不是由 billing 传"可以删的请求集合"，是因为保留期和测试都能留在本模块里，接口只有一个幂等的插入，供应商不去推断计费的结算状态；billing 的结算分支（feat/28-settle）合并时在它终结请求的事务里调用 `EndRequest`。
 - **测试**：日志持续写失败，同时有请求结算永久失败：它们的名额不释放，节点占满后返回 503，缓冲始终不超过节点名额 × 9 行；日志恢复后条目落库、名额释放。请求仍在执行时它的日志已全部落库，名额不释放。结算一直暂时性失败、仍在后台重试时日志已全部落库，名额不释放。
 
 ## 决策与理由

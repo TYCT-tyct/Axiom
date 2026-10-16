@@ -187,6 +187,29 @@ func (q *Queries) InsertCostSchedule(ctx context.Context, db DBTX, arg InsertCos
 	return id, err
 }
 
+const insertEndedRequest = `-- name: InsertEndedRequest :exec
+INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (request_id) DO NOTHING
+`
+
+type InsertEndedRequestParams struct {
+	RequestID uuid.UUID
+	SiteID    *uuid.UUID
+	AccountID *uuid.UUID
+	EndedAt   time.Time
+}
+
+func (q *Queries) InsertEndedRequest(ctx context.Context, db DBTX, arg InsertEndedRequestParams) error {
+	_, err := db.Exec(ctx, insertEndedRequest,
+		arg.RequestID,
+		arg.SiteID,
+		arg.AccountID,
+		arg.EndedAt,
+	)
+	return err
+}
+
 const insertLostRequest = `-- name: InsertLostRequest :exec
 INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endpoint_ids)
 VALUES ($1, $2, $3, $4)
@@ -349,25 +372,37 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 }
 
 const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
-SELECT request_id, attempt_seq, charge_ref FROM suppliers.attempt_costs
+SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1
+    AND (finished_at, request_id, attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
 ORDER BY finished_at, request_id, attempt_seq
-LIMIT $2::int
+LIMIT $5::int
 `
 
 type ListUnmatchedAttemptsParams struct {
-	Before time.Time
-	Batch  int32
+	Before       time.Time
+	AfterAt      time.Time
+	AfterRequest uuid.UUID
+	AfterSeq     int16
+	Batch        int32
 }
 
 type ListUnmatchedAttemptsRow struct {
 	RequestID  uuid.UUID
 	AttemptSeq int16
 	ChargeRef  *string
+	FinishedAt time.Time
 }
 
+// One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
 func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUnmatchedAttemptsParams) ([]ListUnmatchedAttemptsRow, error) {
-	rows, err := db.Query(ctx, listUnmatchedAttempts, arg.Before, arg.Batch)
+	rows, err := db.Query(ctx, listUnmatchedAttempts,
+		arg.Before,
+		arg.AfterAt,
+		arg.AfterRequest,
+		arg.AfterSeq,
+		arg.Batch,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +410,12 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 	var items []ListUnmatchedAttemptsRow
 	for rows.Next() {
 		var i ListUnmatchedAttemptsRow
-		if err := rows.Scan(&i.RequestID, &i.AttemptSeq, &i.ChargeRef); err != nil {
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.AttemptSeq,
+			&i.ChargeRef,
+			&i.FinishedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -474,13 +514,13 @@ func (q *Queries) PauseSupplierForFunding(ctx context.Context, db DBTX, id uuid.
 
 const purgeJournal = `-- name: PurgeJournal :execrows
 DELETE FROM suppliers.attempt_journal j
-WHERE j.written_at < $1
-    AND (EXISTS (SELECT FROM suppliers.attempt_costs a WHERE a.request_id = j.request_id)
-        OR EXISTS (SELECT FROM suppliers.lost_requests l WHERE l.request_id = j.request_id))
+USING suppliers.ended_requests e
+WHERE e.request_id = j.request_id AND e.ended_at < $1
 `
 
-// Only the journal of a request that settled is of no use any more: one that has attempt costs, or was given up as lost.
-// A request that did not settle keeps its rows however old, since they are what cleanup recovers it from.
+// The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
+// end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
+// its rows however old, since they are what cleanup recovers it from.
 func (q *Queries) PurgeJournal(ctx context.Context, db DBTX, before time.Time) (int64, error) {
 	result, err := db.Exec(ctx, purgeJournal, before)
 	if err != nil {

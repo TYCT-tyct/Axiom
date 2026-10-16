@@ -72,6 +72,16 @@ CREATE TABLE suppliers.lost_request_resolutions (
     resolved_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- When a request ended for good, told by billing in the transaction that ends it (settled, or cleaned up and its time
+-- for correction over): the journal of the request is kept for two days after, and not by anything this module infers.
+CREATE TABLE suppliers.ended_requests (
+    request_id uuid PRIMARY KEY,
+    site_id uuid,
+    account_id uuid,
+    CONSTRAINT tenant_whole CHECK ((site_id IS NULL) = (account_id IS NULL)),
+    ended_at timestamptz NOT NULL
+);
+
 -- The supplier's own record of one charge. state: new (not matched yet), matched (to an attempt), held (not matched in
 -- the grace period: it books nothing and is reported until a person decides), assigned (a person attributed it to a
 -- lost request, or to no one). revision rises with every change, so billing can tell a newer verdict from an older.
@@ -143,7 +153,7 @@ CREATE INDEX charge_records_new ON suppliers.charge_records (occurred_at, id) WH
 CREATE INDEX charge_records_unmatched ON suppliers.charge_records (id) WHERE state <> 'matched';
 CREATE INDEX attempt_costs_pending ON suppliers.attempt_costs (finished_at, request_id, attempt_seq)
     WHERE state = 'pending' AND charge_ref IS NOT NULL;
-CREATE INDEX attempt_journal_written ON suppliers.attempt_journal (written_at);
+CREATE INDEX ended_requests_at ON suppliers.ended_requests (ended_at);
 
 -- Row-level security. Rows made in a request's tenant scope follow it; the rest are the platform's.
 ALTER TABLE suppliers.cost_schedules ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
@@ -153,6 +163,8 @@ ALTER TABLE suppliers.attempt_costs ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL S
 CREATE POLICY tenant ON suppliers.attempt_costs USING (platform.in_scope(site_id, account_id) OR platform.in_platform_scope());
 ALTER TABLE suppliers.lost_requests ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON suppliers.lost_requests USING (platform.in_scope(site_id, account_id));
+ALTER TABLE suppliers.ended_requests ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON suppliers.ended_requests USING (platform.in_scope(site_id, account_id) OR platform.in_platform_scope());
 ALTER TABLE suppliers.lost_request_resolutions ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON suppliers.lost_request_resolutions USING (platform.in_scope(site_id, account_id));
 ALTER TABLE suppliers.charge_records ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
@@ -165,6 +177,7 @@ CREATE POLICY platform_only ON suppliers.attempt_journal USING (platform.in_plat
 -- Privileges. Schedules, lost requests, resolutions and events are written once. Attempt costs are inserted, then only
 -- matched; charge records are inserted, then only moved through their states; the journal is rewritten while a request
 -- runs and removed after it is settled.
+GRANT SELECT, INSERT ON suppliers.ended_requests TO axiom_app;
 GRANT SELECT, INSERT ON suppliers.cost_schedules, suppliers.lost_requests, suppliers.lost_request_resolutions,
     suppliers.charge_events TO axiom_app;
 GRANT SELECT, INSERT ON suppliers.attempt_costs TO axiom_app;

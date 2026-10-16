@@ -243,40 +243,63 @@ func TestACrashBetweenSendAndSettleLeavesWhatCleanupNeeds(t *testing.T) {
 	}
 }
 
-// TestOnlySettledRequestsJournalsArePurged: the journal of a request that settled (it has attempt costs) or was given up
-// as lost goes once it is old enough; that of one that did not settle stays however old, because cleanup recovers
-// the request from it.
-func TestOnlySettledRequestsJournalsArePurged(t *testing.T) {
+func (w *world) endRequest(id platform.RequestID, at time.Time) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error { return EndRequest(ctx, tx, id, nil, nil, at) })
+}
+
+func (w *world) purge(now time.Time) (purged int64) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
+		purged, err = PurgeJournal(ctx, tx, now)
+		return err
+	})
+	return purged
+}
+
+// TestAJournalIsPurgedTwoDaysAfterItsRequestEnded: what billing says has ended decides, not what this module can see. A
+// request with attempt costs whose cleanup is still pending keeps its journal however old; one that ended a moment ago
+// keeps it though the rows are old; two days after it ended it goes; and a request never told to have ended keeps it.
+func TestAJournalIsPurgedTwoDaysAfterItsRequestEnded(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
-	id, unsettled, lost := newRequest(), newRequest(), newRequest()
-	w.svc.Journal(w.entry(id, 1, "a", false))
-	w.svc.Journal(w.entry(id, 2, "b", false))
-	w.svc.Journal(w.entry(unsettled, 1, "c", true))
-	w.svc.Journal(w.entry(lost, 1, "d", true))
+	now := time.Now()
+	pending, justEnded, longEnded, never := newRequest(), newRequest(), newRequest(), newRequest()
+	for i, id := range []platform.RequestID{pending, justEnded, longEnded, never} {
+		w.svc.Journal(w.entry(id, 1, "ref-"+string(rune('a'+i)), true))
+	}
 	w.flush()
-	w.record(w.attempt(id, 1, "a"), w.attempt(id, 2, "b"))
-	own := pg.NewScope(false, []uuid.UUID{siteA}, nil)
-	if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return RecordLostRequest(t.Context(), tx, lost, siteA, accountA, nil) }); err != nil {
-		t.Fatal(err)
+	w.record(w.attempt(pending, 1, "ref-a")) // cleanup wrote the attempt and the request waits to be corrected
+	w.endRequest(justEnded, now.Add(-time.Hour))
+	w.endRequest(longEnded, now.Add(-JournalRetention-time.Minute))
+	w.endRequest(longEnded, now) // told again: the first time stands
+	if purged := w.purge(now.Add(30 * 24 * time.Hour)); purged != 2 {
+		t.Errorf("purged %d rows a month on, want the two of the requests that ended", purged)
 	}
-	var purged int64
-	purge := func(before time.Time) {
-		w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
-			purged, err = PurgeJournal(ctx, tx, before)
-			return err
-		})
+	for name, id := range map[string]platform.RequestID{"pending cleanup": pending, "never ended": never} {
+		if len(w.journalOf(id)) != 1 {
+			t.Errorf("the journal of a request with %s was removed", name)
+		}
 	}
-	purge(time.Now().Add(-time.Hour))
-	if purged != 0 || len(w.journalOf(id)) != 2 {
-		t.Fatalf("purged %d rows written a moment ago", purged)
+}
+
+// TestTheRetentionIsFromTheEndNotFromTheWrite: at the time of purging, a journal written long ago whose request ended a
+// moment ago stays, and one whose request ended two days ago goes.
+func TestTheRetentionIsFromTheEndNotFromTheWrite(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	now := time.Now()
+	fresh, old := newRequest(), newRequest()
+	w.svc.Journal(w.entry(fresh, 1, "a", true))
+	w.svc.Journal(w.entry(old, 1, "b", true))
+	w.flush()
+	w.endRequest(fresh, now.Add(-time.Minute))
+	w.endRequest(old, now.Add(-JournalRetention-time.Second))
+	if purged := w.purge(now); purged != 1 {
+		t.Fatalf("purged %d rows, want only the one whose request ended two days ago", purged)
 	}
-	purge(time.Now().Add(time.Hour))
-	if purged != 3 || len(w.journalOf(id)) != 0 || len(w.journalOf(lost)) != 0 {
-		t.Errorf("purged %d rows of the settled requests, want 3", purged)
-	}
-	if got := w.journalOf(unsettled); len(got) != 1 || got[0].Receipt.ref != "c" || !got[0].Committed {
-		t.Errorf("the journal of a request that never settled: %+v", got)
+	if len(w.journalOf(fresh)) != 1 || len(w.journalOf(old)) != 0 {
+		t.Errorf("rows left: %d of the request that ended a minute ago, %d of the one that ended two days ago", len(w.journalOf(fresh)), len(w.journalOf(old)))
 	}
 }
 
