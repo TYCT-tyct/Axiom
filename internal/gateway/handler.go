@@ -1,0 +1,312 @@
+package gateway
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"uuid"
+
+	"axiom/internal/accounts"
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
+	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
+	"axiom/internal/routing"
+)
+
+// Run takes a call that has been admitted: it tries the route, relays the answer, meters and settles (the steps after
+// 6 of internal/gateway/README.md). It owns the call from here: it ends it with Done after the settlement, which
+// releases the reservation's slots, and the handler does not touch it again.
+type Run func(w http.ResponseWriter, r *http.Request, c *Call)
+
+// Deps are the modules a Handler orchestrates. Every one is required.
+type Deps struct {
+	Accounts *accounts.Service
+	Catalog  *catalog.Catalog
+	Router   *routing.Router
+	Billing  *billing.Billing
+	Limits   *Backpressure
+	Memory   *protocol.Memory // the node's budget for request bodies and streams
+	Run      Run
+	Logger   *slog.Logger
+}
+
+// Handler serves the model API: the call paths in both prefixes, and the model list.
+type Handler struct {
+	Deps
+	mux     *http.ServeMux
+	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	models  modelList
+
+	background sync.WaitGroup // settlements of lost admissions
+	stopped    chan struct{}  // closed by Drain when its time is up: the settlements give up
+	stopOnce   sync.Once
+}
+
+// NewHandler checks the dependencies and builds the routes.
+func NewHandler(d Deps) (*Handler, error) {
+	if d.Accounts == nil || d.Catalog == nil || d.Router == nil || d.Billing == nil || d.Limits == nil || d.Memory == nil ||
+		d.Run == nil || d.Logger == nil {
+		return nil, errors.New("gateway: the handler needs every dependency")
+	}
+	if !d.Accounts.GatesLookups() {
+		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
+	}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, stopped: make(chan struct{})}
+	for _, prefix := range []string{"/v1", "/api/v1"} {
+		for path, format := range map[string]protocol.Format{
+			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
+		} {
+			h.mux.HandleFunc("POST "+prefix+path, h.call(format))
+			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))
+		}
+		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+	}
+	return h, nil
+}
+
+// ServeHTTP routes the request. It expects httpserver.Public around it, which gives every request its ID; the call
+// number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
+// routes that are not calls included.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
+	h.mux.ServeHTTP(w, r)
+}
+
+// Call is a request that has been admitted: its reservation is committed and its route is cut to the entries that
+// reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
+type Call struct {
+	ID        uuid.UUID // the request ID, which is also the call number
+	Format    protocol.Format
+	Request   protocol.Request
+	Body      []byte
+	Header    http.Header // the request headers that may go upstream
+	Session   routing.SessionKey
+	Admission accounts.Admission
+	Admitted  billing.Admitted
+	Hold      *billing.Hold
+	Plan      routing.Plan
+
+	site   accounts.Site
+	caller accounts.Caller
+	host   string
+	ip     netip.Addr
+	snap   *catalog.Snapshot
+	models []catalog.ModelID
+	sticky routing.EndpointID
+	over   routing.Override // what the request's provider object narrows the route by
+	rate   int              // requests of the key in the rate window, counted before admission
+
+	mu       sync.Mutex
+	releases []func()
+}
+
+// hold registers something to give back when the call is done, in reverse order.
+func (c *Call) hold(release func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releases = append(c.releases, release)
+}
+
+// Done gives back the call's in-flight slots and the memory of its body. It is safe to call more than once.
+func (c *Call) Done() {
+	c.mu.Lock()
+	releases := c.releases
+	c.releases = nil
+	c.mu.Unlock()
+	for _, release := range slices.Backward(releases) {
+		release()
+	}
+}
+
+// call serves one of the three call paths.
+func (h *Handler) call(format protocol.Format) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+		if err != nil {
+			h.fail(w, r, format, err)
+			return
+		}
+		defer release()
+		c, err := h.accept(w, r, format)
+		if err != nil {
+			h.fail(w, r, format, err)
+			return
+		}
+		h.Run(w, r, c)
+	}
+}
+
+var errUpgrade = invalid("Protocol upgrades such as WebSocket are not supported.")
+
+// refuseUpgrade answers the WebSocket handshake a client may try on a call path before it falls back to POST.
+func refuseUpgrade(format protocol.Format) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "" {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		writeRefusal(w, format, errUpgrade)
+	}
+}
+
+// accept takes a request as far as admission: recognise the site and the key from the headers alone, take the
+// slots, read the body, resolve the model, admit. On any failure the call's holds are given back; the one exception
+// is a lost admission, whose reservation may exist, so its settlement keeps them until it is done.
+func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol.Format) (*Call, error) {
+	if r.Header.Get("Upgrade") != "" {
+		return nil, errUpgrade
+	}
+	site, caller, err := h.authenticate(r)
+	if err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(httpserver.RequestID(r.Context()))
+	if err != nil {
+		return nil, err
+	}
+	c := &Call{ID: id, Format: format, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: clientIP(r)}
+	if err := h.take(w, r, c); err != nil {
+		if !errors.Is(err, errCommitUnknown) {
+			c.Done()
+		}
+		return nil, err
+	}
+	return c, nil
+}
+
+// take takes the call's slots, reads its body and admits it.
+func (h *Handler) take(w http.ResponseWriter, r *http.Request, c *Call) error {
+	release, err := h.Limits.InFlight.Acquire(accountKey(c.caller), 0)
+	if err != nil {
+		return err
+	}
+	c.hold(release)
+	if err := h.read(w, r, c); err != nil {
+		return err
+	}
+	return h.admit(r.Context(), c)
+}
+
+// authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
+// host that is not an API domain and a key that is not known are all the same 401.
+func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
+	site, surface, err := h.Accounts.SiteForHost(r.Host)
+	if errors.Is(err, accounts.ErrStale) {
+		return accounts.Site{}, accounts.Caller{}, err
+	}
+	if err != nil || surface != accounts.API {
+		return accounts.Site{}, accounts.Caller{}, errUnauthorized
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), h.Limits.cfg.KeyLookup)
+	defer cancel()
+	caller, err := h.Accounts.AuthenticateKey(ctx, site.ID, apiKey(r))
+	return site, caller, err
+}
+
+// apiKey is the key in Authorization: Bearer, or else in x-api-key.
+func apiKey(r *http.Request) string {
+	if scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && strings.EqualFold(scheme, "Bearer") {
+		return strings.TrimSpace(token)
+	}
+	return r.Header.Get("X-Api-Key")
+}
+
+// accountKey and keyKey are what the limits and the queue count an account and a key by.
+func accountKey(c accounts.Caller) string {
+	id := uuid.UUID(c.AccountID())
+	return string(id[:])
+}
+
+func keyKey(c accounts.Caller) string {
+	id := uuid.UUID(c.KeyID())
+	return string(id[:])
+}
+
+// forwarded are the request headers that go upstream; every other one is dropped, which includes the client's
+// credentials, x-axiom-*, x-claude-code-*, HTTP-Referer and X-Title (docs/domains/gateway.md「转发规则」). The values
+// are copied as they are: anthropic-beta is not filtered, because Claude Code's value changes with every version.
+var forwarded = []string{"Anthropic-Beta", "Anthropic-Version"}
+
+func forwardable(in http.Header) http.Header {
+	out := make(http.Header, len(forwarded))
+	for _, name := range forwarded {
+		if v := in.Values(name); len(v) > 0 {
+			out[name] = append([]string(nil), v...)
+		}
+	}
+	return out
+}
+
+// read reads the body and everything the request says: its summary, the models, its session and its count in the
+// rate window. Nothing here touches the database.
+func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
+	body, err := h.readBody(w, r, c)
+	if err != nil {
+		return err
+	}
+	req, err := protocol.Inspect(c.Format, body)
+	if err != nil {
+		return err
+	}
+	if req.Previous != "" { // continuing a stored response is M2 (docs/domains/gateway.md「Responses 的会话状态」)
+		return invalid("previous_response_id is not supported yet.")
+	}
+	over, err := override(req.Provider)
+	if err != nil {
+		return err
+	}
+	snap, err := h.Catalog.Current()
+	if err != nil {
+		return err
+	}
+	models, err := resolve(snap, &req)
+	if err != nil {
+		return err
+	}
+	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
+	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
+	c.sticky, _ = h.Router.Stuck(c.Session)
+	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
+	return nil
+}
+
+// resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an
+// alternate that does not is left out, as it could not be tried.
+func resolve(snap *catalog.Snapshot, req *protocol.Request) ([]catalog.ModelID, error) {
+	first, err := snap.ResolvePublic(req.Model)
+	if err != nil {
+		return nil, err
+	}
+	models := []catalog.ModelID{first.Model}
+	for _, name := range req.Models {
+		if m, err := snap.ResolvePublic(name); err == nil {
+			models = append(models, m.Model)
+		}
+	}
+	return models, nil
+}
+
+// fail answers a request that did not get through, unless its client has gone. A body that was too slow is answered
+// though the context has ended: net/http cancels it when the read deadline passes, and the connection can still be
+// written to.
+func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.Format, err error) {
+	if r.Context().Err() != nil && !errors.Is(err, errBodyTimeout) {
+		return
+	}
+	ref, expected := refusal(err)
+	switch {
+	case !expected:
+		h.Logger.Error("a request failed unexpectedly", "request_id", httpserver.RequestID(r.Context()), "err", err)
+	case ref.Status >= http.StatusInternalServerError:
+		h.Logger.Warn("a request was turned away", "request_id", httpserver.RequestID(r.Context()), "status", ref.Status, "err", err)
+	}
+	writeRefusal(w, format, ref)
+}

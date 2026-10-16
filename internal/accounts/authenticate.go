@@ -29,6 +29,9 @@ func (c Caller) KeyID() KeyID { return c.key }
 // AccountID is the account the key belongs to.
 func (c Caller) AccountID() AccountID { return c.account }
 
+// WorkspaceID is the workspace the key belongs to.
+func (c Caller) WorkspaceID() WorkspaceID { return c.workspace }
+
 // AuthenticateKey recognises raw as a key of site. A malformed key is refused before anything is hashed or read; a
 // known one is answered from memory with no database query; concurrent misses of one key share a single lookup. It
 // says nothing about whether the key may be used: Admit decides that.
@@ -70,6 +73,11 @@ func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) 
 // lookUp finds the key in the database, with no scope, under every hash version, and remembers the answer. The key
 // is a secret, so only its hashes leave the process.
 func (s *Service) lookUp(ctx context.Context, at keyHash, raw string) (Caller, error) {
+	release, err := s.slot(ctx)
+	if err != nil {
+		return Caller{}, fmt.Errorf("look up an API key: %w", err)
+	}
+	defer release()
 	hashes := [][]byte{at.hash[:]}
 	for _, v := range s.versions[1:] {
 		h := s.hashes.Sum(v, []byte(raw))

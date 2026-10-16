@@ -1,21 +1,11 @@
 import { expect, type Locator, type Page, type Route, test } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
+import { collectErrors } from "./collect-errors.ts";
 
 // The version `just web` stamped the build with; a test that compares against it fails when it is missing.
 const built = process.env.AXIOM_VERSION ?? "";
 // A program this build does not ship in.
 const deployed = "axiom v0.0.0-20991231000000-000000000000";
-
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  return errors;
-}
 
 // A signed-in account, on a program running the given version.
 async function openConsole(page: Page, version: string) {
