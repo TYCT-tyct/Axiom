@@ -353,6 +353,10 @@ func body(f protocol.Format, size int, lead string) []byte {
 
 var sizes = []int{1 << 10, 1 << 20, 4 << 20}
 
+// allocSizes are the sizes TestAllocs reads: two tell a constant from growth with the body, and each costs seconds under
+// the race detector.
+var allocSizes = sizes[:2]
+
 // TestAllocs holds that reading or rewriting a request allocates a constant more than jsonx.Validate does on it,
 // whatever its size (README.md「不变量」): Inspect's and Prepare's own allocations do not grow with the body. The
 // tokenizer's grow with objects wider than 64 names, so the bodies come both without and with them.
@@ -372,7 +376,7 @@ func TestAllocs(t *testing.T) {
 			for _, lead := range []string{"", wideTurn} {
 				if extra := extraAllocs(t, f, lead, c.read); extra[0] != extra[len(extra)-1] {
 					t.Errorf("%s, format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
-						c.name, f, lead != "", extra, sizes)
+						c.name, f, lead != "", extra, allocSizes)
 				}
 			}
 		}
@@ -397,18 +401,18 @@ func prepareInspected() func(protocol.Format, []byte) error {
 	}
 }
 
-// extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of sizes.
+// extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of allocSizes.
 func extraAllocs(t *testing.T, f protocol.Format, lead string, read func(protocol.Format, []byte) error) []float64 {
 	t.Helper()
 	allocs := func(read func() error) float64 {
-		return testing.AllocsPerRun(5, func() {
+		return steadyAllocs(func() {
 			if err := read(); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 	var extra []float64
-	for _, size := range sizes {
+	for _, size := range allocSizes {
 		b := body(f, size, lead)
 		extra = append(extra, allocs(func() error { return read(f, b) })-allocs(func() error { return jsonx.Validate(b) }))
 	}
