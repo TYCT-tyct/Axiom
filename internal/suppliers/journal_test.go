@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
@@ -242,14 +243,23 @@ func TestACrashBetweenSendAndSettleLeavesWhatCleanupNeeds(t *testing.T) {
 	}
 }
 
-// TestSettledRequestsJournalsArePurged: rows older than the time given are removed, and no others.
-func TestSettledRequestsJournalsArePurged(t *testing.T) {
+// TestOnlySettledRequestsJournalsArePurged: the journal of a request that settled (it has attempt costs) or was given up
+// as lost goes once it is old enough; that of one that did not settle stays however old, because cleanup recovers
+// the request from it.
+func TestOnlySettledRequestsJournalsArePurged(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
-	id := newRequest()
+	id, unsettled, lost := newRequest(), newRequest(), newRequest()
 	w.svc.Journal(w.entry(id, 1, "a", false))
 	w.svc.Journal(w.entry(id, 2, "b", false))
+	w.svc.Journal(w.entry(unsettled, 1, "c", true))
+	w.svc.Journal(w.entry(lost, 1, "d", true))
 	w.flush()
+	w.record(w.attempt(id, 1, "a"), w.attempt(id, 2, "b"))
+	own := pg.NewScope(false, []uuid.UUID{siteA}, nil)
+	if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return RecordLostRequest(t.Context(), tx, lost, siteA, accountA, nil) }); err != nil {
+		t.Fatal(err)
+	}
 	var purged int64
 	purge := func(before time.Time) {
 		w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
@@ -262,8 +272,43 @@ func TestSettledRequestsJournalsArePurged(t *testing.T) {
 		t.Fatalf("purged %d rows written a moment ago", purged)
 	}
 	purge(time.Now().Add(time.Hour))
-	if purged != 2 || len(w.journalOf(id)) != 0 {
-		t.Errorf("purged %d rows, %d left", purged, len(w.journalOf(id)))
+	if purged != 3 || len(w.journalOf(id)) != 0 || len(w.journalOf(lost)) != 0 {
+		t.Errorf("purged %d rows of the settled requests, want 3", purged)
+	}
+	if got := w.journalOf(unsettled); len(got) != 1 || got[0].Receipt.ref != "c" || !got[0].Committed {
+		t.Errorf("the journal of a request that never settled: %+v", got)
+	}
+}
+
+// TestABlockedWriteDoesNotStopTheLoop: a write that does not return is given up at the flush timeout, logged, and tried
+// again with the rows still in the buffer; when the database answers they are written and the waiters released.
+func TestABlockedWriteDoesNotStopTheLoop(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.svc.cfg.FlushEvery, w.svc.cfg.FlushTimeout = 5*time.Millisecond, 30*time.Millisecond
+	var calls atomic.Int32
+	w.svc.writeRows = func(ctx context.Context, rows []store.JournalRow) error {
+		if calls.Add(1) <= 3 {
+			<-ctx.Done() // the database does not answer
+			return ctx.Err()
+		}
+		return w.db.Tx(ctx, platformScope, func(tx pg.Tx) error { return store.UpsertJournal(ctx, tx, rows) })
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = w.svc.Run(ctx) }) //nolint:errcheck // the final flush is read from the database below
+	id := newRequest()
+	w.svc.Journal(w.entry(id, 1, "a", true))
+	waiting := w.svc.JournalFlushed(id)
+	select {
+	case <-waiting:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the loop never got past a blocked write")
+	}
+	cancel()
+	wg.Wait()
+	if calls.Load() < 4 || len(w.journalOf(id)) != 1 {
+		t.Errorf("%d write attempts, %d rows written; want at least 4 and 1", calls.Load(), len(w.journalOf(id)))
 	}
 }
 

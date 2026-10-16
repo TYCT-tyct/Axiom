@@ -183,17 +183,24 @@ func (s *Service) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			return s.Flush(flushCtx)
+			return s.flushWithin(context.WithoutCancel(ctx))
 		case <-time.After(wait):
 		}
-		if err := s.Flush(ctx); err != nil {
+		if err := s.flushWithin(ctx); err != nil {
+			s.cfg.Logger.ErrorContext(ctx, "the journal could not be written; it is kept and tried again", "error", err)
 			wait = min(wait*2, 30*time.Second)
 			continue
 		}
 		wait = s.cfg.FlushEvery
 	}
+}
+
+// flushWithin is one write with its own deadline: a database that stops answering, or a write that waits for a lock,
+// ends in an error after FlushTimeout, the rows stay in the buffer, and the loop goes on to its next try.
+func (s *Service) flushWithin(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.FlushTimeout)
+	defer cancel()
+	return s.Flush(ctx)
 }
 
 // Flush writes what is buffered in one statement.

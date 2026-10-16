@@ -96,10 +96,23 @@ func (q *Queries) DelistEndpoint(ctx context.Context, db DBTX, id uuid.UUID) (in
 }
 
 const holdOverdueCharges = `-- name: HoldOverdueCharges :many
-UPDATE suppliers.charge_records SET state = 'held', revision = revision + 1
-WHERE state = 'new' AND occurred_at < $1
-RETURNING id AS charge_id, revision, amount_native AS actual_native
+WITH due AS (
+    SELECT c.id FROM suppliers.charge_records c
+    WHERE c.state = 'new' AND c.funding = 'wallet' AND c.occurred_at < $1
+    ORDER BY c.occurred_at, c.id
+    LIMIT $2::int
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE suppliers.charge_records cr SET state = 'held', revision = cr.revision + 1
+FROM due
+WHERE cr.id = due.id
+RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native
 `
+
+type HoldOverdueChargesParams struct {
+	Before time.Time
+	Batch  int32
+}
 
 type HoldOverdueChargesRow struct {
 	ChargeID     uuid.UUID
@@ -107,8 +120,9 @@ type HoldOverdueChargesRow struct {
 	ActualNative string
 }
 
-func (q *Queries) HoldOverdueCharges(ctx context.Context, db DBTX, before time.Time) ([]HoldOverdueChargesRow, error) {
-	rows, err := db.Query(ctx, holdOverdueCharges, before)
+// At most one batch of the wallet charges that waited past the grace, oldest first; the rest are for the next batch.
+func (q *Queries) HoldOverdueCharges(ctx context.Context, db DBTX, arg HoldOverdueChargesParams) ([]HoldOverdueChargesRow, error) {
+	rows, err := db.Query(ctx, holdOverdueCharges, arg.Before, arg.Batch)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +280,7 @@ func (q *Queries) ListJournal(ctx context.Context, db DBTX, requestID uuid.UUID)
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.upstream_name, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
@@ -280,7 +294,6 @@ ORDER BY e.id, c.id
 
 type ListRoutableRow struct {
 	EndpointID     uuid.UUID
-	UpstreamName   string
 	Formats        []string
 	SupplierID     uuid.UUID
 	Kind           string
@@ -310,7 +323,6 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 		var i ListRoutableRow
 		if err := rows.Scan(
 			&i.EndpointID,
-			&i.UpstreamName,
 			&i.Formats,
 			&i.SupplierID,
 			&i.Kind,
@@ -340,7 +352,13 @@ const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
 SELECT request_id, attempt_seq, charge_ref FROM suppliers.attempt_costs
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1
 ORDER BY finished_at, request_id, attempt_seq
+LIMIT $2::int
 `
+
+type ListUnmatchedAttemptsParams struct {
+	Before time.Time
+	Batch  int32
+}
 
 type ListUnmatchedAttemptsRow struct {
 	RequestID  uuid.UUID
@@ -348,8 +366,8 @@ type ListUnmatchedAttemptsRow struct {
 	ChargeRef  *string
 }
 
-func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, before time.Time) ([]ListUnmatchedAttemptsRow, error) {
-	rows, err := db.Query(ctx, listUnmatchedAttempts, before)
+func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUnmatchedAttemptsParams) ([]ListUnmatchedAttemptsRow, error) {
+	rows, err := db.Query(ctx, listUnmatchedAttempts, arg.Before, arg.Batch)
 	if err != nil {
 		return nil, err
 	}
@@ -373,9 +391,11 @@ WITH pairs AS (
     SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq
     FROM suppliers.charge_records cr
     JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
-    WHERE cr.state <> 'matched' AND ac.charge_record_id IS NULL
+    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
         AND (SELECT count(*) FROM suppliers.attempt_costs x
              WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
+    ORDER BY cr.id
+    LIMIT $1::int
 ), claimed AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
@@ -407,8 +427,8 @@ type MatchChargesRow struct {
 // which one it belongs to is not known. The attempt is claimed first, and a charge is attributed only to an attempt
 // this statement claimed, so two matchers at once cannot give one attempt two charges or one charge two attempts. A
 // charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update.
-func (q *Queries) MatchCharges(ctx context.Context, db DBTX) ([]MatchChargesRow, error) {
-	rows, err := db.Query(ctx, matchCharges)
+func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]MatchChargesRow, error) {
+	rows, err := db.Query(ctx, matchCharges, batch)
 	if err != nil {
 		return nil, err
 	}
@@ -437,10 +457,30 @@ func (q *Queries) MatchCharges(ctx context.Context, db DBTX) ([]MatchChargesRow,
 	return items, nil
 }
 
-const purgeJournal = `-- name: PurgeJournal :execrows
-DELETE FROM suppliers.attempt_journal WHERE written_at < $1
+const pauseSupplierForFunding = `-- name: PauseSupplierForFunding :execrows
+UPDATE suppliers.suppliers SET status = 'needs_attention', status_reason = 'funding_not_wallet', config_gen = config_gen + 1
+WHERE id = $1 AND status IN ('connecting', 'active', 'low_balance')
 `
 
+// A charge that is not on the wallet (a subscription) is a cost this system does not model: the supplier stops being
+// routed to until a person looks at it.
+func (q *Queries) PauseSupplierForFunding(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
+	result, err := db.Exec(ctx, pauseSupplierForFunding, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeJournal = `-- name: PurgeJournal :execrows
+DELETE FROM suppliers.attempt_journal j
+WHERE j.written_at < $1
+    AND (EXISTS (SELECT FROM suppliers.attempt_costs a WHERE a.request_id = j.request_id)
+        OR EXISTS (SELECT FROM suppliers.lost_requests l WHERE l.request_id = j.request_id))
+`
+
+// Only the journal of a request that settled is of no use any more: one that has attempt costs, or was given up as lost.
+// A request that did not settle keeps its rows however old, since they are what cleanup recovers it from.
 func (q *Queries) PurgeJournal(ctx context.Context, db DBTX, before time.Time) (int64, error) {
 	result, err := db.Exec(ctx, purgeJournal, before)
 	if err != nil {

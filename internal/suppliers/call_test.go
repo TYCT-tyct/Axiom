@@ -6,14 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -301,4 +304,108 @@ func TestCostPricesUsageWithTheReceiptsSchedule(t *testing.T) {
 	if err != nil || got.Flag != CostUnpriced || !got.Missing.Has(catalog.ItemInput) {
 		t.Errorf("a schedule not held: %+v, %v", got, err)
 	}
+}
+
+// TestUsageTheSupplierGaveThatHasNoItemIsNotComplete: usage with no billing item cannot be priced, so an estimate that has
+// it is not complete, whether or not there is usage of known items beside it, and is not "no usage".
+func TestUsageTheSupplierGaveThatHasNoItemIsNotComplete(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := a.Done()
+	unknown := []catalog.UnknownUsage{{Field: "usage.server_tool_use.new_tool_requests", Value: "3"}}
+	both, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 100}, catalog.ServiceTierStandard, unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	only, err := catalog.NewUsage(nil, catalog.ServiceTierStandard, unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, usage := range map[string]catalog.Usage{"with known usage": both, "alone": only} {
+		cost, err := w.svc.Cost(receipt, []catalog.Usage{usage})
+		if err != nil || cost.Flag != CostUnpriced || !cost.Unknown {
+			t.Errorf("unknown usage %s: %+v, %v, want unpriced", name, cost, err)
+		}
+	}
+	// And it is kept in the record of the attempt, with the count of the known items.
+	id := newRequest()
+	rec := w.attempt(id, 1, "ref-u")
+	rec.Usage = []catalog.Usage{both}
+	cost, err := w.svc.Cost(receipt, rec.Usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Cost = cost
+	w.record(rec)
+	var usage string
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return tx.QueryRow(ctx, "SELECT usage::text FROM suppliers.attempt_costs WHERE request_id = $1", uuid.UUID(id)).Scan(&usage)
+	})
+	if !strings.Contains(usage, "new_tool_requests") || !strings.Contains(usage, `"input": 100`) || w.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1 AND cost_flag = 'unpriced'", uuid.UUID(id)) != 1 {
+		t.Errorf("the stored usage %s", usage)
+	}
+}
+
+// TestCallsDoNotWaitForAReload: nothing a call does takes the lock a reload holds, so a reload of any size cannot make
+// an attempt wait; and reloading while calls run is safe.
+func TestCallsDoNotWaitForAReload(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 100)
+	w.svc.reloadMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a, err := w.svc.Acquire(w.endpoint)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = a.Policy()
+		if _, err := w.svc.Cost(a.Receipt(), nil); err != nil {
+			t.Error(err)
+		}
+		w.svc.SetMeasuredCancels(w.endpoint, true)
+		a.Done()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("a call waited for a reload that was in progress")
+	}
+	w.svc.reloadMu.Unlock()
+}
+
+// TestReloadingWhileCallsRunIsSafe: reloads in a row while goroutines acquire, price and finish attempts (run with -race).
+func TestReloadingWhileCallsRunIsSafe(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 100)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if a, err := w.svc.Acquire(w.endpoint); err == nil {
+					_ = a.Policy()
+					_, _ = w.svc.Cost(a.Receipt(), nil) //nolint:errcheck // the point is that it runs
+					a.Done()
+				}
+			}
+		})
+	}
+	for range 5 {
+		if err := w.svc.Reload(t.Context()); err != nil {
+			t.Error(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }

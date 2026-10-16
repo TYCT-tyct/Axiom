@@ -10,7 +10,7 @@ WHERE id = @id;
 -- name: ListRoutable :many
 -- Every credential that can serve an endpoint: the supplier in use, the group chosen, the endpoint enabled with a cost
 -- known, and a key that is bound. Expiry and cooldown are judged by the clock when a credential is picked.
-SELECT e.id AS endpoint_id, e.upstream_name, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
@@ -27,7 +27,12 @@ SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id,
 FROM suppliers.attempt_journal WHERE request_id = @request_id ORDER BY attempt_seq;
 
 -- name: PurgeJournal :execrows
-DELETE FROM suppliers.attempt_journal WHERE written_at < @before;
+-- Only the journal of a request that settled is of no use any more: one that has attempt costs, or was given up as lost.
+-- A request that did not settle keeps its rows however old, since they are what cleanup recovers it from.
+DELETE FROM suppliers.attempt_journal j
+WHERE j.written_at < @before
+    AND (EXISTS (SELECT FROM suppliers.attempt_costs a WHERE a.request_id = j.request_id)
+        OR EXISTS (SELECT FROM suppliers.lost_requests l WHERE l.request_id = j.request_id));
 
 -- name: InsertLostRequest :exec
 INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endpoint_ids)
@@ -48,9 +53,11 @@ WITH pairs AS (
     SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq
     FROM suppliers.charge_records cr
     JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
-    WHERE cr.state <> 'matched' AND ac.charge_record_id IS NULL
+    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
         AND (SELECT count(*) FROM suppliers.attempt_costs x
              WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
+    ORDER BY cr.id
+    LIMIT @batch::int
 ), claimed AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
@@ -66,9 +73,24 @@ RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, cl
     (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit;
 
 -- name: HoldOverdueCharges :many
-UPDATE suppliers.charge_records SET state = 'held', revision = revision + 1
-WHERE state = 'new' AND occurred_at < @before
-RETURNING id AS charge_id, revision, amount_native AS actual_native;
+-- At most one batch of the wallet charges that waited past the grace, oldest first; the rest are for the next batch.
+WITH due AS (
+    SELECT c.id FROM suppliers.charge_records c
+    WHERE c.state = 'new' AND c.funding = 'wallet' AND c.occurred_at < @before
+    ORDER BY c.occurred_at, c.id
+    LIMIT @batch::int
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE suppliers.charge_records cr SET state = 'held', revision = cr.revision + 1
+FROM due
+WHERE cr.id = due.id
+RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native;
+
+-- name: PauseSupplierForFunding :execrows
+-- A charge that is not on the wallet (a subscription) is a cost this system does not model: the supplier stops being
+-- routed to until a person looks at it.
+UPDATE suppliers.suppliers SET status = 'needs_attention', status_reason = 'funding_not_wallet', config_gen = config_gen + 1
+WHERE id = @id AND status IN ('connecting', 'active', 'low_balance');
 
 -- name: AssignChargeToLostRequest :many
 UPDATE suppliers.charge_records SET state = 'assigned', attribution = 'lost_request', lost_request_id = @lost_request_id,
@@ -93,4 +115,5 @@ WHERE id = @id AND cost_state = 'known';
 -- name: ListUnmatchedAttempts :many
 SELECT request_id, attempt_seq, charge_ref FROM suppliers.attempt_costs
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before
-ORDER BY finished_at, request_id, attempt_seq;
+ORDER BY finished_at, request_id, attempt_seq
+LIMIT @batch::int;

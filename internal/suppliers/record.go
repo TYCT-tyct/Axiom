@@ -36,20 +36,23 @@ type AttemptCost struct {
 	Native  platform.Exact
 	Flag    CostFlag
 	Missing catalog.ItemSet
+	// Unknown is set when the supplier reported usage that has no billing item: it cannot be priced, so the estimate is
+	// not complete, and it is not the same as no usage.
+	Unknown bool
 }
 
 // Cost prices the usage of an attempt, one entry per segment, with the schedule its receipt names. It reads memory
 // only. A schedule it does not hold, which can only be from a database that changed under a receipt, prices nothing and
 // says so with the flag, so that the cost is never taken for zero.
 func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, error) {
-	s.mu.Lock()
-	schedule := s.schedules[r.schedule]
-	s.mu.Unlock()
+	schedule := (*s.schedules.Load())[r.schedule]
 	var cost AttemptCost
 	used := false
 	for _, u := range usage {
 		items := usedItems(u)
-		used = used || items != 0
+		unknown := len(u.Unknown()) > 0
+		cost.Unknown = cost.Unknown || unknown
+		used = used || items != 0 || unknown
 		if schedule == nil {
 			cost.Missing |= items
 			continue
@@ -66,7 +69,7 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 	switch {
 	case !used:
 		cost.Flag = CostNoUsage
-	case cost.Missing != 0:
+	case cost.Missing != 0 || cost.Unknown:
 		cost.Flag = CostUnpriced
 	}
 	return cost, nil
@@ -134,6 +137,7 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 // usageOf is the usage of an attempt as stored: the counts of each item added over the segments, and the tier.
 func usageOf(segments []catalog.Usage) ([]byte, error) {
 	items := map[string]int64{}
+	unknown := []map[string]string{}
 	tier := catalog.ServiceTierStandard
 	for i, u := range segments {
 		if i == 0 {
@@ -144,8 +148,11 @@ func usageOf(segments []catalog.Usage) ([]byte, error) {
 				items[it.String()] += n
 			}
 		}
+		for _, k := range u.Unknown() {
+			unknown = append(unknown, map[string]string{"field": k.Field, "value": k.Value})
+		}
 	}
-	return jsonx.MarshalCanonical(map[string]any{"items": items, "tier": tier.String()})
+	return jsonx.MarshalCanonical(map[string]any{"items": items, "unknown": unknown, "tier": tier.String()})
 }
 
 // decimal writes an exact amount as the decimal text the database reads, without a float in between.
@@ -202,8 +209,9 @@ func Reconcile(ctx context.Context, tx pg.Tx, now time.Time, cfg ReconcileConfig
 }
 
 // RecordCharges stores a page of the supplier's charge records, as the scan of its adapter read them, in the sync
-// engine's transaction. A record already stored stays as it was.
-func RecordCharges(ctx context.Context, tx pg.Tx, supplier uuid.UUID, charges []adapter.Charge) error {
+// engine's transaction. A record already stored stays as it was. A record not drawn on the wallet is stored and
+// otherwise ignored, and pauses the supplier; the number of them is returned for the engine to alert on.
+func RecordCharges(ctx context.Context, tx pg.Tx, supplier uuid.UUID, charges []adapter.Charge) (nonWallet int, err error) {
 	return reconcile.Ingest(ctx, tx, supplier, charges)
 }
 

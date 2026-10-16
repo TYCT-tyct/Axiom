@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +36,10 @@ type Config struct {
 	Clock func() time.Time
 	// FlushEvery is how often the journal is written; nil is a second.
 	FlushEvery time.Duration
+	// FlushTimeout is how long one write of the journal may take before it is given up and tried again; nil is 10 seconds.
+	FlushTimeout time.Duration
+	// Logger gets the failures of the journal's writes; nil is slog.Default.
+	Logger *slog.Logger
 	// CredentialCooldown is how long a credential the supplier refused rests; QuotaCooldown is how long one whose
 	// allowance is used up rests when the supplier does not say when it returns.
 	CredentialCooldown, QuotaCooldown time.Duration
@@ -47,12 +53,16 @@ type Service struct {
 	registry *registry.Registry
 	now      func() time.Time
 
-	snap atomic.Pointer[snapshot]
-	mu   sync.Mutex
+	// The snapshot and the schedules are built apart from the calls and published whole; a call reads them with one
+	// atomic load and no lock. A receipt may name a schedule that is no longer an endpoint's, so schedules only grow.
+	snap      atomic.Pointer[snapshot]
+	schedules atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
+	reloadMu  sync.Mutex // one Reload at a time; no call takes it
 	// What outlives a snapshot: the in-flight count and rest of a credential must not reset when the snapshot is rebuilt
-	// while calls run, and a receipt may name a schedule that is no longer the endpoint's.
+	// while calls run. Each lock is held for a lookup, never while anything is parsed or decrypted.
+	runtimeMu sync.Mutex
 	runtime   map[uuid.UUID]*credRuntime
-	schedules map[uuid.UUID]*catalog.Schedule
+	cancelsMu sync.RWMutex
 	cancels   map[EndpointID]bool // measured by quality: whether the supplier stops when the client does
 
 	journal   *journal
@@ -80,11 +90,18 @@ func New(cfg Config) (*Service, error) {
 	if cfg.QuotaCooldown <= 0 {
 		cfg.QuotaCooldown = 15 * time.Minute
 	}
+	if cfg.FlushTimeout <= 0 {
+		cfg.FlushTimeout = 10 * time.Second
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	s := &Service{
 		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{},
-		schedules: map[uuid.UUID]*catalog.Schedule{}, cancels: map[EndpointID]bool{}, journal: newJournal(),
+		cancels: map[EndpointID]bool{}, journal: newJournal(),
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
+	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
 	return s, nil
 }
 
@@ -97,7 +114,7 @@ type credRuntime struct {
 // endpoint is what is needed to call one endpoint.
 type endpoint struct {
 	id, supplier, schedule uuid.UUID
-	origin, upstreamName   string
+	origin                 string
 	quirks                 adapter.CallQuirks
 	creds                  []*credential
 }
@@ -114,8 +131,11 @@ type snapshot struct{ endpoints map[EndpointID]*endpoint }
 
 // Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A key
 // that does not open, or a supplier of a kind with no adapter, fails the reload and leaves the old snapshot in place:
-// it is a configuration to fix, and half a snapshot would route around it silently.
+// it is a configuration to fix, and half a snapshot would route around it silently. The new snapshot is built on its
+// own, with no lock the calls use, and replaces the old one in a single step.
 func (s *Service) Reload(ctx context.Context) error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 	var rows []store.ListRoutableRow
 	err := s.cfg.DB.ReadTx(ctx, s.cfg.Scope, func(tx pg.Tx) (err error) {
 		rows, err = store.New().ListRoutable(ctx, tx)
@@ -125,10 +145,9 @@ func (s *Service) Reload(ctx context.Context) error {
 		return fmt.Errorf("read the endpoints: %w", err)
 	}
 	next := &snapshot{endpoints: map[EndpointID]*endpoint{}}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	schedules := maps.Clone(*s.schedules.Load())
 	for _, r := range rows {
-		ep, err := s.endpointOf(next, r)
+		ep, err := s.endpointOf(next, schedules, r)
 		if err != nil {
 			return err
 		}
@@ -138,11 +157,12 @@ func (s *Service) Reload(ctx context.Context) error {
 		}
 		ep.creds = append(ep.creds, c)
 	}
+	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.snap.Store(next)
 	return nil
 }
 
-func (s *Service) endpointOf(next *snapshot, r store.ListRoutableRow) (*endpoint, error) {
+func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) (*endpoint, error) {
 	if ep, ok := next.endpoints[r.EndpointID]; ok {
 		return ep, nil
 	}
@@ -150,17 +170,14 @@ func (s *Service) endpointOf(next *snapshot, r store.ListRoutableRow) (*endpoint
 	if !ok {
 		return nil, fmt.Errorf("endpoint %s: no adapter of kind %q", r.EndpointID, r.Kind)
 	}
-	if _, known := s.schedules[r.CostScheduleID]; !known {
+	if _, known := schedules[r.CostScheduleID]; !known {
 		sched, err := catalog.ParseSchedule(r.Schedule)
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %s: its cost schedule %s: %w", r.EndpointID, r.CostScheduleID, err)
 		}
-		s.schedules[r.CostScheduleID] = &sched
+		schedules[r.CostScheduleID] = &sched
 	}
-	ep := &endpoint{
-		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin,
-		upstreamName: r.UpstreamName, quirks: a.Calls(),
-	}
+	ep := &endpoint{id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls()}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
 }
@@ -177,27 +194,34 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
-	rt, ok := s.runtime[r.CredentialID]
+	return &credential{id: r.CredentialID, key: key, max: r.MaxConcurrency, expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID)}, nil
+}
+
+// runtimeOf is the running state of a credential, made when it is first seen and kept after.
+func (s *Service) runtimeOf(id uuid.UUID) *credRuntime {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	rt, ok := s.runtime[id]
 	if !ok {
 		rt = &credRuntime{}
-		s.runtime[r.CredentialID] = rt
+		s.runtime[id] = rt
 	}
-	return &credential{id: r.CredentialID, key: key, max: r.MaxConcurrency, expires: r.ExpiresAt, rt: rt}, nil
+	return rt
 }
 
 // SetMeasuredCancels records what quality measured for an endpoint: whether the supplier stops generating when the
 // client disconnects. It replaces the adapter's default for that endpoint from then on.
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cancelsMu.Lock()
+	defer s.cancelsMu.Unlock()
 	s.cancels[ep] = cancels
 }
 
 // Policy is how calls to the endpoint behave: the adapter's default, with the measured cancellation over it.
 func (s *Service) policy(ep *endpoint) adapter.CallPolicy {
 	p := ep.quirks.Policy()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cancelsMu.RLock()
+	defer s.cancelsMu.RUnlock()
 	if measured, ok := s.cancels[ep.id]; ok {
 		p.Cancels = measured
 	}

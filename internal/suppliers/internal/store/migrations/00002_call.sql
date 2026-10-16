@@ -137,6 +137,14 @@ CREATE TABLE suppliers.attempt_journal (
     written_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- The work of reconciliation is the few rows still waiting, however many are done: each query that picks them has a partial
+-- index of just those, so its cost follows the backlog and not the history.
+CREATE INDEX charge_records_new ON suppliers.charge_records (occurred_at, id) WHERE state = 'new';
+CREATE INDEX charge_records_unmatched ON suppliers.charge_records (id) WHERE state <> 'matched';
+CREATE INDEX attempt_costs_pending ON suppliers.attempt_costs (finished_at, request_id, attempt_seq)
+    WHERE state = 'pending' AND charge_ref IS NOT NULL;
+CREATE INDEX attempt_journal_written ON suppliers.attempt_journal (written_at);
+
 -- Row-level security. Rows made in a request's tenant scope follow it; the rest are the platform's.
 ALTER TABLE suppliers.cost_schedules ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY supplier_visible ON suppliers.cost_schedules
