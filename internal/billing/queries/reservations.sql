@@ -27,31 +27,18 @@ INSERT INTO billing.balances (account_id, site_id, floor) VALUES (@account_id, @
 -- name: LockBalance :one
 SELECT balance, floor, reserved FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
 
--- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it. A
--- window is the UTC day, week or month of a limit that resets (accounts' daily, weekly, monthly) by the database's
--- clock, and the epoch, which no window of a limit that resets can start at, for one that never resets or no limit.
+-- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
+-- Counters are kept per UTC day by the database's clock; a limit's window is the days since the start of its UTC day,
+-- week or month, or every day for a limit that never resets, so changing how often a limit resets counts all that
+-- the new window covers.
 -- name: ReadUsage :one
-WITH windows AS (
-    SELECT
-        CASE @workspace_reset::text
-            WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
-            WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
-            WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
-            ELSE 'epoch' END AS workspace_window,
-        CASE @key_reset::text
-            WHEN 'daily' THEN date_trunc('day', clock_timestamp(), 'UTC')
-            WHEN 'weekly' THEN date_trunc('week', clock_timestamp(), 'UTC')
-            WHEN 'monthly' THEN date_trunc('month', clock_timestamp(), 'UTC')
-            ELSE 'epoch' END AS key_window
-)
 SELECT
-    w.workspace_window::timestamptz AS workspace_window,
-    w.key_window::timestamptz AS key_window,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = @workspace_id AND s.window_start = w.workspace_window), 0)::bigint AS workspace_used,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = @key_id AND s.window_start = w.key_window), 0)::bigint AS key_used
-FROM windows w;
+    date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day,
+    coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
+        WHERE s.subject = @workspace_id AND s.window_start >= billing.window_from(@workspace_reset::text)), 0)::bigint
+        AS workspace_used,
+    coalesce((SELECT sum(s.spent + s.reserved) FROM billing.spend s
+        WHERE s.subject = @key_id AND s.window_start >= billing.window_from(@key_reset::text)), 0)::bigint AS key_used;
 
 -- One statement writes the reservation and its three counters.
 -- name: InsertReservation :exec
@@ -70,15 +57,9 @@ VALUES (@workspace_id, @workspace_window, @site_id, @account_id, @amount),
 ON CONFLICT (subject, window_start) DO UPDATE SET reserved = s.reserved + excluded.reserved;
 
 -- name: GetReservation :one
-SELECT r.segment, r.amount, r.state, r.workspace_window, r.key_window,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = r.workspace_id AND s.window_start = r.workspace_window), 0)::bigint AS workspace_used,
-    coalesce((SELECT s.spent + s.reserved FROM billing.spend s
-        WHERE s.subject = r.key_id AND s.window_start = r.key_window), 0)::bigint AS key_used
-FROM billing.reservations r
-WHERE r.request_id = @request_id;
+SELECT segment, amount, state, workspace_window, key_window FROM billing.reservations WHERE request_id = @request_id;
 
--- Compare and write: only the next segment of a pending reservation, so a retried extension changes nothing.
+-- Compare and write on the segment read under the lock.
 -- name: ExtendReservation :execrows
 UPDATE billing.reservations SET segment = segment + 1, amount = amount + @delta
 WHERE request_id = @request_id AND segment = @previous_segment AND state = 'pending';
@@ -99,4 +80,5 @@ WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
 INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
     workspace_window, key_window, segment, amount, state, deadline)
 VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
-    'epoch', 'epoch', 0, 0, 'released', clock_timestamp());
+    date_trunc('day', clock_timestamp(), 'UTC'), date_trunc('day', clock_timestamp(), 'UTC'), 0, 0, 'released',
+    clock_timestamp());

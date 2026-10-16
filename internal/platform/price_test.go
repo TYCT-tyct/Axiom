@@ -145,7 +145,8 @@ func FuzzAdd(f *testing.F) {
 	})
 }
 
-// FuzzCmp checks the comparison against math/big over the whole signed range, both words' edges seeded.
+// FuzzCmp checks the comparison and the negation against math/big over the whole signed range, both words' edges
+// seeded.
 func FuzzCmp(f *testing.F) {
 	for _, pair := range [][2]Exact{{maxExact, minExact}, {{0, 1 << 63}, {0, 1}}, {{-1, 1<<64 - 1}, {}}, {{1, 0}, {0, 1<<64 - 1}}} {
 		f.Add(pair[0].hi, pair[0].lo, pair[1].hi, pair[1].lo)
@@ -154,6 +155,11 @@ func FuzzCmp(f *testing.F) {
 		a, b := Exact{ahi, alo}, Exact{bhi, blo}
 		if got, want := a.Cmp(b), a.Rat().Cmp(b.Rat()); got != want {
 			t.Fatalf("%v.Cmp(%v) = %d, want %d", a, b, got, want)
+		}
+		if a != minExact {
+			if got, want := a.Neg().Rat(), new(big.Rat).Neg(a.Rat()); got.Cmp(want) != 0 {
+				t.Fatalf("%v.Neg() = %s, want %s", a, got, want)
+			}
 		}
 	})
 }
