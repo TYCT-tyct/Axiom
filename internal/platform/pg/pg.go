@@ -256,6 +256,15 @@ func uuidArray(ids []uuid.UUID) string {
 	return "{" + strings.Join(texts, ",") + "}"
 }
 
+// Duplicate reports whether err is a unique constraint refusing a row, and names the constraint, so a module can tell
+// a duplicate its users can cause, such as an email already registered, from a failure, without importing pgx.
+func Duplicate(err error) (constraint string, ok bool) {
+	if e, ok := errors.AsType[*pgconn.PgError](err); ok && e.Code == "23505" {
+		return e.ConstraintName, true
+	}
+	return "", false
+}
+
 // IsDataError reports whether the database refused the data itself (SQLSTATE class 22, a malformed value, or 23, a
 // violated constraint) rather than failing to take it (a lost connection, a restart, a timeout). A writer that
 // retries failures retries only the second kind: the first never succeeds, and retrying it would hold up every row
