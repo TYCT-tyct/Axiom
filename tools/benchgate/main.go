@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -238,7 +239,7 @@ func gate(base, head measurements) (problems, removed []string) {
 			continue
 		}
 		compared++
-		if lowest(samples) > lowest(before) {
+		if lowest(samples) > lowest(before)+tolerance(lowest(before)) {
 			problems = append(problems, fmt.Sprintf("more allocations: %s: %g -> %g %s", name, lowest(before), lowest(samples), allocsUnit))
 		}
 	}
@@ -257,6 +258,13 @@ func gate(base, head measurements) (problems, removed []string) {
 	sort.Strings(removed)
 	return problems, removed
 }
+
+// tolerance is how far above the base count a benchmark's count may be: a thousandth of it, rounded down, so counts
+// below a thousand are exact. allocs/op is the total allocations over the iterations, rounded down, and a run of few
+// iterations spreads the runtime's occasional allocations of its own into one more per iteration, in every run alike,
+// so the minimum cannot remove it. A relay or conversion that allocates once more per event rises by tens to hundreds,
+// far above a thousandth of a count of thousands.
+func tolerance(base float64) float64 { return math.Floor(base / 1000) }
 
 // lowest is the allocation count of a benchmark: the runtime only ever adds allocations of its own to a run (after
 // a garbage collection, for one), never removes any, so the smallest of the -count samples is the code's own count,
