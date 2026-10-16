@@ -197,4 +197,6 @@
 - 各字段的最终名称和结构写入接口契约时确定
 - `provider.only`、`ignore`、`order`：用户写的是官方 API 的名称或中转站分组的代号（[术语表](../glossary.md)），路由按供应商 ID 过滤；名称到 ID 的对应还没有模块提供（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上），有了才能支持，在此之前返回 400。`max_price` 的单位按本站记账单位每百万 token，二级站点用人民币记账时与 OpenRouter 的美元不同，是否要换算待负责人定
 - 402 的错误体附所需金额和在途预留，`limit_source` 区分 `pending`、`pending_correction`，会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`；预留表的状态只有 `pending`、`released`，没有已暂估，`pending_correction` 无从区分，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
+- 上游因请求自身拒绝（4xx）时「保留原文」：suppliers 的 `Failure` 按设计不带上游的文字（对方的文字不进错误、日志和表），gateway 现在回 400 `invalid_request`，不带原文，也没有 `upstream_rejected`；要保留原文，得由适配器把一段筛过的原文放进 `Failure`，并重新评估“对方的文字不进日志和表”这条不变量
+- 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做

@@ -150,6 +150,7 @@ type noSuppliers struct{}
 func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
 	return nil
 }
+
 func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
 	return billing.JournalAttempt{}, false, nil
 }
