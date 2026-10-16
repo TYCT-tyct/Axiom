@@ -40,8 +40,25 @@ type Adapter interface {
 	Calls() CallQuirks
 }
 
-// Detection is what Detect recognised.
-type Detection struct{ Generation, Version string }
+// Detection is what Detect recognised. Captcha is set when the supplier's login needs a human check, which no program
+// can pass: its credentials have to be made by a person.
+type Detection struct {
+	Generation, Version string
+	Captcha             bool
+}
+
+// The errors every adapter reports the same way, so the module's shared code can tell what to do without reading the
+// supplier's words. They wrap at most a code from a fixed list, never text from the supplier.
+var (
+	// ErrNotRecognised: Detect found that the address is not a supplier system of this adapter's kind.
+	ErrNotRecognised = errors.New("adapter: not a system of this kind")
+	// ErrAuthRejected: the supplier refused the account credentials (expired, revoked, missing a permission). Polling
+	// the supplier stops until a person fixes them; trying again would only risk the account.
+	ErrAuthRejected = errors.New("adapter: the supplier rejected the account credentials")
+	// ErrUnrecognised: the supplier answered in a form this adapter does not know, as after an upgrade there. Only the
+	// task that read it stops, and nothing it read is written.
+	ErrUnrecognised = errors.New("adapter: the response is not in a form this adapter knows")
+)
 
 // Amount is a quantity in the supplier's native unit, as decimal text at the supplier's own precision. Upstream
 // amounts never pass through float64: a rounded cost would show up as a difference at reconciliation.
@@ -69,6 +86,10 @@ type LoginStore interface {
 var ErrStaleLogin = errors.New("adapter: the stored login changed since it was read")
 
 // Manager is the read-only management half of an adapter.
+//
+// A listing that takes more requests than a rate bucket allows in a window may be read over several calls: when a request
+// is refused for want of allowance (an error wrapping ErrBucketsFull), the Manager may keep how far the listing got, and
+// the call made again on the same Manager continues. The module keeps a Manager through the retries of a round.
 type Manager interface {
 	Account(ctx context.Context) (Account, error)
 	Offer(ctx context.Context) (Offer, error)
@@ -98,6 +119,10 @@ type Group struct {
 	Ratio     Amount
 	Facts     GroupFacts
 	Models    []Model
+	// ModelsUnread is set when the supplier did not let the adapter read this group's models this time (no key in the
+	// group, or a balance too low to list): Models is then empty because nothing was read, and the module keeps the
+	// models it last saw instead of taking the group to have none.
+	ModelsUnread bool
 }
 
 // GroupFacts is a group's facts as canonical JSON.
@@ -109,6 +134,9 @@ type Model struct {
 	UpstreamName string
 	Formats      []protocol.Format
 	Cost         *catalog.Schedule
+	// Without are the capabilities the supplier's price does not cover (images priced at a ratio of their own, say):
+	// the endpoint does not claim them, so routing keeps requests that need them away.
+	Without protocol.Capabilities
 }
 
 // KeyRef is the supplier's own id of a key.
