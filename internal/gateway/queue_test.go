@@ -204,3 +204,24 @@ func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
 		}
 	})
 }
+
+// A call whose time is spent is refused 429 whatever else Wait could answer: a release that found nobody waiting makes
+// the epoch stale, and that must not send a call past its deadline for another attempt.
+func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		q := newQueue(5, 5)
+		stale := q.Epoch()
+		q.Wake() // nobody waits: the epoch moves on, so a call with a live deadline is told to retry
+		if err := q.Wait(ctx, "a", stale, time.Now().Add(queueWait)); err != nil {
+			t.Fatalf("with time left and a stale epoch: %v, want a retry", err)
+		}
+		for name, deadline := range map[string]time.Time{"now": time.Now(), "past": time.Now().Add(-time.Second)} {
+			if err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, ErrRateLimited) {
+				t.Errorf("a deadline that is %s, with a stale epoch: %v, want ErrRateLimited", name, err)
+			}
+		}
+		if q.queued() != 0 {
+			t.Errorf("%d still queued", q.queued())
+		}
+	})
+}

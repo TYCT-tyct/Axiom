@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"maps"
 	"math/big"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -98,17 +99,21 @@ func noNames(_ *routing.Override, name string, value []byte) error {
 	return nil
 }
 
-// strategies are the values of sort. Routing has one strategy for speed: throughput first, then time to first token.
-var strategies = map[string]routing.Strategy{"price": routing.Cheapest, "throughput": routing.Fastest, "latency": routing.Fastest}
+// strategies are the values of sort that routing has a ranking for. Its Fastest ranks by throughput and only then by time
+// to first token, so it is not a ranking by latency: sort latency is refused rather than served as throughput.
+var strategies = map[string]routing.Strategy{"price": routing.Cheapest, "throughput": routing.Fastest}
 
 func readSort(o *routing.Override, name string, value []byte) error {
 	var by string
 	if err := jsonx.Unmarshal(value, &by); err != nil {
-		return mismatch(name, "price, throughput or latency")
+		return mismatch(name, "price or throughput")
+	}
+	if by == "latency" {
+		return unsupported(name + " latency")
 	}
 	s, ok := strategies[by]
 	if !ok {
-		return mismatch(name, "price, throughput or latency")
+		return mismatch(name, "price or throughput")
 	}
 	o.Sort = &s
 	return nil
@@ -187,23 +192,41 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 	return nil
 }
 
-// perToken turns a JSON number of credits per million tokens into the price of one token. The number is read as an
-// exact fraction, never through a float, so the limit is exactly what was written.
+// priceNumber is a plain JSON number of at most a three-digit exponent: digits, an optional fraction, an optional
+// exponent. Nothing else is a price, and the exponent's size is bounded here, before any arithmetic.
+var priceNumber = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]{1,3}))?$`)
+
+// perToken turns a JSON number of credits per million tokens into the price of one token. The number is read as exact
+// decimal digits and a power of ten, never through a float, so the limit is exactly what was written. A unit price
+// counts 10⁻¹⁵ of a credit and a million tokens make 10⁻⁶ of that, so the price is the number times 10⁹ units, which
+// has to be a whole number and at most 10¹⁸ (UnitPrice's limit). The digits and the power are checked to be within
+// those bounds before the big integer is made, so what an exponent such as 1e1000000 asks for is never computed.
 func perToken(number []byte) (platform.UnitPrice, bool) {
-	if len(number) > 32 { // no price takes more digits than this, and a long exponent would make the fraction huge
+	m := priceNumber.FindSubmatch(number)
+	if m == nil {
 		return platform.UnitPrice{}, false
 	}
-	rate, ok := new(big.Rat).SetString(string(number))
-	if !ok {
+	exp := 0
+	if len(m[3]) > 0 {
+		exp, _ = strconv.Atoi(string(m[3])) //nolint:errcheck // at most a sign and three digits
+	}
+	digits := strings.TrimLeft(string(m[1])+string(m[2]), "0")
+	scale := exp - len(m[2]) // the number is digits × 10^scale
+	if trimmed := strings.TrimRight(digits, "0"); digits != "" {
+		scale += len(digits) - len(trimmed)
+		digits = trimmed
+	}
+	if digits == "" {
+		return platform.UnitPrice{}, true // the zero value is the price of nothing
+	}
+	shift := scale + 9
+	if len(digits) > 19 || shift < 0 || shift+len(digits) > 19 {
 		return platform.UnitPrice{}, false
 	}
-	// A unit price counts 10⁻¹⁵ of a credit, and a million tokens make 10⁻⁶ of that.
-	units := rate.Mul(rate, big.NewRat(1e9, 1))
-	if !units.IsInt() || units.Sign() < 0 {
-		return platform.UnitPrice{}, false
-	}
-	whole, frac := new(big.Int).QuoRem(units.Num(), big.NewInt(1e15), new(big.Int))
-	digits := frac.String()
-	price, err := platform.ParseUnitPrice(whole.String() + "." + strings.Repeat("0", 15-len(digits)) + digits)
+	units, _ := new(big.Int).SetString(digits, 10)
+	units.Mul(units, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(shift)), nil))
+	whole, frac := new(big.Int).QuoRem(units, big.NewInt(1e15), new(big.Int))
+	fraction := frac.String()
+	price, err := platform.ParseUnitPrice(whole.String() + "." + strings.Repeat("0", 15-len(fraction)) + fraction)
 	return price, err == nil
 }

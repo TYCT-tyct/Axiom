@@ -3,6 +3,7 @@ package gateway
 import (
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,6 @@ func TestOverride(t *testing.T) {
 		"null members":             {`{"sort":null,"only":null,"max_price":null}`, routing.Override{}},
 		"sort by price":            {`{"sort":"price"}`, routing.Override{Sort: &cheapest}},
 		"sort by throughput":       {`{"sort":"throughput"}`, routing.Override{Sort: &fastest}},
-		"sort by latency":          {`{"sort":"latency"}`, routing.Override{Sort: &fastest}},
 		"data collection denied":   {`{"data_collection":"deny"}`, routing.Override{Policies: noRetention}},
 		"data collection allowed":  {`{"data_collection":"allow"}`, routing.Override{}},
 		"zero data retention":      {`{"zdr":true}`, routing.Override{Policies: noRetention}},
@@ -49,6 +49,10 @@ func TestOverride(t *testing.T) {
 		"a price with an exponent": {`{"max_price":{"completion":2e-1}}`, routing.Override{MaxPrice: limit(catalog.ItemOutput, "0.0000002")}},
 		"a price of nothing":       {`{"max_price":{"prompt":0}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0")}},
 		"the smallest price":       {`{"max_price":{"prompt":0.000000001}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.000000000000001")}},
+		"a price in units of ten":  {`{"max_price":{"prompt":1e1}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.00001")}},
+		"the dearest price":        {`{"max_price":{"prompt":1E+9}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "1000")}},
+		"a long fraction of zeros": {`{"max_price":{"prompt":1.500000000e0}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.0000015")}},
+		"zero with an exponent":    {`{"max_price":{"prompt":0e999}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0")}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -71,28 +75,33 @@ func TestOverride(t *testing.T) {
 func TestOverrideRefuses(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ provider, named string }{
-		"suppliers to use":              {`{"only":["acme"]}`, "provider.only"},
-		"suppliers to leave out":        {`{"ignore":["acme"]}`, "provider.ignore"},
-		"an order of suppliers":         {`{"order":["acme"]}`, "provider.order"},
-		"fallbacks off":                 {`{"allow_fallbacks":false}`, "provider.allow_fallbacks"},
-		"every parameter required":      {`{"require_parameters":true}`, "provider.require_parameters"},
-		"quantizations":                 {`{"quantizations":["fp8"]}`, "provider.quantizations"},
-		"a member nobody knows":         {`{"colour":"red"}`, "provider.colour"},
-		"a price of a request":          {`{"max_price":{"request":1}}`, "provider.max_price.request"},
-		"a price of an image":           {`{"max_price":{"image":1}}`, "provider.max_price.image"},
-		"a price in text":               {`{"max_price":{"prompt":"1"}}`, "provider.max_price.prompt"},
-		"a negative price":              {`{"max_price":{"prompt":-1}}`, "provider.max_price.prompt"},
-		"a price finer than the unit":   {`{"max_price":{"prompt":0.0000000001}}`, "provider.max_price.prompt"},
-		"a price too dear to be one":    {`{"max_price":{"prompt":1e10}}`, "provider.max_price.prompt"},
-		"a price with a huge exponent":  {`{"max_price":{"prompt":1e999999999}}`, "provider.max_price.prompt"},
-		"prices that are not an object": {`{"max_price":1}`, "provider.max_price"},
-		"sort by something else":        {`{"sort":"quality"}`, "provider.sort"},
-		"sort as an object":             {`{"sort":{"by":"price"}}`, "provider.sort"},
-		"percentile throughput":         {`{"preferred_min_throughput":{"p90":10}}`, "provider.preferred_min_throughput"},
-		"negative latency":              {`{"preferred_max_latency":-1}`, "provider.preferred_max_latency"},
-		"a data collection of maybe":    {`{"data_collection":"maybe"}`, "provider.data_collection"},
-		"zdr as text":                   {`{"zdr":"yes"}`, "provider.zdr"},
-		"a list that is not":            {`{"only":"acme"}`, "provider.only"},
+		"suppliers to use":                              {`{"only":["acme"]}`, "provider.only"},
+		"suppliers to leave out":                        {`{"ignore":["acme"]}`, "provider.ignore"},
+		"an order of suppliers":                         {`{"order":["acme"]}`, "provider.order"},
+		"fallbacks off":                                 {`{"allow_fallbacks":false}`, "provider.allow_fallbacks"},
+		"every parameter required":                      {`{"require_parameters":true}`, "provider.require_parameters"},
+		"quantizations":                                 {`{"quantizations":["fp8"]}`, "provider.quantizations"},
+		"a member nobody knows":                         {`{"colour":"red"}`, "provider.colour"},
+		"a price of a request":                          {`{"max_price":{"request":1}}`, "provider.max_price.request"},
+		"a price of an image":                           {`{"max_price":{"image":1}}`, "provider.max_price.image"},
+		"a price in text":                               {`{"max_price":{"prompt":"1"}}`, "provider.max_price.prompt"},
+		"a negative price":                              {`{"max_price":{"prompt":-1}}`, "provider.max_price.prompt"},
+		"a price finer than the unit":                   {`{"max_price":{"prompt":0.0000000001}}`, "provider.max_price.prompt"},
+		"a price too dear to be one":                    {`{"max_price":{"prompt":1e10}}`, "provider.max_price.prompt"},
+		"prices that are not an object":                 {`{"max_price":1}`, "provider.max_price"},
+		"sort by something else":                        {`{"sort":"quality"}`, "provider.sort"},
+		"sort by latency":                               {`{"sort":"latency"}`, "provider.sort latency"},
+		"a price with an exponent of a million":         {`{"max_price":{"prompt":1e1000000}}`, "provider.max_price.prompt"},
+		"a price with a negative exponent of a million": {`{"max_price":{"prompt":1e-1000000}}`, "provider.max_price.prompt"},
+		"a price with a four-digit exponent":            {`{"max_price":{"prompt":1e1000}}`, "provider.max_price.prompt"},
+		"a price with digits past what a price takes":   {`{"max_price":{"prompt":12345678901234567890}}`, "provider.max_price.prompt"},
+		"a price of many zeros":                         {`{"max_price":{"prompt":0.00000000000000000000000000000001}}`, "provider.max_price.prompt"},
+		"sort as an object":                             {`{"sort":{"by":"price"}}`, "provider.sort"},
+		"percentile throughput":                         {`{"preferred_min_throughput":{"p90":10}}`, "provider.preferred_min_throughput"},
+		"negative latency":                              {`{"preferred_max_latency":-1}`, "provider.preferred_max_latency"},
+		"a data collection of maybe":                    {`{"data_collection":"maybe"}`, "provider.data_collection"},
+		"zdr as text":                                   {`{"zdr":"yes"}`, "provider.zdr"},
+		"a list that is not":                            {`{"only":"acme"}`, "provider.only"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -175,6 +184,62 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	}
 	if r.count(allRows) != 0 || len(r.calls()) != 0 {
 		t.Errorf("%d reservation rows, %d calls", r.count(allRows), len(r.calls()))
+	}
+	r.idle(1 << 30)
+}
+
+// allocated is the bytes the function allocates, measured by the runtime: TotalAlloc only grows, so the difference is
+// what the call asked for, whatever the collector did meanwhile. The test is not parallel, so little else allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestPriceParsingIsBounded: what an exponent asks for is never computed. A price whose exponent would make a
+// million-digit integer is refused having allocated no more than a short one does.
+func TestPriceParsingIsBounded(t *testing.T) {
+	for _, number := range []string{"1e1000000", "1e-1000000", "1e999", "1e-999", "0.1e999999999"} {
+		if got := allocated(func() { perToken([]byte(number)) }); got > 4<<10 {
+			t.Errorf("%s: %d bytes allocated, want a few hundred", number, got)
+		}
+		if _, ok := perToken([]byte(number)); ok {
+			t.Errorf("%s was accepted", number)
+		}
+	}
+}
+
+// TestSortRanksAsAsked: sort throughput ranks by throughput, price by price, and latency is refused, not served as
+// throughput. The endpoints are made so that every ranking differs: alpha-2 is the faster but dearer, alpha-1 the
+// cheaper with the better first token.
+func TestSortRanksAsAsked(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			if name == "alpha-1" {
+				e.Throughput, e.Latency = 50, 100*time.Millisecond
+			}
+			if name == "alpha-2" {
+				e.Throughput, e.Latency = 100, 5*time.Second
+			}
+		}
+	})
+	a := r.newAccount(1e9)
+	one, two := r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID
+	for provider, want := range map[string][]routing.EndpointID{
+		`{"sort":"price"}`:      {one, two},
+		`{"sort":"throughput"}`: {two, one},
+	} {
+		if route, resp, body := r.sendWith(a, provider); resp.StatusCode != http.StatusOK || !cmp.Equal(route, want) {
+			t.Errorf("%s: %d, route %v, want %v: %s", provider, resp.StatusCode, route, want, body)
+		}
+	}
+	before := len(r.calls())
+	_, resp, body := r.sendWith(a, `{"sort":"latency"}`)
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" || !strings.Contains(body, "provider.sort latency") || len(r.calls()) != before {
+		t.Errorf("sort latency: %d %s", resp.StatusCode, body)
 	}
 	r.idle(1 << 30)
 }

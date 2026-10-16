@@ -136,7 +136,7 @@
   - `user`：终端用户标识，用于防滥用和归因。
 
   这些参数的语义见[路由的「请求覆盖」](routing.md#请求覆盖)。
-  - **第一版能兑现的**：`provider` 里的 `sort`、`data_collection`、`zdr`、`max_price` 的 `prompt` 与 `completion`、`preferred_min_throughput`、`preferred_max_latency`；写了名字的 `only`、`ignore`、`order`，`allow_fallbacks: false`，`require_parameters: true`，`quantizations` 和不认识的成员返回 400 `invalid_request` 并指明成员名，不当作没写（原因见「待定问题」）。
+  - **第一版能兑现的**：`provider` 里的 `sort`（`price`、`throughput`；`latency` 无对应排序，返回 400）、`data_collection`、`zdr`、`max_price` 的 `prompt` 与 `completion`、`preferred_min_throughput`、`preferred_max_latency`；写了名字的 `only`、`ignore`、`order`，`allow_fallbacks: false`，`require_parameters: true`，`quantizations` 和不认识的成员返回 400 `invalid_request` 并指明成员名，不当作没写（原因见「待定问题」）。
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
 - **转发前处理**：路由参数和扩展字段在转发前删除；会话和用户标识换成派生值（见上文「转发规则」）。
 

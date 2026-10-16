@@ -40,6 +40,9 @@ func (q *Queue) Wait(parent context.Context, key string, epoch uint64, deadline 
 	if err := parent.Err(); err != nil {
 		return err // before the fast paths: a client that has gone is not told to retry or that the queue is full
 	}
+	if !time.Now().Before(deadline) {
+		return ErrRateLimited // before the epoch too: a release elsewhere must not let a call whose time is spent retry for ever
+	}
 	q.mu.Lock()
 	if q.unclaimed != epoch {
 		q.mu.Unlock()
