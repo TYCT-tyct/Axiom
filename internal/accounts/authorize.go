@@ -21,17 +21,26 @@ var (
 	ViewKeys             = Permission{"api_keys.view", false}
 	ManageKeys           = Permission{"api_keys.manage", false}
 	ManageWorkspaces     = Permission{"workspaces.manage", false}
+	ViewCalls            = Permission{"calls.view", false}
+	ViewBalance          = Permission{"balance.view", false}
 	ManageSites          = Permission{"sites.manage", true}
 	ManagePlatformGrants = Permission{"platform_grants.manage", true}
 )
 
-var permissions = func() map[string]bool {
-	declared := map[string]bool{}
-	for _, p := range []Permission{ViewKeys, ManageKeys, ManageWorkspaces, ManageSites, ManagePlatformGrants} {
-		declared[p.name] = true
+var permissions = func() map[string]Permission {
+	declared := map[string]Permission{}
+	for _, p := range []Permission{ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, ManageSites, ManagePlatformGrants} {
+		declared[p.name] = p
 	}
 	return declared
 }()
+
+// PermissionNamed is the declared permission called name, for an interface contract that names the permission an
+// operation needs.
+func PermissionNamed(name string) (Permission, bool) {
+	p, ok := permissions[name]
+	return p, ok
+}
 
 var (
 	// ErrForbidden is an operator who may see the target but not do this to it.

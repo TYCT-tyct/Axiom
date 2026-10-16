@@ -25,7 +25,7 @@
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
-| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值 | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
@@ -77,7 +77,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`，以及敏感的 `sites.manage`、`platform_grants.manage`。默认角色由迁移 00003 写入：owner 有前三项，admin 五项全有，member 有两项 key 权限，finance、viewer、support 只有 `api_keys.view`；以后加权限的 PR 用迁移改这些集合。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`。默认角色由迁移 00003 写入、00005 改成现在的集合：owner 有前五项，admin 七项全有，member 有两项 key 权限和 `calls.view`，finance 有 `api_keys.view` 和 `balance.view`，viewer 有 `api_keys.view`、`calls.view`、`balance.view`，support 有 `api_keys.view` 和 `calls.view`；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 登录前的查找
@@ -119,8 +119,9 @@
 - **满载排队不占数据库连接**：等待放在事务里，一个满载模型的排队请求每个都占着一条连接，能把连接池占满，别的模型的准入和结算都拿不到连接；在事务外等，排队的请求不占连接，醒来重新准入还顺带读到等待期间的停用和改动。重新准入的次数受路由的排队时间上限约束，到期返回 429。
 - **停用的 key 在准入之前能看到什么**：解析和名字解析在准入之前，所以停用的 key 仍可能收到请求格式类的错误（400、模型不存在），但不会调用上游、读不到租户数据、不产生费用。准入的拒绝不缓存：拒绝可能与请求有关（IP），缓存它会误拒同一把 key 的合法请求。
 - **防枚举只承诺到这里**：不存在、属于别的站点、停用、过期、删除、IP 不允许，状态码和正文完全相同。剩余的时间差：本站真实存在的 key 多一次准入查询；缓存命中与未命中不同。只有持有这把 key 的人能利用。
+- **key 的设置**（`KeySettings`）：名称、停用、花费上限（十亿分之一额度，空表示不限）、重置周期（空表示总额不重置，要有上限）、可用模型（空表示任意，空列表按空处理）、IP 白名单（`cidr`，主机位清零）。创建时不写上限就取站点的新 key 每日上限、按日重置；`UpdateKey` 整体替换，没写的就是不限制，所以页面把读到的设置连同修改送回；到期时间只能在创建时给。创建、整体替换、删除各记一条审计（`api_key.create`、`api_key.update`、`api_key.delete`），改成停用或重新启用也是 `update`。`Key.CreatedAt` 取自 UUIDv7 的 ID（前 48 位毫秒），不另存一列。输入的检查（币种、不为负、重置需要上限、地址能解析、到期在将来）在 `cmd/axiom` 的处理器里，进模块的设置已满足表的约束。
 - 创建 key 不做幂等键：提交后响应丢失，用户在列表里看到一把从未用过的 key，删掉即可，不为重试保存明文。
-- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
+- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.update`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
 - 以后的二级站点：`Admit` 的范围并上站长账户，同一事务里一起预留（见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)「二级站点的请求」）。
 
 | 缓存 | 内容 | 容量与过期 |
@@ -166,6 +167,7 @@
 | key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
 | 计数器本身 | 有容量上限的 LRU | — |
 
+- 超限返回 `*TooManyAttempts`（`errors.Is(err, ErrTooManyAttempts)` 仍成立），带 `RetryAfter`：桶再放过一次尝试的时间，控制台接口据此写 `Retry-After`（至少 1 秒）。开启 TOTP 也算：错的验证码或密码用掉用户的验证码失败次数（与登录的验证共用），"已经开启"这类没在猜什么的拒绝不算。
 - 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时从 LRU 过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
 - 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再计算哈希、不碰数据库。IP 的次数不退。
 - 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
@@ -199,7 +201,7 @@
 | key 能否使用每次调用以库为准 | `Admit` 在准入事务里读库；缓存只存不变的标识。测试：两个 `Service` 共用一个库，一个停用，另一个下一次 `Admit` 被拒；客户端先超时、服务端随后提交停用，之后的 `Admit` 被拒；禁止的 IP 先请求，允许的紧接着成功 |
 | 定规则和路由只用库里的当前值 | `Admission` 带当前的 `preset_id`、`models`、`tier_id`，缓存条目里没有这几项；测试：两个 `Service` 共用一个库，各认出同一把 key 并预热缓存后，一个改预设、可用模型（从 A 改成 A+B）、等级，另一个下一次 `Admit` 交给 `fn` 的是新值；`fn` 里的路由与最高价检查用 `Admission` 的值，接线的证明在 #27 |
 | 准入事务里不等待，满载排队不占数据库连接 | `fn` 只做内存计算和预留，满载时返回"需要等待"、在事务外等；本模块测试：`fn` 返回"需要等待"后事务已回滚、连接已归还池子。接线的验收在 #27：连接池设为 N，模型 A 只有一个并发名额且有多于 N 个请求在排队，期间模型 B 的准入和另一个调用的结算照常完成、在预算之内，排队中的 A 请求占用的连接数为 0 |
-| 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `accounts_key_cache_misses_total` |
+| 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `axiom_accounts_key_cache_misses_total`（OpenTelemetry 的 `axiom.accounts.key_cache.misses`，每次真去问数据库的查找加一，命中和负缓存都不加） |
 | 登录前拿不到租户数据 | 无范围的事务 + 「登录前的查找」的函数和启动检查 |
 | 范围和认证结果不可伪造 | 生产代码只有本模块能构造账户和站点范围（forbidigo）；`Caller`、`Principal`、`Admission` 的字段不导出 |
 | 敏感权限只给本次做过两步验证的会话 | `level = mfa`；测试：先登录的密码会话后来被授予管理员，仍被拒 |
@@ -238,11 +240,19 @@ func (*Service) BeginTOTP(p Principal) (secret, uri string)
 func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
 func NewOperator(db *pg.DB, platform pg.Scope, opened OpenedFunc) *Operator // 命令行：InitSite、CreateUser、GrantPlatform、SetPassword、ResetMFA
+func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) // 同 Authenticate，但接受待验证会话：getSession、signOut
+func (p Principal) Pending() bool; func (p Principal) Verified() bool
+func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
+func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
+func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
+func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用
+func (s *Service) WorkspaceIDs(ctx context.Context, tx pg.Tx, account AccountID) ([]WorkspaceID, error)
 func (s *Service) CheckOrigin(r *http.Request) error                         // 登录、注册等没有会话的改数据请求
 func (s *Service) Cookie(host string, issued Issued) (*http.Cookie, error)
+func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时让浏览器丢掉会话 Cookie
 ```
 
-控制台和管理接口：本模块实现 `consoleapi` 和管理接口里属于自己的方法，`cmd/axiom` 组装。gateway 和 billing 的准入必须经 `Admit` 打开事务，billing 的预留只接受 `Admission`；本模块的测试只证明 `Admit` 本身，接线的证明在 #27、#28。
+控制台和管理接口：处理器在 `cmd/axiom`（它们要组合 accounts、billing、observability，只有 `cmd/axiom` 能同时引用三者），只经各模块的公开接口；`cmd/axiom` 的守卫先按契约做站点、Origin、会话、CSRF、权限的检查（见[平台的「接口约定」](../platform/README.md#接口约定)），处理器拿到的 `Principal` 和范围都是 accounts 签发的。gateway 和 billing 的准入必须经 `Admit` 打开事务，billing 的预留只接受 `Admission`；本模块的测试只证明 `Admit` 本身，接线的证明在 #27、#28。
 
 ## 决策与理由
 

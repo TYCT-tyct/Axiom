@@ -8,6 +8,8 @@ import (
 	"time"
 	"uuid"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/sync/singleflight"
 
 	"axiom/internal/platform/pg"
@@ -33,6 +35,8 @@ type Config struct {
 	// HashWait for a turn, 2 seconds when 0, and is then refused (README.md「登录前的资源」).
 	HashConcurrency int
 	HashWait        time.Duration
+	// Meter reports the module's metrics; nil for none.
+	Meter metric.Meter
 	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
 	OnAccountOpened OpenedFunc
 }
@@ -48,6 +52,7 @@ type Service struct {
 	opened   OpenedFunc
 	slot     func(ctx context.Context) (func(), error) // the lookups' slot; never nil
 	gated    bool                                      // whether Config.LookupSlot was set
+	misses   metric.Int64Counter                       // key lookups that had to ask the database
 
 	snapshot atomic.Pointer[snapshot]
 	// Key identities never change once made, so a hit needs no database. A miss of a key that does not exist is
@@ -85,8 +90,16 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 	if slot == nil {
 		slot = func(context.Context) (func(), error) { return func() {}, nil }
 	}
+	if cfg.Meter == nil {
+		cfg.Meter = noop.NewMeterProvider().Meter("accounts")
+	}
+	misses, err := cfg.Meter.Int64Counter("axiom.accounts.key_cache.misses",
+		metric.WithDescription("API key lookups that missed the cache and asked the database."))
+	if err != nil {
+		panic(err) // the instrument name is a constant
+	}
 	return &Service{
-		db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),

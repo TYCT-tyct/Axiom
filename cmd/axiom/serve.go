@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
+	"axiom/internal/accounts"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/suppliers"
 )
@@ -43,26 +46,59 @@ type listening struct {
 	listener       net.Listener
 }
 
+// nodeSettings are the node's configuration, all read from the environment before anything starts.
+type nodeSettings struct {
+	publicAddr, probesAddr          string
+	startupTimeout, shutdownTimeout time.Duration
+	databaseURL                     string
+	masterKeyFile, keyHashFile      string
+	hashConcurrency                 int
+	hashWait                        time.Duration
+	trustedProxies                  []netip.Prefix
+}
+
+// readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
+func readSettings(environ []string) (nodeSettings, error) {
+	env := config.New(environ)
+	s := nodeSettings{
+		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
+		probesAddr:      probesListenAddr(env),
+		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
+		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
+		databaseURL:     env.Required(pg.DatabaseURLVar),
+		masterKeyFile:   env.Required("AXIOM_MASTER_KEY_FILE"),
+		keyHashFile:     env.Required("AXIOM_KEY_HASH_FILE"),
+		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
+		// GOMAXPROCS and 2 seconds).
+		hashConcurrency: env.Int("AXIOM_HASH_CONCURRENCY", 0, 1),
+		hashWait:        env.Duration("AXIOM_HASH_WAIT", 0),
+		trustedProxies:  env.Prefixes("AXIOM_TRUSTED_PROXIES"),
+	}
+	if err := env.Err(); err != nil {
+		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
+	}
+	return s, nil
+}
+
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
 // and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
-// AXIOM_STARTUP_TIMEOUT.
+// AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	env := config.New(environ)
-	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080") // model calls, the console, payment callbacks
-	probesAddr := probesListenAddr(env)
-	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
-	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
-	databaseURL := env.Required(pg.DatabaseURLVar)
-	if err := env.Err(); err != nil {
-		return fmt.Errorf("configuration:\n%w", err)
+	cfg, err := readSettings(environ)
+	if err != nil {
+		return err
+	}
+	console, err := loadConsole(cfg)
+	if err != nil {
+		return err
 	}
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithTracerProvider(tel.Traces))
+	db, err := openDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, pg.WithTracerProvider(tel.Traces))
 	if err != nil {
 		return err
 	}
@@ -72,13 +108,17 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
-	defer closeRecorder(ctx, recorder, shutdownTimeout, logger)
+	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
 	}
+	routes, err := console.routes(ctx, db, tel, logger)
+	if err != nil {
+		return err
+	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(publicAddr, publicRoutes(consoleAPI{version: version()}, logger), probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -95,11 +135,51 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		stopped = fmt.Errorf("a listener stopped: %w", err)
 	case <-ctx.Done():
 	}
-	logger.Info("shutting down", "timeout", shutdownTimeout.String())
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
 	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
 	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), recorder.Close(ctx))
+	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), recorder.Close(ctx))
+}
+
+// consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
+// read from protected files, whose errors name the variable and never the path or the contents, and the contract
+// the guard enforces.
+type consoleParts struct {
+	cfg      nodeSettings
+	master   *secret.Keyring // seals users' TOTP secrets
+	hashes   *secret.MACKeys // keys API keys are hashed with
+	contract *contract
+}
+
+func loadConsole(cfg nodeSettings) (consoleParts, error) {
+	master, err := secret.Load(cfg.masterKeyFile)
+	if err != nil {
+		return consoleParts{}, err
+	}
+	hashes, err := secret.LoadMAC(cfg.keyHashFile)
+	if err != nil {
+		return consoleParts{}, err
+	}
+	contract, err := consoleContract()
+	return consoleParts{cfg, master, hashes, contract}, err
+}
+
+// routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
+// ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+	service, err := accounts.NewService(db, accounts.Config{
+		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
+		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := service.Load(ctx, logger); err != nil {
+		return nil, err
+	}
+	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger), nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.

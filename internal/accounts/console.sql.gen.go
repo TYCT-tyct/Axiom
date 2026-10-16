@@ -8,6 +8,7 @@ package accounts
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -456,6 +457,50 @@ func (q *Queries) RevokeSession(ctx context.Context, db DBTX, id uuid.UUID) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const sessionInfo = `-- name: SessionInfo :many
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, s.csrf_token,
+    least(s.expires_at, now() + s.idle_timeout)::timestamptz AS expires_at
+FROM accounts.sessions s
+JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+WHERE s.id = $1
+`
+
+type SessionInfoRow struct {
+	Email      string
+	InviteCode string
+	Mfa        bool
+	CsrfToken  string
+	ExpiresAt  pgtype.Timestamptz
+}
+
+// What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
+// whichever comes first.
+func (q *Queries) SessionInfo(ctx context.Context, db DBTX, id uuid.UUID) ([]SessionInfoRow, error) {
+	rows, err := db.Query(ctx, sessionInfo, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionInfoRow
+	for rows.Next() {
+		var i SessionInfoRow
+		if err := rows.Scan(
+			&i.Email,
+			&i.InviteCode,
+			&i.Mfa,
+			&i.CsrfToken,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const sessionTenant = `-- name: SessionTenant :many
