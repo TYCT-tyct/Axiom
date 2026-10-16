@@ -21,7 +21,7 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
-	// IdentityLen is the most bytes Identity returns, 0 when it never returns more than it is given. It sizes the
+	// IdentityLen is the most bytes Identity returns, before JSON escaping, 0 when it never returns more than it is given. It sizes the
 	// output so that identifiers longer than the ones they replace do not make Prepare copy the body again.
 	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
@@ -41,7 +41,7 @@ func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
-	size := len(body) + len(t.Model) + rules.room + rules.identities*(w.IdentityLen+len(`""`))
+	size := len(body) + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
 	for _, item := range w.History {
 		size += len(item) + 1
 	}
@@ -56,6 +56,10 @@ func Prepare(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	}
 	return p.out, nil
 }
+
+// quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
+// needs escaping, the longest escape there is.
+func quoted(n int) int { return 6*n + len(`""`) }
 
 type rule func(*rewriter) error
 

@@ -170,6 +170,31 @@ func TestPrepareBuffer(t *testing.T) {
 	}
 }
 
+// TestPrepareBufferEscapes holds the room to the JSON escapes of the values put in: a model name and identifiers
+// made of bytes that take six bytes each still fit in one allocation, as short ones do.
+func TestPrepareBufferEscapes(t *testing.T) {
+	nasty := strings.Repeat("\x01\"\\", 40)
+	for _, c := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"u"}}`},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`},
+	} {
+		allocs := func(model, identity string) float64 {
+			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity)}
+			return testing.AllocsPerRun(5, func() {
+				if _, err := protocol.Prepare(c.format, []byte(c.body), protocol.Target{Model: model}, w); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+		if long, short := allocs(nasty, nasty), allocs("m", "u"); long != short {
+			t.Errorf("format %d: %d allocations with escaped values, %d without", c.format, int(long), int(short))
+		}
+	}
+}
+
 // TestPrepareSamples holds the recorded requests, pretty-printed as published, to a change of the model alone, and
 // of storage in Responses.
 func TestPrepareSamples(t *testing.T) {
