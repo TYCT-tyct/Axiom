@@ -11,23 +11,11 @@ import (
 // pendingAdmin answers the operations of api/admin.yaml that have no handler yet.
 type pendingAdmin struct{}
 
-func (pendingAdmin) AddModelName(context.Context, adminapi.AddModelNameRequestObject) (adminapi.AddModelNameResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) BindSupplierKey(context.Context, adminapi.BindSupplierKeyRequestObject) (adminapi.BindSupplierKeyResponseObject, error) {
 	return nil, errNotImplemented
 }
 
 func (pendingAdmin) ConfirmSupplierUnitValue(context.Context, adminapi.ConfirmSupplierUnitValueRequestObject) (adminapi.ConfirmSupplierUnitValueResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) CreateModel(context.Context, adminapi.CreateModelRequestObject) (adminapi.CreateModelResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) CreatePricingRule(context.Context, adminapi.CreatePricingRuleRequestObject) (adminapi.CreatePricingRuleResponseObject, error) {
 	return nil, errNotImplemented
 }
 
@@ -39,27 +27,11 @@ func (pendingAdmin) DetectSupplier(context.Context, adminapi.DetectSupplierReque
 	return nil, errNotImplemented
 }
 
-func (pendingAdmin) GetModel(context.Context, adminapi.GetModelRequestObject) (adminapi.GetModelResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) GetSupplier(context.Context, adminapi.GetSupplierRequestObject) (adminapi.GetSupplierResponseObject, error) {
 	return nil, errNotImplemented
 }
 
-func (pendingAdmin) ListAuthors(context.Context, adminapi.ListAuthorsRequestObject) (adminapi.ListAuthorsResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ListModels(context.Context, adminapi.ListModelsRequestObject) (adminapi.ListModelsResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) ListPendingMappings(context.Context, adminapi.ListPendingMappingsRequestObject) (adminapi.ListPendingMappingsResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) ListPricingRules(context.Context, adminapi.ListPricingRulesRequestObject) (adminapi.ListPricingRulesResponseObject, error) {
 	return nil, errNotImplemented
 }
 
@@ -75,10 +47,6 @@ func (pendingAdmin) PreviewPricing(context.Context, adminapi.PreviewPricingReque
 	return nil, errNotImplemented
 }
 
-func (pendingAdmin) PublishReferencePrice(context.Context, adminapi.PublishReferencePriceRequestObject) (adminapi.PublishReferencePriceResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) RemoveSupplier(context.Context, adminapi.RemoveSupplierRequestObject) (adminapi.RemoveSupplierResponseObject, error) {
 	return nil, errNotImplemented
 }
@@ -87,30 +55,10 @@ func (pendingAdmin) ReplaceSupplierLogin(context.Context, adminapi.ReplaceSuppli
 	return nil, errNotImplemented
 }
 
-func (pendingAdmin) SaveAuthor(context.Context, adminapi.SaveAuthorRequestObject) (adminapi.SaveAuthorResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) SelectPriceSource(context.Context, adminapi.SelectPriceSourceRequestObject) (adminapi.SelectPriceSourceResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) SelectSupplierGroup(context.Context, adminapi.SelectSupplierGroupRequestObject) (adminapi.SelectSupplierGroupResponseObject, error) {
 	return nil, errNotImplemented
 }
 
-func (pendingAdmin) SetModelStatus(context.Context, adminapi.SetModelStatusRequestObject) (adminapi.SetModelStatusResponseObject, error) {
-	return nil, errNotImplemented
-}
-
 func (pendingAdmin) SetSupplierStatus(context.Context, adminapi.SetSupplierStatusRequestObject) (adminapi.SetSupplierStatusResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) UpdateModelSpec(context.Context, adminapi.UpdateModelSpecRequestObject) (adminapi.UpdateModelSpecResponseObject, error) {
-	return nil, errNotImplemented
-}
-
-func (pendingAdmin) UpdatePricingRule(context.Context, adminapi.UpdatePricingRuleRequestObject) (adminapi.UpdatePricingRuleResponseObject, error) {
 	return nil, errNotImplemented
 }

@@ -100,7 +100,7 @@ type newPrice struct {
 func parsePrice(raw jsonx.Raw) (newPrice, error) {
 	s, err := ParseSchedule(raw)
 	if err != nil {
-		return newPrice{}, err
+		return newPrice{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	canonical, err := s.MarshalJSON()
 	if err != nil {

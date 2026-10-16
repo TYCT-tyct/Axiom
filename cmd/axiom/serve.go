@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
@@ -190,7 +191,11 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger)
 	if p.cfg.adminAddr != "" {
-		admin = adminRoutes(adminAPI{version: version(), accounts: service, db: db},
+		cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
+		if err != nil {
+			return nil, nil, err
+		}
+		admin = adminRoutes(adminAPI{version: version(), accounts: service, catalog: cat, db: db},
 			&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, logger)
 	}
 	return public, admin, nil

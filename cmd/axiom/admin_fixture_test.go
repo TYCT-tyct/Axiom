@@ -11,6 +11,7 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -63,7 +64,11 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := adminRoutes(adminAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
+	cat, err := catalog.Open(c.db, pg.PlatformScope(), catalog.Config{Logger: logger})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	routes := adminRoutes(adminAPI{version: "test", accounts: svc, catalog: cat, db: c.db}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 

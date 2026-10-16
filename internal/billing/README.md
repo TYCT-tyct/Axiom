@@ -187,6 +187,18 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 | 迟到补扣 / 补差 | 迟到结算 | billing + suppliers | `(request_id, 0, reverse / settle, -1)`；只对清理释放、清理结算发生 |
 | 调用记录 | 异步批量 | observability | 主键 `request_id`，`ON CONFLICT DO NOTHING` |
 
+## 定价规则
+
+已实现存储与维护（`pricing.go`、`queries/pricing.sql`、迁移 `00003_pricing_rules.sql`）；报价**还不读规则**，规则怎么变成售价、试算（`previewPricing`）和成本侧（供应商单位价值、汇率、保本价）随后续 PR，现在存的是人的决定。
+
+一条规则：目标（端点、分组、供应商、模型、厂商、来源类型或全部）、受众（账户、等级或全部）、方法（`cost_plus`：加成率或毛利率二选一、可附固定加价；`reference_multiplier`：参考价倍率；`fixed`：整张固定价格表）和约束（最低毛利率、相对参考价的上下限）。同一站点里目标和受众相同的规则只能有一条（唯一约束），所以任意两条都能排出先后：`Rules` 按目标越具体越先、受众越具体越先、ID 排序。
+
+- **函数**：`Rules(ctx, tx, site)`、`CreateRule(ctx, tx, actor, site, currency, input, reason)`、`UpdateRule(..., id, rev, input, reason)`，都在调用方的平台范围事务里；`currency` 是站点的结算货币，固定价格必须是它。`RuleInput.Check` 检查契约的模式表达不了的部分：目标和受众的 ID 是对应种类的 ID，每种方法只带自己的成员，比率是不为负的十进制，毛利率（含最低毛利率）小于 1，参考价的上下限大于 0 且下限不超过上限，固定价格表合法且是站点的币种。出错是 `*RuleError`，只带成员名与规则，不带值。
+- **从不删除**：停用代替删除；每次修改把当时的整条规则存进 `pricing_rule_versions`（带操作者和原因，只追加），说明过去的价格是怎么来的。
+- **乐观令牌**：`rev` 从 0 起，修改必须带读到的 `rev`，不同报 `ErrStaleRule`（锁住行后比较）；目标和受众撞上另一条规则报 `ErrRuleExists`，找不到报 `ErrRuleNotFound`。
+- **审计**：`pricing_rule.create`、`pricing_rule.update` 带原因，`detail` 只放规则 ID 和 `rev`。
+- **范围**：两张表只有平台范围能读写；站点由调用方传入（管理接口按路径里的站点），表里的 `site_id` 不是租户隔离，是规则的归属。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |

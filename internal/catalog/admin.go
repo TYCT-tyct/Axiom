@@ -28,6 +28,9 @@ var (
 	ErrStaleRev      = errors.New("the model changed since it was reviewed")
 	ErrWrongStatus   = errors.New("the model's status does not allow this")
 	ErrNotReady      = errors.New("the model is not ready to be listed")
+	// ErrInvalid is a request whose spec or schedule is not one the catalog can keep: a rule of its structure, which the
+	// request's schema cannot state.
+	ErrInvalid = errors.New("the spec or the schedule breaks a rule of the catalog")
 )
 
 // Op is what every admin operation carries: who does it, which attempt it is, and why. Key identifies the intended
@@ -206,7 +209,7 @@ type CreateModelRequest struct {
 // CreateModel adds a draft model, visible only to the platform until it is listed.
 func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result, error) {
 	if _, err := parseSpec(r.Spec); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return c.apply(ctx, r.Op, "model.create", func(tx pg.Tx) (outcome, error) {
 		author, _, _ := strings.Cut(r.Slug, "/")
@@ -273,7 +276,7 @@ type UpdateSpecRequest struct {
 func (c *Catalog) UpdateSpec(ctx context.Context, r UpdateSpecRequest) (Result, error) {
 	spec, err := parseSpec(r.Spec)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return c.apply(ctx, r.Op, "model.update_spec", func(tx pg.Tx) (outcome, error) {
 		row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
