@@ -41,7 +41,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	for _, s := range servers {
 		urls[s.variable] = "http://" + s.listener.Addr().String()
 	}
-	public, ops := urls["AXIOM_PUBLIC_ADDR"], urls["AXIOM_OPS_ADDR"]
+	public, ops := urls["AXIOM_PUBLIC_ADDR"], urls["AXIOM_PROBES_ADDR"]
 
 	inFlight := make(chan response, 1)
 	go func() {
@@ -143,7 +143,7 @@ func TestListenReleasesWhatItBound(t *testing.T) {
 	free, logger := freePort(t), slog.New(slog.DiscardHandler)
 	servers := []*listening{
 		{"AXIOM_PUBLIC_ADDR", free, httpserver.New(http.NotFoundHandler(), logger), nil},
-		{"AXIOM_OPS_ADDR", taken.Addr().String(), httpserver.New(http.NotFoundHandler(), logger), nil},
+		{"AXIOM_PROBES_ADDR", taken.Addr().String(), httpserver.New(http.NotFoundHandler(), logger), nil},
 	}
 	if err := listen(t.Context(), servers); err == nil {
 		t.Fatal("listen succeeded on a taken address")

@@ -34,8 +34,8 @@ const bodyTimeout = 2 * time.Minute
 // defaultStartupTimeout bounds how long a command waits for the database before it starts.
 const defaultStartupTimeout = 30 * time.Second
 
-// opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
+// probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
+func probesListenAddr(env *config.Env) string { return env.Addr("AXIOM_PROBES_ADDR", "127.0.0.1:8081") }
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
@@ -52,10 +52,10 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
 	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080")        // model calls, the console, payment callbacks
 	adminAddr := env.Addr("AXIOM_ADMIN_ADDR", "127.0.0.1:8082") // the admin app; loopback until a deployment opens it
-	probesAddr := opsAddr(env)
+	probesAddr := probesListenAddr(env)
 	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
-	databaseURL := env.Required("AXIOM_DATABASE_URL")
+	databaseURL := env.Required(pg.DatabaseURLVar)
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
@@ -137,15 +137,16 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
 		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
 		{"AXIOM_ADMIN_ADDR", adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
+		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
 	}
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: AXIOM_DATABASE_URL: no answer within AXIOM_STARTUP_TIMEOUT")
+	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)

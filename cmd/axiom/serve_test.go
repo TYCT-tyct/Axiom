@@ -22,7 +22,7 @@ import (
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	logs := make(records, 16)
@@ -155,13 +155,13 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	}{
 		{
 			"invalid and unknown variables",
-			[]string{"AXIOM_SHUTDOWN_TIMEOUT=planted-value", "AXIOM_OPS_ADDR=planted-value", "AXIOM_OPS_ADRR=planted-value"},
-			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_OPS_ADDR: want", "AXIOM_OPS_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT=planted-value", "AXIOM_PROBES_ADDR=planted-value", "AXIOM_PROBES_ADRR=planted-value"},
+			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_PROBES_ADDR: want", "AXIOM_PROBES_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
 		},
 		{
 			"a taken address",
-			[]string{"AXIOM_OPS_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
-			[]string{"AXIOM_OPS_ADDR: "},
+			[]string{"AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_PROBES_ADDR: "},
 		},
 		{
 			"a taken admin address",
@@ -187,7 +187,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
-		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=127.0.0.1:0"}, c.environ...)
+		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0"}, c.environ...)
 		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
@@ -299,7 +299,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	}
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_OPS_ADDR=" + taken.Addr().String(),
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(),
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {

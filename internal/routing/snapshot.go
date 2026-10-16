@@ -110,6 +110,8 @@ type Endpoint struct {
 	Caps             protocol.Capabilities
 	Context          int64                  // the most tokens a request may take, input plus output
 	MaxOutput        int64                  // the model's output limit here, also its default
+	OutputSpeed      int64                  // the fastest it outputs, in tokens per second; 0 when not known, which rules out segmenting
+	Reports          catalog.ItemSet        // the billing items its upstream may report (catalog.Reportable)
 	ImageTokens      int64                  // the most input tokens one image can take
 	PageTokens       int64                  // the most input tokens one document page can take
 	FilePages        int64                  // the most pages one file can have; 0 when no limit is known
@@ -268,7 +270,8 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
 	c := &candidate{Endpoint: e, state: r.state.of(e.ID), model: billing.Model{
-		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages, MaxUses: e.ToolUses,
+		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
+		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports,
 	}}
 	if e.Price.Version == (uuid.UUID{}) {
 		return c, nil

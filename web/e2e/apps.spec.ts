@@ -1,16 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { contentSecurityPolicy } from "../vite.shared.ts";
 import { apps } from "./apps.ts";
+import { collectErrors } from "./collect-errors.ts";
 
 for (const app of apps) {
   test(`the ${app.name} works under the content security policy`, async ({ page }) => {
-    const errors: string[] = [];
-    page.on("console", (message) => {
-      if (message.type() === "error") {
-        errors.push(message.text());
-      }
-    });
-    page.on("pageerror", (error) => errors.push(error.message));
+    const errors = collectErrors(page);
     // The console asks for the running version; any answer will do here.
     await page.route("**/api/console/v1/version", (route) => route.fulfill({ json: { version: "" } }));
 
