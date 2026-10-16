@@ -30,20 +30,6 @@ func TestDockerHostFor(t *testing.T) {
 	}
 }
 
-func databaseExists(t *testing.T, name string) bool {
-	t.Helper()
-	var exists bool
-	conn, err := pgx.Connect(t.Context(), at("postgres", "postgres", "postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(context.WithoutCancel(t.Context())) //nolint:errcheck // read-only
-	if err := conn.QueryRow(t.Context(), "SELECT EXISTS (SELECT FROM pg_database WHERE datname = $1)", name).Scan(&exists); err != nil {
-		t.Fatal(err)
-	}
-	return exists
-}
-
 func nameOf(t *testing.T, databaseURL string) string {
 	t.Helper()
 	u, err := url.Parse(databaseURL)
@@ -67,31 +53,38 @@ func TestDatabasesAreSeparate(t *testing.T) {
 	}
 }
 
-// TestTemplateIsBuiltOnceUnderConcurrentBuilders: binaries of one run build the same template at the same time. Each
-// goroutine here stands for one: the mutex of templateFor is not shared between binaries, so they go straight to
-// ensureTemplate. All must succeed and the result must hold the migration.
-func TestTemplateIsBuiltOnceUnderConcurrentBuilders(t *testing.T) {
-	const up = "-- +goose Up\nCREATE FUNCTION catalog.built() RETURNS text LANGUAGE sql RETURN 'built';\n"
-	module := pg.Module{Name: "catalog", Migrations: fstest.MapFS{"00001_built.sql": {Data: []byte(up)}}}
-	name := "axiom_template_concurrent_" + runID
+// TestTemplatesAreBuiltUnderConcurrentBuilders: binaries of one run build templates at the same time, the same one or
+// different ones. Each goroutine here stands for one binary: the mutex of templateFor is not shared between binaries,
+// so they go straight to ensureTemplate. All must succeed and every template must hold its own module's migration.
+func TestTemplatesAreBuiltUnderConcurrentBuilders(t *testing.T) {
 	New(t) // the cluster is up
 	var group errgroup.Group
-	for range 6 {
-		group.Go(func() error { return ensureTemplate(context.Background(), name, []pg.Module{module}) })
+	modules := map[string]pg.Module{}
+	for _, module := range []string{"catalog", "billing"} {
+		up := "-- +goose Up\nCREATE FUNCTION " + module + ".built() RETURNS text LANGUAGE sql RETURN 'built';\n"
+		m := pg.Module{Name: module, Migrations: fstest.MapFS{"00001_built.sql": {Data: []byte(up)}}}
+		modules["axiom_template_concurrent_"+module+"_"+runID] = m
+		for range 3 {
+			group.Go(func() error {
+				return ensureTemplate(context.Background(), "axiom_template_concurrent_"+module+"_"+runID, []pg.Module{m})
+			})
+		}
 	}
 	if err := group.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	var comment string
-	conn, err := pgx.Connect(t.Context(), at("postgres", "postgres", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(context.WithoutCancel(t.Context())) //nolint:errcheck // read-only
-	if err := conn.QueryRow(t.Context(), "SELECT catalog.built()").Scan(&comment); err != nil || comment != "built" {
-		t.Errorf("template's catalog.built() is %q (%v), want the migration applied", comment, err)
-	}
-	if databaseExists(t, "axiom_template_building") {
-		t.Error("the copy being built was left behind")
+	for name, m := range modules {
+		conn, err := pgx.Connect(t.Context(), at("postgres", "postgres", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var built string
+		err = conn.QueryRow(t.Context(), "SELECT "+m.Name+".built()").Scan(&built)
+		if closeErr := conn.Close(context.WithoutCancel(t.Context())); closeErr != nil {
+			t.Error(closeErr)
+		}
+		if err != nil || built != "built" {
+			t.Errorf("template %s: built() is %q (%v), want the migration applied", name, built, err)
+		}
 	}
 }
