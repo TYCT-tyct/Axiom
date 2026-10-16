@@ -63,7 +63,7 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := adminRoutes(adminAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
+	routes := adminRoutes(adminAPI{version: "test", accounts: svc, db: c.db, logger: logger}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 
