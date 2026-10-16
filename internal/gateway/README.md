@@ -141,8 +141,8 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | `Observe` 说 | 做什么 |
 |---|---|
 | `Extend` | `extend` 在自己的 goroutine 里以 `SettleContext`（不随客户端取消，`ExtendWait` 1s，含等闸）调 `Ledger.Extend`，结果进容量 1 的通道；所有者每读一次先不等待地取一次（`landed(false)`），取到就 `Meter.Extended` |
-| `Exhausted` | 停读：停空闲计时，等在途的那次（`Observe` 在没有在途时总会再请求，所以必有一次），批准就以同一进度再计量一次（新段可能仍不够这次读），否则截断；这一步是上游正常结束时不等、也不因先前失败的追加截断，读已经完了 |
-| `Left` | 写期限 = min(`WriteTimeout`, `Left` ÷ 条目的最快输出速度)，全额预留的 `Left` 是 `math.MaxInt64`，即 `WriteTimeout` |
+| `Exhausted`，或 `Left` 为 0 | 停读：停空闲计时，等在途的那次（`Observe` 在没有在途时总会再请求，所以必有一次），批准就以同一进度再计量一次（新段可能仍不够这次读），否则截断；这一步是上游正常结束时不等、也不因先前失败的追加截断，读已经完了 |
+| `Left` | 这一步之后写出内容的期限 = min(`WriteTimeout`, `Left` ÷ 条目的最快输出速度)；全额预留或已覆盖到输出上限时 `Left` 是 `math.MaxInt64`，即 `WriteTimeout`。不再读上游之后（结尾、截断的错误事件）的写用 `WriteTimeout`：上游已停，阻塞的写不再让它多生成 |
 
 - **任何一次追加失败都截断**，不等到当前段用完：`*Insufficient` 截断为 `credits_insufficient`（带 `limit_source`，会重置的上限在提交前的回答带 `Retry-After: 60`），其余（数据库错误、超时、`ErrTerminated`）为 `billing_unavailable`。截断（`attempt.truncate`）取消上游（原因 `errCut`），结束原因 `FinishTruncated`，花掉这一段的那一步不写；提交后以 `Relay.Fail` 结束，提交前没有内容交到客户端，以错误码回答（402 / 503），结局 `FailedBeforeCommit`，所以只收按次项目，不再换条目：别的条目花的是同一个账户。
 - **结算前没有追加在途**（billing 的前提）：`stream` 退出时（含出错、panic）`defer` 等在途的那次返回，至多 `ExtendWait`。
