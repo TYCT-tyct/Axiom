@@ -1,9 +1,11 @@
 package accounts_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -320,13 +322,26 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 	}
 }
 
-// TestOneChallengeOneSession: two codes sent at once for one pending session give one session; the user's lock
-// orders them and the first revokes the pending session.
+// TestOneChallengeOneSession: two codes sent at once for one pending session give one session. The pending session's
+// row is held locked from outside until both verifications are waiting, so they overlap: the user's lock orders them,
+// the first revokes the pending session, and the second finds it gone; the revocation must also change one row.
 func TestOneChallengeOneSession(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
 	_, _, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console)
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- x.admin(t).Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "SELECT 1 FROM accounts.sessions WHERE level = 'pending_mfa' AND revoked_at IS NULL FOR UPDATE"); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
 	results := make(chan error, 2)
 	for _, code := range codes[:2] {
 		go func() {
@@ -334,6 +349,10 @@ func TestOneChallengeOneSession(t *testing.T) {
 			results <- err
 		}()
 	}
+	for deadline := time.Now().Add(10 * time.Second); x.waiting(t) < 2 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
 	won := 0
 	for range 2 {
 		if err := <-results; err == nil {
@@ -342,9 +361,33 @@ func TestOneChallengeOneSession(t *testing.T) {
 			t.Errorf("the losing code: %v", err)
 		}
 	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if won != 1 {
 		t.Errorf("%d sessions from one challenge", won)
 	}
+}
+
+// admin is a pool logged in as the superuser, for holding locks and watching them.
+func (x site) admin(t *testing.T) *pg.DB {
+	t.Helper()
+	db, err := pg.Open(t.Context(), x.database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	return db
+}
+
+// waiting is how many of the database's queries wait for a lock.
+func (x site) waiting(t *testing.T) int {
+	t.Helper()
+	n, err := strconv.Atoi(texts(t, x.admin(t), pg.Scope{}, "SELECT count(*)::text FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // TestPlatformAuthorization: the platform scope needs an unrevoked platform grant whose role holds the permission,
