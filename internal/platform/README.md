@@ -8,7 +8,7 @@
 |---|---|
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
-| `secret` | 从受保护文件加载主密钥；供应商凭证的信封加密与明文脱敏 |
+| `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
@@ -48,7 +48,7 @@
 | 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
 | Axiom 的 schema 里每张表都受行级安全约束 | `serve` 启动时检查各模块同名的 schema（`platform` 和[依赖表](../../docs/architecture.md#模块之间的依赖)里的模块）：除版本表外，每张表都 ENABLE 并 FORCE 行级安全，并且有策略；没有策略的表什么都查不到，是迁移漏了一步，在启动时报出，而不是在运行时表现为查不到数据。测试分别建只 FORCE 没 ENABLE、只 ENABLE 没 FORCE、没有策略的表 |
-| 登录前的查找只经 `axiom_lookup` 的定义者函数 | `serve` 启动时检查：这些 schema 里的 `SECURITY DEFINER` 函数都属于 `axiom_lookup`，`search_path` 固定为 `pg_catalog, pg_temp`，除所有者外只有 `axiom_app` 能执行；`axiom_lookup` 不能登录、不是超级用户、没有 BYPASSRLS，不拥有任何表。测试分别构造函数的三种违规，以及查找角色能登录、拥有表的情况 |
+| 登录前的查找只经 `axiom_lookup` 的定义者函数 | `serve` 启动时检查：这些 schema 里的 `SECURITY DEFINER` 函数都属于 `axiom_lookup`，`search_path` 固定为 `pg_catalog, pg_temp`，除所有者外只有 `axiom_app` 能执行；`axiom_lookup` 存在（不存在说明没跑过迁移，提示先运行 `axiom migrate`），不能登录、不是超级用户、没有 BYPASSRLS，不拥有任何表，在任何 schema 里都没有 CREATE。测试分别构造函数的三种违规，以及查找角色能登录、拥有表、能在 schema 里建对象的情况；查找角色是超级用户、带 BYPASSRLS、不存在这三种改的是整个实例的角色，在不并行的测试里改完即恢复 |
 | 数据库缺少本程序的迁移就不启动 | `serve` 启动时逐个模块比较已执行的版本，缺版本表也不启动；数据库比程序新可以运行，因为迁移只做扩展 |
 | 数据库不应答就不启动，不在监听之前无声地卡住 | `serve` 连接数据库和启动检查合计最多等 `AXIOM_STARTUP_TIMEOUT`，超时后报这两个变量名，不报地址；测试用只建立连接、从不应答的服务器 |
 | 退出时停止接收新请求，在途请求在上限时间内完成 | 第一个 SIGINT 或 SIGTERM：就绪状态先改为否，随即关闭监听，在途请求最多等 `AXIOM_SHUTDOWN_TIMEOUT`，到时关闭剩下的连接，请求的 context 随之结束，按 context 执行的数据库查询中止并归还连接，连接池才能关闭（不看 context 的处理器仍会拖住退出）；第二个信号立即退出 |
@@ -66,6 +66,8 @@
 `secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。当前包尚未接入 `cmd/axiom`。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
 文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同；数值最大的版本用于写入，读取按记录的 `KeyVersion` 选择，旧版本需保留至存量数据迁移完成。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
+
+`secret.LoadMAC(path)` 读 `AXIOM_KEY_HASH_FILE` 指定的文件，格式、权限和报错方式同主密钥文件（共用一个解析器），用于按哈希存放和查找的秘密（如 API key）：`Versions()` 从新到旧列出版本，`Sum(版本, 数据)` 是该版本密钥的 HMAC-SHA256，传入不存在的版本是调用方的错误，panic。最多几个版本由使用方规定。
 
 `secret.New(string)` 包装明文，零值表示空明文。`Keyring.Seal(Secret, Location)` 返回 `Sealed`，每次生成独立随机 AES-256 数据密钥，用 AES-GCM 加密数据，再用当前主密钥的 AES-GCM 包裹数据密钥。`Open(Sealed, Location)` 返回 `Secret`，失败不返回明文。`secret.Location{Table, RowID, Purpose}` 指明密文存在哪张表、哪一行、作什么用；任一字段为空都会让密文在同样留空的位置也能打开，属于调用方的错误，`Seal` 和 `Open` 遇到时 panic。`Seal` 唯一可能的失败是这个 panic，因此不返回错误。密钥环加载后只读，可并发使用；不支持热加载。
 
