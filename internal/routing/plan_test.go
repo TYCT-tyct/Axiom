@@ -425,10 +425,10 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 	}
 }
 
-// TestTheOutputCapQuotedIsTheCapSent: a request that sets no output cap is reserved at the entry's limit, which the
+// TestOutputCapQuotedIsTheCapSent: a request that sets no output cap is reserved at the entry's limit, which the
 // context may have cut below the model's default, so that limit, not the default, is what the upstream is told, in
 // each way a request is called (I1). A model whose limit is unknown has no default to send.
-func TestTheOutputCapQuotedIsTheCapSent(t *testing.T) {
+func TestOutputCapQuotedIsTheCapSent(t *testing.T) {
 	t.Parallel()
 	chat := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 	cases := []struct {

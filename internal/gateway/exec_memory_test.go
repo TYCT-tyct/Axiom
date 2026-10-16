@@ -42,11 +42,11 @@ func chatForResponses(t *testing.T, c *Call) {
 	c.Plan.Entries[0].Target.Format = protocol.Responses
 }
 
-// TestTheNodesMemoryIsAskedForBeforePrepareAllocates: what Prepare may hold is drawn from the budget before it makes
+// TestMemoryIsAskedForBeforePrepareAllocates: what Prepare may hold is drawn from the budget before it makes
 // the request, so a node whose budget is spent refuses at once, 503, instead of finding that out after the allocation
 // it was meant to prevent. The proof is the request Prepare would have refused: with the budget it gets that answer, a
 // 400 about the request; without, it is never asked.
-func TestTheNodesMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
+func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		spare  int64 // the budget beyond the cost
@@ -68,9 +68,9 @@ func TestTheNodesMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 	}
 }
 
-// TestTheRequestIsHeldByItsCapacityWhileItIsSent: the node's budget is charged for the buffer the request is in, its
+// TestMemoryHoldsARequestByItsCapacityWhileItIsSent: the node's budget is charged for the buffer the request is in, its
 // whole capacity, and no more once the request is sent; the length of what is sent is less.
-func TestTheRequestIsHeldByItsCapacityWhileItIsSent(t *testing.T) {
+func TestMemoryHoldsARequestByItsCapacityWhileItIsSent(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		var during int64
@@ -90,10 +90,10 @@ func TestTheRequestIsHeldByItsCapacityWhileItIsSent(t *testing.T) {
 	})
 }
 
-// TestConcurrentRequestsAreHeldToTheBudgetBeforeTheyAreMade: with a budget for three requests' buffers, eight at once
+// TestMemoryHoldsConcurrentRequestsToTheBudget: with a budget for three requests' buffers, eight at once
 // get three and are refused five, whatever the order: the room is drawn before the buffer is made, so the refused make
 // none, and the three are held by the capacity they will have.
-func TestConcurrentRequestsAreHeldToTheBudgetBeforeTheyAreMade(t *testing.T) {
+func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		probe := newHarness(t, ctx, options{})
 		entry := probe.call.Plan.Entries[0]
