@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check the CI build job runs
-check: docs modules adapters-removable scope tidy generated lint deadcode test vuln secrets web
+check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -55,6 +55,11 @@ modules:
 adapters-removable:
     go run ./internal/suppliers/internal/removable .
 
+# Every contract in api/ is valid OpenAPI 3.0.3 and follows the conventions of internal/platform/README.md「接口约定」:
+# security and permission declared, the error body, cursors, idempotency keys, and what two contracts share defined alike
+api:
+    go run -C tools ./checkapi ..
+
 # Only internal/platform/pg sets the tenant scope or switches the role, in Go and SQL, tests and migrations included;
 # scripts/check_scope.py holds the rule and its reasons
 scope:
@@ -70,9 +75,10 @@ deadcode:
     out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
-# Tests, plus one iteration of every benchmark so benchmarks keep compiling and running
+# Tests, plus one iteration of every benchmark so benchmarks keep compiling and running. The packages share one
+# PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test ./pkg` alone starts its own.
 test:
-    go test -race -bench . -benchtime 1x ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -bench . -benchtime 1x ./...
     go test -C tools -race ./...
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the

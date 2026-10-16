@@ -25,9 +25,12 @@ func System(job string) Actor { return Actor{"system", job} }
 // String is the actor as <kind>:<id>, such as user:<uuid> or system:catalog.cli, for a module's own history table.
 func (a Actor) String() string { return a.kind + ":" + a.id }
 
-// Target is what a change was made to. It names no tenant: the table refuses tenant entries until accounts can tie
-// them to one, and the tenant fields come with that (internal/platform/README.md「审计日志」).
-type Target struct{ Module, Kind, ID string }
+// Target is what a change was made to, and the tenant it belongs to: Site and Account for account data, Site alone
+// for site data, neither for platform and public data. The pair must be registered (RegisterSite, RegisterAccount).
+type Target struct {
+	Module, Kind, ID string
+	Site, Account    uuid.UUID // the zero UUID is none
+}
 
 // Event is one change. Action is a stable name, <noun>.<verb> such as api_key.revoke, for searching and replay.
 // Reason is the actor's own words, if a rule asks for them. Detail is small and structured: IDs, names, before and
@@ -57,10 +60,39 @@ func Record(ctx context.Context, tx pg.Tx, event Event) error {
 		Module:     t.Module,
 		TargetKind: t.Kind,
 		TargetID:   t.ID,
+		SiteID:     optional(t.Site),
+		AccountID:  optional(t.Account),
 		Reason:     event.Reason,
 		Detail:     detail,
 	}); err != nil {
 		return fmt.Errorf("audit %s: %w", event.Action, err)
+	}
+	return nil
+}
+
+// optional spells id for the query, which reads the empty string as none.
+func optional(id uuid.UUID) string {
+	if id == (uuid.UUID{}) {
+		return ""
+	}
+	return id.String()
+}
+
+// RegisterSite records site as a tenant entries may name, in tx: the one that creates the site, so the site and its
+// registration commit together.
+func RegisterSite(ctx context.Context, tx pg.Tx, site uuid.UUID) error {
+	return register(ctx, tx, site, site)
+}
+
+// RegisterAccount records account, of site, as a tenant entries may name, in the transaction that creates it. The
+// pair is what an entry's site and account are checked against.
+func RegisterAccount(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error {
+	return register(ctx, tx, site, account)
+}
+
+func register(ctx context.Context, tx pg.Tx, site, tenant uuid.UUID) error {
+	if err := New().InsertTenant(ctx, tx, InsertTenantParams{SiteID: site.String(), TenantID: tenant.String()}); err != nil {
+		return fmt.Errorf("register a tenant: %w", err)
 	}
 	return nil
 }

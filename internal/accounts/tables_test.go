@@ -100,6 +100,7 @@ var seed = []string{
 	apiKey(":k1", ":s1", ":a1", ":w1", ":u1", "call"), apiKey(":k2", ":s2", ":a2", ":w2", ":u2", "call"),
 	session(":e1", ":s1", ":a1", ":u1"), session(":e2", ":s2", ":a2", ":u2"),
 	code(":c1", ":s1", ":a1", ":u1"), code(":c2", ":s2", ":a2", ":u2"),
+	`INSERT INTO platform.tenants VALUES (:s1, :s1), (:s2, :s2), (:s1, :a1), (:s2, :a2), (:s1, :p)`,
 }
 
 // Statements that create a row; newSite also creates its first tier, which the site's default tier must be.
@@ -405,7 +406,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	updatable := map[string][]string{
 		"sites":         {"name", "status", "key_prefix", "registration", "default_tier_id"},
 		"site_domains":  {"disabled_at"},
-		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit"},
+		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts"},
 		"tiers":         {"name"},
 		"roles":         {"permissions"},
 		"accounts":      {"name", "status", "tier_id"},
