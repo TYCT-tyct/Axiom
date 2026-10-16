@@ -1,30 +1,5 @@
-import { createServer } from "node:net";
 import { defineConfig, devices } from "@playwright/test";
-
-// Whether nothing listens on the port, on the addresses a preview server may take.
-function isFree(port: number): Promise<boolean> {
-  const tryListen = (host: string) =>
-    new Promise<boolean>((resolve) => {
-      const server = createServer();
-      // An address the machine does not have cannot be taken by anyone else.
-      server.once("error", (error: NodeJS.ErrnoException) => resolve(error.code !== "EADDRINUSE"));
-      server.listen(port, host, () => server.close(() => resolve(true)));
-    });
-  return Promise.all([tryListen("127.0.0.1"), tryListen("::1")]).then((answers) => answers.every(Boolean));
-}
-
-// A first port from which the three apps' dev ports and their preview ports (vite.shared.ts) are all free. It is random,
-// so two runs starting together do not look at the same ports one after the other and both take them.
-async function freeFirstPort(): Promise<number> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const first = 20_000 + Math.floor(Math.random() * 20_000);
-    const wanted = [0, 1, 2].flatMap((app) => [first + app, first + app + 1000]);
-    if ((await Promise.all(wanted.map(isFree))).every(Boolean)) {
-      return first;
-    }
-  }
-  throw new Error("no free ports for the preview servers");
-}
+import { freeFirstPort } from "./scripts/free-port.ts";
 
 // Unless AXIOM_WEB_PORT names the ports, this run takes free ones, so another worktree's checks can run at the same time.
 // The variable also carries the choice to the test workers, which load this file again, and to the preview servers.
