@@ -1,6 +1,8 @@
 package adaptertest_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -142,6 +144,45 @@ func TestTheSuiteCatchesEachBrokenRule(t *testing.T) {
 		problems := adaptertest.Problems(c.a)
 		if !strings.Contains(strings.Join(problems, "\n"), c.want) {
 			t.Errorf("%s: problems %q do not say %q", c.name, problems, c.want)
+		}
+	}
+}
+
+// scanning is a Manager whose Charges is the function given.
+type scanning struct {
+	adapter.Manager
+	charges func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error)
+}
+
+func (s scanning) Charges(_ context.Context, state adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+	return s.charges(state)
+}
+
+// TestScanProblemFindsWhatBreaksTheProtocol: a manager that follows the protocol passes; one that refuses a position it
+// returned, one that returns none, and one that never ends a pass each fail.
+func TestScanProblemFindsWhatBreaksTheProtocol(t *testing.T) {
+	t.Parallel()
+	done := adapter.ChargePage{Done: true}
+	for name, c := range map[string]struct {
+		charges func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error)
+		fails   bool
+	}{
+		"follows it": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+			return done, []byte(`{"v":1}`), nil
+		}, false},
+		"refuses a position": {func(s adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+			if len(s) > 0 {
+				return adapter.ChargePage{}, s, errors.New("unknown position")
+			}
+			return done, []byte(`{"v":1}`), nil
+		}, true},
+		"returns no position": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) { return done, nil, nil }, true},
+		"never ends a pass": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+			return adapter.ChargePage{}, []byte(`{"v":1}`), nil
+		}, true},
+	} {
+		if problem := adaptertest.ScanProblem(scanning{charges: c.charges}); (problem != "") != c.fails {
+			t.Errorf("%s: ScanProblem = %q, fails expected: %v", name, problem, c.fails)
 		}
 	}
 }

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
@@ -449,19 +452,60 @@ func TestRelayAllocs(t *testing.T) {
 	}
 }
 
+// The benchmark keeps the runtime's own allocations out of the timed region, which otherwise add a varying few to the
+// count and made bench-compare fail on a commit that did not touch the relay. Between collections the collector is off, so
+// none falls inside a measurement; every collectEvery relays one runs outside the timer, and warmUp relays after it, and
+// before the first measurement, take the extra allocations that follow a collection and a growing heap (they cannot be
+// attributed to any allocation site in the code). One processor, as the relay is one goroutine, keeps the scavenger and
+// the sweeper off the timed goroutine's counts. What is left is a few allocations in about one run in six, which
+// tools/benchgate tolerates for this benchmark alone. 16 relays of the largest stream leave about 300 MiB of garbage.
+const (
+	collectEvery = 16
+	warmUp       = 10
+)
+
+// raceDetector reports whether the test binary was built with the race detector.
+func raceDetector() bool {
+	info, ok := debug.ReadBuildInfo()
+	return ok && slices.ContainsFunc(info.Settings, func(s debug.BuildSetting) bool { return s.Key == "-race" && s.Value == "true" })
+}
+
 func BenchmarkRelay(b *testing.B) {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	warm := warmUp
+	if raceDetector() { // `just test` runs every benchmark once under the race detector, whose counts nobody compares
+		warm = 0
+	}
 	for _, format := range formats {
 		for _, n := range []int{16, 256} { // 256 64-KiB deltas is 16 MiB: enough to see growth with the count
 			for _, size := range []int{1 << 10, 64 << 10} {
 				stream := deltas(format.f, n, size)
 				b.Run(fmt.Sprintf("%s/deltas=%d/size=%d", format.dir, n, size), func(b *testing.B) {
+					// Here, not once above: the testing package restores GOMAXPROCS before every repetition of -count.
+					defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 					b.ReportAllocs()
 					b.SetBytes(int64(len(stream)))
-					for b.Loop() {
-						drain(b, format.f, stream)
-					}
+					relayTimed(b, format.f, stream, warm)
 				})
 			}
+		}
+	}
+}
+
+// relayTimed relays the stream b.N times, warming up first and again after each collection, as the comment above says.
+func relayTimed(b *testing.B, f protocol.Format, stream []byte, warm int) {
+	for range warm {
+		drain(b, f, stream)
+	}
+	for i := 1; b.Loop(); i++ {
+		drain(b, f, stream)
+		if i%collectEvery == 0 {
+			b.StopTimer()
+			runtime.GC()
+			for range warm {
+				drain(b, f, stream)
+			}
+			b.StartTimer()
 		}
 	}
 }
