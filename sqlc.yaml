@@ -17,3 +17,58 @@ sql:
         output_models_file_name: models.gen.go
         emit_methods_with_db_argument: true
         omit_unused_structs: true
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/catalog/migrations]
+    queries: internal/catalog/queries
+    gen:
+      go:
+        package: catalog
+        out: internal/catalog
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/suppliers/internal/store/migrations]
+    queries: internal/suppliers/internal/store/queries
+    gen:
+      go:
+        package: store
+        out: internal/suppliers/internal/store
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        # Plain Go types for what modules pass around, so their code names no pgx type (depguard bans pgx outside
+        # platform; sqlc's own output is the exception).
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          - {db_type: "pg_catalog.numeric", go_type: string}
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
+          - {db_type: "pg_catalog.int8", go_type: int64}
+          - {db_type: "pg_catalog.int8", nullable: true, go_type: {type: int64, pointer: true}}
+  - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/observability/migrations]
+    queries: internal/observability/internal/store/queries
+    gen:
+      go:
+        package: store
+        out: internal/observability/internal/store
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}

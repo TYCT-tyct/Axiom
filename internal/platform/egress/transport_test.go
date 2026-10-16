@@ -39,7 +39,7 @@ func TestTLSKeepsHostnameAndVerifiesCertificate(t *testing.T) {
 	if err := requestFailure(t, client, request(t, target)); !errors.As(err, &untrusted) {
 		t.Fatalf("expected certificate verification failure: %v", err)
 	}
-	trusted := &Client{transport: client.transport.Clone()}
+	trusted := &Client{transport: client.transport.Clone(), tracer: client.tracer}
 	defer trusted.CloseIdleConnections()
 	trust(trusted, server.Certificate())
 	resp, err := trusted.Do(request(t, target))

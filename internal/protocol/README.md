@@ -87,6 +87,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 - **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`。合规且不以 `axid_` 开头的 ID 原样；其余写成 `axid_` 加原 ID 字节的十六进制。两类不相交、十六进制一一对应，所以不同的 ID 写出来仍不同；调用和结果用同一个函数，配得上。
 - **结构化输出的子集**（Anthropic《Structured outputs》「JSON Schema limitations」，2026-10-15）：没有数值、字符串约束，数组只有 `minItems` 0 或 1，每个对象都写 `additionalProperties: false`，枚举只含简单值，`format` 在它的列表里，`$ref` 只指向本 schema 的定义、不递归，`allOf` 里没有 `$ref`。不在子集内就换端点，不靠删约束凑。
 
+## 读 SSE
 
 规则按 WHATWG《Server-sent events》的解析部分（2026-10-14 读取）：
 

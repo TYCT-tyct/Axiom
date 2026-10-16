@@ -115,7 +115,8 @@ func NewUsage(counts map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Us
 	return u, nil
 }
 
-// Count is how much of it was used.
+// Count is how much of it was used: protocol renders it as the usage the client sees, billing's meter reads it as
+// what the upstream has reported so far.
 func (u Usage) Count(it Item) int64 { return u.q[it] }
 
 // Unknown returns what the upstream reported that protocol could not map, for billing to price at its fallback prices.

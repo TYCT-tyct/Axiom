@@ -1,0 +1,7 @@
+# 55-err-handler-success-false
+GET /api/token/99999
+> Authorization: Bearer <ALICE_PAT>
+< status: 200  (elapsed 0.02s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"message":"record not found","success":false}
