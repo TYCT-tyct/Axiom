@@ -166,8 +166,9 @@ func RunScan(t testing.TB, m adapter.Manager) {
 // ScanProblem checks the scan protocol on a Manager whose supplier has no charge records, and describes the first rule
 // it breaks, or returns "": the first call has no position and is not refused; each call returns a position; a pass
 // ends (Done) within a few calls; and the position of a finished pass, which the module's next round gives back, is
-// accepted again. The module's sync relies on all of it: it starts with no position, stores what comes back with each
-// page, and reads until Done.
+// accepted again; and a page that says Done also says how far the records are read (Through), because an adapter that
+// leaves it out would have a removal take a backlog for read (#109). The module's sync relies on all of it: it
+// starts with no position, stores what comes back with each page, and reads until Done.
 func ScanProblem(m adapter.Manager) string {
 	var state adapter.ScanState
 	for call := range 20 {
@@ -183,6 +184,9 @@ func ScanProblem(m adapter.Manager) string {
 		state = next
 		if !page.Done {
 			continue
+		}
+		if page.Through.IsZero() {
+			return fmt.Sprintf("Charges call %d ended the pass without saying how far the records are read (Through)", call+1)
 		}
 		again, after, err := m.Charges(context.Background(), state)
 		if err != nil || len(after) == 0 || len(again.Charges) != 0 {
