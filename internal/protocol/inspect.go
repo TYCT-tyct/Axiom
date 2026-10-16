@@ -48,6 +48,8 @@ func (s Capabilities) Has(c Capabilities) bool { return s&c == c }
 type Request struct {
 	Format Format
 	Model  string
+	// Models are OpenRouter's alternates, tried after Model when it cannot serve the request.
+	Models []string
 	Stream bool
 	// Previous is Responses' previous_response_id. The stored history it names is input too.
 	Previous string

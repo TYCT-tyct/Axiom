@@ -29,8 +29,8 @@ type serverTool struct {
 var grammars = [...]grammar{
 	Messages: {
 		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 		},
@@ -46,8 +46,9 @@ var grammars = [...]grammar{
 	},
 	Responses: {
 		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_output_tokens": (*scanner).maxOutput,
-			"input": (*scanner).content, "tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
+			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
 			"previous_response_id": (*scanner).previous,
 		},
@@ -63,8 +64,8 @@ var grammars = [...]grammar{
 	},
 	Chat: {
 		top: fields{
-			"model": (*scanner).model, "stream": (*scanner).stream, "max_tokens": (*scanner).maxOutput,
-			"max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
+			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
@@ -126,6 +127,20 @@ func (s *scanner) model() error {
 	v, err := s.str()
 	s.r.Model = string(v)
 	return err
+}
+
+// maxModels bounds the alternates a request lists, so what Inspect allocates for them does not grow with the body.
+const maxModels = 8
+
+func (s *scanner) models() error {
+	return s.array(func(s *scanner) error {
+		if len(s.r.Models) == maxModels {
+			return fmt.Errorf("models lists more than %d models", maxModels)
+		}
+		v, err := s.str()
+		s.r.Models = append(s.r.Models, string(v))
+		return err
+	})
 }
 
 func (s *scanner) stream() error {

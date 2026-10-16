@@ -13,6 +13,11 @@ import (
 type Config struct {
 	NodeInFlight int // requests served at once, disconnected ones still being read included
 
+	IPConnections int   // connections one client address may hold open
+	IPInFlight    int   // requests one client address may have in flight
+	MaxBody       int64 // largest request body, in bytes
+	KeyRate       int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
+
 	PoolSize         int // N, database connections
 	PoolReserve      int // connections only the Completion class may take
 	BatchConnections int // most connections one batch writer (call records, journal) holds
@@ -20,13 +25,15 @@ type Config struct {
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key
 
+	KeyLookup        time.Duration // an unknown key's lookup in the database
+	RateWindow       time.Duration // the sliding window KeyRate counts over
 	AccountGateWait  time.Duration // an admission's wait for its account's gate
 	QueueWait        time.Duration // wait for a slot when every candidate endpoint is full
 	StartBy          time.Duration // after admission, no new attempt starts
 	MaxCall          time.Duration // longest single call
 	AdmissionBudget  time.Duration // gate, connection and transaction of an admission
-	LockTimeout      time.Duration // the transaction's lock_timeout
-	StatementTimeout time.Duration // the transaction's statement_timeout
+	LockTimeout      time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
+	StatementTimeout time.Duration // the transaction's statement_timeout; likewise
 	HolderTTL        time.Duration // lifetime of a holder row that is not renewed
 	HolderHeartbeat  time.Duration
 	ReclaimGrace     time.Duration // wait after the TTL before the cleanup reclaims a holder
@@ -38,6 +45,12 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		NodeInFlight:     5000,
+		IPConnections:    1000,
+		IPInFlight:       500,
+		MaxBody:          32 << 20,
+		KeyRate:          6000,
+		KeyLookup:        time.Second,
+		RateWindow:       time.Minute,
 		PoolSize:         64,
 		PoolReserve:      16,
 		BatchConnections: 2,
@@ -92,6 +105,10 @@ type Backpressure struct {
 	Funds    *Funds
 	Pool     *Pool // for the connections that need no account gate: cold-key lookup, batch writers
 	Queue    *Queue
+	Rate     *RateCounter
+	IPConns  *Limiter // connections per client address
+	IPCalls  *Limiter // requests in flight per client address
+	cfg      Config
 }
 
 // New validates cfg and builds the limits; it is the only way to get them, so no limit runs on a bad relation.
@@ -105,5 +122,9 @@ func New(cfg Config) (*Backpressure, error) {
 		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool},
 		Pool:     pool,
 		Queue:    newQueue(cfg.QueueWait, cfg.QueueMax, cfg.QueuePerKey),
+		Rate:     NewRateCounter(cfg.RateWindow),
+		IPConns:  NewLimiter(ErrRateLimited),
+		IPCalls:  NewLimiter(ErrRateLimited),
+		cfg:      cfg,
 	}, nil
 }
