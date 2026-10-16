@@ -119,7 +119,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	if s.Pass == nil {
 		if s.Pass = nextPass(s, now); s.Pass == nil {
 			state, err := s.encode()
-			return adapter.ChargePage{Done: true}, state, err
+			return adapter.ChargePage{Done: true, Through: time.Unix(s.Watermark, 0).UTC()}, state, err
 		}
 	}
 	page, err := m.readPage(ctx, s.Pass)
@@ -140,7 +140,11 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 		s.Pass.Page++
 	}
 	state, err := s.encode()
-	return adapter.ChargePage{Charges: charges, Done: done}, state, err
+	page2 := adapter.ChargePage{Charges: charges, Done: done}
+	if done {
+		page2.Through = time.Unix(s.Watermark, 0).UTC()
+	}
+	return page2, state, err
 }
 
 // nextPass picks what to read next: the last day again when that is due, otherwise the stretch after the watermark,
@@ -257,4 +261,21 @@ func funding(o otherInfo) adapter.Funding {
 		return adapter.FundingWallet
 	}
 	return adapter.FundingOther
+}
+
+var _ adapter.Rescanner = (*manager)(nil)
+
+// Rescan begins a late pass over [since, now), for a removal that reads the last records after the grace period: it
+// reads that stretch again whatever the passes the adapter schedules would do next.
+func (m *manager) Rescan(since time.Time) adapter.ScanState {
+	now := m.now()
+	s := scanState{
+		V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix(),
+		Pass: &pass{Late: true, Start: since.Unix(), End: now.Add(-lag).Unix(), Page: 1},
+	}
+	state, err := s.encode()
+	if err != nil {
+		panic(err) // integers and booleans always encode
+	}
+	return state
 }

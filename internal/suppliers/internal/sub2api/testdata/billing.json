@@ -1,0 +1,18 @@
+{
+ "method": "GET",
+ "path": "/v1/sub2api/billing",
+ "status": 200,
+ "header": {
+  "X-Client-Request-Id": "00000000-0000-4000-8000-000000000004"
+ },
+ "body": {
+  "object": "sub2api.key_billing",
+  "schema_version": 1,
+  "billing_scope": "token",
+  "group_rate_multiplier": 1,
+  "resolved_rate_multiplier": 1,
+  "peak_rate_enabled": false,
+  "effective_rate_multiplier": 1,
+  "observed_at": "2026-10-15T15:47:09.322834485Z"
+ }
+}

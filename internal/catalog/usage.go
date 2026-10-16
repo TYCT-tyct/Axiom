@@ -115,6 +115,10 @@ func NewUsage(counts map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Us
 	return u, nil
 }
 
+// Count is how much of it was used: protocol renders it as the usage the client sees, billing's meter reads it as
+// what the upstream has reported so far.
+func (u Usage) Count(it Item) int64 { return u.q[it] }
+
 // Unknown returns what the upstream reported that protocol could not map, for billing to price at its fallback prices.
 func (u Usage) Unknown() []UnknownUsage { return slices.Clone(u.unknown) }
 
@@ -122,5 +126,5 @@ func (u Usage) Unknown() []UnknownUsage { return slices.Clone(u.unknown) }
 // a reply that only reasoned is not an empty reply.
 func (u Usage) OutputTotal() int64 { return u.q[ItemOutput] + u.q[ItemReasoning] }
 
-// Count is the usage of one item, for billing's meter to read a count the upstream has reported so far.
-func (u Usage) Count(it Item) int64 { return u.q[it] }
+// ServiceTier is the service tier that served the request.
+func (u Usage) ServiceTier() ServiceTier { return u.serviceTier }

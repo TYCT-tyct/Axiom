@@ -4,6 +4,7 @@
 package adaptertest
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,6 +49,10 @@ var bodies = map[string][]byte{
 	"unrecognised":  []byte(`{"error":{"code":"never_heard_of_it","message":"?"}}`),
 	"oversized":     []byte(strings.Repeat("x", 64<<10)),
 	"an error page": []byte(htmlPage),
+	// answers that name a known refusal: whatever the code, a 5xx must stay "may have run" (the 5xx rule below)
+	"model not found":    []byte(`{"error":{"code":"model_not_found"}}`),
+	"context too long":   []byte(`{"error":{"code":"context_length_exceeded"}}`),
+	"insufficient funds": []byte(`{"code":"INSUFFICIENT_BALANCE"}`),
 }
 
 var headers = map[string]http.Header{
@@ -148,4 +153,42 @@ func quirkProblems(q adapter.CallQuirks) (problems []string) {
 		}
 	}
 	return problems
+}
+
+// RunScan fails t if ScanProblem finds one.
+func RunScan(t testing.TB, m adapter.Manager) {
+	t.Helper()
+	if problem := ScanProblem(m); problem != "" {
+		t.Fatal(problem)
+	}
+}
+
+// ScanProblem checks the scan protocol on a Manager whose supplier has no charge records, and describes the first rule
+// it breaks, or returns "": the first call has no position and is not refused; each call returns a position; a pass
+// ends (Done) within a few calls; and the position of a finished pass, which the module's next round gives back, is
+// accepted again. The module's sync relies on all of it: it starts with no position, stores what comes back with each
+// page, and reads until Done.
+func ScanProblem(m adapter.Manager) string {
+	var state adapter.ScanState
+	for call := range 20 {
+		page, next, err := m.Charges(context.Background(), state)
+		switch {
+		case err != nil:
+			return fmt.Sprintf("Charges call %d: %v; the first call has no position and every later one has the last returned", call+1, err)
+		case len(next) == 0:
+			return fmt.Sprintf("Charges call %d returned no position to keep", call+1)
+		case len(page.Charges) != 0:
+			return fmt.Sprintf("Charges call %d returned records from a supplier that has none", call+1)
+		}
+		state = next
+		if !page.Done {
+			continue
+		}
+		again, after, err := m.Charges(context.Background(), state)
+		if err != nil || len(after) == 0 || len(again.Charges) != 0 {
+			return fmt.Sprintf("Charges with the position of a finished pass: %v, %d bytes of position, %d records", err, len(after), len(again.Charges))
+		}
+		return ""
+	}
+	return "a pass over a supplier with no records does not end within 20 calls"
 }
