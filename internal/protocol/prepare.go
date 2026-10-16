@@ -171,13 +171,13 @@ const convertFactor = 32
 // before it starts; a conversion's working set is bounded by convertFactor. What stays is the capacity of
 // Upstream.Body, which is never more than the cost.
 func PrepareCost(r *Request, n int, t Target, w Rewrites) int64 {
-	switch r.Format {
-	case t.Format:
+	if r.Format == t.Format {
 		return int64(rewriteSize(rewriteRules[r.Format], n, t, w))
-	case Chat:
-		return int64(n) * convertFactor
 	}
-	return 0 // Prepare refuses at once: nothing is converted from another format
+	if r.Format != Chat {
+		return 0 // Prepare refuses at once: nothing is converted from another format
+	}
+	return int64(n) * convertFactor
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
