@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
@@ -62,7 +63,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithTracerProvider(tel.Traces))
+	db, err := openNodeDatabase(ctx, databaseURL, startupTimeout, tel)
 	if err != nil {
 		return err
 	}
@@ -100,6 +101,24 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	return errors.Join(stopped, shutdown(ctx, shutdownTimeout, &health, servers), recorder.Close(ctx))
+}
+
+// openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
+// (docs/domains/billing.md「价目表缺项」); billing reports its gauges from it.
+func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry) (*pg.DB, error) {
+	db, err := openDatabase(ctx, url, timeout, pg.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, err
+	}
+	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return billing.CheckFallbacks(ctx, tx) })
+	if err == nil {
+		err = billing.RegisterMetrics(tel.Metrics.Meter("axiom/billing"), db, pg.PlatformScope())
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.

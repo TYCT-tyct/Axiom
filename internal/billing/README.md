@@ -2,7 +2,7 @@
 
 预留、计量、追加、结算、清理与校正在代码层面的接口和规则。钱怎么算、收谁多少见[计费](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；这里只写调用路径上下游代码要依赖的部分，定价、账本、额度批次的代码结构随实现补入本文。
 
-> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、校正 `Correct`、账本、后台加额度 `AddCredit` 和对账 `Reconcile`（见下文「报价」「计量」「数据」「结算与账本」）；后台循环 `Run`、额度批次的分配与到期、缺项的兜底价是设计，尚未实现。
+> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、校正 `Correct`、账本、后台加额度 `AddCredit`、对账 `Reconcile` 和缺项的兜底价（见下文「报价」「计量」「数据」「结算与账本」「兜底价」）；后台循环 `Run`、额度批次的分配与到期是设计，尚未实现。
 
 ## 接口（草图）
 
@@ -16,7 +16,7 @@ type Demand struct { // gateway 由 protocol.Request 填写；只放请求里的
 }
 type ServerTool struct{ Item catalog.Item; MaxUses int64 } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数
 type Quotable struct{ Price catalog.Schedule; Model Model; MaxOutput int64; Segmentable bool } // 已实现；B2 加上 Endpoint、Model 的 ID 和 PriceRef
-type Model struct{ ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet } // 调用方从目录快照填
+type Model struct{ ID catalog.ModelID; ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet } // 调用方从目录快照填
 type Segments struct{ Output int64; Overshoot time.Duration } // 站点设置：每段输出 token；追加等待加取消生效的延迟上限
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) // 已实现，纯函数；Reserve 在锁下调用它
 type Reservation struct{ Amount platform.Exact; Kept []int }
@@ -85,7 +85,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 
 ## 准入里的预留
 
-`Reserve` 最后执行，依次三条语句：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**（同时读出余额、底线、在途预留），再以 `FOR KEY SHARE` 核对持有者（见下文），最后一条读工作区与 key 在各自窗口的花费和占用。READ COMMITTED 下最后一条在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。`pg.Tx` 还没有批量发送，三条依次发出，比同批多两次往返，都在账户锁内：准入合计 8 次往返（开始、设范围、核对 key、锁余额行、栅栏、读计数、写预留、提交），追加 9 次（开始、设范围、锁余额行、栅栏、读预留行、读计数、写预留行、写占用、提交），目标已覆盖时 6 次（读完预留行即提交）。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
+`Reserve` 最后执行，依次三条语句：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**（同时读出余额、底线、在途预留），再以 `FOR KEY SHARE` 核对持有者（见下文），最后一条读工作区与 key 在各自窗口的花费和占用。READ COMMITTED 下最后一条在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。`pg.Tx` 还没有批量发送，三条依次发出，比同批多两次往返，都在账户锁内：准入合计 9 次往返（开始、设范围、核对 key、读兜底价、锁余额行、栅栏、读计数、写预留、提交；兜底价是平台数据，在锁之前读），追加 9 次（开始、设范围、锁余额行、栅栏、读预留行、读计数、写预留行、写占用、提交），目标已覆盖时 6 次（读完预留行即提交）。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
 
 - 余额行是账户资金写入的唯一串行点（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)），锁两个账户时的顺序也在那里。没有余额行的账户按余额 0 处理，行在开户时由本模块建。
 - 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。采样次数和按次项目的最大次数在报价时逐条目算：请求没写某个服务端工具的最大次数，就取该条目模型在 catalog 里的默认值，所以跨模型路线的条目可以不同。报价的测试至少包括：请求没写工具的最大次数；路线里两个条目的模型默认次数不同；开启服务端压缩时采样次数乘 2。
@@ -113,7 +113,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 
 | 表 / 列 | 内容 | 谁能读写 |
 |---|---|---|
-| `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`charged_seq` 与 `entry`（收费的那次尝试和它的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`waived`（是否只收了按次项目）、`estimated`（收费是否基于上游没报告的用量）、`unpriced`（是否有还没有价格可收的用量，见下文「暂估」）、`final_usage`（收费所用的用量，含映射不了的，JSON，`Final` 从它读出）、`correct_by` | 已释放、已结算的行不能再改 |
+| `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`charged_seq` 与 `entry`（收费的那次尝试和它的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`waived`（是否只收了按次项目）、`estimated`（收费是否基于上游没报告的用量或兜底价）、`unpriced`（迁移 00003 起不再写入、恒为 false：每个预留都锁定了兜底价，见「兜底价」）、`final_usage`（收费所用的用量，含映射不了的，JSON，`Final` 从它读出）、`correct_by` | 已释放、已结算的行不能再改 |
 | `transactions` | 一个事件一笔：租户、`kind`（credit、settle、reverse、attempt_cost、cost_adjust）、`(request_id, attempt_seq, kind, revision)` 唯一 | 账户范围；只插入 |
 | `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense）、`amount`（借正贷负，不为 0）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
 | `credit_batches` | 每次加额度一个批次：来源（目前只有赠送）、金额、过期时间 | 账户范围；只插入 |
@@ -123,13 +123,30 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 - **账本**：一笔交易的分录合计为 0（写入时断言），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
 - **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本（已有供应商记录的尝试不再记估算的成本）和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，按精确值算，超出部分记 `platform_borne`；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。语句依次发出、没有批量，尝试成本逐次写（查已有记录、写交易、写分录）：一次尝试、成本非零、走免单检查并进入终态时 15 次往返（开始、设范围、锁余额行、读预留行、每次尝试 3 条、写尝试、记免单、记收费 2 条、移动计数、写预留行、`EndRequest`、提交），每多一次尝试多 3 次；从锁余额行到提交持锁 13 次；各段先按精确值求和再向上取整一次。纯成本的分录不动余额行。
 - **免单**：最后一次尝试 `NotExecuted` 不收；客户端取消照收；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、输出与推理合计为 0、结束原因为空或出错的，可以免单：账户当天免单成本（这个请求全部尝试的成本之和）不超过 `WaiverCap` 时只收按次项目（仍按整次采样所在的档位计价），超过后只有零输出的条件还能免。站点级的每日上限还没有：它要一个所有账户范围都能写的计数，行级安全的口径待定。
-- **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估、留住预留里没用掉的部分到 `correct_by`。映射不了的按「价目表缺项」的兜底价收：像 token 的（字段名以 `tokens` 结尾、取值是 0 到 10¹⁰ 的整数）按该模型所有服务等级和分档里最高的 token 单价，首次结算、校正和窗口到期都按它，所以从不免费。其余的（按次计数、认不出的服务等级、非 token 的计费方式、小数）要用站点的按次默认单价或「成本 × 加价」，两者都还没有：收费只含已知部分并标 `unpriced`，保留预留、不开窗口，清理不终结它，直到一条能完整定价的供应商记录到来，那时再开 1 小时窗口。价目表缺价的已知项仍按 0 计，靠上架门槛排除。
-- **`Correct`**：版本号按尝试记在 `corrections`，只增，旧的或重复的版本直接成功，数据库错误照常返回让调用方重试。任何状态下，尝试成本都调到这条记录的数（`cost_adjust`）。只有收费的那次尝试、且在窗口内，才动用户的收费：暂估的冲正原结算再按记录记新的一笔（`reverse` 与 `settle` 用同一个版本号），沿用原来是否免单，补扣以保留的部分为限、超出部分平台承担，并继续保留到窗口结束，以便更新的版本；清理待定的按记录用量和锁定价格收费，转清理结算，释放其余。记录里有没有价格可收的用量时，两者都转已暂估、标 `unpriced`、继续保留；之前是 `unpriced`、这条记录能完整定价的，从现在开窗口。
+- **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估、留住预留里没用掉的部分到 `correct_by`。映射不了的按「兜底价」收，首次结算、窗口到期和迟到的 `Settle` 都按它，所以从不免费。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估；其他已知项缺价仍按 0 计，靠上架门槛排除。
+- **`Correct`**：版本号按尝试记在 `corrections`，只增，旧的或重复的版本直接成功，数据库错误照常返回让调用方重试。任何状态下，尝试成本都调到这条记录的数（`cost_adjust`）。只有收费的那次尝试、且在窗口内，才动用户的收费：暂估的冲正原结算再按记录记新的一笔（`reverse` 与 `settle` 用同一个版本号），沿用原来是否免单，补扣以保留的部分为限、超出部分平台承担，并继续保留到窗口结束，以便更新的版本；清理待定的按记录用量和锁定价格收费，转清理结算，释放其余。记录里有 protocol 映射不了的用量时，应收改为 ⌈记录的成本 × 锁定的加价⌉，补扣可以超出保留的部分、用到账户底线以上的可用余额（「价目表缺项」：合计只在预留与可用余额之内收），其余平台承担；免单的除外，仍按记录用量和兜底价只收按次项目。收费那次尝试的记录不论在不在窗口内，其中映射不了的字段都记到模型上（见「兜底价」）。成本为负的记录报错。
 - **`Cleanup`**：平台范围，逐笔一个事务。挂起且过了截止时间或持有者已回收的：对账日志有已提交、带对账键的尝试就转清理待定（写尝试行、保留预留），否则清理释放并记丢失的请求；暂估到期释放保留、落已结算；清理待定到期仍无记录转清理释放。
 - **迟到的 `Settle`**：清理待定按正常结算；清理结算、清理释放冲正清理已收的，再按完整的 `Outcome` 收（版本号 −1），补扣最多到底线、其余平台承担；清理释放的还 `ResolveLostRequest`。找不到预留行时（主备切换丢了提交）现在返回错误，按清理释放补扣还没有：要先补一行预留。
 - **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。线下付款还不收：现金要按实付金额和锁定汇率记，随支付一起做。
 - **`Suppliers`**：billing 在自己的事务里写尝试、丢失的请求与解决、请求的终结（`EndRequest`），读对账日志里已提交的尝试；接口在 billing，`cmd` 把 suppliers 的函数接上（suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`、`JournalOf`），测试用替身。
 - **`EndRequest`**：预留进入终态（已结算、已释放、清理结算、清理释放）的那个事务里调用，时间取写预留行时的数据库时钟，suppliers 据此在 2 天后清掉对账日志；暂估和清理待定还要等校正，不算终态。`SettleOrphan` 释放或写墓碑时同样调用。
+
+## 兜底价
+
+[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)的实现。迁移 `migrations/00003_fallbacks.sql`，查询 `queries/fallbacks.sql`，代码 `fallback.go`。
+
+| 表 / 列 | 内容 | 谁能读写 |
+|---|---|---|
+| `fallbacks` | 每个记账币种一行，`body` 是规范 JSON：每种已知按次项目（`web_search`、`code_execution`）的默认单价，和缺项校正用的加价倍率 | 任何范围可读；只有平台范围能写，可改 `body` |
+| `reservations` 新增列 | `fallbacks`（保留条目锁定的兜底行，按路线下标，被删的为空串）、`models`（各条目的模型） | 同 `reservations` |
+| `unknown_items` | `(model_id, field)` 主键：模型第一次报告的映射不了的字段、那次请求和它的租户、`cleared_at` | 写入它的租户和平台范围可读；只有平台范围能清除 |
+
+- **按币种存**：站点的额度就是一种币种（「钱的表示」），站点自己的设置还没有，所以兜底价按币种存，所有站点共用；二级站点各自的覆盖随二级站点一起做。迁移按各项目的官方价格页初始化 USD 一行（来源与日期在迁移注释里）：联网搜索取各家最高的单次价 0.025（OpenAI 非推理模型的 web search preview，每千次 $25），代码执行取 Anthropic 一小时容器 0.05，加价 1.2。
+- **校验**：币种是三个大写字母；每种已知按次项目都有、没有别的项；单价大于 0、不超过 1 个币种单位（catalog 对按次参考价的合理性上限）；加价 1 到 10（低于 1 是配置让平台亏本卖，高于 10 当作输错）。`Start` 检查全部行，并要求有 USD（主站币种）的一行，不合格不启动，`serve` 启动时同样检查（`CheckFallbacks`）；`SaveFallbacks` 保存前同样检查、记审计，不合格拒绝。
+- **准入锁定**：`Reserve` 在锁之前读条目币种的兜底行，用 `catalog.Schedule.Fill` 给每个服务等级缺价的已知按次项目补上默认单价，按补过的价目表报价并锁进 `prices`，兜底行锁进 `fallbacks`。之后改兜底价不影响已准入的请求。没有兜底行的币种按缺价处理（`errUnpriced`，整个请求不报价），所以每个预留都有兜底价可用，`unpriced` 不再出现。
+- **兜底价**：像 token 的映射不了的用量（字段名以 `tokens` 结尾、取值是 0 到 10¹⁰ 的整数）按该模型所有服务等级和分档里最高的 token 单价，免单时作为模型用量不收；其余的按次数 × 锁定的最高按次默认单价，次数是取值的十进制向上取整、最多 10¹⁰，不是十进制数（认不出的服务等级、带指数的数）按 1 次，免单时作为已执行的按次项目照收。都标暂估。
+- **移出路由**：结算和校正遇到映射不了的字段时写 `unknown_items`，冲突即已见过；第一次出现的在提交后以 error 日志告警（`Config.Logger`）。`UnknownItems` 列出未清除的，路由快照组装时据此给该模型的端点置 `routing.Endpoint.UnknownItem`（过滤原因 `unknown_item`，永久）；快照组装还没有，接上它时从这里读。管理员定价后 `ClearUnknownItem`（记审计）清除；清除后同一字段再出现不再移出，按兜底价暂估、按成本校正。
+- **监控与人工入口**：`FallbackHolds` 列出靠兜底价暂估、仍保留着预留的请求；`RegisterMetrics` 把它们的个数和保留金额报成 `axiom.billing.fallback_holds`、`axiom.billing.fallback_holds.held`（`serve` 注册）。运营确认不会有供应商记录时用 `CloseHold`（记审计）提前关窗，下一次清理按当前暂估落已结算、释放保留。命令 `axiom billing unknown-items | fallback-holds | save-fallbacks <file> | clear-unknown-item <file> | close-hold <file>`，管理接口另接。
 
 ## 追加与结算
 
@@ -154,12 +171,12 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 |---|---|---|
 | 挂起 | 准入 | — |
 | 已结算 / 已释放 | `Settle`；`SettleOrphan`（含墓碑） | 返回已存的 `Final`，不再记账 |
-| 已暂估 | 暂估的 `Settle`，或清理待定收到有用量没有价格可收的记录，保留余额，`correct_by` = 结算时刻 + 1h；窗口内的校正替换收费、继续保留；到期由清理释放并落已结算。`unpriced` 的没有到期，等能定价的记录 | 返回已存的 `Final` |
+| 已暂估 | 暂估的 `Settle`，保留余额，`correct_by` = 结算时刻 + 1h；窗口内的校正替换收费、继续保留；到期（或 `CloseHold` 提前关窗）由清理释放并落已结算 | 返回已存的 `Final` |
 | 清理待定 | 清理：对账日志里有标了**已提交**且带对账键的尝试（已提交的必是最后一次），按日志写尝试行（用量未知）供对账匹配，保留余额，`correct_by` = 清理时刻 + 1h | 按完整的 `Outcome` 和正常规则结算，落"已结算"；尝试行只插入不改，成本差额经 `ChargeSettled` 调整 |
 | 清理结算 | 清理待定的尝试对上中转站记录：按记录用量 × 锁定价格收费，释放其余 | 按完整的 `Outcome` 和正常规则算出应收，与清理已收的多退少补 |
 | 清理释放 | 清理：日志里没有已提交的尝试，或已提交的没有对账键，或清理待定到 `correct_by` 仍无记录。只靠日志时，只有标了已提交的尝试会向用户收费，日志里其余的尝试只记成本：看不到的后续尝试可能才是最后一次 | 迟到的 `Settle` 带着完整的 `Outcome`，按正常规则收费（客户端取消、非流式聚合成功、免单规则都照常），补扣最多到底线、其余平台承担，并 `ResolveLostRequest` |
 
-- **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放（`unpriced` 的除外）。记录先到时：清理待定的按记录收费后立即释放；已暂估的照样保留到 `correct_by`，以便更新的版本。
+- **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放。记录先到时：清理待定的按记录收费后立即释放；已暂估的照样保留到 `correct_by`，以便更新的版本。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
 
 ## 写入的数据
@@ -198,6 +215,10 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 | 暂估在窗口内保留，校正后不立刻释放 | 同一请求可能先后来几个版本的供应商记录，每次补扣都要从保留里扣才守得住底线 | 第一次校正就释放：之后的版本没有保留可扣 |
 | 免单成本按这个请求全部尝试的成本计 | 上限是为了限住平台为免单付出的钱，那就是供应商对这些尝试收的成本 | 按免掉的售价计：与平台的实际损失无关 |
 | 锁定的价目表存进预留行 | 清理和校正没有准入时的进程，只能从库里拿到锁定价格；`PriceRef` 还没有 | 只在内存里：进程一死，清理结算就没有价可用 |
+| 兜底价在准入时锁进预留行，按次默认单价直接补进锁定的价目表 | 与价目表同理：清理和校正没有准入时的进程，管理员改价也不该改在途请求的收费；补进价目表后报价、结算、校正都按同一份算，不需要另一条缺价路径。代价是准入多一次往返（在锁外） | 结算时现读：改价会改在途请求，结算也多一次往返；缓存在内存：`axiom billing` 是另一个进程，改了不生效 |
+| 缺兜底行的币种不报价，`unpriced` 状态随之取消 | 每个预留都有兜底价，映射不了的用量总有价可收，迟到的 `Settle` 也不会免费终结；缺行是配置错误，拒绝调用立刻暴露 | 留着 `unpriced` 作最后防线：清理之后已没有保留可扣，迟到的结算无法保持暂估（#112 裁决） |
+| 缺项校正按成本 × 加价，可用到底线以上的可用余额 | 「价目表缺项」的口径：兜底价不一定高于实际成本，按实际成本多退少补，合计在预留与可用余额之内；其余校正仍以保留的部分为限，因为它们的补扣按构造不超过保留 | 一律以保留为限：缺项按成本的补扣常超过保留，平台多承担 |
+| 加价暂用兜底行里的一个站点级倍率 | 定价规则还没有实现，没有该模型适用规则的加价可取；倍率校验不低于 1，不会亏本卖。定价规则落地后改按该模型适用规则 | 等定价规则：缺项校正无价可依 |
 | 写入栅栏同时要求 `reaped_at IS NULL` 和未过期 | 回收后心跳续不上，正常情况下被回收的必已过期；但数据库时钟回拨（如主备切换）会让过期时间重新落在未来，只看过期就会放行已回收的持有者 | 只看 `expires_at` |
 | 计数按 UTC 日存，限额按含某天的窗口求和；准入按今天，追加按预留那天；时间按数据库时钟、在锁后的读语句里算 | 追加归到预留那天，检查也必须在那天所在的窗口，否则跨过边界后看到的是空窗口、写进的是旧窗口，能一直越过限额；与栅栏同一个时钟，多节点的本地时钟不一致也落在同一天；限额改了重置周期也不会漏算 | 追加按当前窗口检查：跨边界后检查与归账错位；追加改记到当天：一个预留的占用散在几天里，结算要逐天释放；每个限额窗口一行：改周期后漏算 |
 | `Reserve` 接受 billing 自己的 `Admitted` | `accounts.Admit` 还没有；`Admitted` 只带预留要的字段和范围，范围仍只能由 accounts 构造后传入 | 等 accounts 落地再做预留 |

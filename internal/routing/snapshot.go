@@ -120,6 +120,9 @@ type Endpoint struct {
 	MaxConcurrent    int64     // 0 for no limit at the endpoint itself
 
 	Price PriceRef // the sale price version; a zero Version means none
+	// UnknownItem: billing met a usage field on the model it cannot price (billing.UnknownItems), so the model takes no
+	// new requests until an admin prices it (docs/domains/billing.md「价目表缺项」).
+	UnknownItem bool
 }
 
 // Override is what a request's provider parameter may change: filters only tighten a preset's, the price limits only

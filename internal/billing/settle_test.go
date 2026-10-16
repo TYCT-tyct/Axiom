@@ -350,13 +350,13 @@ func TestCreditOnce(t *testing.T) {
 }
 
 // TestLedgerProperty drives random sequences of credits, reservations, settlements with retries, crashes left to
-// cleanup, and corrections in any order, and checks after every step that every transaction balances, the balance
+// cleanup, and corrections in any order, some with usage only a fallback price or the cost covers, and checks after every step that every transaction balances, the balance
 // equals its book, the counters equal the pending holds and the floor holds.
 func TestLedgerProperty(t *testing.T) {
 	for seed := range uint64(3) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
-			b := newBank(t, 5000, -500, Config{
+			b := fallbackBank(t, 5000, -500, Config{
 				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
 				CorrectionWindow: 20 * time.Millisecond, WaiverCap: 50,
 			})
@@ -387,7 +387,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	case n == 3:
 		if err := b.billing.Correct(ctx, Correction{
 			Request: pick().id, Seq: 1, Revision: r.Int64N(4) + 1,
-			Usage: []catalog.Usage{used(b.t, r.Int64N(3000), r.Int64N(200), 0).Usage}, Cost: r.Int64N(50),
+			Usage: []catalog.Usage{maybeUnknown(b.t, r, used(b.t, r.Int64N(3000), r.Int64N(200), 0)).Usage}, Cost: r.Int64N(5000),
 		}); err != nil {
 			b.t.Fatal(err)
 		}
@@ -405,10 +405,28 @@ func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 	b.t.Helper()
 	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
 	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), r.IntN(4) == 0, //nolint:gosec // G115: below 9
-		used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...))
+		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
 	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
 		b.t.Fatal(err)
 	}
+}
+
+// maybeUnknown adds, one time in three, usage protocol could not map: tokens or uses, to be priced by fallback.
+func maybeUnknown(tb testing.TB, r *rand.Rand, s Segment) Segment {
+	tb.Helper()
+	if r.IntN(3) != 0 {
+		return s
+	}
+	counts := map[catalog.Item]int64{}
+	for it := range catalog.NumItems {
+		counts[it] = s.Usage.Count(it)
+	}
+	field := []string{"usage.new_thing_tokens", "usage.server_tool_use.web_fetch_requests"}[r.IntN(2)]
+	u, err := catalog.NewUsage(counts, s.Usage.ServiceTier(), []catalog.UnknownUsage{{Field: field, Value: fmt.Sprint(1 + r.IntN(40))}})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return Segment{Usage: u, Reported: s.Reported}
 }
 
 // TestLedgerScope: a settlement writes its revenue and cost entries in its account's scope, and no other account's

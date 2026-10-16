@@ -1,8 +1,8 @@
 -- name: LockReservation :one
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
-    r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.unpriced, r.final_usage,
-    coalesce(r.correct_by < clock_timestamp() AND NOT r.unpriced, false)::boolean AS correction_closed
+    r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
+    r.fallbacks, r.models, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
 
@@ -15,7 +15,7 @@ SELECT account_id FROM billing.reservations WHERE request_id = @request_id;
 -- EndRequest records, so every clock the request's end is judged by is the database's.
 UPDATE billing.reservations
 SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq), entry = coalesce(sqlc.narg(entry), entry),
-    charged = @charged, price = @price, waived = @waived, estimated = @estimated, unpriced = @unpriced,
+    charged = @charged, price = @price, waived = @waived, estimated = @estimated,
     final_usage = @final_usage,
     correct_by = CASE WHEN @hold_seconds::float8 > 0
         THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @hold_seconds::float8) ELSE correct_by END
@@ -75,11 +75,10 @@ INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, exp
 VALUES (@id, @site_id, @account_id, 'gift', @amount, sqlc.narg(expires_at));
 
 -- name: DueReservations :many
--- What cleanup must take over: pending past the deadline or under a reaped holder, and held states past correct_by,
--- unless unpriced: only a supplier record ends those.
+-- What cleanup must take over: pending past the deadline or under a reaped holder, and held states past correct_by.
 SELECT r.request_id, r.account_id, r.state FROM billing.reservations r JOIN billing.holders h ON h.id = r.holder_id
 WHERE r.state = 'pending' AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
-    OR r.state IN ('estimated', 'cleanup_pending') AND r.correct_by < clock_timestamp() AND NOT r.unpriced
+    OR r.state IN ('estimated', 'cleanup_pending') AND r.correct_by < clock_timestamp()
 ORDER BY r.request_id
 LIMIT @max;
 

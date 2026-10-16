@@ -13,7 +13,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback" // root certificates for the scratch image, which has none (deploy/Dockerfile)
 )
 
-const usage = "usage: axiom serve | migrate | healthcheck | version | catalog sync | check | <operation> <file>"
+const usage = "usage: axiom serve | migrate | healthcheck | version | catalog sync | check | <operation> <file> | billing <listing> | <operation> <file>"
 
 func main() {
 	if !validArgs(os.Args) {
@@ -38,6 +38,8 @@ func main() {
 		}
 	case "catalog":
 		exitOn(catalogCommand(context.Background(), os.Environ(), os.Args[2:], os.Stdout))
+	case "billing":
+		exitOn(billingCommand(context.Background(), os.Environ(), os.Args[2:], os.Stdout))
 	case "healthcheck":
 		if err := healthcheck(context.Background(), os.Environ()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -51,9 +53,9 @@ func main() {
 	}
 }
 
-// validArgs accepts a command, and for catalog its operation and file.
+// validArgs accepts a command, and for catalog and billing their operation and file.
 func validArgs(args []string) bool {
-	return len(args) == 2 || len(args) > 2 && args[1] == "catalog"
+	return len(args) == 2 || len(args) > 2 && (args[1] == "catalog" || args[1] == "billing")
 }
 
 // exitOn reports a failed command and ends the program with its failure status.

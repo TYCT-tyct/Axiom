@@ -1,5 +1,7 @@
 package catalog
 
+import "axiom/internal/platform"
+
 // Reportable is what an upstream may report for a model: its billing items and the service tiers other than standard.
 // The model data records it and review confirms it (README.md「上架门槛与缺项」).
 type Reportable struct {
@@ -29,4 +31,27 @@ func (s Schedule) unpriced(st ServiceTier, items ItemSet) (missing ItemSet) {
 		}
 	}
 	return missing
+}
+
+// Currency is the currency the schedule's prices are in.
+func (s Schedule) Currency() platform.Currency { return s.currency }
+
+// Fill returns the schedule with each of prices given to every offered service tier that has no base price of its own
+// for the item. A context tier only adds prices to its tier's base, so the filled item is priced in every band, and a
+// price the schedule sets anywhere is kept. Billing fills the known per-use items with the site's default prices
+// (docs/domains/billing.md「价目表缺项」).
+func (s Schedule) Fill(prices map[Item]platform.UnitPrice) Schedule {
+	for st := range numServiceTiers {
+		if !s.offered.Has(st) {
+			continue
+		}
+		base := &s.levels[st].base
+		for it, p := range prices {
+			if !base.priced.Has(it) {
+				base.price[it] = p
+				base.priced.Add(it)
+			}
+		}
+	}
+	return s
 }

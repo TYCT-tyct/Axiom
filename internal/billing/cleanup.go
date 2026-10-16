@@ -99,9 +99,14 @@ type Correction struct {
 // Correct applies c once (README.md「结算与账本」): only a revision newer than the last one applied to its attempt
 // changes anything, in any state. The attempt's cost always follows the record. The user's charge follows it only for
 // the charged attempt, within the correction window: an estimate is replaced, keeping its waiver, the makeup capped by
-// what the reservation still holds; a cleaned-up call is charged at the record's usage and locked price. A database
-// error fails it, for the caller to retry.
+// what the reservation still holds; a cleaned-up call is charged at the record's usage and locked price. A record with
+// usage nothing prices is charged at its cost × the locked markup instead. A database error fails it, for the caller
+// to retry.
 func (b *Billing) Correct(ctx context.Context, c Correction) error {
+	if c.Cost < 0 {
+		return fmt.Errorf("billing: correct %s: a cost of %d", c.Request, c.Cost)
+	}
+	var seen []UnknownItem
 	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
 		accountID, err := queries.ReservationAccount(ctx, tx, c.Request)
 		if err != nil {
@@ -120,11 +125,14 @@ func (b *Billing) Correct(ctx context.Context, c Correction) error {
 		if err := l.adjustCost(ctx, tx, c); err != nil {
 			return err
 		}
-		return l.recharge(ctx, tx, c)
+		err = l.recharge(ctx, tx, c)
+		seen = l.seen
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("billing: correct %s: %w", c.Request, err)
 	}
+	b.alert(seen)
 	return nil
 }
 
@@ -142,29 +150,47 @@ func (c *locked) adjustCost(ctx context.Context, tx pg.Tx, k Correction) error {
 	return err
 }
 
+// charges: the record is of the attempt the user is charged for, whose entry prices it.
+func (c *locked) charges(k Correction) bool {
+	r := c.row
+	return r.ChargedSeq != nil && int(*r.ChargedSeq) == k.Seq && r.Entry != nil
+}
+
 // recharges: a record changes the user's charge only for the charged attempt of a reservation still held, within
 // its correction window.
 func (c *locked) recharges(k Correction) bool {
 	r := c.row
 	held := r.State == "estimated" || r.State == "cleanup_pending"
-	return held && !r.CorrectionClosed && r.ChargedSeq != nil && int(*r.ChargedSeq) == k.Seq && r.Entry != nil
+	return held && !r.CorrectionClosed && c.charges(k)
 }
 
 // recharge replaces an estimated or cleaned-up charge with the record's: the reservation's hold pays the makeup, which
-// therefore never passes the floor; past the hold the platform bears it. An estimate keeps holding the rest until its
-// window ends, for a later revision; a cleaned-up call releases it. A record with usage no price covers leaves an
-// estimate that holds the rest, with no window, until a record prices it, which opens the window then.
+// therefore never passes the floor; past the hold the platform bears it. A charge by cost, for usage nothing prices,
+// may also take what the account has free above its floor (「价目表缺项」: the reservation and the available balance).
+// An estimate keeps holding the rest until its window ends, for a later revision; a cleaned-up call releases it.
+// Whatever the window, the record's unknown fields on the charged attempt are noted against its model.
 func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	r := c.row
-	if !c.recharges(k) {
+	if !c.charges(k) {
 		return nil
 	}
-	p, usage, err := c.priceRecord(k)
+	p, segments, byCost, err := c.priceRecord(k)
+	if err == nil {
+		err = c.noteUnknown(ctx, tx, int(*r.Entry), segments)
+	}
+	if err != nil || !c.recharges(k) {
+		return err
+	}
+	usage, err := encodeUsage(segments)
 	if err != nil {
 		return err
 	}
 	hold := max(r.Amount-r.Charged, 0)
-	c.charged = min(p.price, r.Charged+hold)
+	limit := hold
+	if byCost {
+		limit = c.cap(hold)
+	}
+	c.charged = min(p.price, add(r.Charged, limit))
 	if _, err := post(ctx, tx, c.event("reverse", k.Revision), reversal(r.Price, r.Charged)...); err != nil {
 		return err
 	}
@@ -172,13 +198,10 @@ func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 		return err
 	}
 	w := c.kept("cleanup_settled")
-	w.price, w.estimated, w.unpriced, w.usage = p.price, p.estimated, p.unpriced, usage
+	w.price, w.estimated, w.usage = p.price, p.estimated, usage
 	keep := int64(0)
-	if r.State == "estimated" || p.unpriced {
+	if r.State == "estimated" {
 		w.state, keep = "estimated", max(r.Amount-c.charged, 0)
-	}
-	if r.Unpriced && !p.unpriced { // priced at last: the window it never had opens now
-		w.holdSeconds = c.b.config.CorrectionWindow.Seconds()
 	}
 	if err := c.move(ctx, tx, keep-hold, c.charged-r.Charged); err != nil {
 		return err
@@ -186,21 +209,25 @@ func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
 	return c.write(ctx, tx, w)
 }
 
-// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver,
-// and encodes it as final_usage stores it.
-func (c *locked) priceRecord(k Correction) (priced, []byte, error) {
-	s, err := schedule(c.row.Prices, int(*c.row.Entry))
+// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver.
+// Usage protocol could not map has no price but a fallback, which need not cover what the supplier charged, so a
+// record with any is charged its cost × the locked markup, byCost; a waived call keeps its waiver instead, charging
+// only the per-use items and the unknown uses at their fallback prices, since the cost is mostly model usage.
+func (c *locked) priceRecord(k Correction) (p priced, segments []Segment, byCost bool, err error) {
+	s, f, err := c.pricing(int(*c.row.Entry))
 	if err != nil {
-		return priced{}, nil, err
+		return priced{}, nil, false, err
 	}
-	segments := make([]Segment, len(k.Usage))
+	segments = make([]Segment, len(k.Usage))
 	for i, u := range k.Usage {
 		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
+		byCost = byCost || len(u.Unknown()) > 0
 	}
-	p, err := priceSegments(s, segments, c.row.Waived)
-	if err != nil {
-		return priced{}, nil, err
+	if p, err = priceSegments(s, f, segments, c.row.Waived); err != nil {
+		return priced{}, nil, false, err
 	}
-	usage, err := encodeUsage(segments)
-	return p, usage, err
+	if byCost = byCost && !c.row.Waived; byCost {
+		p.price = f.byCost(k.Cost)
+	}
+	return p, segments, byCost, nil
 }
