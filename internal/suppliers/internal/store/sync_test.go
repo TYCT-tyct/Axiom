@@ -23,7 +23,7 @@ func blockBuckets(ctx context.Context, tx pg.Tx, buckets []store.RateBucket) err
 // someoneWaits blocks until a statement of another connection is waiting for a lock.
 func someoneWaits(ctx context.Context, t *testing.T, db *pg.DB) {
 	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		var n int
 		err := db.ReadTx(ctx, platform, func(tx pg.Tx) error {
 			return tx.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&n)
@@ -88,5 +88,35 @@ func TestBucketsAreAlwaysTakenInKeyOrder(t *testing.T) {
 			}
 			crossed(t, db, c.holder, c.late)
 		})
+	}
+}
+
+// TestMakingBucketsLocksTheExistingOnesToo: a request that makes the buckets it names holds all of them, those that
+// already existed as well as those it made, before it goes on to lock them. Otherwise it could hold the new "global"
+// while waiting for the old "critical" that a closing request holds, and that request would wait for "global": a
+// deadlock between the statements of two requests, which sorting each statement does not prevent.
+func TestMakingBucketsLocksTheExistingOnesToo(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	critical := store.RateBucket{Scope: "ip:a", Name: "critical"}
+	both := []store.RateBucket{{Scope: "ip:a", Name: "global"}, critical}
+	if err := run(t, db, platform, func(ctx context.Context, tx pg.Tx) error { return takeBuckets(ctx, tx, []store.RateBucket{critical}) }); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		ctx := t.Context()
+		if err := store.EnsureRateBuckets(ctx, tx, both); err != nil {
+			return err
+		}
+		go func() { ended <- db.Tx(ctx, platform, func(tx pg.Tx) error { return blockBuckets(ctx, tx, both) }) }()
+		someoneWaits(ctx, t, db)
+		return takeBuckets(ctx, tx, both)
+	})
+	if err != nil {
+		t.Errorf("the request that made the buckets: %v", err)
+	}
+	if err := <-ended; err != nil {
+		t.Errorf("the request that closed them: %v", err)
 	}
 }

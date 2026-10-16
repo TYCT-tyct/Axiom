@@ -59,10 +59,20 @@ type RateBucketRow struct {
 	Used                      int
 }
 
+// The no-op update takes the lock of a bucket that exists, as the insert takes that of one it makes, so the statement
+// holds every bucket it names, taken in key order, when it ends. DO NOTHING would hold only the new ones, and a
+// request could then wait for an old one while holding a new one another request is about to ask for.
 const ensureRateBuckets = `
-INSERT INTO suppliers.rate_buckets (scope, name)
+INSERT INTO suppliers.rate_buckets AS r (scope, name)
 SELECT * FROM unnest($1::text[], $2::text[]) AS b (scope, name) ORDER BY b.scope, b.name
-ON CONFLICT (scope, name) DO NOTHING`
+ON CONFLICT (scope, name) DO UPDATE SET used = r.used`
+
+// ensureRateBucketsFor makes the buckets that do not exist and locks all of them until the transaction ends.
+func ensureRateBucketsFor(ctx context.Context, db DBTX, buckets []RateBucket) error {
+	scopes, names := splitBuckets(buckets)
+	_, err := db.Exec(ctx, ensureRateBuckets, scopes, names)
+	return err
+}
 
 // Every statement here that makes, locks or changes several buckets does it in key order, so that two requests that
 // name some of the same buckets, in any order, wait for each other and cannot deadlock.
@@ -70,10 +80,10 @@ ON CONFLICT (scope, name) DO NOTHING`
 // LockRateBucketsFor makes sure the buckets exist and locks them until the transaction ends. It returns them in key
 // order.
 func LockRateBucketsFor(ctx context.Context, db DBTX, buckets []RateBucket) ([]RateBucketRow, error) {
-	scopes, names := splitBuckets(buckets)
-	if _, err := db.Exec(ctx, ensureRateBuckets, scopes, names); err != nil {
+	if err := ensureRateBucketsFor(ctx, db, buckets); err != nil {
 		return nil, err
 	}
+	scopes, names := splitBuckets(buckets)
 	rows, err := db.Query(ctx, `
 SELECT r.scope, r.name, r.window_start, r.used, r.blocked_until
 FROM suppliers.rate_buckets r
