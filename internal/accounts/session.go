@@ -218,11 +218,7 @@ func (s *Service) authenticate(ctx context.Context, r *http.Request, pendingToo 
 	life := s.snapshot.Load().sites[d.site].sessions[d.surface]
 	maxAge, idle := life.seconds()
 	if err := s.db.Tx(ctx, pg.AccountScope(found.AccountID), func(tx pg.Tx) error {
-		if valid, err = s.queries.ValidSession(ctx, tx, ValidSessionParams{ID: found.SessionID, MaxAgeSeconds: maxAge, IdleSeconds: idle}); err != nil {
-			return err
-		}
-		if len(valid) == 0 {
-			_, err = s.queries.EndSessionsOverSiteLimits(ctx, tx, EndSessionsOverSiteLimitsParams{ID: found.SessionID, MaxAgeSeconds: maxAge, IdleSeconds: idle})
+		if valid, err = s.queries.ValidSession(ctx, tx, ValidSessionParams{ID: found.SessionID, MaxAgeSeconds: maxAge, IdleSeconds: idle}); err != nil || len(valid) == 0 {
 			return err
 		}
 		return s.queries.TouchSession(ctx, tx, found.SessionID)

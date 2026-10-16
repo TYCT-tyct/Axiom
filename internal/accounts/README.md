@@ -36,7 +36,7 @@
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
-| `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`revoked_at`（终态） |
+| `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
 
 - **租户列直接存在行上**：账户数据的每张表都有 `site_id`、`account_id`，都不为空。被引用的父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用它，所以两列不可能与"key → 工作区 → 账户 → 站点"不一致；两列不在可改的列里，写入后不变。外键检查不受行级安全影响。理由见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由)。
@@ -215,7 +215,7 @@
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，删掉账户的租户登记后开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
-| 站点改短会话时长，已签发的会话也按新的算 | `ValidSession` 把存下的时长与站点现在的值取小；测试：改短后空闲过久的、年龄过大的会话下一个请求被拒，没超的不受影响 |
+| 站点改短会话时长，已签发的会话也按新的算，之后放宽也不延长 | `SetSiteSettings` 在同一事务里把新时长写进已有会话（`CutSessions`，只取小）；测试：改短后空闲过久的、年龄过大的会话下一个请求被拒，没超的不受影响（`TestShorterSessionsEndOnTheNextRequest`）；改短、期间没有请求、再放宽，会话仍失效（`TestALoosenedSiteDoesNotRevive`） |
 | 站点设置的替换与审计同成同败，改前的值就是被替换的值 | 站点行锁内读改前、写、记审计；测试：越界的替换既不改设置也不留审计，替换两次有两条，条目有改前改后 |
 
 ## 管理接口
@@ -244,7 +244,7 @@
 
   只有 admin 能改钱、凭证、价格和目录；别的角色最多看。谁该有 `credits.grant` 这类权限是负责人的决定，现在只给 admin。
 - **管理会话的权限是平台授予的**：管理监听面的会话，`SessionInfo` 的权限列表取用户未撤销的平台授予的角色，不是账户里的成员关系；`Authorize` 对平台目标本来如此。
-- **站点缩短会话时长，已有的会话也缩短**：`ValidSession` 和 `SessionInfo` 把会话签发时存下的空闲时长、最长时长与站点现在的值取小（`least`），所以站点改短后，这个节点上每个会话的下一个请求就按新的算；只会缩短，不会延长已签发的会话。别的节点在快照重载间隔内跟上。
+- **站点缩短会话时长，已有的会话也缩短**：`SetSiteSettings` 在改设置的同一事务里，把站点新的空闲时长、最长时长（没设的取代码默认值）写进该站点、该监听面未撤销的会话：`expires_at` 与 `created_at` 加新最长时长取小，`idle_timeout` 与新空闲时长取小（`CutSessions`）。所以改短立即对所有节点生效，并且存进了会话本身：之后站点再放宽，被改短的会话也不会恢复，哪怕改短期间它没有发过请求。只会缩短，不会延长已签发的会话。`ValidSession` 和 `SessionInfo` 另把存下的时长与快照里站点现在的值取小，挡住别的节点在重载快照前按旧时长新签发的会话。应用因此对 `sessions` 的 `expires_at`、`idle_timeout` 有更新权限（迁移 00006），只经 `CutSessions` 往小改。
 
 ## 公开接口（草图）
 
