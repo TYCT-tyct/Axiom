@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"uuid"
 
@@ -24,12 +25,14 @@ var (
 // RegisterRequest is a registration with an invite code at a console domain.
 type RegisterRequest struct {
 	Host, InviteCode, Email, Password string
+	ClientIP                          netip.Addr
 }
 
 // Register makes a user with an invite code: the invitation is checked in the database (site enabled, registering by
 // invitation, the inviter enabled), then, in a transaction scoped to the new account alone, its personal account in
 // the site's default tier, registered as a tenant, its default workspace, the user and the user as the account's
-// owner. A taken email fails the whole transaction.
+// owner. A taken email fails the whole transaction. It spends one of the IP's attempts, and the hash one of the
+// node's turns.
 func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, error) {
 	d, snap, err := s.domain(r.Host)
 	if err != nil {
@@ -38,22 +41,21 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if d.surface != Console {
 		return UserID{}, ErrUnknownHost
 	}
+	if err := s.fromIP(d.site, r.ClientIP); err != nil {
+		return UserID{}, err
+	}
 	if !passwordAllowed(r.Password) {
 		return UserID{}, ErrWeakPassword
 	}
-	var invites []InviteTenantRow
-	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
-		invites, err = s.queries.InviteTenant(ctx, tx, InviteTenantParams{Domain: strings.ToLower(r.Host), Code: r.InviteCode})
-		return err
-	}); err != nil {
-		return UserID{}, fmt.Errorf("register: %w", err)
+	invite, err := s.invite(ctx, r.Host, r.InviteCode)
+	if err != nil {
+		return UserID{}, err
 	}
-	if len(invites) == 0 {
-		return UserID{}, ErrInvalidInvite
-	}
-	invite := invites[0]
 	email := normalEmail(r.Email)
-	hash := hashPassword(r.Password)
+	var hash string
+	if err := s.hash(ctx, func() { hash = hashPassword(r.Password) }); err != nil {
+		return UserID{}, err
+	}
 	user, account := uuid.NewV7(), uuid.NewV7()
 	site := invite.SiteID
 	err = s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
@@ -88,6 +90,22 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 		return UserID{}, fmt.Errorf("register: %w", err)
 	}
 	return UserID(user), nil
+}
+
+// invite is what code admits at host's site, or ErrInvalidInvite.
+func (s *Service) invite(ctx context.Context, host, code string) (InviteTenantRow, error) {
+	var invites []InviteTenantRow
+	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
+		var err error
+		invites, err = s.queries.InviteTenant(ctx, tx, InviteTenantParams{Domain: strings.ToLower(host), Code: code})
+		return err
+	}); err != nil {
+		return InviteTenantRow{}, fmt.Errorf("register: %w", err)
+	}
+	if len(invites) == 0 {
+		return InviteTenantRow{}, ErrInvalidInvite
+	}
+	return invites[0], nil
 }
 
 // newInviteCode is a user's own invite code: 16 characters, 80 random bits.

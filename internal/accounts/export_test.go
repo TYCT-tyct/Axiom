@@ -9,6 +9,7 @@ import (
 var (
 	WellFormedKey = wellFormedKey
 	NewKeyText    = newKeyText
+	TOTPStep      = totpStep
 )
 
 // Reload reloads the snapshot now, as the reload loop does every 30 seconds, within the same time limit.
@@ -22,3 +23,14 @@ func TOTPCode(secretText string, at time.Time) string {
 	}
 	return totpCode(key, at.Unix()/totpPeriod)
 }
+
+// HashTurn takes one of the node's turns at password hashing until release.
+func (s *Service) HashTurn(ctx context.Context) (release func(), err error) {
+	if err := s.guards.hashing.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+	return func() { s.guards.hashing.Release(1) }, nil
+}
+
+// Hash runs compute in one of the node's turns at password hashing, as every argon2id computation does.
+func (s *Service) Hash(ctx context.Context, compute func()) error { return s.hash(ctx, compute) }

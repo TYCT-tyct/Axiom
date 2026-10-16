@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
-| `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`；尝试上限随登录加入 | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；空表示用代码里的默认值 | 站点 | 全部参数列 |
+| `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值 | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
 | `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`（M1 只经迁移） |
 | `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id` |
@@ -120,7 +120,7 @@
 - **停用的 key 在准入之前能看到什么**：解析和名字解析在准入之前，所以停用的 key 仍可能收到请求格式类的错误（400、模型不存在），但不会调用上游、读不到租户数据、不产生费用。准入的拒绝不缓存：拒绝可能与请求有关（IP），缓存它会误拒同一把 key 的合法请求。
 - **防枚举只承诺到这里**：不存在、属于别的站点、停用、过期、删除、IP 不允许，状态码和正文完全相同。剩余的时间差：本站真实存在的 key 多一次准入查询；缓存命中与未命中不同。只有持有这把 key 的人能利用。
 - 创建 key 不做幂等键：提交后响应丢失，用户在列表里看到一把从未用过的 key，删掉即可，不为重试保存明文。
-- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。
+- 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.disable`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
 - 以后的二级站点：`Admit` 的范围并上站长账户，同一事务里一起预留（见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)「二级站点的请求」）。
 
 | 缓存 | 内容 | 容量与过期 |
@@ -150,21 +150,25 @@
 - **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。不用站点或平台范围包住注册。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，第一条语句都是 `SELECT … FROM users WHERE id = $u FOR UPDATE`，在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
-- **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交 → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
-- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认；重建恢复码要一个当前的 TOTP 码。两者都加版本，并为当前设备签发新的 `mfa` 会话。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
+- **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
+- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变，更换和关闭是 M2 的事；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数。两者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
 - **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
 - **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PATCH /admin/v1/sites/{site}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
 
-| 登录前的资源 | 默认上限（进程内计数，多节点时按节点数放大） |
-|---|---|
-| 客户端 IP | 只认 `RemoteAddr`；`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信的地址；默认不信任任何代理 |
-| 每 IP 的登录、注册、两步验证 | 令牌桶，突发 20 次、每分钟 10 次 |
-| 每邮箱的登录失败 | 每 15 分钟 10 次，超出后先等待，不锁账户 |
-| 每用户的 TOTP、恢复码失败 | 每小时 10 次 |
-| 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` |
-| argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 503 |
-| key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` |
-| 计数器本身 | 有容量上限的 LRU |
+| 登录前的资源 | 默认上限（进程内计数，多节点时按节点数放大） | 站点设置 |
+|---|---|---|
+| 客户端 IP | 只认 `RemoteAddr`；`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信的地址；默认不信任任何代理 | — |
+| 每 IP 的登录、注册、两步验证 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
+| 每邮箱的登录失败 | 每 15 分钟 10 次，按（站点, 规范化邮箱）计，不存在的邮箱也计；超出后等待，不锁账户 | `email_sign_in_failures` |
+| 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码的错码也计 | `user_code_failures` |
+| 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` | `challenge_code_attempts` |
+| argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 `ErrBusy`（503）；请求在排队时结束就带它自己的错误返回 | 按节点：`Config.HashConcurrency`、`HashWait` |
+| key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
+| 计数器本身 | 有容量上限的 LRU | — |
+
+- 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时从 LRU 过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
+- 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再计算哈希、不碰数据库。IP 的次数不退。
+- 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
 
 ## 不变量
 
@@ -184,6 +188,9 @@
 | 范围和认证结果不可伪造 | 生产代码只有本模块能构造账户和站点范围（forbidigo）；`Caller`、`Principal`、`Admission` 的字段不导出 |
 | 敏感权限只给本次做过两步验证的会话 | `level = mfa`；测试：先登录的密码会话后来被授予管理员，仍被拒 |
 | 一次性因素只能用一次，一个挑战只换出一个会话 | 用户行锁 + 条件更新 + 影响行数；测试：两条连接同时提交同一个码、同一挑战的两个码，都只有一个成功 |
+| 登录前的猜测有上限，换挑战、换会话不重置 | 每邮箱、每用户的失败计数先扣后退，每 IP 的令牌桶，argon2id 的并发名额；测试：站点设置的 IP 和邮箱上限，等待后恢复，成功不计；两个挑战各错 5 次后第三个挑战的对码也被拒，回一次后通过；名额被占时登录返回忙，请求结束时等待随之结束 |
+| 两步验证开启后只能经命令行重置，不能被覆盖 | 用户行锁内核对 `mfa_enabled_at`；测试：新密钥、原密钥同一步长都被拒，版本、会话、恢复码不变；两次同时开启只有一次成功 |
+| 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，删掉账户的租户登记后开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
 

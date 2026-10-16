@@ -71,9 +71,11 @@ type Issued struct {
 	MaxAge           time.Duration
 }
 
-// SignIn checks the password and issues a session, pending when the user has two-step verification. The hash is
-// checked before the issuing transaction, which then locks the user and issues only if the factors have not changed
-// and the user is enabled. An unknown email costs a hash too.
+// SignIn checks the password and issues a session, pending when the user has two-step verification. Each sign-in
+// spends one of its IP's attempts and, until it succeeds, one of its email's failures (ErrTooManyAttempts when none is
+// left); the hash takes one of the node's turns (ErrBusy). The hash is checked before the issuing transaction, which
+// then locks the user and issues only if the factors have not changed and the user is enabled. An unknown email costs
+// a hash too.
 func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 	d, snap, err := s.domain(r.Host)
 	if err != nil {
@@ -82,6 +84,19 @@ func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 	if d.surface != Console && d.surface != Admin {
 		return Issued{}, ErrUnknownHost
 	}
+	if err := s.fromIP(d.site, r.ClientIP); err != nil {
+		return Issued{}, err
+	}
+	var issued Issued
+	err = failing(s, s.guards.emails, siteEmail{d.site, normalEmail(r.Email)}, snap.sites[d.site].limits.emailFailures, emailWindow, func() error {
+		issued, err = s.signIn(ctx, r, d, snap)
+		return err
+	})
+	return issued, err
+}
+
+func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *snapshot) (Issued, error) {
+	var err error
 	var found []LoginTenantRow
 	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
 		found, err = s.queries.LoginTenant(ctx, tx, LoginTenantParams{Domain: strings.ToLower(r.Host), Email: normalEmail(r.Email)})
@@ -90,7 +105,9 @@ func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 		return Issued{}, fmt.Errorf("sign in: %w", err)
 	}
 	if len(found) == 0 {
-		passwordMatches(dummyHash, r.Password)
+		if err := s.hash(ctx, func() { passwordMatches(dummyHash, r.Password) }); err != nil {
+			return Issued{}, err
+		}
 		return Issued{}, ErrBadCredentials
 	}
 	user, account := found[0].UserID, found[0].AccountID
@@ -101,7 +118,11 @@ func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 	}); err != nil || len(stored) == 0 {
 		return Issued{}, fmt.Errorf("sign in: %w", errors.Join(err, ErrBadCredentials))
 	}
-	if !passwordMatches(stored[0].PasswordHash, r.Password) {
+	matched := false
+	if err := s.hash(ctx, func() { matched = passwordMatches(stored[0].PasswordHash, r.Password) }); err != nil {
+		return Issued{}, err
+	}
+	if !matched {
 		return Issued{}, ErrBadCredentials
 	}
 	var issued Issued

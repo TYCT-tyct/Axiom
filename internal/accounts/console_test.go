@@ -150,12 +150,12 @@ func TestRegistrationRefusals(t *testing.T) {
 		r    accounts.RegisterRequest
 		want error
 	}{
-		"an unknown code":       {accounts.RegisterRequest{console, "nosuchcode0000", "new@example.com", password}, accounts.ErrInvalidInvite},
-		"another site's code":   {accounts.RegisterRequest{console, inviteCode(t, x.db, ":u2"), "new@example.com", password}, accounts.ErrInvalidInvite},
-		"a site that is closed": {accounts.RegisterRequest{otherConsole, inviteCode(t, x.db, ":u2"), "new@example.com", password}, accounts.ErrInvalidInvite},
-		"a short password":      {accounts.RegisterRequest{console, code, "new@example.com", "short"}, accounts.ErrWeakPassword},
-		"an email registered":   {accounts.RegisterRequest{console, code, " SOMEONE@example.com", password}, accounts.ErrEmailTaken},
-		"the admin domain":      {accounts.RegisterRequest{admin, code, "new@example.com", password}, accounts.ErrUnknownHost},
+		"an unknown code":       {accounts.RegisterRequest{console, "nosuchcode0000", "new@example.com", password, client}, accounts.ErrInvalidInvite},
+		"another site's code":   {accounts.RegisterRequest{console, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
+		"a site that is closed": {accounts.RegisterRequest{otherConsole, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
+		"a short password":      {accounts.RegisterRequest{console, code, "new@example.com", "short", client}, accounts.ErrWeakPassword},
+		"an email registered":   {accounts.RegisterRequest{console, code, " SOMEONE@example.com", password, client}, accounts.ErrEmailTaken},
+		"the admin domain":      {accounts.RegisterRequest{admin, code, "new@example.com", password, client}, accounts.ErrUnknownHost},
 	} {
 		if _, err := x.s.Register(t.Context(), c.r); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -164,7 +164,7 @@ func TestRegistrationRefusals(t *testing.T) {
 	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace("UPDATE accounts.users SET status = 'disabled' WHERE id = :u1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{console, code, "new@example.com", password}); !errors.Is(err, accounts.ErrInvalidInvite) {
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{console, code, "new@example.com", password, client}); !errors.Is(err, accounts.ErrInvalidInvite) {
 		t.Errorf("a disabled inviter: %v", err)
 	}
 }
@@ -322,6 +322,124 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 	}
 }
 
+// factorVersion is the registered user's factor version.
+func (x site) factorVersion(t *testing.T) string {
+	t.Helper()
+	return texts(t, x.db, platform, "SELECT factor_version::text FROM accounts.users WHERE id = '"+uuid.UUID(x.user).String()+"'")[0]
+}
+
+// TestTOTPTurnsOnOnce: a user with two-step verification cannot turn it on again, with a new secret or with the one
+// in use and a code of the step it last used, and the refusal changes nothing: the factor version, the session, the
+// recovery codes.
+func TestTOTPTurnsOnOnce(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	key, mfa, codes := x.enableTOTP(t, console, x.signIn(t, console))
+	version := x.factorVersion(t)
+	p, err := x.principal(t, console, mfa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := x.s.BeginTOTP(p)
+	for name, c := range map[string]accounts.FactorChange{
+		"a new secret":            {Secret: fresh, Password: password, Code: accounts.TOTPCode(fresh, x.clock.Now())},
+		"the secret in use again": {Secret: key, Password: password, Code: accounts.TOTPCode(key, x.clock.Now())},
+	} {
+		if _, _, err := x.s.ConfirmTOTP(t.Context(), p, c); !errors.Is(err, accounts.ErrTOTPOn) {
+			t.Errorf("%s: %v, want %v", name, err, accounts.ErrTOTPOn)
+		}
+	}
+	if got := x.factorVersion(t); got != version {
+		t.Errorf("factor version %s after the refusals, was %s", got, version)
+	}
+	if _, err := x.principal(t, console, mfa); err != nil {
+		t.Errorf("the session after the refusals: %v", err)
+	}
+	if _, err := x.verify(t, console, x.signIn(t, console), codes[0]); err != nil {
+		t.Errorf("a recovery code after the refusals: %v", err)
+	}
+}
+
+// TestTOTPConfirmationsAtOnce: two confirmations at once for a user without two-step verification give one.
+func TestTOTPConfirmationsAtOnce(t *testing.T) {
+	t.Parallel()
+	y := newTestSite(t)
+	q, err := y.principal(t, console, y.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			secretText, _ := y.s.BeginTOTP(q)
+			_, _, err := y.s.ConfirmTOTP(context.WithoutCancel(t.Context()), q, accounts.FactorChange{
+				Secret: secretText, Password: password, Code: accounts.TOTPCode(secretText, y.clock.Now()),
+			})
+			results <- err
+		}()
+	}
+	won := 0
+	for range 2 {
+		if err := <-results; err == nil {
+			won++
+		} else if !errors.Is(err, accounts.ErrBadCredentials) && !errors.Is(err, accounts.ErrTOTPOn) {
+			t.Errorf("the losing confirmation: %v", err)
+		}
+	}
+	if won != 1 {
+		t.Errorf("%d of two confirmations at once succeeded", won)
+	}
+}
+
+// TestFactorChangesAreAudited: turning on TOTP and new recovery codes each leave an entry naming the user and its
+// tenant, in the change's transaction: an entry that cannot be written, here for want of the account's tenant
+// registration, undoes the factors, the recovery codes and the new session with it.
+func TestFactorChangesAreAudited(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	key, mfa, _ := x.enableTOTP(t, console, x.signIn(t, console))
+	x.clock.Advance(30 * time.Second)
+	p, err := x.principal(t, console, mfa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := x.s.RegenerateRecoveryCodes(t.Context(), p, accounts.FactorChange{Code: accounts.TOTPCode(key, x.clock.Now())}); err != nil {
+		t.Fatal(err)
+	}
+	user, account := uuid.UUID(x.user).String(), uuid.UUID(p.AccountID()).String()
+	want := "user.totp_enable " + x.user.TypeID() + " " + s1.String() + " " + account + " user:" + user
+	got := texts(t, x.db, platform, "SELECT action || ' ' || target_id || ' ' || site_id || ' ' || account_id || ' ' || actor_kind || ':' || actor_id "+
+		"FROM platform.audit_log WHERE target_kind = 'user' ORDER BY id")
+	if len(got) != 2 || got[0] != want || got[1] != strings.Replace(want, "user.totp_enable", "user.recovery_codes_regenerate", 1) {
+		t.Errorf("audit entries %q, want %q and its recovery_codes_regenerate", got, want)
+	}
+
+	y := newTestSite(t)
+	q, err := y.principal(t, console, y.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, account = uuid.UUID(y.user).String(), uuid.UUID(q.AccountID()).String()
+	if err := pgtest.Run(t.Context(), y.database.Superuser, "DELETE FROM platform.tenants WHERE tenant_id = '"+account+"'"); err != nil {
+		t.Fatal(err)
+	}
+	secretText, _ := y.s.BeginTOTP(q)
+	if _, _, err := y.s.ConfirmTOTP(t.Context(), q, accounts.FactorChange{
+		Secret: secretText, Password: password, Code: accounts.TOTPCode(secretText, y.clock.Now()),
+	}); err == nil {
+		t.Fatal("a factor change whose audit entry fails succeeded")
+	}
+	state := texts(t, y.db, platform, "SELECT u.factor_version || ' ' || (u.mfa_enabled_at IS NULL) || ' ' || "+
+		"(SELECT count(*) FROM accounts.recovery_codes WHERE user_id = u.id) || ' ' || "+
+		"(SELECT count(*) FROM accounts.sessions WHERE user_id = u.id) FROM accounts.users u WHERE u.id = '"+user+"'")
+	if len(state) != 1 || state[0] != "1 true 0 1" {
+		t.Errorf("after the failed change: version, no TOTP, recovery codes, sessions = %q, want \"1 true 0 1\"", state)
+	}
+	if _, err := y.principal(t, console, y.signIn(t, console)); err != nil {
+		t.Errorf("a password sign-in after the failed change: %v", err)
+	}
+}
+
 // TestOneChallengeOneSession: two codes sent at once for one pending session give one session. The pending session's
 // row is held locked from outside until both verifications are waiting, so they overlap: the user's lock orders them,
 // the first revokes the pending session, and the second finds it gone; the revocation must also change one row.
@@ -330,9 +448,10 @@ func TestOneChallengeOneSession(t *testing.T) {
 	x := newTestSite(t)
 	_, _, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console)
+	watcher := x.admin(t)
 	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
-		done <- x.admin(t).Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+		done <- watcher.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
 			if _, err := tx.Exec(t.Context(), "SELECT 1 FROM accounts.sessions WHERE level = 'pending_mfa' AND revoked_at IS NULL FOR UPDATE"); err != nil {
 				return err
 			}
@@ -342,6 +461,8 @@ func TestOneChallengeOneSession(t *testing.T) {
 		})
 	}()
 	<-held
+	free := sync.OnceFunc(func() { close(release) })
+	defer free() // a failing watcher query must not strand the held transaction
 	results := make(chan error, 2)
 	for _, code := range codes[:2] {
 		go func() {
@@ -349,10 +470,14 @@ func TestOneChallengeOneSession(t *testing.T) {
 			results <- err
 		}()
 	}
-	for deadline := time.Now().Add(10 * time.Second); x.waiting(t) < 2 && time.Now().Before(deadline); {
+	waiting := 0
+	for deadline := time.Now().Add(10 * time.Second); waiting < 2 && time.Now().Before(deadline); waiting = locksWaitedFor(t, watcher) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	close(release)
+	if waiting < 2 {
+		t.Errorf("%d verifications waiting after 10 seconds, want both: they did not overlap", waiting)
+	}
+	free()
 	won := 0
 	for range 2 {
 		if err := <-results; err == nil {
@@ -380,10 +505,10 @@ func (x site) admin(t *testing.T) *pg.DB {
 	return db
 }
 
-// waiting is how many of the database's queries wait for a lock.
-func (x site) waiting(t *testing.T) int {
+// locksWaitedFor is how many of the database's queries wait for a lock, as watcher, a superuser pool, sees.
+func locksWaitedFor(t *testing.T, watcher *pg.DB) int {
 	t.Helper()
-	n, err := strconv.Atoi(texts(t, x.admin(t), pg.Scope{}, "SELECT count(*)::text FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()")[0])
+	n, err := strconv.Atoi(texts(t, watcher, pg.Scope{}, "SELECT count(*)::text FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()")[0])
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,6 +56,18 @@ ALTER FUNCTION accounts.login_tenant OWNER TO axiom_lookup;
 ALTER FUNCTION accounts.invite_tenant OWNER TO axiom_lookup;
 REVOKE CREATE ON SCHEMA accounts FROM axiom_lookup;
 
+-- A site's attempt limits before sign-in (README.md「登录前的资源」), null for the code's defaults: per IP a token
+-- bucket for sign-in, registration and two-step verification; failures per email in 15 minutes, per user in an hour;
+-- codes per pending session.
+ALTER TABLE accounts.site_settings
+    ADD COLUMN ip_attempt_burst integer CHECK (ip_attempt_burst BETWEEN 1 AND 10000),
+    ADD COLUMN ip_attempts_per_minute integer CHECK (ip_attempts_per_minute BETWEEN 1 AND 10000),
+    ADD COLUMN email_sign_in_failures integer CHECK (email_sign_in_failures BETWEEN 1 AND 1000),
+    ADD COLUMN user_code_failures integer CHECK (user_code_failures BETWEEN 1 AND 1000),
+    ADD COLUMN challenge_code_attempts integer CHECK (challenge_code_attempts BETWEEN 1 AND 100);
+GRANT UPDATE (ip_attempt_burst, ip_attempts_per_minute, email_sign_in_failures, user_code_failures,
+    challenge_code_attempts) ON accounts.site_settings TO axiom_app;
+
 -- The built-in roles' permissions, as the code declares them (authorize.go). The program refuses to start on a role
 -- holding a permission it does not declare. Forced row-level security binds the owner too, and a migration sets no
 -- scope, so the table's owner writes the rows with FORCE lifted inside this migration's transaction.
@@ -68,3 +80,16 @@ UPDATE accounts.roles SET permissions = CASE name
 END::text[]
 WHERE builtin;
 ALTER TABLE accounts.roles FORCE ROW LEVEL SECURITY;
+
+-- The sites and accounts made before the audit log could name a tenant (platform's 00004) register now, as
+-- audit.RegisterSite and audit.RegisterAccount register every one made after, so their changes can be recorded.
+-- Platform's migrations run before this module's, so the registry exists and is empty here. A migration sets no
+-- scope, so FORCE is lifted inside this transaction for the owner, as for the roles above.
+ALTER TABLE accounts.sites NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE accounts.accounts NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE platform.tenants NO FORCE ROW LEVEL SECURITY;
+INSERT INTO platform.tenants (site_id, tenant_id)
+    SELECT id, id FROM accounts.sites UNION ALL SELECT site_id, id FROM accounts.accounts;
+ALTER TABLE accounts.sites FORCE ROW LEVEL SECURITY;
+ALTER TABLE accounts.accounts FORCE ROW LEVEL SECURITY;
+ALTER TABLE platform.tenants FORCE ROW LEVEL SECURITY;

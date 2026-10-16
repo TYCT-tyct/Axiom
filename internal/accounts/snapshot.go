@@ -32,6 +32,7 @@ type Site struct {
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit int64
 	sessions         map[Surface]lifetime
+	limits           limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -138,6 +139,11 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
 		}
+		site.limits = limits{
+			ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
+			emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
+			challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
+		}
 		next.sites[site.ID] = site
 	}
 	domains, err := s.queries.ListSiteDomains(ctx, tx)
@@ -170,6 +176,14 @@ func seconds(v int64, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(v) * time.Second
+}
+
+// setting is a site's limit, or fallback when it is unset; the table's bounds keep a set one at 1 or more.
+func setting(v *int32, fallback int) int {
+	if v == nil {
+		return fallback
+	}
+	return int(*v)
 }
 
 // SiteForHost is the site and surface of the request's Host, as written in the request: lower-cased here, with the
