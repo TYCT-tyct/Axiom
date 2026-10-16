@@ -62,7 +62,7 @@ func checkPages(t *testing.T, addrs addresses) {
 	t.Helper()
 	public, admin := "http://"+addrs.Public, "http://"+addrs.Admin
 	for _, path := range []string{"/", "/console/", "/console/keys"} {
-		resp, err := get(t, public+path)
+		resp, err := getAccepting(t, public+path, "text/html")
 		if err != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" ||
 			resp.Header.Get("Content-Security-Policy") == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 			t.Errorf("GET %s on the public listener: %v %v", path, resp.Response, err)
@@ -266,11 +266,20 @@ type response struct {
 
 func get(t *testing.T, url string) (response, error) {
 	t.Helper()
+	return getAccepting(t, url, "")
+}
+
+// getAccepting is get with an Accept header, as a browser navigating to a page sends one.
+func getAccepting(t *testing.T, url, accept string) (response, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
