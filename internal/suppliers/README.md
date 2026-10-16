@@ -180,7 +180,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 |---|---|---|
 | `NormalizeOrigin` | 只读文本、不碰网络，得到存下的来源：小写；端口按十进制整数解析，须在 1 到 65535，按规范写法输出（去掉前导零），是 https 默认的 443 时省略。同一个站点写成两种样子不会成为两个供应商，凭证也只发往这个地址。处理器在占幂等键之前调用它，规范化后的来源进入键的指纹 | 不是 `https://主机[:端口]`，或端口不在 1 到 65535（`ErrBadOrigin`） |
 | `CheckOrigin` | 用出站客户端的 `Check` 解析并验证规范化后的来源，回答的是网络此刻的样子。建供应商时只在幂等回调里、也就是真正执行改动的那次请求里调用；同一个键的重发直接得到第一次的响应，不再问网络，所以 DNS 或出口变了也不影响重放。检查失败时事务回滚，占键一起撤销 | 内网、回环等地址（`ErrAddressRefused`）；解析不出（`ErrUnreachable`） |
-| `Detect` | 每次都先 `NormalizeOrigin` 再 `CheckOrigin`（不存东西，没有重放）；按注册顺序问每个能被接入的适配器是否认得这个站点；站点要验证码时，只列不需要密码的登录成员；不存任何东西，每次探测最多 45 秒 | 同上两行；没有适配器能判断出站点答了没有（`ErrUnreachable`）；认不出不是错误，返回没有 `Kind` 的结果 |
+| `Detect` | 每次都先 `NormalizeOrigin` 再 `CheckOrigin`（探测没有重放）；按注册顺序问每个能被接入的适配器是否认得这个站点；站点要验证码时，只列不需要密码的登录成员；不存任何东西，每次探测最多 45 秒 | 同上两行；没有适配器能判断出站点答了没有（`ErrUnreachable`）；认不出不是错误，返回没有 `Kind` 的结果 |
 | `Connect` | 建供应商（`connecting`），来源须是 `NormalizeOrigin` 的结果、调用方已在同一次执行里 `CheckOrigin` 过；登录用 `master` 密钥封到 `Location{suppliers.supplier_logins, 供应商 ID, login}`；同一来源和账号只能接入一次 | `ErrNoAdapter`、`*LoginError`（缺成员，或给了这个类型不用的成员）、`ErrSupplierExists` |
 | `SetStatus` | 使用中或低余额的暂停，暂停的恢复；已经是要的状态则不动、不记审计、不升代次 | 其他状态（`ErrStatusLocked`）：`connecting`、`needs_attention` 由同步改，移除中和已移除不能回头 |
 | `Remove` | 从任何不是终点的状态开始移除，代次加一让正在跑的一轮同步作废；重复请求不动 | 已移除（`ErrStatusLocked`） |
