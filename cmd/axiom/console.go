@@ -77,5 +77,5 @@ func publicRoutes(api consoleapi.StrictServerInterface, frontend *webui.Frontend
 	routes := http.NewServeMux()
 	routes.Handle("/api/", handler)
 	routes.Handle("/", frontend.Public())
-	return routes
+	return frontend.Secured(routes) // outermost: the redirect for an unclean path is the router's own answer
 }

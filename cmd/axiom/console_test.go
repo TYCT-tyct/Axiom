@@ -152,3 +152,25 @@ func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestPublicRoutesSecureEveryAnswer: the answer the router itself gives for a path it cleans, a redirect, carries the
+// security headers like any other, because they are set outside the router.
+func TestPublicRoutesSecureEveryAnswer(t *testing.T) {
+	routes := publicRoutes(consoleAPI{version: "v"}, testFrontend(t), slog.New(slog.DiscardHandler))
+	rec := httptest.NewRecorder()
+	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/console//keys", nil))
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/console/keys" {
+		t.Fatalf("GET /console//keys: %d to %q, want a redirect to /console/keys", rec.Code, rec.Header().Get("Location"))
+	}
+	for name, want := range map[string]string{
+		"Content-Security-Policy": "default-src 'self'",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "strict-origin-when-cross-origin",
+		"Permissions-Policy":      "camera=(), microphone=(), geolocation=()",
+	} {
+		if got := rec.Header().Get(name); got != want {
+			t.Errorf("the redirect's %s is %q, want %q", name, got, want)
+		}
+	}
+}

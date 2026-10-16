@@ -71,14 +71,16 @@ func (f *Frontend) Public() http.Handler {
 		http.Redirect(w, r, target, http.StatusPermanentRedirect) //nolint:gosec // the path is constant; the query is the caller's own, sent back to the caller
 	})
 	mux.Handle("/", f.site)
-	return f.secured(mux)
+	return f.Secured(mux)
 }
 
 // Admin serves the admin app, for the admin listener alone.
-func (f *Frontend) Admin() http.Handler { return f.secured(f.admin) }
+func (f *Frontend) Admin() http.Handler { return f.Secured(f.admin) }
 
-// secured sets the security headers before next answers, so no answer of it, whoever writes it, goes without.
-func (f *Frontend) secured(next http.Handler) http.Handler {
+// Secured sets the security headers before next answers, so no answer of it, whoever writes it, goes without. A
+// listener that routes to the pages among other handlers wraps its outermost router in it: a router answers a path it
+// has to clean with a redirect of its own.
+func (f *Frontend) Secured(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for name, value := range f.headers {
 			w.Header().Set(name, value)
