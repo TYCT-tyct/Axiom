@@ -336,7 +336,7 @@ func awaitLookup(t *testing.T, admin *pg.DB) {
 func lookupsWaiting(t *testing.T, admin *pg.DB) string {
 	t.Helper()
 	return texts(t, admin, pg.Scope{}, `SELECT count(*)::text FROM pg_stat_activity
-		WHERE wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`)[0]
 }
 
 // TestReloadGivesUpAndRecovers: a reload the database does not answer gives up within its limit instead of holding
