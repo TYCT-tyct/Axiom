@@ -27,6 +27,8 @@ type Config struct {
 	// HashWait for a turn, 2 seconds when 0, and is then refused (README.md「登录前的资源」).
 	HashConcurrency int
 	HashWait        time.Duration
+	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
+	OnAccountOpened OpenedFunc
 }
 
 // Service is the module. One per node; several share a database.
@@ -37,6 +39,7 @@ type Service struct {
 	keyring  *secret.Keyring
 	versions []uint32 // of hashes, newest first
 	now      func() time.Time
+	opened   OpenedFunc
 
 	snapshot atomic.Pointer[snapshot]
 	// Key identities never change once made, so a hit needs no database. A miss of a key that does not exist is
@@ -71,7 +74,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		now = time.Now
 	}
 	return &Service{
-		db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now,
+		db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
 	}, nil
