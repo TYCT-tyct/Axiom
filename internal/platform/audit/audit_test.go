@@ -118,7 +118,7 @@ func TestEntriesCannotBeRewritten(t *testing.T) {
 	}
 }
 
-// TestOnlyThePlatformScopeRecordsAndReads: entries name no tenant, so only the platform scope records or reads them.
+// TestOnlyThePlatformScopeRecordsAndReads: an entry that names no tenant only the platform scope records or reads.
 func TestOnlyThePlatformScopeRecordsAndReads(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -143,25 +143,52 @@ func TestOnlyThePlatformScopeRecordsAndReads(t *testing.T) {
 	}
 }
 
-// TestTenantEntriesAreRefused: no_tenant refuses any entry naming a tenant, whoever writes it; why is in the platform
-// README (审计日志).
-func TestTenantEntriesAreRefused(t *testing.T) {
+// TestTenantEntriesNeedARegisteredPair: an entry may name a site, or an account with its site, only as registered;
+// the two mismatched pairs of two registered accounts, an unregistered site and an account without a site are
+// refused. The tenant's own scope records its entries and registers itself, and reads its entries but not the
+// registry.
+func TestTenantEntriesNeedARegisteredPair(t *testing.T) {
 	t.Parallel()
 	db := open(t)
+	otherSite, otherAccount := uuid.NewV7(), uuid.NewV7()
+	ownAccount := pg.NewScope(false, nil, []uuid.UUID{account})
+	if err := db.Tx(t.Context(), ownAccount, func(tx pg.Tx) error {
+		return audit.RegisterAccount(t.Context(), tx, site, account)
+	}); err != nil {
+		t.Fatalf("an account registering itself: %v", err)
+	}
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		return errors.Join(audit.RegisterSite(t.Context(), tx, site), audit.RegisterSite(t.Context(), tx, otherSite),
+			audit.RegisterAccount(t.Context(), tx, otherSite, otherAccount))
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name          string
-		site, account any
+		site, account uuid.UUID
+		want          string
 	}{
-		{"a site", site, nil},
-		{"an account", nil, account},
-		{"an account of its site", site, account},
+		{"a registered site", site, uuid.UUID{}, ""},
+		{"a registered account", site, account, ""},
+		{"an account with another registered site", otherSite, account, "23503"},
+		{"another registered account with the site", site, otherAccount, "23503"},
+		{"an unregistered site", uuid.NewV7(), uuid.UUID{}, "23503"},
+		{"an account without its site", uuid.UUID{}, account, "23514"},
 	} {
-		err := exec(t, db, `INSERT INTO platform.audit_log (actor_kind, actor_id, action, module, target_kind, target_id,
-			site_id, account_id, detail)
-			VALUES ('system', 'catalog.sync', 'model.retire', 'catalog', 'model', 'm', $1, $2, '{}')`, c.site, c.account)
-		if code(err) != "23514" { // check_violation
-			t.Errorf("%s: %v, want a check violation", c.name, err)
+		e := event()
+		e.Target.Site, e.Target.Account = c.site, c.account
+		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error { return audit.Record(t.Context(), tx, e) })
+		if code(err) != c.want {
+			t.Errorf("%s: %v, want SQLSTATE %q", c.name, err, c.want)
 		}
+	}
+	e := event()
+	e.Target.Site, e.Target.Account = site, account
+	if err := db.Tx(t.Context(), ownAccount, func(tx pg.Tx) error { return audit.Record(t.Context(), tx, e) }); err != nil {
+		t.Errorf("the account recording its own entry: %v", err)
+	}
+	if read, registry := count(t, db, ownAccount, "platform.audit_log"), count(t, db, ownAccount, "platform.tenants"); read != 2 || registry != 0 {
+		t.Errorf("the account reads %d entries and %d registrations, want its 2 and none", read, registry)
 	}
 }
 
