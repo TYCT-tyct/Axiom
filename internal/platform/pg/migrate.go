@@ -131,14 +131,14 @@ func MigrateWith(ctx context.Context, adminURL string, connectTimeout time.Durat
 	}
 	config, err := pgx.ParseConfig(adminURL)
 	if err != nil {
-		return redactConnect("AXIOM_MIGRATE_DATABASE_URL", errors.New("AXIOM_MIGRATE_DATABASE_URL: not a PostgreSQL connection string"))
+		return redactConnect(MigrateDatabaseURLVar, errors.New(MigrateDatabaseURLVar+": not a PostgreSQL connection string"))
 	}
 	config.RuntimeParams["lock_timeout"] = "5s" // the bootstrap's advisory lock and every lock a migration takes
 	// Every session of this run carries a name of its own, so that the run can end its sessions, and only those, at the
 	// deadline.
 	name := "axiom-migrate-" + uuid.NewV4().String()
 	config.RuntimeParams["application_name"] = name
-	return redactConnect("AXIOM_MIGRATE_DATABASE_URL", runBounded(ctx, stopGrace,
+	return redactConnect(MigrateDatabaseURLVar, runBounded(ctx, stopGrace,
 		func() error { return endSessions(ctx, config, name, connectTimeout) },
 		func() error { return migrate(ctx, config, connectTimeout, all) }))
 }

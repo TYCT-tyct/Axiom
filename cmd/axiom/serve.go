@@ -33,8 +33,8 @@ const bodyTimeout = 2 * time.Minute
 // defaultStartupTimeout bounds how long a command waits for the database before it starts.
 const defaultStartupTimeout = 30 * time.Second
 
-// opsAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func opsAddr(env *config.Env) string { return env.Addr("AXIOM_OPS_ADDR", "127.0.0.1:8081") }
+// probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
+func probesListenAddr(env *config.Env) string { return env.Addr("AXIOM_PROBES_ADDR", "127.0.0.1:8081") }
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
@@ -50,10 +50,10 @@ type listening struct {
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	env := config.New(environ)
 	publicAddr := env.Addr("AXIOM_PUBLIC_ADDR", ":8080") // model calls, the console, payment callbacks
-	probesAddr := opsAddr(env)
+	probesAddr := probesListenAddr(env)
 	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
 	shutdownTimeout := env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second)
-	databaseURL := env.Required("AXIOM_DATABASE_URL")
+	databaseURL := env.Required(pg.DatabaseURLVar)
 	if err := env.Err(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
@@ -123,7 +123,7 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 func node(publicAddr string, routes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
 		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_OPS_ADDR", probesAddr, health.Server(logger), nil},
+		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
 	}
 }
 

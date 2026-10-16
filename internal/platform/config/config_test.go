@@ -1,6 +1,9 @@
 package config
 
 import (
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,4 +67,48 @@ func TestEnv(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An accepted address is an IP or nothing, and a 16-bit port, so listening never waits on a lookup; a refused one is
+// reported and reads as the default.
+func FuzzAddr(f *testing.F) {
+	for _, seed := range []string{"127.0.0.1:8081", "[::1]:8081", ":8081", "localhost:1", "1.2.3.4", ":65536", "[::1%eth0]:1", ""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		const def = "127.0.0.1:1"
+		env := New([]string{"AXIOM_ADDR=" + value})
+		got := env.Addr("AXIOM_ADDR", def)
+		if env.Err() != nil {
+			if got != def {
+				t.Fatalf("%q was refused but gave %q", value, got)
+			}
+			return
+		}
+		host, port, err := net.SplitHostPort(got)
+		if _, portErr := strconv.ParseUint(port, 10, 16); err != nil || portErr != nil {
+			t.Fatalf("%q accepted but is not host:port with a 16-bit port", got)
+		}
+		if _, ipErr := netip.ParseAddr(host); host != "" && ipErr != nil {
+			t.Fatalf("%q accepted with a host that is not an IP", got)
+		}
+	})
+}
+
+// An accepted duration is positive; a refused one is reported and reads as the default.
+func FuzzDuration(f *testing.F) {
+	for _, seed := range []string{"30s", "1m30s", "-1s", "0", "30", "9223372036854775807h", ""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		const def = time.Second
+		env := New([]string{"AXIOM_TIMEOUT=" + value})
+		got := env.Duration("AXIOM_TIMEOUT", def)
+		if got <= 0 {
+			t.Fatalf("%q gave %v", value, got)
+		}
+		if err := env.Err(); err != nil && got != def {
+			t.Fatalf("%q was refused but gave %v", value, got)
+		}
+	})
 }

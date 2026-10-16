@@ -54,12 +54,12 @@ func New(t testing.TB, modules ...pg.Module) Database {
 	}
 	name := fmt.Sprintf("test_%d", databases.Add(1))
 	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE "+template,
-		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		"GRANT CREATE ON DATABASE "+name+" TO axiom_migrator"); err != nil {
 		t.Fatal(err)
 	}
 	return Database{
 		App:       at("axiom_app", "app", name),
-		Migrator:  at("migrator", "migrator", name),
+		Migrator:  at("axiom_migrator", "axiom_migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
 }
@@ -83,10 +83,10 @@ func templateFor(ctx context.Context, modules []pg.Module) (string, error) {
 		return name, nil
 	}
 	if err := Run(ctx, at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE axiom_template",
-		"GRANT CREATE ON DATABASE "+name+" TO migrator"); err != nil {
+		"GRANT CREATE ON DATABASE "+name+" TO axiom_migrator"); err != nil {
 		return "", err
 	}
-	if err := pg.Migrate(ctx, at("migrator", "migrator", name), modules...); err != nil {
+	if err := pg.Migrate(ctx, at("axiom_migrator", "axiom_migrator", name), modules...); err != nil {
 		return "", err
 	}
 	templates[name] = true
@@ -162,13 +162,13 @@ func start(ctx context.Context) error {
 	}
 	if err := Run(ctx, at("postgres", "postgres", "postgres"),
 		`CREATE ROLE axiom_app LOGIN PASSWORD 'app'`,
-		`CREATE ROLE migrator LOGIN CREATEROLE PASSWORD 'migrator'`,
+		`CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD 'axiom_migrator'`,
 		`CREATE DATABASE axiom_template`,
-		`GRANT CREATE ON DATABASE axiom_template TO migrator`); err != nil {
+		`GRANT CREATE ON DATABASE axiom_template TO axiom_migrator`); err != nil {
 		return err
 	}
 	for range 2 { // the second run finds nothing to do
-		if err := pg.Migrate(ctx, at("migrator", "migrator", "axiom_template")); err != nil {
+		if err := pg.Migrate(ctx, at("axiom_migrator", "axiom_migrator", "axiom_template")); err != nil {
 			return err
 		}
 	}
