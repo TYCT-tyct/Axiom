@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page, type Route, test } from "@playwright/test";
-import { mockConsole, signedInAs } from "./console-api.ts";
 import { collectErrors } from "./collect-errors.ts";
+import { mockConsole, signedInAs } from "./console-api.ts";
 
 // The version `just web` stamped the build with; a test that compares against it fails when it is missing.
 const built = process.env.AXIOM_VERSION ?? "";
