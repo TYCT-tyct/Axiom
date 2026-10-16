@@ -46,6 +46,20 @@ type Hold struct {
 	keyWindow       time.Time
 }
 
+// lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement,
+// cleanup and corrections price usage with them, whichever process runs them.
+func lockedPrices(q []Quotable, kept []int) ([]string, error) {
+	prices := make([]string, len(q))
+	for _, i := range kept {
+		b, err := q[i].Price.MarshalJSON()
+		if err != nil {
+			return nil, fmt.Errorf("billing: lock the price of entry %d: %w", i, err)
+		}
+		prices[i] = string(b)
+	}
+	return prices, nil
+}
+
 // OpenBalance creates an account's balance row with its floor (0 or below), as the account is opened. Without the
 // row an account can reserve nothing.
 func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor int64) error {
@@ -80,8 +94,13 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	} else if err != nil {
 		return nil, nil, err
 	}
+	prices, err := lockedPrices(q, r.Kept)
+	if err != nil {
+		return nil, nil, err
+	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
+		Prices:    prices,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),
@@ -162,12 +181,26 @@ func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) er
 			if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
 				err = h.addReserved(ctx, tx, -row.Amount)
 			}
+		case err == nil: // ended already, and told suppliers so
+			return nil
+		}
+		if err == nil {
+			err = b.ended(ctx, tx, id, a.Site, a.Account)
 		}
 		if err != nil {
 			return fmt.Errorf("billing: settle the orphan %s: %w", id, err)
 		}
 		return nil
 	})
+}
+
+// ended tells suppliers the request ended, at the database's time.
+func (b *Billing) ended(ctx context.Context, tx pg.Tx, id, site, account uuid.UUID) error {
+	at, err := queries.Now(ctx, tx)
+	if err == nil {
+		err = b.suppliers.EndRequest(ctx, tx, id, site, account, at)
+	}
+	return err
 }
 
 func (h *Hold) addReserved(ctx context.Context, tx pg.Tx, delta int64) error {
