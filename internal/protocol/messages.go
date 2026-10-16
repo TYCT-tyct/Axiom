@@ -74,6 +74,7 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 	s.settle()
 	if s.report != nil {
 		s.meter(m)
+		s.report = nil
 	}
 	if s.e.name == "message_start" || s.e.role == ending {
 		return s.rewrite(messagesRewrites)
@@ -91,6 +92,11 @@ func (s *messagesStream) settle() {
 	if s.serverTool && s.webSearch {
 		s.e.searches = 1
 	}
+}
+
+func (s *messagesStream) dropBuffers() {
+	s.eventReader.dropBuffers()
+	s.report = nil
 }
 
 func (s *messagesStream) eventType() error {

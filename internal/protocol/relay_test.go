@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -230,6 +231,10 @@ func TestRelayEndings(t *testing.T) {
 		{"not an object", start + "data: [1]\n\n", protocol.ErrUpstream, false},
 		{"no content at all", start + messageDelta(`{"output_tokens":2}`) + messageStop, nil, false},
 		{
+			"events without content after the usage events", start + textBlock + messageDelta(`{"output_tokens":2}`) +
+				"data: {\"type\":\"later\"}\n\n" + messageDelta(`{"output_tokens":3}`) + "data: {}\n\n" + messageStop, nil, true,
+		},
+		{
 			"two usage events", start + textBlock + messageDelta(`{"output_tokens":2}`) + messageDelta(`{"output_tokens":3}`) + messageStop,
 			nil, true,
 		},
@@ -239,21 +244,34 @@ func TestRelayEndings(t *testing.T) {
 			if !errors.Is(got.err, c.err) || (c.err == nil) != (got.err == nil) {
 				t.Fatalf("error %v, want %v", got.err, c.err)
 			}
-			es := events(t, got.out)
-			last, want, deltas := es[len(es)-1]["type"], "message_stop", strings.Count(c.stream, `"message_delta"`)
-			if c.err != nil {
-				want, deltas = "error", 0
+			if wrote := strings.Contains(string(got.out), "content_block_start"); wrote != c.committed {
+				t.Errorf("content written %v, want %v", wrote, c.committed)
 			}
-			wrote := strings.Contains(string(got.out), "content_block_start")
-			if last != want || wrote != c.committed || strings.Count(string(got.out), `"message_delta"`) != deltas {
-				t.Errorf("last event %v, want %s; content written %v, want %v; message_delta events %d, want %d", last, want,
-					wrote, c.committed, strings.Count(string(got.out), `"message_delta"`), deltas)
-			}
-			if err := streamcheck.Messages(bytes.NewReader(got.out)); err != nil {
-				t.Error(err)
-			}
+			checkEnding(t, c.stream, got.out, c.err == nil)
 		})
 	}
+}
+
+// checkEnding: a normal end gives the upstream's events in its order; an error ending none of the withheld ones.
+func checkEnding(t *testing.T, stream string, out []byte, normal bool) {
+	t.Helper()
+	switch es := events(t, out); {
+	case normal && !slices.Equal(types(events(t, []byte(stream))), types(es)):
+		t.Errorf("not the upstream's events in its order:\n%s", out)
+	case !normal && (es[len(es)-1]["type"] != "error" || strings.Contains(string(out), `"message_delta"`)):
+		t.Errorf("not an error ending alone:\n%s", out)
+	}
+	if err := streamcheck.Messages(bytes.NewReader(out)); err != nil {
+		t.Error(err)
+	}
+}
+
+func types(es []map[string]any) []any {
+	out := make([]any, len(es))
+	for i, e := range es {
+		out[i] = e["type"]
+	}
+	return out
 }
 
 // TestRelayRewrites: the client sees the call ID and its own model name, usage without anything but Messages'
@@ -396,11 +414,23 @@ func FuzzRelay(f *testing.F) {
 	}
 	f.Add(uint8(0), []byte(messageStart(`{"input_tokens":3}`)+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{1})
 	f.Add(uint8(0), []byte(messageStart(`{}`)+`data: {"type":"error","error":{"type":"api_error","message":"x"}}`+"\n\n"), []byte{9})
+	f.Add(uint8(0), []byte(messageStart(`{}`)+messageDelta(`{}`)+"data: {}\n\n"+messageStop), []byte{4})
 	f.Add(uint8(2), []byte(chatHello), []byte{5})
 	f.Add(uint8(2), []byte(chatMixed), []byte{40, 9})
 	f.Add(uint8(2), []byte(`data:{"id":"0","object":"chat.completion.chunk","model":[]}`+"\n\ndata:[DONE]\n\n"), []byte{9})
 	f.Add(uint8(2), []byte(chatRole+chatHead+`[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],`+
 		`"usage":{"prompt_tokens":3}}`+"\n\n"+chatDone), []byte{2})
+	f.Add(uint8(2), []byte(chatRole+chatHead+`[{"index":0,"delta":{},"finish_reason":"stop"},{"index":1,"delta":`+
+		`{"role":"assistant","content":""},"logprobs":{"content":[]},"finish_reason":null}]}`+"\n\n"+chatHead+
+		`[{"index":1,"delta":{"content":"y"},"finish_reason":"stop"}]}`+"\n\n"+chatDone), []byte{7})
+	f.Add(uint8(0), []byte(messageStart(`{"input_tokens":3}`)+"event: content_block_start\ndata: "+
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{"a":1}}}`+
+		"\n\n"+blockStop+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{11})
+	f.Add(uint8(1), []byte(responsesEvent("response.created", 0, responsesObject)+
+		responsesEvent("response.output_item.done", 1, `,"output_index":0,"item":{"id":"fc_1","type":"function_call",`+
+			`"status":"completed","call_id":"call_1","name":"f","arguments":"{}"}`)+
+		responsesEvent("response.completed", 2, strings.Replace(responsesObject, `"usage":null`,
+			`"usage":{"input_tokens":5,"output_tokens":3}`, 1))), []byte{13})
 	f.Fuzz(func(t *testing.T, which uint8, stream, cuts []byte) {
 		format := formats[int(which)%len(formats)]
 		if format.check(bytes.NewReader(stream)) != nil {
@@ -414,16 +444,25 @@ func FuzzRelay(f *testing.F) {
 		if err := format.check(bytes.NewReader(whole.out)); err != nil {
 			t.Fatalf("client stream: %v\n%s", err, whole.out)
 		}
-		if !endsNormally(format.f, stream) {
-			return
-		}
-		if whole.err != nil {
-			t.Fatalf("a stream that ends normally failed: %v\n%s", whole.err, stream)
-		}
-		if diff := cmp.Diff(contents(t, format.f, stream), contents(t, format.f, whole.out)); diff != "" {
-			t.Fatalf("contents (-upstream +client):\n%s", diff)
-		}
+		checkContents(t, format.f, stream, whole)
 	})
+}
+
+// checkContents: a stream that ends normally does not fail, and the client gets its contents.
+func checkContents(t *testing.T, f protocol.Format, stream []byte, got relayed) {
+	t.Helper()
+	if !endsNormally(f, stream) {
+		return
+	}
+	if got.err != nil {
+		t.Fatalf("a stream that ends normally failed: %v\n%s", got.err, stream)
+	}
+	if !decodes(stream) {
+		return
+	}
+	if diff := cmp.Diff(contents(t, f, stream), contents(t, f, got.out)); diff != "" {
+		t.Fatalf("contents (-upstream +client):\n%s", diff)
+	}
 }
 
 // chunks returns data in reads whose sizes come from cuts.

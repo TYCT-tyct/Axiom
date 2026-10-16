@@ -75,9 +75,12 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	case "response.completed", "response.incomplete":
 		s.e.role, s.e.ends, s.e.final = ending, true, true
 	}
-	s.settle()
+	if err := s.settle(); err != nil {
+		return event{}, err
+	}
 	if s.report != nil {
 		s.meter(m)
+		s.report = nil
 	}
 	if s.hasResponse {
 		return s.rewrite(responsesRewrites)
@@ -86,7 +89,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 }
 
 // settle counts the content once all members are read, since they come in any order.
-func (s *responsesStream) settle() {
+func (s *responsesStream) settle() error {
 	switch {
 	case strings.HasSuffix(s.e.name, ".delta"):
 		s.e.role = content
@@ -95,6 +98,10 @@ func (s *responsesStream) settle() {
 		}
 	case s.e.name == "response.output_item.added":
 		if s.index == int64(len(s.items)) { // an index out of turn is not tracked: its item counts in full when done
+			var err error
+			if s.items, err = sse.Grow(s.items, 1, s.charge); err != nil {
+				return err
+			}
 			s.items = append(s.items, 0)
 		}
 		if s.webSearch {
@@ -106,6 +113,12 @@ func (s *responsesStream) settle() {
 			s.e.content = max(0, s.itemBytes-s.items[s.index])
 		}
 	}
+	return nil
+}
+
+func (s *responsesStream) dropBuffers() {
+	s.eventReader.dropBuffers()
+	s.items, s.report = nil, nil
 }
 
 func (s *responsesStream) eventType() error {

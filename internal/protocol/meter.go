@@ -50,8 +50,21 @@ type meter struct {
 const finalOnSight = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite |
 	1<<catalog.ItemCacheWrite1h)
 
+// The meter is kept through the settlement, so what it holds is bounded and charged up front as meterMemory: at most
+// maxUnknown unknown fields for the reply and as many over its compactions, each a field and a value of at most
+// maxUnknownLen bytes, and at most maxCompactions compactions. A report past them makes the usage invalid, which
+// billing estimates, as it does any usage it cannot take.
+const (
+	maxUnknown     = 16
+	maxUnknownLen  = 128
+	maxCompactions = 8
+)
+
 // report takes a usage object: the reply's counts, and the compactions it lists, each its own segment.
 func (m *meter) report(r usageReport, compactions []usageReport) {
+	if m.invalid == nil {
+		m.invalid = m.bound(r, compactions)
+	}
 	if m.invalid != nil || !m.takeCounts(r) {
 		return
 	}
@@ -69,6 +82,34 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	if compactions != nil {
 		m.compact(compactions)
 	}
+}
+
+// bound reports a report that would take the meter past its bounds.
+func (m *meter) bound(r usageReport, compactions []usageReport) error {
+	if len(compactions) > maxCompactions {
+		return fmt.Errorf("usage: %d compactions, more than %d", len(compactions), maxCompactions)
+	}
+	fields, over := len(m.unknown), 0
+	for _, u := range r.unknown {
+		if !slices.ContainsFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }) {
+			fields++
+		}
+	}
+	for _, c := range compactions {
+		over += len(c.unknown)
+	}
+	if fields > maxUnknown || over > maxUnknown {
+		return fmt.Errorf("usage: more than %d unknown fields", maxUnknown)
+	}
+	long := func(c usageReport) bool {
+		return slices.ContainsFunc(c.unknown, func(u catalog.UnknownUsage) bool {
+			return len(u.Field) > maxUnknownLen || len(u.Value) > maxUnknownLen
+		})
+	}
+	if long(r) || slices.ContainsFunc(compactions, long) {
+		return fmt.Errorf("usage: an unknown field or its value is longer than %d bytes", maxUnknownLen)
+	}
+	return nil
 }
 
 // takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid.

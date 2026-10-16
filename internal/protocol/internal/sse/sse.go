@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unsafe"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -223,19 +224,19 @@ func (r *Reader) more() error {
 	return nil
 }
 
-// Grow returns b with room for n more bytes. A new array is at least twice as large, so appending costs amortized
+// Grow returns b with room for n more elements. A new array is at least twice as large, so appending costs amortized
 // constant time; charge, unless nil, is first asked for the bytes it adds, and an error from it is returned instead.
-func Grow(b []byte, n int, charge func(n int) error) ([]byte, error) {
+func Grow[T any](b []T, n int, charge func(n int) error) ([]T, error) {
 	if cap(b)-len(b) >= n {
 		return b, nil
 	}
 	size := max(2*cap(b), len(b)+n)
 	if charge != nil {
-		if err := charge(size - cap(b)); err != nil {
+		if err := charge((size - cap(b)) * int(unsafe.Sizeof(*new(T)))); err != nil {
 			return b, err
 		}
 	}
-	return append(make([]byte, 0, size), b...), nil
+	return append(make([]T, 0, size), b...), nil
 }
 
 // AppendEvent appends to dst an event whose data is data: an event line naming it, unless name is empty or holds
