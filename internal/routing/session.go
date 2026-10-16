@@ -99,8 +99,8 @@ func firstItem(value []byte) []byte {
 	value = bytes.TrimLeftFunc(bytes.TrimPrefix(bytes.TrimLeftFunc(value, unicode.IsSpace), []byte(":")), unicode.IsSpace)
 	dec := jsontext.NewDecoder(bytes.NewBuffer(value))
 	tok, err := dec.ReadToken()
-	if err != nil {
-		return []byte{}
+	if err != nil { // a string cut off by the prefix has no end yet: its start is the item
+		return bounded(value)
 	}
 	from := int64(0)
 	if tok.Kind() == '[' {

@@ -3,10 +3,13 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"slices"
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
@@ -105,10 +108,12 @@ type Endpoint struct {
 	Native           FormatSet              // formats it speaks itself
 	Served           FormatSet              // formats it can serve, with protocol's conversion; includes Native
 	Caps             protocol.Capabilities
-	Context          int64 // the most tokens a request may take, input plus output
-	MaxOutput        int64 // the model's output limit here, also its default
-	ImageTokens      int64 // the most input tokens one image can take
-	PageTokens       int64 // the most input tokens one document page can take
+	Context          int64                  // the most tokens a request may take, input plus output
+	MaxOutput        int64                  // the model's output limit here, also its default
+	ImageTokens      int64                  // the most input tokens one image can take
+	PageTokens       int64                  // the most input tokens one document page can take
+	FilePages        int64                  // the most pages one file can have; 0 when no limit is known
+	ToolUses         map[catalog.Item]int64 // each server tool's default most uses; the snapshot keeps a copy
 	Streams          bool
 	Cancels          bool      // measured: it stops generating when the client disconnects
 	ReasoningVisible FormatSet // the formats in which reasoning progress shows in the stream
@@ -138,22 +143,34 @@ type PriceLimit struct {
 	Max [catalog.NumItems]platform.UnitPrice
 }
 
+// tokenItems are the billing items counted in tokens; the others are counted in calls.
+const tokenItems = catalog.ItemSet(1<<catalog.NumItems-1) &^ (1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution)
+
+// allTiers are every service tier.
+const allTiers = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierFlex | 1<<catalog.ServiceTierPriority |
+	1<<catalog.ServiceTierFast)
+
 // within reports whether what a request may be charged per item is within the limit: the highest price over the service
-// tiers it may be served at and the context tiers a prompt of at most length tokens can fall in (Schedule.Ceiling), so
-// a priority or long-context price above the limit counts. An item the schedule does not price at some tier cannot be
-// compared and passes: billing prices what has no price at its fallback.
+// tiers it may be served at and the context tiers a prompt of at most length tokens can fall in, so a priority or
+// long-context price above the limit counts. A tier without a price does not hide the ones that have: the known prices
+// are held to the limit, and a token item missing a price is held at the highest token price of the schedule, which is
+// what billing charges it (docs/domains/billing.md「价目表缺项」). A call item missing a price has the site's default price,
+// which routing does not know, so it is not compared.
 func (p PriceLimit) within(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64) bool {
-	if tiers == 0 {
-		tiers.Add(catalog.ServiceTierStandard)
-	}
 	for it := range catalog.NumItems {
 		if !p.Set.Has(it) {
 			continue
 		}
 		var one catalog.ItemSet
 		one.Add(it)
-		if ceiling, ok := s.Ceiling(one, tiers, length); ok && ceiling.Cmp(p.Max[it]) > 0 {
+		highest, missing := s.Highest(one, tiers, length)
+		if highest.Cmp(p.Max[it]) > 0 {
 			return false
+		}
+		if missing && tokenItems.Has(it) {
+			if fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
+				return false
+			}
 		}
 	}
 	return true
@@ -201,8 +218,9 @@ type Snapshot struct {
 // live state, which outlives the snapshot.
 type candidate struct {
 	Endpoint
-	blend        float64 // input plus output base rate, as a number; only for weighting
-	cacheCheaper bool    // reading the cache costs less than input, which is when sticking pays
+	model        billing.Model // what billing reads of the endpoint's model, for the input bound
+	blend        float64       // input plus output base rate, as a number; only for weighting
+	cacheCheaper bool          // reading the cache costs less than input, which is when sticking pays
 	state        *epState
 }
 
@@ -242,10 +260,16 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	if e.Served&e.Native != e.Native {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s serves less than it speaks", uuid.UUID(e.ID))
 	}
+	if e.Context <= 0 {
+		return nil, fmt.Errorf("routing snapshot: endpoint %s has no context length", uuid.UUID(e.ID))
+	}
+	e.ToolUses = maps.Clone(e.ToolUses)
 	if e.ServiceTiers == 0 {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
-	c := &candidate{Endpoint: e, state: r.state.of(e.ID)}
+	c := &candidate{Endpoint: e, state: r.state.of(e.ID), model: billing.Model{
+		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages, MaxUses: e.ToolUses,
+	}}
 	if e.Price.Version == (uuid.UUID{}) {
 		return c, nil
 	}

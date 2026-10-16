@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 )
@@ -14,7 +15,9 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
-	tokens int64 // an estimate of the input, in tokens; see Config.BytesPerToken
+	tokens int64                  // an estimate of the input, in tokens; see Config.BytesPerToken
+	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
+	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
 	now    time.Time
 }
 
@@ -33,8 +36,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
-		tokens: in.Req.TextBytes / r.cfg.BytesPerToken,
+		tokens: in.Req.TextBytes / r.cfg.BytesPerToken, demand: demandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
+	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
 	var order []ranked
 	var seen []catalog.ModelID
@@ -67,6 +71,22 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		Entries: entries, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), Record: rec,
 	}, nil, nil
+}
+
+// demandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
+// (billing.InputBound). Compaction is not in the request summary yet.
+func demandOf(req *protocol.Request) billing.Demand {
+	d := billing.Demand{
+		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
+	}
+	if req.Needs.Has(protocol.WebSearch) {
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
+	}
+	if req.Needs.Has(protocol.CodeExecution) {
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})
+	}
+	return d
 }
 
 // nothing says why the plan is empty: a Wait when some endpoint would have served but is full, otherwise a NoEndpoint.
@@ -182,9 +202,6 @@ func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int6
 	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
 	}
-	if c.Context == 0 {
-		return limit, true
-	}
 	room := c.Context - tokens
 	switch {
 	case room <= 0:
@@ -212,7 +229,7 @@ func (c *candidate) full() bool {
 func (n *need) presetAllows(c *candidate) bool {
 	p := n.preset
 	return p.Classes.Has(c.Class) && p.Policies.Has(c.Policy) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
-		(!p.VerifiedOnly || c.Verified) && p.MaxPrice.within(c.Price.Schedule, n.req.ServiceTiers, n.req.TextBytes) &&
+		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c) &&
 		(!p.NoFallbacks || listed(p.Order, c.Supplier))
 }
 
@@ -222,7 +239,16 @@ func (n *need) overrideAllows(c *candidate) bool {
 	o := n.over
 	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
-		o.MaxPrice.within(c.Price.Schedule, n.req.ServiceTiers, n.req.TextBytes) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
+		n.withinLimit(o.MaxPrice, c) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
+}
+
+// withinLimit holds the endpoint's price to a limit against the longest prompt any sampling of the request can have.
+func (n *need) withinLimit(limit PriceLimit, c *candidate) bool {
+	if limit.Set == 0 {
+		return true
+	}
+	_, longest := billing.InputBound(n.demand, c.model)
+	return limit.within(c.Price.Schedule, n.tiers, longest)
 }
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
