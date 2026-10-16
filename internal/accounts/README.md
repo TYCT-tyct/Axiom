@@ -248,7 +248,6 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
 func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
 func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用
-func (s *Service) WorkspaceIDs(ctx context.Context, tx pg.Tx, account AccountID) ([]WorkspaceID, error)
 func (s *Service) CheckOrigin(r *http.Request) error                         // 登录、注册等没有会话的改数据请求
 func (s *Service) Cookie(host string, issued Issued) (*http.Cookie, error)
 func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时让浏览器丢掉会话 Cookie

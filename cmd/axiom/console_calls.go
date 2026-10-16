@@ -25,13 +25,9 @@ func (c consoleAPI) GetBalance(ctx context.Context, _ consoleapi.GetBalanceReque
 	cl := callOf(ctx)
 	var view billing.BalanceView
 	err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
-		workspaces, err := c.accounts.WorkspaceIDs(ctx, tx, cl.principal.AccountID())
+		ids, err := c.accounts.AccountWorkspaces(ctx, tx, cl.principal.AccountID())
 		if err != nil {
 			return err
-		}
-		ids := make([]uuid.UUID, len(workspaces))
-		for i, w := range workspaces {
-			ids[i] = uuid.UUID(w)
 		}
 		view, err = billing.ReadBalance(ctx, tx, uuid.UUID(cl.principal.AccountID()), ids)
 		return err

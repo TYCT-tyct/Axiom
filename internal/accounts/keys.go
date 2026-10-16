@@ -123,19 +123,6 @@ func nilIfEmpty[T any](v []T) []T {
 	return v
 }
 
-// WorkspaceIDs are the account's workspaces, deleted ones included: what they were charged stays counted.
-func (s *Service) WorkspaceIDs(ctx context.Context, tx pg.Tx, account AccountID) ([]WorkspaceID, error) {
-	ids, err := s.queries.AccountWorkspaces(ctx, tx, uuid.UUID(account))
-	if err != nil {
-		return nil, fmt.Errorf("list the workspaces: %w", err)
-	}
-	workspaces := make([]WorkspaceID, len(ids))
-	for i, id := range ids {
-		workspaces[i] = WorkspaceID(id)
-	}
-	return workspaces, nil
-}
-
 // ListKeys is up to limit of account's call keys that are not deleted, disabled ones included, newest first, starting
 // after the key `after` (the zero KeyID for the first page); more tells whether keys remain beyond them.
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) (keys []Key, more bool, err error) {
