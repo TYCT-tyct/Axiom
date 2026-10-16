@@ -66,6 +66,7 @@ func TestCatalogCommandRefusals(t *testing.T) {
 	for _, c := range []struct{ name, operation, doc, want string }{
 		{"an unknown member", "save-author", `{"op_key":"0198c0a8-0000-7000-8000-000000000009","reason":"r","slug":"x","name":"X","extra":1}`, "extra"},
 		{"an unknown operation", "delete-everything", `{}`, "unknown operation"},
+		{"a dataset request with an unknown member", "select-dataset-source", `{"op_key":"0198c0a8-0000-7000-8000-000000000007","reason":"r","model":"0198c0a8-0000-7000-8000-000000000006","source":"litellm","prices":[]}`, "prices"},
 		{"a missing reason", "save-author", `{"op_key":"0198c0a8-0000-7000-8000-000000000008","slug":"x","name":"X"}`, "reason"},
 	} {
 		if _, err := run(c.operation, c.doc); err == nil || !strings.Contains(err.Error(), c.want) {
