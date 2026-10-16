@@ -399,6 +399,9 @@ func TestFallbackSettings(t *testing.T) {
 	if err := b.saveFallbacks(strings.ReplaceAll(testFallbacks, "USD", "CNY")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := b.tryHoldOn(cny, 100); err != nil {
+		t.Errorf("a CNY entry with CNY fallbacks: %v", err)
+	}
 	h := b.holdOn(metered(t), 1000) // locks the seeded USD row
 	if err := b.saveFallbacks(testFallbacks); err != nil {
 		t.Fatal(err)
@@ -407,9 +410,6 @@ func TestFallbackSettings(t *testing.T) {
 	b.settleWith(h, outcome(Committed, FinishStop, false, s))
 	if n := b.count("SELECT price FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); n != 70+5e7 {
 		t.Errorf("priced %d, want the code execution at the locked 0.05", n)
-	}
-	if _, err := b.tryHoldOn(cny, 100); err != nil {
-		t.Errorf("a CNY entry with CNY fallbacks: %v", err)
 	}
 	if n := b.count("SELECT count(*) FROM platform.audit_log WHERE action = 'fallbacks.save'"); n != 2 {
 		t.Errorf("%d saves audited, want 2", n)
