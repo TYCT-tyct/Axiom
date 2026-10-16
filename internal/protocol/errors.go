@@ -74,6 +74,22 @@ func appendErrorType(dst []byte, e Error) []byte {
 // body carries what was charged anyway, such as a web search already run, in an axiom object: the usage in f's
 // fields, and the cost unless the settlement is pending (docs/domains/gateway.md「用量与费用」「错误」).
 func RenderError(f Format, e Error, fin *Final) (status int, body []byte) {
+	if fin == nil {
+		return renderError(f, e, nil)
+	}
+	return renderError(f, e, &charges{reply(fin.Usage), cost(fin), fin.Pending})
+}
+
+// charges is what an error answer reports of the call: the usage of the reply, its cost, which is empty or a list of
+// members each led by a comma, and whether the settlement was not written.
+type charges struct {
+	usage   catalog.Usage
+	cost    string
+	pending bool
+}
+
+// renderError is RenderError for the charges it reports, nil for none.
+func renderError(f Format, e Error, charged *charges) (status int, body []byte) {
 	t := errorTypes[e.Type]
 	if f == Messages {
 		body = fmt.Appendf(nil, `{"type":"error","error":{"type":%q,"message":`, t.messages)
@@ -82,25 +98,24 @@ func RenderError(f Format, e Error, fin *Final) (status int, body []byte) {
 		body = fmt.Appendf(nil, `{"error":{"code":%d,"message":`, t.status)
 		body = append(appendErrorType(append(appendQuoted(body, e.message()), `,"metadata":{`...), e), "}}"...)
 	}
-	if fin != nil {
-		body = append(appendCharged(append(body, `,"axiom":{"usage":`...), f, fin), '}')
+	if charged != nil {
+		body = append(appendCharged(append(body, `,"axiom":{"usage":`...), f, charged), '}')
 	}
 	return t.status, append(body, '}')
 }
 
 // appendCharged appends the reply's usage of fin in format f's fields, with its cost, and the pending flag when the
 // settlement was not written.
-func appendCharged(dst []byte, f Format, fin *Final) []byte {
-	u := reply(fin.Usage)
+func appendCharged(dst []byte, f Format, c *charges) []byte {
 	switch f {
 	case Messages:
-		dst = appendMessagesUsage(dst, u, cost(fin))
+		dst = appendMessagesUsage(dst, c.usage, c.cost)
 	case Responses:
-		dst = appendOpenAIUsage(dst, responsesNames, u, cost(fin))
+		dst = appendOpenAIUsage(dst, responsesNames, c.usage, c.cost)
 	case Chat:
-		dst = appendOpenAIUsage(dst, chatNames, u, cost(fin))
+		dst = appendOpenAIUsage(dst, chatNames, c.usage, c.cost)
 	}
-	if fin.Pending {
+	if c.pending {
 		dst = append(dst, `,"billing_pending":true`...)
 	}
 	return dst
