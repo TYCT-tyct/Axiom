@@ -229,7 +229,9 @@ func TestTheClientsProtocolHeadersGoUpstream(t *testing.T) {
 		"Anthropic-Beta": {"tools-2026"}, "Anthropic-Version": {"2024-01-01"},
 		"Authorization": {"Bearer client-key"}, "Content-Type": {"text/plain"},
 	}
-	resp, f := a.Send(t.Context(), Call{Format: protocol.Messages, Body: []byte("{}"), Header: header})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // egress wants a deadline
+	defer cancel()
+	resp, f := a.Send(ctx, Call{Format: protocol.Messages, Body: []byte("{}"), Header: header})
 	if f != nil {
 		t.Fatalf("%+v", f)
 	}
