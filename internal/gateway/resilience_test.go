@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -31,20 +32,22 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// lockBalance holds the account's balance row locked for d, as an admission or a settlement of the account does while
-// it works, and returns when the lock is held.
-func (r *rig) lockBalance(ctx context.Context, a account, d time.Duration) {
+// lockBalance holds the account's balance row locked, as an admission or a settlement of the account does while it
+// works, and returns when the lock is held. The lock lasts until the returned function is called (the end of the test
+// calls it too), so what a test asserts is the order of events and not how long anything took.
+func (r *rig) lockBalance(ctx context.Context, a account) (unlock func()) {
 	r.t.Helper()
 	ctx = context.WithoutCancel(ctx)
 	scope := pg.NewScope(false, nil, []uuid.UUID{a.id})
-	locked := make(chan struct{})
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(done)
 		err := r.db.Tx(ctx, scope, func(tx pg.Tx) error {
 			if _, err := tx.Exec(ctx, "SELECT 1 FROM billing.balances WHERE account_id = $1 FOR UPDATE", a.id); err != nil {
 				return err
 			}
 			close(locked)
-			time.Sleep(d)
+			<-release
 			return nil
 		})
 		if err != nil {
@@ -52,6 +55,12 @@ func (r *rig) lockBalance(ctx context.Context, a account, d time.Duration) {
 		}
 	}()
 	<-locked
+	unlock = sync.OnceFunc(func() {
+		close(release)
+		<-done
+	})
+	r.t.Cleanup(unlock)
+	return unlock
 }
 
 // TestQueuedAdmissionsHoldNoConnection: with the endpoint full, more requests than the pool has connections for wait
@@ -160,7 +169,7 @@ func (r *rig) failedCommit() admitFunc {
 func (r *rig) slowAfter(admit admitFunc, a account, d time.Duration) admitFunc {
 	return func(ctx context.Context, c accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
 		err := admit(ctx, c, req, fn)
-		r.lockBalance(ctx, a, d)
+		time.AfterFunc(d, r.lockBalance(ctx, a)) // the settlement waits for this long, whatever the machine's pace
 		return err
 	}
 }
@@ -213,20 +222,19 @@ func TestAdmissionGivesUpWhenTheBalanceIsLocked(t *testing.T) {
 		}
 	})
 	a := r.newAccount(1e9)
-	r.lockBalance(t.Context(), a, 8*time.Second)
-	start := time.Now()
+	unlock := r.lockBalance(t.Context(), a)
+	// The lock is held until the answer is in, so an answer can only be the admission giving up at its budget: one that
+	// waited for the lock would wait forever.
 	resp, body := r.message(a, "acme/beta")
-	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "overloaded" || resp.Header.Get("Retry-After") != "1" ||
-		time.Since(start) > 6*time.Second { // it gave up at its budget of half a second, not when the lock was freed
-		t.Errorf("%d %s after %v", resp.StatusCode, body, time.Since(start))
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "overloaded" || resp.Header.Get("Retry-After") != "1" {
+		t.Errorf("%d %s", resp.StatusCode, body)
 	}
 	if r.count(allRows) != 0 || len(r.calls()) != 0 {
 		t.Errorf("%d reservation rows, %d calls", r.count(allRows), len(r.calls()))
 	}
 	r.idle(1 << 30)
-	waitFor(t, "the lock to be released", func() bool {
-		time.Sleep(200 * time.Millisecond)
-		resp, _ := r.message(a, "acme/beta")
-		return resp.StatusCode == http.StatusOK
-	})
+	unlock()
+	if resp, body := r.message(a, "acme/beta"); resp.StatusCode != http.StatusOK {
+		t.Errorf("once the lock was released: %d %s", resp.StatusCode, body)
+	}
 }
