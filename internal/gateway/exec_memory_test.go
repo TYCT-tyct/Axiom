@@ -2,7 +2,10 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -83,6 +86,37 @@ func TestTheRequestIsHeldByItsCapacityWhileItIsSent(t *testing.T) {
 		}
 		if after := left(h.memory); after != h.budget {
 			t.Errorf("%d bytes are left after the call, want %d", after, h.budget)
+		}
+	})
+}
+
+// TestConcurrentRequestsAreHeldToTheBudgetBeforeTheyAreMade: with a budget for three requests' buffers, eight at once
+// get three and are refused five, whatever the order: the room is drawn before the buffer is made, so the refused make
+// none, and the three are held by the capacity they will have.
+func TestConcurrentRequestsAreHeldToTheBudgetBeforeTheyAreMade(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		probe := newHarness(t, ctx, options{})
+		entry := probe.call.Plan.Entries[0]
+		cost := protocol.PrepareCost(&probe.call.Request, len(probe.call.Body), entry.Target, protocol.Rewrites{})
+		h := newHarness(t, ctx, options{memory: 3 * cost})
+		s := &session{x: h.exec, c: h.call}
+		var wg sync.WaitGroup
+		var made, refused atomic.Int64
+		for range 8 {
+			wg.Go(func() {
+				switch _, held, err := s.prepare(entry); {
+				case err == nil && held == cost:
+					made.Add(1)
+				case errors.Is(err, ErrOverloaded):
+					refused.Add(1)
+				default:
+					t.Errorf("held %d of %d, %v", held, cost, err)
+				}
+			})
+		}
+		wg.Wait()
+		if made.Load() != 3 || refused.Load() != 5 || left(h.memory) != 0 {
+			t.Errorf("%d requests made, %d refused, %d bytes left of the budget", made.Load(), refused.Load(), left(h.memory))
 		}
 	})
 }

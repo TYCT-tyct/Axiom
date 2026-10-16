@@ -69,6 +69,14 @@ type Rewrites struct {
 // values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
 const defaultIdentityLen = 128
 
+// withDefaults fills in what a zero Rewrites value leaves to its defaults.
+func (w Rewrites) withDefaults() Rewrites {
+	if w.IdentityLen == 0 {
+		w.IdentityLen = defaultIdentityLen
+	}
+	return w
+}
+
 // errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
 var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
 
@@ -135,6 +143,7 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
+	w = w.withDefaults()
 	p := &rewriter{
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
 	}
@@ -149,9 +158,7 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 
 // rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
 func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
-	if w.IdentityLen == 0 {
-		w.IdentityLen = defaultIdentityLen
-	}
+	w = w.withDefaults()
 	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
 	for _, item := range w.History {
 		size += len(item) + 1
