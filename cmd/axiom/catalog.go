@@ -53,7 +53,7 @@ var catalogOperations = map[string]operation{
 			return catalog.Result{}, err
 		}
 		r.SetActor(actor)
-		fetched, err := f.Fetch(ctx, r.Source)
+		fetched, err := c.Fetch(ctx, f, r.Source)
 		if err != nil {
 			return catalog.Result{}, err
 		}
@@ -188,7 +188,7 @@ func checkCommand(ctx context.Context, c *catalog.Catalog, f *catalog.Fetcher, o
 // is a problem reported on a line, so the other dataset is still checked. OpenRouter's list also gives the models the
 // catalog lacks.
 func checkDataset(ctx context.Context, c *catalog.Catalog, f *catalog.Fetcher, src catalog.PriceSource, report func(any, bool) error) error {
-	fetched, err := f.Fetch(ctx, src)
+	fetched, err := c.Fetch(ctx, f, src)
 	var sync catalog.SyncReport
 	if err == nil {
 		sync, err = c.SyncDataset(ctx, fetched, false)

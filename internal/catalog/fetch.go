@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"axiom/internal/platform/egress"
+	"axiom/internal/platform/pg"
 )
 
 // The limits README.md「参考价的录入」sets for a fetch; the datasets are a few MB.
@@ -28,15 +29,14 @@ type Fetcher struct {
 	client   *egress.Client
 	urls     map[PriceSource]string
 	maxBytes int64
-	now      func() time.Time
 }
 
 // NewFetcher fetches the datasets over client.
 func NewFetcher(client *egress.Client) *Fetcher {
-	return &Fetcher{client: client, urls: datasetURLs, maxBytes: maxDatasetBytes, now: time.Now}
+	return &Fetcher{client: client, urls: datasetURLs, maxBytes: maxDatasetBytes}
 }
 
-// Fetch downloads one dataset.
+// Fetch downloads one dataset. It leaves Fetched.At zero: the catalog sets it from the database's clock (Catalog.Fetch).
 func (f *Fetcher) Fetch(ctx context.Context, src PriceSource) (Fetched, error) {
 	url, ok := f.urls[src]
 	if !ok {
@@ -48,7 +48,6 @@ func (f *Fetcher) Fetch(ctx context.Context, src PriceSource) (Fetched, error) {
 	if err != nil {
 		return Fetched{}, err
 	}
-	at := f.now()
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return Fetched{}, fmt.Errorf("fetch %s: %w", src, err)
@@ -60,7 +59,23 @@ func (f *Fetcher) Fetch(ctx context.Context, src PriceSource) (Fetched, error) {
 	if err := errors.Join(err, resp.Body.Close()); err != nil {
 		return Fetched{}, fmt.Errorf("fetch %s: %w", src, err)
 	}
-	return Fetched{Source: src, Body: body, At: at}, nil
+	return Fetched{Source: src, Body: body}, nil
+}
+
+// Fetch downloads a dataset and stamps it with the database's clock as read just before the download. A published price
+// carries the database's clock too, so a round and the prices it competes with are ordered by one clock, whatever the
+// nodes' clocks say.
+func (c *Catalog) Fetch(ctx context.Context, f *Fetcher, src PriceSource) (Fetched, error) {
+	var at time.Time
+	err := c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) error {
+		return tx.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&at)
+	})
+	if err != nil {
+		return Fetched{}, fmt.Errorf("fetch %s: read the database's clock: %w", src, err)
+	}
+	fetched, err := f.Fetch(ctx, src)
+	fetched.At = at
+	return fetched, err
 }
 
 // datasetSources are the datasets a round reads, in the order it reads them.
@@ -72,7 +87,7 @@ func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]Sync
 	var reports []SyncReport
 	var errs []error
 	for _, src := range datasetSources {
-		fetched, err := f.Fetch(ctx, src)
+		fetched, err := c.Fetch(ctx, f, src)
 		if err == nil {
 			var report SyncReport
 			report, err = c.SyncDataset(ctx, fetched, publish)

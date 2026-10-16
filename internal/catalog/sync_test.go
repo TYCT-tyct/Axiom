@@ -2,12 +2,16 @@ package catalog_test
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 )
 
 // follow is a listed model that takes its prices from a dataset: the author, the model with the given names (the first
@@ -193,6 +197,39 @@ func TestSyncHoldKeepsTheCandidate(t *testing.T) {
 		Op: op(), Model: id, Base: r.Base, Source: catalog.SourceLiteLLM, Schedule: raw(xCurrent), Evidence: raw(evidence),
 	}))
 	wantErr(t, publish(), "not the one the request was decided on")
+}
+
+// TestSyncOrdersRoundsByTheDatabaseClock: the node's clock runs 30 seconds fast, which must not make a dataset fetched
+// before a price was published look newer than it.
+func TestSyncOrdersRoundsByTheDatabaseClock(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	s.c.SetClock(func() time.Time { return time.Now().Add(30 * time.Second) })
+	id := s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, xSpec, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write(litellm(`"gpt-x-2025-01-01"=` + xPrices("1.1e-06", "2.2e-06", "1.1e-07")).Body); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	f := catalog.NewTestFetcher(egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{catalog.SourceLiteLLM: srv.URL})
+	fetched, err := s.c.Fetch(t.Context(), f, catalog.SourceLiteLLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// another round publishes after this one fetched
+	s.must(s.c.PublishPrice(t.Context(), catalog.PublishPriceRequest{
+		Op: op(), Model: id, Base: new(s.head(id, "USD")), Source: catalog.SourceLiteLLM,
+		Schedule: raw(`{"v":1,"currency":"USD","rates":{"cache_read":"0.0000001","input":"0.0000012","output":"0.000002"}}`), Evidence: raw(evidence),
+	}))
+	before := s.usd(id)
+	report, err := s.c.SyncDataset(t.Context(), fetched, true)
+	if err != nil || report.Results[0].Outcome != catalog.OutcomeHeld || !strings.Contains(report.Results[0].Reason, "published after") {
+		t.Fatalf("round: %+v, %v", report, err)
+	}
+	if s.usd(id) != before {
+		t.Error("an older round replaced a newer price")
+	}
 }
 
 // TestSyncHoldsADatasetOlderThanThePrice: a round that fetched before the current price was published cannot put its older

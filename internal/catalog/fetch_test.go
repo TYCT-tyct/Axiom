@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
@@ -26,17 +25,14 @@ func fetcherFor(t *testing.T, h http.HandlerFunc) *Fetcher {
 	t.Cleanup(srv.Close)
 	f := NewFetcher(egress.NewForTesting(egresstest.Loopback(t)))
 	f.urls = map[PriceSource]string{SourceLiteLLM: srv.URL + "/models.json"}
-	f.now = func() time.Time { return fetchedAt }
 	return f
 }
-
-var fetchedAt = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 func TestFetch(t *testing.T) {
 	t.Parallel()
 	f := fetcherFor(t, func(w http.ResponseWriter, _ *http.Request) { reply(t, w, `{"a":1}`) })
 	got, err := f.Fetch(t.Context(), SourceLiteLLM)
-	if err != nil || string(got.Body) != `{"a":1}` || got.Source != SourceLiteLLM || !got.At.Equal(fetchedAt) {
+	if err != nil || string(got.Body) != `{"a":1}` || got.Source != SourceLiteLLM || !got.At.IsZero() {
 		t.Fatalf("Fetch = %+v, %v", got, err)
 	}
 	if _, err := f.Fetch(t.Context(), SourceOfficial); err == nil {
