@@ -118,9 +118,13 @@ const desktopWidth = 1024;
 
 // focusPage moves focus to the page after a navigation, so a screen reader announces the new page instead of staying
 // on the link or the menu button; the first load leaves focus where the browser puts it. Pass it to the router's
-// onResolved event.
+// onResolved event. A drawer still open makes the page inert, where focus() does nothing, and closing it later hands
+// focus back to the menu button: so it is closed first, whichever of the two events came first.
 export function focusPage({ fromLocation, pathChanged }: { fromLocation?: unknown; pathChanged: boolean }) {
   if (fromLocation && pathChanged) {
+    for (const dialog of document.querySelectorAll("dialog[open]")) {
+      (dialog as HTMLDialogElement).close();
+    }
     document.getElementById("main")?.focus();
   }
 }
