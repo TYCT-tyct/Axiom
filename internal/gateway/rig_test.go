@@ -127,7 +127,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedRouting(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
-	}); err != nil {
+	}, noSuppliers{}); err != nil {
 		t.Fatal(err)
 	}
 	r.memory = protocol.NewMemory(o.memory)
@@ -350,4 +350,21 @@ func (r *rig) newKey(a account) (string, accounts.KeyID) {
 		r.t.Fatal(err)
 	}
 	return created.Text.Reveal(), created.ID
+}
+
+// noSuppliers stands in for suppliers' side of settlement, which admission never reaches: the rig's Run only releases
+// the reservation.
+type noSuppliers struct{}
+
+func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
+	return nil
+}
+
+func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
+	return billing.JournalAttempt{}, false, nil
+}
+func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error  { return nil }
+func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
+func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
+	return nil
 }

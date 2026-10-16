@@ -47,7 +47,7 @@ func scan(router *routing.Router, f protocol.Format, body []byte) error {
 		return err
 	}
 	router.SessionKey(routing.AccountID{1}, &req, body)
-	_, err = protocol.Prepare(f, body, protocol.Target{Model: "up"}, protocol.Rewrites{Identity: func(s string) string { return "h" + s }})
+	_, err = protocol.Prepare(&req, body, protocol.Target{Format: f, Model: "up"}, protocol.Rewrites{Identity: func(s string) string { return "h" + s }})
 	return err
 }
 
@@ -67,11 +67,15 @@ type scanPart struct {
 }
 
 func scanParts(router *routing.Router, f protocol.Format, body []byte) []scanPart {
+	req, err := protocol.Inspect(f, body) // Prepare alone is measured on a summary read outside it
+	if err != nil {
+		panic(err)
+	}
 	return []scanPart{
 		{"all", func() error { return scan(router, f, body) }},
 		{"inspect", func() error { _, err := protocol.Inspect(f, body); return err }},
 		{"prepare", func() error {
-			_, err := protocol.Prepare(f, body, protocol.Target{Model: "up"}, protocol.Rewrites{Identity: func(s string) string { return s }})
+			_, err := protocol.Prepare(&req, body, protocol.Target{Format: f, Model: "up"}, protocol.Rewrites{Identity: func(s string) string { return s }})
 			return err
 		}},
 	}

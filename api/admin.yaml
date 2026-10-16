@@ -1,0 +1,2370 @@
+# The admin API: what the admin app calls on the admin listener, which only the admin domains and restricted sources
+# reach (docs/architecture.md「技术选型」前端交付). Code on both sides is generated from this file; change the
+# contract here first. The conventions it follows, and the reasons, are in internal/platform/README.md「接口约定」;
+# `just api` checks them. The operations of the Session tag are the console's, under this surface's path: a session
+# is valid on the surface that issued it, so each surface has its own sign-in.
+openapi: 3.0.3
+info:
+  title: Axiom admin API
+  version: v1
+  description: >-
+    The API of the admin app, under `/api/admin/v1` on the admin listener. Every operation outside the Session tag
+    acts on the platform, so it needs a session that passed two-step verification (`x-axiom-level: mfa`) and the
+    permission named by `x-axiom-permission` among the user's platform grants.
+
+
+    Every operation that changes data needs the `Origin` of the admin domain, `Content-Type: application/json` and the
+    session's `X-CSRF-Token`. Operations outside the Session tag that change data also take an `Idempotency-Key` (a
+    UUID chosen by the caller for one intended change; sending it again returns the first result with the header
+    `Idempotency-Replayed: true`, and using it for another kind of change is `idempotency_key_reused`) and a
+    `reason` of 1 to 1000 characters, which goes to the audit log. A `rev` in a request is the revision the caller
+    read; a changed resource is refused with `stale_revision` instead of overwritten. A POST marked
+    `x-axiom-safe: true` changes nothing and takes neither. Every response carries `X-Request-ID` and
+    `Cache-Control: no-store`.
+tags:
+  - {name: Session, description: "Sign-in, two-step verification and the current session."}
+  - {name: Site, description: "Site settings."}
+  - {name: Users, description: "Users, accounts and manual credit."}
+  - {name: Suppliers, description: "Suppliers, their groups and keys, and the upstream model names waiting to be mapped."}
+  - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
+  - {name: Pricing, description: "Pricing rules and their preview."}
+paths:
+  /api/admin/v1/version:
+    get:
+      operationId: getVersion
+      tags: [Session]
+      summary: The version of the running program
+      description: >-
+        The console compares it with the version it was built as and offers a reload when they differ, so a page
+        left open across a deployment does not keep calling an API it no longer matches.
+      security: []
+      responses:
+        "200":
+          description: The running version
+          headers:
+            Cache-Control:
+              schema: {type: string, enum: [no-store]}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Version"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/sign-in:
+    post:
+      operationId: signIn
+      tags: [Session]
+      summary: Sign in with email and password
+      description: >-
+        Sets the session cookie. A user with two-step verification gets a pending session (`mfa_required`) that only
+        `verifyMfa` accepts. An unknown email costs a password hash too, so the answer does not tell whether the
+        email exists. Needs the `Origin` of the surface, but no session.
+
+
+        Limits: a token bucket per client IP shared by sign-in, registration and two-step verification (burst 20, 10 a
+        minute), and failed sign-ins per email (10 in 15 minutes, then a wait; the account is never locked). A limit
+        is a 429 with `Retry-After`. The values are site settings with defaults in code.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SignInRequest"}
+      responses:
+        "200":
+          description: Signed in, or waiting for the second factor.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/mfa:
+    post:
+      operationId: verifyMfa
+      tags: [Session]
+      summary: Pass two-step verification
+      description: >-
+        Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and
+        issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending
+        session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same
+        challenge give one session.
+
+
+        Limits: the per-IP bucket of `signIn`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MfaRequest"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/sign-out:
+    post:
+      operationId: signOut
+      tags: [Session]
+      summary: End the session
+      description: Revokes the session of the cookie, whatever its level, and expires the cookie.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: any
+      x-axiom-permission: none
+      responses:
+        "204":
+          description: Signed out.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/session:
+    get:
+      operationId: getSession
+      tags: [Session]
+      summary: The current session
+      description: >-
+        Who is signed in and what the session may do. A page calls it on load to learn whether to show the sign-in
+        page, and to get the CSRF token again (the cookie is HttpOnly, so the page keeps the token only in memory).
+      security:
+        - session: []
+      x-axiom-level: any
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/totp/setup:
+    post:
+      operationId: beginTotpSetup
+      tags: [Session]
+      summary: Start enabling two-step verification
+      description: >-
+        Makes a new TOTP secret and the URI for its QR code. Nothing is stored, so calling it again just makes another
+        secret; `confirmTotpSetup` stores the one the user proved.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: A new secret
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TotpSetup"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/totp/confirm:
+    post:
+      operationId: confirmTotpSetup
+      tags: [Session]
+      summary: Finish enabling two-step verification
+      description: >-
+        Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes
+        (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Enabling
+        twice replaces the old secret.
+
+
+        Limits: failed codes count against the user's 10 an hour.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TotpConfirmRequest"}
+      responses:
+        "200":
+          description: Enabled.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/auth/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      tags: [Session]
+      summary: Make new recovery codes
+      description: >-
+        Needs a current TOTP code from a session that passed two-step verification. The old codes stop working, and
+        the user's other sessions end.
+
+
+        Limits: failed codes count against the user's 10 an hour.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RecoveryCodesRequest"}
+      responses:
+        "200":
+          description: The new codes.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/settings:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteSettings
+      tags: [Site]
+      summary: A site's session and key settings
+      description: >-
+        The values the site sets itself, and the defaults in code that apply where it sets none, so a page can show
+        what is in force.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSettingsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteSettings
+      tags: [Site]
+      summary: Set a site's session and key settings
+      description: >-
+        Replaces the site's own values: a setting left out falls back to the default in code. Each value has the
+        bounds `SiteSettings` states, and a request outside them is a 400. Shorter sessions take effect on the next
+        request of every session; the change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SiteSettingsUpdate"}
+      responses:
+        "200":
+          description: The settings as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/tiers:
+    get:
+      operationId: listTiers
+      tags: [Users]
+      summary: The tiers of a site
+      description: Every tier of the site, for choosing one in a pricing rule or reading an account's. Few enough not to be paged.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.view
+      parameters:
+        - {name: site_id, in: query, required: false, description: "Defaults to the main site.", schema: {$ref: "#/components/schemas/SiteId"}}
+      responses:
+        "200":
+          description: The tiers
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TierList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      summary: Users
+      description: >-
+        Users newest first, of one site or all. `email_prefix` matches the start of the lower-cased email, so it uses
+        an index.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.view
+      parameters:
+        - {name: site_id, in: query, required: false, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: email_prefix, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 254}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of users
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UserList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}:
+    get:
+      operationId: getAccount
+      tags: [Users]
+      summary: One account with its balance
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.view
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountDetail"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/credit-grants:
+    post:
+      operationId: grantCredit
+      tags: [Users]
+      summary: Give an account credit
+      description: >-
+        Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense
+        and audited with the reason. The amount is positive and within the limit for one grant (the money limits of
+        the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what
+        is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid
+        for offline comes with the payments design.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreditGrantRequest"}
+      responses:
+        "201":
+          description: Granted.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreditGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers:
+    get:
+      operationId: listSuppliers
+      tags: [Suppliers]
+      summary: Suppliers
+      description: Newest first. The status filter is exact.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - {name: status, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierStatus"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of suppliers
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createSupplier
+      tags: [Suppliers]
+      summary: Connect a supplier
+      description: >-
+        Connects the supplier at `origin` as `upstream_account`, with the login `detectSupplier` said its kind needs
+        (stored sealed, never returned). It answers at once with the supplier in `connecting`; the first sync logs in,
+        reads the groups, keys and models, and moves it to `active`, or to `needs_attention` with the reason, so the
+        page polls `getSupplier`. The origin and the account cannot change later, so a changed address cannot carry old
+        credentials to a new host; an origin and account already connected is a 409. The address is checked by the
+        outbound client like every supplier request, and one it refuses is a 422.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierCreate"}
+            examples:
+              paid_in_cny:
+                summary: A new-api supplier paid in yuan, logged in with a personal access token
+                value:
+                  name: Example CN
+                  kind: newapi
+                  origin: https://api.example.cn
+                  upstream_account: ops@example.com
+                  settlement_currency: CNY
+                  login: {access_token: pat-example, access_token_expires_at: "2027-01-01T00:00:00Z"}
+                  reason: Second source for the hosted models
+              paid_in_usd:
+                summary: A sub2api supplier paid in dollars, logged in with tokens taken after a manual sign-in
+                value:
+                  name: Example US
+                  kind: sub2api
+                  origin: https://api.example.com
+                  upstream_account: ops@example.com
+                  settlement_currency: USD
+                  login: {access_token: at-example, refresh_token: rt-example, access_token_expires_at: "2026-10-16T08:00:00Z"}
+                  reason: Second source for the hosted models
+      responses:
+        "201":
+          description: Connecting.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/detections:
+    post:
+      operationId: detectSupplier
+      tags: [Suppliers]
+      summary: Find out what system a site runs
+      description: >-
+        Probes the address through the outbound client, which refuses private and internal addresses, and says which
+        adapter kind fits and what login it needs. It stores nothing. A site no adapter recognises answers 200 with no
+        `kind`.
+
+
+        Limits: 10 a minute per session, because each probe is a request to a third party.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      x-axiom-safe: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DetectionRequest"}
+      responses:
+        "200":
+          description: What the probe found.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Detection"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}:
+    parameters:
+      - name: supplier_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/Uuid"}
+    get:
+      operationId: getSupplier
+      tags: [Suppliers]
+      summary: One supplier with its groups and keys
+      description: >-
+        The supplier, its groups with their ratios, the keys bound to groups, and the keys the supplier lists that are
+        bound to none. Read from what the sync last stored, not from the supplier, so it is cheap.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      responses:
+        "200":
+          description: The supplier
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierDetail"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/status:
+    put:
+      operationId: setSupplierStatus
+      tags: [Suppliers]
+      summary: Pause or resume a supplier
+      description: >-
+        `paused` takes the supplier out of routing and stops its sync without touching its credentials; `active`
+        resumes it. A supplier that is `connecting`, `needs_attention`, `removing` or `removed` is not moved by hand:
+        409.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierStatusUpdate"}
+      responses:
+        "200":
+          description: The supplier as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/removal:
+    post:
+      operationId: removeSupplier
+      tags: [Suppliers]
+      summary: Start removing a supplier
+      description: >-
+        Takes the supplier out of the snapshot, waits for its calls in flight, reads its charge records to the end and
+        deletes its credentials, in steps that can be repeated (docs: internal/suppliers README「同步」). It answers
+        at once with the supplier in `removing`; it ends `removed`. Axiom does not write to the supplier in M1, so the
+        keys it made there are listed for a person to revoke. Sending it again while removing returns the supplier
+        as it is.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "202":
+          description: Removing.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/login:
+    put:
+      operationId: replaceSupplierLogin
+      tags: [Suppliers]
+      summary: Replace the login Axiom uses at a supplier
+      description: >-
+        Seals the new login in place of the old one and has the sync log in with it. Used when the supplier rejected
+        the old one (`needs_attention`) or the person rotates it. The address and the account are not changed. Changing
+        a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the actor and the
+        reason, not the login.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierLoginUpdate"}
+      responses:
+        "200":
+          description: The supplier, `connecting` again.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/unit-value:
+    put:
+      operationId: confirmSupplierUnitValue
+      tags: [Suppliers]
+      summary: Confirm what one unit of a supplier's balance is worth
+      description: >-
+        The person's answer to "1 unit of balance = how much money" (docs/domains/billing.md「供应商成本」), which
+        turns the supplier's costs into money. The adapter's hint is in `Supplier.unit_value_hint`. A later value
+        applies from now; calls already costed keep theirs. Endpoints of the supplier stay out of routing until a
+        value is confirmed.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UnitValueUpdate"}
+      responses:
+        "200":
+          description: The supplier as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}:
+    put:
+      operationId: selectSupplierGroup
+      tags: [Suppliers]
+      summary: Choose whether a supplier's group is used
+      description: >-
+        A selected group gets its code name (the name users see in place of the group's, made when it is first
+        selected and never changed) and its models become endpoints. Unselecting takes the group out of routing and
+        keeps the code name.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: group_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GroupSelection"}
+      responses:
+        "200":
+          description: The group as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierGroup"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials:
+    post:
+      operationId: bindSupplierKey
+      tags: [Suppliers]
+      summary: Use one of the supplier's keys for a group
+      description: >-
+        Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the
+        supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync
+        has read the key's text from the supplier and sealed it. A key is bound once, and the group must be
+        selected.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BindKey"}
+      responses:
+        "201":
+          description: Binding.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pending-mappings:
+    get:
+      operationId: listPendingMappings
+      tags: [Suppliers]
+      summary: Upstream model names that map to no model
+      description: >-
+        The names suppliers list that the catalog could not recognise and no alias covers. They get no endpoint and
+        take no traffic until someone maps them. Oldest first, so the queue is worked in order.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - {name: supplier_id, in: query, required: false, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of names
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PendingMappingList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/model-mappings:
+    post:
+      operationId: mapSupplierModel
+      tags: [Suppliers]
+      summary: Map an upstream model name to a model
+      description: >-
+        Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The
+        endpoint it creates waits for the authenticity check before it takes traffic. An alias is never changed; a
+        wrong one is corrected by a new alias in the narrower scope. A name that already has an alias in that scope
+        is a 409.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelMappingRequest"}
+      responses:
+        "201":
+          description: Mapped.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ModelMapping"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/authors:
+    get:
+      operationId: listAuthors
+      tags: [Catalog]
+      summary: Model authors
+      description: Every author, by slug. Few enough not to be paged.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.view
+      responses:
+        "200":
+          description: The authors
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AuthorList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/authors/{slug}:
+    put:
+      operationId: saveAuthor
+      tags: [Catalog]
+      summary: Make an author or rename it
+      description: Makes the author if the slug is new, else changes its display name. A slug never changes.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AuthorSlug"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AuthorSave"}
+      responses:
+        "200":
+          description: The author as saved
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Author"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models:
+    get:
+      operationId: listModels
+      tags: [Catalog]
+      summary: Models
+      description: >-
+        Models by slug, drafts included (the queue to review is `status=draft`). `slug_prefix` matches the start of
+        the slug.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.view
+      parameters:
+        - {name: status, in: query, required: false, schema: {$ref: "#/components/schemas/ModelStatus"}}
+        - {name: author, in: query, required: false, schema: {$ref: "#/components/schemas/AuthorSlug"}}
+        - {name: slug_prefix, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 200}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of models
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createModel
+      tags: [Catalog]
+      summary: Draft a model
+      description: >-
+        Makes a draft model, visible to the platform only until it is put on sale. The author is the first part of
+        the slug and must exist. The slug is `<author>/<model>`, with `@<version>` when the vendor gives one.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelCreate"}
+      responses:
+        "201":
+          description: Drafted.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}:
+    get:
+      operationId: getModel
+      tags: [Catalog]
+      summary: One model with its names and prices
+      description: >-
+        The model, its names, and its current reference price in each currency that has had one. `rev` is what the
+        operations that change the model take back.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.view
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+      responses:
+        "200":
+          description: The model
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/spec:
+    put:
+      operationId: updateModelSpec
+      tags: [Catalog]
+      summary: Replace a model's baseline spec
+      description: >-
+        Replaces the spec as of `rev`; the old one stays in the change history. A retired model cannot change. A model
+        on sale must still declare `items` and `tiers`, and every current reference price must still price all of
+        them, else 422 `not_ready`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SpecUpdate"}
+      responses:
+        "200":
+          description: The model as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/names:
+    post:
+      operationId: addModelName
+      tags: [Catalog]
+      summary: Give a model another name
+      description: >-
+        Adds a name written as the vendor writes it. Names are never changed or removed, and compared normalised they
+        are unique across all models, so a name never starts to mean another model (`name_taken`). Only a public name
+        can be called by users, and the model's standard ID must be one of them before it goes on sale. A retired
+        model takes no new names.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NameAdd"}
+      responses:
+        "200":
+          description: The model with the name added
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/status:
+    put:
+      operationId: setModelStatus
+      tags: [Catalog]
+      summary: Put a model on sale or retire it
+      description: >-
+        `listed` puts a draft model on sale, after the review gate: it declares what an upstream may report, its
+        standard ID is a public name, it has a reference price, and every current reference price covers everything
+        it declares; a model that fails is 422 `not_ready` with what is missing. `retired` takes a listed model out of
+        use for good: its names answer "retired" from then on and are never reused. Any other change of status is a
+        409. Both are as of `rev`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelStatusUpdate"}
+      responses:
+        "200":
+          description: The model as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/prices:
+    post:
+      operationId: publishReferencePrice
+      tags: [Catalog]
+      summary: Publish a reference price in a currency
+      description: >-
+        Adds a version to the currency's history, which is never rewritten: a correction is another version. `base` is
+        the row that was current in that currency when the person decided (absent if the currency has no history);
+        another current row is a 409 `stale_revision`. `source` must be the model's price source, and `evidence` a
+        non-empty object. A schedule that loses a price the current one has is refused (422), and one whose tier
+        basis differs from the current one's needs `confirm_basis_change`. On a model on sale the schedule must price
+        everything the model declares.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricePublish"}
+      responses:
+        "200":
+          description: The model with the price published
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/price-source:
+    put:
+      operationId: selectPriceSource
+      tags: [Catalog]
+      summary: Choose where a model's reference price comes from
+      description: >-
+        Switches the model to another price source and, in one step, publishes the new source's price in each of its
+        currencies and withdraws the currencies it has none in, so every current price comes from the new source.
+        `bases` lists the current row of every currency that has history, as the person saw them; any difference is a
+        409 `stale_revision`. In M1 the source is `official` or `manual`, and `prices` carries the schedules with their
+        evidence. A switch that would lose a price the model has is refused.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PriceSourceSelect"}
+      responses:
+        "200":
+          description: The model as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/rules:
+    get:
+      operationId: listPricingRules
+      tags: [Pricing]
+      summary: The platform's pricing rules
+      description: >-
+        Every rule, enabled or not, most specific target first, then most specific audience (the order in which rules
+        are tried, docs/domains/billing.md「定价」). Few enough not to be paged. In M1 these are the main site's rules.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      responses:
+        "200":
+          description: The rules
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricingRuleList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createPricingRule
+      tags: [Pricing]
+      summary: Add a pricing rule
+      description: >-
+        A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints).
+        Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow
+        the rules automatically; the break-even floor always applies and raises a price a rule would set below it.
+        What a rule would do is shown by `previewPricing` first.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricingRuleCreate"}
+      responses:
+        "201":
+          description: Added.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricingRule"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/rules/{rule_id}:
+    put:
+      operationId: updatePricingRule
+      tags: [Pricing]
+      summary: Change a pricing rule
+      description: >-
+        Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted,
+        so the history stays: disable it. Changes of price follow the rules' own limits on the size of a change
+        (docs/domains/operations.md「风险分级与审批」).
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricingRuleUpdate"}
+      responses:
+        "200":
+          description: The rule as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricingRule"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/previews:
+    post:
+      operationId: previewPricing
+      tags: [Pricing]
+      summary: Preview prices and margins
+      description: >-
+        What each of up to 100 models would sell for, one row per model and endpoint since endpoints differ in cost,
+        to one account (with its tier and the rules for it alone) or to a user of one tier, with the stored rules, or
+        with `rule` added (or replacing `replaces_rule_id`) when given, and the margin over each endpoint's cost.
+        Nothing is stored. There is no per-model summary: a model's lowest margin is the least of its rows.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      x-axiom-safe: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricingPreviewRequest"}
+      responses:
+        "200":
+          description: The preview
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricingPreview"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-axiom_session
+      description: >-
+        The session cookie (HttpOnly, Secure, SameSite=Lax). Its name loses the `__Host-` prefix only where the site's
+        registered origin is `http://localhost`. The sign-in operations set it, and it is valid only on the surface
+        that issued it.
+    csrf:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: >-
+        The session's CSRF token, which sign-in, two-step verification and `getSession` return. Every request that
+        changes data and carries a session sends it; the request must also carry an `Origin` equal to the origin
+        registered for the site and surface, and `Content-Type: application/json`. The API sends no CORS headers.
+  headers:
+    SetCookie:
+      required: true
+      description: The new session cookie, or an expired one that ends the session.
+      schema: {type: string}
+    IdempotencyReplayed:
+      required: false
+      description: "true when this response is the stored result of an earlier request with the same Idempotency-Key; nothing was done again."
+      schema: {type: boolean}
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for
+        the same filters, and a malformed one is a 400.
+      schema: {type: string, minLength: 1, maxLength: 512}
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: How many items a page holds at most.
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost
+        response, returns the first result instead of doing it twice.
+      schema: {type: string, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
+  responses:
+    BadRequest:
+      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unauthenticated:
+      description: >-
+        No valid session for this surface, or the credentials of a sign-in are wrong, alike for an unknown email, a
+        wrong password and a disabled user (`unauthenticated`, `invalid_credentials`, `invalid_code`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: >-
+        The session may not do this: the permission is missing, the session has not passed two-step verification
+        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: >-
+        There is no such resource, or the session's scope cannot see it. A malformed ID and an unknown one answer
+        alike (`not_found`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: >-
+        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`,
+        `idempotency_key_reused`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unprocessable:
+      description: >-
+        The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
+        `unprocessable`); `message` says which.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooManyRequests:
+      description: A limit on this operation is used up (`rate_limited`); wait `Retry-After` seconds.
+      headers:
+        Retry-After:
+          required: true
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Failure:
+      description: >-
+        Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable`
+        (503). A 500 never carries the internal error's text.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      description: >-
+        The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+      properties:
+        error: {$ref: "#/components/schemas/ErrorDetail"}
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      description: >-
+        `code` is what a client branches on and translates; `message` is English text for logs and developers.
+      properties:
+        code: {$ref: "#/components/schemas/ErrorCode"}
+        message: {type: string}
+        fields:
+          type: array
+          description: Which parts of the request broke a constraint, for `invalid_request`.
+          items: {$ref: "#/components/schemas/ErrorField"}
+    ErrorField:
+      type: object
+      required: [pointer, message]
+      properties:
+        pointer: {type: string, description: "JSON pointer into the request body, or the name of a query or path parameter."}
+        message: {type: string}
+    ErrorCode:
+      type: string
+      description: >-
+        The closed list of failure codes. A code is added in a contract change, so a client that translates every code
+        fails to compile until it knows the new one.
+      enum:
+        - invalid_request
+        - unauthenticated
+        - invalid_credentials
+        - invalid_code
+        - forbidden
+        - mfa_required
+        - origin_rejected
+        - not_found
+        - conflict
+        - email_taken
+        - name_taken
+        - stale_revision
+        - idempotency_key_reused
+        - invalid_invite
+        - weak_password
+        - not_ready
+        - unprocessable
+        - rate_limited
+        - internal
+        - not_implemented
+        - unavailable
+    Money:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
+        one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
+        above 2^53 (about 9 million units) in the browser.
+      properties:
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
+    Version:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+          description: >-
+            The program's version line exactly as `axiom version` prints it: the main module's version, which the Go
+            toolchain stamps from version control (such as a pseudo-version with the commit time and hash, +dirty for
+            uncommitted changes). The console is stamped with the same line and only compares the two whole for
+            equality.
+          example: axiom v0.0.0-20261014044725-4daa4538fcac
+    UserId: {type: string, pattern: '^user_[0-9a-hjkmnp-tv-z]{26}$', description: "A user's ID (TypeID)."}
+    AccountId: {type: string, pattern: '^acct_[0-9a-hjkmnp-tv-z]{26}$', description: "An account's ID (TypeID)."}
+    SignInRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, minLength: 3, maxLength: 254}
+        password: {type: string, minLength: 1, maxLength: 256}
+    SessionGrant:
+      type: object
+      required: [status, csrf_token]
+      properties:
+        status:
+          type: string
+          enum: [signed_in, mfa_required]
+          description: >-
+            `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending
+            session that only `verifyMfa` accepts, for 5 minutes.
+        csrf_token: {type: string, description: "Sent as X-CSRF-Token on the requests that change data."}
+    MfaRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          minLength: 6
+          maxLength: 19
+          description: >-
+            A TOTP code (6 digits) or a recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server
+            tells them apart by shape.
+    SessionLevel:
+      type: string
+      enum: [pending_mfa, password, mfa]
+      description: >-
+        What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a
+        sign-in that waits for its second factor.
+    Session:
+      type: object
+      required: [user, account, level, mfa_enabled, csrf_token, expires_at, permissions]
+      properties:
+        user:
+          type: object
+          required: [id, email, invite_code]
+          properties:
+            id: {$ref: "#/components/schemas/UserId"}
+            email: {type: string}
+            invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
+        account: {$ref: "#/components/schemas/AccountId"}
+        level: {$ref: "#/components/schemas/SessionLevel"}
+        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
+        csrf_token: {type: string}
+        expires_at: {type: string, format: date-time, description: "When the session ends if it is not used again; the idle timeout moves it."}
+        permissions:
+          type: array
+          description: >-
+            The permission names the session holds on its own scope (the user's account on the console, the platform
+            on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
+          items: {type: string}
+    TotpSetup:
+      type: object
+      required: [secret, uri]
+      properties:
+        secret: {type: string, description: "The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back."}
+        uri: {type: string, description: "The otpauth:// URI for a QR code."}
+    TotpConfirmRequest:
+      type: object
+      required: [secret, password, code]
+      properties:
+        secret: {type: string, maxLength: 128}
+        password: {type: string, maxLength: 256, description: "The user's password, asked again."}
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
+    RecoveryCodesRequest:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A current TOTP code."}
+    FactorChange:
+      type: object
+      required: [csrf_token, recovery_codes]
+      description: >-
+        A changed factor ends every other session of the user and every unused recovery code, and issues this device a
+        new `mfa` session: the cookie of the response replaces the old one.
+      properties:
+        csrf_token: {type: string}
+        recovery_codes:
+          type: array
+          description: "10 one-time codes, each written xxxx-xxxx-xxxx-xxxx. They are shown only here."
+          items: {type: string}
+    Balance:
+      type: object
+      required: [balance, reserved, floor, available, spent_this_month]
+      description: >-
+        An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted
+        while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls
+        settled for the current UTC calendar month.
+      properties:
+        balance: {$ref: "#/components/schemas/Money"}
+        reserved: {$ref: "#/components/schemas/Money"}
+        floor: {$ref: "#/components/schemas/Money"}
+        available: {$ref: "#/components/schemas/Money"}
+        spent_this_month: {$ref: "#/components/schemas/Money"}
+    Uuid:
+      type: string
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      description: An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+    SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
+    TierId: {type: string, pattern: '^tier_[0-9a-hjkmnp-tv-z]{26}$', description: "A tier's ID (TypeID)."}
+    Decimal:
+      type: string
+      pattern: '^-?(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$'
+      description: An exact decimal number in text, never a JSON number, so no digit is lost on the way.
+    UnitPrice:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,2})(\.[0-9]{1,15})?$|^1000$'
+      description: >-
+        A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at
+        most 15 decimals and at most 1000 per unit.
+    Reason:
+      type: string
+      minLength: 1
+      maxLength: 1000
+      description: Why the person is doing this. It goes to the audit log.
+    ReasonRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: {$ref: "#/components/schemas/Reason"}
+    TierRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: {$ref: "#/components/schemas/TierId"}
+        name: {type: string}
+    TierList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/TierRef"}
+    SiteSettings:
+      type: object
+      description: >-
+        A site's own values for the sessions and keys its users get. A value that is absent is the default in code.
+        Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days;
+        the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to
+        1,000,000 units.
+      properties:
+        console_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 2592000}
+        console_max_age_seconds: {type: integer, minimum: 300, maximum: 7776000}
+        admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
+        admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
+        new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+    SiteSettingsView:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings: {$ref: "#/components/schemas/SiteSettings"}
+        defaults:
+          description: What applies where `settings` has no value.
+          allOf: [{$ref: "#/components/schemas/SiteSettings"}]
+    SiteSettingsUpdate:
+      type: object
+      required: [settings, reason]
+      properties:
+        settings: {$ref: "#/components/schemas/SiteSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    UserSummary:
+      type: object
+      required: [id, account_id, site_id, email, status, tier, mfa_enabled, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/UserId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        email: {type: string}
+        status: {type: string, enum: [active, disabled]}
+        tier: {$ref: "#/components/schemas/TierRef"}
+        mfa_enabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+    UserList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/UserSummary"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    AccountDetail:
+      type: object
+      required: [id, site_id, name, kind, status, tier, owner, balance, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/AccountId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        name: {type: string}
+        kind: {type: string, enum: [personal, organization]}
+        status: {type: string, enum: [active, disabled]}
+        tier: {$ref: "#/components/schemas/TierRef"}
+        owner:
+          type: object
+          required: [id, email]
+          properties:
+            id: {$ref: "#/components/schemas/UserId"}
+            email: {type: string}
+        balance: {$ref: "#/components/schemas/Balance"}
+        created_at: {type: string, format: date-time}
+    CreditGrantRequest:
+      type: object
+      required: [amount, reason]
+      properties:
+        amount: {$ref: "#/components/schemas/Money"}
+        expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the credit does not expire."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    CreditGrant:
+      type: object
+      required: [id, account_id, amount, created_at, balance_after]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        amount: {$ref: "#/components/schemas/Money"}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        balance_after: {$ref: "#/components/schemas/Balance"}
+    SupplierStatus:
+      type: string
+      enum: [connecting, active, low_balance, needs_attention, paused, removing, removed]
+      description: >-
+        `connecting`: not yet read; `active`: syncing and routable; `low_balance`: syncing, balance under the alert
+        line; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on
+        purpose; `removing` and `removed`: see `removeSupplier`.
+    Supplier:
+      type: object
+      required: [id, name, kind, origin, upstream_account, native_unit, settlement_currency, status]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {type: string, pattern: '^[a-z][a-z0-9]*$', description: "The adapter's name, such as newapi or sub2api."}
+        origin: {type: string, example: "https://api.example.com"}
+        upstream_account: {type: string, description: "The email or username Axiom logs in as."}
+        generation: {type: string, description: "The system's generation the adapter detected, such as 1.0."}
+        detected_version: {type: string}
+        native_unit: {type: string, enum: [quota, usd], description: "The unit the supplier counts its balance in."}
+        settlement_currency: {type: string, pattern: '^[A-Z]{3}$'}
+        status: {$ref: "#/components/schemas/SupplierStatus"}
+        status_reason: {type: string}
+        balance_native: {$ref: "#/components/schemas/Decimal"}
+        balance_observed_at: {type: string, format: date-time}
+        low_balance_threshold: {$ref: "#/components/schemas/Decimal"}
+        unit_value: {$ref: "#/components/schemas/Decimal"}
+        unit_value_hint: {$ref: "#/components/schemas/Decimal"}
+    SupplierList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Supplier"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SupplierLogin:
+      type: object
+      description: >-
+        What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not
+        use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step
+        verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can
+        renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the
+        refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes
+        `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
+      properties:
+        email: {type: string, maxLength: 254}
+        password: {type: string, maxLength: 256}
+        access_token: {type: string, maxLength: 4096}
+        refresh_token: {type: string, maxLength: 4096, description: "With `access_token`, so Axiom renews the login itself when the access token ends."}
+        access_token_expires_at: {type: string, format: date-time}
+    LoginField:
+      type: string
+      enum: [email, password, access_token, refresh_token, access_token_expires_at]
+    DetectionRequest:
+      type: object
+      required: [origin]
+      properties:
+        origin: {type: string, pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$', maxLength: 255}
+    Detection:
+      type: object
+      required: [origin, login_fields]
+      properties:
+        origin: {type: string, description: "The origin as Axiom will store it, lower case."}
+        kind: {type: string, description: "The adapter that fits. Absent when none recognised the site."}
+        generation: {type: string}
+        detected_version: {type: string}
+        login_fields:
+          type: array
+          description: The members of `SupplierLogin` this kind needs; empty when `kind` is absent.
+          items: {$ref: "#/components/schemas/LoginField"}
+    SupplierCreate:
+      type: object
+      required: [name, kind, origin, upstream_account, settlement_currency, login, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        kind: {type: string, pattern: '^[a-z][a-z0-9]*$'}
+        origin: {type: string, pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$', maxLength: 255}
+        upstream_account: {type: string, minLength: 1, maxLength: 254}
+        settlement_currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: >-
+            The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the
+            supplier's unit, so the person says it; it is fixed, and the unit value is always in it.
+        login: {$ref: "#/components/schemas/SupplierLogin"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierLoginUpdate:
+      type: object
+      required: [login, reason]
+      properties:
+        login: {$ref: "#/components/schemas/SupplierLogin"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierStatusUpdate:
+      type: object
+      required: [status, reason]
+      properties:
+        status: {type: string, enum: [active, paused]}
+        reason: {$ref: "#/components/schemas/Reason"}
+    UnitValueUpdate:
+      type: object
+      required: [value, reason]
+      properties:
+        value:
+          description: >-
+            What one unit of the supplier's balance is worth, in the supplier's `settlement_currency` (fixed when it was
+            added); greater than 0 and at most 1000.
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierGroup:
+      type: object
+      required: [id, upstream_ref, name, ratio, selected, present]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        upstream_ref: {type: string, description: "The supplier's own ID of the group."}
+        name: {type: string}
+        ratio: {$ref: "#/components/schemas/Decimal"}
+        selected: {type: boolean}
+        codename: {type: string, description: "What users see in place of the group's name. Set when first selected, never changed."}
+        present: {type: boolean, description: "False when the supplier no longer lists the group."}
+        facts:
+          type: object
+          description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
+          additionalProperties: true
+    GroupSelection:
+      type: object
+      required: [selected, reason]
+      properties:
+        selected: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierCredential:
+      type: object
+      required: [id, group_id, upstream_key_ref, status, max_concurrency]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_key_ref: {type: string}
+        status:
+          type: string
+          enum: [binding, active, upstream_disabled, quota_exhausted, expired, disabled]
+        cooldown_until: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        max_concurrency: {type: integer, minimum: 1}
+    UpstreamKey:
+      type: object
+      required: [ref, status]
+      description: A key the supplier lists that Axiom has not bound to a group.
+      properties:
+        ref: {type: string}
+        group_ref: {type: string, description: "The supplier's ID of the group the key is for."}
+        status: {type: string, enum: [active, disabled, quota_exhausted, expired]}
+    SupplierDetail:
+      type: object
+      required: [supplier, groups, credentials, unbound_keys]
+      properties:
+        supplier: {$ref: "#/components/schemas/Supplier"}
+        groups:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierGroup"}
+        credentials:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierCredential"}
+        unbound_keys:
+          type: array
+          items: {$ref: "#/components/schemas/UpstreamKey"}
+    BindKey:
+      type: object
+      required: [group_id, upstream_key_ref, reason]
+      properties:
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_key_ref: {type: string, minLength: 1, maxLength: 200}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelFormat:
+      type: string
+      enum: [messages, responses, chat]
+    PendingMapping:
+      type: object
+      required: [supplier_id, group_id, upstream_name, formats]
+      properties:
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        group_codename: {type: string}
+        upstream_name: {type: string}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+    PendingMappingList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PendingMapping"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    ModelMappingRequest:
+      type: object
+      required: [upstream_name, model_id, reason]
+      properties:
+        group_id:
+          description: "The group the alias is for. Absent: the whole supplier."
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+        upstream_name: {type: string, minLength: 1, maxLength: 200}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelMapping:
+      type: object
+      required: [id, supplier_id, upstream_name, model_id]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_name: {type: string}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+    AuthorSlug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,39}$'}
+    ModelSlug:
+      type: string
+      maxLength: 182
+      pattern: '^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(@[a-z0-9][a-z0-9._-]{0,39})?$'
+      description: "`<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it."
+    Author:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: {$ref: "#/components/schemas/AuthorSlug"}
+        name: {type: string, minLength: 1, maxLength: 100}
+    AuthorList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Author"}
+    AuthorSave:
+      type: object
+      required: [name, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelStatus:
+      type: string
+      enum: [draft, listed, retired]
+      description: "`draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good."
+    VersionBasis:
+      type: string
+      enum: [dated, floating]
+      description: "`dated`: the model is one fixed version; `floating`: the vendor moves the model under a name."
+    PriceSource:
+      type: string
+      enum: [litellm, openrouter, official, manual]
+    BillingItem:
+      type: string
+      enum:
+        - input
+        - cache_read
+        - cache_write
+        - cache_write_1h
+        - output
+        - reasoning
+        - audio_in
+        - audio_out
+        - image_in
+        - image_out
+        - web_search
+        - code_execution
+    ServiceTier:
+      type: string
+      enum: [standard, flex, priority, fast]
+    ModelSpec:
+      type: object
+      description: >-
+        The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists
+        the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a
+        model goes on sale only if both are present, even if empty.
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/BillingItem"}
+        tiers:
+          type: array
+          items: {$ref: "#/components/schemas/ServiceTier"}
+      additionalProperties: true
+    Rates:
+      type: object
+      description: The price per unit of each billing item the schedule prices; an item left out has no price here.
+      additionalProperties: false
+      properties:
+        input: {$ref: "#/components/schemas/UnitPrice"}
+        cache_read: {$ref: "#/components/schemas/UnitPrice"}
+        cache_write: {$ref: "#/components/schemas/UnitPrice"}
+        cache_write_1h: {$ref: "#/components/schemas/UnitPrice"}
+        output: {$ref: "#/components/schemas/UnitPrice"}
+        reasoning: {$ref: "#/components/schemas/UnitPrice"}
+        audio_in: {$ref: "#/components/schemas/UnitPrice"}
+        audio_out: {$ref: "#/components/schemas/UnitPrice"}
+        image_in: {$ref: "#/components/schemas/UnitPrice"}
+        image_out: {$ref: "#/components/schemas/UnitPrice"}
+        web_search: {$ref: "#/components/schemas/UnitPrice"}
+        code_execution: {$ref: "#/components/schemas/UnitPrice"}
+    ContextTier:
+      type: object
+      required: [above, rates]
+      additionalProperties: false
+      properties:
+        above: {type: integer, format: int64, minimum: 0, description: "The tier applies when the basis items sum to more than this."}
+        rates: {$ref: "#/components/schemas/Rates"}
+    ContextTiers:
+      type: object
+      required: [basis, method, tiers]
+      additionalProperties: false
+      description: "Whole-request tiers: when the basis items sum past a tier's threshold, the tier's rates replace the base ones."
+      properties:
+        basis:
+          type: array
+          items: {$ref: "#/components/schemas/BillingItem"}
+        method: {type: string, enum: [whole]}
+        tiers:
+          type: array
+          description: Strictly increasing by `above`.
+          items: {$ref: "#/components/schemas/ContextTier"}
+    ServiceTierRates:
+      type: object
+      required: [rates]
+      additionalProperties: false
+      properties:
+        rates: {$ref: "#/components/schemas/Rates"}
+        context_tiers:
+          type: array
+          description: The same thresholds as the schedule's, in order; a tier that changes no price has empty rates.
+          items: {$ref: "#/components/schemas/ContextTier"}
+    PriceSchedule:
+      type: object
+      required: [v, currency, rates]
+      additionalProperties: false
+      description: >-
+        A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing
+        item, optional whole-request tiers by size, and a complete set of prices for each service tier other than
+        the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
+      properties:
+        v: {type: integer, enum: [1]}
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "XXX in a supplier's cost plan, which is in the supplier's own unit."}
+        rates: {$ref: "#/components/schemas/Rates"}
+        context_tiers: {$ref: "#/components/schemas/ContextTiers"}
+        service_tiers:
+          type: object
+          additionalProperties: false
+          properties:
+            flex: {$ref: "#/components/schemas/ServiceTierRates"}
+            priority: {$ref: "#/components/schemas/ServiceTierRates"}
+            fast: {$ref: "#/components/schemas/ServiceTierRates"}
+    ModelName:
+      type: object
+      required: [name, visibility]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        visibility: {type: string, enum: [public, internal], description: "Only public names can be called by users."}
+    ReferencePrice:
+      type: object
+      required: [id, currency, source, published_at]
+      description: The current version of a model's reference price in one currency.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        source: {$ref: "#/components/schemas/PriceSource"}
+        schedule:
+          description: "Absent when the price was withdrawn: the currency has no price now, but this row is still the current one to build on."
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        published_at: {type: string, format: date-time}
+    ModelSummary:
+      type: object
+      required: [id, slug, author, status, version_basis, price_source, rev]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        slug: {$ref: "#/components/schemas/ModelSlug"}
+        author: {$ref: "#/components/schemas/AuthorSlug"}
+        status: {$ref: "#/components/schemas/ModelStatus"}
+        version_basis: {$ref: "#/components/schemas/VersionBasis"}
+        price_source: {$ref: "#/components/schemas/PriceSource"}
+        rev: {type: integer, format: int64, minimum: 0}
+    ModelList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/ModelSummary"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    Model:
+      type: object
+      required: [id, slug, author, status, version_basis, price_source, rev, spec, names, prices]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        slug: {$ref: "#/components/schemas/ModelSlug"}
+        author: {$ref: "#/components/schemas/AuthorSlug"}
+        status: {$ref: "#/components/schemas/ModelStatus"}
+        version_basis: {$ref: "#/components/schemas/VersionBasis"}
+        price_source: {$ref: "#/components/schemas/PriceSource"}
+        rev: {type: integer, format: int64, minimum: 0}
+        spec: {$ref: "#/components/schemas/ModelSpec"}
+        names:
+          type: array
+          items: {$ref: "#/components/schemas/ModelName"}
+        prices:
+          type: array
+          items: {$ref: "#/components/schemas/ReferencePrice"}
+    ModelCreate:
+      type: object
+      required: [slug, version_basis, price_source, spec, reason]
+      properties:
+        slug: {$ref: "#/components/schemas/ModelSlug"}
+        version_basis: {$ref: "#/components/schemas/VersionBasis"}
+        price_source: {$ref: "#/components/schemas/PriceSource"}
+        spec: {$ref: "#/components/schemas/ModelSpec"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SpecUpdate:
+      type: object
+      required: [rev, spec, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 0}
+        spec: {$ref: "#/components/schemas/ModelSpec"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    NameAdd:
+      type: object
+      required: [name, visibility, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        visibility: {type: string, enum: [public, internal]}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelStatusUpdate:
+      type: object
+      required: [status, rev, reason]
+      properties:
+        status: {type: string, enum: [listed, retired]}
+        rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    Evidence:
+      type: object
+      minProperties: 1
+      additionalProperties: true
+      description: What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
+    PricePublish:
+      type: object
+      required: [source, schedule, evidence, reason]
+      properties:
+        base:
+          description: The ID of the row that was current in the schedule's currency. Absent when the currency has no history.
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+        source: {$ref: "#/components/schemas/PriceSource"}
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+        evidence: {$ref: "#/components/schemas/Evidence"}
+        confirm_basis_change: {type: boolean, default: false}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SourcePrice:
+      type: object
+      required: [schedule, evidence]
+      properties:
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+        evidence: {$ref: "#/components/schemas/Evidence"}
+    PriceSourceSelect:
+      type: object
+      required: [rev, source, bases, prices, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 0}
+        source: {type: string, enum: [official, manual]}
+        bases:
+          type: object
+          description: The ID of the current price row of each currency that has history, by currency code.
+          additionalProperties: {$ref: "#/components/schemas/Uuid"}
+        prices:
+          type: array
+          minItems: 1
+          description: The new source's schedule for each currency it has, one per currency.
+          items: {$ref: "#/components/schemas/SourcePrice"}
+        confirm_basis_change: {type: boolean, default: false}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PricingTarget:
+      type: object
+      required: [kind]
+      description: >-
+        What a rule prices, from the most specific to the widest: an endpoint, a supplier group, a supplier, a model, a
+        model author, a source type, or everything. `id` is that thing's ID (a model author's slug), and absent for
+        `all`.
+      properties:
+        kind: {type: string, enum: [endpoint, group, supplier, model, author, source_type, all]}
+        id: {type: string, maxLength: 200}
+    PricingAudience:
+      type: object
+      required: [kind]
+      description: "Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`."
+      properties:
+        kind: {type: string, enum: [account, tier, all]}
+        id: {type: string, maxLength: 64}
+    PricingMethod:
+      type: object
+      required: [kind]
+      description: >-
+        How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio`
+        instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios.
+        `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with
+        `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the
+        price. The members of the other kinds must be absent.
+      properties:
+        kind: {type: string, enum: [cost_plus, reference_multiplier, fixed]}
+        markup_ratio: {$ref: "#/components/schemas/Decimal"}
+        margin_ratio: {$ref: "#/components/schemas/Decimal"}
+        fixed_markup: {$ref: "#/components/schemas/Rates"}
+        multiplier: {$ref: "#/components/schemas/Decimal"}
+        currency_conversion: {type: string, enum: [exchange, face]}
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+    PricingConstraints:
+      type: object
+      description: >-
+        Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for
+        what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep
+        the price between those multiples of the reference price.
+      properties:
+        min_margin_ratio: {$ref: "#/components/schemas/Decimal"}
+        reference_min_ratio: {$ref: "#/components/schemas/Decimal"}
+        reference_max_ratio: {$ref: "#/components/schemas/Decimal"}
+    PricingRuleInput:
+      type: object
+      required: [enabled, target, audience, method, constraints]
+      properties:
+        enabled: {type: boolean}
+        target: {$ref: "#/components/schemas/PricingTarget"}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        method: {$ref: "#/components/schemas/PricingMethod"}
+        constraints: {$ref: "#/components/schemas/PricingConstraints"}
+    PricingRule:
+      type: object
+      required: [id, rev, enabled, target, audience, method, constraints, updated_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        rev: {type: integer, format: int64, minimum: 0}
+        enabled: {type: boolean}
+        target: {$ref: "#/components/schemas/PricingTarget"}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        method: {$ref: "#/components/schemas/PricingMethod"}
+        constraints: {$ref: "#/components/schemas/PricingConstraints"}
+        updated_at: {type: string, format: date-time}
+    PricingRuleList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PricingRule"}
+    PricingRuleCreate:
+      type: object
+      required: [rule, reason]
+      properties:
+        rule: {$ref: "#/components/schemas/PricingRuleInput"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PricingRuleUpdate:
+      type: object
+      required: [rev, rule, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 0}
+        rule: {$ref: "#/components/schemas/PricingRuleInput"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PricingPreviewRequest:
+      type: object
+      required: [model_ids]
+      properties:
+        model_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: "#/components/schemas/Uuid"}
+        tier_id:
+          description: "The tier whose price to show. Absent, and without `account_id`: the site's default tier. Not with `account_id`."
+          allOf: [{$ref: "#/components/schemas/TierId"}]
+        account_id:
+          description: "Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400)."
+          allOf: [{$ref: "#/components/schemas/AccountId"}]
+        rule:
+          description: A rule to add, or to put in place of `replaces_rule_id`, for this preview only.
+          allOf: [{$ref: "#/components/schemas/PricingRuleInput"}]
+        replaces_rule_id: {$ref: "#/components/schemas/Uuid"}
+    PricingPreviewRow:
+      type: object
+      required: [model_id, slug, status]
+      properties:
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        slug: {$ref: "#/components/schemas/ModelSlug"}
+        endpoint_id:
+          description: "The endpoint this row prices. Absent for a model with no endpoint, which has the one row."
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+        status:
+          type: string
+          enum: [priced, cost_unknown, below_floor, unpriced]
+          description: >-
+            `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held;
+            `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no
+            rule applies and the model has no reference price to fall back on.
+        sale: {$ref: "#/components/schemas/PriceSchedule"}
+        cost:
+          description: The endpoint's cost, in the site's currency.
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        margin_ratio:
+          description: The lowest margin of `sale` over `cost` across billing items and tiers; negative would be a loss.
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+    PricingPreview:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PricingPreviewRow"}
