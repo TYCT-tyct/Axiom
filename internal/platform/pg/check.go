@@ -92,6 +92,9 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 				return err
 			}
 		}
+		if err := checkQueue(ctx, tx); err != nil {
+			return err
+		}
 		for _, a := range schemaAudits {
 			if err := a.run(ctx, tx); err != nil {
 				return err
@@ -99,6 +102,22 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 		}
 		return nil
 	}))
+}
+
+// checkQueue refuses a database whose queue tables lack a migration of the River this program carries.
+func checkQueue(ctx context.Context, tx Tx) error {
+	migrator, err := queueMigrator()
+	if err != nil {
+		return err
+	}
+	result, err := migrator.ValidateTx(ctx, tx.tx, nil)
+	if err != nil {
+		return fmt.Errorf("read the version of the queue (run axiom migrate first): %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("the queue's tables are not at the version of this program: run axiom migrate (%s)", strings.Join(result.Messages, "; "))
+	}
+	return nil
 }
 
 func (a audit) run(ctx context.Context, tx Tx) error {

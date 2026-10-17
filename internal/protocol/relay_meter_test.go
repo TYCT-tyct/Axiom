@@ -185,6 +185,43 @@ func TestRelayCommitPoint(t *testing.T) {
 	}
 }
 
+// TestRelaySignatureContent: a stream whose only content is a thinking signature or a redacted thinking block
+// delivers bytes the upstream bills as output tokens, so a client of the upstream's format and a Chat client of a
+// converted stream both count them (README.md「字节上界」).
+func TestRelaySignatureContent(t *testing.T) {
+	const sign, redacted = "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxB", "EmwBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdj"
+	for _, c := range []struct {
+		name, block, delta string
+		bytes              int64
+	}{
+		{
+			"a signature delta", `{"type":"thinking","thinking":"","signature":""}`,
+			`{"type":"signature_delta","signature":"` + sign + `"}`, int64(len(sign)),
+		},
+		{
+			"a signature in the block", `{"type":"thinking","thinking":"","signature":"` + sign + `"}`, "",
+			int64(len(sign)),
+		},
+		{"redacted thinking", `{"type":"redacted_thinking","data":"` + redacted + `"}`, "", int64(len(redacted))},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stream := messageStart(`{"input_tokens":3,"output_tokens":1}`) +
+				`data: {"type":"content_block_start","index":0,"content_block":` + c.block + "}\n\n"
+			if c.delta != "" {
+				stream += `data: {"type":"content_block_delta","index":0,"delta":` + c.delta + "}\n\n"
+			}
+			stream += blockStop + messageDelta(`{"output_tokens":2}`) + messageStop
+			got := relay(t, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+			if p := got.r.Progress(); got.err != nil || p.ContentBytes != c.bytes {
+				t.Errorf("content %d, want the delivered %d: %v", p.ContentBytes, c.bytes, got.err)
+			}
+			if conv := progressAfter(t, protocol.Chat, protocol.Messages, stream); conv != c.bytes {
+				t.Errorf("a Chat client counts %d, want %d", conv, c.bytes)
+			}
+		})
+	}
+}
+
 // TestRelayUsageMerge: a later usage event that leaves out the tier, an unknown count or the iterations keeps what an
 // earlier one reported.
 func TestRelayUsageMerge(t *testing.T) {
@@ -358,8 +395,8 @@ func TestRelayMemoryRewrite(t *testing.T) {
 		}
 		return 64<<20 - least
 	}
-	// The reader's buffer, its data, the held event and the rewritten copy each hold the snapshot.
-	if one, two := drawn(1), drawn(2); one < 4*size-64<<10 || two-one > 64<<10 {
+	// The reader's buffer, the held event and the rewritten copy each hold the snapshot.
+	if one, two := drawn(1), drawn(2); one < 3*size-64<<10 || two-one > 64<<10 {
 		t.Errorf("drew %d for one snapshot of %d, %d for two", one, size, two)
 	}
 }
