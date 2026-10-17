@@ -97,22 +97,23 @@ func finish(ctx context.Context, c *Commit, h Hooks) error {
 }
 
 // finalScan reads the charge records. The first read goes on, pass after pass, until the adapter says the records are
-// read up to where the removal began (an adapter reads a backlog window by window, and one pass may end long before the
-// present); an adapter that does not say is taken to have caught up when a pass ends. Pages and passes beyond this call's
-// share, and the limits of the supplier, make it wait. A supplier that no longer lets us in has nothing more to give:
+// read up to where the removal began: an adapter reads a backlog window by window, and one pass may end long before the
+// present. One call reads at most MaxPages passes of at most MaxPages pages each, so the pages it may read are bounded
+// by MaxPages², not by MaxPages; how long the read takes before that has no bound: it is the backlog divided by the
+// window one pass covers, at the supplier's rate limits. A supplier that no longer lets us in has nothing more to give:
 // that is noted and the removal goes on. Then the next step: after the first read the grace period, after the second the
 // deletion.
 func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool, err error) {
 	switch err = e.readToCutoff(ctx, st, c); {
 	case errors.Is(err, adapter.ErrBucketsFull):
-		return true, nil
+		return e.waitForCatchUp(ctx, st, c)
 	case errors.Is(err, adapter.ErrAuthRejected):
 		c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Why: "the last charge records could not be read: the credentials are rejected"})
 		c.State.Scan, c.State.ScanOpen = nil, false
 	case err != nil:
 		return false, err
 	case !e.caughtUp(st):
-		return true, nil // pages or passes remain beyond this call's share
+		return e.waitForCatchUp(ctx, st, c) // the next call reads on from the position this one committed
 	}
 	if st.Removal == StepFinalScan {
 		c.State.Removal, c.State.GraceUntil = StepGrace, e.now().Add(e.set.Grace)
@@ -122,7 +123,21 @@ func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool
 	return false, nil
 }
 
-// readToCutoff reads passes until the records are read up to the removal's start, or the share of one call is used.
+// waitForCatchUp ends this call and, once, tells a person that the removal has been waiting on the charge records for
+// longer than CatchUpAlert. The event is committed here rather than with the step: a step that only waits is not
+// committed by its caller.
+func (e *Engine) waitForCatchUp(ctx context.Context, st *State, c *Commit) (bool, error) {
+	if !st.CatchUpNotified && e.now().Sub(st.RemovalAt) > e.set.CatchUpAlert {
+		c.State.CatchUpNotified = true
+		c.Events = append(c.Events, Event{Kind: RemovalSlow, Why: "the charge records are still being read"})
+		if err := e.commit(ctx, st, c); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// readToCutoff reads passes until the records are read up to the removal's start, or this call's passes are used.
 func (e *Engine) readToCutoff(ctx context.Context, st *State, c *Commit) error {
 	for range e.set.MaxPages {
 		if err := e.scan(ctx, st, c); err != nil {
@@ -135,10 +150,11 @@ func (e *Engine) readToCutoff(ctx context.Context, st *State, c *Commit) error {
 	return nil
 }
 
-// caughtUp reports whether the last pass ended and the records are read to the removal's start.
+// caughtUp reports whether the last pass ended and the adapter says the records are read to the removal's start. An
+// adapter that does not say has not caught up: the removal reads on instead of taking a backlog for read (#109).
 func (e *Engine) caughtUp(st *State) bool {
 	if st.ScanOpen {
 		return false
 	}
-	return st.Removal != StepFinalScan || st.Through.IsZero() || !st.Through.Before(st.RemovalAt.Add(-e.set.CatchUp))
+	return st.Removal != StepFinalScan || !st.Through.Before(st.RemovalAt.Add(-e.set.CatchUp))
 }

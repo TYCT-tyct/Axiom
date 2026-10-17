@@ -113,8 +113,10 @@ type State struct {
 	RescanFrom time.Time
 	// RemovalAt is when the removal began, and Through how far the adapter says the records are read (the last Done page
 	// that said); the first read of a removal goes on until Through reaches RemovalAt, so no backlog is left unread when
-	// the grace period starts.
+	// the grace period starts. A removal happens once, so CatchUpNotified, the alert for a read that has been going on
+	// longer than CatchUpAlert, is sent once.
 	RemovalAt, Through time.Time
+	CatchUpNotified    bool
 }
 
 // Kind names an event.
@@ -140,12 +142,13 @@ const (
 	FundingChanged   // where calls are paid from
 	BalanceCrossed   // the balance went above or below the reserve a route needs
 	BalanceRecovered // the balance rose back over the low-balance line
+	RemovalSlow      // the removal has been reading the charge records for longer than its catch-up bound
 )
 
 var kindNames = [...]string{
 	"group_added", "group_removed", "ratio_changed", "model_added", "model_removed", "plan_changed", "key_changed",
 	"balance_low", "needs_attention", "task_halted", "removal_started", "removal_done", "group_changed", "model_changed",
-	"funding_changed", "balance_crossed", "balance_recovered",
+	"funding_changed", "balance_crossed", "balance_recovered", "removal_slow",
 }
 
 // String is the name an event is stored and delivered under, so that reordering the constants changes no stored event.

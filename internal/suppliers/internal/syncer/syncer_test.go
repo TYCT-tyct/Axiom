@@ -113,7 +113,8 @@ func (m *supplier) Charges(_ context.Context, scan adapter.ScanState) (adapter.C
 	return m.charges(scan)
 }
 
-// healthy is a supplier whose answers never change.
+// healthy is a supplier whose answers never change. Its Done page says nothing about how far it read, like an adapter
+// that never went through the contract test (#109); a test that runs a removal says where it read with scanThrough.
 func healthy() *supplier {
 	return &supplier{
 		account: func() (adapter.Account, error) {
@@ -137,6 +138,14 @@ func healthy() *supplier {
 func engine(m adapter.Manager) (*Engine, *memStore, *clock) {
 	st, clk := newStore(), &clock{t: t0}
 	return New(st, m, Defaults(), clk.now), st, clk
+}
+
+// scanThrough makes the supplier report how far it read on every Done page, as the contract requires: up to the test's
+// clock, so a removal finds it caught up.
+func scanThrough(m *supplier, clk *clock) {
+	m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+		return adapter.ChargePage{Done: true, Through: clk.now()}, adapter.ScanState(`{"v":1}`), nil
+	}
 }
 
 func round(t *testing.T, e *Engine) {
