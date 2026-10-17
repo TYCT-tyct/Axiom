@@ -95,7 +95,7 @@ func catalogCommand(ctx context.Context, environ, args []string, out io.Writer) 
 func withCatalog(ctx context.Context, environ []string, do func(*catalog.Catalog, *catalog.Fetcher) error) error {
 	env := config.New(environ)
 	databaseURL := env.Required(pg.DatabaseURLVar)
-	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
+	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}

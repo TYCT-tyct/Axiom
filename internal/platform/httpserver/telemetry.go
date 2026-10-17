@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"context"
+	"maps"
 	"net/http"
-	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -20,7 +22,64 @@ type Telemetry struct {
 	tracer   trace.Tracer
 	requests metric.Int64Counter
 	duration metric.Float64Histogram
+	series   *seriesCache
 }
+
+// labels is one combination of the metrics' labels. The routes are the registered patterns plus "unmatched", so there
+// are few of them (the cap in internal/platform/README.md「遥测」).
+type labels struct{ route, class, outcome string }
+
+// seriesCache holds each combination's measurement options, made once: building them for every request allocates,
+// and the metrics must not (BenchmarkRequestTelemetry). Reads are one atomic load; the map is replaced, never
+// changed, when a combination is first seen.
+type seriesCache struct {
+	mu   sync.Mutex
+	seen atomic.Pointer[map[labels]series]
+}
+
+type series struct {
+	add    []metric.AddOption
+	record []metric.RecordOption
+}
+
+func newSeriesCache() *seriesCache {
+	c := new(seriesCache)
+	c.seen.Store(&map[labels]series{})
+	return c
+}
+
+func (c *seriesCache) get(l labels) series {
+	if s, ok := (*c.seen.Load())[l]; ok {
+		return s
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	known := *c.seen.Load()
+	if s, ok := known[l]; ok {
+		return s
+	}
+	opt := metric.WithAttributeSet(attribute.NewSet(attribute.String("route", l.route),
+		attribute.String("status_class", l.class), attribute.String("outcome", l.outcome)))
+	s := series{[]metric.AddOption{opt}, []metric.RecordOption{opt}}
+	next := maps.Clone(known)
+	next[l] = s
+	c.seen.Store(&next)
+	return s
+}
+
+var statusClasses = [...]string{"none", "1xx", "2xx", "3xx", "4xx", "5xx", "6xx", "7xx", "8xx", "9xx"}
+
+// statusClass names the class of a status; none when no status was sent. net/http sends only 100 to 999, but the
+// recorder notes a status before net/http refuses it, so any number can arrive.
+func statusClass(status int) string {
+	if status < 100 || status > 999 {
+		return statusClasses[0]
+	}
+	return statusClasses[status/100]
+}
+
+// serverSpan is the options of the request's span, shared so that no slice is made for each.
+var serverSpan = []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindServer)}
 
 // NewTelemetry makes the instruments in the given providers.
 func NewTelemetry(tp trace.TracerProvider, mp metric.MeterProvider) (Telemetry, error) {
@@ -36,7 +95,7 @@ func NewTelemetry(tp trace.TracerProvider, mp metric.MeterProvider) (Telemetry, 
 	if err != nil {
 		return Telemetry{}, err
 	}
-	return Telemetry{tp.Tracer("axiom/httpserver"), requests, duration}, nil
+	return Telemetry{tp.Tracer("axiom/httpserver"), requests, duration, newSeriesCache()}, nil
 }
 
 // Option adjusts Public.
@@ -60,27 +119,27 @@ func (t Telemetry) start(ctx context.Context, requestID string) (context.Context
 	if t.tracer == nil {
 		return ctx, func(string, int, bool, time.Duration) {}
 	}
-	ctx, span := t.tracer.Start(ctx, "http.request", trace.WithSpanKind(trace.SpanKindServer),
-		trace.WithAttributes(attribute.String("request_id", requestID)))
+	ctx, span := t.tracer.Start(ctx, "http.request", serverSpan...)
+	if span.IsRecording() {
+		span.SetAttributes(attribute.String("request_id", requestID))
+	}
 	return ctx, func(route string, status int, aborted bool, elapsed time.Duration) {
 		if route == "" {
 			route = "unmatched" // a pattern is a registered one; whatever else was asked is one label
 		}
-		class, outcome := "none", "completed" // none: the connection ended before any status was sent
-		if status != 0 {
-			class = strconv.Itoa(status/100) + "xx"
-		}
+		class, outcome := statusClass(status), "completed" // none: the connection ended before any status was sent
 		if aborted {
 			outcome = "aborted" // the status may be a 200 already sent: the response is still broken
 		}
-		attrs := metric.WithAttributes(attribute.String("route", route), attribute.String("status_class", class),
-			attribute.String("outcome", outcome))
-		t.requests.Add(ctx, 1, attrs)
-		t.duration.Record(ctx, elapsed.Seconds(), attrs)
-		span.SetName(route)
-		span.SetAttributes(attribute.Int("http.response.status_code", status), attribute.String("outcome", outcome))
-		if aborted || status >= http.StatusInternalServerError {
-			span.SetStatus(codes.Error, outcome+" "+class)
+		s := t.series.get(labels{route, class, outcome})
+		t.requests.Add(ctx, 1, s.add...)
+		t.duration.Record(ctx, elapsed.Seconds(), s.record...)
+		if span.IsRecording() {
+			span.SetName(route)
+			span.SetAttributes(attribute.Int("http.response.status_code", status), attribute.String("outcome", outcome))
+			if aborted || status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, outcome+" "+class)
+			}
 		}
 		span.End()
 	}
