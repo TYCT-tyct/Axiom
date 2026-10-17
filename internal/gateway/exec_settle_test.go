@@ -236,8 +236,9 @@ func usageIs(segments []billing.Segment, input, output int64, reported catalog.I
 		segments[0].Usage.OutputTotal() == output && segments[0].Reported == reported
 }
 
-// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated, the output at 3
-// bytes a token rounded up, never below a count reported.
+// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated, the input at 4 bytes
+// of the request's text a token and the output at 3 bytes read a token, both rounded up, the output never below a count
+// reported.
 func TestEstimated(t *testing.T) {
 	t.Parallel()
 	usage := func(counts map[catalog.Item]int64) catalog.Usage {
@@ -291,6 +292,7 @@ func TestEstimated(t *testing.T) {
 			map[catalog.Item]int64{in: 900, out: 3},
 		},
 	} {
+		// 3600 bytes of text at 4 a token, inside the model's window: the first sampling's input is 900.
 		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64)
 		for it := range catalog.NumItems {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
