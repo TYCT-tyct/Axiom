@@ -295,7 +295,7 @@ func TestAdminPermissionsAreCheckedEveryRequest(t *testing.T) {
 		`ALTER TABLE accounts.roles FORCE ROW LEVEL SECURITY`)
 	f = f.restarted()
 	expectAdmin(t, "listUsers without users.view", f.do(http.MethodGet, "/users", "", as(s)), http.StatusForbidden, codeForbidden)
-	expectAdmin(t, "listAuthors still allowed", f.do(http.MethodGet, "/authors", "", as(s)), http.StatusNotImplemented, codeNotImplemented)
+	expectAdmin(t, "listAuthors still allowed", f.do(http.MethodGet, "/authors", "", as(s)), http.StatusOK, "")
 }
 
 // TestAGrantRevokedStopsTheNextRequest: the platform grants are read from the database on every request, so revoking

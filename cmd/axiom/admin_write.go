@@ -17,15 +17,25 @@ func actor(ctx context.Context) audit.Actor {
 	return audit.User(uuid.UUID(callOf(ctx).principal.UserID()))
 }
 
+// keyOf reads an Idempotency-Key. The guard has held the header to the contract's pattern, which the all-zero UUID
+// matches.
+func keyOf(key string) (uuid.UUID, error) {
+	id, err := uuid.Parse(key)
+	if err != nil || id == (uuid.UUID{}) {
+		return uuid.UUID{}, invalidField("Idempotency-Key", "must be a UUID that is not all zeros")
+	}
+	return id, nil
+}
+
 // idempotently runs a change of an operation that takes an Idempotency-Key as one transaction in the platform scope,
 // the scope the guard authorized, and answers with its response. The first request with a key runs do and stores the
 // response with the claim; the same request again, after a lost response, gets that response without do (replayed),
 // and another request with the key is idempotency_key_reused. request is what the response depends on, the path
 // parameters and the body: it is compared, not stored. do's error rolls back the transaction, the claim included.
 func idempotently[T any](ctx context.Context, db *pg.DB, operation, key string, request any, do func(tx pg.Tx) (T, error)) (response T, replayed bool, err error) {
-	id, err := uuid.Parse(key) // the guard has held the header to the contract's pattern
-	if err != nil || id == (uuid.UUID{}) {
-		return response, false, invalidField("Idempotency-Key", "must be a UUID that is not all zeros")
+	id, err := keyOf(key)
+	if err != nil {
+		return response, false, err
 	}
 	fingerprint, err := idem.Fingerprint(request)
 	if err != nil {
