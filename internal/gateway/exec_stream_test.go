@@ -39,7 +39,7 @@ func TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere(t *tes
 		if got := h.elapsed(); got != idle {
 			t.Errorf("the call took %v, the idle timeout is %v", got, idle)
 		}
-		ends := h.ended().ending.Attempts
+		ends := h.ended().outcome.Attempts
 		if h.w.status != 200 || len(ends) != 2 || ends[0].Result != billing.FailedBeforeCommit || ends[1].Result != billing.Committed {
 			t.Errorf("status %d, attempts %+v", h.w.status, ends)
 		}
@@ -64,7 +64,7 @@ func TestContentKeepsAnUpstreamAlive(t *testing.T) {
 		if got := h.elapsed(); got != 600*time.Second || !strings.Contains(h.w.body(), "message_stop") {
 			t.Errorf("took %v:\n%s", got, h.w.body())
 		}
-		if a := h.ended().ending.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishStop {
+		if a := h.ended().outcome.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishStop {
 			t.Errorf("%+v", a)
 		}
 	})
@@ -90,8 +90,8 @@ func TestAfterTheCommitPointTheStreamIsKeptAliveAndThenEndedInPlace(t *testing.T
 		if !strings.Contains(last, "event: error") || !strings.Contains(last, `"error_type":"timeout"`) {
 			t.Errorf("the ending: %s", last)
 		}
-		if ends := h.ended().ending.Attempts; len(ends) != 1 || ends[0].Result != billing.Committed || ends[0].Finish != billing.FinishTimeout {
-			t.Errorf("%+v", h.ended().ending)
+		if ends := h.ended().outcome.Attempts; len(ends) != 1 || ends[0].Result != billing.Committed || ends[0].Finish != billing.FinishTimeout {
+			t.Errorf("%+v", h.ended().outcome)
 		}
 	})
 }
@@ -153,7 +153,7 @@ func TestAnUpstreamThatFailsBeforeTheCommitPointIsTriedElsewhere(t *testing.T) {
 			h.up.eps[uuidOf(ep(1))].script = []scripted{tc.first(h)}
 			h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
 			h.run()
-			ends := h.ended().ending.Attempts
+			ends := h.ended().outcome.Attempts
 			if h.w.status != 200 || len(ends) != 2 || h.elapsed() != tc.elapsed(h.cfg) {
 				t.Fatalf("%s: status %d, %d attempts, took %v", tc.name, h.w.status, len(ends), h.elapsed())
 			}
@@ -176,7 +176,7 @@ func TestAStreamThatBreaksAfterTheCommitPointEndsWithAnErrorAndSettlesWhatCameFi
 		if h.w.status != 200 || h.up.endpoint(2).sends != 0 || !strings.Contains(body, "event: error") || !strings.Contains(body, `"error_type":"upstream_error"`) {
 			t.Errorf("status %d:\n%s", h.w.status, body)
 		}
-		if a := h.ended().ending.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishError {
+		if a := h.ended().outcome.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishError {
 			t.Errorf("%+v", a)
 		}
 	})
@@ -194,8 +194,8 @@ func TestTheCallStopsAtItsLongestTime(t *testing.T) {
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold()}
 		h.up.eps[uuidOf(ep(2))].script = []scripted{hold()}
 		h.run()
-		if h.w.status != http.StatusRequestTimeout || h.elapsed() != 10*time.Minute || len(h.ended().ending.Attempts) != 2 {
-			t.Errorf("status %d after %v, %d attempts\n%s", h.w.status, h.elapsed(), len(h.ended().ending.Attempts), h.w.body())
+		if h.w.status != http.StatusRequestTimeout || h.elapsed() != 10*time.Minute || len(h.ended().outcome.Attempts) != 2 {
+			t.Errorf("status %d after %v, %d attempts\n%s", h.w.status, h.elapsed(), len(h.ended().outcome.Attempts), h.w.body())
 		}
 		if !strings.Contains(h.w.body(), `"error_type":"timeout"`) {
 			t.Errorf("the answer: %s", h.w.body())
@@ -210,7 +210,7 @@ func TestTheCallStopsAtItsLongestTime(t *testing.T) {
 		if h.elapsed() != 10*time.Minute || h.up.endpoint(2).sends != 0 || !strings.Contains(last, `"error_type":"timeout"`) {
 			t.Errorf("after %v:\n%s", h.elapsed(), last)
 		}
-		if a := h.ended().ending.Attempts[0]; a.Finish != billing.FinishTimeout || a.Result != billing.Committed {
+		if a := h.ended().outcome.Attempts[0]; a.Finish != billing.FinishTimeout || a.Result != billing.Committed {
 			t.Errorf("%+v", a)
 		}
 	})
@@ -224,7 +224,7 @@ func TestNoNewAttemptStartsAfterStartBy(t *testing.T) {
 		h.up.eps[uuidOf(ep(1))].script = []scripted{late(20*time.Second, failure(routing.ScopeEndpoint, false))}
 		h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
 		h.run()
-		if h.w.status != http.StatusBadGateway || h.up.endpoint(2).sends != 0 || len(h.ended().ending.Attempts) != 1 {
+		if h.w.status != http.StatusBadGateway || h.up.endpoint(2).sends != 0 || len(h.ended().outcome.Attempts) != 1 {
 			t.Errorf("status %d, entry 2 sends %d", h.w.status, h.up.endpoint(2).sends)
 		}
 	})
@@ -319,7 +319,7 @@ func TestAnEventArrivingInPiecesKeepsTheUpstreamAlive(t *testing.T) {
 			beat{wait: 100 * time.Second, data: hello[2*third:]}, h.feed(evBang, evBlockStop, evMsgDelta, evMsgStop),
 		)}
 		h.run()
-		if h.elapsed() != 300*time.Second || !strings.Contains(h.w.body(), "message_stop") || len(h.ended().ending.Attempts) != 1 {
+		if h.elapsed() != 300*time.Second || !strings.Contains(h.w.body(), "message_stop") || len(h.ended().outcome.Attempts) != 1 {
 			t.Errorf("took %v: %s", h.elapsed(), h.w.body())
 		}
 	})

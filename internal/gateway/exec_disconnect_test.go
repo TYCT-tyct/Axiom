@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
@@ -28,8 +29,8 @@ func TestAClientThatGoesBeforeAnythingWasSentCostsNothing(t *testing.T) {
 		h.client()
 		h.run()
 		s := h.ended()
-		if len(s.ending.Attempts) != 0 || !s.ending.Cancelled || h.up.endpoint(1).acquired != 0 || h.w.wrote() != 0 || h.w.status != 0 {
-			t.Errorf("ending %+v, %d acquired, %d writes, status %d", s.ending, h.up.endpoint(1).acquired, h.w.wrote(), h.w.status)
+		if len(s.outcome.Attempts) != 0 || !s.outcome.Cancelled || h.up.endpoint(1).acquired != 0 || h.w.wrote() != 0 || h.w.status != 0 {
+			t.Errorf("ending %+v, %d acquired, %d writes, status %d", s.outcome, h.up.endpoint(1).acquired, h.w.wrote(), h.w.status)
 		}
 	})
 }
@@ -49,9 +50,14 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 			t.Errorf("the call went on for %v after the client left", got-2*time.Second)
 		}
 		s := h.ended()
-		a := s.ending.Attempts[0]
-		if !s.ending.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled || len(a.Usage.Segments) != 1 {
-			t.Errorf("ending %+v", s.ending)
+		a := s.outcome.Attempts[0]
+		if !s.outcome.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled || len(a.Segments) != 1 {
+			t.Errorf("ending %+v", s.outcome)
+		}
+		// Charged by the usage so far: the input as reported, the output it never reported by what was read, estimated.
+		if u := a.Segments[0]; u.Usage.Count(catalog.ItemInput) != 25 || !u.Reported.Has(catalog.ItemInput) ||
+			u.Usage.Count(catalog.ItemOutput) != 5 || u.Reported.Has(catalog.ItemOutput) {
+			t.Errorf("usage %+v", u)
 		}
 		if strings.Contains(h.w.body(), "event: error") || h.w.wrote() != 1 {
 			t.Errorf("something was written to a client that had gone (%d writes):\n%s", h.w.wrote(), h.w.body())
@@ -76,9 +82,9 @@ func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
 			t.Errorf("the call took %v, the upstream took 45s", got)
 		}
 		s := h.ended()
-		a := s.ending.Attempts[0]
-		if !s.ending.Cancelled || a.Result != billing.Committed || a.Usage.Segments[0].Usage.OutputTotal() != 15 {
-			t.Errorf("ending %+v", s.ending)
+		a := s.outcome.Attempts[0]
+		if !s.outcome.Cancelled || a.Result != billing.Committed || a.Segments[0].Usage.OutputTotal() != 15 {
+			t.Errorf("ending %+v", s.outcome)
 		}
 		if h.w.wrote() != 1 || strings.Contains(s.body, "message_stop") {
 			t.Errorf("%d writes: a client that had gone was written to:\n%s", h.w.wrote(), h.w.body())
@@ -97,8 +103,8 @@ func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *te
 		h.client()
 		<-done
 		h.check()
-		a := h.ended().ending.Attempts[0]
-		if h.w.status != 0 || h.w.wrote() != 0 || a.Result != billing.FailedBeforeCommit || a.Usage.Segments[0].Usage.OutputTotal() != 15 {
+		a := h.ended().outcome.Attempts[0]
+		if h.w.status != 0 || h.w.wrote() != 0 || a.Result != billing.FailedBeforeCommit || a.Segments[0].Usage.OutputTotal() != 15 {
 			t.Errorf("status %d, %d writes, attempt %+v", h.w.status, h.w.wrote(), a)
 		}
 		for _, e := range h.up.journal {
@@ -123,8 +129,8 @@ func TestAnEndpointThatDoesNotCancelIsStillStoppedByTheIdleTimeout(t *testing.T)
 		if got := h.elapsed(); got != h.cfg.IdleTimeout { // counted from the last thing the upstream said
 			t.Errorf("the call took %v", got)
 		}
-		if s := h.ended(); !s.ending.Cancelled || s.ending.Attempts[0].Finish != billing.FinishCancelled {
-			t.Errorf("ending %+v", s.ending)
+		if s := h.ended(); !s.outcome.Cancelled || s.outcome.Attempts[0].Finish != billing.FinishCancelled {
+			t.Errorf("ending %+v", s.outcome)
 		}
 	})
 }
@@ -150,7 +156,7 @@ func TestAWriteThatFailsMeansTheClientIsGone(t *testing.T) {
 			if h.w.wrote() != 1 || h.elapsed() != tc.took {
 				t.Errorf("%s: %d writes, took %v", tc.name, h.w.wrote(), h.elapsed())
 			}
-			if !h.ended().ending.Cancelled {
+			if !h.ended().outcome.Cancelled {
 				t.Errorf("%s: a client that does not read was settled as one that stayed", tc.name)
 			}
 		})
@@ -171,8 +177,8 @@ func TestAClientThatDoesNotTakeAWriteInTimeIsGone(t *testing.T) {
 		if got := h.elapsed(); got != h.cfg.WriteTimeout {
 			t.Errorf("the call took %v", got)
 		}
-		if s := h.ended(); !s.ending.Cancelled || s.ending.Attempts[0].Result != billing.FailedBeforeCommit {
-			t.Errorf("ending %+v", s.ending)
+		if s := h.ended(); !s.outcome.Cancelled || s.outcome.Attempts[0].Result != billing.FailedBeforeCommit {
+			t.Errorf("ending %+v", s.outcome)
 		}
 	})
 }
@@ -181,10 +187,6 @@ func TestAClientThatDoesNotTakeAWriteInTimeIsGone(t *testing.T) {
 // ends with the error and no cost, as the settlement could not say; and a settlement that has a charge to report puts it
 // in the error that answers a call that sent nothing.
 func TestSettlingFails(t *testing.T) {
-	usd, err := platform.ParseCurrency("USD")
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Run("completed", func(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, options{settleErr: io.ErrClosedPipe})
@@ -208,7 +210,7 @@ func TestSettlingFails(t *testing.T) {
 	})
 	t.Run("charged but sent nothing", func(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
-			h := newHarness(t, ctx, options{final: &protocol.Final{Cost: platform.AmountExact(5), Currency: usd}})
+			h := newHarness(t, ctx, options{final: billing.Final{Charged: platform.AmountExact(5)}})
 			h.run()
 			if body := h.w.body(); h.w.status != http.StatusBadGateway || !strings.Contains(body, `"axiom"`) || !strings.Contains(body, `"cost":`) {
 				t.Errorf("status %d:\n%s", h.w.status, body)
@@ -232,7 +234,7 @@ func TestEveryWayOutSettlesOnce(t *testing.T) {
 			t.Fatalf("recovered %v", p)
 		}
 		h.check()
-		if a := h.ended().ending.Attempts; len(a) != 1 || a[0].Result != billing.Unknown {
+		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.Unknown {
 			t.Errorf("attempts %+v", a)
 		}
 	})
@@ -297,7 +299,7 @@ func TestAClientThatLeavesARealConnection(t *testing.T) {
 	<-over
 	h.check()
 	s := h.ended()
-	if a := s.ending.Attempts[0]; !s.ending.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled {
-		t.Errorf("ending %+v", s.ending)
+	if a := s.outcome.Attempts[0]; !s.outcome.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled {
+		t.Errorf("ending %+v", s.outcome)
 	}
 }
