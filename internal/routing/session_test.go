@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/routing"
 )
 
@@ -223,27 +224,39 @@ func BenchmarkPlan(b *testing.B) {
 // the bar of 96 leaves room for noise, and even a quadratic pass as cheap as comparing IDs (the mutation in the PR for
 // #107) measures over 100. Allocations must not grow with the candidates beyond a few: Plan's slices are sized once.
 func TestPlanScales(t *testing.T) {
-	const small, large, samples = 25, 800, 5
-	hs, ins := candidates(t, small)
-	hl, inl := candidates(t, large)
-	reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
-	// also warm both sizes up
-	for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 5*time.Millisecond {
-		timed(hl, inl, 1)
-		reps *= 2
-	}
-	bestSmall, bestLarge := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
-	for range samples {
-		bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
-	}
-	if ratio := float64(bestLarge) / float64(bestSmall); ratio > 96 {
-		t.Errorf("planning %d candidates takes %.1f times as long as %d (%v against %v for %d plans), want about %d",
-			large, ratio, small, bestLarge, bestSmall, reps, large/small)
-	}
-	allocsSmall, allocsLarge := testing.AllocsPerRun(5, func() { hs.plan(ins) }), testing.AllocsPerRun(5, func() { hl.plan(inl) })
-	if allocsLarge > 3*allocsSmall {
-		t.Errorf("planning %d candidates allocates %v times, %d candidates %v: want about as many", large, allocsLarge, small, allocsSmall)
-	}
+	t.Run("time", func(t *testing.T) {
+		const small, large, samples = 25, 800, 5
+		hs, ins := candidates(t, small)
+		hl, inl := candidates(t, large)
+		reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
+		// also warm both sizes up
+		for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 5*time.Millisecond {
+			timed(hl, inl, 1)
+			reps *= 2
+		}
+		bestSmall, bestLarge := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
+		for range samples {
+			bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
+		}
+		if ratio := float64(bestLarge) / float64(bestSmall); ratio > 96 {
+			t.Errorf("planning %d candidates takes %.1f times as long as %d (%v against %v for %d plans), want about %d",
+				large, ratio, small, bestLarge, bestSmall, reps, large/small)
+		}
+	})
+	t.Run("allocs", func(t *testing.T) {
+		const small, large = 25, 800
+		hs, ins := candidates(t, small)
+		hl, inl := candidates(t, large)
+		// The measurement runs in a child process, so this binary's other goroutines are not counted as Plan's.
+		got := alloctest.Measure(t,
+			alloctest.Function{Name: "small", F: func() { hs.plan(ins) }},
+			alloctest.Function{Name: "large", F: func() { hl.plan(inl) }},
+		)
+		if got["large"].Count > 3*got["small"].Count {
+			t.Errorf("planning %d candidates allocates %v times, %d candidates %v: want about as many",
+				large, got["large"].Count, small, got["small"].Count)
+		}
+	})
 }
 
 // timed is how long reps plans take.

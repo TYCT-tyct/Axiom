@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 	"axiom/internal/protocol/internal/sse"
 )
@@ -95,24 +96,35 @@ func drainAggregated(tb testing.TB, f protocol.Format, stream []byte) {
 
 // TestAggregateAllocs: aggregating allocates nothing per event beyond what reading it does, but the growth of the
 // buffers, which doubles, so the allocations a longer reply adds are logarithmic in its length and do not depend on
-// the size of its deltas (docs/performance.md「调用路径上的规则」).
+// the size of its deltas (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so this
+// binary's other goroutines and their collections are not counted as the aggregator's.
 func TestAggregateAllocs(t *testing.T) {
-	extra := func(f protocol.Format, stream []byte) float64 {
-		read := testing.AllocsPerRun(5, func() {
+	read := func(stream []byte) func() {
+		return func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
 			for _, err := r.Next(); err == nil; _, err = r.Next() {
 			}
-		})
-		return testing.AllocsPerRun(5, func() { drainAggregated(t, f, stream) }) - read
+		}
 	}
 	for _, format := range formats {
 		for _, size := range []int{1 << 10, 16 << 10} {
-			// 190 more events would add at least 190 allocations if each allocated. The pieces and the decoder's pooled
-			// buffers, made again after a collection, add a few.
-			if few, many := extra(format.f, aggregateDeltas(format.f, 10, size)), extra(format.f, aggregateDeltas(format.f, 200, size)); many-few > 30 {
-				t.Errorf("%s, %d-byte deltas: aggregating allocates %v more than reading 10 events, %v more for 200",
-					format.dir, size, few, many)
-			}
+			t.Run(fmt.Sprintf("%s-%d", format.dir, size), func(t *testing.T) {
+				ten, twoHundred := aggregateDeltas(format.f, 10, size), aggregateDeltas(format.f, 200, size)
+				got := alloctest.Measure(t,
+					alloctest.Function{Name: "read/10", F: read(ten)},
+					alloctest.Function{Name: "aggregate/10", F: func() { drainAggregated(t, format.f, ten) }},
+					alloctest.Function{Name: "read/200", F: read(twoHundred)},
+					alloctest.Function{Name: "aggregate/200", F: func() { drainAggregated(t, format.f, twoHundred) }},
+				)
+				few := got["aggregate/10"].Count - got["read/10"].Count
+				more := got["aggregate/200"].Count - got["read/200"].Count
+				// 190 more events would add at least 190 allocations if each allocated. The pieces and the decoder's
+				// pooled buffers, made again after a collection, add a few.
+				if more-few > 30 {
+					t.Errorf("%s, %d-byte deltas: aggregating allocates %v more than reading 10 events, %v more for 200",
+						format.dir, size, few, more)
+				}
+			})
 		}
 	}
 }
