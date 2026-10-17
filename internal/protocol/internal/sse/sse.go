@@ -292,12 +292,15 @@ func (r *Reader) repack(pending int) error {
 	return nil
 }
 
-// shrink drops data unless an event is using it and moves the pending bytes to a buffer that fits them and one read,
-// then tells charge what it gave back.
+// shrink moves the bytes in data, which a small event's first line is already in (repack spills it before the buffers
+// can be given back), and the pending bytes to buffers that fit them, the latter with room for one read, then tells
+// charge what it gave back.
 func (r *Reader) shrink(pending int) error {
 	given := 0
-	if len(r.data) == 0 {
-		given, r.data = cap(r.data), nil
+	if cap(r.data) > len(r.data) {
+		given = cap(r.data)
+		r.data = append(make([]byte, 0, len(r.data)), r.data...)
+		given -= cap(r.data)
 	}
 	if want := pending + readSize; cap(r.buf) > want {
 		given += cap(r.buf) - want

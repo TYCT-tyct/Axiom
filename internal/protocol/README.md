@@ -107,7 +107,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 - 流结束时：没有未完成的事件返回 `io.EOF`；已经有 data 的事件没等到空行就结束，返回 `io.ErrUnexpectedEOF`。是否正常结束只看有没有收到格式规定的结尾事件，由调用方判断。
 - 出错后每次调用都返回同一个错误。`Next` 返回的切片在下次调用前有效；只有一行 `data` 的事件（最常见的）直接返回缓冲里的那一段，不再拷贝一份，所以这段数据不能追加（容量与长度相等），下次调用读上游时缓冲会移动。
 - `Poll` 是至多读一次的 `Next`：这次读没凑成事件就返回空，`Pending` 给出已读到、还没交出的字节。每次读至多 16 KiB，所以 `Relay` 每读 16 KiB 至少返回一次。
-- 缓冲增长之前先经 `ChargeGrowth` 设的函数申请增加的容量，被拒就不增长、以拒绝的错误失败；`Relay` 用它给节点的内存预算记账。大事件之后缓冲不一直留着：连续 16 个事件都只用到缓冲的四分之一以下，且缓冲超过 64 KiB 时，换成刚好够用的小缓冲，并以负数调用该函数归还（不到 16 个就换，会让每个大事件都重新分配一遍）。`AppendEvent` 按规范形式写一个事件（`event` 行只写不会改变分帧的名字），`Relay` 和录制命令共用。
+- 缓冲增长之前先经 `ChargeGrowth` 设的函数申请增加的容量，被拒就不增长、以拒绝的错误失败；`Relay` 用它给节点的内存预算记账。大事件之后缓冲不一直留着：连续 16 个事件都只用到缓冲的四分之一以下，且缓冲超过 64 KiB 时，换成刚好够用的小缓冲（data 里正在用的字节和未解析的字节各搬到刚好容得下它们的缓冲里；单行事件的第一行此时已拷进 data，所以不能只在 data 为空时才缩），并以负数调用该函数归还（不到 16 个就换，会让每个大事件都重新分配一遍）。`AppendEvent` 按规范形式写一个事件（`event` 行只写不会改变分帧的名字），`Relay` 和录制命令共用。
 
 ## 检查流结构
 
@@ -273,7 +273,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 事件的最后一个字节一到就交出，不等下一次读，不攒够字节 | `TestReaderHandsOverAtOnce`：上游交出一个完整事件后阻塞，`Next` 仍返回它，LF、CRLF、CR（要等到下一个字节）各一条，整段和逐字节各一遍 |
 | 读一个长行的时间与行长成正比 | 记住已经扫描过、没有行尾的位置；只有缓冲前部有已消费的字节时才搬移；`TestReaderLineScales` 比较 1 MiB 与 8 MiB 的行读完的最快耗时，长八倍的行五次里没有一次在 24 倍的时间内读完就失败（线性约 8 倍，每次读后重扫或自我搬移是 64 倍；超时的那次读中止，所以退化时很快失败），规则同 `TestPlanScales` |
 | 缓冲长齐之后，读一个事件不分配（单行和多行的 data 都是），解码器不是每个事件新建一个 | `TestReaderAllocs` 比较 1000 与 2000 个事件的分配次数，用 `steadyAllocs` 关掉垃圾回收；基准测试 1 KiB 和 1 MiB 的事件，CI 与 `main` 对比分配次数 |
-| 一个大事件不让一路流一直占着它的缓冲，一串大事件也不让缓冲反复重新分配 | `TestReaderShrinks`：512 KiB 的事件之后跟小事件，持有量回到 64 KiB 以内并以负数归还；连续的大事件不归还；`TestReaderAppendToEvent` 核对交出的单行 data 不能越过自己的长度写到后面的字节 |
+| 一个大事件不让一路流一直占着它的缓冲，一串大事件也不让缓冲反复重新分配 | `TestReaderShrinks`：512 KiB 的事件（含多行 data 的事件，以及每次读都止于下一个事件的 data 行之后的分片）之后跟小事件，持有量回到 64 KiB 以内并以负数归还；连续的大事件不归还；`TestReaderAppendToEvent` 核对交出的单行 data 不能越过自己的长度写到后面的字节 |
 | 提交点之前不向客户端写字节；每路流恰好一个结尾，成功结尾只在上游正常结束后发出；扣住的块不随出错结尾写出 | `TestRelaySteps` 逐步核对步骤的类型；`TestRelayChat` 覆盖 Chat 的用量块、没有用量块、给出 `finish_reason` 后断流、选项没结束就 `[DONE]`、内容结束和用量在同一块、出错块；`TestRelayChatChoices` 核对两个选项交错时各自的内容和工具调用顺序不变；`TestRelayResponses` 覆盖 `response.created` 前后断流和 `response.incomplete`；`TestRelayCommitPoint` 核对哪些块的开头是提交点、计入多少内容和搜索；`TestRelayEndings` 每种结束方式一个用例：正常结束、提交前后的 `error` 事件、结尾前后断流、没有用量事件、结尾后又来内容、结尾后不带内容的事件按上游的顺序写出、事件不是对象、没有内容、两个用量事件都写出；测试的驱动在结束后再调 `Finish`、`Fail`、`Next`，断言不再写出、返回 `ErrTerminated`。模糊测试 `FuzzRelay` 覆盖三种格式：`streamcheck` 接受的上游流，客户端拿到的流也被它接受，并且与怎么分片无关；正常结束的上游流不报错，客户端拿到的内容与上游逐项相同：Messages 每个内容块的事件（含工具块开头的 `input`）、Responses 每个输出项的事件（含只在 `output_item.done` 里整块给出的项）原样相同，Chat 每个选项 `delta` 的每个成员（含 `role`、`reasoning_details`、工具调用的 `id`、`type`）、其余非 `null` 的成员和最后的 `finish_reason` 相同；`TestRelayChatSplitKeeps` 覆盖拆出结束信号后只剩零字节成员的块 |
 | 客户端看到调用编号、自己请求的模型名，用量里只有官方的用量成员和本站的费用 | 三种格式的黄金输出；`TestRelayChat` 核对每块的 `id`、`model`，`provider`、上游的 `cost` 和 `is_byok` 不出现；`TestRelayRewrites`：上游的 `cost`、`cost_details`、`axiom` 不出现，三种 `Final`（已结算、暂估、待结算）的结尾逐项比较，结尾没有 `usage`、`usage` 为 `null`、过滤后为空都得到合规的费用 |
 | 官方样本转给客户端的输出与黄金输出逐字节相同，整段读和逐字节读结果相同 | `TestRelaySamples` 覆盖全部样本；黄金输出也通过本格式的 `streamcheck` |

@@ -342,6 +342,19 @@ func TestReaderShrinks(t *testing.T) {
 	largeData := `"` + strings.Repeat("x", 512<<10) + `"`
 	large := "data: " + largeData + "\n\n"
 	small := "data: 1\n\n"
+	// An event of many data lines, so that the reader's data buffer grows, followed by small events whose reads each
+	// stop right after the event's data line: the reader has copied that line into the data buffer by the time it
+	// could give the buffer back.
+	lines := []string{"["}
+	for range 4 {
+		lines = append(lines, `"`+strings.Repeat("x", 128<<10)+`",`)
+	}
+	lines = append(lines, "0]")
+	splitReads := []io.Reader{strings.NewReader("data: " + strings.Join(lines, "\ndata: ") + "\n\n"), strings.NewReader("data: 1\n")}
+	for range 40 {
+		splitReads = append(splitReads, strings.NewReader("\ndata: 1\n"))
+	}
+	splitReads = append(splitReads, strings.NewReader("\n"))
 	for _, tc := range []struct {
 		name         string
 		stream       io.Reader
@@ -354,6 +367,11 @@ func TestReaderShrinks(t *testing.T) {
 			"small events after a large one",
 			io.MultiReader(strings.NewReader(large), iotest.OneByteReader(strings.NewReader(strings.Repeat(small, 40)))),
 			append([]string{largeData}, slices.Repeat([]string{"1"}, 40)...), true, 64 << 10,
+		},
+		{
+			"reads ending after a data line",
+			io.MultiReader(splitReads...),
+			append([]string{strings.Join(lines, "\n")}, slices.Repeat([]string{"1"}, 41)...), true, 64 << 10,
 		},
 		{"large events in a row", strings.NewReader(strings.Repeat(large, 8)), slices.Repeat([]string{largeData}, 8), false, 4 * len(large)},
 	} {
