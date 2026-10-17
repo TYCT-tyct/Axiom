@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
@@ -17,12 +19,17 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// ErrClosed is Enqueue's answer once Close has begun.
-var ErrClosed = errors.New("observability: the recorder is closed")
+var (
+	// ErrClosed is Enqueue's answer once Close has begun.
+	ErrClosed = errors.New("observability: the recorder is closed")
+	// ErrQueueFull is Enqueue's answer when the queue is full: the record and its attempts were dropped and counted.
+	// A caller on the call path may ignore it; it is never a reason to fail or slow the call.
+	ErrQueueFull = errors.New("observability: the record queue is full; the record was dropped")
+)
 
 // Config sizes the Recorder. Production values come from cmd/axiom; tests use small ones.
 type Config struct {
-	QueueSize     int           // records waiting to be written; Enqueue waits when it is full
+	QueueSize     int           // records waiting to be written; when full, Enqueue drops the new one
 	BatchSize     int           // rows per write, at most
 	FlushInterval time.Duration // how long the first record of a batch may wait for company
 	RetryBase     time.Duration // the first wait after a failed write; it doubles up to RetryMax
@@ -31,45 +38,59 @@ type Config struct {
 	Meter         metric.Meter  // nil for none
 }
 
-// Recorder writes call records in the background. Enqueue is the only call on a request's path: it hands the record
-// to a bounded queue and returns, and when the queue is full it waits, so a slow database slows requests down to the
-// node's in-flight limit instead of losing records (docs/domains/observability.md「写入路径」).
-type Recorder struct {
-	cfg    Config
-	write  func(context.Context, []row) error
-	fatal  func(error) bool // the error says the rows themselves are bad: retrying cannot help
-	logger *slog.Logger
-
-	queue chan row
-	stop  chan struct{} // closed by Close: Enqueue refuses, and a blocked Enqueue gives up
-
-	mu      sync.Mutex // guards closing, which is set before Close waits for senders
-	closing bool
-	senders sync.WaitGroup
-
-	giveUp context.CancelFunc // ends the writer's context: Close ran out of time waiting for the queue to drain
-	done   chan struct{}      // closed when the writer has exited
-	lost   int                // the writer's count of rows given up on; read after done
-
-	written, retries, dropped metric.Int64Counter
+// queued is one call with its attempts, the unit a caller hands over and the writer keeps or loses whole.
+type queued struct {
+	call     row
+	attempts []attemptRow
 }
 
-// NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the rows of
+// Recorder writes call and attempt records in the background. Enqueue is the only call on a request's path: it hands
+// the record to a bounded queue without waiting. When the queue is full it drops the new record and counts it, so a
+// slow database can never slow or fail a call (README「写入」 and docs/domains/observability.md「写入路径」).
+type Recorder struct {
+	cfg    Config
+	write  func(context.Context, []queued) error
+	fatal  func(error) bool // the error says the records themselves are bad: retrying cannot help
+	logger *slog.Logger
+
+	queue chan queued
+
+	mu      sync.Mutex // guards closing and a send, so Close can close the queue without racing one
+	closing bool
+
+	giveUp       context.CancelFunc // ends the writer's context: Close ran out of time waiting for the queue to drain
+	done         chan struct{}      // closed when the writer has exited
+	lost         atomic.Int64       // calls not written: dropped at Enqueue or given up on by the writer
+	lostAttempts atomic.Int64       // their attempts
+
+	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
+}
+
+// NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the records of
 // many accounts. The writer takes ctx's values, such as the tracing provider, but not its end: only Close stops it.
 func NewRecorder(ctx context.Context, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) *Recorder {
 	return newRecorder(ctx, cfg, dbWriter(db, scope), isBadRow, logger)
 }
 
-// dbWriter writes a batch in one transaction in scope.
-func dbWriter(db *pg.DB, scope pg.Scope) func(context.Context, []row) error {
-	return func(ctx context.Context, rows []row) error {
-		payload, err := marshalRows(rows)
+// dbWriter writes a batch in one transaction in scope: the calls first, then their attempts, so a retried batch can
+// never leave attempts whose call is missing.
+func dbWriter(db *pg.DB, scope pg.Scope) func(context.Context, []queued) error {
+	return func(ctx context.Context, batch []queued) error {
+		calls, attempts, err := marshalQueued(batch)
 		if err != nil {
 			return err
 		}
 		return db.Tx(ctx, scope, func(tx pg.Tx) error {
-			_, err := store.New().InsertCallLogs(ctx, tx, payload)
-			return err
+			queries := store.New()
+			if _, err := queries.InsertCallLogs(ctx, tx, calls); err != nil {
+				return err
+			}
+			if attempts != nil {
+				if _, err := queries.InsertCallAttempts(ctx, tx, attempts); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 }
@@ -80,15 +101,30 @@ var errEncoding = errors.New("encode call records")
 // isBadRow reports a failure that retrying the same rows cannot mend: the database refused a value, or encoding did.
 func isBadRow(err error) bool { return pg.IsDataError(err) || errors.Is(err, errEncoding) }
 
-func marshalRows(rows []row) ([]byte, error) {
-	payload, err := jsonx.MarshalCanonical(rows)
-	if err != nil {
-		return nil, fmt.Errorf("%w (%d rows): %w", errEncoding, len(rows), err)
+// marshalQueued writes the batch as the two JSON arrays the insert statements take, one for calls and one for
+// attempts. It returns a nil attempts array when the batch has none.
+func marshalQueued(batch []queued) (calls, attempts []byte, err error) {
+	callRows := make([]row, len(batch))
+	var attemptRows []attemptRow
+	for i, q := range batch {
+		callRows[i] = q.call
+		attemptRows = append(attemptRows, q.attempts...)
 	}
-	return payload, nil
+	calls, err = jsonx.MarshalCanonical(callRows)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %w", errEncoding, len(callRows), len(attemptRows), err)
+	}
+	if len(attemptRows) == 0 {
+		return calls, nil, nil
+	}
+	attempts, err = jsonx.MarshalCanonical(attemptRows)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %w", errEncoding, len(callRows), len(attemptRows), err)
+	}
+	return calls, attempts, nil
 }
 
-func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []row) error, fatal func(error) bool, logger *slog.Logger) *Recorder {
+func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []queued) error, fatal func(error) bool, logger *slog.Logger) *Recorder {
 	if cfg.QueueSize <= 0 || cfg.BatchSize <= 0 || cfg.FlushInterval <= 0 || cfg.RetryBase <= 0 || cfg.RetryMax < cfg.RetryBase ||
 		cfg.WriteTimeout <= 0 {
 		panic("observability: Config needs positive sizes and durations") // a constant of cmd/axiom, fixed at build time
@@ -99,13 +135,15 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	run, giveUp := context.WithCancel(context.WithoutCancel(ctx))
 	r := &Recorder{
 		cfg: cfg, write: write, fatal: fatal, logger: logger,
-		queue: make(chan row, cfg.QueueSize), stop: make(chan struct{}),
-		giveUp: giveUp, done: make(chan struct{}),
+		queue: make(chan queued, cfg.QueueSize), giveUp: giveUp, done: make(chan struct{}),
 	}
 	r.written = counter(cfg.Meter, "axiom.observability.records.written", "Call records stored.")
+	r.attemptsWritten = counter(cfg.Meter, "axiom.observability.attempts.written", "Attempt records stored.")
 	r.retries = counter(cfg.Meter, "axiom.observability.write.retries", "Batch writes that failed and were tried again.")
-	r.dropped = counter(cfg.Meter, "axiom.observability.records.lost",
-		"Call records given up on: refused by the database as malformed, or unwritten when shutdown ran out of time.")
+	r.lostMetric = counter(cfg.Meter, "axiom.observability.records.lost",
+		"Call records not written, by reason: queue_full, malformed or shutdown.")
+	r.attemptsLostMetric = counter(cfg.Meter, "axiom.observability.attempts.lost",
+		"Attempt records not written, with their call and for the same reasons.")
 	_, err := cfg.Meter.Int64ObservableGauge("axiom.observability.queue.depth",
 		metric.WithDescription("Call records waiting to be written."),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
@@ -127,45 +165,42 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 	return c
 }
 
-// Enqueue queues rec for writing. It waits while the queue is full and returns ctx's error if ctx ends first, in
-// which case rec is not queued: a caller that must not lose the record passes a context that ends only with the
-// process's shutdown, not the client's disconnection. It returns ErrClosed once Close has begun, and an error for a
-// record that could never be written.
-func (r *Recorder) Enqueue(ctx context.Context, rec CallRecord) error {
-	row, err := newRow(rec)
+// Enqueue queues rec and its attempts for writing, without waiting. It returns ErrQueueFull when the queue has no
+// room, after counting the dropped call and attempts: a record is never worth slowing a call for. It returns
+// ErrClosed once Close has begun, and an error for a record that could never be written.
+func (r *Recorder) Enqueue(rec CallRecord) error {
+	call, attempts, err := newRows(rec)
 	if err != nil {
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	}
+	q := queued{call: call, attempts: attempts}
 	r.mu.Lock()
 	if r.closing {
 		r.mu.Unlock()
 		return ErrClosed
 	}
-	r.senders.Add(1)
-	r.mu.Unlock()
-	defer r.senders.Done()
 	select {
-	case r.queue <- row:
+	case r.queue <- q:
+		r.mu.Unlock()
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-r.stop:
-		return ErrClosed
+	default:
+		// Counted under the lock so Close, which also takes it, cannot finish before the loss is in the report.
+		r.lose(context.Background(), q, "queue_full")
+		r.mu.Unlock()
+		return ErrQueueFull
 	}
 }
 
 // Close stops accepting records and writes what is queued, retrying failures until ctx ends. It returns nil when
-// everything was written; otherwise it logs and returns how many records were lost.
+// everything was written; otherwise it logs and returns how many records were lost, including those dropped while the
+// queue was full.
 func (r *Recorder) Close(ctx context.Context) error {
 	r.mu.Lock()
-	first := !r.closing
-	r.closing = true
-	r.mu.Unlock()
-	if first {
-		close(r.stop)
-		r.senders.Wait() // after this no one sends, so closing the queue is safe
-		close(r.queue)
+	if !r.closing {
+		r.closing = true
+		close(r.queue) // no send can be in flight: Enqueue holds r.mu for its non-blocking send
 	}
+	r.mu.Unlock()
 	select {
 	case <-r.done:
 	case <-ctx.Done():
@@ -173,8 +208,9 @@ func (r *Recorder) Close(ctx context.Context) error {
 		<-r.done
 	}
 	r.giveUp()
-	if r.lost > 0 {
-		return fmt.Errorf("observability: %d call records were not written", r.lost)
+	calls, attempts := r.lost.Load(), r.lostAttempts.Load()
+	if calls > 0 {
+		return fmt.Errorf("observability: %d call records were not written (%d attempts lost)", calls, attempts)
 	}
 	return nil
 }
@@ -193,14 +229,14 @@ func (r *Recorder) writer(ctx context.Context) {
 	}
 }
 
-// collect takes up to BatchSize rows, waiting for the first and then at most FlushInterval for the rest. It reports
+// collect takes up to BatchSize records, waiting for the first and then at most FlushInterval for the rest. It reports
 // false once the queue is closed and empty.
-func (r *Recorder) collect() (batch []row, open bool) {
+func (r *Recorder) collect() (batch []queued, open bool) {
 	first, ok := <-r.queue
 	if !ok {
 		return nil, false
 	}
-	batch = append(make([]row, 0, r.cfg.BatchSize), first)
+	batch = append(make([]queued, 0, r.cfg.BatchSize), first)
 	timer := time.NewTimer(r.cfg.FlushInterval)
 	defer timer.Stop()
 	for len(batch) < r.cfg.BatchSize {
@@ -218,19 +254,24 @@ func (r *Recorder) collect() (batch []row, open bool) {
 }
 
 // flush writes batch, retrying with a growing wait until it succeeds or Close gives up. A batch the database calls
-// malformed is split to find the row at fault, which is logged and left out: one bad record must not stop every
+// malformed is split to find the record at fault, which is logged and left out: one bad record must not stop every
 // later one.
-func (r *Recorder) flush(ctx context.Context, batch []row) {
+func (r *Recorder) flush(ctx context.Context, batch []queued) {
 	delay := r.cfg.RetryBase
 	for {
 		err := r.attempt(ctx, batch)
 		if err == nil {
 			r.written.Add(ctx, int64(len(batch)))
+			var attempts int64
+			for _, q := range batch {
+				attempts += int64(len(q.attempts))
+			}
+			r.attemptsWritten.Add(ctx, attempts)
 			return
 		}
 		switch {
 		case ctx.Err() != nil:
-			r.abandon(ctx, len(batch), err)
+			r.abandon(ctx, batch, err)
 			return
 		case r.fatal(err) && len(batch) > 1:
 			mid := len(batch) / 2
@@ -238,9 +279,9 @@ func (r *Recorder) flush(ctx context.Context, batch []row) {
 			r.flush(ctx, batch[mid:])
 			return
 		case r.fatal(err):
-			r.logger.Error("call record refused by the database", "request_id", batch[0].ID, "err", err)
-			r.dropped.Add(ctx, 1)
-			r.lost++
+			r.logger.Error("call record refused by the database", "request_id", batch[0].call.ID,
+				"attempts", len(batch[0].attempts), "err", err)
+			r.lose(ctx, batch[0], "malformed")
 			return
 		}
 		r.retries.Add(ctx, 1)
@@ -254,15 +295,28 @@ func (r *Recorder) flush(ctx context.Context, batch []row) {
 }
 
 // attempt is one write, cut off after WriteTimeout: a database that stops answering must not hold the only writer.
-func (r *Recorder) attempt(ctx context.Context, batch []row) error {
+func (r *Recorder) attempt(ctx context.Context, batch []queued) error {
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.WriteTimeout)
 	defer cancel()
 	return r.write(ctx, batch)
 }
 
-// abandon counts the rows of a batch that shutdown could not wait for.
-func (r *Recorder) abandon(ctx context.Context, n int, err error) {
-	r.logger.Error("call records lost at shutdown", "records", n, "err", err)
-	r.dropped.Add(ctx, int64(n))
-	r.lost += n
+// abandon counts a batch that shutdown could not wait for.
+func (r *Recorder) abandon(ctx context.Context, batch []queued, err error) {
+	var attempts int
+	for _, q := range batch {
+		attempts += len(q.attempts)
+	}
+	r.logger.Error("call records lost at shutdown", "records", len(batch), "attempts", attempts, "err", err)
+	for _, q := range batch {
+		r.lose(ctx, q, "shutdown")
+	}
+}
+
+// lose counts one call and its attempts as not written, for the reason given.
+func (r *Recorder) lose(ctx context.Context, q queued, reason string) {
+	r.lost.Add(1)
+	r.lostAttempts.Add(int64(len(q.attempts)))
+	r.lostMetric.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
+	r.attemptsLostMetric.Add(ctx, int64(len(q.attempts)), metric.WithAttributes(attribute.String("reason", reason)))
 }
