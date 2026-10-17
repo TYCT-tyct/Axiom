@@ -260,7 +260,7 @@ func TestAClientThatLeavesWhileItsReplyIsAggregated(t *testing.T) {
 		output   int64
 		reported bool
 	}{
-		{"cancels", true, 2 * time.Second, 5, false}, // "Hello", counted by its bytes, estimated
+		{"cancels", true, 2 * time.Second, 2, false}, // "Hello", 5 bytes at 3 a token rounded up, estimated
 		{"does not", false, 10 * time.Second, 15, true},
 	}
 	for _, c := range cases {

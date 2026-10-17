@@ -13,7 +13,6 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
-	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
 
@@ -141,11 +140,11 @@ func TestACompactReplyThatNamesNoUsageIsEstimated(t *testing.T) {
 		if h.w.status != http.StatusOK || h.w.body() != noUsage {
 			t.Fatalf("status %d:\n%s", h.w.status, h.w.body())
 		}
-		bound, _ := billing.InputBound(routing.DemandOf(&h.call.Request), h.call.Plan.Entries[0].Limits)
+		input := estimatedInput(t, h, 0)
 		u := h.ended().outcome.Attempts[0].Segments[0]
-		if bound <= 0 || u.Usage.Count(catalog.ItemInput) != bound || u.Reported.Has(catalog.ItemInput) {
-			t.Errorf("the input is %d (reported %t), want the bound %d estimated", u.Usage.Count(catalog.ItemInput),
-				u.Reported.Has(catalog.ItemInput), bound)
+		if u.Usage.Count(catalog.ItemInput) != input || u.Reported.Has(catalog.ItemInput) {
+			t.Errorf("the input is %d (reported %t), want %d estimated", u.Usage.Count(catalog.ItemInput),
+				u.Reported.Has(catalog.ItemInput), input)
 		}
 		if u.Usage.Count(catalog.ItemOutput) != 0 {
 			t.Errorf("the output is %d, want nothing a whole reply cannot tell", u.Usage.Count(catalog.ItemOutput))
