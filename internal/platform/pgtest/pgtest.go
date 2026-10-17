@@ -184,7 +184,7 @@ func dockerHostFor(goos, current string) string {
 
 // connect points this binary at the cluster of the run, or starts one of its own, which Ryuk removes after the binary.
 func connect(ctx context.Context) error {
-	connection := os.Getenv(ClusterEnv)
+	connection := clusterURL()
 	if connection == "" {
 		var err error
 		if connection, _, err = StartCluster(ctx); err != nil {
@@ -194,6 +194,28 @@ func connect(ctx context.Context) error {
 	var err error
 	cluster, err = url.Parse(connection)
 	return err
+}
+
+// clusterURL is ClusterEnv from the environment, read through os.Environ rather than os.Getenv on purpose: the go
+// command records every variable a test reads with os.Getenv in the key of the cached test result, and this URL names a
+// container that is new on every run. Read with os.Getenv, it would run tests whose code has not changed over and over;
+// the URL is not an input. Each test gets a database of its own from New, and the cluster's migrations come from the
+// test binary's embedded files, so a cached pass proves what a new run proves. A test that depends on cluster-wide
+// state unsets the variable first, as internal/platform/pg's TestMain does.
+func clusterURL() string {
+	return clusterURLIn(os.Environ())
+}
+
+// clusterURLIn returns the last value of ClusterEnv in env: withcluster appends its URL after os.Environ, so the last
+// entry is the one the command was given.
+func clusterURLIn(env []string) string {
+	prefix := ClusterEnv + "="
+	for _, entry := range slices.Backward(env) {
+		if value, ok := strings.CutPrefix(entry, prefix); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // StartCluster runs a PostgreSQL container and prepares it: the roles, and a template with every migration applied.
