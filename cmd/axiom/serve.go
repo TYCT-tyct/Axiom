@@ -135,24 +135,36 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
+	served := startServing(servers, &health, logger)
+
+	stopped := waitForStop(ctx, served)
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
+	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
+	defer cancel()
+	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
+}
+
+// startServing serves every listener and reports the node ready. The channel carries the error of the first listener
+// to stop.
+func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
 	served := make(chan error, len(servers))
 	for _, s := range servers {
 		go func() { served <- s.server.Serve(s.listener) }()
 	}
 	health.SetReady(true)
 	logger.Info("serving", servedAddrs(servers)...)
+	return served
+}
 
-	var stopped error
+// waitForStop waits until a listener stops or ctx ends, and names the listener that stopped.
+func waitForStop(ctx context.Context, served <-chan error) error {
 	select {
 	case err := <-served:
-		stopped = fmt.Errorf("a listener stopped: %w", err)
+		return fmt.Errorf("a listener stopped: %w", err)
 	case <-ctx.Done():
+		return nil
 	}
-	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
-	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
 }
 
 // consoleParts are what the console's API needs that the node can check before it touches the database: the secrets

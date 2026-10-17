@@ -10,7 +10,6 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
-	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
@@ -77,8 +76,5 @@ func adminRoutes(api adminapi.StrictServerInterface, g *guard, frontend *webui.F
 		})
 		return adminapi.HandlerWithOptions(admin, adminapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
-	routes := http.NewServeMux()
-	routes.Handle("/api/", httpserver.Compress(apiHandler))
-	routes.Handle("/", frontend.Admin())
-	return frontend.Secured(routes)
+	return servedRoutes(apiHandler, frontend.Secured, frontend.Admin())
 }
