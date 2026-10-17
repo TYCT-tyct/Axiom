@@ -17,7 +17,7 @@ import (
 )
 
 // bank is a test database with one account whose balance and floor the test chooses, and a billing whose holder is
-// alive. Quotes are made exact: input at one billionth a token, no output, so TextBytes is the amount in billionths.
+// alive. Its quotes are made exact: input at one billionth a token, no output, so TextBytes is the amount in billionths.
 type bank struct {
 	t        *testing.T
 	db       pgtest.Database
@@ -26,9 +26,16 @@ type bank struct {
 	billing  *Billing
 	admitted Admitted
 	supplies *supplies
+	exact    Quotable
 }
 
-var exact = Quotable{MaxOutput: 0, Model: Model{ContextLength: 1e12}}
+// exactQuote is a route entry priced in billionths: a token of input 1, no output, so TextBytes is the amount in
+// billionths. Each bank keeps its own: one package value whose price every newBank wrote was a race between the
+// package's parallel tests.
+func exactQuote(tb testing.TB) Quotable {
+	tb.Helper()
+	return Quotable{Price: mustSchedule(tb, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0"}}`), Model: Model{ContextLength: 1e12}}
+}
 
 func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	t.Helper()
@@ -39,7 +46,7 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	}
 	t.Cleanup(app.Close)
 	site, account := uuid.NewV7(), uuid.NewV7()
-	b := &bank{t: t, db: db, app: app, platform: pg.NewScope(true, nil, nil), admitted: Admitted{
+	b := &bank{t: t, db: db, app: app, platform: pg.NewScope(true, nil, nil), exact: exactQuote(t), admitted: Admitted{
 		Scope: pg.NewScope(false, nil, []uuid.UUID{account}), Site: site, Account: account,
 		Workspace: uuid.NewV7(), Key: uuid.NewV7(),
 	}}
@@ -59,7 +66,6 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	if balance > 0 {
 		b.credit(balance)
 	}
-	exact.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0"}}`)
 	return b
 }
 
@@ -98,7 +104,7 @@ func (b *bank) count(query string) int64 {
 func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 	var h *Hold
 	err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{exact})
+		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
 		return err
 	})
 	return h, err
@@ -223,7 +229,7 @@ func (b *bank) holdOpen(a Admitted, id uuid.UUID, amount int64) (release chan st
 	release, done, held := make(chan struct{}), make(chan error, 1), make(chan struct{})
 	go func() {
 		done <- b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) error {
-			_, _, err := b.billing.Reserve(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{exact})
+			_, _, err := b.billing.Reserve(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
 			close(held)
 			<-release
 			return err
@@ -369,7 +375,7 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := b.app.Tx(ctx, b.admitted.Scope, func(tx pg.Tx) error {
-		_, _, err := b.billing.Reserve(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{exact})
+		_, _, err := b.billing.Reserve(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
 		return err
 	})
 	if err == nil || b.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND segment = 0") != 1 {
