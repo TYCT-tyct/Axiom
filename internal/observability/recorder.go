@@ -185,7 +185,7 @@ func (r *Recorder) Enqueue(rec CallRecord) error {
 		return nil
 	default:
 		// Counted under the lock so Close, which also takes it, cannot finish before the loss is in the report.
-		r.lose(q, "queue_full")
+		r.lose(context.Background(), q, "queue_full")
 		r.mu.Unlock()
 		return ErrQueueFull
 	}
@@ -281,7 +281,7 @@ func (r *Recorder) flush(ctx context.Context, batch []queued) {
 		case r.fatal(err):
 			r.logger.Error("call record refused by the database", "request_id", batch[0].call.ID,
 				"attempts", len(batch[0].attempts), "err", err)
-			r.lose(batch[0], "malformed")
+			r.lose(ctx, batch[0], "malformed")
 			return
 		}
 		r.retries.Add(ctx, 1)
@@ -309,15 +309,14 @@ func (r *Recorder) abandon(ctx context.Context, batch []queued, err error) {
 	}
 	r.logger.Error("call records lost at shutdown", "records", len(batch), "attempts", attempts, "err", err)
 	for _, q := range batch {
-		r.lose(q, "shutdown")
+		r.lose(ctx, q, "shutdown")
 	}
 }
 
 // lose counts one call and its attempts as not written, for the reason given.
-func (r *Recorder) lose(q queued, reason string) {
+func (r *Recorder) lose(ctx context.Context, q queued, reason string) {
 	r.lost.Add(1)
 	r.lostAttempts.Add(int64(len(q.attempts)))
-	ctx := context.Background()
 	r.lostMetric.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
 	r.attemptsLostMetric.Add(ctx, int64(len(q.attempts)), metric.WithAttributes(attribute.String("reason", reason)))
 }

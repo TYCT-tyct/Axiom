@@ -84,6 +84,19 @@ func TestTenantsReadOnlyTheirOwnCalls(t *testing.T) {
 	if got := list(t, db, pg.Scope{}, day(a)); len(got) != 0 {
 		t.Errorf("an empty scope reads %d calls, want 0", len(got))
 	}
+	checkAttemptScopes(t, db, a, b)
+	err := db.ReadTx(t.Context(), accountScope(a), func(tx pg.Tx) error {
+		_, err := GetOwn(t.Context(), tx, theirs.ID)
+		return err
+	})
+	if err == nil {
+		t.Error("account A fetched account B's call by ID")
+	}
+}
+
+// checkAttemptScopes: the attempt table follows the same account scopes as the call table.
+func checkAttemptScopes(t *testing.T, db *pg.DB, a, b uuid.UUID) {
+	t.Helper()
 	for _, tc := range []struct {
 		scope pg.Scope
 		want  int
@@ -97,13 +110,6 @@ func TestTenantsReadOnlyTheirOwnCalls(t *testing.T) {
 		if n != tc.want {
 			t.Errorf("a scope sees %d attempts, want %d", n, tc.want)
 		}
-	}
-	err := db.ReadTx(t.Context(), accountScope(a), func(tx pg.Tx) error {
-		_, err := GetOwn(t.Context(), tx, theirs.ID)
-		return err
-	})
-	if err == nil {
-		t.Error("account A fetched account B's call by ID")
 	}
 }
 
@@ -198,11 +204,15 @@ func TestRecordsAreStoredOnceAndNeverRefusedForLackOfAPartition(t *testing.T) {
 func TestCallAndAttemptsRoundTrip(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
-	a := uuid.NewV7()
-	rec := record(a, now)
+	rec := record(uuid.NewV7(), now)
 	keep(t, db, rec)
 	keep(t, db, rec) // a retry whose first write had committed
+	checkCallRow(t, db, rec)
+	checkAttemptsInOrder(t, db, rec)
+}
 
+func checkCallRow(t *testing.T, db *pg.DB, rec CallRecord) {
+	t.Helper()
 	var count, attempts int
 	var endpoint, source, egress, route string
 	var ledger int
@@ -220,7 +230,10 @@ func TestCallAndAttemptsRoundTrip(t *testing.T) {
 		t.Errorf("call: %d rows, %d attempts, endpoint %q, source %q, egress %q, route %q, %d ledger entries",
 			count, attempts, endpoint, source, egress, route, ledger)
 	}
+}
 
+func checkAttemptsInOrder(t *testing.T, db *pg.DB, rec CallRecord) {
+	t.Helper()
 	var seqs []int
 	var outcomes, endpoints, errors []string
 	var firstTokens []int
