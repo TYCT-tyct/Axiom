@@ -130,8 +130,12 @@ test.describe("two-step verification settings", () => {
     }) => {
       const state = await mockConsole(page);
       const { dialog, submit, url } = await flow.start(page, state);
+      // The request is held until the checks below are done, not for a fixed time: on a loaded runner they can take
+      // longer than any fixed delay, and the answer would replace the dialog before they look at it.
+      let answer!: () => void;
+      const held = new Promise<void>((resolve) => (answer = resolve));
       await page.route(url, async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        await held;
         await route.fallback();
       });
       await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
@@ -143,6 +147,7 @@ test.describe("two-step verification settings", () => {
       await expect(dialog.getByRole("button", { name: "取消" })).toBeDisabled();
       await expect(dialog.getByRole("button", { name: "关闭" })).toHaveCount(0);
       await expect(dialog).toBeVisible();
+      answer();
 
       const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
       await expect(codes.getByRole("listitem")).toHaveCount(10);
