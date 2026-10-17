@@ -114,7 +114,12 @@ func TestQueuedAdmissionsHoldNoConnection(t *testing.T) {
 func TestQueueLimits(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
-		o.config = func(c *Config) { c.QueuePerKey, c.QueueWait = 2, 400*time.Millisecond }
+		o.config = func(c *Config) {
+			c.QueuePerKey, c.QueueWait = 2, 400*time.Millisecond
+			// The account's gate, 200 ms by default, would turn the second and third request away before the queue
+			// they are here for on a loaded machine: the queue's limit is what this test asserts.
+			c.AccountGateWait = 30 * time.Second
+		}
 		o.endpoints = func(name string, e *routing.Endpoint) {
 			if name == "beta-1" {
 				e.MaxConcurrent = 1
@@ -234,6 +239,11 @@ func TestAdmissionGivesUpWhenTheBalanceIsLocked(t *testing.T) {
 	}
 	r.idle(1 << 30)
 	unlock()
+	// The budget is what the first request proves. The next one must not have to fit its database work into the same
+	// 500 ms on a loaded machine; the lock being free is what it proves.
+	r.limits.cfg.AdmissionBudget = 30 * time.Second
+	r.limits.cfg.LockTimeout = 20 * time.Second
+	r.limits.cfg.StatementTimeout = 25 * time.Second
 	if resp, body := r.message(a, "acme/beta"); resp.StatusCode != http.StatusOK {
 		t.Errorf("once the lock was released: %d %s", resp.StatusCode, body)
 	}

@@ -20,6 +20,9 @@ type Schedule struct {
 	offered  set[ServiceTier] // the service tiers with prices; a parsed schedule always has the standard tier
 }
 
+// Currency is what the schedule's prices are in.
+func (s Schedule) Currency() platform.Currency { return s.currency }
+
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
 // when the basis adds up to more than the threshold, for the whole request; M1 supports no other method
 // (README.md「条件」).
