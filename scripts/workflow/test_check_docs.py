@@ -68,7 +68,10 @@ class CheckDocsTest(unittest.TestCase):
     def test_config_mistakes_fail_instead_of_falling_back(self):
         config = ".github/project-workflow.toml"
         cases = {
-            "misspelled table": ("[limit]\ndoc_lines = 10\n", [f"{config}: unknown key limit; known: limits, source"]),
+            "misspelled table": ("[limit]\ndoc_lines = 10\n", [f"{config}: unknown key limit; known: limits, review, source"]),
+            "waiver as a string": ('[review]\nwaiver = "false"\n', [f"{config}: [review] takes only waiver = true or false"]),
+            "unknown review key": ("[review]\nwaivers = false\n", [f"{config}: [review] takes only waiver = true or false"]),
+            "waiver switched off": ("[review]\nwaiver = false\n", []),
             "bad values": ('source = "abc"\n[limits]\ndoc_lines = 0\ndoc_line = 4\n', [
                 f"{config}: source must be a full 40-character commit hash",
                 f"{config}: limit doc_lines must be a positive whole number, not 0",
