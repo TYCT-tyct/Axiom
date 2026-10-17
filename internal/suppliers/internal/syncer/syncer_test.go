@@ -40,7 +40,16 @@ func newStore() *memStore { return &memStore{charges: map[adapter.ChargeRef]adap
 func (s *memStore) Load(context.Context) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state.clone(), nil
+	st := s.state.clone()
+	// The real store reads whether the removal's alert was sent from the stored event, not from the state (State.
+	// CatchUpNotified is not stored): a reload in a test must forget what the state object held.
+	st.CatchUpNotified = false
+	for _, e := range s.events {
+		if e.Kind == RemovalSlow {
+			st.CatchUpNotified = true
+		}
+	}
+	return st, nil
 }
 
 func (s *memStore) Commit(_ context.Context, expect int64, c Commit) error {

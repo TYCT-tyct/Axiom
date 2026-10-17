@@ -124,11 +124,11 @@ func (e *Engine) finalScan(ctx context.Context, st *State, c *Commit) (wait bool
 }
 
 // waitForCatchUp ends this call and, once, tells a person that the removal has been waiting on the charge records for
-// longer than CatchUpAlert. The event is committed here rather than with the step: a step that only waits is not
-// committed by its caller.
+// longer than CatchUpAlert. Only the first read of a removal alerts: the second read starts a grace period after the
+// removal began, so the bound says nothing about it. The event is committed here rather than with the step: a step that
+// only waits is not committed by its caller.
 func (e *Engine) waitForCatchUp(ctx context.Context, st *State, c *Commit) (bool, error) {
-	if !st.CatchUpNotified && e.now().Sub(st.RemovalAt) > e.set.CatchUpAlert {
-		c.State.CatchUpNotified = true
+	if st.Removal == StepFinalScan && !st.CatchUpNotified && e.now().Sub(st.RemovalAt) > e.set.CatchUpAlert {
 		c.Events = append(c.Events, Event{Kind: RemovalSlow, Why: "the charge records are still being read"})
 		if err := e.commit(ctx, st, c); err != nil {
 			return false, err

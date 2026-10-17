@@ -82,8 +82,9 @@ type GroupSnap struct {
 }
 
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
-// 「持久化」), so the constants of Task, Status and RemovalStep only gain members at the end, and any other change to its
-// fields that an old stored state would read differently needs a new format number in package persist.
+// 「持久化」), except CatchUpNotified, which a store reads from what it stored besides the state, so the constants of
+// Task, Status and RemovalStep only gain members at the end, and any other change to its fields that an old stored
+// state would read differently needs a new format number in package persist.
 type State struct {
 	Version   int64 // the Store's fence: a Commit must name the version it read
 	ConfigGen int64 // raised when the configuration changes; results of rounds that began before are void
@@ -113,10 +114,13 @@ type State struct {
 	RescanFrom time.Time
 	// RemovalAt is when the removal began, and Through how far the adapter says the records are read (the last Done page
 	// that said); the first read of a removal goes on until Through reaches RemovalAt, so no backlog is left unread when
-	// the grace period starts. A removal happens once, so CatchUpNotified, the alert for a read that has been going on
-	// longer than CatchUpAlert, is sent once.
+	// the grace period starts.
 	RemovalAt, Through time.Time
-	CatchUpNotified    bool
+	// CatchUpNotified is whether the alert for a read that has been going on longer than CatchUpAlert has been sent. It
+	// is not stored in the state: a member this version adds to the stored state is one the version before it refuses
+	// (jsonx.UnmarshalKnown), and the two run side by side during a rollout (CONTRIBUTING「发布与缓存」). The store
+	// derives it from the removal_slow event it already has.
+	CatchUpNotified bool `json:"-"`
 }
 
 // Kind names an event.

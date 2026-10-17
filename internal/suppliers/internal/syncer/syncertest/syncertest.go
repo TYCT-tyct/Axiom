@@ -22,11 +22,19 @@ type Store struct {
 // New is an empty store.
 func New() *Store { return &Store{Charges: map[adapter.ChargeRef]adapter.Charge{}} }
 
-// Load implements syncer.Store.
+// Load implements syncer.Store. Like the real one, it reads whether a removal's alert was sent from the stored events:
+// the state does not keep it (syncer.State.CatchUpNotified).
 func (s *Store) Load(context.Context) (syncer.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state, nil
+	st := s.state
+	st.CatchUpNotified = false
+	for _, e := range s.Events {
+		if e.Kind == syncer.RemovalSlow {
+			st.CatchUpNotified = true
+		}
+	}
+	return st, nil
 }
 
 // Commit implements syncer.Store.

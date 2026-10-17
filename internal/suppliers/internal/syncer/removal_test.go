@@ -225,7 +225,45 @@ func TestRemovalAlertsOnceWhenCatchingUpTakesLong(t *testing.T) {
 		}
 		clk.advance(10 * time.Minute)
 	}
-	if st.state.Status != Removed || st.count(RemovalSlow) != 1 || !st.state.CatchUpNotified {
-		t.Errorf("status %v, %d alerts, notified %v; want it removed after one alert", st.state.Status, st.count(RemovalSlow), st.state.CatchUpNotified)
+	if st.state.Status != Removed || st.count(RemovalSlow) != 1 {
+		t.Errorf("status %v, %d alerts; want it removed after one alert", st.state.Status, st.count(RemovalSlow))
+	}
+}
+
+// TestRemovalDoesNotAlertInTheSecondRead: the first read catches up at once, so the removal enters the grace period well
+// inside the bound; the second read, made after it, is held up by the supplier's limits or by a pass that does not end.
+// It waits, and sends no catch-up alert: that alert is about the first read, and these records were read to the
+// removal's start before the grace period began.
+func TestRemovalDoesNotAlertInTheSecondRead(t *testing.T) {
+	t.Parallel()
+	for name, heldUp := range map[string]func(*supplier){
+		"rate limited": func(m *supplier) {
+			m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+				return adapter.ChargePage{}, nil, adapter.Blocked{Until: t0.Add(2 * time.Hour)}
+			}
+		},
+		"a pass that does not end": func(m *supplier) {
+			m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+				return adapter.ChargePage{}, adapter.ScanState(`{"v":1}`), nil
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := healthy()
+			e, st, clk := engine(m)
+			scanThrough(m, clk)
+			if done, err := e.Remove(t.Context(), &hooks{}); done || err != nil || st.state.Removal != StepGrace {
+				t.Fatalf("first Remove = %v, %v at step %v; want it waiting in the grace period", done, err, st.state.Removal)
+			}
+			clk.advance(31 * time.Minute) // past the grace period, and past CatchUpAlert from the removal's start
+			heldUp(m)
+			if done, err := e.Remove(t.Context(), &hooks{}); done || err != nil {
+				t.Fatalf("Remove in the second read = %v, %v; want it waiting", done, err)
+			}
+			if st.state.Removal != StepLateScan || st.count(RemovalSlow) != 0 {
+				t.Errorf("step %v, %d alerts; want the second read waiting without the catch-up alert", st.state.Removal, st.count(RemovalSlow))
+			}
+		})
 	}
 }
