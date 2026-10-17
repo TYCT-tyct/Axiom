@@ -112,6 +112,24 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 - 包装响应时实现 `FlushError` 和 `Unwrap`，流式处理器通过 `http.ResponseController` 刷新和设置期限，刷新也算响应已开始。
 - 生成的接口代码的每条出错路径都在 `cmd/axiom` 里设定，不留默认值：请求本身不合法时返回 400，说明只涉及客户端自己发来的内容；处理器出错时记日志、只返回 500，不把内部错误原文发给客户端。
 
+## 前端文件
+
+`webui` 提供 `web/` 构建出的官网、控制台和管理后台，文件由 `go:embed` 读入，启动时全部载入内存。
+
+| 规则 | 做法 | 为什么 |
+|---|---|---|
+| 嵌入的一定是本次的构建 | `just web-embed`（`web/scripts/embed.ts`）把三个 `dist/` 复制到 `webui/build/`；`just up`、`just test`、`just web` 都依赖它。`build/` 除一份说明外不入库。没有构建时 `go build` 照常通过，程序启动报「前端没有嵌入，先运行 `just web-embed`」 | 嵌入目录缺失时 `go:embed` 的报错不说怎么办；放在启动时是本地能查的事不拖到运行时 |
+| 带哈希的资源长期缓存 | `assets/` 下名字以 8 位哈希结尾的文件：`public, max-age=31536000, immutable`。其余一律 `no-store`，包括入口页和所有 404 | 名字随内容变，永远不会拿到别的内容；入口页是发布时唯一要立刻换掉的文件 |
+| 静态文件预压缩 | 构建时给文本文件（html、js、css、svg、json、txt）各写一份 brotli（q11）和 gzip（9），比原文小才写；服务器按 `Accept-Encoding` 的 q 值选，相同时 br 优先，都不接受或 `q=0` 发原文，一律带 `Vary: Accept-Encoding`。压缩函数只有一个（`web/scripts/compress.ts`），体积预算也用它 | 不在请求路径上压缩，不占 CPU；预算量的就是发出去的 |
+| 不压缩流式响应 | 压缩只有两处：上面的预压缩，和 `httpserver.Compress`，后者只在控制台接口上，只压 `application/json`、至少 1 KiB、客户端接受 gzip 的响应。其他类型（`text/event-stream`、NDJSON 等）原样通过；带 `ETag` 的、已编码的、被刷新过的也原样。模型调用接口不挂它 | 压缩器的缓冲会让流式输出攒着不发；按类型白名单排除，新的流式类型默认不被压 |
+| 单页应用回退 | 只对 GET/HEAD、路径不带扩展名、`Accept` 含 `text/html` 的未知路径回到该应用的入口页。`/api/`、`/v1/` 下的一律 404，扩展名不为空的未知路径（缺失的脚本、过期的代码块）也是 404 | 回退成 200 的 HTML 会把过期的代码块伪装成脚本；接口调用方要的是 404，不是页面 |
+| 公网监听不含管理后台 | 公网的处理器只持有官网和控制台的文件；管理后台的处理器只交给管理监听 | 结构上不可达，而不是靠路径判断 |
+| 安全响应头 | `Content-Security-Policy`（`vite.shared.ts` 里唯一的一份，由 `embed.ts` 写进 `build/content-security-policy.txt`，Go 原样发送）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（关摄像头、麦克风、定位）。每个应答都带，错误也带 | 策略只在一处定义，两边不会漂移；HSTS 由终结 TLS 的入口节点发 |
+| 不支持范围请求 | 整个文件带 `Content-Length` 发送 | 脚本、样式和字体没有人要一段；`http.ServeContent` 对已编码的响应不写长度 |
+| 滚动发布时 | 旧页面请求新版本已经没有的代码块得到 404，前端自动刷新一次（`web/README.md`）；一台机器上的页面和资源总来自同一个构建 | 多台机器新旧并存时，页面和它的代码块可能落在不同版本上，靠这一次刷新恢复；要彻底避免，由入口节点按会话粘到同一台 |
+
+模型与价格页由 Go 在返回页面时写入数据的位置留在 `webui` 的应用里：以后在回退到入口页的地方改成渲染，不改路由。
+
 ## 接口约定
 
 控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
@@ -192,6 +210,10 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。
 - 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
 - 删除旧结构的收缩迁移怎么与滚动发布共存，随第一个收缩迁移确定。
+
+### 任务队列
+
+`pg.Queue`（`db.NewQueue(logger)`）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
 
 ### 查询（sqlc）
 
