@@ -40,7 +40,7 @@ const bodyTimeout = 2 * time.Minute
 const defaultStartupTimeout = 30 * time.Second
 
 // probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func probesListenAddr(env *config.Env) string { return env.Addr("AXIOM_PROBES_ADDR", "127.0.0.1:8081") }
+func probesListenAddr(env *config.Env) string { return env.Addr(probesAddrVar, "127.0.0.1:8081") }
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
@@ -66,19 +66,19 @@ type nodeSettings struct {
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"), // model calls, the console, payment callbacks
+		publicAddr:      env.Addr(publicAddrVar, ":8080"), // model calls, the console, payment callbacks
 		probesAddr:      probesListenAddr(env),
-		adminAddr:       env.Addr("AXIOM_ADMIN_ADDR", ""), // the admin API, only on the core
-		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
-		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
+		adminAddr:       env.Addr(adminAddrVar, ""), // the admin API, only on the core
+		startupTimeout:  env.Duration(startupTimeoutVar, defaultStartupTimeout),
+		shutdownTimeout: env.Duration(shutdownTimeoutVar, 30*time.Second),
 		databaseURL:     env.Required(pg.DatabaseURLVar),
-		masterKeyFile:   env.Required("AXIOM_MASTER_KEY_FILE"),
-		keyHashFile:     env.Required("AXIOM_KEY_HASH_FILE"),
+		masterKeyFile:   env.Required(masterKeyFileVar),
+		keyHashFile:     env.Required(keyHashFileVar),
 		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 		// GOMAXPROCS and 2 seconds).
-		hashConcurrency: env.Int("AXIOM_HASH_CONCURRENCY", 0, 1),
-		hashWait:        env.Duration("AXIOM_HASH_WAIT", 0),
-		trustedProxies:  env.Prefixes("AXIOM_TRUSTED_PROXIES"),
+		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
+		hashWait:        env.Duration(hashWaitVar, 0),
+		trustedProxies:  env.Prefixes(trustedProxiesVar),
 	}
 	if err := env.Err(); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
@@ -297,17 +297,17 @@ func node(publicAddr string, routes http.Handler, adminAddr string, adminRoutes 
 	server := func(routes http.Handler) *http.Server {
 		return httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
 	}
-	servers := []*listening{{"AXIOM_PUBLIC_ADDR", publicAddr, server(routes), nil}}
+	servers := []*listening{{publicAddrVar, publicAddr, server(routes), nil}}
 	if adminRoutes != nil {
-		servers = append(servers, &listening{"AXIOM_ADMIN_ADDR", adminAddr, server(adminRoutes), nil})
+		servers = append(servers, &listening{adminAddrVar, adminAddr, server(adminRoutes), nil})
 	}
-	return append(servers, &listening{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil})
+	return append(servers, &listening{probesAddrVar, probesAddr, health.Server(logger), nil})
 }
 
 // servedAddrs are the addresses the node listens on, named for the log line that reports them: public, admin when
 // the node serves one, and ops.
 func servedAddrs(servers []*listening) []any {
-	names := map[string]string{"AXIOM_PUBLIC_ADDR": "public", "AXIOM_ADMIN_ADDR": "admin", "AXIOM_PROBES_ADDR": "ops"}
+	names := map[string]string{publicAddrVar: "public", adminAddrVar: "admin", probesAddrVar: "ops"}
 	var attrs []any
 	for _, s := range servers {
 		attrs = append(attrs, names[s.variable], s.listener.Addr().String())
@@ -318,7 +318,7 @@ func servedAddrs(servers []*listening) []any {
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
+	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within " + startupTimeoutVar)
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)

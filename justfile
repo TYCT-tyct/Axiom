@@ -87,9 +87,14 @@ test: web-embed
 record format scenario request:
     go run ./internal/protocol/internal/record internal/protocol/testdata {{ quote(format) }} {{ quote(scenario) }} {{ quote(request) }}
 
+# Benchmarks of two jobs at once measure each other, so on a shared machine they take turns, as the CI server's README
+# asks of every shared resource: through a /tmp lock, which is what flock is for and where it exists. Windows and macOS
+# have neither the other jobs nor flock, and a developer's machine benchmarks alone.
+bench_lock := if os() == "linux" { "flock /tmp/axiom-bench.lock" } else { "" }
+
 # Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
 bench-compare base:
-    go run -C tools ./benchgate .. {{ quote(base) }}
+    {{ bench_lock }} go run -C tools ./benchgate .. {{ quote(base) }}
 
 compose := "docker compose -f deploy/compose.yaml"
 

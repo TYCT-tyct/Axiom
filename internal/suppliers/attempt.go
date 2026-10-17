@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptrace"
 	"sync"
@@ -22,10 +23,13 @@ type Failure = adapter.Failure
 // CallPolicy is how calls to an endpoint behave: whether they stream and whether the supplier stops when we do.
 type CallPolicy = adapter.CallPolicy
 
-// Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint.
+// Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint, and the
+// request headers that go with it (gateway's whitelist: anthropic-beta and anthropic-version). Header never replaces
+// the credential or the content type, and gives the version the client chose over the default.
 type Call struct {
 	Format protocol.Format
 	Body   []byte
+	Header http.Header
 }
 
 // AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, and the
@@ -103,6 +107,14 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 	return best, bestN
 }
 
+// NotExecuted is the Executed of a failure after which the supplier is known not to have run the request; any other
+// value is unknown, and the cost is then estimated (README.md「调用面」).
+const NotExecuted = adapter.NotExecuted
+
+// RateLimited is the Cause of a supplier's answer that there were too many requests, which routing weighs the endpoint
+// down for. gateway cannot name the adapter's own types, so the two it needs are named here.
+type RateLimited = adapter.RateLimited
+
 // Policy is how this attempt's endpoint behaves: the adapter's default, over which quality's measurement of
 // cancellation stands.
 func (a *Attempt) Policy() CallPolicy { return a.s.policy(a.ep) }
@@ -145,9 +157,10 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
+	maps.Copy(req.Header, call.Header)
 	req.Header.Set("Authorization", "Bearer "+a.cred.key.Reveal())
 	req.Header.Set("Content-Type", "application/json")
-	if w.version != "" {
+	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)
 	}
 	resp, err := a.s.cfg.Egress.Do(req)

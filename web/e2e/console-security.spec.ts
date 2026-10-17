@@ -1,19 +1,14 @@
 import { expect, type Page, test } from "@playwright/test";
+import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { knownPassword } from "./mock-auth.ts";
+import { advanceUntil } from "./page-clock.ts";
 
 // The security page against the mocked API (console-api.ts): two-step verification and the codes it hands out once.
 
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  return errors;
-}
+// What a page does when its window comes back to the front, which is when it asks again for the session.
+const returnToWindow = (page: Page) =>
+  page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
 
 test.describe("two-step verification settings", () => {
   test("turning it on shows a QR code and the recovery codes once, and later changes use the new session", async ({
@@ -68,28 +63,34 @@ test.describe("two-step verification settings", () => {
     await page.goto("/console/security");
     await expect(page.getByText("未开启")).toBeVisible();
     const session = "**/api/console/v1/session";
-    await page.route(session, (route) =>
-      route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
-    );
+    let reads = 0;
+    await page.route(session, (route) => {
+      reads += 1;
+      return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
+    });
 
     await page.getByRole("button", { name: "开启两步验证" }).click();
     const dialog = page.getByRole("dialog", { name: "开启两步验证" });
     await dialog.getByLabel("密码").fill(knownPassword);
     await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
+    // From here on the session is asked for again, and the query keeps its retries on the page's clock, which
+    // advanceUntil moves: the three reads then take a few steps of simulated time instead of seconds of wall clock.
+    await page.clock.install();
     await dialog.getByRole("button", { name: "开启", exact: true }).click();
 
     // The server has changed the factor and will not say the codes again. Keeping them reads the new session, which
     // fails (after the query's retries); the codes stay on screen, with the reason.
     const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
+    await advanceUntil(page, () => expect(codes.getByRole("listitem")).toHaveCount(10, { timeout: 100 }));
+    await advanceUntil(page, () => expect(reads).toBe(3));
     await expect(codes.getByRole("listitem")).toHaveCount(10);
     await codes.getByRole("button", { name: "我已保存" }).click();
     await expect(codes.getByRole("alert")).toContainText("服务出了问题", { timeout: 10_000 });
     await expect(codes.getByRole("listitem")).toHaveCount(10);
 
     await page.unroute(session);
-    await codes.getByRole("button", { name: "我已保存" }).click();
-    await expect(codes).toHaveCount(0);
-    await expect(page.getByText("已开启")).toBeVisible();
+    await returnToWindow(page);
+    await advanceUntil(page, () => expect(page.getByText("已开启")).toBeVisible({ timeout: 100 }));
   });
 
   for (const flow of [
@@ -125,8 +126,12 @@ test.describe("two-step verification settings", () => {
     }) => {
       const state = await mockConsole(page);
       const { dialog, submit, url } = await flow.start(page, state);
+      // The request is held until the checks below are done, not for a fixed time: on a loaded runner they can take
+      // longer than any fixed delay, and the answer would replace the dialog before they look at it.
+      let answer!: () => void;
+      const held = new Promise<void>((resolve) => (answer = resolve));
       await page.route(url, async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, 600));
+        await held;
         await route.fallback();
       });
       await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
@@ -138,6 +143,7 @@ test.describe("two-step verification settings", () => {
       await expect(dialog.getByRole("button", { name: "取消" })).toBeDisabled();
       await expect(dialog.getByRole("button", { name: "关闭" })).toHaveCount(0);
       await expect(dialog).toBeVisible();
+      answer();
 
       const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
       await expect(codes.getByRole("listitem")).toHaveCount(10);
