@@ -244,9 +244,19 @@ func (db *DB) ReadTx(ctx context.Context, scope Scope, fn func(Tx) error) error 
 	return db.begin(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, scope, fn)
 }
 
+// startSpan opens the transaction's span, a child of ctx's span. Its attribute is set only when the span records: an
+// unsampled span drops attributes, but Go builds their arguments first, and with no exporter nothing is sampled
+// (internal/platform/README.md「遥测」). The span carries no statement and no error text, which may quote data.
+func (db *DB) startSpan(ctx context.Context) (context.Context, trace.Span) {
+	ctx, span := db.tracer.Start(ctx, "db.tx", trace.WithSpanKind(trace.SpanKindClient))
+	if span.IsRecording() {
+		span.SetAttributes(attribute.String("db.system", "postgresql"))
+	}
+	return ctx, span
+}
+
 func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn func(Tx) error) (err error) {
-	ctx, span := db.tracer.Start(ctx, "db.tx", trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(attribute.String("db.system", "postgresql")))
+	ctx, span := db.startSpan(ctx)
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, "transaction failed")
