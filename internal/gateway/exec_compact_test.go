@@ -48,6 +48,13 @@ func compact(t *testing.T, c *Call) {
 	}
 }
 
+// bigCompacted is a compact reply holding n bytes of encrypted content, with the usage the sample's has.
+func bigCompacted(n int) string {
+	return `{"object":"response.compaction","output":[{"type":"compaction","id":"cmp_1","encrypted_content":"` +
+		strings.Repeat("x", n) + `"}],"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40},` +
+		`"output_tokens":10,"output_tokens_details":{"reasoning_tokens":4}}}`
+}
+
 // wholeAnswer is an upstream that answers with a whole body, as the compact endpoint does.
 func wholeAnswer(body string) scripted {
 	return func(context.Context) (*http.Response, *suppliers.Failure) {
@@ -287,7 +294,7 @@ func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
 // (docs/domains/gateway.md「转发规则」).
 func TestASlowClientGetsItsWholeReply(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		reply := `{"object":"response.compaction","output":"` + strings.Repeat("x", 1<<20) + `"}`
+		reply := bigCompacted(1 << 20)
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.rate = 96 << 10 // 96 KiB a second: a 64 KiB chunk takes 0.68s, the 1 MiB reply 10.9s
@@ -312,7 +319,7 @@ func TestASlowClientGetsItsWholeReply(t *testing.T) {
 // (docs/domains/gateway.md「转发规则」, README.md「超时与限额」).
 func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		reply := `{"object":"response.compaction","output":"` + strings.Repeat("x", 256<<10) + `"}`
+		reply := bigCompacted(256 << 10)
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.rate = 8 << 10 // 8 KiB a second: a chunk in 8s, the 256 KiB reply in 32s against a total of 16s
@@ -336,7 +343,7 @@ func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 // 「用量与费用」).
 func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		reply := `{"object":"response.compaction","output":"` + strings.Repeat("x", 256<<10) + `"}`
+		reply := bigCompacted(256 << 10)
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.failFrom = 2 // the second chunk's write fails, as a client that stopped reading
