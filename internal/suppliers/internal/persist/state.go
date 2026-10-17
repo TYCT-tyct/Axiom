@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/reconcile"
 	"axiom/internal/suppliers/internal/store"
 	"axiom/internal/suppliers/internal/syncer"
@@ -20,6 +21,38 @@ const format = 1
 
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// listings is what the state keeps beside itself, in the sync_states.listing column: how far the two paged listings got,
+// and the configuration generation they were read in. A member the state gained would be one a node of the version
+// before refuses (jsonx.UnmarshalKnown), so it is a column of its own, read leniently: a position this version does not
+// know is dropped and its listing begins again, which costs reads, not keys.
+type listings struct {
+	Gen   int64           `json:"gen"`
+	Offer adapter.Listing `json:"offer"`
+	Keys  adapter.Listing `json:"keys"`
+}
+
+// encodeListings is the column's value, or nothing while neither listing is under way.
+func encodeListings(gen int64, st syncer.State) ([]byte, error) {
+	if st.OfferAt == nil && st.KeysAt == nil {
+		return nil, nil
+	}
+	return jsonx.MarshalCanonical(listings{Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
+}
+
+// decodeListings reads the column: where the two listings got, or nothing when it holds a position this version does
+// not read, or one read in another configuration generation (the credentials were replaced, the supplier was paused, a
+// removal began). Either way the listing begins again, which costs reads, not keys.
+func decodeListings(row []byte, gen int64) (offer, keys adapter.Listing) {
+	if len(row) == 0 {
+		return nil, nil
+	}
+	var l listings
+	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen {
+		return nil, nil
+	}
+	return l.Offer, l.Keys
+}
 
 type stateStore struct{ s *Session }
 
@@ -38,6 +71,7 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 			return fmt.Errorf("decode the state: %w", err)
 		}
 		out.Version = row.Version
+		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen)
 		if out.Removal == syncer.StepFinalScan {
 			// The state does not store whether the removal's alert was sent (an older node would refuse that member),
 			// so it is read back from the event the alert wrote. Only the first read of a removal alerts, so the rest
@@ -66,6 +100,10 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		return fmt.Errorf("persist: encode the state: %w", err)
 	}
 	cfg, id := st.s.node.cfg, st.s.Supplier.ID
+	listing, err := encodeListings(st.s.Supplier.ConfigGen, c.State)
+	if err != nil {
+		return fmt.Errorf("persist: encode the listings of supplier %s: %w", id, err)
+	}
 	now := cfg.Now()
 	until := now.Add(cfg.LeaseTTL)
 	err = cfg.DB.Tx(ctx, cfg.Scope, func(tx pg.Tx) error {
@@ -75,7 +113,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		}
 		changed, err := store.New().CommitSyncState(ctx, tx, store.CommitSyncStateParams{
 			SupplierID: id, Expect: expect, Version: c.State.Version, Format: format,
-			State: encoded, NextDue: nextDue(c.State), LeaseUntil: &until,
+			State: encoded, Listing: listing, NextDue: nextDue(c.State), LeaseUntil: &until,
 		})
 		if err != nil {
 			return err

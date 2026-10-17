@@ -111,3 +111,46 @@ func open(t testing.TB, c adapter.Client, now time.Time) adapter.Manager {
 	}
 	return m
 }
+
+// readOffer reads the whole offer over as many reads as it takes, each from the position the one before gave, as the
+// module does.
+func readOffer(t testing.TB, m adapter.Manager) ([]adapter.Group, error) {
+	t.Helper()
+	var from adapter.Listing
+	for range maxPages + 1 {
+		page, err := m.Offer(t.Context(), from)
+		if err != nil {
+			return nil, err
+		}
+		if page.Done {
+			return page.Items, nil
+		}
+		if len(page.Next) == 0 {
+			t.Fatal("a read that did not end the offer gave no position to go on from")
+		}
+		from = page.Next
+	}
+	t.Fatal("the offer did not end")
+	return nil, nil
+}
+
+// readKeys reads the whole keys listing the same way.
+func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
+	t.Helper()
+	var from adapter.Listing
+	for range maxPages + 1 {
+		page, err := m.Keys(t.Context(), from)
+		if err != nil {
+			return nil, err
+		}
+		if page.Done {
+			return page.Items, nil
+		}
+		if len(page.Next) == 0 {
+			t.Fatal("a read that did not end the listing gave no position to go on from")
+		}
+		from = page.Next
+	}
+	t.Fatal("the keys listing did not end")
+	return nil, nil
+}

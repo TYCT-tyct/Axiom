@@ -154,6 +154,7 @@ type clock struct{ t time.Time }
 
 func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *clock) set(t time.Time)         { c.t = t }
 
 // managerAt opens a manager whose clock is clk.
 func managerAt(t testing.TB, srv adapter.Client, st *store, clk *clock) adapter.Manager {
@@ -196,4 +197,77 @@ func manager0(t testing.TB, srv *server, st *store) adapter.Manager {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// readKeys reads the whole keys listing over as many reads as it takes, each from the position the one before gave, as
+// the module does.
+func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
+	t.Helper()
+	var from adapter.Listing
+	for range maxPages + 1 {
+		page, err := m.Keys(t.Context(), from)
+		if err != nil {
+			return nil, err
+		}
+		if page.Done {
+			return page.Items, nil
+		}
+		if len(page.Next) == 0 {
+			t.Fatal("a read that did not end the listing gave no position to go on from")
+		}
+		from = page.Next
+	}
+	t.Fatal("the keys listing did not end")
+	return nil, nil
+}
+
+// readOffer reads the whole offer the same way.
+func readOffer(t testing.TB, m adapter.Manager) ([]adapter.Group, error) {
+	t.Helper()
+	var from adapter.Listing
+	for range maxPages + 1 {
+		page, err := m.Offer(t.Context(), from)
+		if err != nil {
+			return nil, err
+		}
+		if page.Done {
+			return page.Items, nil
+		}
+		if len(page.Next) == 0 {
+			t.Fatal("a read that did not end the offer gave no position to go on from")
+		}
+		from = page.Next
+	}
+	t.Fatal("the offer did not end")
+	return nil, nil
+}
+
+// readPaged reads a listing over as many reads as its bucket allows: a read the bucket stopped is given again after the
+// window reopens, from the position it answered with. It returns the read that ended the listing, and how often it had
+// to wait.
+func readPaged[T any](t *testing.T, clk *clock, read func(from adapter.Listing) (adapter.Page[T], error)) (adapter.Page[T], int) {
+	t.Helper()
+	var from adapter.Listing
+	var page adapter.Page[T]
+	waits := 0
+	for range 500 {
+		var err error
+		if page, err = read(from); err != nil {
+			t.Fatal(err)
+		}
+		if page.Done {
+			return page, waits
+		}
+		if !page.Until.IsZero() {
+			waits++
+			clk.set(page.Until)
+			continue
+		}
+		if len(page.Next) == 0 {
+			t.Fatal("a read that did not end the listing gave no position to go on from")
+		}
+		from = page.Next
+	}
+	t.Fatal("the listing did not end")
+	return page, waits
 }

@@ -41,7 +41,9 @@ type scanState struct {
 	Pass      *pass `json:"pass,omitempty"`
 }
 
-// pass is the pass under way: the time it covers, the keys it reads (listed when it starts) and where in them it is.
+// pass is the pass under way: the time it covers, the keys it reads and where in them it is. Page is the key page while
+// the keys are being listed, and the page of a key's usage records once they are: a member of its own for the key page
+// would be one a node of the version before refuses, and the two run side by side during a rollout.
 type pass struct {
 	Late   bool     `json:"late"`
 	Start  int64    `json:"start"`
@@ -135,15 +137,21 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	return out, state, err
 }
 
-// passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended.
+// passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended. A pass
+// begins by listing the keys it reads, one page of them per read, so that a supplier with more keys than a window allows
+// is read over several reads.
 func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool, error) {
 	if !p.Listed {
-		keys, err := m.listKeys(ctx)
+		items, pages, _, err := m.keyPage(ctx, p.Page)
 		if err != nil {
 			return nil, false, err
 		}
-		for _, k := range keys {
+		for _, k := range items {
 			p.Keys = append(p.Keys, string(k.ID))
+		}
+		if p.Page < pages && len(items) > 0 {
+			p.Page++
+			return nil, false, nil
 		}
 		p.Listed, p.Page = true, 1
 	}

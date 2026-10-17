@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -28,6 +31,52 @@ import (
 
 var platform = pg.NewScope(true, nil, nil)
 
+// paging is a fake paged listing of the supplier: how many pages it has, the page whose read the limits refuse (once,
+// for as long as they stay shut) and the pages served.
+type paging struct {
+	mu     sync.Mutex
+	pages  int
+	stopAt int           // the page whose read is refused, once; 0 for none
+	wait   time.Duration // how long from now the limits stay shut
+	served []int
+}
+
+// read serves one read of the listing from the position in from: the page it read, the position after it, whether that
+// ends the listing, and when the limits reopen if they refused the read.
+func (p *paging) read(from adapter.Listing) (page int, next adapter.Listing, done bool, until time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pos := struct {
+		Page int `json:"page"`
+	}{Page: 1}
+	if len(from) > 0 {
+		if err := jsonx.Unmarshal(from, &pos); err != nil {
+			panic(err) // the test's own position
+		}
+	}
+	encode := func() adapter.Listing {
+		b, err := jsonx.MarshalCanonical(pos)
+		if err != nil {
+			panic(err) // a page number always encodes
+		}
+		return b
+	}
+	if pos.Page == p.stopAt {
+		p.stopAt = 0
+		return 0, encode(), false, time.Now().Add(p.wait)
+	}
+	p.served = append(p.served, pos.Page)
+	pos.Page++
+	return pos.Page - 1, encode(), pos.Page > p.pages, time.Time{}
+}
+
+// readPages is the pages the listing served, in order.
+func (p *paging) readPages() []int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.served)
+}
+
 // system is the made-up supplier system the tests sync: its manager answers as its fields say, and counts the calls.
 type system struct {
 	adapter.Adapter
@@ -35,17 +84,13 @@ type system struct {
 	account  func() (adapter.Account, error)
 	opens    atomic.Int32
 	accounts atomic.Int32
-	// holdKeys, if set, makes the first listing of keys of each opened adapter end at the supplier's limits for as long
-	// as it says, as a listing of more pages than a window allows does; the second goes on and is counted as finished.
-	holdKeys     time.Duration
+	// keys and offer are the listings of the supplier: pages of one item each, and the limits the tests move into them.
+	keys, offer paging
+	// keysFinished counts the listings of keys that ended.
 	keysFinished atomic.Int32
 	// holdOpen, if set, makes the first Open end at the supplier's limits for as long as it says, as a login the
 	// supplier answers with a wait does; the next goes through.
 	holdOpen time.Duration
-	// stuckKeys, if not zero, makes every listing of keys end at limits that reopen that long from now (a time already
-	// past if negative), so that the round is held up for as long as the job goes on.
-	stuckKeys time.Duration
-	keysCalls atomic.Int32
 }
 
 func (*system) Kind() adapter.Kind            { return "fake" }
@@ -61,8 +106,7 @@ func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adap
 }
 
 type manager struct {
-	s    *system
-	keys int
+	s *system
 }
 
 func (m *manager) Account(context.Context) (adapter.Account, error) {
@@ -70,19 +114,24 @@ func (m *manager) Account(context.Context) (adapter.Account, error) {
 	return m.s.account()
 }
 
-func (*manager) Offer(context.Context) (adapter.Offer, error) { return adapter.Offer{}, nil }
-
-func (m *manager) Keys(context.Context) ([]adapter.KeyState, error) {
-	m.keys++
-	m.s.keysCalls.Add(1)
-	if m.s.stuckKeys != 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(m.s.stuckKeys)}
+func (m *manager) Offer(_ context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
+	page, next, done, until := m.s.offer.read(from)
+	if !done {
+		return adapter.Page[adapter.Group]{Next: next, Until: until}, nil
 	}
-	if m.keys == 1 && m.s.holdKeys > 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(m.s.holdKeys)}
+	return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
+		Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`),
+		Models: []adapter.Model{{UpstreamName: "m"}},
+	}}}, nil
+}
+
+func (m *manager) Keys(_ context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	page, next, done, until := m.s.keys.read(from)
+	if !done {
+		return adapter.Page[adapter.KeyState]{Next: next, Until: until}, nil
 	}
 	m.s.keysFinished.Add(1)
-	return nil, nil
+	return adapter.Page[adapter.KeyState]{Done: true, Items: []adapter.KeyState{{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive}}}, nil
 }
 
 func (*manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
@@ -473,53 +522,17 @@ func TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing(t *testing.T) {
 	}
 }
 
-// TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter: when the supplier's limits end a listing half way, the job waits
-// for them to reopen and goes on with the adapter it has, whose listing remembers how far it got; a job that ended there
-// would leave the next to open a new adapter and begin the listing again, and a listing longer than a window would never
-// be finished.
-func TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter(t *testing.T) {
-	t.Parallel()
-	s := &system{account: healthy(), holdKeys: 300 * time.Millisecond}
-	c := newCluster(t, s)
-	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
-		t.Fatal(err)
-	}
-	if s.opens.Load() != 1 || s.keysFinished.Load() != 1 {
-		t.Errorf("the adapter was opened %d times and finished the listing %d times, want once and once", s.opens.Load(), s.keysFinished.Load())
-	}
-}
-
 // TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen: an Open that the supplier's limits refuse is not remembered as
-// the round's failure: the job waits and opens again, and the round goes through.
+// the round's failure: the next task of the round opens again, and the round goes through.
 func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 	t.Parallel()
 	s := &system{account: healthy(), holdOpen: 300 * time.Millisecond}
 	c := newCluster(t, s)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second) // a job that keeps the refusal waits here
-	defer cancel()
-	if err := c.node("a", time.Hour).s.sync(ctx, c.supplier); err != nil {
+	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
 	if s.opens.Load() < 2 || s.accounts.Load() != 1 {
 		t.Errorf("the adapter was opened %d times and the balance read %d times, want a second open and one read", s.opens.Load(), s.accounts.Load())
-	}
-}
-
-// TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp: a round that the limits keep holding up ends with the job's budget,
-// even when the time they name has already passed, which would otherwise keep it going until the queue cancels it.
-func TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp(t *testing.T) {
-	t.Parallel()
-	s := &system{account: healthy(), stuckKeys: -time.Hour}
-	c := newCluster(t, s)
-	n := c.node("a", time.Hour)
-	n.s.budget = 3 * time.Second
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	if err := n.s.sync(ctx, c.supplier); err != nil {
-		t.Fatalf("the job did not end within its budget: %v", err)
-	}
-	if s.keysCalls.Load() < 2 {
-		t.Errorf("the listing was tried %d times, want it retried while the budget lasted", s.keysCalls.Load())
 	}
 }
 

@@ -207,6 +207,55 @@ func TestALeaseThatRanOutIsTakenOverAndTheOldHolderWritesNothing(t *testing.T) {
 	}
 }
 
+// TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration: the page a listing reached is stored beside the state,
+// in a column of its own, so another node goes on from it while the state keeps the shape an older node reads; a change
+// of the configuration (the credentials are replaced, or a pause) makes it stale, and the listing begins again.
+func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	kept := stateAt(1)
+	kept.OfferAt, kept.KeysAt = adapter.Listing(`{"page":2}`), adapter.Listing(`{"page":3}`)
+	if err := c.acquire(c.node("a")).Store().Commit(t.Context(), 0, syncer.Commit{State: kept}); err != nil {
+		t.Fatal(err)
+	}
+	state, listing := c.stored()
+	if strings.Contains(state, "OfferAt") || strings.Contains(state, "KeysAt") || !strings.Contains(listing, "page") {
+		t.Errorf("the state holds a listing position (%s), or the column does not hold it (%s)", state, listing)
+	}
+
+	// Another node reads the positions as the node before wrote them.
+	c.clock.advance(ttl + time.Second)
+	st, err := c.acquire(c.node("b")).Store().Load(t.Context())
+	if err != nil || string(st.OfferAt) != `{"page":2}` || string(st.KeysAt) != `{"page":3}` {
+		t.Fatalf("the position another node read: %q, %q, %v", st.OfferAt, st.KeysAt, err)
+	}
+
+	// A new configuration generation: the position belongs to a listing of an account or a run that is gone.
+	if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET config_gen = config_gen + 1 WHERE id = $1", c.supplier)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.clock.advance(ttl + time.Second)
+	if st, err = c.acquire(c.node("c")).Store().Load(t.Context()); err != nil || st.OfferAt != nil || st.KeysAt != nil {
+		t.Errorf("after the configuration changed: %q, %q, %v; want the positions given up", st.OfferAt, st.KeysAt, err)
+	}
+}
+
+// stored is the supplier's state and its column of listing positions, as text.
+func (c *cluster) stored() (state, listing string) {
+	c.t.Helper()
+	err := c.open().ReadTx(c.t.Context(), platform, func(tx pg.Tx) error {
+		return tx.QueryRow(c.t.Context(), "SELECT state::text, coalesce(listing::text, '') FROM suppliers.sync_states WHERE supplier_id = $1",
+			c.supplier).Scan(&state, &listing)
+	})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return state, listing
+}
+
 // TestACommitKeepsTheLeaseAndAReleaseGivesItUp: every commit lengthens the lease by its time, so a round longer than the
 // time keeps it; a released lease can be taken at once, and a release by a holder that lost the lease takes nothing.
 func TestACommitKeepsTheLeaseAndAReleaseGivesItUp(t *testing.T) {
@@ -349,8 +398,15 @@ type pages struct {
 func (*pages) Account(context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: "100", Funding: adapter.FundingWallet}, nil
 }
-func (*pages) Offer(context.Context) (adapter.Offer, error)     { return adapter.Offer{}, nil }
-func (*pages) Keys(context.Context) ([]adapter.KeyState, error) { return nil, nil }
+
+func (*pages) Offer(context.Context, adapter.Listing) (adapter.Page[adapter.Group], error) {
+	return adapter.Page[adapter.Group]{Done: true}, nil
+}
+
+func (*pages) Keys(context.Context, adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	return adapter.Page[adapter.KeyState]{Done: true}, nil
+}
+
 func (*pages) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
 	return secret.Secret{}, errors.New("not used")
 }

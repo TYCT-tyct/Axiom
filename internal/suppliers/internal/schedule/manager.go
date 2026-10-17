@@ -13,7 +13,7 @@ import (
 // (the account is rejected, the supplier is down): by failing inside a task it is recorded as the task's failure, with
 // the backoff or the stop that goes with it, instead of ending the round before the engine has seen it. One login a
 // round, not one for each task. A refusal for want of allowance (adapter.ErrBucketsFull) is not kept: it asked nothing
-// of the supplier, and the caller that waits for the limits to reopen must be able to open again then.
+// of the supplier, and the tasks of the round after it must be able to open again then.
 //
 // It does not forward adapter.Rescanner, which a removal asks the Manager for; a removal opens the adapter before it
 // begins.
@@ -40,20 +40,20 @@ func (o *openOnUse) Account(ctx context.Context) (adapter.Account, error) {
 	return m.Account(ctx)
 }
 
-func (o *openOnUse) Offer(ctx context.Context) (adapter.Offer, error) {
+func (o *openOnUse) Offer(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
 	m, err := o.get()
 	if err != nil {
-		return adapter.Offer{}, err
+		return adapter.Page[adapter.Group]{}, err
 	}
-	return m.Offer(ctx)
+	return m.Offer(ctx, from)
 }
 
-func (o *openOnUse) Keys(ctx context.Context) ([]adapter.KeyState, error) {
+func (o *openOnUse) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 	m, err := o.get()
 	if err != nil {
-		return nil, err
+		return adapter.Page[adapter.KeyState]{}, err
 	}
-	return m.Keys(ctx)
+	return m.Keys(ctx, from)
 }
 
 func (o *openOnUse) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Secret, error) {

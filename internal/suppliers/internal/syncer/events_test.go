@@ -10,9 +10,9 @@ import (
 )
 
 // groupOf is an offer of one group with the given facts and models.
-func groupOf(facts string, models ...adapter.Model) func() (adapter.Offer, error) {
-	return func() (adapter.Offer, error) {
-		return adapter.Offer{Groups: []adapter.Group{{Ref: "1", Name: "g", Ratio: "1", Facts: adapter.GroupFacts(facts), Models: models}}}, nil
+func groupOf(facts string, models ...adapter.Model) func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+	return func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{Ref: "1", Name: "g", Ratio: "1", Facts: adapter.GroupFacts(facts), Models: models}}}, nil
 	}
 }
 
@@ -28,7 +28,7 @@ func TestRoutingRelevantCatalogChangesAreEvents(t *testing.T) {
 	if got := st.state.Groups[0].Models[0].Without; got != protocol.Images {
 		t.Fatalf("the snapshot keeps Without %v, want %v", got, protocol.Images)
 	}
-	step := func(offer func() (adapter.Offer, error), want ...Kind) {
+	step := func(offer func(adapter.Listing) (adapter.Page[adapter.Group], error), want ...Kind) {
 		t.Helper()
 		m.offer = offer
 		clk.advance(10 * time.Minute)
@@ -43,8 +43,8 @@ func TestRoutingRelevantCatalogChangesAreEvents(t *testing.T) {
 	step(groupOf(`{"peak":true}`, chat), GroupChanged)                                                                             // peak pricing on, ratio unchanged
 	step(groupOf(`{"peak":true}`, adapter.Model{UpstreamName: "m", Formats: []protocol.Format{protocol.Chat}}), ModelChanged)      // the limit lifted
 	step(groupOf(`{"peak":true}`, adapter.Model{UpstreamName: "m", Formats: []protocol.Format{protocol.Responses}}), ModelChanged) // another format
-	m.offer = func() (adapter.Offer, error) {
-		return adapter.Offer{Groups: []adapter.Group{{Ref: "1", Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{"peak":true}`), ModelsUnread: true}}}, nil
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{Ref: "1", Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{"peak":true}`), ModelsUnread: true}}}, nil
 	}
 	clk.advance(10 * time.Minute)
 	round(t, e)

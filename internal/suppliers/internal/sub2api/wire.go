@@ -134,8 +134,9 @@ func retryAfter(h http.Header) time.Duration {
 
 // page is sub2api's {items, total, page, page_size, pages} list.
 type page[T any] struct {
-	Items []T  `json:"items"`
-	Pages *int `json:"pages"`
+	Items []T     `json:"items"`
+	Total *number `json:"total"`
+	Pages *int    `json:"pages"`
 }
 
 // checked returns the page's items, or ErrUnrecognised if the list or its page count is missing: a page without them is
@@ -145,6 +146,19 @@ func (p page[T]) checked() ([]T, int, error) {
 		return nil, 0, fmt.Errorf("%w: a page without its items or page count", adapter.ErrUnrecognised)
 	}
 	return p.Items, *p.Pages, nil
+}
+
+// count is how many records the whole list holds, which tells a listing that changed under a position, or an
+// unrecognised answer when the page does not say.
+func (p page[T]) count() (int, error) {
+	if p.Total == nil {
+		return 0, fmt.Errorf("%w: a page without its total", adapter.ErrUnrecognised)
+	}
+	n, err := p.Total.int64()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // pathID builds a path segment from an id the supplier gave, refusing anything but digits so that an id cannot add

@@ -45,14 +45,15 @@ func (q *Queries) AcquireSyncLease(ctx context.Context, db DBTX, arg AcquireSync
 
 const commitSyncState = `-- name: CommitSyncState :execrows
 UPDATE suppliers.sync_states
-SET version = $1, format = $2, state = $3, next_due = $4, lease_until = $5
-WHERE supplier_id = $6 AND version = $7
+SET version = $1, format = $2, state = $3, listing = $4, next_due = $5, lease_until = $6
+WHERE supplier_id = $7 AND version = $8
 `
 
 type CommitSyncStateParams struct {
 	Version    int64
 	Format     int16
 	State      []byte
+	Listing    []byte
 	NextDue    time.Time
 	LeaseUntil *time.Time
 	SupplierID uuid.UUID
@@ -66,6 +67,7 @@ func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncSt
 		arg.Version,
 		arg.Format,
 		arg.State,
+		arg.Listing,
 		arg.NextDue,
 		arg.LeaseUntil,
 		arg.SupplierID,
@@ -131,19 +133,25 @@ func (q *Queries) GetSupplierLogin(ctx context.Context, db DBTX, supplierID uuid
 }
 
 const getSyncState = `-- name: GetSyncState :one
-SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = $1
+SELECT version, format, state, listing FROM suppliers.sync_states WHERE supplier_id = $1
 `
 
 type GetSyncStateRow struct {
 	Version int64
 	Format  int16
 	State   []byte
+	Listing []byte
 }
 
 func (q *Queries) GetSyncState(ctx context.Context, db DBTX, supplierID uuid.UUID) (GetSyncStateRow, error) {
 	row := db.QueryRow(ctx, getSyncState, supplierID)
 	var i GetSyncStateRow
-	err := row.Scan(&i.Version, &i.Format, &i.State)
+	err := row.Scan(
+		&i.Version,
+		&i.Format,
+		&i.State,
+		&i.Listing,
+	)
 	return i, err
 }
 
