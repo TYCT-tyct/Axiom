@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import check_pr
-from check_pr import describe, review, unfinished, waiver_allowed
+from check_pr import change, describe, review, unfinished, unticked_acceptance, waiver_allowed
 
 TEMPLATE = "## Background / 背景\n<!-- why -->\n\n## Verification / 验证\n<!-- evidence -->\n"
 BODY = "## Background / 背景\nbecause\n## Verification / 验证\nran it\n"
@@ -92,6 +92,21 @@ class ClosingTest(unittest.TestCase):
             "description or rerun the pr check"])
         self.assertEqual(fetched, [1, 2, 3, 4])  # each issue once; other repositories, comments and Refs are not fetched
 
+    def test_acceptance_sections_keep_their_subheadings_and_skip_code(self):
+        cases = {
+            "box under a subheading": ("## 验收标准\n### 功能\n- [ ] a\n## 其他\n- [ ] not acceptance\n", 1),
+            "every acceptance section": ("### 验收标准\n- [x] a\n### 其他\n- [ ] no\n### 验收标准（补充）\n- [ ] b\n1. [ ] c\n", 2),
+            "a shell comment in a fence": ("### 验收标准\n```sh\n# run it\n- [ ] in code\n```\n- [ ] after the fence\n", 1),
+            "a deeper acceptance heading": ("# 计划\n## 验收\n- [ ] a\n# 下一步\n- [ ] no\n", 1),
+            "a fence holding a shorter fence": ("### 验收\n````md\n```\n- [ ] in code\n```\n````\n- [ ] b\n", 1),
+            "a tilde line inside a backtick fence": ("### 验收\n```\n~~~\n- [ ] in code\n```\n- [ ] b\n", 1),
+            "inline code that looks like a fence": ("### 验收\n```x``` text\n- [ ] a\n", 1),
+            "no acceptance": ("### 要解决什么问题\n- [ ] a task\n", 0),
+        }
+        for name, (body, count) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(unticked_acceptance(body), count)
+
     def test_an_unreadable_issue_fails_with_the_reason_and_keeps_the_other_problems(self):
         error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 404: Not Found\n")
         env = {"PR_TITLE": "Bad title", "PR_BODY": BODY + "Closes #1\n", "PR_AUTHOR": "someone", "REPO": "owner/repo"}
@@ -119,6 +134,59 @@ class ReviewTest(unittest.TestCase):
         for name, (comments, ok) in cases.items():
             with self.subTest(name):
                 self.assertEqual(review(HEAD, BODY, "someone", comments) == [], ok)
+
+    def test_a_review_holds_while_later_commits_only_merge_the_base_in(self):
+        same = lambda commit: commit == "fedcba9"
+        older = [reviewed(should=1, sha="fedcba9"), comment("作者回应 · 提交 fedcba9")]
+        self.assertEqual(review(HEAD, BODY, "someone", older, same_change=same), [])
+        self.assertNotEqual(review(HEAD, BODY, "someone", older[:1], same_change=same), [])  # its should-fix still needs the answer
+        self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="fedcba9")], same_change=same), [])
+        self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(sha="1234567")], same_change=same), [])  # another change
+
+    def test_change_ignores_base_merges_but_not_the_prs_own_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                                                "-c", "core.autocrlf=false", "-C", tmp, *args],
+                                               capture_output=True, check=True, text=True).stdout.strip()
+            def commit(files, message):
+                for name, content in files.items():
+                    Path(tmp, name).write_bytes(content)
+                git("add", "-A")
+                git("commit", "-q", "-m", message)
+                return git("rev-parse", "HEAD")
+            far = b"\n\n\n\n"
+            git("init", "-q", "-b", "main")
+            commit({"a.py": b"import os" + far + b"x = 1\n", "b.py": b"foo\n" + far + far + b"foo\n", "c.bin": b"\0aaaa"}, "base")
+            git("checkout", "-q", "-b", "pr")
+            reviewed_commit = commit({"a.py": b"import os" + far + b"x = 2\n", "b.py": b"bar\n" + far + far + b"foo\n",
+                                      "c.bin": b"\0bbbb"}, "the PR")
+            git("checkout", "-q", "main")
+            commit({"a.py": b"import os\nimport sys" + far + b"x = 1\n"}, "main moves on")  # shifts the PR's line
+            git("checkout", "-q", "pr")
+            git("merge", "-q", "--no-edit", "main")
+            merged = git("rev-parse", "HEAD")
+            later = {  # each edit after the merge, made on its own from the merged commit
+                "whitespace": {"a.py": b"import os\nimport sys" + far + b"x  = 2\n"},
+                "line ending": {"a.py": b"import os\nimport sys" + far + b"x = 2\r\n"},
+                "the same edit moved": {"b.py": b"foo\n" + far + far + b"bar\n"},
+                "binary content": {"c.bin": b"\0cccc"},  # same size, so only --binary tells them apart
+            }
+            edited = {}
+            for name, files in later.items():
+                git("checkout", "-q", merged)
+                edited[name] = commit(files, name)
+            cwd = os.getcwd()
+            os.chdir(tmp)  # the review job runs git in the checkout
+            try:
+                mine = change("main", reviewed_commit)
+                self.assertIsNotNone(mine)
+                self.assertEqual(change("main", merged), mine)  # merging the base in keeps the change
+                for name, sha in edited.items():
+                    with self.subTest(name):
+                        self.assertNotEqual(change("main", sha), mine)
+                self.assertIsNone(change("main", "0" * 40))
+            finally:
+                os.chdir(cwd)
 
     def test_waivers(self):
         self.assertEqual(review(HEAD, BODY + "免评审：只改了措辞\n", "someone", []), [])
