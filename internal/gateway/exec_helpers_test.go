@@ -442,7 +442,9 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 			supplier = o.supplier(i)
 		}
 		plan.Entries = append(plan.Entries, routing.Entry{
-			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{Format: upstream, Model: "up-" + string(rune('0'+i)), Streams: true},
+			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{
+				Format: upstream, Model: "up-" + string(rune('0'+i)), Streams: true, MaxOutput: 1000,
+			},
 			MaxOutput: 1000, Limits: limits, Segmentable: o.segmentable, Price: routing.PriceRef{Version: uuid.UUID{1}, Schedule: schedule},
 		})
 		plan.Record.Route = append(plan.Record.Route, ep(i))
