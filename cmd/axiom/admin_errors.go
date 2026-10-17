@@ -7,6 +7,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/idem"
+	"axiom/internal/suppliers"
 )
 
 // errNotImplemented is the answer of an operation of the admin's contract that has no handler yet (tools/pendingapi).
@@ -38,6 +39,19 @@ var adminRefusals = []refusal{
 	{billing.ErrRuleNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
 	{billing.ErrRuleExists, http.StatusConflict, codeConflict, "the site has a pricing rule for that target and audience"},
 	{billing.ErrStaleRule, http.StatusConflict, codeStaleRevision, "the pricing rule changed since it was read"},
+
+	{suppliers.ErrNoSupplier, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrNoGroup, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrSupplierExists, http.StatusConflict, codeConflict, "that origin and account are already connected"},
+	{suppliers.ErrStatusLocked, http.StatusConflict, codeConflict, "the supplier's status does not allow this"},
+	{suppliers.ErrGroupGone, http.StatusConflict, codeConflict, "the supplier no longer lists that group"},
+	{suppliers.ErrKeyBound, http.StatusConflict, codeConflict, "that key is already bound"},
+	{suppliers.ErrAliasExists, http.StatusConflict, codeConflict, "that name already has an alias in that scope"},
+	{suppliers.ErrNoAdapter, http.StatusUnprocessableEntity, codeUnprocessable, "no adapter of that kind that can be connected"},
+	{suppliers.ErrAddressRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the outbound client refuses that address"},
+	{suppliers.ErrUnreachable, http.StatusUnprocessableEntity, codeUnprocessable, "the site did not answer"},
+	{suppliers.ErrGroupNotSelected, http.StatusUnprocessableEntity, codeUnprocessable, "the group is not selected"},
+	{suppliers.ErrUnitValue, http.StatusUnprocessableEntity, codeUnprocessable, "a unit value is above 0 and at most 1000, with at most 15 decimals"},
 }
 
 // unprocessable is a request that is well formed but that a rule refuses; message says which.

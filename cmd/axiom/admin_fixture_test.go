@@ -13,8 +13,10 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/suppliers"
 )
 
 const (
@@ -49,6 +51,16 @@ func newAdminFixture(t *testing.T) adminFixture {
 // startAdminNode starts a node of the program on the command line's database that serves the admin listener.
 func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	c.t.Helper()
+	exit, err := egress.New(egress.Direct)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return startAdminNodeVia(c, clock, exit)
+}
+
+// startAdminNodeVia is startAdminNode with the outbound client the node's suppliers go through.
+func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adminFixture {
+	c.t.Helper()
 	svc, err := accounts.NewService(c.db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
 	})
@@ -68,7 +80,11 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	routes := adminRoutes(adminAPI{version: "test", accounts: svc, catalog: cat, db: c.db, logger: logger}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(c.t), Egress: exit})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, c.db, logger), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 

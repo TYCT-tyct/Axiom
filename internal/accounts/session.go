@@ -56,6 +56,9 @@ func (p Principal) UserID() UserID { return p.user }
 // AccountID is the user's personal account.
 func (p Principal) AccountID() AccountID { return p.account }
 
+// SessionID is the session the principal was recognised by.
+func (p Principal) SessionID() SessionID { return p.session }
+
 // Pending reports whether the session still waits for its second factor, as only AuthenticateAny returns one.
 func (p Principal) Pending() bool { return p.level == levelPending }
 

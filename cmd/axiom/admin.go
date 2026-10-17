@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
+	"axiom/internal/suppliers"
 )
 
 //go:generate go run -C ../../tools ./pendingapi ../api/admin.yaml ../cmd/axiom admin_pending.gen.go axiom/internal/platform/adminapi adminAPI pendingAdmin
@@ -25,7 +27,22 @@ type adminAPI struct {
 	accounts *accounts.Service
 	catalog  *catalog.Catalog
 	db       *pg.DB
-	logger   *slog.Logger
+	// suppliers is what the admin does with suppliers; detections limits how often a session may ask a third party's
+	// site what it runs.
+	logger     *slog.Logger
+	suppliers  *suppliers.Admin
+	detections *windowLimiter
+}
+
+// detectionsPerMinute is how many times a session may run detectSupplier in a minute.
+const detectionsPerMinute = 10
+
+// newAdminAPI is the admin's handlers on the modules and the database of the node.
+func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, db *pg.DB, logger *slog.Logger) adminAPI {
+	return adminAPI{
+		version: version, accounts: a, catalog: c, suppliers: s, db: db, logger: logger,
+		detections: newWindowLimiter(detectionsPerMinute, time.Minute, time.Now),
+	}
 }
 
 // adminContract is the admin's contract as the generated code embeds it, with the rules read out of it.

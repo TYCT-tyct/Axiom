@@ -203,7 +203,15 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nil, nil, err
 	}
-	admin = adminRoutes(adminAPI{version: version(), accounts: service, catalog: cat, db: db, logger: logger},
+	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, nil, err
+	}
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
+	if err != nil {
+		return nil, nil, err
+	}
+	admin = adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return public, admin, nil
 }
