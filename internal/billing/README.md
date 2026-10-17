@@ -173,6 +173,15 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 - **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放（`unpriced` 的除外）。记录先到时：清理待定的按记录收费后立即释放；已暂估的照样保留到 `correct_by`，以便更新的版本。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
 
+### 被丢弃的校正作业
+
+供应商记录先于 `Settle` 到达、记录里又有映射不了的字段时，`Correct` 返回 `ErrNotRecorded`，作业重试到 `Settle` 或清理写入那次尝试；两者一直不写入，作业用尽重试，被 River 标为 `discarded`，不再运行。校正作业还没有接入 River，接入后它的失败由队列的通用告警报出来（见[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）：error 日志 `queue.job_discarded`，指标 `axiom.pg.queue.discarded_jobs` 的 `kind` 标签是它的任务类型。
+
+1. 按日志里的 `job_id` 在 `river.river_job` 读出任务的 `args` 和 `errors`，确认请求、尝试和记录版本。
+2. 在 `billing.corrections` 看那次尝试已生效的版本，在 `billing.reservations` 看请求状态，在 `suppliers.attempt_entries`、`suppliers.charge_records` 看尝试和扣费记录是否已经写入。
+3. 尝试已经被迟到的 `Settle` 或清理写入的，用一次性的命令按同一个版本再调用 `Correct`（版本守卫使重放幂等），尝试的成本和收费会补上。请求已经清理释放、那次尝试不会再有条目的，记录无法记到尝试上：按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)给缺的计费项补价并把模型移出路由，供应商成本按未归属成本处理。
+4. 把 `job_id`、`charge_events` 里的记录和处理结果写进同一个工单。
+
 ## 写入的数据
 
 | 写什么 | 事务 | 谁写 | 幂等键 / 守护 |

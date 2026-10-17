@@ -180,7 +180,7 @@ func (c *cluster) node(holder string, sweepEvery time.Duration) *node {
 		c.t.Fatal(err)
 	}
 	db := c.open()
-	q := db.NewQueue(slog.New(slog.DiscardHandler))
+	q := db.NewQueue(slog.New(slog.DiscardHandler), nil)
 	cfg := Config{
 		DB: db, Scope: platform, Keys: c.keys, Egress: egress.NewForTesting(egresstest.Loopback(c.t)), Queue: q, Registry: reg,
 		Holder: holder, SweepEvery: sweepEvery, Now: time.Now, Logger: slog.New(slog.DiscardHandler),

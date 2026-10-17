@@ -199,7 +199,7 @@ func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *teleme
 	if err != nil {
 		return nil, err
 	}
-	queue := db.NewQueue(logger)
+	queue := db.NewQueue(logger, tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
