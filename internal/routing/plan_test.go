@@ -293,7 +293,9 @@ func TestSegmentable(t *testing.T) {
 		want bool
 	}{
 		{"all of it", nil, nil, true},
-		{"cannot stream", func(e *routing.Endpoint) { e.Streams = false }, nil, false},
+		// An endpoint that cannot stream is not routed for a generation call (TestFilters): the compact call, whose
+		// answer arrives whole, is the one that reaches one, and it is never metered in segments.
+		{"cannot stream", func(e *routing.Endpoint) { e.Streams = false }, func(in *routing.Input) { in.NoSegments = true }, false},
 		{"does not cancel", func(e *routing.Endpoint) { e.Cancels = false }, nil, false},
 		{"its output speed is not known", func(e *routing.Endpoint) { e.OutputSpeed = 0 }, nil, false},
 		{"reasoning not visible in this format", func(e *routing.Endpoint) { e.ReasoningVisible = routing.Of(protocol.Chat) }, nil, false},
