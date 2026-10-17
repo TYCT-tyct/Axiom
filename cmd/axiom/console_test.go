@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/webui"
@@ -66,19 +68,57 @@ func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
 }
 
 // TestHandlerErrorThroughARealRequest: a request the guard admits fails in the handler on a real database error; the
-// client gets the contract's bare 500, and the log has the error but the answer does not.
+// client gets the contract's bare 500, and the log has the query's error but the answer does not.
 func TestHandlerErrorThroughARealRequest(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
 	f.run(`ALTER TABLE accounts.api_keys RENAME TO api_keys_missing`)
 	rec := f.do(http.MethodGet, "/keys", "", as(s))
-	expect(t, "a handler's database error", rec, http.StatusInternalServerError, consoleapi.ErrorCodeInternal)
-	if strings.Contains(rec.Body.String(), "api_keys_missing") {
-		t.Errorf("the answer repeats the database's error: %s", rec.Body)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("the client got %d %q, want 500", rec.Code, rec.Body)
 	}
-	if !strings.Contains(f.logs.String(), "console API handler failed") {
-		t.Errorf("the log does not record the handler's failure: %s", f.logs)
+	var body consoleapi.Error
+	decode(t, rec, &body)
+	want := consoleapi.Error{Error: consoleapi.ErrorDetail{Code: consoleapi.ErrorCodeInternal, Message: "internal error"}}
+	if diff := cmp.Diff(want, body); diff != "" {
+		t.Errorf("the client's error body (-want +got):\n%s", diff)
 	}
+
+	failure := failedHandler(t, f.logs.String())
+	if !strings.Contains(failure.Err, "accounts.api_keys") || !strings.Contains(failure.Err, "does not exist") {
+		t.Errorf("the log does not have the query's error: %q", failure.Err)
+	}
+	for _, detail := range []string{failure.Err, "accounts.api_keys", "does not exist"} {
+		if strings.Contains(rec.Body.String(), detail) {
+			t.Errorf("the answer repeats the database error %q: %s", detail, rec.Body)
+		}
+	}
+}
+
+// handlerFailure is the program's log record of a handler's failure.
+type handlerFailure struct {
+	Msg string `json:"msg"`
+	Err string `json:"err"`
+}
+
+// failedHandler reads the record of the handler's failure from the log.
+func failedHandler(t *testing.T, logs string) handlerFailure {
+	t.Helper()
+	for line := range strings.SplitSeq(logs, "\n") {
+		if line == "" {
+			continue
+		}
+		var record handlerFailure
+		if err := jsonx.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log record %q: %v", line, err)
+		}
+		if record.Msg == "console API handler failed" {
+			return record
+		}
+	}
+	t.Fatalf("no handler-failure record in the log: %s", logs)
+	return handlerFailure{}
 }
 
 // checkSecrecy: a response is uncached JSON that does not tell the client the handler's error, and the log has it
