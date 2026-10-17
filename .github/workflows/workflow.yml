@@ -16,7 +16,7 @@ jobs:
   docs:
     runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -m unittest discover -s scripts/workflow
       - run: python3 scripts/workflow/check_docs.py
 
@@ -28,7 +28,7 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the commit's whole history is scanned: a secret that was ever committed has leaked
       # --retry alone does not retry a dropped connection (curl exit 56); --retry-all-errors does, and a partial file is
@@ -44,23 +44,33 @@ jobs:
   pr:
     if: github.event_name == 'pull_request'
     runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      issues: read # the issues the PR closes, for their acceptance boxes
+      pull-requests: read # a closing keyword may name a pull request, which the issues API serves only with this
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 scripts/workflow/check_pr.py describe
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
 
   review:
-    # Comments do not trigger pull_request events: after posting a review or an answer, rerun this job (review method).
-    if: github.event_name == 'pull_request'
+    # Comments do not trigger pull_request events: review-rerun.yml reruns this job when a review or an answer is posted.
+    # It runs last, so a finished run means a finished review: a comment misses both only in the seconds between this job
+    # reading the comments and the run finishing. !cancelled() runs it even when another job failed, since a skipped
+    # required check counts as passed.
+    needs: [docs, secrets, pr]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
       pull-requests: read # the PR's comments
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: gh api --paginate "repos/$REPO/issues/$NUMBER/comments?per_page=100" --jq '.[] | {body, author_association}' | python3 scripts/workflow/check_pr.py review
         shell: bash # with pipefail: a failed page must fail the check, never pass it on fewer comments
         env:

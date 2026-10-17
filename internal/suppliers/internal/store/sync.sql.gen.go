@@ -78,7 +78,7 @@ func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncSt
 }
 
 const getSupplierForSync = `-- name: GetSupplierForSync :one
-SELECT id, kind, origin, mgmt_egress_id, config_gen FROM suppliers.suppliers WHERE id = $1
+SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = $1
 `
 
 type GetSupplierForSyncRow struct {
@@ -86,6 +86,7 @@ type GetSupplierForSyncRow struct {
 	Kind         string
 	Origin       string
 	MgmtEgressID string
+	Status       string
 	ConfigGen    int64
 }
 
@@ -98,6 +99,7 @@ func (q *Queries) GetSupplierForSync(ctx context.Context, db DBTX, id uuid.UUID)
 		&i.Kind,
 		&i.Origin,
 		&i.MgmtEgressID,
+		&i.Status,
 		&i.ConfigGen,
 	)
 	return i, err
@@ -161,6 +163,43 @@ func (q *Queries) HoldSyncLease(ctx context.Context, db DBTX, arg HoldSyncLeaseP
 	var lease_fence int64
 	err := row.Scan(&lease_fence)
 	return lease_fence, err
+}
+
+const listSyncDue = `-- name: ListSyncDue :many
+SELECT s.id FROM suppliers.suppliers s
+LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
+WHERE s.status = ANY($1::text[])
+    AND (y.supplier_id IS NULL OR (y.next_due <= $2 AND (y.lease_until IS NULL OR y.lease_until <= $2)))
+ORDER BY y.next_due NULLS FIRST, s.id
+LIMIT $3
+`
+
+type ListSyncDueParams struct {
+	Statuses []string
+	Now      time.Time
+	Max      int32
+}
+
+// The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
+// whose lease is free or has run out. Only suppliers in one of the statuses are listed.
+func (q *Queries) ListSyncDue(ctx context.Context, db DBTX, arg ListSyncDueParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, listSyncDue, arg.Statuses, arg.Now, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockSupplier = `-- name: LockSupplier :one
