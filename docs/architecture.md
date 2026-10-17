@@ -204,7 +204,7 @@ docs/                         文档
   - 凭证按供应商类型定义成有类型的结构，不用字符串键值包。sub2api 因为字段白名单漏了几个键，导致一整类账号永远选不中（sub2api issue #7758，2026-10）。
 - **不用隐式机制**：不用 ORM、依赖注入框架、反射加载配置。
 - **反馈要快**：一条命令跑完格式化、lint 和单元测试。契约代码由生成得到，CI 检查生成结果是否最新。
-- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check`/`check-all` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）用固定的项目名、端口、镜像和数据卷，靠机器级的文件锁轮流执行，每次以 `just down -v` 收尾。只改 Markdown 的 PR 只跑 `just md-checks`（读 Markdown 的便宜检查），跳过 web、deploy-check 和基准；`docs` 检查仍跑。机器地址和凭证不入库。
+- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check`/`check-all` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）用固定的项目名、端口、镜像和数据卷，靠机器级的文件锁轮流执行，每次以 `just down -v` 收尾。只改 Markdown 的 PR 只跑 `just md-checks`（读 Markdown 的便宜检查），跳过 web、deploy-check 和基准；`docs` 检查仍跑。runner 机器用 `scripts/ci/runner-host.sh` 安装、自检和删除（工具链预放进 Actions 的工具缓存、每个 runner 私有的 Go 缓存、CPU 与内存上限），不手工配置。机器地址和凭证不入库。
 - **每个模块的 README 写明不变量**；测试和代码放在一起。
 
 ## 底线指标
