@@ -112,14 +112,14 @@ func marshalQueued(batch []queued) (calls, attempts []byte, err error) {
 	}
 	calls, err = jsonx.MarshalCanonical(callRows)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %v", errEncoding, len(callRows), len(attemptRows), err)
+		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %w", errEncoding, len(callRows), len(attemptRows), err)
 	}
 	if len(attemptRows) == 0 {
 		return calls, nil, nil
 	}
 	attempts, err = jsonx.MarshalCanonical(attemptRows)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %v", errEncoding, len(callRows), len(attemptRows), err)
+		return nil, nil, fmt.Errorf("%w (%d calls, %d attempts): %w", errEncoding, len(callRows), len(attemptRows), err)
 	}
 	return calls, attempts, nil
 }
