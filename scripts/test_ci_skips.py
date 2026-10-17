@@ -25,19 +25,21 @@ class OnlyMarkdown(unittest.TestCase):
 
 class NeedsBenchmark(unittest.TestCase):
     def test_markdown_and_web_only_changes_skip_it(self):
-        for paths in (["docs/unread.md"], ["README.md"], ["web/site/src/app.ts"], ["web/pnpm-lock.yaml"]):
+        for paths in (["docs/unread.md"], ["docs/architecture.md"], ["README.md"], ["web/site/src/app.ts"],
+                      ["web/pnpm-lock.yaml"]):
             with self.subTest(paths=paths):
-                self.assertFalse(ci_skips.needs_benchmark(paths, unreferenced))
+                self.assertFalse(ci_skips.needs_benchmark(paths))
 
     def test_everything_else_runs_it(self):
         for path in ("main.go", "internal/x/x_test.go", "internal/x/testdata/sample.sse", "migrations/1.sql",
                      "api/console.yaml", "go.mod", "tools/go.sum"):
             with self.subTest(path=path):
-                self.assertTrue(ci_skips.needs_benchmark([path], unreferenced))
-        self.assertTrue(ci_skips.needs_benchmark(["web/a.ts", "docs/a.md"], unreferenced))
+                self.assertTrue(ci_skips.needs_benchmark([path]))
+        self.assertTrue(ci_skips.needs_benchmark(["web/a.ts", "docs/a.md"]))
 
-    def test_architecture_document_is_not_markdown_only(self):
-        self.assertTrue(ci_skips.needs_benchmark(["docs/architecture.md"]))
+    def test_architecture_document_is_markdown_only_for_benchmarks_but_not_for_the_build(self):
+        self.assertFalse(ci_skips.only_md(["docs/architecture.md"]))
+        self.assertFalse(ci_skips.needs_benchmark(["docs/architecture.md"]))
 
 
 if __name__ == "__main__":

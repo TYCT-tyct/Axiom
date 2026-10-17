@@ -30,20 +30,22 @@ def referenced_by_code(path: str) -> bool:
     return True  # a failed search must not skip the build
 
 
+def all_md(paths: list[str]) -> bool:
+    return bool(paths) and all(path.lower().endswith(".md") for path in paths)
+
+
 def only_md(paths: list[str], referenced=referenced_by_code) -> bool:
     """A pull request that changes only Markdown files no code check reads needs no build."""
-    return bool(paths) and all(path.lower().endswith(".md") for path in paths) and not any(
-        referenced(path) for path in paths
-    )
+    return all_md(paths) and not any(referenced(path) for path in paths)
 
 
 def web_only(paths: list[str]) -> bool:
     return bool(paths) and all(path.startswith("web/") for path in paths)
 
 
-def needs_benchmark(paths: list[str], referenced=referenced_by_code) -> bool:
+def needs_benchmark(paths: list[str]) -> bool:
     """Run the comparison for anything but Markdown-only and web/-only changes."""
-    return not (only_md(paths, referenced) or web_only(paths))
+    return not (all_md(paths) or web_only(paths))
 
 
 def main(argv: list[str]) -> int:
