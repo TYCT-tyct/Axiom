@@ -44,7 +44,7 @@ func twoAttempts(t *testing.T, last Segment, result Result) Outcome {
 // TestCorrectCosts: every attempt's cost follows its own supplier record, by its own revisions, in any state, even
 // after the reservation settled or its window closed; only the charged attempt's record touches the user's charge.
 func TestCorrectCosts(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 500 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour})
 	h := b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, twoAttempts(t, used(t, 300, 20, 0, in), Committed)); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestCorrectCosts(t *testing.T) {
 	if c1, c2, charged := b.cost(h, 1), b.cost(h, 2), b.count("SELECT charged FROM billing.reservations"); c1 != 11 || c2 != 9 || charged != 420 {
 		t.Errorf("costs %d and %d, charged %d; want 11, 9 and 420", c1, c2, charged)
 	}
-	time.Sleep(600 * time.Millisecond)
+	b.closeWindow(h)
 	b.cleanup() // the window closes and the estimate settles
 	b.correct(h, 2, 2, 13, used(t, 10, 0, 0))
 	if c2, charged := b.cost(h, 2), b.count("SELECT charged FROM billing.reservations"); c2 != 13 || charged != 420 {
@@ -169,7 +169,9 @@ func unknown(t *testing.T, input int64, field, value string) Segment {
 // returns the stored Final, unknown usage included. Usage with no fallback price is charged its known part and held,
 // past any window, until a supplier record prices it.
 func TestSettleUnknownUsage(t *testing.T) {
-	config := Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 300 * time.Millisecond}
+	// The window is long enough that the corrections this test makes inside it cannot fall outside it on a loaded
+	// machine; where a subtest needs the window to have ended, it moves it into the past itself.
+	config := Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour}
 	settle := func(b *bank, h *Hold, s Segment) Final {
 		t.Helper()
 		f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, s))
@@ -191,9 +193,9 @@ func TestSettleUnknownUsage(t *testing.T) {
 		}
 		b.balanced()
 	}
-	expire := func(b *bank) {
+	endWindow := func(b *bank, h *Hold) {
 		t.Helper()
-		time.Sleep(400 * time.Millisecond)
+		b.closeWindow(h)
 		b.cleanup()
 	}
 	t.Run("tokens, corrected", func(t *testing.T) {
@@ -209,18 +211,19 @@ func TestSettleUnknownUsage(t *testing.T) {
 		b.correct(h, 1, 1, 9, corrected)
 		expect(b, "estimated", 460)
 		retried(b, h, Final{Segments: []Segment{{Usage: corrected.Usage, Reported: ^catalog.ItemSet(0)}}, Charged: platform.AmountExact(460), Estimated: true})
-		expire(b)
+		endWindow(b, h)
 		expect(b, "settled", 460)
 	})
 	t.Run("tokens, window ends", func(t *testing.T) {
 		b := newBank(t, 10_000, 0, config)
-		settle(b, b.hold(1000), unknown(t, 50, "usage.new_thing_tokens", "30"))
-		expire(b)
+		h := b.hold(1000)
+		settle(b, h, unknown(t, 50, "usage.new_thing_tokens", "30"))
+		endWindow(b, h)
 		expect(b, "settled", 100)
 	})
-	unpriced := func(b *bank, charged int64) {
+	unpriced := func(b *bank, h *Hold, charged int64) {
 		t.Helper()
-		expire(b)
+		b.closeWindow(h)
 		if n, err := b.billing.Cleanup(t.Context(), 100); err != nil || n != 0 {
 			t.Errorf("Cleanup = %d, %v; want nothing to end", n, err)
 		}
@@ -233,11 +236,11 @@ func TestSettleUnknownUsage(t *testing.T) {
 		b := newBank(t, 10_000, 0, config)
 		h := b.hold(1000)
 		first := settle(b, h, fetches(50))
-		unpriced(b, 70)
+		unpriced(b, h, 70)
 		retried(b, h, first)
 		b.correct(h, 1, 1, 9, used(t, 400, 20, 1)) // priced at last: the window opens
 		expect(b, "estimated", 430)
-		expire(b)
+		endWindow(b, h)
 		expect(b, "settled", 430)
 	})
 	t.Run("no fallback price in the record", func(t *testing.T) {
@@ -245,10 +248,10 @@ func TestSettleUnknownUsage(t *testing.T) {
 		h := b.hold(1000)
 		settle(b, h, used(t, 300, 20, 0, in))
 		b.correct(h, 1, 1, 9, fetches(400))
-		unpriced(b, 420) // past the window the estimate opened
+		unpriced(b, h, 420) // past the window the estimate opened
 		b.correct(h, 1, 2, 9, used(t, 400, 20, 1))
 		expect(b, "estimated", 430)
-		expire(b)
+		endWindow(b, h)
 		expect(b, "settled", 430)
 	})
 	t.Run("no fallback price in a cleaned-up call's record", func(t *testing.T) {
@@ -259,9 +262,9 @@ func TestSettleUnknownUsage(t *testing.T) {
 		b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
 		b.cleanup()
 		b.correct(h, 1, 1, 9, fetches(400))
-		unpriced(b, 420)
+		unpriced(b, h, 420)
 		b.correct(h, 1, 2, 9, used(t, 400, 20, 1))
-		expire(b)
+		endWindow(b, h)
 		expect(b, "settled", 430)
 	})
 }
@@ -269,13 +272,13 @@ func TestSettleUnknownUsage(t *testing.T) {
 // TestSettleReturnsTheStoredFinal: a retry returns what the first Settle stored, whatever outcome it carries, and the
 // estimate stays an estimate after its window closes.
 func TestSettleReturnsTheStoredFinal(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 20 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour})
 	h := b.hold(1000)
 	first, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 300, 20, 0, in)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(30 * time.Millisecond)
+	b.closeWindow(h)
 	b.cleanup()
 	again, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 1, 1, 0)))
 	if err != nil || !again.Estimated || again.Charged != first.Charged || len(again.Segments) != 1 || again.Segments[0].Usage.Count(in) != 300 {
@@ -285,7 +288,7 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 
 // TestEndRequest: suppliers learn of a request's end once it is terminal, in the same transaction, and not before.
 func TestEndRequest(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 500 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: time.Hour})
 	settled, estimated, lost, pending := b.hold(100), b.hold(100), b.hold(100), b.hold(100)
 	b.supplies.journal[pending.id] = JournalAttempt{Seq: 1, Key: "client:k"}
 	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
@@ -304,7 +307,8 @@ func TestEndRequest(t *testing.T) {
 			t.Errorf("%s ended %d times, want %d", id, got, want)
 		}
 	}
-	time.Sleep(600 * time.Millisecond)
+	b.closeWindow(estimated)
+	b.closeWindow(pending)
 	b.cleanup() // the estimate settles, the cleaned-up one is lost
 	if b.supplies.ended[estimated.id] != 1 || b.supplies.ended[pending.id] != 1 {
 		t.Errorf("after the window: ended %d and %d times, want once each", b.supplies.ended[estimated.id], b.supplies.ended[pending.id])
