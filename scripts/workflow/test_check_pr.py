@@ -72,13 +72,120 @@ class DescribeTest(unittest.TestCase):
                 self.assertEqual(describe("docs: x y", BODY + text + "\n", "someone", TEMPLATE) == [], ok)
 
 
+RENDERED = {  # body_html as GitHub renders each description: gh api -X POST markdown -f mode=gfm, verbatim
+    "the issue's example": (
+        '\n<h3>验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> unfinished</li>\n</ul>'
+    ),
+    "a marker in an inline code span": (
+        '<h3>验收</h3>\n<p>Explain <code class="notranslate">&lt;!--</code> here.</p>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a marker in an indented code block": (
+        '<h3>验收</h3>\n<pre class="notranslate"><code class="notranslate">```\n&lt;!--\n```\n</code></pre>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a comment inside a heading": (
+        '<h3> 验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "several comments on one heading": (
+        '<h3> 验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a tilde fence after a comment": (
+        '<h3>验收</h3>\n<p>~~~</p>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "an unmatched backtick before a comment": (
+        '<h3>Other ` </h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> unrelated</li>\n</ul>'
+    ),
+    "a box inside a comment": (
+        '<h3>验收</h3>\n\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>'
+    ),
+    "a comment marker inside a fence": (
+        '<h3>验收</h3>\n<div class="highlight highlight-text-md"><pre class="notranslate"><span class="pl-c">'
+        '<span class="pl-c">&lt;!--</span></span>\n<span class="pl-c">- [ ] in code</span></pre></div>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>'
+    ),
+    "a heading and a box inside a fence": (
+        '<h3>验收</h3>\n<div class="highlight highlight-text-md"><pre class="notranslate"><span class="pl-mh">'
+        '### <span class="pl-en">验收标准</span></span>\n<span class="pl-v">-</span> <span class="pl-k">[ ]</span>'
+        ' in code</pre></div>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "subheadings and a checked box": (
+        '<h3>验收标准</h3>\n<h4>功能</h4>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> a</li>\n</ul>\n<h4>其他</h4>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task"'
+        ' checked=""> b</li>\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> c</li>\n</ul>\n<h3>下一步</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> not acceptance</li>\n</ul>'
+    ),
+    "a second acceptance section": (
+        '<h3>验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task"'
+        ' checked=""> a</li>\n</ul>\n<h3>其他</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> no</li>\n</ul>\n<h3>验收标准（补充）</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>\n<ol class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> c</li>\n</ol>'
+    ),
+    "no acceptance": (
+        '<h3>要解决什么问题</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> a task</li>\n</ul>'
+    ),
+}
+
+
 class ClosingTest(unittest.TestCase):
+    def test_unticked_boxes_in_the_rendered_description(self):
+        cases = {
+            "the issue's example": 1,
+            "a marker in an inline code span": 1,
+            "a marker in an indented code block": 1,
+            "a comment inside a heading": 1,
+            "several comments on one heading": 1,
+            "a tilde fence after a comment": 1,
+            "an unmatched backtick before a comment": 0,
+            "a box inside a comment": 1,
+            "a comment marker inside a fence": 1,
+            "a heading and a box inside a fence": 1,
+            "subheadings and a checked box": 2,
+            "a second acceptance section": 2,
+            "no acceptance": 0,
+        }
+        for name, count in cases.items():
+            with self.subTest(name):
+                self.assertEqual(unticked_acceptance(RENDERED[name]), count)
+
     def test_a_closed_issue_needs_its_acceptance_boxes_ticked(self):
         issues = {
-            1: {"body": "### 要解决什么问题\n- [ ] not acceptance\n\n### 验收标准\n\n- [x] done\n- [ ] not yet\n- [ ] nor this\n"},
-            2: {"body": "### 验收标准\r\n\r\n- [x] done\r\n"},
-            3: {"body": "no acceptance section\n- [ ] a task\n"},
-            4: {"body": "### 验收标准\n- [ ] a PR's own checklist\n", "pull_request": {}},
+            1: {"body_html": RENDERED["subheadings and a checked box"]},
+            2: {"body_html": RENDERED["an unmatched backtick before a comment"]},
+            3: {"body_html": RENDERED["no acceptance"]},
+            4: {"body_html": RENDERED["the issue's example"], "pull_request": {}},
         }
         fetched = []
 
@@ -92,27 +199,18 @@ class ClosingTest(unittest.TestCase):
             "description or rerun the pr check"])
         self.assertEqual(fetched, [1, 2, 3, 4])  # each issue once; other repositories, comments and Refs are not fetched
 
-    def test_acceptance_sections_keep_their_subheadings_and_skip_code(self):
-        cases = {
-            "box under a subheading": ("## 验收标准\n### 功能\n- [ ] a\n## 其他\n- [ ] not acceptance\n", 1),
-            "every acceptance section": ("### 验收标准\n- [x] a\n### 其他\n- [ ] no\n### 验收标准（补充）\n- [ ] b\n1. [ ] c\n", 2),
-            "a shell comment in a fence": ("### 验收标准\n```sh\n# run it\n- [ ] in code\n```\n- [ ] after the fence\n", 1),
-            "a deeper acceptance heading": ("# 计划\n## 验收\n- [ ] a\n# 下一步\n- [ ] no\n", 1),
-            "a fence holding a shorter fence": ("### 验收\n````md\n```\n- [ ] in code\n```\n````\n- [ ] b\n", 1),
-            "a tilde line inside a backtick fence": ("### 验收\n```\n~~~\n- [ ] in code\n```\n- [ ] b\n", 1),
-            "inline code that looks like a fence": ("### 验收\n```x``` text\n- [ ] a\n", 1),
-            "no acceptance": ("### 要解决什么问题\n- [ ] a task\n", 0),
-        }
-        for name, (body, count) in cases.items():
-            with self.subTest(name):
-                self.assertEqual(unticked_acceptance(body), count)
+    def test_an_issue_read_without_rendered_html_is_a_problem(self):
+        self.assertEqual(unfinished("Closes #1\n", "owner/repo", lambda number: {"body_html": None}), [])  # no description
+        self.assertEqual(unfinished("Closes #1\n", "owner/repo", lambda number: {}),
+                         ["could not read #1 as GitHub renders it: no body_html in the reply"])
 
     def test_an_unreadable_issue_fails_with_the_reason_and_keeps_the_other_problems(self):
         error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 404: Not Found\n")
         env = {"PR_TITLE": "Bad title", "PR_BODY": BODY + "Closes #1\n", "PR_AUTHOR": "someone", "REPO": "owner/repo"}
         with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
-              mock.patch("subprocess.run", side_effect=error), redirect_stdout(io.StringIO()) as out):
+              mock.patch("subprocess.run", side_effect=error) as run, redirect_stdout(io.StringIO()) as out):
             self.assertEqual(check_pr.main(), 1)
+        self.assertIn("Accept: application/vnd.github.html+json", run.call_args.args[0])  # the reply must carry body_html
         self.assertIn("title 'Bad title'", out.getvalue())
         self.assertIn("could not read an issue this PR closes: HTTP 404: Not Found", out.getvalue())
 

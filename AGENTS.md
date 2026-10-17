@@ -6,7 +6,7 @@
 
 - 读 CONTRIBUTING.md 和[文档地图](docs/README.md)，再按地图只读与任务相关的文档。
 - 进度看 Issue（`gh issue list`）。记忆或聊天记录与仓库冲突时，以仓库为准。
-- 多个会话并行时，各用独立的 git worktree，不动别的会话正在用的目录。
+- 多个会话并行时，各用独立的 git worktree，不动别的会话正在用的目录；开工前用 `gh pr list --state all` 和相关 Issue 的评论看有没有人在做或已做完，开始做就在 Issue 评论（没有 Issue 就用一个空提交开草稿 PR）里写明范围和分支认领，撞车时后认领的停下。
 - 建立、接入、升级、设计、评审、发布、复盘的步骤在 project-workflow skill 里；没装时运行 `npx skills add TYCT-tyct/project-workflow -g`。
 
 ## 谁拍板
@@ -34,7 +34,7 @@
 4. 代码和文档在同一个 PR 里改：按文档地图找到负责的文档原地改写，不追加"更新"，不留废弃段落。
 5. PR 标题用 Conventional Commits，形如 `type(scope): summary`：英文、祈使、小写开头、不超过 72 字符；`type` 取 feat、fix、docs、refactor、test、chore、ci，破坏性变更在 `type` 后加 `!`，描述末尾写 `BREAKING CHANGE: <说明>`。描述按模板，先英文后中文；「验证」写可检验的证据，"已测试"不算。基础检查的 `pr` 核对标题、模板的每一节、关闭关键字的位置，以及要关闭的 Issue 验收是否都勾了。
 6. 检查全部通过。需要评审的，由不是作者、用不同模型的评审者只读评审，做法见 skill 的评审方法；完整意见原样贴在 PR 评论，作者逐条回应。没有未解决的阻断意见（合并前必须解决的）、应修意见都有回应，才能合并：基础检查的 `review` 按评审方法规定的第一行核对最新的提交，改动连同旁边几行没变的（如只合入了基础分支）沿用原来的评审。不需要评审的 PR，描述里写一行 `免评审：<理由>`；项目在 `.github/project-workflow.toml` 关闭了免评审的，每个 PR 都要评审。
-7. 作者用 `gh pr merge --squash --match-head-commit <检查通过的最新提交>` 合并。
+7. 作者用 `gh pr merge --squash --match-head-commit <检查通过的最新提交>` 合并。合并积压时先推进已开的 PR、暂停无关的新工作，解除阻塞的修复除外。
 8. 完成的定义：验收标准逐条有证据，改动的行为有测试，文档已同步，检查和评审通过。汇报写明做完了什么、现在在哪、下一步。
 
 ## 文档

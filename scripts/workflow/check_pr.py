@@ -3,7 +3,8 @@
 unticked, or when its head commit has no passing independent review.
 
 Managed by project-workflow: changed only by upgrades.
-  check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, and REPO to fetch the issues it closes through gh
+  check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, and REPO to fetch the issues it closes through gh, as GitHub
+                         renders them: the acceptance boxes come from the rendered HTML, never from the Markdown text
   check_pr.py review     reads PR_HEAD, PR_BODY, PR_AUTHOR, BASE_REF, the PR's comments as JSON lines on stdin, and git history
 Values arrive through the environment, never the command line, so a title or description cannot inject shell.
 The review check reads the first lines the review method asks reviewers and authors to write. With one account shared by
@@ -18,6 +19,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from html.parser import HTMLParser
 from pathlib import Path
 
 TYPES = ("feat", "fix", "docs", "refactor", "test", "chore", "ci")
@@ -29,9 +31,7 @@ COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+"
                      r"(?:(?:[\w.-]+/[\w.-]+)?#[0-9]+|https?://github\.com/[\w.-]+/[\w.-]+/issues/[0-9]+)", re.IGNORECASE)
 ISSUE_REF = re.compile(r"(?:([\w.-]+/[\w.-]+)?#|https?://github\.com/([\w.-]+/[\w.-]+)/issues/)([0-9]+)$")
-HEADING = re.compile(r"#{1,6}(?=[ \t])")
-FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")  # CommonMark: a fence closes on the same character, at least as long, alone
-UNTICKED = re.compile(r"[ \t]*(?:[-*+]|[0-9]+[.)])[ \t]+\[ \]")
+HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|[0-9]+[.)])[ \t]*)*")  # indentation and list or quote markers
 SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,33 +66,50 @@ def describe(title, body, author, template):
     return problems
 
 
-def unticked_acceptance(body):
-    """Unticked boxes under every heading that names 验收 (the issue templates' 验收标准), down to the next heading of the
-    same or a higher level, so subheadings stay inside; lines in code fences are neither headings nor boxes."""
-    count, level, fence = 0, None, ""
-    for line in body.splitlines():
-        if match := FENCE.match(line):
-            marker, rest = match.groups()
-            if not fence and not (marker[0] == "`" and "`" in rest):  # a backtick fence's info string has no backtick
-                fence = marker
-                continue
-            if fence and marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
-                fence = ""
-                continue
-        if fence:
-            continue
-        if heading := HEADING.match(line):
-            if level is None or len(heading.group(0)) <= level:
-                level = len(heading.group(0)) if "验收" in line else None
-        elif level is not None and UNTICKED.match(line):
-            count += 1
-    return count
+class Acceptance(HTMLParser):
+    """Counts the task-list checkboxes GitHub leaves unticked under each heading that names 验收 (the issue templates'
+    验收标准), down to the next heading of the same or a higher level, so subheadings stay inside. The input is the issue's
+    body_html, which GitHub renders: comments, code and inline code are already what a reader sees, so no Markdown or comment
+    rules are guessed here, and whatever GitHub does with a description is exactly what this counts."""
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+        self.section = None  # the level of the acceptance heading still open, or None
+        self.heading = None  # the level of the heading being read, or None
+        self.text = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in HEADINGS:
+            self.heading, self.text = int(tag[1]), []
+        elif tag == "input" and self.section is not None:
+            attrs = dict(attrs)  # GitHub renders a task list's box as <input type="checkbox">, checked when ticked
+            if attrs.get("type") == "checkbox" and "checked" not in attrs:
+                self.count += 1
+
+    def handle_endtag(self, tag):
+        if tag in HEADINGS and self.heading is not None:
+            level, text = self.heading, "".join(self.text)
+            self.heading = None
+            if self.section is None or level <= self.section:
+                self.section = level if "验收" in text else None
+
+    def handle_data(self, data):
+        if self.heading is not None:
+            self.text.append(data)
+
+
+def unticked_acceptance(html):
+    """The unticked acceptance boxes in an issue description as GitHub renders it; see Acceptance."""
+    boxes = Acceptance()
+    boxes.feed(html)
+    boxes.close()
+    return boxes.count
 
 
 def unfinished(body, repo, issue):
     """Problems for each issue of this repository the PR closes whose acceptance criteria still have unticked boxes.
-    issue(number) returns the issue as GitHub's API does; pull requests and issues without an acceptance section pass.
-    This proves the boxes were ticked, not that the evidence is there: that stays with the review."""
+    issue(number) returns the issue as GitHub's API does, body_html included; pull requests and issues without an acceptance
+    section pass. This proves the boxes were ticked, not that the evidence is there: that stays with the review."""
     problems, seen = [], set()
     for match in CLOSING.finditer(COMMENT.sub("", body)):
         ref = ISSUE_REF.search(match.group(0))
@@ -102,7 +119,11 @@ def unfinished(body, repo, issue):
             continue
         seen.add(number)
         found = issue(number)
-        if "pull_request" not in found and (count := unticked_acceptance(found.get("body") or "")):
+        if "pull_request" in found:
+            continue
+        if "body_html" not in found:  # the request did not ask for rendered HTML: fail rather than count nothing
+            problems.append(f"could not read #{number} as GitHub renders it: no body_html in the reply")
+        elif count := unticked_acceptance(found["body_html"] or ""):
             problems.append(f"#{number} still has {count} unticked acceptance boxes: tick each with its evidence, or write "
                             f"Refs #{number} instead; then edit this description or rerun the pr check")
     return problems
@@ -161,8 +182,10 @@ def main():
     if sys.argv[1:] == ["describe"]:
         problems = describe(env("PR_TITLE"), env("PR_BODY"), env("PR_AUTHOR"), TEMPLATE.read_text(encoding="utf-8-sig"))
         if env("PR_AUTHOR") not in EXEMPT:  # a failed request is a problem, so an outage fails the check instead of passing it
-            issue = lambda number: json.loads(subprocess.run(["gh", "api", f"repos/{env('REPO')}/issues/{number}"],
-                                                             capture_output=True, check=True).stdout)
+            # body_html is GitHub's own rendering: that is what a reader sees, so the acceptance boxes are read from it
+            issue = lambda number: json.loads(subprocess.run(
+                ["gh", "api", "-H", "Accept: application/vnd.github.html+json", f"repos/{env('REPO')}/issues/{number}"],
+                capture_output=True, check=True).stdout)
             try:
                 problems += unfinished(env("PR_BODY"), env("REPO"), issue)
             except subprocess.CalledProcessError as error:
