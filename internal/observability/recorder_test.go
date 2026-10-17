@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 	"uuid"
+
+	"axiom/internal/platform/pg"
 )
 
 // sink stands in for the database: it keeps what is written, in order, and can be told to block or fail.
@@ -365,6 +367,51 @@ func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
 	}
 	if n := attemptsOf(t, db, a); n != 4 {
 		t.Errorf("%d attempts stored, want the 4 of the good calls", n)
+	}
+}
+
+// TestBadAttemptRollsBackItsCallAndIsIsolated: the attempt insert refuses a 65-character error_kind. Because the call
+// and its attempts share one transaction, the call insert rolls back too; splitting the batch then leaves out exactly
+// that call and its attempts, while both neighbours are written whole.
+func TestBadAttemptRollsBackItsCallAndIsIsolated(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	a := uuid.NewV7()
+	before, bad, after := record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))
+	bad.Attempts[0].ErrorKind = strings.Repeat("x", 65)
+	r := newRecorder(t.Context(), Config{
+		QueueSize: 10, BatchSize: 10, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, dbWriter(db, platformScope), isBadRow, quiet)
+	enqueueAll(t, r, []CallRecord{before, bad, after})
+	err := r.Close(t.Context())
+	if err == nil || err.Error() != "observability: 1 call records were not written (2 attempts lost)" {
+		t.Errorf("Close = %v, want exactly one call and its two attempts lost", err)
+	}
+
+	count := func(table, column string, id uuid.UUID) int {
+		t.Helper()
+		var n int
+		if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), "SELECT count(*) FROM observability."+table+" WHERE "+column+" = $1", id).Scan(&n)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, rec := range []CallRecord{before, after} {
+		if n := count("call_log", "id", rec.ID); n != 1 {
+			t.Errorf("the good call %s has %d rows, want 1", rec.ID, n)
+		}
+		if n := count("call_attempt", "request_id", rec.ID); n != 2 {
+			t.Errorf("the good call %s has %d attempts, want 2", rec.ID, n)
+		}
+	}
+	if n := count("call_log", "id", bad.ID); n != 0 {
+		t.Errorf("the refused call has %d rows, want 0 after the rollback", n)
+	}
+	if n := count("call_attempt", "request_id", bad.ID); n != 0 {
+		t.Errorf("the refused call has %d attempts, want 0 after the rollback", n)
 	}
 }
 
