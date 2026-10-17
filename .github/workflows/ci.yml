@@ -30,8 +30,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
           fetch-depth: 0 # the benchmark comparison checks out the base commit
-      # The docs check in workflow.yml covers Markdown, so a PR that changes only Markdown needs no build. Every later
-      # step is skipped, and the required build check succeeds at once; main always runs everything.
+      # A PR that changes only Markdown no tracked non-Markdown file names needs no build; a document code reads (for
+      # example docs/architecture.md in tools/checkmodules and the pg tests) still runs everything. Every later step is
+      # skipped, and the required build check succeeds at once; main always runs everything.
       - id: changes
         if: github.event_name == 'pull_request'
         run: |
@@ -88,8 +89,8 @@ jobs:
         run: just migrations "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-      # A test-only or Markdown change cannot move an allocation; production Go or a module file can. tools/benchgate
-      # stays as it is.
+      # A Markdown-only or web/-only change cannot move a Go allocation; every other change, testdata, *.sql and test
+      # files included, runs the comparison. tools/benchgate stays as it is.
       - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
         run: |
           if python3 scripts/ci_skips.py bench-needed "$BASE"; then

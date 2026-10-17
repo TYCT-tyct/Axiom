@@ -157,7 +157,7 @@
 | 部署 | 静态编译的单个程序 → 非 root 的最小容器镜像；每个节点用 Docker Compose | 起步最简单；节点多了再换编排工具，程序不变 | 一开始就上 Kubernetes |
 | 命令入口 | just | 跨平台，Windows 开发机和 Linux CI 用同一套命令 | Makefile：Windows 上不好用 |
 
-`just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：每个 PR 和主分支都由 `just check-all` 里的 `just bench-once` 带竞态检测各跑一次；PR 上生产 Go 或 `go.mod`/`go.sum` 有变化时，`just bench-compare` 再比较分配，否则跳过。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`AXIOM_` 变量）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum` 和测试配置的哈希复用，任何 Go 变化都会重跑。只改 Markdown 的 PR 直接跳过 build，`docs` 检查仍跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
+`just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：每个 PR 和主分支都由 `just check-all` 里的 `just bench-once` 带竞态检测各跑一次；PR 上生产 Go 或 `go.mod`/`go.sum` 有变化时，`just bench-compare` 再比较分配，否则跳过。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`AXIOM_` 变量和 `web_cache.py` 自身的哈希）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum`、测试配置、Go 版本和 `AXIOM_` 测试变量的哈希复用，任何 Go 变化都会重跑。缓存目录不自动淘汰，定期清理 `<cache>/web-build` 和 `<cache>/e2e`（例如 `find ~/.cache/axiom/web-build -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} +`）。只有没有任何非 Markdown 文件引用的 Markdown 改动才跳过 build，`docs` 检查仍跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
 
 具体小库（如缓存客户端）在实现时按兼容性测试选定，记在对应模块的 README。
 
@@ -204,7 +204,7 @@ docs/                         文档
   - 凭证按供应商类型定义成有类型的结构，不用字符串键值包。sub2api 因为字段白名单漏了几个键，导致一整类账号永远选不中（sub2api issue #7758，2026-10）。
 - **不用隐式机制**：不用 ORM、依赖注入框架、反射加载配置。
 - **反馈要快**：一条命令跑完格式化、lint 和单元测试。契约代码由生成得到，CI 检查生成结果是否最新。
-- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check`/`check-all` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）用固定的项目名、端口、镜像和数据卷，靠机器级的文件锁轮流执行，每次以 `just down -v` 收尾。只改 Markdown 的 PR 跳过 build，由 `docs` 检查覆盖；机器地址和凭证不入库。
+- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check`/`check-all` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）用固定的项目名、端口、镜像和数据卷，靠机器级的文件锁轮流执行，每次以 `just down -v` 收尾。只改 Markdown 且没有非 Markdown 文件引用它的 PR 跳过 build，由 `docs` 检查覆盖；被代码读取的文档照常跑 build。机器地址和凭证不入库。
 - **每个模块的 README 写明不变量**；测试和代码放在一起。
 
 ## 底线指标

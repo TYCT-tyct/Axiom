@@ -76,14 +76,19 @@ def e2e_inputs_hash(root: Path) -> str:
 
 def toolchain() -> str:
     versions = []
-    for command in ("node", "pnpm"):
+    for command in ("node", "pnpm", "go"):
+        args = [command, "version"] if command == "go" else [command, "--version"]
         try:
-            result = subprocess.run([command, "--version"], capture_output=True, text=True, check=True)
+            result = subprocess.run(args, capture_output=True, text=True, check=True)
         except (OSError, subprocess.CalledProcessError):
             versions.append(command + " unknown")
         else:
             versions.append(command + " " + result.stdout.strip())
     return " ".join(versions)
+
+
+def script_hash() -> str:
+    return hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()
 
 
 def extra(h, name: str, value: str) -> None:
@@ -96,6 +101,7 @@ def extra(h, name: str, value: str) -> None:
 def build_key(root: Path, version: str, tools: str) -> str:
     h = hashlib.sha256()
     extra(h, "format", CACHE_FORMAT)
+    extra(h, "script", script_hash())
     extra(h, "web", web_hash(root))
     extra(h, "version", version)
     extra(h, "toolchain", tools)
@@ -112,9 +118,13 @@ def e2e_key(root: Path, tools: str) -> str:
     # the Go code.
     h = hashlib.sha256()
     extra(h, "format", CACHE_FORMAT)
+    extra(h, "script", script_hash())
     extra(h, "inputs", e2e_inputs_hash(root))
     extra(h, "toolchain", tools)
     extra(h, "platform", platform.platform())
+    for name in sorted(os.environ):
+        if name.startswith("AXIOM_") and name not in ("AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"):
+            extra(h, "env " + name, os.environ[name])
     return h.hexdigest()
 
 
@@ -138,9 +148,12 @@ def save(root: Path, target: Path) -> bool:
         for app in APPS:
             shutil.copytree(root / "web" / app / "dist", temp / app / "dist")
         (temp / ".complete").write_text(CACHE_FORMAT + "\n", encoding="utf-8")
-        if target.exists():
-            return False  # another job saved the same key first
-        os.replace(temp, target)
+        try:
+            os.replace(temp, target)
+        except OSError:
+            if complete(target):
+                return False  # another job saved the same key first
+            raise
         return True
     finally:
         if temp.exists():

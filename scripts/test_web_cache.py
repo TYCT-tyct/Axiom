@@ -1,9 +1,12 @@
 import contextlib
 import io
+import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import web_cache
 
@@ -83,6 +86,13 @@ class Hashes(unittest.TestCase):
         self.assertNotEqual(after_test, web_cache.e2e_inputs_hash(self.repo.root))
 
 
+def make_dist(root: Path) -> None:
+    for app in web_cache.APPS:
+        dist = root / "web" / app / "dist"
+        dist.mkdir(parents=True, exist_ok=True)
+        (dist / "index.html").write_text(app + " proof\n", encoding="utf-8")
+
+
 class BuildCache(unittest.TestCase):
     def setUp(self):
         self.repo = Repository()
@@ -112,6 +122,39 @@ class BuildCache(unittest.TestCase):
         self.repo.write("web/site/src/app.ts", "export const site = 3\n")
         self.assertIn("cache miss", self.build())
         self.assertEqual((self.repo.root / "built.log").read_text(encoding="utf-8").count("build"), 2)
+
+    def test_two_writers_of_one_key_do_not_fail(self):
+        roots = [Repository(), Repository()]
+        for root in roots:
+            make_dist(root.root)
+        target = self.cache / "web-build" / "same"
+        barrier = threading.Barrier(2)
+        original = os.replace
+        results = []
+
+        def replace(src, dst):
+            barrier.wait()
+            return original(src, dst)
+
+        def save(root):
+            results.append(web_cache.save(root, target))
+
+        threads = [threading.Thread(target=save, args=(root.root,)) for root in roots]
+        with mock.patch.object(web_cache.os, "replace", side_effect=replace):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        for root in roots:
+            root.close()
+        self.assertEqual(sorted(results), [False, True])
+        self.assertTrue(web_cache.complete(target))
+
+    def test_an_unexpected_replace_error_is_not_swallowed(self):
+        make_dist(self.repo.root)
+        with mock.patch.object(web_cache.os, "replace", side_effect=OSError("boom")):
+            with self.assertRaises(OSError):
+                web_cache.save(self.repo.root, self.cache / "web-build" / "same")
 
 
 class E2ECache(unittest.TestCase):

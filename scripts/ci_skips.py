@@ -1,7 +1,8 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
-The decisions are content-based: a path list from git, never a guess about what a checkout contains. A file list is
-empty on a failed diff, so md-only fails closed (run the build) and bench-needed fails open (run the comparison).
+The decisions are computed from content, not hand-kept lists: Markdown is skippable only when no tracked non-Markdown
+file names it (a document can be an input to a code check), and a benchmark comparison is worth its minutes for
+everything except Markdown-only and web/-only changes. A failed diff runs the build and the comparison.
 """
 
 import subprocess
@@ -16,20 +17,33 @@ def changed_paths(base: str, head: str = "HEAD") -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def only_md(paths: list[str]) -> bool:
-    """A pull request that changes only Markdown files needs no build."""
-    return bool(paths) and all(path.lower().endswith(".md") for path in paths)
+def referenced_by_code(path: str) -> bool:
+    """Whether a tracked non-Markdown file names path, as tools/checkmodules names docs/architecture.md."""
+    result = subprocess.run(
+        ["git", "grep", "-l", "-F", "-e", path, "--", ".", ":(exclude)*.md"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        return bool(result.stdout.strip())
+    if result.returncode == 1:
+        return False
+    return True  # a failed search must not skip the build
 
 
-def needs_benchmark(paths: list[str]) -> bool:
-    """A benchmark comparison is worth its minutes only when production Go or a module file changed."""
-    for path in paths:
-        name = path.rsplit("/", 1)[-1]
-        if name in ("go.mod", "go.sum"):
-            return True
-        if path.endswith(".go") and not path.endswith("_test.go"):
-            return True
-    return False
+def only_md(paths: list[str], referenced=referenced_by_code) -> bool:
+    """A pull request that changes only Markdown files no code check reads needs no build."""
+    return bool(paths) and all(path.lower().endswith(".md") for path in paths) and not any(
+        referenced(path) for path in paths
+    )
+
+
+def web_only(paths: list[str]) -> bool:
+    return bool(paths) and all(path.startswith("web/") for path in paths)
+
+
+def needs_benchmark(paths: list[str], referenced=referenced_by_code) -> bool:
+    """Run the comparison for anything but Markdown-only and web/-only changes."""
+    return not (only_md(paths, referenced) or web_only(paths))
 
 
 def main(argv: list[str]) -> int:
