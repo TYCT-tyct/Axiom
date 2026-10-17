@@ -124,11 +124,12 @@ func TestAFailedAggregateIsTriedElsewhereAndItsContentIsNotMixed(t *testing.T) {
 
 // TestAnAggregateKeptForAClientThatLeftIsLetGo: the first attempt generated content and broke, so its reply was kept
 // for the answer; the client left before another entry could answer, so nothing of it is the call's, and it is neither
-// written nor booked as content the client got (docs/domains/gateway.md「用量与费用」).
+// written nor booked as content the client got (docs/domains/gateway.md「用量与费用」). A Chat client is the one that
+// shows it, since Messages answers the error alone either way.
 func TestAnAggregateKeptForAClientThatLeftIsLetGo(t *testing.T) {
-	no := false
+	no, messages := false, protocol.Messages
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, stream: &no, noSlot: []int{2}})
+		h := newHarness(t, ctx, options{client: protocol.Chat, upstream: &messages, entries: 2, stream: &no, noSlot: []int{2}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart, evBlock, evHello), beat{hangup: true})}
 		h.up.beforeAcquire = func(id suppliers.EndpointID) {
 			if id == uuidOf(ep(2)) {
