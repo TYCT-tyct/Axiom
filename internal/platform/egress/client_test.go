@@ -16,7 +16,11 @@ import (
 	"testing"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/telemetry"
 )
 
 func request(t *testing.T, target string) *http.Request {
@@ -256,6 +260,31 @@ func redirectServer(t *testing.T, followed *atomic.Int32) *httptest.Server {
 		}
 		w.WriteHeader(http.StatusFound)
 	}))
+}
+
+// BenchmarkEgressSpan is what the egress.request span costs for one outbound request: "unsampled" is the provider
+// serve builds while no exporter is attached (telemetry.New samples nothing), "sampled" the same with a span
+// processor, as when an exporter is. An unsampled span records nothing, so it builds no attributes; bench-compare
+// fails if either grows.
+func BenchmarkEgressSpan(b *testing.B) {
+	for name, processors := range map[string][]sdktrace.SpanProcessor{
+		"unsampled": nil,
+		"sampled":   {sdktrace.NewSimpleSpanProcessor(tracetest.NewNoopExporter())},
+	} {
+		node, err := telemetry.New(processors...)
+		if err != nil {
+			b.Fatal(err)
+		}
+		client := &Client{tracer: node.Traces.Tracer("axiom/egress")}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, span := client.startSpan(b.Context(), "upstream.example")
+				recordStatus(span, http.StatusOK)
+				span.End()
+			}
+		})
+	}
 }
 
 func requestFailure(t *testing.T, client *Client, req *http.Request) error {

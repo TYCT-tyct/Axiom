@@ -44,6 +44,10 @@ type Settings struct {
 	DrainLimit, Grace time.Duration
 	// CatchUp is how close to the removal's start Through must come: an adapter keeps a short distance from the present.
 	CatchUp time.Duration
+	// CatchUpAlert is how long a removal may spend catching up on the charge records before it sends an alert. The read
+	// has no bound of its own and a large backlog is read window by window, so without this a removal would wait quietly.
+	// It is measured from RemovalAt, so a removal that waits for attempts in flight first includes that wait (DrainLimit).
+	CatchUpAlert time.Duration
 }
 
 // Defaults are the design's values.
@@ -53,6 +57,7 @@ func Defaults() Settings {
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
 		MaxPages:   50,
 		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute, CatchUp: 2 * time.Minute,
+		CatchUpAlert: 30 * time.Minute,
 	}
 }
 
