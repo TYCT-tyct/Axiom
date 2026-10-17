@@ -2,12 +2,13 @@ import { expect, test } from "@playwright/test";
 import { contentSecurityPolicy } from "../vite.shared.ts";
 import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
+import { mockConsole, signedInAs } from "./console-api.ts";
 
 for (const app of apps) {
   test(`the ${app.name} works under the content security policy`, async ({ page }) => {
     const errors = collectErrors(page);
-    // The console asks for the running version; any answer will do here.
-    await page.route("**/api/console/v1/version", (route) => route.fulfill({ json: { version: "" } }));
+    // The console asks its API who is signed in, and shows the page the answer leads to.
+    signedInAs(await mockConsole(page));
 
     const response = await page.goto(app.url);
     const policy = response?.headers()["content-security-policy"];
@@ -72,7 +73,7 @@ for (const app of apps) {
 }
 
 test("the website's buttons open the console", async ({ page }) => {
-  await page.route("**/api/console/v1/version", (route) => route.fulfill({ json: { version: "" } }));
+  signedInAs(await mockConsole(page));
   await page.goto(apps[0].url);
   await page.getByRole("link", { name: "获取 API key" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();

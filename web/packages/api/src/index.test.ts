@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { consoleApi, isTransient, unwrap } from "./index";
+import { consoleApi, isTransient, setCsrfToken, unwrap, unwrapEmpty } from "./index";
 
 function respond(status: number, data?: unknown) {
   return Promise.resolve({ data, response: new Response(null, { status, headers: { "X-Request-ID": "req-1" } }) });
@@ -33,6 +33,33 @@ describe("unwrap", () => {
     expect(await failure(Promise.reject(cause))).toMatchObject({ status: 0, requestId: null, cause });
   });
 
+  it("reports what the server says went wrong and how long a limit asks to wait", async () => {
+    const body = {
+      error: { code: "rate_limited", message: "slow down", fields: [{ pointer: "/email", message: "x" }] },
+    };
+    const response = new Response(null, { status: 429, headers: { "Retry-After": "30" } });
+    expect(await failure(Promise.resolve({ error: body, response }))).toMatchObject({
+      status: 429,
+      code: "rate_limited",
+      fields: [{ pointer: "/email", message: "x" }],
+      retryAfter: 30,
+    });
+    expect(
+      await failure(Promise.resolve({ error: "<html>", response: new Response(null, { status: 502 }) })),
+    ).toMatchObject({ status: 502, code: undefined, fields: [] });
+  });
+
+  it("accepts an empty answer from an operation that has none", async () => {
+    await expect(
+      unwrapEmpty(Promise.resolve({ response: new Response(null, { status: 204 }) })),
+    ).resolves.toBeUndefined();
+    await expect(unwrapEmpty(Promise.resolve({ response: new Response(null, { status: 404 }) }))).rejects.toMatchObject(
+      {
+        status: 404,
+      },
+    );
+  });
+
   it("tells a response that could not be read from no response, keeping the cause", async () => {
     const cause = new SyntaxError("Unexpected token '<'");
     const error = await failure(Promise.reject(cause));
@@ -62,6 +89,10 @@ describe("consoleApi", () => {
     vi.stubGlobal("fetch", (_: Request, init?: RequestInit) => {
       const signal = init?.signal;
       return new Promise<Response>((_resolve, reject) => {
+        // like fetch, which rejects at once for a signal that has already aborted
+        if (signal?.aborted) {
+          reject(signal.reason);
+        }
         signal?.addEventListener("abort", () => reject(signal.reason));
       });
     });
@@ -69,5 +100,29 @@ describe("consoleApi", () => {
     const call = consoleApi.GET("/api/console/v1/version", { baseUrl: "http://localhost", signal: caller.signal });
     caller.abort();
     expect(await failure(call)).toMatchObject({ status: 0 });
+  });
+});
+
+describe("the requests that change data", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function sent(send: () => Promise<unknown>) {
+    let request: Request | undefined;
+    vi.stubGlobal("fetch", (sentRequest: Request) => {
+      request = sentRequest;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    await send();
+    return request as Request;
+  }
+
+  it("carry the CSRF token and the JSON content type, and a read carries neither", async () => {
+    setCsrfToken("token-1");
+    const post = await sent(() => consoleApi.POST("/api/console/v1/auth/sign-out", { baseUrl: "http://localhost" }));
+    expect(post.headers.get("X-CSRF-Token")).toBe("token-1");
+    expect(post.headers.get("Content-Type")).toBe("application/json");
+    const get = await sent(() => consoleApi.GET("/api/console/v1/session", { baseUrl: "http://localhost" }));
+    expect(get.headers.get("X-CSRF-Token")).toBeNull();
+    expect(get.headers.get("Content-Type")).toBeNull();
   });
 });

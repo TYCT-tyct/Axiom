@@ -57,6 +57,7 @@ type Supplier struct {
 	ID           uuid.UUID
 	Kind         adapter.Kind
 	Origin, Exit string
+	Status       string
 	ConfigGen    int64
 }
 
@@ -88,7 +89,7 @@ func (n *Node) Acquire(ctx context.Context, supplier uuid.UUID) (*Session, error
 			return fmt.Errorf("read the supplier: %w", err)
 		}
 		s.fence = fence
-		s.Supplier = Supplier{ID: row.ID, Kind: adapter.Kind(row.Kind), Origin: row.Origin, Exit: row.MgmtEgressID, ConfigGen: row.ConfigGen}
+		s.Supplier = Supplier{ID: row.ID, Kind: adapter.Kind(row.Kind), Origin: row.Origin, Exit: row.MgmtEgressID, Status: row.Status, ConfigGen: row.ConfigGen}
 		return nil
 	})
 	if err != nil {

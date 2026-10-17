@@ -76,6 +76,22 @@ const icons = {
     </>
   ),
   check: <path d="m3.25 8.25 3 3 6.5-6.5" />,
+  left: <path d="M10 3.5 5.5 8l4.5 4.5" />,
+  plus: <path d="M8 3v10M3 8h10" />,
+  copy: (
+    <>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.75" />
+      <path d="M10.5 5.5V3.75A1.75 1.75 0 0 0 8.75 2h-5A1.75 1.75 0 0 0 2 3.75v5a1.75 1.75 0 0 0 1.75 1.75H5.5" />
+    </>
+  ),
+  pencil: <path d="m10.5 2.75 2.75 2.75-8 8-3.25.75.75-3.25z" />,
+  trash: (
+    <>
+      <path d="M2.75 4.5h10.5M6.25 4.5V3a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1.5" />
+      <path d="m4.25 4.5.5 8.25a1 1 0 0 0 1 .9h4.5a1 1 0 0 0 1-.9l.5-8.25M6.75 7v3.5M9.25 7v3.5" />
+    </>
+  ),
+  logout: <path d="M6.5 2.75H3.75a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1H6.5M10 5.25 12.75 8 10 10.75M12.75 8H6" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof icons;

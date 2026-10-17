@@ -139,7 +139,7 @@ export interface paths {
         put?: never;
         /**
          * Finish enabling two-step verification
-         * @description Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Enabling twice replaces the old secret.
+         * @description Needs the password again and a code from the new secret. Stores the secret, makes the 10 recovery codes (shown only in this response) and replaces the user's sessions as described by `FactorChange`. Only for a user who has not enabled it: once on, it stays on and cannot be replaced from the console (409); the person who runs the deployment can reset it from the command line.
          *
          *     Limits: failed codes count against the user's 10 an hour.
          */
@@ -449,6 +449,11 @@ export interface components {
         CallId: string;
         Site: {
             name: string;
+            /**
+             * @description The site's accounting currency, the one of every `Money` its API shows. It never changes.
+             * @example USD
+             */
+            currency: string;
             /** @description Absent when the site has no logo. */
             logo_url?: string;
             /**
@@ -832,6 +837,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };

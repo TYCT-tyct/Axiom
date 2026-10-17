@@ -19,20 +19,20 @@ import (
 // site s2, opened by a1, with its tier t2 and personal account a2. Each account has its default workspace (w1, w2),
 // user (u1, u2), API key (k1, k2), session (e1, e2) and recovery code (c1, c2); u1 holds the platform grant g1, and
 // u2 is a2's member. p is a personal account of s1 with no user yet, as registration leaves one before it adds
-// the user. role is a role of the test's own.
+// the user. role is a role of the test's own, and spare a spare one, for a grant u1 does not hold yet.
 var (
-	s1, s2, t1, t2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	a1, a2, w1, w2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	u1, u2, k1, k2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	e1, e2, c1, c2 = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	g1, role, p    = uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	x, y, z        = uuid.NewV7(), uuid.NewV7(), uuid.NewV7() // rows a test creates
-	platform       = pg.NewScope(true, nil, nil)
+	s1, s2, t1, t2     = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	a1, a2, w1, w2     = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	u1, u2, k1, k2     = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	e1, e2, c1, c2     = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	g1, role, spare, p = uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	x, y, z            = uuid.NewV7(), uuid.NewV7(), uuid.NewV7() // rows a test creates
+	platform           = pg.NewScope(true, nil, nil)
 
 	// names spells the IDs in SQL as :name, and reads them back by name.
 	names = map[string]uuid.UUID{
 		"s1": s1, "s2": s2, "t1": t1, "t2": t2, "a1": a1, "a2": a2, "w1": w1, "w2": w2, "u1": u1, "u2": u2,
-		"k1": k1, "k2": k2, "e1": e1, "e2": e2, "c1": c1, "c2": c2, "g1": g1, "role": role, "p": p, "x": x, "y": y, "z": z,
+		"k1": k1, "k2": k2, "e1": e1, "e2": e2, "c1": c1, "c2": c2, "g1": g1, "role": role, "spare": spare, "p": p, "x": x, "y": y, "z": z,
 	}
 	ids = func() *strings.Replacer {
 		var pairs []string
@@ -55,9 +55,9 @@ func member(site, account, kind, user, userAccount string) string {
 		VALUES (` + site + `, ` + account + `, '` + kind + `', ` + user + `, ` + userAccount + `, :role)`
 }
 
-func grant(id, site, account, user string) string {
+func grant(id, site, account, user, role string) string {
 	return `INSERT INTO accounts.platform_grants (id, site_id, account_id, user_id, role_id)
-		VALUES (` + id + `, ` + site + `, ` + account + `, ` + user + `, :role)`
+		VALUES (` + id + `, ` + site + `, ` + account + `, ` + user + `, ` + role + `)`
 }
 
 func apiKey(id, site, account, workspace, createdBy, kind string) string {
@@ -93,10 +93,10 @@ var seed = []string{
 	`INSERT INTO accounts.site_domains VALUES ('main.example', :s1, 'console', 'https://main.example', NULL),
 		('second.example', :s2, 'api', 'https://second.example', NULL)`,
 	`INSERT INTO accounts.site_settings (site_id) VALUES (:s2)`,
-	`INSERT INTO accounts.roles VALUES (:role, 'tester', '{}', false)`,
+	`INSERT INTO accounts.roles VALUES (:role, 'tester', '{}', false), (:spare, 'spare', '{}', false)`,
 	user(":u1", ":s1", ":a1", "NULL"), user(":u2", ":s2", ":a2", "NULL"),
 	member(":s2", ":a2", "personal", ":u2", ":a2"),
-	grant(":g1", ":s1", ":a1", ":u1"),
+	grant(":g1", ":s1", ":a1", ":u1", ":role"),
 	apiKey(":k1", ":s1", ":a1", ":w1", ":u1", "call"), apiKey(":k2", ":s2", ":a2", ":w2", ":u2", "call"),
 	session(":e1", ":s1", ":a1", ":u1"), session(":e2", ":s2", ":a2", ":u2"),
 	code(":c1", ":s1", ":a1", ":u1"), code(":c2", ":s2", ":a2", ":u2"),
@@ -239,7 +239,7 @@ func TestScopesSeeAndWriteOnlyTheirRows(t *testing.T) {
 		},
 		{
 			"roles", "name", "permissions = '{}'",
-			map[string][]string{"platform": {"admin", "finance", "member", "owner", "support", "tester", "viewer"}},
+			map[string][]string{"platform": {"admin", "finance", "member", "owner", "spare", "support", "tester", "viewer"}},
 			[]string{`INSERT INTO accounts.roles VALUES (:x, 'custom', '{}', false)`},
 			[]string{"platform"},
 			nil,
@@ -267,7 +267,7 @@ func TestScopesSeeAndWriteOnlyTheirRows(t *testing.T) {
 		{
 			"platform_grants", "account_id", "revoked_at = revoked_at",
 			map[string][]string{"platform": {"a1"}, "s1": {"a1"}, "a1": {"a1"}},
-			[]string{grant(":z", ":s1", ":a1", ":u1")},
+			[]string{grant(":z", ":s1", ":a1", ":u1", ":spare")},
 			[]string{"platform"},
 			[]string{"platform"},
 		},
@@ -363,7 +363,7 @@ func TestKeysHoldTheTenantStructure(t *testing.T) {
 			[]string{newAccount, user(":z", ":s1", ":x", "NULL"), member(":s1", ":a1", "personal", ":z", ":x")},
 			"23503",
 		},
-		{"a platform grant to a secondary site's user", []string{grant(":z", ":s2", ":a2", ":u2")}, "23503"},
+		{"a platform grant to a secondary site's user", []string{grant(":z", ":s2", ":a2", ":u2", ":role")}, "23503"},
 		{"a key on another account's workspace", []string{apiKey(":z", ":s1", ":a1", ":w2", ":u1", "call")}, "23503"},
 		{"a key created by a user of another site", []string{apiKey(":z", ":s1", ":a1", ":w1", ":u2", "call")}, "23503"},
 		{"a management key that never expires", []string{apiKey(":z", ":s1", ":a1", ":w1", ":u1", "management")}, "23514"},

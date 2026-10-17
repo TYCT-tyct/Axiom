@@ -25,6 +25,7 @@ function StateFrame({
   action,
   tone = "text-t3",
   page = false,
+  compact = false,
 }: {
   icon: IconName;
   title: string;
@@ -32,11 +33,14 @@ function StateFrame({
   action?: ReactNode;
   tone?: string;
   page?: boolean;
+  compact?: boolean;
 }) {
   usePageTitle(page ? title : undefined);
   const Heading = page ? "h1" : "h2";
   return (
-    <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4 py-16 text-center">
+    <div
+      className={cn("mx-auto flex max-w-md flex-col items-center gap-3 px-4 text-center", compact ? "py-8" : "py-16")}
+    >
       <span className={cn("flex size-10 items-center justify-center rounded-full bg-s2", tone)}>
         <Icon name={icon} />
       </span>
@@ -61,25 +65,45 @@ export function LoadingState() {
   );
 }
 
-export function EmptyState({ title, children, action }: { title?: string; children?: ReactNode; action?: ReactNode }) {
+export function EmptyState({
+  title,
+  children,
+  action,
+  compact,
+}: {
+  title?: string;
+  children?: ReactNode;
+  action?: ReactNode;
+  compact?: boolean;
+}) {
   const { t } = useTranslation("common");
   return (
-    <StateFrame icon="grid" title={title ?? t("state.emptyTitle")} action={action}>
+    <StateFrame icon="grid" title={title ?? t("state.emptyTitle")} action={action} compact={compact}>
       {children}
     </StateFrame>
   );
 }
 
-function ForbiddenState() {
+function ForbiddenState({ compact }: { compact?: boolean }) {
   const { t } = useTranslation("common");
   return (
-    <StateFrame icon="lock" title={t("state.forbiddenTitle")}>
+    <StateFrame icon="lock" title={t("state.forbiddenTitle")} compact={compact}>
       <p>{t("state.forbiddenBody")}</p>
     </StateFrame>
   );
 }
 
-function ErrorState({ error, at, onRetry }: { error: unknown; at?: Date; onRetry?: () => void }) {
+function ErrorState({
+  error,
+  at,
+  onRetry,
+  compact,
+}: {
+  error: unknown;
+  at?: Date;
+  onRetry?: () => void;
+  compact?: boolean;
+}) {
   const { t } = useTranslation("common");
   const format = useFormat();
   const failure = isFailure(error) ? error : null;
@@ -88,6 +112,7 @@ function ErrorState({ error, at, onRetry }: { error: unknown; at?: Date; onRetry
       icon="alert"
       tone="text-bad"
       title={t("state.errorTitle")}
+      compact={compact}
       action={
         onRetry ? (
           <Button onClick={onRetry}>
@@ -119,11 +144,13 @@ export function DataState<T>({
   query,
   isEmpty,
   empty,
+  compact,
   children,
 }: {
   query: QueryLike<T>;
   isEmpty?: (data: T) => boolean;
   empty?: ReactNode;
+  compact?: boolean;
   children: (data: T) => ReactNode;
 }) {
   if (query.status === "pending") {
@@ -131,9 +158,16 @@ export function DataState<T>({
   }
   if (query.status === "error" || query.data === undefined) {
     if (isFailure(query.error) && query.error.status === 403) {
-      return <ForbiddenState />;
+      return <ForbiddenState compact={compact} />;
     }
-    return <ErrorState error={query.error} at={new Date(query.errorUpdatedAt)} onRetry={() => query.refetch()} />;
+    return (
+      <ErrorState
+        error={query.error}
+        at={new Date(query.errorUpdatedAt)}
+        onRetry={() => query.refetch()}
+        compact={compact}
+      />
+    );
   }
   if (isEmpty?.(query.data)) {
     return empty ?? <EmptyState />;
