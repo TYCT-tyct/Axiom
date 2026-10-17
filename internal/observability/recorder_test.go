@@ -9,16 +9,19 @@ import (
 	"testing"
 	"time"
 	"uuid"
+
+	"axiom/internal/platform/pg"
 )
 
 // sink stands in for the database: it keeps what is written, in order, and can be told to block or fail.
 type sink struct {
-	mu      sync.Mutex
-	batches [][]string // request IDs per write that succeeded
-	calls   int
-	failing int           // the next writes fail, this many
-	gate    chan struct{} // when set, a write waits for it to close
-	poison  string        // a write containing this request ID fails with a data error
+	mu       sync.Mutex
+	batches  [][]string    // request IDs per write that succeeded
+	attempts int           // attempt rows in those writes
+	calls    int           // writes, successful or not
+	failing  int           // the next writes fail, this many
+	gate     chan struct{} // when set, a write waits for it to close
+	poison   string        // a write containing this request ID fails with a data error
 }
 
 var (
@@ -26,7 +29,7 @@ var (
 	errPoison = errors.New("malformed row")
 )
 
-func (s *sink) write(ctx context.Context, rows []row) error {
+func (s *sink) write(ctx context.Context, batch []queued) error {
 	s.mu.Lock()
 	gate := s.gate
 	s.mu.Unlock()
@@ -44,14 +47,17 @@ func (s *sink) write(ctx context.Context, rows []row) error {
 		s.failing--
 		return errDown
 	}
-	ids := make([]string, len(rows))
-	for i, r := range rows {
-		if r.ID == s.poison {
+	ids := make([]string, len(batch))
+	attempts := 0
+	for i, q := range batch {
+		if q.call.ID == s.poison {
 			return errPoison
 		}
-		ids[i] = r.ID
+		ids[i] = q.call.ID
+		attempts += len(q.attempts)
 	}
 	s.batches = append(s.batches, ids)
+	s.attempts += attempts
 	return nil
 }
 
@@ -64,7 +70,13 @@ func (s *sink) stored() (ids []string, batches int) {
 	return ids, len(s.batches)
 }
 
-func (s *sink) attempts() int {
+func (s *sink) attemptsStored() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempts
+}
+
+func (s *sink) writes() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
@@ -117,14 +129,14 @@ func eventually(t *testing.T, what string, cond func() bool) {
 func enqueueAll(t *testing.T, r *Recorder, records []CallRecord) {
 	t.Helper()
 	for _, rec := range records {
-		if err := r.Enqueue(t.Context(), rec); err != nil {
+		if err := r.Enqueue(rec); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
 // TestBatchesFlushOnSizeAndOnTime: a full batch is written at once, however long the interval; a partial one waits
-// for the interval and is then written alone.
+// for the interval and is then written alone. Attempts travel in the same write as their call.
 func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
@@ -135,6 +147,9 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 		got, batches := s.stored()
 		return batches == 1 && slices.Equal(got, ids(records))
 	})
+	if got := s.attemptsStored(); got != 2*len(records) {
+		t.Errorf("%d attempts written with the calls, want %d", got, 2*len(records))
+	}
 	if err := r.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -160,70 +175,54 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: 30 * time.Millisecond})
 	enqueueAll(t, r, one)
 	eventually(t, "the interval to flush a partial batch", func() bool { got, _ := s.stored(); return len(got) == 1 })
+	if got := s.attemptsStored(); got != 2 {
+		t.Errorf("%d attempts written with the one call, want 2", got)
+	}
 	if err := r.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestFullQueueWaitsAndNeverDrops: with the writer stuck and the queue full, Enqueue blocks instead of returning or
-// discarding; once the writer moves, every record is written, in order.
-func TestFullQueueWaitsAndNeverDrops(t *testing.T) {
+// TestFullQueueDropsWithoutBlocking: with the writer stuck and the queue full, Enqueue returns at once and says the
+// record was dropped; it never waits for room. The records accepted before it are still written, and Close reports the
+// lost call and its attempts.
+func TestFullQueueDropsWithoutBlocking(t *testing.T) {
 	t.Parallel()
 	s := &sink{gate: make(chan struct{})}
 	r := recorderOf(s, Config{QueueSize: 2, BatchSize: 1, FlushInterval: time.Millisecond})
-	records := calls(10)
-	returned := make(chan int, len(records))
-	go func() {
-		for i, rec := range records {
-			if err := r.Enqueue(t.Context(), rec); err != nil {
-				t.Error(err)
-			}
-			returned <- i
-		}
-	}()
-	// One record is in the stuck write, two fill the queue; the fourth Enqueue must not return.
-	eventually(t, "the queue to fill", func() bool { return len(returned) >= 3 })
-	time.Sleep(50 * time.Millisecond)
-	if n := len(returned); n != 3 { // one in the stuck write, two in the queue
-		t.Fatalf("%d Enqueue calls returned with the queue full and the writer stuck, want 3", n)
-	}
-	s.open()
-	eventually(t, "every Enqueue to return", func() bool { return len(returned) == len(records) })
-	if err := r.Close(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := s.stored()
-	if !slices.Equal(got, ids(records)) {
-		t.Errorf("stored %d records, want all %d in order", len(got), len(records))
-	}
-}
-
-// TestEnqueueGivesUpOnItsContext: a caller whose context ends while the queue is full is told, and its record is
-// not queued.
-func TestEnqueueGivesUpOnItsContext(t *testing.T) {
-	t.Parallel()
-	s := &sink{gate: make(chan struct{})}
-	r := recorderOf(s, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
-	records := calls(3)
+	records := calls(6)
 	enqueueAll(t, r, records[:1])
 	eventually(t, "the writer to take the first record", func() bool { return len(r.queue) == 0 })
-	enqueueAll(t, r, records[1:2]) // fills the queue behind the stuck write
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	if err := r.Enqueue(ctx, records[2]); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Enqueue = %v, want the context's error", err)
+	enqueueAll(t, r, records[1:3]) // two fill the queue behind the stuck write
+	eventually(t, "the queue to fill", func() bool { return len(r.queue) == 2 })
+
+	done := make(chan error, 1)
+	go func() { done <- r.Enqueue(records[3]) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrQueueFull) {
+			t.Fatalf("Enqueue on a full queue = %v, want ErrQueueFull", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Enqueue blocked on a full queue")
 	}
+
 	s.open()
-	if err := r.Close(t.Context()); err != nil {
-		t.Fatal(err)
+	err := r.Close(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "1 call records") || !strings.Contains(err.Error(), "2 attempts") {
+		t.Errorf("Close = %v, want it to report the one dropped call and its two attempts", err)
 	}
-	if got, _ := s.stored(); !slices.Equal(got, ids(records[:2])) {
-		t.Errorf("stored %v, want only the two queued records", got)
+	got, _ := s.stored()
+	if !slices.Equal(got, ids(records[:3])) {
+		t.Errorf("stored %v, want the three records queued before the drop", got)
+	}
+	if got := s.attemptsStored(); got != 6 {
+		t.Errorf("%d attempts stored, want 6", got)
 	}
 }
 
-// TestCloseDrainsTheQueue: every queued record is written before Close returns, although the interval is long and the
-// batch not full, and Enqueue refuses afterwards.
+// TestCloseDrainsTheQueue: every queued call and its attempts are written before Close returns, although the interval
+// is long and the batch not full, and Enqueue refuses afterwards.
 func TestCloseDrainsTheQueue(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
@@ -236,7 +235,10 @@ func TestCloseDrainsTheQueue(t *testing.T) {
 	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
 		t.Errorf("stored %d of %d records after Close", len(got), len(records))
 	}
-	if err := r.Enqueue(t.Context(), records[0]); !errors.Is(err, ErrClosed) {
+	if got := s.attemptsStored(); got != 2*len(records) {
+		t.Errorf("%d attempts stored after Close, want %d", got, 2*len(records))
+	}
+	if err := r.Enqueue(records[0]); !errors.Is(err, ErrClosed) {
 		t.Errorf("Enqueue after Close = %v, want ErrClosed", err)
 	}
 	if err := r.Close(t.Context()); err != nil {
@@ -244,7 +246,8 @@ func TestCloseDrainsTheQueue(t *testing.T) {
 	}
 }
 
-// TestFailedWritesRetryUntilTheyWork: a database that is down for a while loses nothing and writes each record once.
+// TestFailedWritesRetryUntilTheyWork: a database that is down for a while loses nothing, keeps the batch order, and
+// writes each call and attempt once.
 func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	t.Parallel()
 	s := &sink{failing: 4}
@@ -262,13 +265,16 @@ func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
 		t.Errorf("stored %v, want %v exactly once", got, ids(records))
 	}
-	if n := s.attempts(); n != 5 {
+	if got := s.attemptsStored(); got != 2*len(records) {
+		t.Errorf("%d attempts stored, want %d exactly once", got, 2*len(records))
+	}
+	if n := s.writes(); n != 5 {
 		t.Errorf("%d write attempts, want 4 failures and 1 success", n)
 	}
 }
 
 // TestCloseGivesUpWhenItsTimeRunsOut: a database that stays down cannot hold shutdown past its deadline; Close says
-// how many records were lost.
+// how many calls and attempts were lost.
 func TestCloseGivesUpWhenItsTimeRunsOut(t *testing.T) {
 	t.Parallel()
 	s := &sink{failing: 1 << 30}
@@ -286,10 +292,13 @@ func TestCloseGivesUpWhenItsTimeRunsOut(t *testing.T) {
 	if want := "5 call records"; !strings.Contains(err.Error(), want) {
 		t.Errorf("Close = %q, want it to count %s", err, want)
 	}
+	if want := "10 attempts"; !strings.Contains(err.Error(), want) {
+		t.Errorf("Close = %q, want it to count %s", err, want)
+	}
 }
 
-// TestMalformedRecordDoesNotBlockTheRest: a row the database refuses is found by splitting the batch, logged and
-// left out; every other record, before and after it, is written.
+// TestMalformedRecordDoesNotBlockTheRest: a record the database refuses is found by splitting the batch, logged and
+// left out with its attempts; every other call, before and after it, is written.
 func TestMalformedRecordDoesNotBlockTheRest(t *testing.T) {
 	t.Parallel()
 	records := calls(6)
@@ -309,6 +318,9 @@ func TestMalformedRecordDoesNotBlockTheRest(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("stored %d records, want the other 5", len(got))
+	}
+	if n := s.attemptsStored(); n != 10 {
+		t.Errorf("%d attempts stored, want the 10 of the good calls", n)
 	}
 }
 
@@ -333,15 +345,15 @@ func TestEndUserHashIsKeyed(t *testing.T) {
 	}
 	rec := record(uuid.NewV7(), now)
 	rec.EndUser = a
-	r, err := newRow(rec)
-	if err != nil || len(r.EndUserHash) != 64 || strings.Contains(r.EndUserHash, "user-1") {
-		t.Errorf("row hash %q (%v)", r.EndUserHash, err)
+	r, attempts, err := newRows(rec)
+	if err != nil || len(r.EndUserHash) != 64 || strings.Contains(r.EndUserHash, "user-1") || len(attempts) != 2 {
+		t.Errorf("row hash %q, %d attempts (%v)", r.EndUserHash, len(attempts), err)
 	}
 }
 
 // TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder: a row the encoder refuses (invalid UTF-8) between good ones is
-// found by splitting, left out and counted; the good rows reach the database. The row is put on the queue directly,
-// because Enqueue rejects such text at the boundary (TestEnqueueRejectsText).
+// found by splitting, left out with its attempts and counted; the good rows reach the database. The row is put on the
+// queue directly, because Enqueue rejects such text at the boundary (TestEnqueueRejectsText).
 func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -350,17 +362,17 @@ func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
 		QueueSize: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
 		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, dbWriter(db, platformScope), isBadRow, quiet)
-	var rows []row
+	var records []queued
 	for _, rec := range []CallRecord{record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))} {
-		rw, err := newRow(rec)
+		call, attempts, err := newRows(rec)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows = append(rows, rw)
+		records = append(records, queued{call: call, attempts: attempts})
 	}
-	rows[1].ClientApp = "\xff\xfe"
-	for _, rw := range rows {
-		r.queue <- rw
+	records[1].call.ClientApp = "\xff\xfe"
+	for _, q := range records {
+		r.queue <- q
 	}
 	if err := r.Close(t.Context()); err == nil || !strings.Contains(err.Error(), "1 call records") {
 		t.Errorf("Close = %v, want it to report the one lost row", err)
@@ -368,20 +380,94 @@ func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
 	if got := list(t, db, accountScope(a), day(a)); len(got) != 2 {
 		t.Errorf("%d rows stored, want the 2 good ones", len(got))
 	}
+	if n := attemptsOf(t, db, a); n != 4 {
+		t.Errorf("%d attempts stored, want the 4 of the good calls", n)
+	}
 }
 
-// TestEnqueueRejectsText: text that cannot be stored is refused when it is queued, so it never reaches a batch.
+// TestBadAttemptRollsBackItsCallAndIsIsolated: the attempt insert refuses a 65-character error_kind. Because the call
+// and its attempts share one transaction, the call insert rolls back too; splitting the batch then leaves out exactly
+// that call and its attempts, while both neighbours are written whole.
+func TestBadAttemptRollsBackItsCallAndIsIsolated(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	a := uuid.NewV7()
+	before, bad, after := record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))
+	bad.Attempts[0].ErrorKind = strings.Repeat("x", 65)
+	r := newRecorder(t.Context(), Config{
+		QueueSize: 10, BatchSize: 10, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, dbWriter(db, platformScope), isBadRow, quiet)
+	enqueueAll(t, r, []CallRecord{before, bad, after})
+	err := r.Close(t.Context())
+	if err == nil || err.Error() != "observability: 1 call records were not written (2 attempts lost)" {
+		t.Errorf("Close = %v, want exactly one call and its two attempts lost", err)
+	}
+
+	count := func(table, column string, id uuid.UUID) int {
+		t.Helper()
+		var n int
+		if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), "SELECT count(*) FROM observability."+table+" WHERE "+column+" = $1", id).Scan(&n)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, rec := range []CallRecord{before, after} {
+		if n := count("call_log", "id", rec.ID); n != 1 {
+			t.Errorf("the good call %s has %d rows, want 1", rec.ID, n)
+		}
+		if n := count("call_attempt", "request_id", rec.ID); n != 2 {
+			t.Errorf("the good call %s has %d attempts, want 2", rec.ID, n)
+		}
+	}
+	if n := count("call_log", "id", bad.ID); n != 0 {
+		t.Errorf("the refused call has %d rows, want 0 after the rollback", n)
+	}
+	if n := count("call_attempt", "request_id", bad.ID); n != 0 {
+		t.Errorf("the refused call has %d attempts, want 0 after the rollback", n)
+	}
+}
+
+// TestEnqueueRejectsText: text that cannot be stored is refused when it is queued, so it never reaches a batch, and
+// the same holds for an attempt's text.
 func TestEnqueueRejectsText(t *testing.T) {
 	t.Parallel()
 	r := recorderOf(&sink{}, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
 	defer r.Close(t.Context()) //nolint:errcheck // nothing was queued
 	for name, edit := range map[string]func(*CallRecord){
-		"bad UTF-8 in the client app": func(c *CallRecord) { c.ClientApp = "\xff" },
-		"a NUL in the model":          func(c *CallRecord) { c.Model = "a\x00b" },
+		"bad UTF-8 in the client app":        func(c *CallRecord) { c.ClientApp = "\xff" },
+		"a NUL in the model":                 func(c *CallRecord) { c.Model = "a\x00b" },
+		"bad UTF-8 in an attempt's egress":   func(c *CallRecord) { c.Attempts[0].Egress = "\xff" },
+		"a NUL in an attempt's error kind":   func(c *CallRecord) { c.Attempts[1].ErrorKind = "a\x00b" },
+		"an attempt with an unknown outcome": func(c *CallRecord) { c.Attempts[0].Outcome = "maybe" },
 	} {
 		rec := record(uuid.NewV7(), now)
 		edit(&rec)
-		if err := r.Enqueue(t.Context(), rec); err == nil {
+		if err := r.Enqueue(rec); err == nil {
+			t.Errorf("%s was queued", name)
+		}
+	}
+}
+
+// TestEnqueueRejectsAnIncompleteAttempt: the logs cannot say what happened without an endpoint, a supplier, times or
+// a sequence that runs from one; such a record is refused before it reaches the queue.
+func TestEnqueueRejectsAnIncompleteAttempt(t *testing.T) {
+	t.Parallel()
+	r := recorderOf(&sink{}, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
+	defer r.Close(t.Context()) //nolint:errcheck // nothing was queued
+	for name, edit := range map[string]func(*CallRecord){
+		"a nil endpoint":      func(c *CallRecord) { c.Attempts[0].Endpoint = uuid.Nil() },
+		"a nil supplier":      func(c *CallRecord) { c.Attempts[1].Supplier = uuid.Nil() },
+		"no start time":       func(c *CallRecord) { c.Attempts[0].StartedAt = time.Time{} },
+		"finish before start": func(c *CallRecord) { c.Attempts[1].FinishedAt = c.Attempts[1].StartedAt.Add(-time.Second) },
+		"a sequence gap":      func(c *CallRecord) { c.Attempts[1].Seq = 3 },
+		"four attempts":       func(c *CallRecord) { c.Attempts = append(c.Attempts, c.Attempts[1], c.Attempts[1]) },
+	} {
+		rec := record(uuid.NewV7(), now)
+		edit(&rec)
+		if err := r.Enqueue(rec); err == nil {
 			t.Errorf("%s was queued", name)
 		}
 	}
@@ -394,7 +480,7 @@ func TestHungWriteTimesOutAndRecovers(t *testing.T) {
 	hung := make(chan struct{})
 	var once sync.Once
 	s := &sink{}
-	write := func(ctx context.Context, rows []row) error {
+	write := func(ctx context.Context, batch []queued) error {
 		blocked := false
 		once.Do(func() { blocked = true })
 		if blocked {
@@ -402,7 +488,7 @@ func TestHungWriteTimesOutAndRecovers(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		return s.write(ctx, rows)
+		return s.write(ctx, batch)
 	}
 	r := newRecorder(t.Context(), Config{
 		QueueSize: 4, BatchSize: 2, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
@@ -416,5 +502,8 @@ func TestHungWriteTimesOutAndRecovers(t *testing.T) {
 	}
 	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
 		t.Errorf("stored %v after the hung write, want %v", got, ids(records))
+	}
+	if n := s.attemptsStored(); n != 4 {
+		t.Errorf("%d attempts stored after the hung write, want 4", n)
 	}
 }

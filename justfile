@@ -73,7 +73,7 @@ scope:
 # egress.NewForTesting lives in egress itself, so it stays listed.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed -E 's/^(.+\.go):([0-9]+):[0-9]+: unreachable func: (.+)$/only tests reach: \3 (\1 line \2)/'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The
@@ -105,33 +105,30 @@ md-checks: docs modules
 record format scenario request:
     go run ./internal/protocol/internal/record internal/protocol/testdata {{ quote(format) }} {{ quote(scenario) }} {{ quote(request) }}
 
-# Benchmarks of two jobs at once measure each other, so on a shared machine they take turns, as the CI server's README
-# asks of every shared resource: through a /tmp lock, which is what flock is for and where it exists. Windows and macOS
-# have neither the other jobs nor flock, and a developer's machine benchmarks alone.
-bench_lock := if os() == "linux" { "flock /tmp/axiom-bench.lock" } else { "" }
-
-# Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
+# Run the benchmarks at a base commit and here: more allocations fail, timings are only reported. Jobs on a shared
+# machine can run it at the same time: every benchmark has a fixed iteration count with the collector off on one
+# processor per binary, so another job's load cannot move its allocation count (tools/benchgate, docs/performance.md).
 bench-compare base:
-    {{ bench_lock }} go run -C tools ./benchgate .. {{ quote(base) }}
+    go run -C tools ./benchgate .. {{ quote(base) }}
 
 compose := "docker compose -f deploy/compose.yaml"
 
 # Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to
 # deploy/.env, readable only by its owner, the first time; returns once it reports ready, or, when a step outlasts
 # its limit, fails with the containers' state, health-check output and logs. New passwords would not open a database
-# created with the old ones, so a missing deploy/.env next to an existing database volume stops it; only the migration
-# administrator's password is added to a deploy/.env written before that role existed, and postgres/roles.sh, run
-# before migrating, creates the role in such a database.
+# created with the old ones, so a missing deploy/.env next to the project's existing database volume stops it; only the
+# migration administrator's password is added to a deploy/.env written before that role existed, and postgres/roles.sh,
+# run before migrating, creates the role in such a database.
 up: web-embed
-    umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^axiom_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
+    umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^${COMPOSE_PROJECT_NAME:-axiom}_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the project's database volume exists: restore the file, or delete the database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
-# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name, so it
-# works without deploy/.env.
+# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name — the
+# one COMPOSE_PROJECT_NAME names for a CI job, otherwise axiom — so it works without deploy/.env.
 down *flags:
-    docker compose --project-name axiom down {{ flags }}
+    docker compose --project-name "${COMPOSE_PROJECT_NAME:-axiom}" down {{ flags }}
 
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the
