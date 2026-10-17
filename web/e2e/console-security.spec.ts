@@ -82,9 +82,8 @@ test.describe("two-step verification settings", () => {
     // fails (after the query's retries); the codes stay on screen, with the reason.
     const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
     await advanceUntil(page, () => expect(codes.getByRole("listitem")).toHaveCount(10, { timeout: 100 }));
-    await advanceUntil(page, () => expect(reads).toBe(3));
-    await expect(codes.getByRole("listitem")).toHaveCount(10);
     await codes.getByRole("button", { name: "我已保存" }).click();
+    await advanceUntil(page, () => expect(reads).toBe(3));
     await expect(codes.getByRole("alert")).toContainText("服务出了问题", { timeout: 10_000 });
     await expect(codes.getByRole("listitem")).toHaveCount(10);
 
