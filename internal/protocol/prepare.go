@@ -167,9 +167,10 @@ func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
 }
 
 // What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
-// reads them into structures, one for every object and, in an object whose members it does not know, one for every
-// member; a body of nothing but "{}," makes 224 bytes of message of every 3. The body does not say how many objects and
-// members there are, but counting its braces and colons bounds them: those inside strings only add. The constants are
+// reads them into structures, one for every object or null in an array of them and, in an object whose members it does
+// not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
+// The body does not say how many there are, but counting its braces, nulls and colons bounds them (any other element
+// of such an array is refused where it stands): those inside strings only add. The constants are
 // the structures' sizes, doubled for the growth of the slices they sit in, with room to spare (measured 2026-10-16, a
 // body of "{}," allocates 1.3 KiB for each object, and 100,000 unknown members 485 bytes each); TestPrepareCost holds
 // them to what bodies of the worst shapes allocate.
@@ -193,7 +194,8 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	if r.Format != Chat {
 		return 0 // Prepare refuses at once: nothing is converted from another format
 	}
-	return convertPerByte*n + convertPerObject*int64(bytes.Count(body, []byte("{"))) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
+	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that

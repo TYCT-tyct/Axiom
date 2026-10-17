@@ -528,6 +528,8 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		body string
 	}{
 		{"empty messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat("{},", 20000) + `{}]`)},
+		{"null messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat("null,", 20000) + `null]`)},
+		{"null tool calls", protocol.Chat, chatBody(`"messages":[{"role":"assistant","tool_calls":[` + strings.Repeat("null,", 20000) + `null]}]`)},
 		{"the smallest messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat(pair+",", 20000) + pair + `]`)},
 		{"members of a message it does not know", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]`)},
 		{"members of the request it does not know", protocol.Chat, chatBody(`"messages":[` + userHi + `],` + strings.Join(members, ","))},
