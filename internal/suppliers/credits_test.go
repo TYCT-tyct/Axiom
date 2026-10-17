@@ -1,14 +1,11 @@
 package suppliers
 
 import (
-	"context"
 	"errors"
 	"testing"
-	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
@@ -84,23 +81,15 @@ func currency(t *testing.T, code string) platform.Currency {
 }
 
 // TestOnlySuppliersWithAUnitValueAreRouted: an attempt takes the latest unit value and records the row it came from,
-// and keeps both through a reload; a supplier with none has no endpoint to call; a value with more decimals than a
-// price holds is refused by the table, so no row can make a reload fail.
+// and keeps both through a reload; a supplier with none has no endpoint to call.
 func TestOnlySuppliersWithAUnitValueAreRouted(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 2)
-	value := func(v string) uuid.UUID {
-		var id uuid.UUID
-		w.tx(func(ctx context.Context, tx pg.Tx) error {
-			return tx.QueryRow(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'later') RETURNING id", w.supplier, v).Scan(&id)
-		})
-		return id
-	}
 	began, err := w.svc.Acquire(w.endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	three := value("3")
+	three := w.addValue("3")
 	if err := w.svc.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -115,16 +104,6 @@ func TestOnlySuppliersWithAUnitValueAreRouted(t *testing.T) {
 	if after.unitValueID != three || before.unitValueID == three {
 		t.Errorf("unit value ids %s and %s, want the attempt after the reload to record %s", before.unitValueID, after.unitValueID, three)
 	}
-	err = w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 0.0000000000000001, 'test', 'bad')", w.supplier)
-		return err
-	})
-	if err == nil {
-		t.Error("a unit value of 16 decimals was stored")
-	}
-	if err := w.svc.Reload(t.Context()); err != nil {
-		t.Errorf("a reload after the refused write failed: %v", err)
-	}
 	if err := pgtest.Run(t.Context(), w.database.Superuser, "DELETE FROM suppliers.unit_values"); err != nil {
 		t.Fatal(err)
 	}
@@ -133,5 +112,19 @@ func TestOnlySuppliersWithAUnitValueAreRouted(t *testing.T) {
 	}
 	if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoEndpoint) {
 		t.Errorf("a supplier with no unit value: %v, want ErrNoEndpoint", err)
+	}
+}
+
+// TestAUnitValueWithTooManyDecimalsIsRefused: the table refuses a value with more decimals than a price holds, so a
+// row written outside the admin's validation cannot make every reload fail; a value of 15 decimals still loads.
+func TestAUnitValueWithTooManyDecimalsIsRefused(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 2)
+	if err := w.insertValue("0.0000000000000001"); err == nil {
+		t.Error("a unit value of 16 decimals was stored")
+	}
+	w.addValue("0.000000000000001")
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Errorf("a reload after the refused write failed: %v", err)
 	}
 }

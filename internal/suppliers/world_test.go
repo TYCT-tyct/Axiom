@@ -189,6 +189,25 @@ func (w *world) tx(fn func(ctx context.Context, tx pg.Tx) error) {
 	}
 }
 
+// addValue gives the supplier another unit value and returns the row's id.
+func (w *world) addValue(v string) uuid.UUID {
+	w.t.Helper()
+	var id uuid.UUID
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return tx.QueryRow(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'later') RETURNING id", w.supplier, v).Scan(&id)
+	})
+	return id
+}
+
+// insertValue writes a unit value and returns the database's answer, for a value the table may refuse.
+func (w *world) insertValue(v string) error {
+	w.t.Helper()
+	return w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := tx.Exec(w.t.Context(), "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'bad')", w.supplier, v)
+		return err
+	})
+}
+
 // pointAt makes the endpoint's calls go to a test server instead of the supplier's address.
 func (w *world) pointAt(serverURL string) {
 	w.t.Helper()
