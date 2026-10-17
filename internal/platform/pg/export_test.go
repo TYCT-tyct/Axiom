@@ -33,3 +33,6 @@ func RunBounded(ctx context.Context, grace time.Duration, stop, f func() error) 
 func NewTimedConnector(inner driver.Connector, timeout time.Duration) driver.Connector {
 	return timedConnector{inner, timeout}
 }
+
+// ScanDiscarded runs the queue's discard scan now, so a test need not wait for the periodic job.
+func (q *Queue) ScanDiscarded(ctx context.Context) error { return q.scanDiscarded(ctx) }

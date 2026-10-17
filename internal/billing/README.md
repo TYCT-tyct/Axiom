@@ -178,6 +178,20 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 - **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放（`unpriced` 的除外）。记录先到时：清理待定的按记录收费后立即释放；已暂估的照样保留到 `correct_by`，以便更新的版本。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
 
+### 被丢弃的校正作业
+
+校正作业还没有接入 River（`ErrNotRecorded` 也只存在于未合并的 PR #150，main 上的 `Correct` 不返回它），所以今天没有会被 River 丢弃的校正作业；等待 `Settle`、重试和放弃的语义等接入作业的 PR 定，属于待定。队列的通用告警已经能看到任何被丢弃的任务（见[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）：error 日志 `queue.job_discarded`（`job_id`、`kind`、`attempt`），指标 `axiom.pg.queue.discarded_jobs` 的 `kind` 标签是任务类型；错误的正文在 `river.river_job.errors` 里。
+
+今天要补一条校正，只有调用 `Correct` 一次（main 上只有测试调用它）。重放前先确认：
+
+1. **版本**：`billing.corrections` 里 `(request_id, attempt_seq)` 的 `revision` 必须小于要投递的版本。`ApplyRevision` 只接受更新的版本；同版本或更旧的版本返回成功，但**什么也不改**（成本也不改）。
+2. **预留**：`billing.reservations` 里必须有这条请求；`Correct` 先按请求找到账户并锁余额行。
+3. **成本**：版本更新时，`adjustCost` 一定调整这次尝试的供应商成本，即使 `suppliers.attempt_costs` 里还没有这次尝试（从 0 起算）；这项只动 `cost_adjust` 的账，不动用户收费。
+4. **收费**：只有同时满足下面全部条件，`recharges` 才会冲正再重记用户收费：预留状态是 `estimated` 或 `cleanup_pending`；`correction_closed` 为假（数据库时钟未过 `correct_by`，或这条预留还是 `unpriced`）；`charged_seq` 是这次尝试；`entry` 不为空。这时补扣以 `amount - charged` 为上限，超出部分由平台承担。其他状态（`pending`、`settled`、`released`、`cleanup_settled`、`cleanup_released`）或收费的是别的尝试时，重放只调整成本。
+5. **核对账本**：成功只表示事务提交（或版本已应用/过旧，直接返回成功），不表示收费变了。重放后查 `billing.transactions`（`(request_id, attempt_seq, kind, revision)`）、`billing.entries` 和 `billing.reservations` 的 `state`、`charged`、`charged_seq`、`correct_by`，确认成本和收费确实按预期变化；没有变化就按上一条判断是否本来就只有成本该变。
+
+找不到预留行时 `Correct` 返回错误，不会补一行；清理已经释放、那次尝试没有 `attempt_costs` 行时，记录里的用量不会写进尝试（`Correct` 只按记录的成本调整这次尝试的供应商成本）。此时按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)给缺的计费项补价并把模型移出路由，避免它继续接单。处理完把 `job_id`、`charge_events` 里的记录和处理结果写进同一个工单。
+
 ## 写入的数据
 
 | 写什么 | 事务 | 谁写 | 幂等键 / 守护 |
