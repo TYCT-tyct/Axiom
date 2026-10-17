@@ -106,14 +106,7 @@ func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
 		t.Skip("Windows cannot send os.Interrupt to another process")
 	}
 	c := withOwner(t)
-	// A table lock holds the sign-in in flight: without a request to wait for, the node would stop before the second
-	// signal and the test would prove nothing.
-	watcher, err := pg.Open(t.Context(), c.database.Superuser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(watcher.Close)
-	free, freed := holdRow(t, watcher, "LOCK TABLE accounts.users IN ACCESS EXCLUSIVE MODE")
+	free, freed, watcher := holdForShutdown(t, c)
 	defer free()
 
 	p := startAxiom(t, []string{
@@ -122,28 +115,46 @@ func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
 		"AXIOM_SHUTDOWN_TIMEOUT=1m", // long enough that only the second signal can explain a quick exit
 	}, "serve")
 	serving := p.until(t, "serving")
+	cancel, answered := waitForSignIn(t, serving.Public, watcher)
 
-	// The owner's sign-in waits for the users' table, so the request stays in flight for shutdown to wait on.
+	stopTheNode(t, p)
+
+	free()
+	if err := <-freed; err != nil {
+		t.Error(err)
+	}
+	cancel()
+	select {
+	case err := <-answered:
+		if err == nil {
+			t.Error("the sign-in answered although the node was ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("the sign-in is still waiting")
+	}
+}
+
+// holdForShutdown locks the users' table, so a sign-in stays in flight for the shutdown to wait on, and returns the
+// release and a pool that can look at the server's sessions.
+func holdForShutdown(t *testing.T, c commandLine) (free func(), freed <-chan error, watcher *pg.DB) {
+	t.Helper()
+	watcher, err := pg.Open(t.Context(), c.database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watcher.Close)
+	free, freed = holdRow(t, watcher, "LOCK TABLE accounts.users IN ACCESS EXCLUSIVE MODE")
+	return free, freed, watcher
+}
+
+// waitForSignIn sends the owner's sign-in and returns once it waits for the locked table: a request in flight for the
+// shutdown to wait on.
+func waitForSignIn(t *testing.T, public string, watcher *pg.DB) (context.CancelFunc, <-chan error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	answered := make(chan error, 1)
-	go func() {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+serving.Public+"/api/console/v1/auth/sign-in",
-			strings.NewReader(`{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`))
-		if err != nil {
-			answered <- err
-			return
-		}
-		req.Host = consoleHost
-		req.Header.Set("Origin", "https://"+consoleHost)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_, err = io.Copy(io.Discard, resp.Body)
-			err = errors.Join(err, resp.Body.Close())
-		}
-		answered <- err
-	}()
+	go signIn(ctx, public, answered)
 	waitFor(t, func() bool {
 		var waiting int
 		err := watcher.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
@@ -152,7 +163,32 @@ func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
 		})
 		return err == nil && waiting > 0
 	})
+	return cancel, answered
+}
 
+// signIn makes the owner's sign-in request through the public listener; answered gets its result.
+func signIn(ctx context.Context, public string, answered chan<- error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+public+"/api/console/v1/auth/sign-in",
+		strings.NewReader(`{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`))
+	if err != nil {
+		answered <- err
+		return
+	}
+	req.Host = consoleHost
+	req.Header.Set("Origin", "https://"+consoleHost)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		_, err = io.Copy(io.Discard, resp.Body)
+		err = errors.Join(err, resp.Body.Close())
+	}
+	answered <- err
+}
+
+// stopTheNode sends the first signal, waits for the shutdown to begin, then sends the second and requires the process
+// to end at once rather than wait out AXIOM_SHUTDOWN_TIMEOUT.
+func stopTheNode(t *testing.T, p *program) {
+	t.Helper()
 	if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
@@ -173,19 +209,6 @@ func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the second signal did not end the node at once")
-	}
-	free()
-	if err := <-freed; err != nil {
-		t.Error(err)
-	}
-	cancel()
-	select {
-	case err := <-answered:
-		if err == nil {
-			t.Error("the sign-in answered although the node was ended")
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("the sign-in is still waiting")
 	}
 }
 
