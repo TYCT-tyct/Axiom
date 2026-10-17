@@ -39,12 +39,10 @@ const (
 	// discardedScanEvery is how often the queue looks for jobs that reached the discarded state. It must be shorter
 	// than the time an operator is willing to wait, and longer than a scan.
 	discardedScanEvery = time.Minute
-	// discardedRetention is how long River keeps a discarded job's row. The queue's claim on the job is kept longer,
-	// so the row cannot go before the claim does; a claim older than this is pruned.
+	// discardedRetention is how long a discarded job's row is kept after it finished. River's own cleaner does not
+	// delete discarded jobs (Start sets its retention to -1); the scan deletes a job only after claiming it, once the
+	// job is this old. A job discarded before an outage therefore survives to be reported when the queue returns.
 	discardedRetention = 24 * time.Hour
-	// discardedSeenDays is how long the queue keeps a claim. It is longer than discardedRetention, so a job cannot
-	// reappear as new after its claim is pruned.
-	discardedSeenDays = 7
 )
 
 // Queue is the job queue, River on the application's connection pool (docs/architecture.md「技术选型」). A module
@@ -91,7 +89,7 @@ func (q *Queue) Start(ctx context.Context) error {
 	}
 	client, err := river.NewClient(riverpgxv5.New(q.db.pool), &river.Config{
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
-		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: discardedRetention,
+		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: -1, // the scan deletes them, after claiming them
 		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: queueWorkers}},
 	})
 	if err != nil {
@@ -161,16 +159,13 @@ func (q *Queue) workDiscardedScan(ctx context.Context, _ *river.Job[discardedSca
 	return q.scanDiscarded(ctx)
 }
 
-// scanDiscarded claims every discarded job not reported before, in the transaction that reads them, and reports each
-// as it is claimed. The claim is a row keyed by job id, so a second scan, another node or a restart reports nothing;
-// if the transaction rolls back after a report, the next scan reports again (at least once). The report is the error
-// log alerts watch and the counter, labelled by kind.
+// scanDiscarded claims every discarded job not reported before, reports each as it is claimed, and then deletes the
+// claimed jobs that are past the retention period. The claim is a row keyed by job id, so a second scan, another node
+// or a restart reports nothing; if the transaction rolls back after a report, the next scan reports again (at least
+// once). River's cleaner does not delete discarded jobs, so an unclaimed job older than the retention is still claimed
+// and reported before this cleanup removes it.
 func (q *Queue) scanDiscarded(ctx context.Context) error {
 	err := q.db.Tx(ctx, Scope{}, func(tx Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM river.axiom_discarded_job
-			WHERE seen_at < now() - make_interval(days => $1)`, int32(discardedSeenDays)); err != nil {
-			return fmt.Errorf("prune reported discards: %w", err)
-		}
 		rows, err := tx.Query(ctx, `INSERT INTO river.axiom_discarded_job (job_id, kind, attempt)
 			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
 			ON CONFLICT (job_id) DO NOTHING
@@ -178,15 +173,31 @@ func (q *Queue) scanDiscarded(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("claim discarded jobs: %w", err)
 		}
-		defer rows.Close()
 		for rows.Next() {
 			var d discardedJob
 			if err := rows.Scan(&d.id, &d.kind, &d.attempt); err != nil {
+				rows.Close()
 				return fmt.Errorf("read a discarded job: %w", err)
 			}
 			q.reportDiscarded(ctx, d)
 		}
-		return rows.Err()
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("read discarded jobs: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM river.river_job j
+			WHERE j.state = 'discarded'
+				AND j.finalized_at < now() - make_interval(hours => $1)
+				AND EXISTS (SELECT FROM river.axiom_discarded_job s WHERE s.job_id = j.id)`,
+			int32(discardedRetention.Hours())); err != nil {
+			return fmt.Errorf("delete reported discards: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM river.axiom_discarded_job s
+			WHERE NOT EXISTS (SELECT FROM river.river_job j WHERE j.id = s.job_id)`); err != nil {
+			return fmt.Errorf("delete claims whose job is gone: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("scan discarded jobs: %w", err)

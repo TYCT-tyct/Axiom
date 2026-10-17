@@ -91,9 +91,9 @@ func TestARescuedDiscardIsReportedOnce(t *testing.T) {
 	}
 }
 
-// TestADiscardIsNotReportedAgainAfterRestart: a job discarded before this process started is reported once, and a
-// second queue on the same database, standing in for a restart or another node, reports it no more.
-func TestADiscardIsNotReportedAgainAfterRestart(t *testing.T) {
+// TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart: a job discarded before this process started, and older than
+// the retention, is reported once when a queue returns, then deleted with its claim; a second queue reports nothing.
+func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 	t.Parallel()
 	db, err := pg.Open(t.Context(), pgtest.New(t).App)
 	if err != nil {
@@ -104,7 +104,8 @@ func TestADiscardIsNotReportedAgainAfterRestart(t *testing.T) {
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job
 			(kind, args, state, queue, max_attempts, attempt, attempted_at, finalized_at)
-			VALUES ('test.old', '{}', 'discarded', 'default', 1, 1, now(), now())`)
+			VALUES ('test.old', '{}', 'discarded', 'default', 1, 1, now() - interval '25 hours',
+				now() - interval '25 hours')`)
 		return err
 	})
 	if err != nil {
@@ -120,6 +121,12 @@ func TestADiscardIsNotReportedAgainAfterRestart(t *testing.T) {
 	}
 	if got := strings.Count(firstLogs.String(), "queue.job_discarded"); got != 1 {
 		t.Fatalf("the first scan logged the discard %d times, want 1: %s", got, firstLogs.String())
+	}
+	if got := discardedJobs(t, first)["test.old"]; got != 1 {
+		t.Errorf("the first scan counted the discard %d times, want 1", got)
+	}
+	if got := jobCount(t, db, "test.old"); got != 0 {
+		t.Errorf("%d old discarded rows are left after the scan, want 0", got)
 	}
 	stopDiscardQueue(t, q1)
 
@@ -178,6 +185,19 @@ func jobState(t *testing.T, db *pg.DB, kind string) string {
 		t.Fatal(err)
 	}
 	return state
+}
+
+// jobCount is how many job rows of kind exist, including discarded ones the scan has not cleaned yet.
+func jobCount(t *testing.T, db *pg.DB, kind string) int {
+	t.Helper()
+	var n int
+	err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT count(*) FROM river.river_job WHERE kind = $1", kind).Scan(&n)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // discardedJobs is the discard counter by job kind, as reader has collected it.

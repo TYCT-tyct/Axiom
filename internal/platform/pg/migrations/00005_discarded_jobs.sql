@@ -11,7 +11,6 @@ CREATE TABLE river.axiom_discarded_job (
     seen_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Pruning by age: a row may go once the job is beyond River's discarded-job retention, which is six days shorter.
-CREATE INDEX axiom_discarded_job_seen_at ON river.axiom_discarded_job (seen_at);
-
+-- A claim is deleted with its job by the scan, after the job has been reported and is old enough; no age index is
+-- needed.
 GRANT SELECT, INSERT, DELETE ON river.axiom_discarded_job TO axiom_app;
