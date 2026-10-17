@@ -17,6 +17,13 @@ deployed="$(curl -fsS http://127.0.0.1:8080/api/console/v1/version | jq -r .vers
 built="$(just axiom-version)"
 [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
+# The console's other operations are served by a node that read its key files and its contract: an address no site
+# registers is the contract's 404
+[ "$(curl -s http://127.0.0.1:8080/api/console/v1/site | jq -r .error.code)" = not_found ] || { echo "::error::the node does not answer the console's API as the contract says"; exit 1; }
+# The admin listener runs the same build, and answers its own routes only
+adminDeployed="$(curl -fsS http://127.0.0.1:8082/api/admin/v1/version | jq -r .version)"
+[ "$adminDeployed" = "$built" ] || { echo "::error::the admin listener runs $adminDeployed, this tree builds $built"; exit 1; }
+[ "$(curl -s http://127.0.0.1:8082/api/admin/v1/users | jq -r .error.code)" = not_found ] || { echo "::error::the admin listener does not answer the admin's API as the contract says"; exit 1; }
 
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.

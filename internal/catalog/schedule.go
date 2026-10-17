@@ -206,6 +206,9 @@ func lookup[T ~uint8](names []string, name string) (T, error) {
 	return T(i), nil
 }
 
+// Currency is the currency the schedule is priced in: XXX for a supplier's cost plan, which is in its own unit.
+func (s Schedule) Currency() platform.Currency { return s.currency }
+
 // MarshalJSON writes the canonical form (jsonx.MarshalCanonical): prices in UnitPrice's canonical text, lists in
 // enumeration order.
 func (s Schedule) MarshalJSON() ([]byte, error) {

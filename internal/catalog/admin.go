@@ -22,12 +22,15 @@ var (
 	ErrNoOpKey       = errors.New("op_key is required and must not be the zero UUID")
 	ErrNameLength    = fmt.Errorf("a name is 1 to %d bytes", maxNameLen)
 	ErrReason        = errors.New("a reason of 1 to 1000 characters is required")
-	ErrOpKeyReused   = errors.New("op_key was already used by another kind of operation")
+	ErrOpKeyReused   = errors.New("op_key was already used by another operation")
 	ErrAuthorMissing = errors.New("the author does not exist")
 	ErrNameTaken     = errors.New("the name, normalized, is already taken")
 	ErrStaleRev      = errors.New("the model changed since it was reviewed")
 	ErrWrongStatus   = errors.New("the model's status does not allow this")
 	ErrNotReady      = errors.New("the model is not ready to be listed")
+	// ErrInvalid is a request whose spec or schedule is not one the catalog can keep: a rule of its structure, which the
+	// request's schema cannot state.
+	ErrInvalid = errors.New("the spec or the schedule breaks a rule of the catalog")
 )
 
 // Op is what every admin operation carries: who does it, which attempt it is, and why. Key identifies the intended
@@ -36,6 +39,9 @@ type Op struct {
 	Actor  audit.Actor `json:"-"`
 	Key    uuid.UUID   `json:"op_key"`
 	Reason string      `json:"reason"`
+	// Tx, when set, is the transaction the operation runs in, the caller's own (the admin API claims its idempotency
+	// key in it), instead of one of its own. The caller refreshes the snapshot after it commits.
+	Tx *pg.Tx `json:"-"`
 }
 
 // SetActor names who does the operation, for a request read from a file.
@@ -64,6 +70,15 @@ func (c *Catalog) apply(ctx context.Context, op Op, kind string, do func(tx pg.T
 	}
 	if op.Key == (uuid.UUID{}) {
 		return Result{}, ErrNoOpKey
+	}
+	if op.Tx != nil {
+		// The caller's idempotency claim already answers its own retries, so a key this one finds applied was used
+		// elsewhere (the command line): replaying it would answer for another actor, target or content.
+		res, _, err := once(ctx, *op.Tx, op, kind, do)
+		if err == nil && res.Replayed {
+			return Result{}, ErrOpKeyReused
+		}
+		return res, err
 	}
 	var res Result
 	var raised bool
@@ -206,7 +221,7 @@ type CreateModelRequest struct {
 // CreateModel adds a draft model, visible only to the platform until it is listed.
 func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result, error) {
 	if _, err := parseSpec(r.Spec); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return c.apply(ctx, r.Op, "model.create", func(tx pg.Tx) (outcome, error) {
 		author, _, _ := strings.Cut(r.Slug, "/")
@@ -273,7 +288,7 @@ type UpdateSpecRequest struct {
 func (c *Catalog) UpdateSpec(ctx context.Context, r UpdateSpecRequest) (Result, error) {
 	spec, err := parseSpec(r.Spec)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return c.apply(ctx, r.Op, "model.update_spec", func(tx pg.Tx) (outcome, error) {
 		row, err := lockReviewed(ctx, tx, r.Model, r.Rev)

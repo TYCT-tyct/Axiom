@@ -8,6 +8,7 @@ package accounts
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -458,6 +459,57 @@ func (q *Queries) RevokeSession(ctx context.Context, db DBTX, id uuid.UUID) (int
 	return result.RowsAffected(), nil
 }
 
+const sessionInfo = `-- name: SessionInfo :many
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, s.csrf_token,
+    least(s.expires_at, s.created_at + make_interval(secs => $1::bigint),
+    now() + least(s.idle_timeout, make_interval(secs => $2::bigint)))::timestamptz AS expires_at
+FROM accounts.sessions s
+JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+WHERE s.id = $3
+`
+
+type SessionInfoParams struct {
+	MaxAgeSeconds int64
+	IdleSeconds   int64
+	ID            uuid.UUID
+}
+
+type SessionInfoRow struct {
+	Email      string
+	InviteCode string
+	Mfa        bool
+	CsrfToken  string
+	ExpiresAt  pgtype.Timestamptz
+}
+
+// What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
+// whichever comes first, both cut by the site's lifetimes now (ValidSession).
+func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParams) ([]SessionInfoRow, error) {
+	rows, err := db.Query(ctx, sessionInfo, arg.MaxAgeSeconds, arg.IdleSeconds, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionInfoRow
+	for rows.Next() {
+		var i SessionInfoRow
+		if err := rows.Scan(
+			&i.Email,
+			&i.InviteCode,
+			&i.Mfa,
+			&i.CsrfToken,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sessionTenant = `-- name: SessionTenant :many
 SELECT k.session_id::uuid AS session_id, k.user_id::uuid AS user_id, k.account_id::uuid AS account_id
 FROM accounts.session_tenant($1::text, $2::text, $3::bytea) AS k (session_id, user_id, account_id)
@@ -559,9 +611,17 @@ const validSession = `-- name: ValidSession :many
 SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
-WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND s.last_seen_at + s.idle_timeout > now()
+WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
+    AND s.created_at + make_interval(secs => $2::bigint) > now()
+    AND s.last_seen_at + least(s.idle_timeout, make_interval(secs => $3::bigint)) > now()
     AND u.status = 'active' AND u.factor_version = s.factor_version
 `
+
+type ValidSessionParams struct {
+	ID            uuid.UUID
+	MaxAgeSeconds int64
+	IdleSeconds   int64
+}
 
 type ValidSessionRow struct {
 	SiteID        uuid.UUID
@@ -572,9 +632,11 @@ type ValidSessionRow struct {
 }
 
 // A session holds while it is not revoked, expired or idle too long, its user is enabled, and its factor version is
-// the user's.
-func (q *Queries) ValidSession(ctx context.Context, db DBTX, id uuid.UUID) ([]ValidSessionRow, error) {
-	rows, err := db.Query(ctx, validSession, id)
+// the user's. The site's lifetimes now (the caller's, in seconds) cut what the session was issued with, never extend it:
+// a site that shortens its sessions writes that into the ones already made (CutSessions), and this cut also holds a
+// session another node issued from its snapshot before reloading the change.
+func (q *Queries) ValidSession(ctx context.Context, db DBTX, arg ValidSessionParams) ([]ValidSessionRow, error) {
+	rows, err := db.Query(ctx, validSession, arg.ID, arg.MaxAgeSeconds, arg.IdleSeconds)
 	if err != nil {
 		return nil, err
 	}

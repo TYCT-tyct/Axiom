@@ -21,9 +21,31 @@ WHERE k.id = @key_id
 
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, expires_at, status, spend_limit, limit_reset)
+    secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
 VALUES (@id, @site_id, @account_id, @workspace_id, 'call', @name, @prefix, @last4, @secret_hash, @secret_version,
-    @created_by, @expires_at, 'active', @spend_limit, 'daily');
+    @created_by, @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow);
+
+-- name: DefaultWorkspace :many
+SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default;
+
+-- name: ListKeys :many
+-- An account's call keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
+SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys
+WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL AND id < @before
+ORDER BY id DESC
+LIMIT @page_size;
+
+-- name: GetKey :many
+SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL;
+
+-- name: UpdateKey :many
+-- Every setting a user may change, replaced whole; the expiry is not among them.
+UPDATE accounts.api_keys SET name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
+    models = @models, ip_allow = @ip_allow
+WHERE id = @id AND kind = 'call'
+RETURNING site_id, account_id;
 
 -- name: DisableKey :many
 UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'active' RETURNING site_id, account_id;
@@ -31,3 +53,6 @@ UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'ac
 -- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.
 UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id RETURNING site_id, account_id;
+
+-- name: AccountWorkspaces :many
+SELECT id FROM accounts.workspaces WHERE account_id = @account_id ORDER BY id;

@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
+	"axiom/internal/suppliers/internal/adapter"
 )
 
 // LoginKind names this credential structure in suppliers.supplier_logins.kind.
@@ -54,4 +55,25 @@ func DecodeLogin(raw []byte) (Login, error) {
 		l.ExpiresAt = time.Unix(d.ExpiresAt, 0).UTC()
 	}
 	return l, nil
+}
+
+// NativeUnit implements adapter.Onboarding: new-api counts quota, an integer of its own.
+func (*Adapter) NativeUnit() string { return "quota" }
+
+// LoginFields implements adapter.Onboarding: a personal access token and, if it ends, when. The same with a CAPTCHA,
+// since a token needs no login.
+func (*Adapter) LoginFields(bool) []adapter.LoginField {
+	return []adapter.LoginField{adapter.FieldAccessToken, adapter.FieldAccessTokenExpiresAt}
+}
+
+// NewLogin implements adapter.Onboarding.
+func (*Adapter) NewLogin(c adapter.Credentials) (adapter.Login, error) {
+	if c.AccessToken == "" {
+		return adapter.Login{}, &adapter.LoginError{Field: adapter.FieldAccessToken, Reason: "is required: a personal access token"}
+	}
+	raw, err := EncodeLogin(Login{PAT: secret.New(c.AccessToken), ExpiresAt: c.AccessTokenExpiresAt})
+	if err != nil {
+		return adapter.Login{}, err
+	}
+	return adapter.Login{Kind: LoginKind, Plaintext: raw, ExpiresAt: c.AccessTokenExpiresAt}, nil
 }

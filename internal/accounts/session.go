@@ -56,6 +56,15 @@ func (p Principal) UserID() UserID { return p.user }
 // AccountID is the user's personal account.
 func (p Principal) AccountID() AccountID { return p.account }
 
+// SessionID is the session the principal was recognised by.
+func (p Principal) SessionID() SessionID { return p.session }
+
+// Pending reports whether the session still waits for its second factor, as only AuthenticateAny returns one.
+func (p Principal) Pending() bool { return p.level == levelPending }
+
+// Verified reports whether the session passed two-step verification.
+func (p Principal) Verified() bool { return p.level == levelMFA }
+
 // SignInRequest is a sign-in with a password at the request's Host.
 type SignInRequest struct {
 	Host, Email, Password string
@@ -194,20 +203,32 @@ func (s *Service) issue(ctx context.Context, tx pg.Tx, n newSession) (Issued, er
 // state-changing request must also come from the domain's registered origin, carry JSON and the session's CSRF token.
 // A pending session is not signed in.
 func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal, error) {
+	return s.authenticate(ctx, r, false)
+}
+
+// AuthenticateAny is Authenticate for the operations a session still waiting for its second factor may do: read
+// itself and end.
+func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) {
+	return s.authenticate(ctx, r, true)
+}
+
+func (s *Service) authenticate(ctx context.Context, r *http.Request, pendingToo bool) (Principal, error) {
 	found, _, d, err := s.sessionOf(ctx, r)
 	if err != nil {
 		return Principal{}, err
 	}
 	var valid []ValidSessionRow
+	life := s.snapshot.Load().sites[d.site].sessions[d.surface]
+	maxAge, idle := life.seconds()
 	if err := s.db.Tx(ctx, pg.AccountScope(found.AccountID), func(tx pg.Tx) error {
-		if valid, err = s.queries.ValidSession(ctx, tx, found.SessionID); err != nil || len(valid) == 0 {
+		if valid, err = s.queries.ValidSession(ctx, tx, ValidSessionParams{ID: found.SessionID, MaxAgeSeconds: maxAge, IdleSeconds: idle}); err != nil || len(valid) == 0 {
 			return err
 		}
 		return s.queries.TouchSession(ctx, tx, found.SessionID)
 	}); err != nil {
 		return Principal{}, fmt.Errorf("authenticate: %w", err)
 	}
-	if len(valid) == 0 || valid[0].Level == levelPending {
+	if len(valid) == 0 || valid[0].Level == levelPending && !pendingToo {
 		return Principal{}, ErrNoSession
 	}
 	if err := checkCSRF(r, d, valid[0].CsrfToken); err != nil {
@@ -252,6 +273,11 @@ func (s *Service) SignOut(ctx context.Context, p Principal) error {
 		_, err := s.queries.RevokeSession(ctx, tx, uuid.UUID(p.session))
 		return err
 	})
+}
+
+// ExpiredCookie is the cookie that ends the session cookie at host, for signing out.
+func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) {
+	return s.Cookie(host, Issued{MaxAge: -time.Second})
 }
 
 // CheckOrigin refuses a state-changing request, signed in or not, that does not come from its domain's registered

@@ -2,7 +2,7 @@
 
 供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试、写对账日志）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 适配器、调用面（挑凭证、发请求、记尝试、对账日志）和对账，写在「代码结构」到「对账」；同步引擎和管理接口在后续 PR。「对账日志」一节是日志的设计，已实现，实现的接口在「调用面」。代码与本文不一致时，在同一个 PR 里改本文。
+> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 适配器、调用面（挑凭证、发请求、记尝试、对账日志）和对账，写在「代码结构」到「对账」；同步引擎在后续 PR，管理接口见「管理接口」。「对账日志」一节是日志的设计，已实现，实现的接口在「调用面」。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 代码结构
 
@@ -52,6 +52,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 ## 适配器
 
 - **契约**（`adapter`）：`Adapter` 有 `Kind`、`Buckets`、`Detect`、`Open`、`Calls`；`Open` 返回只读的 `Manager`（账户、报价、key 状态、按对方 ID 读 key 原文、扣费记录分页；每笔记录带标准化用量 `catalog.Usage` 和"已报告的项"集合，没报告和报告为零不同，暂估才能按项、按请求锁定的单价校正）；`Calls` 返回 `CallQuirks`（`Formats`、`ChargeRef`、`Classify`、`Policy`）。写能力以后用单独的可选接口加入，能力就是实现了什么。
+- **接入**（`adapter.Onboarding`，可选，一个适配器要能在后台接入才实现）：`LoginFields(captcha)` 说这个类型的登录用哪几个成员（new-api 是一个个人访问令牌，sub2api 是令牌或邮箱加密码），`NewLogin` 把给定的成员检查后做成要封存的登录，`NativeUnit` 说余额的单位（new-api 的 `quota`，sub2api 的 `usd`）。缺成员、多给成员都是 `LoginError`，只带成员名，不带值。
 - **`Failure`** 是 `{Executed, Scope, Cause}`。`Cause` 是封闭的和类型（`gochecksumtype` 检查每个 switch 都处理了全部成员），成员只带数字和时间，**没有来自对方的文本**，所以回显了凭证的响应进不了日志和表。`Executed` 的零值是 `ExecutionUnknown`：没把握就按"可能执行了"处理，成本按估算记、由对账补正；`NotExecuted` 只给对方在执行前就拒绝的响应。`Transport` 只由通用调用层设置，适配器不得返回。作用范围比设计草稿多一个 `Endpoint`（限流、过载作用于一个分组和模型）。
 - **`Client`** 是适配器唯一的出站入口，`Request` 声明占用的全部桶，`BucketSpec` 声明对方的限速；任一桶没有名额就不发，返回包装了 `ErrBucketsFull` 的错误，调用方推迟而不是当失败。实现是 `internal/suppliers/internal/client`（进程内计数）；多节点共享一个出口地址时的数据库版（`rate_buckets` 表）随同步引擎加入。
 - **注册表**（`registry`）：`adapters` 列表是唯一同时引用所有适配器的地方，一行一个，不用 `init()`。`registry.New` 在启动时拒绝不合法的 `kind`、重复的 `kind`、不可能放行请求的限速桶。
@@ -171,6 +172,29 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
 
+## 管理接口
+
+已实现（`admin.go`、`admin_write.go`）。`Admin` 是管理后台对供应商做的事，处理器（`cmd/axiom/admin_suppliers.go`）只做请求与响应的转换；每个函数在调用方的事务里写（事务要有平台范围，审计条目在同一个事务里写），审计条目带操作者和原因，不带登录、账号和邮箱。除 `Detect` 外不碰供应商：同步引擎读到这里改的行和代次后做其余的事。
+
+| 操作 | 做什么 | 拒绝 |
+|---|---|---|
+| `NormalizeOrigin` | 只读文本、不碰网络，得到存下的来源：小写；端口按十进制整数解析，须在 1 到 65535，按规范写法输出（去掉前导零），是 https 默认的 443 时省略。同一个站点写成两种样子不会成为两个供应商，凭证也只发往这个地址。处理器在占幂等键之前调用它，规范化后的来源进入键的指纹 | 不是 `https://主机[:端口]`，或端口不在 1 到 65535（`ErrBadOrigin`） |
+| `CheckOrigin` | 用出站客户端的 `Check` 解析并验证规范化后的来源，回答的是网络此刻的样子。建供应商时只在幂等回调里、也就是真正执行改动的那次请求里调用；同一个键的重发直接得到第一次的响应，不再问网络，所以 DNS 或出口变了也不影响重放。检查失败时事务回滚，占键一起撤销 | 内网、回环等地址（`ErrAddressRefused`）；解析不出（`ErrUnreachable`） |
+| `Detect` | 每次都先 `NormalizeOrigin` 再 `CheckOrigin`（探测没有重放）；按注册顺序问每个能被接入的适配器是否认得这个站点；站点要验证码时，只列不需要密码的登录成员；不存任何东西，每次探测最多 45 秒 | 同上两行；没有适配器能判断出站点答了没有（`ErrUnreachable`）；认不出不是错误，返回没有 `Kind` 的结果 |
+| `Connect` | 建供应商（`connecting`），来源须是 `NormalizeOrigin` 的结果、调用方已在同一次执行里 `CheckOrigin` 过；登录用 `master` 密钥封到 `Location{suppliers.supplier_logins, 供应商 ID, login}`；同一来源和账号只能接入一次 | `ErrNoAdapter`、`*LoginError`（缺成员，或给了这个类型不用的成员）、`ErrSupplierExists` |
+| `SetStatus` | 使用中或低余额的暂停，暂停的恢复；已经是要的状态则不动、不记审计、不升代次 | 其他状态（`ErrStatusLocked`）：`connecting`、`needs_attention` 由同步改，移除中和已移除不能回头 |
+| `Remove` | 从任何不是终点的状态开始移除，代次加一让正在跑的一轮同步作废；重复请求不动 | 已移除（`ErrStatusLocked`） |
+| `ReplaceLogin` | 新登录封在旧的位置上，版本加一，供应商回到 `connecting`，代次加一 | 同 `Connect` 的登录检查；移除中和已移除 |
+| `ConfirmUnitValue` | 一单位余额值多少结算货币：大于 0、至多 1000、至多 15 位小数；只追加行，新的值从现在起生效，已算过的成本保留自己的 | `ErrUnitValue` |
+| `SelectGroup` | 选用或取消选用一个分组；第一次选用时给分组起代号（`g` 加 8 个 base32 字符），之后取消再选用不变 | `ErrNoGroup`、`ErrGroupGone`（选用已不在列表里的分组；取消不受限） |
+| `BindKey` | 把供应商上的一把 key 绑到已选用的分组：只记 key 的引用，状态 `binding`、没有密文，同步去读出并封存；默认最大并发 4 | `ErrNoGroup`、`ErrGroupNotSelected`、`ErrKeyBound` |
+| `MapModel` | 别名：上游名字在一个分组或整个供应商里指向某个目录模型，建了不改，改错在更窄的范围再建一个；模型由调用方查过 | `ErrAliasExists`、`ErrNoGroup`、`ErrStatusLocked` |
+| `PendingMappings` | 还没有模型的上游名字，最早出现的在前（`first_seen_at`），被别名盖住的不出现，键集分页 | |
+
+处理器的 `Idempotency-Key` 指纹里没有登录的值，只有给了哪几个成员：指纹存在库里，带值会让它成为猜密码的依据；代价是同一个键换一个密钥重发得到第一次的结果，所以页面每次尝试用新键。
+
+上面改配置的操作都在 `suppliers` 行上加锁、校验状态后才写，所以和同步、彼此之间串行。读（`Suppliers`、`Supplier`）带最近一次的单位价值、余额和分组与 key；没有同步写过的字段是空。
+
 ## 对账
 
 `internal/suppliers/internal/reconcile`。扣费记录由同步引擎在栅栏事务里经 `RecordCharges` 写入（一条记录读两次只存一次）；`Reconcile` 在平台范围的事务里做一遍：
@@ -198,3 +222,5 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 | 决策 | 理由 | 不选 |
 |---|---|---|
 | 每秒批量的对账日志，不在发请求前单独写；只有标了已提交的尝试能让清理向用户收费 | 每节点每秒一个事务，崩溃窗口从整个请求时长缩到最近一次成功写入之后，计费的清理结算才走得到。日志看不到之后的尝试，所以只认已提交的：提交后不再换端点，已提交的必是最后一次 | 每次尝试先写一行：往返随尝试数增长 |
+| 分组代号在第一次选用时随机生成，取消选用不收回 | 用户看到的是代号不是上游名字，换回来或重选不能让同一个分组换名字 | 由名字派生：名字泄露代号；每次选用重新生成：用户记下的代号失效 |
+| 管理接口里的并发限制默认 4 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；改它的接口以后再加 | 不设上限：新接入的供应商可能被打满 |

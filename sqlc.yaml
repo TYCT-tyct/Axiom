@@ -18,6 +18,21 @@ sql:
         emit_methods_with_db_argument: true
         omit_unused_structs: true
   - engine: postgresql
+    schema: [sqlc/schemas.sql, internal/platform/pg/migrations]
+    queries: internal/platform/idem/queries
+    gen:
+      go:
+        package: idem
+        out: internal/platform/idem
+        sql_package: pgx/v5
+        output_files_suffix: .gen
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        emit_methods_with_db_argument: true
+        omit_unused_structs: true
+        overrides:
+          - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+  - engine: postgresql
     schema: [sqlc/schemas.sql, internal/accounts/migrations]
     queries: internal/accounts/queries
     gen:
@@ -53,6 +68,7 @@ sql:
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
           - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
           - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: text, nullable: true, go_type: {type: string, pointer: true}}
   - engine: postgresql
     schema: [sqlc/schemas.sql, internal/suppliers/internal/store/migrations]
     queries: internal/suppliers/internal/store/queries
