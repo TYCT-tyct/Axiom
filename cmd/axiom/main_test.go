@@ -53,17 +53,18 @@ func command(t *testing.T, environ []string, args ...string) *exec.Cmd {
 func runAxiom(t *testing.T, environ []string, args ...string) (string, int) {
 	t.Helper()
 	cmd := command(t, environ, args...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	out := stdout.String() + stderr.String()
 	if err == nil {
-		return out.String(), 0
+		return out, 0
 	}
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		t.Fatalf("run %q: %v", strings.Join(args, " "), err)
 	}
-	return out.String(), exit.ExitCode()
+	return out, exit.ExitCode()
 }
 
 // TestMainExitCodes: a successful command exits 0, a command that fails exits 1, and a command line main does not
