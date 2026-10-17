@@ -1,5 +1,5 @@
 # Base checks, managed by project-workflow: changed only by upgrades, except Dependabot's action-version bumps.
-# Project-specific jobs go in ci.yml.
+# Project-specific jobs go in ci.yml, or in describe.yml when they read the PR description.
 # Every job here is a check the ruleset protecting main requires (set by the skill's manage.py protect); keep the names.
 name: workflow
 
@@ -71,6 +71,8 @@ jobs:
       pull-requests: read # the PR's comments
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base branch and earlier PR commits, to tell whether a review still covers the PR's change
       - run: gh api --paginate "repos/$REPO/issues/$NUMBER/comments?per_page=100" --jq '.[] | {body, author_association}' | python3 scripts/workflow/check_pr.py review
         shell: bash # with pipefail: a failed page must fail the check, never pass it on fewer comments
         env:
@@ -80,3 +82,4 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}

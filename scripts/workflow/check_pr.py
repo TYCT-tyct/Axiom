@@ -4,12 +4,14 @@ unticked, or when its head commit has no passing independent review.
 
 Managed by project-workflow: changed only by upgrades.
   check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, and REPO to fetch the issues it closes through gh
-  check_pr.py review     reads PR_HEAD, PR_BODY, PR_AUTHOR, and the PR's comments as JSON lines on stdin
+  check_pr.py review     reads PR_HEAD, PR_BODY, PR_AUTHOR, BASE_REF, the PR's comments as JSON lines on stdin, and git history
 Values arrive through the environment, never the command line, so a title or description cannot inject shell.
 The review check reads the first lines the review method asks reviewers and authors to write. With one account shared by
-the owner and the AI, it proves that a review of this exact commit was recorded and answered, not who wrote it.
+the owner and the AI, it proves that a review of this commit, or of an earlier one carrying the same change, was recorded
+and answered, not who wrote it.
 """
 
+import functools
 import json
 import os
 import re
@@ -27,9 +29,9 @@ COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+"
                      r"(?:(?:[\w.-]+/[\w.-]+)?#[0-9]+|https?://github\.com/[\w.-]+/[\w.-]+/issues/[0-9]+)", re.IGNORECASE)
 ISSUE_REF = re.compile(r"(?:([\w.-]+/[\w.-]+)?#|https?://github\.com/([\w.-]+/[\w.-]+)/issues/)([0-9]+)$")
-# Issue forms render each field as a heading; the issue templates call this one 验收标准
-ACCEPTANCE = re.compile(r"^#{1,6}[ \t]+[^\n]*验收[^\n]*\n(.*?)(?=^#{1,6}[ \t]|\Z)", re.MULTILINE | re.DOTALL)
-UNTICKED = re.compile(r"^[ \t]*[-*+][ \t]+\[ \]", re.MULTILINE)
+HEADING = re.compile(r"#{1,6}(?=[ \t])")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")  # CommonMark: a fence closes on the same character, at least as long, alone
+UNTICKED = re.compile(r"[ \t]*(?:[-*+]|[0-9]+[.)])[ \t]+\[ \]")
 LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|[0-9]+[.)])[ \t]*)*")  # indentation and list or quote markers
 SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +66,29 @@ def describe(title, body, author, template):
     return problems
 
 
+def unticked_acceptance(body):
+    """Unticked boxes under every heading that names 验收 (the issue templates' 验收标准), down to the next heading of the
+    same or a higher level, so subheadings stay inside; lines in code fences are neither headings nor boxes."""
+    count, level, fence = 0, None, ""
+    for line in body.splitlines():
+        if match := FENCE.match(line):
+            marker, rest = match.groups()
+            if not fence and not (marker[0] == "`" and "`" in rest):  # a backtick fence's info string has no backtick
+                fence = marker
+                continue
+            if fence and marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
+                fence = ""
+                continue
+        if fence:
+            continue
+        if heading := HEADING.match(line):
+            if level is None or len(heading.group(0)) <= level:
+                level = len(heading.group(0)) if "验收" in line else None
+        elif level is not None and UNTICKED.match(line):
+            count += 1
+    return count
+
+
 def unfinished(body, repo, issue):
     """Problems for each issue of this repository the PR closes whose acceptance criteria still have unticked boxes.
     issue(number) returns the issue as GitHub's API does; pull requests and issues without an acceptance section pass.
@@ -77,8 +102,7 @@ def unfinished(body, repo, issue):
             continue
         seen.add(number)
         found = issue(number)
-        section = ACCEPTANCE.search((found.get("body") or "").replace("\r\n", "\n"))
-        if "pull_request" not in found and section and (count := len(UNTICKED.findall(section.group(1)))):
+        if "pull_request" not in found and (count := unticked_acceptance(found.get("body") or "")):
             problems.append(f"#{number} still has {count} unticked acceptance boxes: tick each with its evidence, or write "
                             f"Refs #{number} instead; then edit this description or rerun the pr check")
     return problems
@@ -93,11 +117,28 @@ def waiver_allowed(root):
         return True
 
 
-def review(head, body, author, comments, allow_waiver=True):
+def change(base, commit):
+    """The PR's own change at a commit: its diff from where it meets the base branch, with its context lines but without line
+    numbers and blob ids. It stays equal while the changed lines and their neighbours do, as when the base is merged in
+    elsewhere; a base change next to them, or an edit moved among other neighbours, makes it differ. Binary files compare by content, line endings count. None when git cannot tell (missing history)."""
+    git = lambda *args: subprocess.run(["git", *args], capture_output=True, check=True).stdout
+    try:
+        diff = git("diff", "--no-color", "--no-ext-diff", "--no-renames", "--binary", git("merge-base", base, commit).decode().strip(),
+                   commit)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [line for line in diff.split(b"\n") if not line.startswith((b"index ", b"@@"))]
+
+
+def review(head, body, author, comments, allow_waiver=True, same_change=lambda commit: False):
+    """same_change(commit) says whether an earlier commit carries the same change as head, so a review of it still holds."""
     if author in EXEMPT:
         return []
     first = [(comment["body"].strip().splitlines() or [""])[0] for comment in comments if comment.get("author_association") in TRUSTED]
     reviews = [(index, match) for index, line in enumerate(first) if (match := REVIEW.match(line)) and head.startswith(match.group(1))]
+    if not reviews:  # later commits that only merged the base branch in keep the latest review of the same change
+        reviews = next(([(index, match)] for index, line in reversed(list(enumerate(first)))
+                        if (match := REVIEW.match(line)) and same_change(match.group(1))), [])
     if not reviews:  # a waiver stands only where no review of this commit was recorded, so it cannot overrule one
         if WAIVER.search(COMMENT.sub("", body)):
             if allow_waiver:
@@ -105,11 +146,13 @@ def review(head, body, author, comments, allow_waiver=True):
             return [f"this project does not accept 免评审 ([review] waiver = false in {CONFIG}): get an independent review of {head[:7]}"]
         return [f"no independent review of {head[:7]}: post one whose first line follows the review method, then rerun this check"]
     index, latest = reviews[-1]
+    reviewed = latest.group(1)
     if int(latest.group(2)):
-        return [f"the review of {head[:7]} has {latest.group(2)} blocking findings: fix them, then have the new commit reviewed"]
-    answered = any((match := RESPONSE.match(line)) and head.startswith(match.group(1)) for line in first[index + 1:])
+        return [f"the review of {reviewed[:7]} has {latest.group(2)} blocking findings: fix them, then have the new commit reviewed"]
+    answered = any((match := RESPONSE.match(line)) and (reviewed.startswith(match.group(1)) or match.group(1).startswith(reviewed))
+                   for line in first[index + 1:])
     if int(latest.group(3)) and not answered:
-        return [f"answer the review of {head[:7]} in a comment whose first line is 作者回应 · 提交 {head[:7]}"]
+        return [f"answer the review of {reviewed[:7]} in a comment whose first line is 作者回应 · 提交 {reviewed[:7]}"]
     return []
 
 
@@ -125,8 +168,11 @@ def main():
             except subprocess.CalledProcessError as error:
                 problems.append(f"could not read an issue this PR closes: {error.stderr.decode().strip()}")
     elif sys.argv[1:] == ["review"]:
+        base = f"origin/{env('BASE_REF')}"
+        mine = functools.cache(lambda: change(base, env("PR_HEAD")))  # only needed when no review names the head
+        same_change = lambda commit: mine() is not None and change(base, commit) == mine()
         problems = review(env("PR_HEAD"), env("PR_BODY"), env("PR_AUTHOR"), [json.loads(line) for line in sys.stdin if line.strip()],
-                          waiver_allowed(ROOT))
+                          waiver_allowed(ROOT), same_change)
     else:
         sys.exit("usage: check_pr.py describe | review")
     for problem in problems:
