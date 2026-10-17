@@ -77,6 +77,19 @@ func TestABucketNobodyDeclaredIsAnError(t *testing.T) {
 	}
 }
 
+// TestARepeatedBucketIsCountedOnce: a request that names one bucket twice takes one allowance from it, not two, so no
+// request can use up a bucket by itself.
+func TestARepeatedBucketIsCountedOnce(t *testing.T) {
+	t.Parallel()
+	l := client.NewLimiter(specs, newClock().now)
+	for i := range 3 { // global allows three
+		if err := l.Take(t.Context(), []string{"global", "global"}); err != nil {
+			t.Fatalf("request %d naming its bucket twice: %v", i+1, err)
+		}
+	}
+	blockedUntil(t, l.Take(t.Context(), []string{"global"}))
+}
+
 func newClient(t *testing.T, server *httptest.Server) (*client.Client, *clock) {
 	t.Helper()
 	c := newClock()
