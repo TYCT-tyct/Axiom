@@ -119,8 +119,8 @@ export function CheckField({ label, hint, className, ...props }: Omit<FieldProps
         className="mt-0.5 size-4 shrink-0 accent-(--accent)"
         {...props}
       />
-      <div className="space-y-0.5">
-        <label htmlFor={id} className="block text-ui text-t1">
+      <div className="min-w-0 space-y-0.5">
+        <label htmlFor={id} className="block text-ui text-t1 [overflow-wrap:anywhere]">
           {label}
         </label>
         {hint ? (

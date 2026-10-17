@@ -1,11 +1,7 @@
-import { consoleApi, unwrap } from "@axiom/api";
+import { RecoveryDialog, TotpSetupDialog, useBeginTotp, useErrors, useSession } from "@axiom/app";
 import { Badge, Button, CopyButton, FormError, Icon, PageHeader, Panel } from "@axiom/ui";
-import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "../errors";
-import { useSession } from "../session";
-import { RecoveryDialog, TotpSetupDialog } from "../totp-dialogs";
 
 export default function Security() {
   const { t } = useTranslation();
@@ -26,9 +22,7 @@ function TwoStep() {
   const errors = useErrors();
   const session = useSession();
   const [dialog, setDialog] = useState<"recovery" | null>(null);
-  const begin = useMutation({
-    mutationFn: () => unwrap(consoleApi.POST("/api/console/v1/auth/totp/setup")),
-  });
+  const begin = useBeginTotp();
   const setup = begin.data;
   return (
     <Panel
@@ -73,7 +67,7 @@ function Invite() {
     <Panel title={t("security.account.title")}>
       <dl className="divide-y divide-b1">
         <div className="grid gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[12rem_minmax(0,1fr)]">
-          <dt className="text-t3">{t("auth.email")}</dt>
+          <dt className="text-t3">{t("auth.email", { ns: "common" })}</dt>
           <dd className="text-t1 [overflow-wrap:anywhere]">{user.email}</dd>
         </div>
         <div className="grid gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[12rem_minmax(0,1fr)]">

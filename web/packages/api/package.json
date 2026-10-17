@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts"
   },
   "scripts": {
     "generate": "openapi-typescript ../../../api/console.yaml --output src/console.gen.ts && openapi-typescript ../../../api/admin.yaml --output src/admin.gen.ts",

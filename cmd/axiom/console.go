@@ -81,20 +81,27 @@ func apiRoutes(g *guard, logger *slog.Logger, mount func(mounting) http.Handler)
 	})
 }
 
+// servedRoutes mounts one contract's API under /api/ and the pages beside it at /, compressed and under the security
+// headers: the public and the admin listener differ only in which of each they serve.
+func servedRoutes(api http.Handler, secure func(http.Handler) http.Handler, pages http.Handler) http.Handler {
+	// The API owns its prefix for every method, so what the contract does not route is the API's own 404, never a
+	// page; the pages get the rest.
+	routes := http.NewServeMux()
+	routes.Handle("/api/", httpserver.Compress(api))
+	routes.Handle("/", pages)
+	return secure(routes) // outermost: the redirect for an unclean path is the router's own answer
+}
+
 // publicRoutes are the public listener's routes: the console's API, with its large JSON answers gzipped, and the
-// website and console pages for every path the API does not claim. What the contract does not route under /api/ is the
-// API's own 404, never a page.
+// website and console pages for every path the API does not claim.
 func publicRoutes(api consoleapi.StrictServerInterface, g *guard, frontend *webui.Frontend, logger *slog.Logger) http.Handler {
-	console := apiRoutes(g, logger, func(m mounting) http.Handler {
-		handler := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
+	apiHandler := apiRoutes(g, logger, func(m mounting) http.Handler {
+		console := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc: invalidRequest, ResponseErrorHandlerFunc: m.handlerFailed,
 		})
-		return consoleapi.HandlerWithOptions(handler, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
+		return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
-	routes := http.NewServeMux()
-	routes.Handle("/api/", httpserver.Compress(console))
-	routes.Handle("/", frontend.Public())
-	return frontend.Secured(routes) // outermost: the redirect for an unclean path is the router's own answer
+	return servedRoutes(apiHandler, frontend.Secured, frontend.Public())
 }
 
 // invalidRequest answers a request the generated code could not read. The guard has checked the request against the

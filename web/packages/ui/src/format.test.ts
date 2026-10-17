@@ -17,6 +17,19 @@ describe("money", () => {
   });
 });
 
+describe("decimal", () => {
+  // Decimal text from the API is shown grouped for the language, without rounding a digit.
+  it.each([
+    { text: "1520.5", want: "1,520.5" },
+    { text: "0.0000142", want: "0.0000142" },
+    { text: "-3", want: "-3" },
+    { text: "999999999999999999.999999999999999", want: "999,999,999,999,999,999.999999999999999" },
+  ])("formats $text exactly", ({ text, want }) => {
+    expect(formatters("zh").decimal(text)).toBe(want);
+    expect(formatters("en").decimal(text)).toBe(want);
+  });
+});
+
 describe("parseMoney", () => {
   it.each([
     { text: "12.5", want: "12500000000" },

@@ -1,7 +1,9 @@
 import createClient from "openapi-fetch";
+import type { components as adminComponents, paths as adminPaths } from "./admin.gen";
 import type { components, paths } from "./console.gen";
 
 export type Schemas = components["schemas"];
+export type AdminSchemas = adminComponents["schemas"];
 export type ErrorCode = Schemas["ErrorCode"];
 
 // How long a call may take, body included, before it counts as having no response. A console call answers in well
@@ -9,33 +11,40 @@ export type ErrorCode = Schemas["ErrorCode"];
 // otherwise leave a page loading forever, shows the error within about half a minute, two retries included.
 const requestTimeout = 10_000;
 
-// The console's API (api/console.yaml): paths, parameters and bodies are typed from the contract. A call ends at the
-// timeout or when the caller's signal aborts, whichever comes first; a query passes TanStack Query's signal, so a
-// query nobody watches any more stops its request.
-export const consoleApi = createClient<paths>({
-  fetch: (request) =>
-    fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(requestTimeout)]) }),
-});
-
 // The session's CSRF token, which the page keeps in memory only (the session cookie is HttpOnly). Every request that
-// changes data sends it with the content type the contract requires; the browser adds the Origin itself.
+// changes data sends it with the content type the contract requires; the browser adds the Origin itself. An app is one
+// bundle talking to one surface, so one token serves its client.
 let csrfToken = "";
 
 export function setCsrfToken(token: string) {
   csrfToken = token;
 }
 
-consoleApi.use({
-  onRequest({ request }) {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      request.headers.set("Content-Type", "application/json");
-      if (csrfToken) {
-        request.headers.set("X-CSRF-Token", csrfToken);
+// A client for one contract: paths, parameters and bodies are typed from it. A call ends at the timeout or when the
+// caller's signal aborts, whichever comes first; a query passes TanStack Query's signal, so a query nobody watches any
+// more stops its request.
+function createApi<P extends object>() {
+  const api = createClient<P>({
+    fetch: (request) =>
+      fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(requestTimeout)]) }),
+  });
+  api.use({
+    onRequest({ request }) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        request.headers.set("Content-Type", "application/json");
+        if (csrfToken) {
+          request.headers.set("X-CSRF-Token", csrfToken);
+        }
       }
-    }
-    return request;
-  },
-});
+      return request;
+    },
+  });
+  return api;
+}
+
+// The console's API (api/console.yaml) and the admin's (api/admin.yaml).
+export const consoleApi = createApi<paths>();
+export const adminApi = createApi<adminPaths>();
 
 // What a failed call says in its body (the contract's Error), if it has one; a gateway's page or an empty body has none.
 function errorDetail(body: unknown): Schemas["ErrorDetail"] | undefined {
@@ -97,13 +106,20 @@ async function settle<T>(call: Promise<Settled<T>>): Promise<Settled<T>> {
   return result;
 }
 
-// unwrap turns an openapi-fetch call into its data, or throws ApiError, so a query's error has that shape.
-export async function unwrap<T>(call: Promise<Settled<T>>): Promise<T> {
+// unwrapChange turns an openapi-fetch call into its data, or throws ApiError, so a query's error has that shape. It
+// also says whether the answer is the stored result of an earlier request with the same Idempotency-Key (admin API
+// operations that change data), in which case nothing was done again.
+export async function unwrapChange<T>(call: Promise<Settled<T>>): Promise<{ data: T; replayed: boolean }> {
   const { data, response } = await settle(call);
   if (data === undefined) {
     throw new ApiError(response.status, response.headers.get("X-Request-ID"));
   }
-  return data;
+  return { data, replayed: response.headers.get("Idempotency-Replayed") === "true" };
+}
+
+// unwrap is unwrapChange for a read, which has no replay to tell.
+export async function unwrap<T>(call: Promise<Settled<T>>): Promise<T> {
+  return (await unwrapChange(call)).data;
 }
 
 // unwrapEmpty is unwrap for an operation that answers 204.

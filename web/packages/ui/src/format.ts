@@ -39,6 +39,8 @@ export function formatters(language: Language, timeZone?: string) {
   const locale = locales[language];
   const zone = timeZone ? { timeZone } : {};
   const integers = new Intl.NumberFormat(locale);
+  // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
+  const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });
   const times = new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "short",
@@ -53,6 +55,7 @@ export function formatters(language: Language, timeZone?: string) {
   const currencies = new Map<string, Intl.NumberFormat>();
   return {
     number: (value: number | bigint) => integers.format(value),
+    decimal: (text: string) => decimals.format(text as `${number}`),
     // An amount of money exactly as the server holds it: never rounded, and at least the currency's two decimals.
     money: ({ amount, currency }: Money) => {
       let format = currencies.get(currency);

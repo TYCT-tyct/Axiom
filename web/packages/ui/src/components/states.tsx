@@ -84,11 +84,33 @@ export function EmptyState({
   );
 }
 
-function ForbiddenState({ compact }: { compact?: boolean }) {
+// Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
+type Placement = { compact?: boolean; page?: boolean };
+
+function ForbiddenState(placement: Placement) {
   const { t } = useTranslation("common");
   return (
-    <StateFrame icon="lock" title={t("state.forbiddenTitle")} compact={compact}>
+    <StateFrame icon="lock" title={t("state.forbiddenTitle")} {...placement}>
       <p>{t("state.forbiddenBody")}</p>
+    </StateFrame>
+  );
+}
+
+// The thing asked for is not there: asking again will not find it, so the way out is back home.
+function GoneState(placement: Placement) {
+  const { t } = useTranslation("common");
+  return (
+    <StateFrame
+      icon="search"
+      title={t("state.goneTitle")}
+      action={
+        <a href={import.meta.env.BASE_URL} className="text-accent underline-offset-4 hover:underline">
+          {t("state.home")}
+        </a>
+      }
+      {...placement}
+    >
+      <p>{t("state.goneBody")}</p>
     </StateFrame>
   );
 }
@@ -97,13 +119,12 @@ function ErrorState({
   error,
   at,
   onRetry,
-  compact,
+  ...placement
 }: {
   error: unknown;
   at?: Date;
   onRetry?: () => void;
-  compact?: boolean;
-}) {
+} & Placement) {
   const { t } = useTranslation("common");
   const format = useFormat();
   const failure = isFailure(error) ? error : null;
@@ -112,7 +133,7 @@ function ErrorState({
       icon="alert"
       tone="text-bad"
       title={t("state.errorTitle")}
-      compact={compact}
+      {...placement}
       action={
         onRetry ? (
           <Button onClick={onRetry}>
@@ -144,28 +165,31 @@ export function DataState<T>({
   query,
   isEmpty,
   empty,
-  compact,
   children,
+  ...placement
 }: {
   query: QueryLike<T>;
   isEmpty?: (data: T) => boolean;
   empty?: ReactNode;
-  compact?: boolean;
   children: (data: T) => ReactNode;
-}) {
+} & Placement) {
   if (query.status === "pending") {
     return <LoadingState />;
   }
   if (query.status === "error" || query.data === undefined) {
-    if (isFailure(query.error) && query.error.status === 403) {
-      return <ForbiddenState compact={compact} />;
+    const status = isFailure(query.error) ? query.error.status : undefined;
+    if (status === 403) {
+      return <ForbiddenState {...placement} />;
+    }
+    if (status === 404) {
+      return <GoneState {...placement} />;
     }
     return (
       <ErrorState
         error={query.error}
         at={new Date(query.errorUpdatedAt)}
         onRetry={() => query.refetch()}
-        compact={compact}
+        {...placement}
       />
     );
   }

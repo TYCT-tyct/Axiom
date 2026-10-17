@@ -1,8 +1,8 @@
+import { Stat } from "@axiom/app";
 import { DataState, PageHeader, Panel, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { balanceQuery } from "../queries";
-import { Stat } from "../stat";
 
 export default function Balance() {
   const { t } = useTranslation();

@@ -1,7 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { goodInvite, knownEmail, knownPassword, limitedEmail, mfaEmail } from "./console-data.ts";
+import { goodInvite } from "./console-data.ts";
+import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
 // The console's pages against the mocked API (console-api.ts): the main flows of M1, each as a user would walk it.
 

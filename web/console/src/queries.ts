@@ -1,6 +1,6 @@
 import { consoleApi, unwrap } from "@axiom/api";
+import { accountKey } from "@axiom/app";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { accountKey } from "./session";
 
 // The calls the pages make, one place for each so a page and the one that changes its data agree on the key. Everything
 // of the signed-in account is under accountKey, which the end of a session clears.

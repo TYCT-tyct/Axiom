@@ -1,13 +1,10 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { AuthFrame, Gate, readForm, useErrors, useSignIn } from "@axiom/app";
 import { DataState, FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "../errors";
-import { readForm } from "../forms";
 import { siteQuery } from "../queries";
-import { Gate, useSignIn } from "../session";
-import { AuthFrame } from "./frame";
 
 export default function Register() {
   return (
@@ -23,6 +20,7 @@ function RegisterPage() {
   const site = useQuery(siteQuery);
   return (
     <AuthFrame
+      brand={site.data}
       title={t("auth.register.title")}
       description={t("auth.register.description")}
       footer={
@@ -59,14 +57,14 @@ function RegisterFields({ error }: { error: unknown }) {
         error={errors.field(error, "invite_code")}
       />
       <TextField
-        label={t("auth.email")}
+        label={t("auth.email", { ns: "common" })}
         name="email"
         autoComplete="username"
         inputMode="email"
         error={errors.field(error, "email")}
       />
       <TextField
-        label={t("auth.password")}
+        label={t("auth.password", { ns: "common" })}
         hint={t("auth.register.passwordHint")}
         name="password"
         type="password"

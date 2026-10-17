@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { knownPassword } from "./console-data.ts";
+import { knownPassword } from "./mock-auth.ts";
 import { advanceUntil } from "./page-clock.ts";
 
 // The security page against the mocked API (console-api.ts): two-step verification and the codes it hands out once.
@@ -55,15 +55,15 @@ test.describe("two-step verification settings", () => {
     await expect(page.getByText(/\/console\/register\?invite=AXIOM-7K2Q/)).toBeVisible();
   });
 
-  test("the codes are shown even when the session cannot be read again, and it is read once the server can", async ({
+  test("the codes stay when the new session cannot be read as they are kept, and keeping them again works", async ({
     page,
   }) => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/security");
     await expect(page.getByText("未开启")).toBeVisible();
-    let reads = 0;
     const session = "**/api/console/v1/session";
+    let reads = 0;
     await page.route(session, (route) => {
       reads += 1;
       return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
@@ -78,13 +78,14 @@ test.describe("two-step verification settings", () => {
     await page.clock.install();
     await dialog.getByRole("button", { name: "开启", exact: true }).click();
 
-    // The server has changed the factor and will not say the codes again. The session is asked for three times (the
-    // query's retries) and fails each time; the codes stay on screen throughout.
+    // The server has changed the factor and will not say the codes again. Keeping them reads the new session, which
+    // fails (after the query's retries); the codes stay on screen, with the reason.
     const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
     await advanceUntil(page, () => expect(codes.getByRole("listitem")).toHaveCount(10, { timeout: 100 }));
-    await advanceUntil(page, () => expect(reads).toBe(3));
-    await expect(codes.getByRole("listitem")).toHaveCount(10);
     await codes.getByRole("button", { name: "我已保存" }).click();
+    await advanceUntil(page, () => expect(reads).toBe(3));
+    await expect(codes.getByRole("alert")).toContainText("服务出了问题", { timeout: 10_000 });
+    await expect(codes.getByRole("listitem")).toHaveCount(10);
 
     await page.unroute(session);
     await returnToWindow(page);

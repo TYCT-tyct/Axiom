@@ -1,12 +1,12 @@
 import type { Schemas } from "@axiom/api";
+import { can, LoadMore, useSession } from "@axiom/app";
 import { Badge, Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
-import { LoadMore, maskedKey } from "../parts";
+import { maskedKey } from "../parts";
 import { keysQuery } from "../queries";
-import { can, useSession } from "../session";
 
 type Key = Schemas["Key"];
 type Dialog =

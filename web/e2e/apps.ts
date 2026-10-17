@@ -9,3 +9,6 @@ export const apps = [
   { name: "console", url: served(ports.site, "/console/") },
   { name: "admin", url: served(ports.admin) },
 ] as const;
+
+// An address of the admin app.
+export const adminUrl = (path = "") => new URL(path, apps[2].url).href;
