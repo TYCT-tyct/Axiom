@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +54,9 @@ func workRoutes(t *testing.T, db *pg.DB, client *egress.Client, upstream string)
 	return routes
 }
 
-// tracedRequest sends one request through the public stack and returns the spans it made and the request ID the
-// client was given.
-func tracedRequest(t *testing.T) (spans []sdktrace.ReadOnlySpan, requestID string) {
+// tracedRequest sends one request through the public stack and returns the spans it made, the request ID the client
+// was given and the upstream's host.
+func tracedRequest(t *testing.T) (spans []sdktrace.ReadOnlySpan, requestID, upstreamHost string) {
 	t.Helper()
 	recorded := tracetest.NewSpanRecorder()
 	tel, err := telemetry.New(recorded)
@@ -69,6 +70,10 @@ func tracedRequest(t *testing.T) (spans []sdktrace.ReadOnlySpan, requestID strin
 	defer db.Close()
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tel.Traces))
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
@@ -81,15 +86,16 @@ func tracedRequest(t *testing.T) (spans []sdktrace.ReadOnlySpan, requestID strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	return recorded.Ended(), resp.Header.Get("X-Request-ID")
+	return recorded.Ended(), resp.Header.Get("X-Request-ID"), target.Hostname()
 }
 
 // TestRequestTraceCarriesTheRequestID: a public request is one trace. Its server span holds the request ID the
-// client sees in X-Request-ID; the transaction and the outbound request it made are its children; and no span holds
-// the path, the query or any statement, which may carry identifiers or content.
+// client sees in X-Request-ID; the transaction and the outbound request it made are its children, and they keep the
+// attributes they carry when sampled; and no span holds the path, the query or any statement, which may carry
+// identifiers or content.
 func TestRequestTraceCarriesTheRequestID(t *testing.T) {
 	t.Parallel()
-	spans, requestID := tracedRequest(t)
+	spans, requestID, upstreamHost := tracedRequest(t)
 	byName := map[string]sdktrace.ReadOnlySpan{}
 	for _, s := range spans {
 		byName[s.Name()] = s
@@ -106,6 +112,9 @@ func TestRequestTraceCarriesTheRequestID(t *testing.T) {
 	if got := attribute(server, "request_id"); got != requestID || requestID == "" {
 		t.Errorf("server span request_id = %q, the client saw %q", got, requestID)
 	}
+	wantAttribute(t, tx, "db.system", "postgresql")
+	wantAttribute(t, out, "server.address", upstreamHost)
+	wantAttribute(t, out, "http.response.status_code", "200")
 	for _, child := range []sdktrace.ReadOnlySpan{tx, out} {
 		if child.Parent().SpanID() != server.SpanContext().SpanID() || child.SpanContext().TraceID() != server.SpanContext().TraceID() {
 			t.Errorf("span %s is not a child of the request's span", child.Name())
@@ -128,4 +137,12 @@ func attribute(s sdktrace.ReadOnlySpan, key string) string {
 		}
 	}
 	return ""
+}
+
+// wantAttribute fails the test when the span does not carry key with the given value.
+func wantAttribute(t *testing.T, s sdktrace.ReadOnlySpan, key, value string) {
+	t.Helper()
+	if got := attribute(s, key); got != value {
+		t.Errorf("span %s attribute %s = %q, want %q", s.Name(), key, got, value)
+	}
 }
