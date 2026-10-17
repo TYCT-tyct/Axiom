@@ -172,7 +172,7 @@ func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) /
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
 type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
 func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
-func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、已到的对账键
+func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键
 func (r AttemptReceipt) Key() string                           // 对账键，结算写进 billing.AttemptResult；其余字段不对外
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
