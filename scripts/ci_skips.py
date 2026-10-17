@@ -1,12 +1,15 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
-The decisions are computed from content, not hand-kept lists: Markdown is skippable only when no tracked non-Markdown
-file names it (a document can be an input to a code check), and a benchmark comparison is worth its minutes for
-everything except Markdown-only and web/-only changes. A failed diff runs the build and the comparison.
+Markdown-only changes run the cheap checks that read Markdown instead of the whole build; a benchmark comparison is
+skipped only for Markdown-only and web/-only changes. The decisions come from the file list, never a guess about what
+reads what. A failed diff runs the build and the comparison; bench-needed uses exit code 10 for "not needed", so any
+other outcome runs the comparison.
 """
 
 import subprocess
 import sys
+
+NOT_NEEDED = 10
 
 
 def changed_paths(base: str, head: str = "HEAD") -> list[str]:
@@ -17,26 +20,8 @@ def changed_paths(base: str, head: str = "HEAD") -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def referenced_by_code(path: str) -> bool:
-    """Whether a tracked non-Markdown file names path, as tools/checkmodules names docs/architecture.md."""
-    result = subprocess.run(
-        ["git", "grep", "-l", "-F", "-e", path, "--", ".", ":(exclude)*.md"],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        return bool(result.stdout.strip())
-    if result.returncode == 1:
-        return False
-    return True  # a failed search must not skip the build
-
-
 def all_md(paths: list[str]) -> bool:
     return bool(paths) and all(path.lower().endswith(".md") for path in paths)
-
-
-def only_md(paths: list[str], referenced=referenced_by_code) -> bool:
-    """A pull request that changes only Markdown files no code check reads needs no build."""
-    return all_md(paths) and not any(referenced(path) for path in paths)
 
 
 def web_only(paths: list[str]) -> bool:
@@ -56,13 +41,13 @@ def main(argv: list[str]) -> int:
     head = argv[2] if len(argv) == 3 else "HEAD"
     try:
         paths = changed_paths(base, head)
-    except subprocess.CalledProcessError as error:
-        print(f"cannot diff {base}...{head}: {error.stderr.strip()}", file=sys.stderr)
+    except (subprocess.CalledProcessError, OSError) as error:
+        print(f"cannot diff {base}...{head}: {error}", file=sys.stderr)
         return 1 if action == "md-only" else 0
     if action == "md-only":
-        return 0 if only_md(paths) else 1
+        return 0 if all_md(paths) else 1
     if action == "bench-needed":
-        return 0 if needs_benchmark(paths) else 1
+        return 0 if needs_benchmark(paths) else NOT_NEEDED
     print(f"unknown action {action}", file=sys.stderr)
     return 2
 

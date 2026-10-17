@@ -94,6 +94,11 @@ bench-once: web-embed
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
+# The checks that read Markdown: the docs tests (including the pull request template), module boundaries, and the pg
+# module table. A Markdown-only PR runs this instead of the full build.
+md-checks: docs modules
+    go test ./internal/platform/pg -run '^TestModuleOrderFollowsArchitecture$'
+
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
 # stream as internal/protocol/testdata/<format>/<scenario>/, scrubbed and checked. Base URLs and keys come from the
 # environment or .env, as .env.example lists; internal/protocol/README.md「录制样本」 has the rules.

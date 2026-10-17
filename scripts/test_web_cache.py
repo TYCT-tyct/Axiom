@@ -57,6 +57,24 @@ class Repository:
         self.temp.cleanup()
 
 
+class EnvInputs(unittest.TestCase):
+    def test_both_keys_share_one_prefix_rule(self):
+        with mock.patch.dict(os.environ, {
+            "VITE_PROOF": "vite",
+            "NODE_OPTIONS": "--proof",
+            "AXIOM_SHOTS_DIR": "shots",
+            "AXIOM_CACHE_DIR": "cache",
+            "AXIOM_WEB_PORT": "1",
+            "AXIOM_VERSION": "v",
+        }, clear=False):
+            inputs = dict(web_cache.env_inputs())
+        self.assertEqual(inputs["VITE_PROOF"], "vite")
+        self.assertEqual(inputs["NODE_OPTIONS"], "--proof")
+        self.assertEqual(inputs["AXIOM_SHOTS_DIR"], "shots")
+        for name in ("AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"):
+            self.assertNotIn(name, inputs)
+
+
 class Hashes(unittest.TestCase):
     def setUp(self):
         self.repo = Repository()

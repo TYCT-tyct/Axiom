@@ -30,9 +30,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
           fetch-depth: 0 # the benchmark comparison checks out the base commit
-      # A PR that changes only Markdown no tracked non-Markdown file names needs no build; a document code reads (for
-      # example docs/architecture.md in tools/checkmodules and the pg tests) still runs everything. Every later step is
-      # skipped, and the required build check succeeds at once; main always runs everything.
+      # A Markdown-only PR runs the cheap checks that read Markdown (`just md-checks`) and skips web, deploy-check and
+      # the benchmark comparison; main, and every other PR, runs everything.
       - id: changes
         if: github.event_name == 'pull_request'
         run: |
@@ -43,8 +42,7 @@ jobs:
           fi
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: "**/go.sum"
@@ -68,12 +66,14 @@ jobs:
         run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
         env:
           DEPS: ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: |
+      - run: |
           curl -sSfL --retry 3 -o "$RUNNER_TEMP/just.tar.gz" "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz"
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table.
+      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only == 'true'
+        run: just md-checks
       # The tests stay cacheable; bench-once runs every benchmark under -race on PRs too, and bench-compare below still
       # compares allocations without -race.
       - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
@@ -85,18 +85,21 @@ jobs:
       - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
         run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
-      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+      - if: github.event_name == 'pull_request'
         run: just migrations "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
       # A Markdown-only or web/-only change cannot move a Go allocation; every other change, testdata, *.sql and test
-      # files included, runs the comparison. tools/benchgate stays as it is.
+      # files included, runs the comparison. Exit 10 is the only "not needed"; every other outcome runs it.
       - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
         run: |
-          if python3 scripts/ci_skips.py bench-needed "$BASE"; then
-            just bench-compare "$BASE"
+          status=0
+          python3 scripts/ci_skips.py bench-needed "$BASE" || status=$?
+          if [ "$status" -eq 10 ]; then
+            echo "bench-compare skipped: only Markdown or web/ changed between $BASE and HEAD"
           else
-            echo "bench-compare skipped: no non-test Go or go.mod/go.sum changed between $BASE and HEAD"
+            [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
+            just bench-compare "$BASE"
           fi
         env:
           BASE: ${{ github.event.pull_request.base.sha }}

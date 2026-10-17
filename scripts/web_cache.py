@@ -91,6 +91,17 @@ def script_hash() -> str:
     return hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()
 
 
+ENV_PREFIXES = ("VITE_", "NODE_", "AXIOM_")
+ENV_EXCLUDED = {"AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"}
+
+
+def env_inputs():
+    """The environment variables Vite or the e2e tests read; one rule for both keys."""
+    for name in sorted(os.environ):
+        if name.startswith(ENV_PREFIXES) and name not in ENV_EXCLUDED:
+            yield name, os.environ[name]
+
+
 def extra(h, name: str, value: str) -> None:
     h.update(name.encode())
     h.update(b"\0")
@@ -106,9 +117,8 @@ def build_key(root: Path, version: str, tools: str) -> str:
     extra(h, "version", version)
     extra(h, "toolchain", tools)
     extra(h, "platform", platform.platform())
-    for name in sorted(os.environ):
-        if name != "AXIOM_CACHE_DIR" and name.startswith(("VITE_", "AXIOM_", "NODE_")):
-            extra(h, "env " + name, os.environ[name])
+    for name, value in env_inputs():
+        extra(h, "env " + name, value)
     return h.hexdigest()
 
 
@@ -122,9 +132,8 @@ def e2e_key(root: Path, tools: str) -> str:
     extra(h, "inputs", e2e_inputs_hash(root))
     extra(h, "toolchain", tools)
     extra(h, "platform", platform.platform())
-    for name in sorted(os.environ):
-        if name.startswith("AXIOM_") and name not in ("AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"):
-            extra(h, "env " + name, os.environ[name])
+    for name, value in env_inputs():
+        extra(h, "env " + name, value)
     return h.hexdigest()
 
 
