@@ -183,6 +183,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 		wg       sync.WaitGroup
 		runs     = make([]measurements, len(targets))
 		failures = make([]error, len(targets))
+		stderr   = new(sync.Mutex) // one package's stderr line at a time
 	)
 	for i, pkg := range targets {
 		slots <- struct{}{}
@@ -190,7 +191,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			run, err := benchmark(ctx, dir, pkg)
+			run, err := benchmark(ctx, dir, pkg, stderr)
 			if err != nil {
 				failures[i] = fmt.Errorf("package %s: %w", pkg, err)
 				return
@@ -253,8 +254,8 @@ func benchmarkPackages(ctx context.Context, dir string) ([]string, error) {
 }
 
 // benchmark runs the benchmarks of one package at the fixed iteration count, with the garbage collector off and on one
-// processor; the go command's stderr goes straight to ours.
-func benchmark(ctx context.Context, dir, pkg string) (measurements, error) {
+// processor; the go command's stderr reaches ours, prefixed with the package, because four packages run at once.
+func benchmark(ctx context.Context, dir, pkg string, stderr *sync.Mutex) (measurements, error) {
 	cmd := exec.CommandContext(ctx, "go", append(slices.Clone(bench), pkg)...)
 	// A collection empties the pools the code keeps its buffers in, and the run then allocates them again: that cost is
 	// per operation, not per run, so more iterations do not spread it. Aggregate with 64-KiB deltas read 582 to 585
@@ -266,8 +267,10 @@ func benchmark(ctx context.Context, dir, pkg string) (measurements, error) {
 	// (benchtime) and cancels between the base commit and the working tree. The heap grows until a package's run ends:
 	// protocol, the heaviest, peaks near 530 MiB at twenty iterations.
 	cmd.Env = append(os.Environ(), "GOGC=off", "GOMAXPROCS=1")
-	cmd.Dir, cmd.Stderr = dir, os.Stderr
+	log := &prefixWriter{lock: stderr, out: os.Stderr, prefix: pkg}
+	cmd.Dir, cmd.Stderr = dir, log
 	out, runErr := cmd.Output()
+	log.flush()
 	run, parseErr := parse(bytes.NewReader(out))
 	if runErr != nil {
 		return measurements{}, fmt.Errorf("%w\n%s%s", runErr, run.diagnostics, run.text)
@@ -276,6 +279,40 @@ func benchmark(ctx context.Context, dir, pkg string) (measurements, error) {
 		return measurements{}, fmt.Errorf("read the benchmarks: %w", parseErr)
 	}
 	return run, nil
+}
+
+// prefixWriter writes every line it is given to out with prefix, over the lock shared by the packages running at once,
+// so their stderr lines stay whole and tell which package printed them.
+type prefixWriter struct {
+	lock   *sync.Mutex
+	out    io.Writer
+	prefix string
+	buf    []byte // the tail of a line the command has not ended yet
+}
+
+func (w *prefixWriter) Write(p []byte) (int, error) {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		line, rest, found := bytes.Cut(w.buf, []byte("\n"))
+		if !found {
+			break
+		}
+		fmt.Fprintf(w.out, "%s: %s\n", w.prefix, line)
+		w.buf = rest
+	}
+	return len(p), nil
+}
+
+// flush writes a last line the command left without a newline.
+func (w *prefixWriter) flush() {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	if len(w.buf) > 0 {
+		fmt.Fprintf(w.out, "%s: %s\n", w.prefix, w.buf)
+		w.buf = nil
+	}
 }
 
 // event is the part of a `go test -json` event the gate needs; Package names the package of the events of the list pass.

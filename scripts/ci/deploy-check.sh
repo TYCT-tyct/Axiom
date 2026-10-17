@@ -1,30 +1,70 @@
 #!/usr/bin/env bash
 # CI's deployment checks (ci.yml, job build): deploy this tree with `just up`, check the node runs it, upgrade a
-# deployment from before the migration administrator in place, and always tear down with the database. Each job gets its
-# own compose project, image tag, volumes (compose prefixes them with the project) and host ports, so jobs on the runners
-# sharing a host need no lock; local `just up` keeps its defaults.
+# deployment from before the migration administrator in place, and always tear down with the database.
+#
+# The job owns its compose project, image tag and volumes, named from RUNNER_NAME and its workspace path
+# (scripts/deploy_name.py), and publishes host ports the kernel picks, so jobs on the runners sharing this host never
+# collide and need no lock. A runner runs one job at a time and keeps its workspace, so the next job on it removes
+# whatever a job killed before its trap reached left. If that runner never runs a deploy check again, the next deploy
+# check on any runner removes it instead: the teardown only ever names this job's project, and clean_stale below only
+# removes projects that carry this script's label (deploy/compose.yaml), are named axiom-ci-*, and whose containers are
+# all older than the 40-minute step timeout — a running job's stack is younger, and nothing else is inspected.
 set -euo pipefail
 
-# The runner names the job's stack: a runner runs one job at a time, and its name stays the same between them, so the
-# next job on it can remove what a job that was killed before its trap ran left behind — no trap survives a SIGKILL.
-job="$(printf '%s' "${RUNNER_NAME:-local-$(hostname)}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-')"
+job="$(python3 scripts/deploy_name.py "${RUNNER_NAME:-local-$(hostname)}" "${GITHUB_WORKSPACE:-$(pwd)}")"
 export COMPOSE_PROJECT_NAME="axiom-ci-$job"
 export DEPLOY_IMAGE="axiom-ci:$job"
+export DEPLOY_RESTART_POLICY=no # a CI stack must not start again after a killed job leaves it behind
 # Empty: the compose file publishes a port the kernel picks (deploy/compose.yaml), which no other job can hold.
 export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
 
 compose() { docker compose -f deploy/compose.yaml "$@"; }
 
-# A killed job leaves its containers, volumes and image behind, so every run starts and ends with nothing; the volumes
-# go with `down -v`, which knows them from the project name.
+# No 45-second graceful stop in CI (the compose file's local default): a short one finishes before the runner kills the
+# step, and `down` by project name works before deploy/.env exists.
+down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --timeout 5; }
+
+# Both steps always run: failing to stop the containers must not leave the image behind.
 teardown() {
-  just down -v
+  down || true
   docker image rm --force "$DEPLOY_IMAGE" > /dev/null 2>&1 || true
 }
-trap teardown EXIT
+
+# Keep the status the script already had: neither a failed teardown nor a successful one may change it.
+finish() {
+  status=$?
+  teardown
+  exit "$status"
+}
+trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# The step timeout in ci.yml is 40 minutes: no job of this script can still be running after it, so an older stack was
+# abandoned. The label and the axiom-ci- prefix keep this scan away from every other container on the host, and the
+# project name keeps `down` scoped to one stack.
+STALE_AFTER=2400 # seconds
+clean_stale() {
+  local id project created now
+  local -A newest=()
+  for id in $(docker ps -aq --filter label=axiom.ci.deploy-check=true); do
+    project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id" 2>/dev/null)" || continue
+    case "$project" in axiom-ci-*) ;; *) continue ;; esac
+    created="$(date -d "$(docker inspect --format '{{.Created}}' "$id" 2>/dev/null)" +%s 2>/dev/null)" || continue
+    if [ "${newest[$project]:-0}" -lt "$created" ]; then newest[$project]=$created; fi
+  done
+  now=$(date +%s)
+  for project in "${!newest[@]}"; do
+    [ $(( now - newest[$project] )) -ge "$STALE_AFTER" ] || continue
+    echo "removing the abandoned CI deploy stack $project"
+    docker compose --project-name "$project" down --volumes --timeout 5 || true
+    docker image rm --force "axiom-ci:${project#axiom-ci-}" > /dev/null 2>&1 || true
+  done
+}
+
+# Whatever a killed job left: this runner's own stack first, then any abandoned one.
 teardown
+clean_stale
 
 # Start the stack and learn the ports it published: --build can replace the container, and with it the mapping.
 start() {

@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -51,23 +56,137 @@ func TestParse(t *testing.T) {
 // package writes a marker of its own and waits for the other package's, so the other marker appears only while both run
 // at once; packages run one after another fail after the deadline.
 func TestBenchmarksRunPackagesInParallel(t *testing.T) {
-	dir := t.TempDir()
-	files := map[string]string{
-		"go.mod":      "module probe\n\ngo 1.27.2\n",
+	dir := probeFiles(t, map[string]string{
 		"a/a_test.go": overlapBenchmark("a", "b"),
 		"b/b_test.go": overlapBenchmark("b", "a"),
-	}
-	for name, content := range files {
-		path := filepath.Join(dir, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 	if _, err := benchmarks(t.Context(), dir, "the probe module"); err != nil {
 		t.Fatalf("the packages did not run at the same time: %v", err)
+	}
+}
+
+// TestBenchmarksReportAFailedPackage runs the go command: a benchmark that fails in one package must fail the gate even
+// while other packages run, and the error must name the package.
+func TestBenchmarksReportAFailedPackage(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"ok/ok_test.go": `package ok
+
+import "testing"
+
+func BenchmarkOK(b *testing.B) {
+	for b.Loop() {
+	}
+}
+`,
+		"bad/bad_test.go": `package bad
+
+import "testing"
+
+func BenchmarkBad(b *testing.B) {
+	b.Fatal("the benchmark broke")
+}
+`,
+	})
+	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "probe/bad") {
+		t.Fatalf("a failing package did not fail the gate: %v", err)
+	}
+}
+
+// TestBenchmarksWithoutAny runs the go command: a tree with no benchmark at all is an error, never a silent pass.
+func TestBenchmarksWithoutAny(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"plain/plain_test.go": `package plain
+
+import "testing"
+
+func TestNothing(t *testing.T) {
+}
+`,
+	})
+	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "no package has a benchmark") {
+		t.Fatalf("a tree without benchmarks was accepted: %v", err)
+	}
+}
+
+// TestBenchmarksSkipPackagesWithoutBenchmarks runs the go command: a package with no benchmark is only listed, so its
+// tests are never run and only the package with a benchmark contributes results.
+func TestBenchmarksSkipPackagesWithoutBenchmarks(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"bench/bench_test.go": `package bench
+
+import "testing"
+
+func BenchmarkOK(b *testing.B) {
+	for b.Loop() {
+	}
+}
+`,
+		"plain/plain_test.go": `package plain
+
+import "testing"
+
+func TestFails(t *testing.T) {
+	t.Fatal("a package without benchmarks must not be run")
+}
+`,
+	})
+	run, err := benchmarks(t.Context(), dir, "the probe module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.allocs) != 1 {
+		t.Fatalf("results of %d packages, want only the one with a benchmark: %v", len(run.allocs), run.allocs)
+	}
+	for name := range run.allocs {
+		if !strings.HasPrefix(name, "probe/bench.OK") {
+			t.Errorf("unexpected benchmark %s", name)
+		}
+	}
+}
+
+// TestBenchmarksReportSkipsFromEveryPackage runs the go command: a skip in either of two packages running at once still
+// reaches the gate, including one after the first run, which leaves a result line with no iterations.
+func TestBenchmarksReportSkipsFromEveryPackage(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"a/a_test.go": `package a
+
+import "testing"
+
+func BenchmarkSkipped(b *testing.B) {
+	b.Skip("needs a database")
+}
+`,
+		"b/b_test.go": `package b
+
+import "testing"
+
+func BenchmarkLate(b *testing.B) {
+	if b.N > 1 {
+		b.Skip("cannot run the calibrated workload")
+	}
+}
+`,
+	})
+	run, err := benchmarks(t.Context(), dir, "the probe module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"BenchmarkSkipped", "probe/b.Late (no iterations)"}
+	if diff := cmp.Diff(want, slices.Compact(slices.Sorted(slices.Values(run.skipped)))); diff != "" {
+		t.Errorf("skipped (-want +got):\n%s", diff)
+	}
+}
+
+// TestPrefixWriter checks that a package's stderr lines carry its name, including a last line without a newline.
+func TestPrefixWriter(t *testing.T) {
+	var out bytes.Buffer
+	w := &prefixWriter{lock: new(sync.Mutex), out: &out, prefix: "probe/a"}
+	if _, err := w.Write([]byte("first\nsecond")); err != nil {
+		t.Fatal(err)
+	}
+	w.flush()
+	if diff := cmp.Diff("probe/a: first\nprobe/a: second\n", out.String()); diff != "" {
+		t.Errorf("stderr (-want +got):\n%s", diff)
 	}
 }
 
@@ -103,17 +222,40 @@ func BenchmarkOverlap(b *testing.B) {
 `, mine, theirs)
 }
 
-// probeModule writes a throwaway module with the given test file and returns its directory.
+// probeModule writes a throwaway module with the given test file at its root and returns its directory.
 func probeModule(t *testing.T, test string) string {
 	t.Helper()
+	return probeFiles(t, map[string]string{"b_test.go": test})
+}
+
+// probeFiles writes a throwaway module with the given files (paths relative to its root) and returns its directory.
+func probeFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
 	dir := t.TempDir()
-	files := map[string]string{"go.mod": "module probe\n\ngo 1.27.2\n", "b_test.go": test}
+	files = maps.Clone(files)
+	files["go.mod"] = "module probe\n\ngo " + probeGoVersion() + "\n"
 	for name, src := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return dir
+}
+
+// goVersion is the language version in a toolchain string: "1.27" in both "go1.27.2" and "devel go1.28-...".
+var goVersion = regexp.MustCompile(`1\.\d+`)
+
+// probeGoVersion is the go directive for a probe module: the running toolchain's own language version, so a probe never
+// asks the go command to download another toolchain, whatever Go version the runner has.
+func probeGoVersion() string {
+	if version := goVersion.FindString(runtime.Version()); version != "" {
+		return version
+	}
+	return "1.24" // older than any toolchain running these tests; the probes' language features need 1.22 or later
 }
 
 // TestBenchmarksRunFixedIterations runs the go command: the benchmark command asks for a fixed count of iterations, and
