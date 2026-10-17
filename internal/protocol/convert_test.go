@@ -89,6 +89,10 @@ func noMidSystem(t *protocol.Target)    { t.MidSystem = false }
 func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = true }
 func encrypting(t *protocol.Target)     { t.EncryptedReasoning = true }
 func streaming(t *protocol.Target)      { t.Streams = true }
+func encryptingStream(t *protocol.Target) {
+	encrypting(t)
+	streaming(t)
+}
 
 func noDefaultCap(t *protocol.Target) { t.MaxOutput = 0 }
 func quotedCap(t *protocol.Target)    { t.MaxOutput = 7000 }
@@ -249,7 +253,7 @@ func TestConvertToResponses(t *testing.T) {
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],"store":false,"max_output_tokens":50}`,
 		},
 		{
-			"system, text and storage", chatBody(`"messages":[{"role":"developer","content":"Be brief."},` + userHi + `],"stream":true,"max_tokens":50`), encrypting,
+			"system, text and storage", chatBody(`"messages":[{"role":"developer","content":"Be brief."},` + userHi + `],"stream":true,"max_tokens":50`), encryptingStream,
 			head + `{"type":"message","role":"developer","content":[{"type":"input_text","text":"Be brief."}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],` +
 				`"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":50,"stream":true}`,
 		},
