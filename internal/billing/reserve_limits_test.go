@@ -17,7 +17,7 @@ import (
 // the later attempt's larger target is written, not taken for a retry.
 func TestExtendAcrossAttempts(t *testing.T) {
 	b := newBank(t, 1e6, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Segments: Segments{Output: 100}})
-	segmented := exact
+	segmented := b.exact
 	segmented.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
 	segmented.MaxOutput, segmented.Segmentable = 1000, true
 	var h *Hold
@@ -96,7 +96,7 @@ func TestReserveNoBalanceRow(t *testing.T) {
 	a := b.admitted
 	a.Account = uuid.NewV7()
 	a.Scope = pg.NewScope(false, nil, []uuid.UUID{a.Account})
-	free := exact
+	free := b.exact
 	free.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`)
 	err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) error {
 		_, _, err := b.billing.Reserve(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 10}, []Quotable{free})

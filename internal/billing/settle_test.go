@@ -305,7 +305,7 @@ func TestCleanup(t *testing.T) {
 		{"journal, never corrected", true, false, 0, "cleanup_released", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 500 * time.Millisecond})
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: time.Hour})
 			h := b.hold(1000)
 			b.takenOver(h, tc.journal, tc.correct)
 			if tc.late > 0 {
@@ -342,7 +342,7 @@ func (b *bank) takenOver(h *Hold, journal, correct bool) {
 			b.t.Fatalf("the supplier record charged %d, want 400", n)
 		}
 	case journal:
-		time.Sleep(600 * time.Millisecond) // past the correction window
+		b.closeWindow(h)
 		b.cleanup()
 	}
 }
@@ -353,6 +353,14 @@ func (b *bank) cleanup() {
 	if _, err := b.billing.Cleanup(b.t.Context(), 100); err != nil {
 		b.t.Fatal(err)
 	}
+}
+
+// closeWindow moves h's correction window into the past, so a test that needs the window to have ended says so
+// instead of sleeping a while and hoping a loaded machine got there: the window is the database's clock, not the
+// test's.
+func (b *bank) closeWindow(h *Hold) {
+	b.t.Helper()
+	b.sql(fmt.Sprintf("UPDATE billing.reservations SET correct_by = clock_timestamp() - interval '1 second' WHERE request_id = '%s'", h.id))
 }
 
 // state is the state of the one reservation.

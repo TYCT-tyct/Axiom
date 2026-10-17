@@ -55,6 +55,7 @@ func (l *SharedLimiter) key(name string) (store.RateBucket, bool) {
 // Take implements Buckets. A request that names a bucket its adapter did not declare is a mistake of the adapter's and
 // is refused before the database is asked.
 func (l *SharedLimiter) Take(ctx context.Context, names []string) error {
+	names = dedupe(names)
 	keys := make([]store.RateBucket, len(names))
 	for i, name := range names {
 		k, ok := l.key(name)
@@ -113,7 +114,7 @@ func reopening(buckets []bucket, now time.Time) (until time.Time) {
 // Block implements Buckets.
 func (l *SharedLimiter) Block(ctx context.Context, names []string, until time.Time) error {
 	var keys []store.RateBucket
-	for _, name := range names {
+	for _, name := range dedupe(names) {
 		if k, ok := l.key(name); ok {
 			keys = append(keys, k)
 		}
