@@ -7,7 +7,7 @@ on:
     # edited: docs-impact reads the description. Every job reruns on an edit; build cannot be skipped instead, because
     # a skipped required check counts as passed. project-workflow 9f60686 lets docs-impact move to describe.yml so
     # this file can drop edited; until that move lands, keep description edits few: write it in full before review.
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review] # ready_for_review: a draft gets its first build when it is marked ready
   push:
     branches: [main]
 
@@ -21,7 +21,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    # A draft cannot merge, so it does not hold a build runner; marking it ready starts the build that counts.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # The heavy job has its own runner pool (RUNS_ON_HEAVY) so the seconds-long checks on RUNS_ON never queue behind it
+    runs-on: ${{ fromJSON(vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     env:
       # Pinned with the release's own checksum (SHA256SUMS), so a swapped download fails.
       JUST_VERSION: "1.58.0"
