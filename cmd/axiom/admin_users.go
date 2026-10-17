@@ -70,13 +70,9 @@ func balanceBody(v billing.BalanceView, currency platform.Currency) adminapi.Bal
 
 // readBalance is the account's money, in tx, which holds a scope that sees the account.
 func (a adminAPI) readBalance(ctx context.Context, tx pg.Tx, account accounts.AccountID) (billing.BalanceView, error) {
-	workspaces, err := a.accounts.WorkspaceIDs(ctx, tx, account)
+	ids, err := a.accounts.AccountWorkspaces(ctx, tx, account)
 	if err != nil {
 		return billing.BalanceView{}, err
-	}
-	ids := make([]uuid.UUID, len(workspaces))
-	for i, w := range workspaces {
-		ids[i] = uuid.UUID(w)
 	}
 	return billing.ReadBalance(ctx, tx, uuid.UUID(account), ids)
 }

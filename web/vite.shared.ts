@@ -7,20 +7,26 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type UserConfig } from "vite";
 
-// An app's preview server listens this far above its dev server.
-export const previewOffset = 1000;
+// The server the end-to-end tests run against (internal/platform/webui/cmd/serveweb) listens this far above an app's dev
+// server.
+export const servedOffset = 1000;
 
-// The apps' dev server ports. AXIOM_WEB_PORT moves them all, and the preview servers with them, so another worktree can
-// run its servers and end-to-end tests at the same time.
-const firstPort = Number(process.env.AXIOM_WEB_PORT ?? 5173);
-if (!Number.isInteger(firstPort) || firstPort < 1 || firstPort + 2 + previewOffset > 65_535) {
-  throw new Error(`AXIOM_WEB_PORT must leave room for three ports and their preview ports, not ${firstPort}`);
+// firstAppPort reads AXIOM_WEB_PORT: the three apps' dev server ports start here, and their test servers sit
+// servedOffset above them, so all six must be ports.
+export function firstAppPort(value: string | undefined): number {
+  const raw = value ?? "5173";
+  const first = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isInteger(first) || first < 1 || first + 2 + servedOffset > 65_535) {
+    throw new Error(`AXIOM_WEB_PORT must leave room for three ports and their test server ports, not ${raw}`);
+  }
+  return first;
 }
+const firstPort = firstAppPort(process.env.AXIOM_WEB_PORT);
 export const ports = { site: firstPort, console: firstPort + 1, admin: firstPort + 2 };
 
 // The content security policy pages must work under (docs/security.md「网页与域名」): no inline script or style, nothing
-// loaded from another origin. The preview server sends it, so the end-to-end tests fail on any output that breaks it.
-// This is the policy's one definition: the Go server that serves the builds must send exactly this string.
+// loaded from another origin. This is the policy's one definition: web/scripts/embed.ts hands it to the Go server
+// (internal/platform/webui), which sends exactly this string, so the end-to-end tests fail on any output that breaks it.
 export const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self'",
@@ -34,7 +40,7 @@ export const contentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-// The program from `just up` answers the API, so the dev and preview servers talk to a real one.
+// The program from `just up` answers the API, so the dev server talks to a real one.
 const api = { "/api": "http://127.0.0.1:8080" };
 
 // themeScript serves theme.js to every app and loads it at the start of <head>: a classic script, so it runs before the
@@ -74,7 +80,7 @@ function themeScript(): Plugin {
 }
 
 // mounts maps a path to the dev server port of the app production serves there on the same listener, such as the
-// console under the website's /console/, so following a link between them works on the dev and preview servers too.
+// console under the website's /console/, so following a link between them works on the dev servers too.
 export function appConfig({
   port,
   base = "/",
@@ -84,10 +90,9 @@ export function appConfig({
   base?: string;
   mounts?: Record<string, number>;
 }): UserConfig {
-  const forward = (offset: number) =>
-    Object.fromEntries(
-      Object.entries(mounts).map(([path, to]) => [path, { target: `http://localhost:${to + offset}`, ws: true }]),
-    );
+  const forward = Object.fromEntries(
+    Object.entries(mounts).map(([path, to]) => [path, { target: `http://localhost:${to}`, ws: true }]),
+  );
   return defineConfig({
     base,
     publicDir: false,
@@ -106,13 +111,7 @@ export function appConfig({
     server: {
       port,
       strictPort: true,
-      proxy: { ...api, ...forward(0) },
-    },
-    preview: {
-      port: port + previewOffset,
-      strictPort: true,
-      proxy: { ...api, ...forward(previewOffset) },
-      headers: { "Content-Security-Policy": contentSecurityPolicy },
+      proxy: { ...api, ...forward },
     },
   });
 }

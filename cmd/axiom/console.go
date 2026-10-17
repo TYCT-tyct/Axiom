@@ -7,8 +7,10 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/webui"
 )
 
 // consoleAPI implements the console's API (api/console.yaml). It stands behind the guard, which has found the site,
@@ -79,14 +81,20 @@ func apiRoutes(g *guard, logger *slog.Logger, mount func(mounting) http.Handler)
 	})
 }
 
-// publicRoutes are the public listener's routes: so far the console's API.
-func publicRoutes(api consoleapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
-	return apiRoutes(g, logger, func(m mounting) http.Handler {
-		console := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
+// publicRoutes are the public listener's routes: the console's API, with its large JSON answers gzipped, and the
+// website and console pages for every path the API does not claim. What the contract does not route under /api/ is the
+// API's own 404, never a page.
+func publicRoutes(api consoleapi.StrictServerInterface, g *guard, frontend *webui.Frontend, logger *slog.Logger) http.Handler {
+	console := apiRoutes(g, logger, func(m mounting) http.Handler {
+		handler := consoleapi.NewStrictHandlerWithOptions(api, nil, consoleapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc: invalidRequest, ResponseErrorHandlerFunc: m.handlerFailed,
 		})
-		return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
+		return consoleapi.HandlerWithOptions(handler, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
+	routes := http.NewServeMux()
+	routes.Handle("/api/", httpserver.Compress(console))
+	routes.Handle("/", frontend.Public())
+	return frontend.Secured(routes) // outermost: the redirect for an unclean path is the router's own answer
 }
 
 // invalidRequest answers a request the generated code could not read. The guard has checked the request against the

@@ -253,20 +253,20 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 
 // locked is the supplier's row, locked for a change: it must be there and in one of the statuses the change starts
 // from (none: any status that is not an end of life, removing or removed).
-func (*Admin) locked(ctx context.Context, tx pg.Tx, id uuid.UUID, from ...Status) (store.LockSupplierRow, error) {
-	rows, err := store.New().LockSupplier(ctx, tx, id)
+func (*Admin) locked(ctx context.Context, tx pg.Tx, id uuid.UUID, from ...Status) (store.LockSupplierForChangeRow, error) {
+	rows, err := store.New().LockSupplierForChange(ctx, tx, id)
 	if err != nil {
-		return store.LockSupplierRow{}, fmt.Errorf("lock the supplier: %w", err)
+		return store.LockSupplierForChangeRow{}, fmt.Errorf("lock the supplier: %w", err)
 	}
 	if len(rows) == 0 {
-		return store.LockSupplierRow{}, ErrNoSupplier
+		return store.LockSupplierForChangeRow{}, ErrNoSupplier
 	}
 	status := Status(rows[0].Status)
 	if len(from) == 0 {
 		from = []Status{Connecting, Active, LowBalance, NeedsAttention, Paused}
 	}
 	if !slices.Contains(from, status) {
-		return store.LockSupplierRow{}, fmt.Errorf("%w: it is %s", ErrStatusLocked, status)
+		return store.LockSupplierForChangeRow{}, fmt.Errorf("%w: it is %s", ErrStatusLocked, status)
 	}
 	return rows[0], nil
 }
@@ -303,7 +303,7 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 		if to == Active {
 			action = "supplier.resume"
 		}
-		if err := store.New().SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{ID: id, Status: string(to)}); err != nil {
+		if err := store.New().SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(to)}); err != nil {
 			return Supplier{}, fmt.Errorf("set the status: %w", err)
 		}
 		if err := a.record(ctx, tx, actor, action, id, reason, map[string]any{"from": row.Status, "to": string(to)}); err != nil {
@@ -321,7 +321,7 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 		return Supplier{}, err
 	}
 	if Status(row.Status) != Removing {
-		if err := store.New().SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{ID: id, Status: string(Removing)}); err != nil {
+		if err := store.New().SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Removing)}); err != nil {
 			return Supplier{}, fmt.Errorf("start removing: %w", err)
 		}
 		if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status}); err != nil {

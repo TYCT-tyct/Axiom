@@ -14,6 +14,8 @@ export default {
     navigation: "Main navigation",
     skipToContent: "Skip to content",
   },
+  dialog: { close: "Close" },
+  copy: { copy: "Copy", copied: "Copied", failed: "Couldn’t copy. Select it by hand." },
   state: {
     loading: "Loading",
     emptyTitle: "Nothing here yet",

@@ -84,7 +84,7 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, c.db, logger), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
+	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, c.db, logger), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 

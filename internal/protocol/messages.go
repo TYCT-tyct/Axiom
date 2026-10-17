@@ -51,13 +51,16 @@ var (
 		"message":       func(s *messagesStream) error { return walk(&s.reader, s, messageFields) },
 		"usage":         (*messagesStream).usage,
 	}
+	// contentFields and blockFields carry the members the client is given that the upstream bills as output:
+	// thinking's signature and redacted_thinking's data count like its text (README.md「字节上界」).
 	contentFields = map[string]func(*messagesStream) error{
 		"text": (*messagesStream).text, "thinking": (*messagesStream).text, "partial_json": (*messagesStream).text,
-		"stop_reason": (*messagesStream).stopReason,
+		"signature": (*messagesStream).text, "stop_reason": (*messagesStream).stopReason,
 	}
 	blockFields = map[string]func(*messagesStream) error{
 		"text": (*messagesStream).text, "thinking": (*messagesStream).text, "type": (*messagesStream).blockType,
-		"name": (*messagesStream).toolName, "input": (*messagesStream).rawContent,
+		"name": (*messagesStream).toolName, "input": (*messagesStream).rawContent, "signature": (*messagesStream).text,
+		"data": (*messagesStream).text,
 	}
 	messageFields = map[string]func(*messagesStream) error{"usage": (*messagesStream).usage}
 )
@@ -310,21 +313,11 @@ var (
 // error.error_type and the usage of the reply, with cost, which is empty or a list of members each led by a comma
 // (docs/domains/gateway.md「错误」).
 func (*messagesStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
-	data := fmt.Appendf(nil, `{"type":"error","error":{"type":%q,"message":`, messagesErrorTypes[e.Type])
-	data, _ = jsontext.AppendQuote(data, e.Message) //nolint:errcheck // invalid UTF-8 is written as U+FFFD, and that is all the error says
-	data = fmt.Appendf(data, `,"error_type":%q},"usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,`+
-		`"cache_read_input_tokens":%d,"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d},`+
-		`"output_tokens":%d,"server_tool_use":{"web_search_requests":%d}%s}}`,
-		errorTypeNames[e.Type], u.Count(catalog.ItemInput),
-		u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), u.Count(catalog.ItemCacheRead),
-		u.Count(catalog.ItemCacheWrite), u.Count(catalog.ItemCacheWrite1h), u.OutputTotal(),
-		u.Count(catalog.ItemWebSearch), cost)
+	data := fmt.Appendf(nil, `{"type":"error","error":{"type":%q,"message":`, errorTypes[e.Type].messages)
+	data = append(appendErrorType(append(appendQuoted(data, e.message()), ','), e), `},"usage":`...)
+	data = append(appendMessagesUsage(data, u, cost), '}')
 	return sse.AppendEvent(dst, "error", data)
 }
-
-// messagesErrorTypes are the Messages error types for ours: a stream that stops for money says billing_error, as
-// before it starts; the others are the server's failures.
-var messagesErrorTypes = [...]string{"billing_error", "api_error", "api_error", "timeout_error"}
 
 // usageEvent is never needed: message_stop follows message_delta.
 func (*messagesStream) usageEvent(dst []byte, _ catalog.Usage, _, _ string) []byte { return dst }

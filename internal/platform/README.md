@@ -9,12 +9,13 @@
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
-| `httpserver` | 所有监听共用的限制；公网监听的中间件；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
+| `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
+| `webui` | 提供嵌入程序的前端三个应用：缓存、预压缩、安全头、单页应用回退，见下文「前端文件」；`cmd/serveweb` 给端到端测试起同样的服务 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」 |
-| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
+| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
@@ -44,6 +45,7 @@
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
+| 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，要求函数体的两个 `current_setting` 都在、函数名不出现，两组断言同时排除空计划和子查询写法（带子查询的函数体不再被内联，每行一次调用） |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
 | 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
@@ -63,7 +65,7 @@
 
 ## 凭证加密
 
-`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥的封装）和 `AXIOM_KEY_HASH_FILE`（API key 的哈希），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这两个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
+`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥的封装）和 `AXIOM_KEY_HASH_FILE`（API key 的哈希），缺了或不合法就不启动；主密钥也用来解密供应商的登录令牌（同步）；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这两个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
 文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同；数值最大的版本用于写入，读取按记录的 `KeyVersion` 选择，旧版本需保留至存量数据迁移完成。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 
@@ -97,11 +99,11 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 | 监听 | 提供什么 |
 |---|---|
-| 公网 `AXIOM_PUBLIC_ADDR` | 控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；以后加模型调用接口、控制台页面、支付回调 |
-| 管理 `AXIOM_ADMIN_ADDR`（只在核心上，不设就没有） | 管理接口（`/api/admin/v1/…`），守卫只放行管理域名；以后加管理后台页面。管理接口的 40 个操作中，除定价试算（`previewPricing`，缺供应商成本侧的数据）外都有处理器（见「接口约定」）。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
+| 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；以后加模型调用接口、支付回调 |
+| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作中，除定价试算（`previewPricing`，缺供应商成本侧的数据）外都有处理器（见「接口约定」）。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`（见「凭证加密」），以及：`AXIOM_ADMIN_ADDR`（管理监听的地址，同 `AXIOM_PUBLIC_ADDR` 的写法；不设则节点不开管理监听）、`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -111,6 +113,24 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 - **panic**：还没发出响应时返回 500（带请求 ID）；响应已经开始时（写过内容，或只刷新过响应头）中断连接，让客户端看到响应不完整，而不是一个状态码错误却"完整"的响应。被中断的请求也记访问日志。
 - 包装响应时实现 `FlushError` 和 `Unwrap`，流式处理器通过 `http.ResponseController` 刷新和设置期限，刷新也算响应已开始。
 - 生成的接口代码的每条出错路径都在 `cmd/axiom` 里设定，不留默认值：请求本身不合法时返回 400，说明只涉及客户端自己发来的内容；处理器出错时记日志、只返回 500，不把内部错误原文发给客户端。
+
+## 前端文件
+
+`webui` 提供 `web/` 构建出的官网、控制台和管理后台，文件由 `go:embed` 读入，启动时全部载入内存。
+
+| 规则 | 做法 | 为什么 |
+|---|---|---|
+| 嵌入的一定是本次的构建 | `just web-embed`（`web/scripts/embed.ts`）把三个 `dist/` 复制到 `webui/build/`；`just up`、`just test`、`just web` 都依赖它。`build/` 除一份说明外不入库。没有构建时 `go build` 照常通过，程序启动报「前端没有嵌入，先运行 `just web-embed`」 | 嵌入目录缺失时 `go:embed` 的报错不说怎么办；放在启动时是本地能查的事不拖到运行时 |
+| 带哈希的资源长期缓存 | `assets/` 下名字以 8 位哈希结尾的文件：`public, max-age=31536000, immutable`。其余一律 `no-store`，包括入口页和所有 404 | 名字随内容变，永远不会拿到别的内容；入口页是发布时唯一要立刻换掉的文件 |
+| 静态文件预压缩 | 构建时给文本文件（html、js、css、svg、json、txt）各写一份 brotli（q11）和 gzip（9），比原文小才写；服务器按 `Accept-Encoding` 的 q 值选，相同时 br 优先，都不接受或 `q=0` 发原文，一律带 `Vary: Accept-Encoding`。压缩函数只有一个（`web/scripts/compress.ts`），体积预算也用它 | 不在请求路径上压缩，不占 CPU；预算量的就是发出去的 |
+| 不压缩流式响应 | 压缩只有两处：上面的预压缩，和 `httpserver.Compress`，后者只在控制台接口上，只压 `application/json`、至少 1 KiB、客户端接受 gzip 的响应。其他类型（`text/event-stream`、NDJSON 等）原样通过；带 `ETag` 的、已编码的、被刷新过的也原样。模型调用接口不挂它 | 压缩器的缓冲会让流式输出攒着不发；按类型白名单排除，新的流式类型默认不被压 |
+| 单页应用回退 | 只对 GET/HEAD、路径不带扩展名、`Accept` 含 `text/html` 的未知路径回到该应用的入口页。`/api/`、`/v1/` 下的一律 404，扩展名不为空的未知路径（缺失的脚本、过期的代码块）也是 404 | 回退成 200 的 HTML 会把过期的代码块伪装成脚本；接口调用方要的是 404，不是页面 |
+| 公网监听不含管理后台 | 公网的处理器只持有官网和控制台的文件；管理后台的处理器只交给管理监听 | 结构上不可达，而不是靠路径判断 |
+| 安全响应头 | `Content-Security-Policy`（`vite.shared.ts` 里唯一的一份，由 `embed.ts` 写进 `build/content-security-policy.txt`，Go 原样发送）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（关摄像头、麦克风、定位）。每个应答都带，错误也带 | 策略只在一处定义，两边不会漂移；HSTS 由终结 TLS 的入口节点发 |
+| 不支持范围请求 | 整个文件带 `Content-Length` 发送 | 脚本、样式和字体没有人要一段；`http.ServeContent` 对已编码的响应不写长度 |
+| 滚动发布时 | 旧页面请求新版本已经没有的代码块得到 404，前端自动刷新一次（`web/README.md`）；一台机器上的页面和资源总来自同一个构建 | 多台机器新旧并存时，页面和它的代码块可能落在不同版本上，靠这一次刷新恢复；要彻底避免，由入口节点按会话粘到同一台 |
+
+模型与价格页由 Go 在返回页面时写入数据的位置留在 `webui` 的应用里：以后在回退到入口页的地方改成渲染，不改路由。
 
 ## 接口约定
 
@@ -140,7 +160,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
-控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `WorkspaceIDs`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）。还要补：`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
+控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）。还要补：`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
 
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
@@ -148,11 +168,34 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 指标和链路追踪的基座（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）：OpenTelemetry 的 API 与 SDK，指标经 Prometheus 导出器暴露。`telemetry.New` 在 `serve` 里建出提供者，`cmd/axiom` 把它们作为参数交给 `pg.Open`（`pg.WithTracerProvider`）、`egress`（`egress.WithTracerProvider`）、`httpserver.NewTelemetry` 和各模块；**不用 OpenTelemetry 的全局**，并行的测试各自持有自己的，互不影响。
 
+**决策与理由**（2026-10-16）：
+
+- **选 OpenTelemetry 的 API 与 SDK 做指标和链路，指标用 Prometheus 导出器暴露，抓取式。** 各模块只依赖 `metric.Meter` 一套接口，换导出方式（以后推到收集器）不用改任何模块；指标和链路同属一个系列，请求的上下文把二者连起来；Prometheus 文本格式是运维节点上监控系统通用的读法。
+- **不选 `prometheus/client_golang` 直接记指标、链路另用 OpenTelemetry**：模块要认两套接口，以后改成推送要改遍所有模块；性能没有优势（两者记一次测量都是零分配，见下文「调用路径」）。client_golang 仍是依赖，但只做导出器的底层和 `/metrics` 的处理器。
+- **不选现在就用 OTLP 推送指标和链路**：要先有收集器，部署还没有；OTLP/HTTP 导出器会带进 grpc、grpc-gateway、`go.opentelemetry.io/proto/otlp`、genproto 一批依赖（`otlptracehttp` v1.47.0 的 go.mod，2026-10-16 查），而现在 `go.mod` 里只有 protobuf。抓取不需要这些，等有收集器的部署再加，只是 `telemetry.New` 的一个处理器参数。
+- **不选厂商的 SDK 或托管服务（Datadog、New Relic 等）**：端点在境外，国内的节点不一定连得上，调用元数据也会离开部署；换厂商要改调用代码。指标靠本机抓取，将来的链路只发到自己部署的收集器，都不依赖境外的服务。
+- **产品基线**：OpenRouter 不给用户暴露指标端点；它的 Broadcast 把每次调用的链路用 OTLP/HTTP 发到用户指定的收集器，每个目的地可设 0.0001 到 1 的采样率，默认 1（OpenRouter 文档「Broadcast」，2026-10-16）。这是面向用户的功能，属于调用记录的导出（见[记录与告警](../../docs/domains/observability.md)）；本节是运维用的节点遥测，选 OTLP/HTTP 与它的做法一致，便于以后接同一类收集器。
+
 - **指标只在探针监听 `/metrics` 上**，公网监听没有这个路径（测试：公网 404，探针 200，`text/plain`）。指标放在专用的注册表里，只有经 `Metrics` 注册的才会出现，不带 Go 运行时和进程的默认集合（运行时指标随第一个需要它们的告警加入）。
-- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`，如 `axiom_http_server_requests_total`、`axiom_http_server_duration_seconds`、`axiom_observability_queue_depth`。
+- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`。现有的指标：
+
+  | 指标（Prometheus 名） | 类型 | 标签 |
+  |---|---|---|
+  | `axiom_http_server_requests_total` | 计数 | `route`、`status_class`、`outcome` |
+  | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
+  | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
+  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_observability_queue_depth` | 仪表 | 无 |
+
+  新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
 - **链路**：每个公网请求一个服务端跨度，名字是路由模式，属性 `request_id`（与 `X-Request-ID` 相同）、状态码；`pg` 的事务（`db.tx`）和 `egress` 的出站请求（`egress.request`，到响应头为止）是它的子跨度，同一个 trace。跨度属性只有主机名、状态码、`db.system` 这类有界的值：不记语句（可能含数据）、不记错误文本（可能引用地址或数据）、不记路径和查询。测试：请求路径、查询和语句里放入标记值，没有任何跨度属性含它；并核对父子关系和请求 ID。
-- **采样与导出**：提供者现在不带导出器，跨度在进程内产生后丢弃，所以没有采样可调；导出器是 `telemetry.New` 的一个 `SpanProcessor` 参数。设计：接上第一个收集器时用父级决定加按比例采样（默认 10%，出错的请求总采），OTLP/HTTP 导出，地址和凭证由标准的 `OTEL_EXPORTER_OTLP_*` 变量给，配置错了不启动。OTLP 导出器要带进 gRPC、protobuf 等一批依赖，等有收集器的部署再决定并评审，不在这里预先引入。
+- **调用路径**：标签组合初始化后，稳态下记一次测量不分配内存，指标就不会让调用路径的垃圾回收随流量增长；一个组合第一次出现时要建属性和选项切片并复制缓存的映射，是一次性的开销，组合数有上限，基准重复同一个组合，量不到它。`BenchmarkRecord`（无标签的计数、带标签的计数和直方图，上下文里是被采样的跨度）全部是 0 allocs/op，`bench-compare` 在任何一项开始分配时失败。做到的两条规则：标签集合预先建好、按组合缓存（`httpserver` 的 `seriesCache`，组合数就是标签上限里的那个数，读取是一次原子加载），因为每次调用现建 `metric.WithAttributes` 要分配；选项切片也建一次，用 `Add(ctx, 1, opts...)` 传入，因为逐个传的可变参数会在接口调用处分配一个切片。每个请求的跨度仍有开销：`BenchmarkRequestTelemetry` 在没有处理器时是 3 allocs/op（240 B，跨度的上下文和结束函数），有处理器、跨度被采样时是 9 allocs/op（约 1.5 KiB）；关闭遥测是 0。事务和出站请求的跨度同理，量的是开关一次跨度的开销：`BenchmarkTransactionSpan` 未采样时是 4 allocs/op（176 B），采样时 8（约 1.1 KiB）；`BenchmarkEgressSpan` 未采样时是 4（176 B），采样时 10（约 1.3 KiB）；未采样时不为属性构造参数。
+- **采样**：没有处理器时没有人读跨度，`telemetry.New` 不采样（`NeverSample`）：跨度仍在，子跨度照常连在一起，但不记属性、不记事件。公网请求的服务端跨度（`httpserver`）、事务跨度（`pg`）和出站请求跨度（`egress`）因此都只在 `span.IsRecording()` 为真时构造属性：`trace.WithAttributes`、`SetAttributes` 的参数先求值、再由不记录的跨度丢掉，不判断就白建。`BenchmarkRequestTelemetry`、`BenchmarkTransactionSpan`、`BenchmarkEgressSpan` 守住这一步。有处理器（接上了导出器）时用默认的父级决定加全采，下一条定下比例。
+- **导出**：
+  - **指标**：只抓取，没有推送，不需要配置：监控系统从探针监听（`AXIOM_PROBES_ADDR`，默认只听本机；要跨机抓取就把它绑到内网地址，由部署的防火墙限制来源）取 `/metrics`。
+  - **链路**：现在没有导出器，跨度在进程内产生后丢弃，所以没有导出配置可错。第一个有收集器的部署再加：OTLP/HTTP 导出，作为 `telemetry.New` 的一个 `SpanProcessor`，只发到自己部署的收集器；端点和凭证用标准的 `OTEL_EXPORTER_OTLP_*` 变量，采样比例是 `AXIOM_TRACE_SAMPLE_RATIO`（0 到 1，默认 0.1，父级已决定的跟随父级）。**配置错了不启动**：端点不是绝对的 http(s) 地址、比例不在 0 到 1 之间、凭证没配而端点配了，都在 `serve` 解析配置时报错，报错只说变量名，不带值。出错的请求总采要靠收集器的尾部采样，节点上的比例采样事先不知道请求会不会出错；用哪一种等有收集器时和它的容量一起定。
+  - 这条的实现和依赖随那个部署的 PR 评审；现在加，是为一个没有使用者的导出器多带一批依赖和一个没有效果的配置项。
 - **不记**对话正文和密钥：指标没有任何自由文本，跨度属性按上面的白名单。
 
 ## 健康检查
@@ -176,6 +219,17 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 [安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
 
+### 连接池
+
+进程最多保持 64 条数据库连接（`pg.PoolSize`，`pg.Open` 里设，不跟机器的核数走；pgx 的默认是 max(4, NumCPU)）。取值按这几条算：
+
+- **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
+- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+- **一个账户占不满**：单个账户受账户闸和每秒 135–200 个请求的上限约束，约占 2 条。
+- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
+
+连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
+
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
@@ -189,9 +243,14 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - **期限**：每个连接从域名解析到握手结束合计最多等 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒；一个主机有几个地址也合计，URL 里的 `connect_timeout` 只能让它更短），整次执行最多 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟，长 DDL 要的时间）。到期时迁移自己结束它在服务器上的会话：每个连接带着本次执行独有的 `application_name`，期限到后用一个独立的短连接（自己最多 5 秒）对这些会话执行 `pg_terminate_backend`，等它返回才返回。这样结果既不依赖 pgx 在后台发出的取消请求（进程退出可能抢在它前面，语句也可以写成吞掉取消），也不是每条语句各自重新计时的语句超时；按应用名而不是按进程号，是因为进程号可能被别的会话复用。事务回滚，会话级的 goose 锁随会话释放。goose 释放会话锁用的是取消不掉的 context，服务器不应答时解锁会一直等，所以终止之后再给 15 秒宽限，仍未返回就放弃等待、让进程退出。两者都在连接之前校验：必须是正的时长，连接期限必须短于执行期限，拼错的变量名报错。执行期限让一次卡住的迁移不会一直占着 goose 的会话锁，挡住下一次部署。
+- 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务不存租户的行），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。
 - 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
 - 删除旧结构的收缩迁移怎么与滚动发布共存，随第一个收缩迁移确定。
+
+### 任务队列
+
+`pg.Queue`（`db.NewQueue(logger)`）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
 
 ### 查询（sqlc）
 
@@ -256,9 +315,12 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 全量校验 DNS 结果后按 IP 拨号，连接池仍按原主机复用 | 混合公网/内网结果整体拒绝，DNS 后续变化不能替换已经选择的连接目标；保留 TLS 证书校验和长连接 | 只在 URL 保存时校验或让 Transport 再解析：存在 DNS 重绑定窗口 |
 | 私有测试能力值，只能在测试进程构造 | 类型和未导出字段阻止伪造，测试开关不能在生产启用 | 导出 AllowPrivate、任意 Resolver/Dialer：生产调用方能绕过 SSRF 边界 |
 | RoundTrip 返回第一个响应 | 重定向既不请求也不解析，畸形 Location 也不能把凭证带进重定向错误 | 默认 http.Client：默认跟随重定向；拒绝回调前仍可能解析 Location |
+| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围 |
+| River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
+| `in_scope` 的函数体保持简单表达式，不放子查询 | PostgreSQL 只内联简单的函数体；带子查询后策略里每行调用一次，2M 行的扫描实测 53 秒，原来的函数体是 1.9 秒（#63）。要一次解析，只能让策略把解析好的数组当参数传进来，那要改每张表的策略 | 把设置读成标量子查询（#63 原本的写法）：慢 29 倍；用 `IMMUTABLE` 包一层让计划只解析一次：计划在连接上复用，范围会串到别的事务 |
 | 登录角色和密码由部署创建 | 密码不经过本程序。部署的初始化脚本用 `CREATE ROLE … PASSWORD` 设置它，语句里有明文密码，数据库开启 DDL 日志时会记下来，所以初始化时不开 | `axiom migrate` 按连接串设置密码：密码要经过程序 |
 | 一次 `just test` 的所有测试包共用一个 PostgreSQL 集群，由 `withcluster` 启动，连接串经 `PGTEST_CLUSTER_URL` 传入；没有变量就自己起容器 | 容器数从“包数 × 并发运行数”降到“并发运行数”：几个 worktree 同时检查时，每包一个容器会让 Docker 虚拟机里同时有几十个容器，连接握手超时、测试随机失败；变量缺省时 `go test ./某包` 照旧能单独跑；每个运行自己的容器，不同 worktree、不同 runner 互不串 | testcontainers 的复用（固定容器名加 reuse）：名字要带运行标识才不串，复用的容器没有明确的结束时刻，清不掉；一台机器一个常驻集群：并发运行共用同一份角色和模板，改集群范围状态的测试会互相影响 |
 | 模块把迁移作为 `pg.Module` 值交给 `cmd/axiom`，由它传给 `Migrate` 和 `Check`；执行顺序和合法的模块名在 `pg` 的清单里固定 | 依赖一眼可见，没有导入顺序决定的全局状态；顺序与调用方怎么排无关；拼错的模块名在迁移和启动时就失败 | 各模块在包初始化时登记到全局表：靠导入的副作用，gochecknoinits 也禁止；按传入的顺序执行：测试和生产可能以不同顺序迁移 |
@@ -267,6 +329,9 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 迁移管理员不必是超级用户，测试也这样跑 | 生产上缺的权限在测试里就暴露 | 测试用超级用户：权限问题到部署时才发现 |
 | 测试用 testcontainers，一个测试二进制一个容器，每个测试一份模板副本 | 对着真实的 PostgreSQL 测；复制模板只要几十毫秒，测试互不影响 | 每个测试一个容器：慢；共用一个库：测试互相干扰 |
 | 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），以后的管理后台和运营接口各一份，在各自的监听上 | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台和运营接口只挂在管理监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |
+| 前端三个应用嵌入程序，预压缩在构建时做，不在请求时压 | 一个文件部署（[总体架构](../../docs/architecture.md#技术选型)「前端交付」）；请求路径上不占 CPU，体积预算量的就是发出去的字节 | 请求时压缩加缓存：占 CPU，要管缓存；只嵌 br 或 gz，旧客户端要解压：多一份代码 |
+| 缓存策略按文件名判断（`assets/` 下带 8 位哈希），不读清单 | Vite 和 `theme.js` 都用这个名字；一条正则，不依赖构建的内部文件 | 读 `manifest.json`：多一个要随构建同步的文件 |
+| 管理监听默认 `127.0.0.1:8082`，不是 `:8082` | 管理后台不对公网开放；忘了配置的部署也是安全的，容器里由 compose 明确打开 | 默认 `:8082`：忘了限制来源就暴露 |
 | 控制台靠 `GET /api/console/v1/version` 发现新版本 | 页面和程序一起发布，版本相同就是同一份；不缓存的接口比轮询入口页更直接 | 前端轮询 `index.html` 的哈希 |
 | 密文绑定的位置由 `secret` 包编码，调用方传 `Location`，不传原始 AAD | 数据写入后，位置编码就是存储格式的一部分，永远不能再改；只有一种由包持有的编码，每个模块绑定密文的方式才一致，密文移到另一张表、另一行或另一用途都打不开 | 调用方自行编码 AAD：每个模块各写一种，容易有歧义，改动会让存量数据打不开 |
 | `typeid` 用 `Prefix` 值，不用每次传前缀字符串 | 前缀在构造时检查一次，`Encode` 不会失败，`Decode` 不重复检查，请求路径零分配；写错的常量在启动时就 panic | 函数 `Encode(前缀, id)`：每次调用都要检查，或者把写错的前缀留到运行时才报错 |

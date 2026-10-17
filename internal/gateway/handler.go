@@ -44,9 +44,7 @@ type Handler struct {
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 	models  modelList
 
-	background sync.WaitGroup // settlements of lost admissions
-	stopped    chan struct{}  // closed by Drain when its time is up: the settlements give up
-	stopOnce   sync.Once
+	background *background // settlements of lost admissions
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -58,7 +56,7 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, stopped: make(chan struct{})}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground()}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -67,6 +65,7 @@ func NewHandler(d Deps) (*Handler, error) {
 			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))
 		}
 		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+		h.auxRoutes(prefix)
 	}
 	return h, nil
 }

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: an ID is decoded only to match it
 	"strconv"
 
@@ -31,7 +32,7 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 			return nil, err
 		}
 	}
-	out = responsesSettings(out, c)
+	out = responsesSettings(out, c, t.MaxOutput)
 	for _, id := range []struct {
 		name  string
 		value *string
@@ -57,9 +58,10 @@ func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
 	return out, nil
 }
 
-// responsesSettings writes the cap, sampling, reasoning, streaming and service tier.
-func responsesSettings(out []byte, c *canon) []byte {
-	if n := c.maxOutput(); n > 0 {
+// responsesSettings writes the cap, sampling, reasoning, streaming and service tier. A request that sets no cap gets
+// defaultCap, if there is one.
+func responsesSettings(out []byte, c *canon, defaultCap int64) []byte {
+	if n := cmp.Or(c.maxOutput(), defaultCap); n > 0 {
 		out = strconv.AppendInt(append(out, `,"max_output_tokens":`...), n, 10)
 	}
 	for _, member := range []struct {

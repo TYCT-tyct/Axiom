@@ -67,14 +67,14 @@ services:
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+      AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
-      AXIOM_ADMIN_ADDR: ":8082"
     volumes:
       - keys:/keys:ro
     ports:
       - 127.0.0.1:8080:8080 # the public listener, reachable from this machine only
-      - 127.0.0.1:8082:8082 # the admin listener, reachable from this machine only
+      - 127.0.0.1:8082:8082 # the admin listener, likewise
     depends_on:
       migrate: {condition: service_completed_successfully}
       keys: {condition: service_completed_successfully}

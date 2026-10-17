@@ -27,7 +27,7 @@ var update = flag.Bool("update", false, "rewrite the golden client streams in te
 var (
 	usd     = must(platform.ParseCurrency("USD"))
 	price   = must(platform.ParseUnitPrice("0.000003"))
-	options = protocol.RelayOptions{ID: "gen-01", Model: "claude-client-name"}
+	options = protocol.RelayOptions{ID: "gen-01", Model: "claude-client-name", Created: 1760000000}
 )
 
 func must[T any](v T, err error) T {
@@ -65,9 +65,17 @@ func relay(t testing.TB, f protocol.Format, src io.Reader, ctx protocol.UsageCon
 	settle func(protocol.Usage) protocol.Final,
 ) relayed {
 	t.Helper()
+	return relayTo(t, f, f, src, ctx, mem, settle)
+}
+
+// relayTo is relay for a client of another format than the upstream's.
+func relayTo(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx protocol.UsageContext,
+	mem *protocol.Memory, settle func(protocol.Usage) protocol.Final,
+) relayed {
+	t.Helper()
 	o := options
 	o.Memory = mem
-	res := relayed{r: protocol.NewRelay(f, f, src, ctx, o)}
+	res := relayed{r: protocol.NewRelay(client, upstream, src, ctx, o)}
 	for {
 		step, err := res.r.Next()
 		if err != nil {
@@ -374,9 +382,11 @@ func TestRelayFail(t *testing.T) {
 }
 
 func TestRelayUnsupported(t *testing.T) {
-	r := protocol.NewRelay(protocol.Chat, protocol.Messages, strings.NewReader(""), protocol.UsageContext{}, options)
-	if _, err := r.Next(); err == nil {
-		t.Fatal("relaying Messages to a Chat client succeeded")
+	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Chat}, {protocol.Responses, protocol.Messages}} {
+		r := protocol.NewRelay(pair[0], pair[1], strings.NewReader(""), protocol.UsageContext{}, options)
+		if _, err := r.Next(); err == nil {
+			t.Errorf("relaying format %d to a client of format %d succeeded", pair[1], pair[0])
+		}
 	}
 }
 
@@ -407,6 +417,7 @@ func TestKeepAlive(t *testing.T) {
 // the same valid stream of that format with exactly one ending; one that ends normally relays without an error, and
 // the client gets every block's, part's and choice's text, reasoning and tool calls as the upstream sent them.
 func FuzzRelay(f *testing.F) {
+	const doneMessage = `{"id":"m","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x"}]}`
 	for i, format := range formats {
 		for _, dir := range must(fs.Glob(samples, format.dir+"/*")) {
 			f.Add(uint8(i), sample(f, dir+"/upstream.sse"), []byte{3, 200, 7})
@@ -431,6 +442,24 @@ func FuzzRelay(f *testing.F) {
 			`"status":"completed","call_id":"call_1","name":"f","arguments":"{}"}`)+
 		responsesEvent("response.completed", 2, strings.Replace(responsesObject, `"usage":null`,
 			`"usage":{"input_tokens":5,"output_tokens":3}`, 1))), []byte{13})
+	// For the aggregators: what they refuse though the check accepts it (a message_start without a message, an ending
+	// without a response), and streams that make every kind of block, choice, tool call and item.
+	f.Add(uint8(0), []byte(`data:{"type":"message_start"}`+"\n\n"+`data:{"type":"message_delta"}`+"\n\n"+`data:{"type":"message_stop"}`+"\n\n"), []byte{0})
+	f.Add(uint8(1), []byte(`data:{"type":"response.created","sequence_number":0}`+"\n\n"+`data:{"type":"response.completed","sequence_number":1}`+"\n\n"), []byte{0})
+	f.Add(uint8(0), []byte(messageStart(`{"input_tokens":3}`)+startBlock(0, `{"type":"tool_use","id":"toolu_1","name":"f","input":{}}`)+
+		input(0, `{\"a\":`)+input(0, `1}`)+stopBlock(0)+thinkingBlock(1, "a", "S")+messageDelta(`{"output_tokens":2}`)+messageStop), []byte{6})
+	f.Add(uint8(2), []byte(chatChunk(`[{"index":0,"delta":{"role":"assistant","content":"a","reasoning_details":[{"type":"reasoning.text","text":"t","index":0}]},"finish_reason":null},`+
+		`{"index":1,"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"f","arguments":"{"}}]},"finish_reason":null}]`)+
+		chatChunk(`[{"index":1,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"logprobs":{"content":[]},"finish_reason":"tool_calls"},`+
+			`{"index":0,"delta":{"annotations":[{"type":"u"}]},"finish_reason":"stop"}]`)+chatDone), []byte{9})
+	f.Add(uint8(1), []byte(responsesEvent("response.created", 0, responsesObject)+
+		responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"m","type":"message","content":[]}`)+
+		responsesEvent("response.content_part.added", 2, `,"output_index":0,"content_index":0,"part":{"type":"output_text","text":""}`)+
+		responsesEvent("response.output_text.delta", 3, `,"output_index":0,"content_index":0,"delta":"x"`)+
+		responsesEvent("response.content_part.done", 4, `,"output_index":0,"content_index":0,"item_id":"m","part":{"type":"output_text","text":"x"}`)+
+		responsesEvent("response.output_item.done", 5, `,"output_index":0,"item":`+doneMessage)+
+		responsesEvent("response.completed", 6, strings.Replace(strings.Replace(responsesObject, `"usage":null`, `"usage":{"input_tokens":5}`, 1),
+			`"output":[]`, `"output":[`+doneMessage+`]`, 1))), []byte{5})
 	f.Fuzz(func(t *testing.T, which uint8, stream, cuts []byte) {
 		format := formats[int(which)%len(formats)]
 		if format.check(bytes.NewReader(stream)) != nil {
@@ -445,6 +474,7 @@ func FuzzRelay(f *testing.F) {
 			t.Fatalf("client stream: %v\n%s", err, whole.out)
 		}
 		checkContents(t, format.f, stream, whole)
+		checkAggregate(t, format.f, format.f, stream, cuts, whole)
 	})
 }
 

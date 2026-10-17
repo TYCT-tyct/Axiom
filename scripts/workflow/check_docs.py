@@ -116,9 +116,15 @@ def limits(root):
         config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return dict(LIMITS), [f"{CONFIG}: not valid UTF-8 TOML: {error}"]
-    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: limits, source" for key in config if key not in ("limits", "source")]
+    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: limits, merge, review, source" for key in config if key not in ("limits", "merge", "review", "source")]
     if "source" in config and not (isinstance(config["source"], str) and SOURCE.fullmatch(config["source"])):
         errors.append(f"{CONFIG}: source must be a full 40-character commit hash")
+    review = config.get("review", {})  # read by check_pr.py; validated here, where every config mistake is reported
+    if not isinstance(review, dict) or set(review) - {"waiver"} or not isinstance(review.get("waiver", True), bool):
+        errors.append(f"{CONFIG}: [review] takes only waiver = true or false")
+    merge = config.get("merge", {})  # read by manage.py protect and verify; validated here with the rest
+    if not isinstance(merge, dict) or set(merge) - {"strict"} or not isinstance(merge.get("strict", True), bool):
+        errors.append(f"{CONFIG}: [merge] takes only strict = true or false")
     configured = config.get("limits", {})
     if not isinstance(configured, dict):
         return result, errors + [f"{CONFIG}: limits must be a table: [limits]"]

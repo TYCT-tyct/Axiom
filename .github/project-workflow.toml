@@ -2,4 +2,10 @@
 # source: the project-workflow commit the managed files were copied from; only upgrades change it.
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
-source = "7da6506503b04b97c544f2914f34a30b12b6947b"
+source = "b1a447e1602561a273861c7757fa513d32a72b29"
+
+[review]
+waiver = false # CONTRIBUTING.md: every PR, upgrades included, gets an independent review
+
+[merge]
+strict = false # CI takes about 35 minutes a round with a dozen PRs in flight and no merge queue on a personal private repo; instead each PR takes main in and runs the full CI before it is queued, and main runs the full CI on every push (CONTRIBUTING.md step 9, #192)

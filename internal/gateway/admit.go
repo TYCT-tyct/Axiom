@@ -108,14 +108,20 @@ func routingAdmission(a accounts.Admission, c *Call) routing.Admission {
 		ra.Preset = routing.PresetID(p)
 	}
 	if names := a.Models(); names != nil { // nil allows every model, an empty list none
-		ra.Allowed = make(map[catalog.ModelID]struct{}, len(names))
-		for _, name := range names {
-			if m, err := c.snap.ResolvePublic(name); err == nil {
-				ra.Allowed[m.Model] = struct{}{}
-			}
-		}
+		ra.Allowed = allowedModels(c.snap, names)
 	}
 	return ra
+}
+
+// allowedModels are the models the key's names stand for; a name the catalog does not know allows nothing.
+func allowedModels(snap *catalog.Snapshot, names []string) map[catalog.ModelID]struct{} {
+	allowed := make(map[catalog.ModelID]struct{}, len(names))
+	for _, name := range names {
+		if m, err := snap.ResolvePublic(name); err == nil {
+			allowed[m.Model] = struct{}{}
+		}
+	}
+	return allowed
 }
 
 func billingAdmitted(a accounts.Admission, c *Call) billing.Admitted {
@@ -159,35 +165,15 @@ func trim(p routing.Plan, kept []int) routing.Plan {
 func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
 	h.background.Go(func() {
 		defer c.Done()
-		give := time.Now().Add(h.Limits.cfg.SettleBackground)
-		for pause := 50 * time.Millisecond; ; pause = min(2*pause, 2*time.Second) {
-			err := h.orphanOnce(ctx, c)
-			if err == nil {
-				return
-			}
-			if time.Now().After(give) || h.isStopped() {
-				h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
-				return
-			}
-			select {
-			case <-h.stopped:
-			case <-time.After(pause):
-			}
+		never := func(error) bool { return false }
+		if err := h.background.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
+			h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
 		}
 	})
 }
 
-func (h *Handler) isStopped() bool {
-	select {
-	case <-h.stopped:
-		return true
-	default:
-		return false
-	}
-}
-
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := SettleContext(ctx, 2*time.Second)
+	ctx, cancel := SettleContext(ctx, settleAttempt)
 	defer cancel()
 	release, err := h.Limits.Funds.Complete(ctx, accountKey(c.caller))
 	if err != nil {
@@ -199,16 +185,4 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is
 // left is the cleanup's.
-func (h *Handler) Drain(ctx context.Context) {
-	done := make(chan struct{})
-	go func() {
-		h.background.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		h.stopOnce.Do(func() { close(h.stopped) })
-		<-done
-	}
-}
+func (h *Handler) Drain(ctx context.Context) { h.background.drain(ctx) }

@@ -16,6 +16,10 @@ __pycache__/
 # The program built for the container image
 deploy/bin/
 
+# The frontend builds the program embeds (just web-embed); the directory keeps only the note saying so
+/internal/platform/webui/build/*
+!/internal/platform/webui/build/NOT_BUILT.txt
+
 # Logs and scratch output
 *.log
 tmp/

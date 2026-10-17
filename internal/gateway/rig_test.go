@@ -20,6 +20,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -45,7 +46,7 @@ var (
 )
 
 // rig is the handler on real accounts, billing and catalog tables, with a routing snapshot of two models and a Run
-// that only releases the reservation: what G4 and later put there is not under test here.
+// that only releases the reservation, unless a test gives it an executor (exec).
 type rig struct {
 	t        *testing.T
 	database pgtest.Database
@@ -69,6 +70,7 @@ type rig struct {
 	admits  []*Call
 	hold    chan struct{} // when set, Run waits for it to close before it settles; see holdCalls
 	settled int
+	exec    *Executor // when set, Run is its Run
 }
 
 type rigOptions struct {
@@ -79,6 +81,7 @@ type rigOptions struct {
 	memory    int64
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
+	segments  billing.Segments
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -108,7 +111,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations)
+	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module())
 	var err error
 	dsn := r.database.App
 	if o.conns > 0 {
@@ -127,6 +130,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedRouting(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
+		Segments: o.segments,
 	}, noSuppliers{}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +170,12 @@ func (r *rig) warmConnections(n int) {
 func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	r.mu.Lock()
 	r.admits = append(r.admits, c)
-	hold := r.hold
+	hold, exec := r.hold, r.exec
 	r.mu.Unlock()
+	if exec != nil {
+		exec.Run(w, req, c)
+		return
+	}
 	if hold != nil {
 		<-hold
 	}

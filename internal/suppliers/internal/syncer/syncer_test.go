@@ -40,7 +40,16 @@ func newStore() *memStore { return &memStore{charges: map[adapter.ChargeRef]adap
 func (s *memStore) Load(context.Context) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state.clone(), nil
+	st := s.state.clone()
+	// The real store reads whether the removal's alert was sent from the stored event, not from the state (State.
+	// CatchUpNotified is not stored): a reload in a test must forget what the state object held.
+	st.CatchUpNotified = false
+	for _, e := range s.events {
+		if e.Kind == RemovalSlow {
+			st.CatchUpNotified = true
+		}
+	}
+	return st, nil
 }
 
 func (s *memStore) Commit(_ context.Context, expect int64, c Commit) error {
@@ -113,7 +122,8 @@ func (m *supplier) Charges(_ context.Context, scan adapter.ScanState) (adapter.C
 	return m.charges(scan)
 }
 
-// healthy is a supplier whose answers never change.
+// healthy is a supplier whose answers never change. Its Done page says nothing about how far it read, like an adapter
+// that never went through the contract test (#109); a test that runs a removal says where it read with scanThrough.
 func healthy() *supplier {
 	return &supplier{
 		account: func() (adapter.Account, error) {
@@ -137,6 +147,14 @@ func healthy() *supplier {
 func engine(m adapter.Manager) (*Engine, *memStore, *clock) {
 	st, clk := newStore(), &clock{t: t0}
 	return New(st, m, Defaults(), clk.now), st, clk
+}
+
+// scanThrough makes the supplier report how far it read on every Done page, as the contract requires: up to the test's
+// clock, so a removal finds it caught up.
+func scanThrough(m *supplier, clk *clock) {
+	m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+		return adapter.ChargePage{Done: true, Through: clk.now()}, adapter.ScanState(`{"v":1}`), nil
+	}
 }
 
 func round(t *testing.T, e *Engine) {
@@ -263,6 +281,43 @@ func TestBlockedBucketsAreNotFailures(t *testing.T) {
 	round(t, e)
 	if ts := st.state.Tasks[TaskKeys]; ts.Failures != 0 || !ts.Due.Equal(until) {
 		t.Errorf("keys task = %+v, want due at %v with no failure", ts, until)
+	}
+	if !e.Blocked().Equal(until) {
+		t.Errorf("Blocked = %v, want %v", e.Blocked(), until)
+	}
+	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	e.now = func() time.Time { return until }
+	round(t, e)
+	if !e.Blocked().IsZero() {
+		t.Errorf("Blocked = %v after a round nothing was held up in, want none", e.Blocked())
+	}
+}
+
+// TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn: tasks held up by the limits until different times are waited for one
+// after the other, and a task still waiting is reported after another has gone on, so that a caller keeping the Manager
+// does not drop it, and with it how far its listing got, while a later one is not yet due.
+func TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn(t *testing.T) {
+	t.Parallel()
+	m := healthy()
+	early, late := t0.Add(2*time.Minute), t0.Add(5*time.Minute)
+	m.offer = func() (adapter.Offer, error) { return adapter.Offer{}, adapter.Blocked{Until: early} }
+	m.keys = func() ([]adapter.KeyState, error) { return nil, adapter.Blocked{Until: late} }
+	e, _, clk := engine(m)
+	round(t, e)
+	if !e.Blocked().Equal(early) {
+		t.Fatalf("Blocked = %v, want the earlier %v", e.Blocked(), early)
+	}
+	clk.advance(2 * time.Minute)
+	m.offer = healthy().offer
+	round(t, e)
+	if !e.Blocked().Equal(late) {
+		t.Errorf("Blocked = %v after the earlier task went on, want the later %v still waited for", e.Blocked(), late)
+	}
+	clk.advance(3 * time.Minute)
+	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	round(t, e)
+	if !e.Blocked().IsZero() {
+		t.Errorf("Blocked = %v after every task went on, want none", e.Blocked())
 	}
 }
 
