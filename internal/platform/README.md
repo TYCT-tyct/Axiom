@@ -167,11 +167,34 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 指标和链路追踪的基座（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）：OpenTelemetry 的 API 与 SDK，指标经 Prometheus 导出器暴露。`telemetry.New` 在 `serve` 里建出提供者，`cmd/axiom` 把它们作为参数交给 `pg.Open`（`pg.WithTracerProvider`）、`egress`（`egress.WithTracerProvider`）、`httpserver.NewTelemetry` 和各模块；**不用 OpenTelemetry 的全局**，并行的测试各自持有自己的，互不影响。
 
+**决策与理由**（2026-10-16）：
+
+- **选 OpenTelemetry 的 API 与 SDK 做指标和链路，指标用 Prometheus 导出器暴露，抓取式。** 各模块只依赖 `metric.Meter` 一套接口，换导出方式（以后推到收集器）不用改任何模块；指标和链路同属一个系列，请求的上下文把二者连起来；Prometheus 文本格式是运维节点上监控系统通用的读法。
+- **不选 `prometheus/client_golang` 直接记指标、链路另用 OpenTelemetry**：模块要认两套接口，以后改成推送要改遍所有模块；性能没有优势（两者记一次测量都是零分配，见下文「调用路径」）。client_golang 仍是依赖，但只做导出器的底层和 `/metrics` 的处理器。
+- **不选现在就用 OTLP 推送指标和链路**：要先有收集器，部署还没有；OTLP/HTTP 导出器会带进 grpc、grpc-gateway、`go.opentelemetry.io/proto/otlp`、genproto 一批依赖（`otlptracehttp` v1.47.0 的 go.mod，2026-10-16 查），而现在 `go.mod` 里只有 protobuf。抓取不需要这些，等有收集器的部署再加，只是 `telemetry.New` 的一个处理器参数。
+- **不选厂商的 SDK 或托管服务（Datadog、New Relic 等）**：端点在境外，国内的节点不一定连得上，调用元数据也会离开部署；换厂商要改调用代码。指标靠本机抓取，将来的链路只发到自己部署的收集器，都不依赖境外的服务。
+- **产品基线**：OpenRouter 不给用户暴露指标端点；它的 Broadcast 把每次调用的链路用 OTLP/HTTP 发到用户指定的收集器，每个目的地可设 0.0001 到 1 的采样率，默认 1（OpenRouter 文档「Broadcast」，2026-10-16）。这是面向用户的功能，属于调用记录的导出（见[记录与告警](../../docs/domains/observability.md)）；本节是运维用的节点遥测，选 OTLP/HTTP 与它的做法一致，便于以后接同一类收集器。
+
 - **指标只在探针监听 `/metrics` 上**，公网监听没有这个路径（测试：公网 404，探针 200，`text/plain`）。指标放在专用的注册表里，只有经 `Metrics` 注册的才会出现，不带 Go 运行时和进程的默认集合（运行时指标随第一个需要它们的告警加入）。
-- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`，如 `axiom_http_server_requests_total`、`axiom_http_server_duration_seconds`、`axiom_observability_queue_depth`。
+- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`。现有的指标：
+
+  | 指标（Prometheus 名） | 类型 | 标签 |
+  |---|---|---|
+  | `axiom_http_server_requests_total` | 计数 | `route`、`status_class`、`outcome` |
+  | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
+  | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
+  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_observability_queue_depth` | 仪表 | 无 |
+
+  新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
 - **链路**：每个公网请求一个服务端跨度，名字是路由模式，属性 `request_id`（与 `X-Request-ID` 相同）、状态码；`pg` 的事务（`db.tx`）和 `egress` 的出站请求（`egress.request`，到响应头为止）是它的子跨度，同一个 trace。跨度属性只有主机名、状态码、`db.system` 这类有界的值：不记语句（可能含数据）、不记错误文本（可能引用地址或数据）、不记路径和查询。测试：请求路径、查询和语句里放入标记值，没有任何跨度属性含它；并核对父子关系和请求 ID。
-- **采样与导出**：提供者现在不带导出器，跨度在进程内产生后丢弃，所以没有采样可调；导出器是 `telemetry.New` 的一个 `SpanProcessor` 参数。设计：接上第一个收集器时用父级决定加按比例采样（默认 10%，出错的请求总采），OTLP/HTTP 导出，地址和凭证由标准的 `OTEL_EXPORTER_OTLP_*` 变量给，配置错了不启动。OTLP 导出器要带进 gRPC、protobuf 等一批依赖，等有收集器的部署再决定并评审，不在这里预先引入。
+- **调用路径**：标签组合初始化后，稳态下记一次测量不分配内存，指标就不会让调用路径的垃圾回收随流量增长；一个组合第一次出现时要建属性和选项切片并复制缓存的映射，是一次性的开销，组合数有上限，基准重复同一个组合，量不到它。`BenchmarkRecord`（无标签的计数、带标签的计数和直方图，上下文里是被采样的跨度）全部是 0 allocs/op，`bench-compare` 在任何一项开始分配时失败。做到的两条规则：标签集合预先建好、按组合缓存（`httpserver` 的 `seriesCache`，组合数就是标签上限里的那个数，读取是一次原子加载），因为每次调用现建 `metric.WithAttributes` 要分配；选项切片也建一次，用 `Add(ctx, 1, opts...)` 传入，因为逐个传的可变参数会在接口调用处分配一个切片。每个请求的跨度仍有开销：`BenchmarkRequestTelemetry` 在没有处理器时是 3 allocs/op（240 B，跨度的上下文和结束函数），有处理器、跨度被采样时是 9 allocs/op（约 1.5 KiB）；关闭遥测是 0。
+- **采样**：没有处理器时没有人读跨度，`telemetry.New` 不采样（`NeverSample`）：跨度仍在，子跨度照常连在一起，但不记属性、不记事件；公网请求的服务端跨度（`httpserver`）因此不构造属性。`pg` 的事务和 `egress` 的出站请求跨度仍无条件构造属性（Go 会先求值参数，`NeverSample` 拦不住），那是原有的写法，尚未改。有处理器（接上了导出器）时用默认的父级决定加全采，下一条定下比例。
+- **导出**：
+  - **指标**：只抓取，没有推送，不需要配置：监控系统从探针监听（`AXIOM_PROBES_ADDR`，默认只听本机；要跨机抓取就把它绑到内网地址，由部署的防火墙限制来源）取 `/metrics`。
+  - **链路**：现在没有导出器，跨度在进程内产生后丢弃，所以没有导出配置可错。第一个有收集器的部署再加：OTLP/HTTP 导出，作为 `telemetry.New` 的一个 `SpanProcessor`，只发到自己部署的收集器；端点和凭证用标准的 `OTEL_EXPORTER_OTLP_*` 变量，采样比例是 `AXIOM_TRACE_SAMPLE_RATIO`（0 到 1，默认 0.1，父级已决定的跟随父级）。**配置错了不启动**：端点不是绝对的 http(s) 地址、比例不在 0 到 1 之间、凭证没配而端点配了，都在 `serve` 解析配置时报错，报错只说变量名，不带值。出错的请求总采要靠收集器的尾部采样，节点上的比例采样事先不知道请求会不会出错；用哪一种等有收集器时和它的容量一起定。
+  - 这条的实现和依赖随那个部署的 PR 评审；现在加，是为一个没有使用者的导出器多带一批依赖和一个没有效果的配置项。
 - **不记**对话正文和密钥：指标没有任何自由文本，跨度属性按上面的白名单。
 
 ## 健康检查
