@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import check_pr
-from check_pr import change, describe, review, unfinished, unticked_acceptance, waiver_allowed
+from check_pr import change, closing, describe, review, unfinished, unticked_acceptance, waiver_allowed
 
 TEMPLATE = "## Background / 背景\n<!-- why -->\n\n## Verification / 验证\n<!-- evidence -->\n"
 BODY = "## Background / 背景\nbecause\n## Verification / 验证\nran it\n"
@@ -182,40 +182,59 @@ class ClosingTest(unittest.TestCase):
 
     def test_a_closed_issue_needs_its_acceptance_boxes_ticked(self):
         issues = {
-            1: {"body_html": RENDERED["subheadings and a checked box"]},
-            2: {"body_html": RENDERED["an unmatched backtick before a comment"]},
-            3: {"body_html": RENDERED["no acceptance"]},
-            4: {"body_html": RENDERED["the issue's example"], "pull_request": {}},
+            ("owner/repo", 1): {"body_html": RENDERED["subheadings and a checked box"]},
+            ("owner/repo", 2): {"body_html": RENDERED["an unmatched backtick before a comment"]},
+            ("owner/repo", 3): {"body_html": RENDERED["no acceptance"]},
+            ("other/repo", 4): {"body_html": RENDERED["the issue's example"]},  # in another repository, or linked in the sidebar
         }
-        fetched = []
-
-        def issue(number):
-            fetched.append(number)
-            return issues[number]
-        body = ("Closes #1\nCloses #1\nFixes #2\nResolves #3\nCloses #4\nCloses other/repo#5\n"
-                "Closes https://github.com/Owner/Repo/issues/1\n<!-- Closes #6 -->\nRefs #7\n")
-        self.assertEqual(unfinished(body, "owner/repo", issue), [
-            "#1 still has 2 unticked acceptance boxes: tick each with its evidence, or write Refs #1 instead; then edit this "
-            "description or rerun the pr check"])
-        self.assertEqual(fetched, [1, 2, 3, 4])  # each issue once; other repositories, comments and Refs are not fetched
+        self.assertEqual(unfinished(list(issues), lambda repo, number: issues[repo, number]), [
+            "owner/repo#1 still has 2 unticked acceptance boxes: tick each with its evidence, or stop closing it (write "
+            "Refs owner/repo#1, or unlink it in the PR's sidebar); then rerun the pr check",
+            "other/repo#4 still has 1 unticked acceptance boxes: tick each with its evidence, or stop closing it (write "
+            "Refs other/repo#4, or unlink it in the PR's sidebar); then rerun the pr check"])
 
     def test_an_issue_read_without_rendered_html_is_a_problem(self):
-        self.assertEqual(unfinished("Closes #1\n", "owner/repo", lambda number: {"body_html": None}), [])  # no description
-        self.assertEqual(unfinished("Closes #1\n", "owner/repo", lambda number: {}),
-                         ["could not read #1 as GitHub renders it: no body_html in the reply"])
+        self.assertEqual(unfinished([("owner/repo", 1)], lambda repo, number: {"body_html": None}), [])  # no description
+        self.assertEqual(unfinished([("owner/repo", 1)], lambda repo, number: {}),
+                         ["could not read owner/repo#1 as GitHub renders it: no body_html in the reply"])
 
-    def test_an_unreadable_issue_fails_with_the_reason_and_keeps_the_other_problems(self):
-        error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 404: Not Found\n")
-        env = {"PR_TITLE": "Bad title", "PR_BODY": BODY + "Closes #1\n", "PR_AUTHOR": "someone", "REPO": "owner/repo"}
+    def test_the_closing_references_reply(self):
+        def reply(nodes, more=False):
+            return {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"pageInfo": {"hasNextPage": more}, "nodes": nodes}}}}}
+        issue = {"number": 1, "repository": {"nameWithOwner": "owner/repo"}}
+        self.assertEqual(closing(reply([])), ([], []))  # the usual case: the PR closes nothing
+        self.assertEqual(closing(reply([issue])), ([("owner/repo", 1)], []))
+        self.assertEqual(closing(reply([issue], more=True)),
+                         ([("owner/repo", 1)], ["this PR closes more than 100 issues; the check reads only the first 100"]))
+
+    def test_the_issues_come_from_github_and_a_failed_request_fails(self):
+        graphql = b'{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/repo"}}]}}}}}'
+        replies = [subprocess.CompletedProcess([], 0, graphql), subprocess.CompletedProcess([], 0, b'{}')]
+        env = {"PR_TITLE": "Bad title", "PR_BODY": BODY, "PR_AUTHOR": "someone", "REPO": "owner/repo", "NUMBER": "9"}
         with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
-              mock.patch("subprocess.run", side_effect=error) as run, redirect_stdout(io.StringIO()) as out):
+              mock.patch("subprocess.run", side_effect=replies) as run, redirect_stdout(io.StringIO()) as out):
             self.assertEqual(check_pr.main(), 1)
-        self.assertIn("Accept: application/vnd.github.html+json", run.call_args.args[0])  # the reply must carry body_html
-        self.assertIn("title 'Bad title'", out.getvalue())
-        self.assertIn("could not read an issue this PR closes: HTTP 404: Not Found", out.getvalue())
+        query, read = (call.args[0] for call in run.call_args_list)
+        self.assertEqual(query[:3], ["gh", "api", "graphql"])
+        self.assertTrue({"owner=owner", "name=repo", "number=9"} <= set(query))
+        self.assertIn("Accept: application/vnd.github.html+json", read)  # the reply must carry body_html
+        self.assertEqual(read[-1], "repos/owner/repo/issues/1")
+        self.assertIn("could not read owner/repo#1 as GitHub renders it", out.getvalue())
+        error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 502\n")
+        with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
+              mock.patch("subprocess.run", side_effect=error), redirect_stdout(io.StringIO()) as out):
+            self.assertEqual(check_pr.main(), 1)
+        self.assertIn("title 'Bad title'", out.getvalue())  # the other problems are kept
+        self.assertIn("could not read the issues this PR closes: HTTP 502", out.getvalue())
 
 
 class ReviewTest(unittest.TestCase):
+    def test_a_missing_review_says_how_to_write_one(self):
+        # AGENTS.md only points at this check, so its message alone must yield a first line the check accepts
+        problem, = review("abcdef1234", "", "someone", [])
+        line = problem.split("first line is ")[1].split(" (")[0].replace("<model>", "m").replace("<n>", "0")
+        self.assertEqual(review("abcdef1234", "", "someone", [{"body": line, "author_association": "OWNER"}]), [])
+
     def test_the_head_commit_needs_a_passing_answered_review(self):
         answer = comment(f"作者回应 · 提交 {HEAD[:7]} · 修改在 abc1234")
         cases = {

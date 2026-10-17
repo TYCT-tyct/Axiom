@@ -2,7 +2,7 @@
 # source: the project-workflow commit the managed files were copied from; only upgrades change it.
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
-source = "27a0a05bcaef26b1dafe48a683455dd0936862d8"
+source = "738c99b3911ce6299821be0b064064bb340f5214"
 
 [review]
 waiver = false # CONTRIBUTING.md: every PR, upgrades included, gets an independent review

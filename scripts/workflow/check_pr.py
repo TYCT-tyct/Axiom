@@ -3,8 +3,8 @@
 unticked, or when its head commit has no passing independent review.
 
 Managed by project-workflow: changed only by upgrades.
-  check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, and REPO to fetch the issues it closes through gh, as GitHub
-                         renders them: the acceptance boxes come from the rendered HTML, never from the Markdown text
+  check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, REPO and NUMBER to ask GitHub which issues the PR closes,
+                         then reads each as GitHub renders it: the boxes come from the rendered HTML, never from Markdown text
   check_pr.py review     reads PR_HEAD, PR_BODY, PR_AUTHOR, BASE_REF, the PR's comments as JSON lines on stdin, and git history
 Values arrive through the environment, never the command line, so a title or description cannot inject shell.
 The review check reads the first lines the review method asks reviewers and authors to write. With one account shared by
@@ -30,7 +30,6 @@ COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # reads the raw text: GitHub skips code and comments, but telling them apart takes a Markdown parser, and quoting is rare.
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+"
                      r"(?:(?:[\w.-]+/[\w.-]+)?#[0-9]+|https?://github\.com/[\w.-]+/[\w.-]+/issues/[0-9]+)", re.IGNORECASE)
-ISSUE_REF = re.compile(r"(?:([\w.-]+/[\w.-]+)?#|https?://github\.com/([\w.-]+/[\w.-]+)/issues/)([0-9]+)$")
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|[0-9]+[.)])[ \t]*)*")  # indentation and list or quote markers
 SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
@@ -40,6 +39,12 @@ CONFIG = ".github/project-workflow.toml"
 REVIEW = re.compile(r"^独立评审 · 提交 ([0-9a-f]{7,40}) · .*阻断 ([0-9]+) · 应修 ([0-9]+)")
 RESPONSE = re.compile(r"^作者回应 · 提交 ([0-9a-f]{7,40})")
 WAIVER = re.compile(r"^免评审[：:][ \t]*\S", re.MULTILINE)
+# The issues GitHub closes when the PR merges, by any keyword form it honours or by a link set in the PR's sidebar. After an
+# edit GitHub updated them within about a second (measured 2026-10-17); a job reading them starts later than that. Linking an
+# issue in the sidebar triggers no workflow, so the check is rerun by hand after that (engineering reference, pr). GitHub
+# leaves out the issues the token may not read (cli/cli#11841), such as those in other private repositories.
+CLOSES = ("query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) "
+          "{ closingIssuesReferences(first: 100) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }")
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}  # on a public repository anyone may comment
 EXEMPT = {"dependabot[bot]"}  # version bumps: their titles and descriptions are generated and cannot be corrected
 
@@ -106,26 +111,26 @@ def unticked_acceptance(html):
     return boxes.count
 
 
-def unfinished(body, repo, issue):
-    """Problems for each issue of this repository the PR closes whose acceptance criteria still have unticked boxes.
-    issue(number) returns the issue as GitHub's API does, body_html included; pull requests and issues without an acceptance
-    section pass. This proves the boxes were ticked, not that the evidence is there: that stays with the review."""
-    problems, seen = [], set()
-    for match in CLOSING.finditer(COMMENT.sub("", body)):
-        ref = ISSUE_REF.search(match.group(0))
-        elsewhere = (ref.group(1) or ref.group(2) or repo).lower() != repo.lower()
-        number = int(ref.group(3))
-        if elsewhere or number in seen:
-            continue
-        seen.add(number)
-        found = issue(number)
-        if "pull_request" in found:
-            continue
+def closing(reply):
+    """(repository, number) for each issue in a closingIssuesReferences reply, and the problems it shows. gh exits non-zero
+    on a reply with errors, so the pull request is there."""
+    references = reply["data"]["repository"]["pullRequest"]["closingIssuesReferences"]
+    found = [(node["repository"]["nameWithOwner"], node["number"]) for node in references["nodes"]]
+    return found, ["this PR closes more than 100 issues; the check reads only the first 100"] if references["pageInfo"]["hasNextPage"] else []
+
+
+def unfinished(closes, issue):
+    """Problems for each issue the PR closes, as (repository, number) pairs from GitHub, whose acceptance criteria still have
+    unticked boxes. issue(repository, number) returns the issue as GitHub's API does, body_html included; issues without an
+    acceptance section pass. This proves the boxes were ticked, not that the evidence is there: that stays with the review."""
+    problems = []
+    for repo, number in closes:
+        found = issue(repo, number)
         if "body_html" not in found:  # the request did not ask for rendered HTML: fail rather than count nothing
-            problems.append(f"could not read #{number} as GitHub renders it: no body_html in the reply")
+            problems.append(f"could not read {repo}#{number} as GitHub renders it: no body_html in the reply")
         elif count := unticked_acceptance(found["body_html"] or ""):
-            problems.append(f"#{number} still has {count} unticked acceptance boxes: tick each with its evidence, or write "
-                            f"Refs #{number} instead; then edit this description or rerun the pr check")
+            problems.append(f"{repo}#{number} still has {count} unticked acceptance boxes: tick each with its evidence, or stop "
+                            f"closing it (write Refs {repo}#{number}, or unlink it in the PR's sidebar); then rerun the pr check")
     return problems
 
 
@@ -165,7 +170,9 @@ def review(head, body, author, comments, allow_waiver=True, same_change=lambda c
             if allow_waiver:
                 return []
             return [f"this project does not accept 免评审 ([review] waiver = false in {CONFIG}): get an independent review of {head[:7]}"]
-        return [f"no independent review of {head[:7]}: post one whose first line follows the review method, then rerun this check"]
+        return [f"no independent review of {head[:7]}: a reviewer other than the author, on a different model, posts the full "
+                f"review in a comment whose first line is 独立评审 · 提交 {head[:7]} · <model> · 只读 · 阻断 <n> · 应修 <n> · 细节 <n> "
+                "(open findings by grade); then rerun this check"]
     index, latest = reviews[-1]
     reviewed = latest.group(1)
     if int(latest.group(2)):
@@ -183,13 +190,15 @@ def main():
         problems = describe(env("PR_TITLE"), env("PR_BODY"), env("PR_AUTHOR"), TEMPLATE.read_text(encoding="utf-8-sig"))
         if env("PR_AUTHOR") not in EXEMPT:  # a failed request is a problem, so an outage fails the check instead of passing it
             # body_html is GitHub's own rendering: that is what a reader sees, so the acceptance boxes are read from it
-            issue = lambda number: json.loads(subprocess.run(
-                ["gh", "api", "-H", "Accept: application/vnd.github.html+json", f"repos/{env('REPO')}/issues/{number}"],
-                capture_output=True, check=True).stdout)
+            gh = lambda *args: subprocess.run(["gh", *args], capture_output=True, check=True).stdout
+            issue = lambda repo, number: json.loads(gh("api", "-H", "Accept: application/vnd.github.html+json", f"repos/{repo}/issues/{number}"))
+            owner, name = env("REPO").split("/")
             try:
-                problems += unfinished(env("PR_BODY"), env("REPO"), issue)
+                closes, capped = closing(json.loads(gh(
+                    "api", "graphql", "-f", f"query={CLOSES}", "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={env('NUMBER')}")))
+                problems += capped + unfinished(closes, issue)
             except subprocess.CalledProcessError as error:
-                problems.append(f"could not read an issue this PR closes: {error.stderr.decode().strip()}")
+                problems.append(f"could not read the issues this PR closes: {error.stderr.decode().strip()}")
     elif sys.argv[1:] == ["review"]:
         base = f"origin/{env('BASE_REF')}"
         mine = functools.cache(lambda: change(base, env("PR_HEAD")))  # only needed when no review names the head
