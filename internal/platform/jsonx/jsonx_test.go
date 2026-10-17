@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -43,9 +44,6 @@ func TestValidate(t *testing.T) {
 				if errors.Is(tc.want, errSyntax) && !errors.As(err, &syntax) || !errors.Is(tc.want, errSyntax) && !errors.Is(err, tc.want) {
 					t.Fatalf("%s = %v, want %v", name, err, tc.want)
 				}
-			}
-			if (len(tc.data) > keepMax) != (validator.dec == nil) {
-				t.Errorf("after %d bytes the Validator keeps its decoder: %t, want %t", len(tc.data), validator.dec != nil, len(tc.data) <= keepMax)
 			}
 		})
 	}
@@ -153,6 +151,99 @@ func BenchmarkValidate(b *testing.B) {
 				if err := Validate(data); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// members is an object of n unique members.
+func members(n int) string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"k%03d":0`, i)
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// nestedMembers is an object nested depth levels deep with as many unique members at its deepest level as keepMax
+// bytes allow.
+func nestedMembers(depth int) string {
+	const wrap = len(`{"a":}`)
+	n := max(1, (keepMax-wrap*(depth-1))/len(`"k000":0,`))
+	return strings.Repeat(`{"a":`, depth-1) + members(n) + strings.Repeat("}", depth-1)
+}
+
+func TestValidatorKeeps(t *testing.T) {
+	for _, tc := range []struct {
+		name, data string
+		kept       bool
+	}{
+		{"small", `{"a":[1]}`, true},
+		{"largest", members(1) + strings.Repeat(" ", keepMax-len(members(1))), true},
+		{"too large", members(1) + strings.Repeat(" ", keepMax-len(members(1))+1), false},
+		{"deepest kept", nested(keepDepth), true},
+		{"too deep", nested(keepDepth + 1), false},
+		{"too deep and invalid", strings.Repeat("[", keepDepth+1) + "x", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var v Validator
+			if err := v.Validate([]byte(tc.data)); err != nil {
+				t.Logf("invalid, as expected for some cases: %v", err)
+			}
+			if kept := v.dec != nil; kept != tc.kept {
+				t.Errorf("keeps its decoder: %t, want %t", kept, tc.kept)
+			}
+		})
+	}
+}
+
+// retainedBy is the heap a Validator holds after validating docs in turn.
+func retainedBy(t *testing.T, docs []string) uint64 {
+	t.Helper()
+	var v Validator
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.GC() // twice: the first sweep may leave the garbage of the test before
+	runtime.ReadMemStats(&before)
+	for _, doc := range docs {
+		if err := v.Validate([]byte(doc)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.GC()
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(&v)
+	runtime.KeepAlive(docs)
+	// The documents are alive in both readings, so the difference cannot wrap.
+	return after.HeapAlloc - before.HeapAlloc
+}
+
+// TestValidatorRetains: what a Validator holds after documents of any shape stays small. A decoder keeps a table of
+// member names for every nesting level a document has used and clears one only when a later document reaches that
+// level again, so documents of falling depth, each with many members at its deepest level, leave a table at every
+// level behind: 1.9 MB for 256 documents of 200 members each, none over 3.4 KB, under a 4 KiB size rule alone.
+func TestValidatorRetains(t *testing.T) {
+	const retainedMax = 192 << 10
+	cases := map[string][]string{"one large document": {members(5000)}}
+	for _, top := range []int{keepDepth, 4 * keepDepth, MaxDepth} {
+		var falling []string
+		for depth := top; depth >= 1; depth-- {
+			falling = append(falling, nestedMembers(depth))
+		}
+		cases[fmt.Sprintf("documents falling from depth %d", top)] = falling
+	}
+	for name, docs := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := retainedBy(t, docs); got > retainedMax {
+				t.Errorf("the Validator holds %d bytes, want at most %d", got, retainedMax)
+			} else {
+				t.Logf("holds %d bytes", got)
 			}
 		})
 	}
