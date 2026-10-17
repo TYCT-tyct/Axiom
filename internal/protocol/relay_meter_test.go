@@ -518,7 +518,7 @@ func raceDetector() bool {
 func BenchmarkRelay(b *testing.B) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	warm := warmUp
-	if raceDetector() { // `just test` runs every benchmark once under the race detector, whose counts nobody compares
+	if raceDetector() { // `just bench-once` runs every benchmark once under the race detector, whose counts nobody compares
 		warm = 0
 	}
 	for _, format := range formats {
