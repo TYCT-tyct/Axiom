@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	"axiom/internal/platform/pg"
 )
 
 // Config holds the limits and deadlines the in-process primitives and the later steps share. The defaults are the
@@ -20,7 +22,7 @@ type Config struct {
 	KeyRate       int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
 	CountRate     int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
-	PoolSize         int // N, database connections
+	PoolSize         int // N, database connections: the pool's size, so that every permit has a connection (DefaultConfig)
 	PoolReserve      int // connections only the Completion class may take
 	BatchConnections int // most connections one batch writer (call records, journal) holds
 
@@ -58,7 +60,7 @@ func DefaultConfig() Config {
 		CountRate:        6000,
 		KeyLookup:        time.Second,
 		RateWindow:       time.Minute,
-		PoolSize:         64,
+		PoolSize:         pg.PoolSize,
 		PoolReserve:      16,
 		BatchConnections: 2,
 		QueueMax:         256,

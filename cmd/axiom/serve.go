@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
@@ -259,6 +260,20 @@ func node(publicAddr string, routes http.Handler, adminAddr string, admin http.H
 	}
 }
 
+// checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
+// Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
+// a larger pool is left to the deployment. It runs in openDatabase, so every command that opens the database holds to
+// the one pool configuration; the gateway's settings are its defaults until the call path is wired, so the check reads
+// them there.
+func checkPool(db *pg.DB) error {
+	gate := gateway.DefaultConfig()
+	if have := int(db.MaxConns()); have < gate.PoolSize {
+		return fmt.Errorf("%s: pool_max_conns %d is below the gateway's %d database connections (PoolSize): raise it, or lower PoolSize",
+			pg.DatabaseURLVar, have, gate.PoolSize)
+	}
+	return nil
+}
+
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
@@ -267,6 +282,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkPool(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

@@ -1,0 +1,60 @@
+# PR checks that read the title, description or comments, managed by project-workflow: changed only by upgrades, except
+# Dependabot's action-version bumps. They are apart from workflow.yml so that editing a description reruns only these.
+# Every job here is a check the ruleset protecting main requires (set by the skill's manage.py protect); keep the names.
+name: workflow-pr
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened] # edited: a changed title or description is checked again
+
+# A newer push or edit cancels the PR's older run: only the latest head and description count
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr:
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      issues: read # the issues the PR closes, for their acceptance boxes
+      pull-requests: read # the PR's closing references, which GitHub resolves from its keywords and sidebar links
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/workflow/check_pr.py describe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+
+  review:
+    # Comments do not trigger pull_request events: review-rerun.yml reruns this job when a review or an answer is posted.
+    # It runs last, so a finished run means a finished review: a comment misses both only in the seconds between this job
+    # reading the comments and the run finishing. !cancelled() runs it even when pr failed, since a skipped required check
+    # counts as passed.
+    needs: [pr]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      pull-requests: read # the PR's comments
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base branch and earlier PR commits, to tell whether a review still covers the PR's change
+      - run: gh api --paginate "repos/$REPO/issues/$NUMBER/comments?per_page=100" --jq '.[] | {body, author_association}' | python3 scripts/workflow/check_pr.py review
+        shell: bash # with pipefail: a failed page must fail the check, never pass it on fewer comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
