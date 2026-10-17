@@ -184,9 +184,31 @@ func TestPrefixWriter(t *testing.T) {
 	if _, err := w.Write([]byte("first\nsecond")); err != nil {
 		t.Fatal(err)
 	}
-	w.flush()
+	if err := w.flush(); err != nil {
+		t.Fatal(err)
+	}
 	if diff := cmp.Diff("probe/a: first\nprobe/a: second\n", out.String()); diff != "" {
 		t.Errorf("stderr (-want +got):\n%s", diff)
+	}
+}
+
+// failingWriter fails every write, so a prefix writer that drops a write error shows it.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("cannot write") }
+
+// TestPrefixWriterReportsWriteErrors checks that a failed stderr write reaches the caller, from a whole line and from
+// the last, unfinished one.
+func TestPrefixWriterReportsWriteErrors(t *testing.T) {
+	if _, err := (&prefixWriter{lock: new(sync.Mutex), out: failingWriter{}, prefix: "probe/a"}).Write([]byte("line\n")); err == nil {
+		t.Error("Write dropped the write error of a whole line")
+	}
+	w := &prefixWriter{lock: new(sync.Mutex), out: failingWriter{}, prefix: "probe/a"}
+	if _, err := w.Write([]byte("unfinished")); err != nil {
+		t.Fatal(err) // nothing is written until the line ends
+	}
+	if err := w.flush(); err == nil {
+		t.Error("flush dropped the write error of the last line")
 	}
 }
 

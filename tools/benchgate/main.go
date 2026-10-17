@@ -187,9 +187,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 	)
 	for i, pkg := range targets {
 		slots <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-slots }()
 			run, err := benchmark(ctx, dir, pkg, stderr)
 			if err != nil {
@@ -197,7 +195,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 				return
 			}
 			runs[i] = run
-		}()
+		})
 	}
 	wg.Wait()
 	if err := errors.Join(failures...); err != nil {
@@ -217,7 +215,7 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 
 // benchmarkPackages returns the packages of dir that have a benchmark, in the go command's order.
 func benchmarkPackages(ctx context.Context, dir string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "go", list...)
+	cmd := exec.CommandContext(ctx, "go", list...) //nolint:gosec // the arguments are the fixed flags in list; no caller input reaches them
 	cmd.Env = append(os.Environ(), "GOGC=off", "GOMAXPROCS=1")
 	cmd.Dir, cmd.Stderr = dir, os.Stderr
 	out, runErr := cmd.Output()
@@ -256,7 +254,7 @@ func benchmarkPackages(ctx context.Context, dir string) ([]string, error) {
 // benchmark runs the benchmarks of one package at the fixed iteration count, with the garbage collector off and on one
 // processor; the go command's stderr reaches ours, prefixed with the package, because four packages run at once.
 func benchmark(ctx context.Context, dir, pkg string, stderr *sync.Mutex) (measurements, error) {
-	cmd := exec.CommandContext(ctx, "go", append(slices.Clone(bench), pkg)...)
+	cmd := exec.CommandContext(ctx, "go", append(slices.Clone(bench), pkg)...) //nolint:gosec // pkg is an import path the go command listed for this tree; the other arguments are fixed flags
 	// A collection empties the pools the code keeps its buffers in, and the run then allocates them again: that cost is
 	// per operation, not per run, so more iterations do not spread it. Aggregate with 64-KiB deltas read 582 to 585
 	// allocs/op at five to fifty iterations with the collector on, and 575 with it off; Relay's benchmark turns it off
@@ -270,10 +268,10 @@ func benchmark(ctx context.Context, dir, pkg string, stderr *sync.Mutex) (measur
 	log := &prefixWriter{lock: stderr, out: os.Stderr, prefix: pkg}
 	cmd.Dir, cmd.Stderr = dir, log
 	out, runErr := cmd.Output()
-	log.flush()
+	flushErr := log.flush()
 	run, parseErr := parse(bytes.NewReader(out))
-	if runErr != nil {
-		return measurements{}, fmt.Errorf("%w\n%s%s", runErr, run.diagnostics, run.text)
+	if err := errors.Join(runErr, flushErr); err != nil {
+		return measurements{}, fmt.Errorf("%w\n%s%s", err, run.diagnostics, run.text)
 	}
 	if parseErr != nil {
 		return measurements{}, fmt.Errorf("read the benchmarks: %w", parseErr)
@@ -299,20 +297,25 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 		if !found {
 			break
 		}
-		fmt.Fprintf(w.out, "%s: %s\n", w.prefix, line)
+		if _, err := fmt.Fprintf(w.out, "%s: %s\n", w.prefix, line); err != nil {
+			return 0, fmt.Errorf("write stderr: %w", err)
+		}
 		w.buf = rest
 	}
 	return len(p), nil
 }
 
-// flush writes a last line the command left without a newline.
-func (w *prefixWriter) flush() {
+// flush writes a last line the command left without a newline, and reports a write error.
+func (w *prefixWriter) flush() error {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	if len(w.buf) > 0 {
-		fmt.Fprintf(w.out, "%s: %s\n", w.prefix, w.buf)
+		if _, err := fmt.Fprintf(w.out, "%s: %s\n", w.prefix, w.buf); err != nil {
+			return fmt.Errorf("write stderr: %w", err)
+		}
 		w.buf = nil
 	}
+	return nil
 }
 
 // event is the part of a `go test -json` event the gate needs; Package names the package of the events of the list pass.
