@@ -112,8 +112,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		}
 	}
 	out.Header.Set("User-Agent", "Axiom")
-	ctx, span := c.tracer.Start(out.Context(), "egress.request", trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(attribute.String("server.address", out.URL.Hostname())))
+	ctx, span := c.startSpan(out.Context(), out.URL.Hostname())
 	defer span.End()           // ends when the response headers arrive; reading the body is the caller's
 	out = out.WithContext(ctx) //nolint:contextcheck // ctx comes from out.Context() through the tracer
 	resp, err := c.transport.RoundTrip(out)
@@ -121,13 +120,33 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		span.SetStatus(codes.Error, "request failed") // the error text can quote the address
 		return nil, fmt.Errorf("egress request: %w", err)
 	}
-	span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
+	recordStatus(span, resp.StatusCode)
 	// After a 101 the body is the raw connection, which the request context no longer closes, so a silent upstream
 	// could hold a reader past its deadline. Axiom never asks for an upgrade; closing the body closes the connection.
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		return nil, errors.Join(errProtocolSwitch, resp.Body.Close())
 	}
 	return resp, nil
+}
+
+// startSpan opens the outbound request's span, a child of ctx's. The host is set by a site owner or ourselves, never
+// by a client; the path and query, which may hold identifiers, are left out. The attribute is set only when the span
+// records: an unsampled span drops attributes, but Go builds their arguments first, and with no exporter nothing is
+// sampled (internal/platform/README.md「遥测」).
+func (c *Client) startSpan(ctx context.Context, host string) (context.Context, trace.Span) {
+	ctx, span := c.tracer.Start(ctx, "egress.request", trace.WithSpanKind(trace.SpanKindClient))
+	if span.IsRecording() {
+		span.SetAttributes(attribute.String("server.address", host))
+	}
+	return ctx, span
+}
+
+// recordStatus records the response status on a span that records; an unsampled span keeps nothing, so the attribute
+// is built only for one that does.
+func recordStatus(span trace.Span, status int) {
+	if span.IsRecording() {
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+	}
 }
 
 func validateRequest(req *http.Request) error {
