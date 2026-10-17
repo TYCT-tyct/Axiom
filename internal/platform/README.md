@@ -45,7 +45,7 @@
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
-| 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，函数名出现即失败，因为带子查询的函数体不再被内联，每行一次调用 |
+| 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，要求函数体的两个 `current_setting` 都在、函数名不出现，两组断言同时排除空计划和子查询写法（带子查询的函数体不再被内联，每行一次调用） |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
 | 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
@@ -205,7 +205,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - **一个账户占不满**：单个账户受账户闸和每秒 135–200 个请求的上限约束，约占 2 条。
 - **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
 
-连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定；它不能小于 gateway 的 N，理由同上。
+连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：`serve` 启动时用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
 
 ### 范围
 

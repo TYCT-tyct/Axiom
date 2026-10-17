@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
@@ -106,6 +107,9 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
+	if err := checkPool(db); err != nil {
+		return err
+	}
 
 	recorder := startRecorder(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
@@ -257,6 +261,19 @@ func node(publicAddr string, routes http.Handler, adminAddr string, admin http.H
 		{"AXIOM_ADMIN_ADDR", adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
 		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
 	}
+}
+
+// checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
+// Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
+// a larger pool is left to the deployment. The gateway's settings are its defaults until the call path is wired, so
+// the check reads them there.
+func checkPool(db *pg.DB) error {
+	gate := gateway.DefaultConfig()
+	if have := int(db.MaxConns()); have < gate.PoolSize {
+		return fmt.Errorf("%s: pool_max_conns %d is below the gateway's %d database connections (PoolSize): raise it, or lower PoolSize",
+			pg.DatabaseURLVar, have, gate.PoolSize)
+	}
+	return nil
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never

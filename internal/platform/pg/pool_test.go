@@ -27,7 +27,7 @@ func TestOpenSizesThePool(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(db.Close)
-			if got := db.PoolMaxConns(); got != c.want {
+			if got := db.MaxConns(); got != c.want {
 				t.Errorf("pool size %d, want %d", got, c.want)
 			}
 		})
