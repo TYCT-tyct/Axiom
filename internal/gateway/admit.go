@@ -165,31 +165,11 @@ func trim(p routing.Plan, kept []int) routing.Plan {
 func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
 	h.background.Go(func() {
 		defer c.Done()
-		give := time.Now().Add(h.Limits.cfg.SettleBackground)
-		for pause := 50 * time.Millisecond; ; pause = min(2*pause, 2*time.Second) {
-			err := h.orphanOnce(ctx, c)
-			if err == nil {
-				return
-			}
-			if time.Now().After(give) || h.isStopped() {
-				h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
-				return
-			}
-			select {
-			case <-h.stopped:
-			case <-time.After(pause):
-			}
+		never := func(error) bool { return false }
+		if err := h.background.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
+			h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
 		}
 	})
-}
-
-func (h *Handler) isStopped() bool {
-	select {
-	case <-h.stopped:
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
@@ -205,16 +185,4 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is
 // left is the cleanup's.
-func (h *Handler) Drain(ctx context.Context) {
-	done := make(chan struct{})
-	go func() {
-		h.background.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		h.stopOnce.Do(func() { close(h.stopped) })
-		<-done
-	}
-}
+func (h *Handler) Drain(ctx context.Context) { h.background.drain(ctx) }

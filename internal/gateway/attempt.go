@@ -20,6 +20,7 @@ var (
 	errIdle       = errors.New("gateway: the upstream sent nothing new in time")
 	errHeaderWait = errors.New("gateway: the upstream did not answer in time")
 	errClientGone = errors.New("gateway: the client is not reading")
+	errShutdown   = errors.New("gateway: the node is going away")
 )
 
 // skips is why entries were passed over without an attempt (internal/gateway/README.md「尝试」).
@@ -58,11 +59,13 @@ func (s *session) attempts(ctx context.Context) ended {
 
 // mayStart says whether another attempt may begin, and if not how the call ends. A client that has gone gets nothing,
 // a holder that may be gone, or a call at the end of its time, no new attempt (the reservation may no longer cover it),
-// and a call past StartBy none either.
+// and a call past StartBy or on a node going away none either.
 func (s *session) mayStart(maxAttempts int) (ended, bool) {
 	switch {
 	case s.req.Context().Err() != nil:
 		return ended{}, true
+	case s.x.shutdown.Err() != nil:
+		return ended{err: protocol.Error{Type: protocol.Timeout}}, true
 	case !s.x.Alive():
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, true
 	case !time.Now().Before(s.deadline):
@@ -173,15 +176,22 @@ func (s *session) record(a *attempt, failed bool, scope routing.Scope, next rout
 	})
 }
 
-// attempt is one try at an endpoint, from the moment its identity is fixed.
+// attempt is one try at an endpoint, from the moment its identity is fixed. The goroutine that runs the call owns it.
 type attempt struct {
 	s       *session
 	i       int // index in s.ends
 	entry   routing.Entry
 	conn    Conn
-	meter   *billing.Meter // bound to the entry that was priced; metering reads it (G6)
+	meter   *billing.Meter // bound to the entry that was priced
 	cancel  context.CancelCauseFunc
 	release context.CancelFunc
+	unhook  func() bool // of the node's shutdown, which cancels the attempt
+
+	usage protocol.Usage    // what the stream reported, once it is over
+	seen  protocol.Progress // what the relay had seen last
+
+	asked   billing.ExtendRequest
+	landing chan error // the outcome of the extension asked for, nil when none is in flight
 }
 
 // bind fixes the attempt's identity before anything is sent: its number, and the entry whose price the reservation
@@ -190,11 +200,13 @@ type attempt struct {
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
-	s.ends = append(s.ends, AttemptEnd{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
+	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
+	s.currency = entry.Price.Schedule.Currency()
 	policy := conn.Policy()
 	ctx, release := AttemptContext(ctx, s.deadline, policy.Cancels)
 	ctx, a.cancel = context.WithCancelCause(ctx)
 	a.release = release
+	a.unhook = context.AfterFunc(s.x.shutdown, func() { a.cancel(errShutdown) })
 	s.x.Router.Begin(entry.Endpoint)
 	s.setCancel(a.cancel, policy.Cancels)
 	s.journal(a, false)
@@ -202,12 +214,14 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 }
 
 // close ends the attempt: its upstream is cancelled if it still runs, the credential's slot and the endpoint's count
-// are given back, and the receipt, which has the supplier's request id, is kept for the settlement.
+// are given back, and what billing takes of it is made from its usage and the receipt, which has the supplier's
+// request id.
 func (a *attempt) close() {
 	a.s.setCancel(nil, false)
+	a.unhook()
 	a.cancel(nil)
 	a.release()
-	a.s.ends[a.i].Receipt = a.conn.Done()
+	a.result(a.conn.Done())
 	a.s.x.Router.End(a.entry.Endpoint)
 }
 

@@ -25,16 +25,12 @@ func whole(h *harness) scripted { return serve(beat{data: strings.Join(h.events,
 // and the attempt it settles is the committed one.
 func TestACallIsRelayedAndSettledBeforeItsEnding(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		usd, err := platform.ParseCurrency("USD")
-		if err != nil {
-			t.Fatal(err)
-		}
-		h := newHarness(t, ctx, options{final: &protocol.Final{Cost: platform.AmountExact(3703701), Currency: usd}})
+		h := newHarness(t, ctx, options{final: billing.Final{Charged: platform.AmountExact(3703701)}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		h.run()
 		checkStream(t, h)
 		checkSettlementBeforeTheEnding(t, h.ended())
-		checkCommittedAttempt(t, h.ended().ending)
+		checkCommittedAttempt(t, h.ended().outcome)
 	})
 }
 
@@ -44,7 +40,7 @@ func checkStream(t *testing.T, h *harness) {
 		t.Fatalf("status %d, headers %v", h.w.status, h.w.header)
 	}
 	body := h.w.body()
-	for _, want := range []string{`"text": "Hello"`, `"text": "!"`, h.call.ID.String(), `"model": "claude-opus-5-5"`, `"cost":`} {
+	for _, want := range []string{`"text": "Hello"`, `"text": "!"`, h.call.ID.String(), `"model": "claude-opus-5-5"`, `"cost":0.003703701,"cost_currency":"USD"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the stream lacks %s:\n%s", want, body)
 		}
@@ -68,14 +64,14 @@ func checkSettlementBeforeTheEnding(t *testing.T, s settlement) {
 	}
 }
 
-func checkCommittedAttempt(t *testing.T, e Ending) {
+func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	t.Helper()
 	if len(e.Attempts) != 1 || e.Cancelled {
 		t.Fatalf("ending %+v", e)
 	}
 	a := e.Attempts[0]
-	if a.Seq != 1 || a.Entry != 0 || a.Result != billing.Committed || a.Finish != billing.FinishStop || len(a.Usage.Segments) != 1 ||
-		a.Usage.Segments[0].Usage.OutputTotal() != 15 {
+	if a.Seq != 1 || a.Entry != 0 || a.Result != billing.Committed || a.Finish != billing.FinishStop || len(a.Segments) != 1 ||
+		a.Segments[0].Usage.OutputTotal() != 15 {
 		t.Errorf("attempt %+v", a)
 	}
 }
@@ -140,7 +136,7 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 			if got != tc.wantCalls || h.w.status != tc.wantStatus {
 				t.Errorf("%s: sends %v, status %d", tc.name, got, h.w.status)
 			}
-			if first := h.ended().ending.Attempts[0]; first.Result != tc.result {
+			if first := h.ended().outcome.Attempts[0]; first.Result != tc.result {
 				t.Errorf("%s: the first attempt's result %d", tc.name, first.Result)
 			}
 		})
@@ -182,7 +178,7 @@ func checkNumbered(t *testing.T, h *harness, name string, entries, want int) {
 	if h.w.status != http.StatusBadGateway || !strings.Contains(h.w.body(), `"error_type":"upstream_error"`) {
 		t.Errorf("%s: status %d:\n%s", name, h.w.status, h.w.body())
 	}
-	ends := h.ended().ending.Attempts
+	ends := h.ended().outcome.Attempts
 	if len(ends) != want {
 		t.Fatalf("%s: %d attempts, want %d", name, len(ends), want)
 	}
@@ -222,8 +218,8 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 			if h.w.status != tc.status || h.w.header.Get("Retry-After") != tc.retryAfter {
 				t.Errorf("%s: status %d, Retry-After %q\n%s", tc.name, h.w.status, h.w.header.Get("Retry-After"), h.w.body())
 			}
-			if s := h.ended(); len(s.ending.Attempts) != 0 {
-				t.Errorf("%s: %d attempts", tc.name, len(s.ending.Attempts))
+			if s := h.ended(); len(s.outcome.Attempts) != 0 {
+				t.Errorf("%s: %d attempts", tc.name, len(s.outcome.Attempts))
 			}
 			excluded := h.call.Plan.Record.Excluded
 			if len(excluded) == 0 || excluded[0].Reason != tc.reason {
@@ -335,7 +331,7 @@ func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
 		h.up.eps[uuidOf(ep(1))].script = []scripted{failure(routing.ScopeEndpoint, false)}
 		h.up.eps[uuidOf(ep(3))].script = []scripted{whole(h)}
 		h.run()
-		ends := h.ended().ending.Attempts
+		ends := h.ended().outcome.Attempts
 		if len(ends) != 2 || ends[0].Entry != 0 || ends[1].Entry != 2 || h.up.endpoint(2).acquired != 0 {
 			t.Errorf("attempts %+v", ends)
 		}
@@ -357,7 +353,7 @@ func TestWhenTheHolderMayBeGoneNothingIsStarted(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, tc.o)
 			h.run()
-			if h.w.status != tc.status || h.up.endpoint(1).acquired != 0 || len(h.ended().ending.Attempts) != 0 {
+			if h.w.status != tc.status || h.up.endpoint(1).acquired != 0 || len(h.ended().outcome.Attempts) != 0 {
 				t.Errorf("%s: status %d, %d acquired", tc.name, h.w.status, h.up.endpoint(1).acquired)
 			}
 		})
@@ -379,7 +375,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	}
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
-		Settle: func(context.Context, *Call, Ending) (*protocol.Final, error) { return &protocol.Final{}, nil }, Alive: func() bool { return true },
+		Ledger: &fakeLedger{}, Costs: fakeCosts(0), Alive: func() bool { return true },
 		IdentitySecret: []byte("0123456789abcdef"),
 	}
 	if _, err := NewExecutor(full); err != nil {
@@ -388,7 +384,8 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	for name, missing := range map[string]func(*ExecDeps){
 		"router": func(d *ExecDeps) { d.Router = nil }, "upstreams": func(d *ExecDeps) { d.Upstreams = nil },
 		"limits": func(d *ExecDeps) { d.Limits = nil }, "memory": func(d *ExecDeps) { d.Memory = nil },
-		"logger": func(d *ExecDeps) { d.Logger = nil }, "settle": func(d *ExecDeps) { d.Settle = nil },
+		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
+		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
 	} {
 		d := full
