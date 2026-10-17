@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 	"axiom/internal/protocol/internal/sse"
 )
@@ -466,33 +467,36 @@ func drain(tb testing.TB, f protocol.Format, stream []byte) {
 	}
 }
 
-// steadyAllocs is testing.AllocsPerRun without the runtime's own allocations, which a collection during a run adds
-// (a few, once the heap has grown) and which only ever raise a count: the collector is off and runs just before.
-func steadyAllocs(f func()) float64 {
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	runtime.GC()
-	return testing.AllocsPerRun(5, f)
-}
-
 // TestRelayAllocs: beyond what reading the events allocates, which has a constant bound per event (README.md「读
 // SSE」), relaying them allocates nothing once the buffers have grown, in each format, so a longer reply costs the
-// relay no more allocations (docs/performance.md「调用路径上的规则」).
+// relay no more allocations (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so
+// this binary's other goroutines and the collections they trigger are not counted as the relay's.
 func TestRelayAllocs(t *testing.T) {
-	extra := func(f protocol.Format, stream []byte) float64 {
-		read := steadyAllocs(func() {
+	read := func(stream []byte) func() {
+		return func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
 			for _, err := r.Next(); err == nil; _, err = r.Next() {
 			}
-		})
-		return steadyAllocs(func() { drain(t, f, stream) }) - read
+		}
 	}
 	for _, format := range formats {
 		for _, size := range []int{1 << 10, 64 << 10} {
-			// 30 more events would add at least 30 allocations if each allocated; the race detector's own add a few.
-			if few, many := extra(format.f, deltas(format.f, 10, size)), extra(format.f, deltas(format.f, 40, size)); many-few > 5 {
-				t.Errorf("%s, %d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 40",
-					format.dir, size, few, many)
-			}
+			t.Run(fmt.Sprintf("%s-%d", format.dir, size), func(t *testing.T) {
+				ten, forty := deltas(format.f, 10, size), deltas(format.f, 40, size)
+				got := alloctest.Measure(t,
+					alloctest.Function{Name: "read/10", F: read(ten)},
+					alloctest.Function{Name: "relay/10", F: func() { drain(t, format.f, ten) }},
+					alloctest.Function{Name: "read/40", F: read(forty)},
+					alloctest.Function{Name: "relay/40", F: func() { drain(t, format.f, forty) }},
+				)
+				few := got["relay/10"].Count - got["read/10"].Count
+				many := got["relay/40"].Count - got["read/40"].Count
+				// 30 more events would add at least 30 allocations if each allocated; the race detector's own add a few.
+				if many-few > 5 {
+					t.Errorf("%s, %d-byte deltas: the relay allocates %v more than reading 10 events, %v more for 40",
+						format.dir, size, few, many)
+				}
+			})
 		}
 	}
 }

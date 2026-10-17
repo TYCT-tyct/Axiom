@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -411,7 +412,8 @@ var allocSizes = sizes[:2]
 
 // TestAllocs holds that reading or rewriting a request allocates a constant more than jsonx.Validate does on it,
 // whatever its size (README.md「不变量」): Inspect's and Prepare's own allocations do not grow with the body. The
-// tokenizer's grow with objects wider than 64 names, so the bodies come both without and with them.
+// tokenizer's grow with objects wider than 64 names, so the bodies come both without and with them. The measurement
+// runs in a child process, so this binary's other goroutines and their collections are not counted as the reader's.
 func TestAllocs(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -426,17 +428,19 @@ func TestAllocs(t *testing.T) {
 	} {
 		for f := range c.formats {
 			for _, lead := range []string{"", wideTurn} {
-				if extra := extraAllocs(t, f, lead, c.read); extra[0] != extra[len(extra)-1] {
-					t.Errorf("%s, format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
-						c.name, f, lead != "", extra, allocSizes)
-				}
+				t.Run(fmt.Sprintf("%s-format=%d-wide=%t", c.name, f, lead != ""), func(t *testing.T) {
+					if extra := extraAllocs(t, f, lead, c.read); extra[0] != extra[len(extra)-1] {
+						t.Errorf("%s, format %d, wide %t: allocations beyond jsonx.Validate %v grow with the body sizes %v",
+							c.name, f, lead != "", extra, allocSizes)
+					}
+				})
 			}
 		}
 	}
 }
 
-// prepareInspected prepares a body with the summary Inspect read from it the first time, which AllocsPerRun's warm-up
-// run is, so that only Prepare's allocations are counted.
+// prepareInspected prepares a body with the summary Inspect read from it the first time, which the measurement's
+// warm-up run is, so that only Prepare's allocations are counted.
 func prepareInspected() func(protocol.Format, []byte) error {
 	seen := map[*byte]protocol.Request{}
 	return func(f protocol.Format, b []byte) error {
@@ -456,17 +460,26 @@ func prepareInspected() func(protocol.Format, []byte) error {
 // extraAllocs returns how many more allocations read makes than jsonx.Validate on a body of each of allocSizes.
 func extraAllocs(t *testing.T, f protocol.Format, lead string, read func(protocol.Format, []byte) error) []float64 {
 	t.Helper()
-	allocs := func(read func() error) float64 {
-		return steadyAllocs(func() {
-			if err := read(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-	var extra []float64
+	var funcs []alloctest.Function
 	for _, size := range allocSizes {
 		b := body(f, size, lead)
-		extra = append(extra, allocs(func() error { return read(f, b) })-allocs(func() error { return jsonx.Validate(b) }))
+		funcs = append(funcs,
+			alloctest.Function{Name: fmt.Sprintf("read/%d", size), F: func() {
+				if err := read(f, b); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			alloctest.Function{Name: fmt.Sprintf("validate/%d", size), F: func() {
+				if err := jsonx.Validate(b); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		)
+	}
+	got := alloctest.Measure(t, funcs...)
+	var extra []float64
+	for _, size := range allocSizes {
+		extra = append(extra, got[fmt.Sprintf("read/%d", size)].Count-got[fmt.Sprintf("validate/%d", size)].Count)
 	}
 	return extra
 }

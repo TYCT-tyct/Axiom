@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
@@ -291,32 +290,31 @@ func TestReaderAppendToEvent(t *testing.T) {
 	}
 }
 
-// steadyAllocs is testing.AllocsPerRun without the runtime's own allocations, which a collection during a run adds and
-// which only ever raise a count: the collector is off and runs just before.
-func steadyAllocs(f func()) float64 {
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	runtime.GC()
-	return testing.AllocsPerRun(5, f)
-}
-
 // TestReaderAllocs: once the buffers have grown, reading an event allocates nothing, whether it has one data line or
-// several, so a longer stream costs no more allocations (docs/performance.md「调用路径上的规则」).
+// several, so a longer stream costs no more allocations (docs/performance.md「调用路径上的规则」). The measurement runs
+// in a child process, so this binary's other goroutines and their collections are not counted as the reader's.
 func TestReaderAllocs(t *testing.T) {
-	for _, event := range []string{"data: {\"a\":[1,\"b\"]}\n\n", "data: {\"a\":\ndata: [1,\"b\"]}\n\n"} {
-		allocs := func(events int) float64 {
-			stream := []byte(strings.Repeat(event, events))
-			return steadyAllocs(func() {
-				r := sse.NewReader(bytes.NewReader(stream), 1<<10)
-				for {
-					if _, err := r.Next(); err != nil {
-						return
+	for i, event := range []string{"data: {\"a\":[1,\"b\"]}\n\n", "data: {\"a\":\ndata: [1,\"b\"]}\n\n"} {
+		t.Run(fmt.Sprintf("event=%d", i), func(t *testing.T) {
+			read := func(events int) func() {
+				stream := []byte(strings.Repeat(event, events))
+				return func() {
+					r := sse.NewReader(bytes.NewReader(stream), 1<<10)
+					for {
+						if _, err := r.Next(); err != nil {
+							return
+						}
 					}
 				}
-			})
-		}
-		if few, many := allocs(1000), allocs(2000); few != many {
-			t.Errorf("%q: %v allocations for 1000 events, %v for 2000", event, few, many)
-		}
+			}
+			got := alloctest.Measure(t,
+				alloctest.Function{Name: "events=1000", F: read(1000)},
+				alloctest.Function{Name: "events=2000", F: read(2000)},
+			)
+			if few, many := got["events=1000"].Count, got["events=2000"].Count; few != many {
+				t.Errorf("%q: %v allocations for 1000 events, %v for 2000", event, few, many)
+			}
+		})
 	}
 }
 
