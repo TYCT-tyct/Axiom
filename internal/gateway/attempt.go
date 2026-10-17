@@ -108,7 +108,11 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		s.exclude(entry, routing.Full)
 		return nextEntry, ended{}
 	}
-	up, err := protocol.Prepare(&s.c.Request, s.c.Body, entry.Target, protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))})
+	up, held, err := s.prepare(entry)
+	if errors.Is(err, ErrOverloaded) {
+		conn.Done()
+		return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}
+	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
 		if s.skips.unsupported == "" {
@@ -124,14 +128,30 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		s.x.Router.Sent(entry.Supplier)
 	} else if !s.x.Router.TakeRetry(entry.Supplier) {
 		conn.Done()
+		s.x.Memory.Refund(held)
 		s.exclude(entry, routing.RetryBudget)
 		return nextEntry, ended{}
 	}
-	if !s.x.Memory.Charge(int64(len(up.Body))) { // the request as this endpoint takes it is a copy of the body
-		conn.Done()
-		return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}
+	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
+// charged before it allocates (a charge made after would be an allocation already done), and what stays, the capacity
+// of the request as this endpoint takes it, which is a copy of the body, is all that remains charged: held, which the
+// attempt gives back once the request is sent. A refusal is ErrOverloaded.
+func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
+	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
+	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, entry.Target, w)
+	if !s.x.Memory.Charge(cost) {
+		return up, 0, ErrOverloaded
 	}
-	return s.attempt(ctx, i, entry, conn, up)
+	up, err = protocol.Prepare(&s.c.Request, s.c.Body, entry.Target, w)
+	held = min(cost, int64(cap(up.Body)))
+	if err != nil {
+		held = 0
+	}
+	s.x.Memory.Refund(cost - held)
+	return up, held, err
 }
 
 // unprepared is the end of a call whose request cannot be made ready for an endpoint. A request the client got wrong
@@ -217,10 +237,10 @@ func (s *session) journal(a *attempt, committed bool) {
 }
 
 // attempt runs one try: send, and either a failure to decide on or a stream to relay.
-func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream) (step, ended) {
+func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream, held int64) (step, ended) {
 	a, ctx := s.bind(ctx, i, entry, conn)
 	defer a.close()
-	resp, fail := a.send(ctx, up)
+	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
 		return s.failed(a, fail)
 	}
@@ -229,11 +249,11 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 }
 
 // send posts the request, within the wait for the response headers, and journals the attempt again when they come: that
-// is when the supplier's request id is known. The prepared body is given back to the node's budget as soon as it has
-// been sent.
-func (a *attempt) send(ctx context.Context, up protocol.Upstream) (*http.Response, *suppliers.Failure) {
+// is when the supplier's request id is known. The prepared body, held in the node's budget, is given back as soon as it
+// has been sent.
+func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*http.Response, *suppliers.Failure) {
 	s := a.s
-	defer s.x.Memory.Refund(int64(len(up.Body)))
+	defer s.x.Memory.Refund(held)
 	wait := time.AfterFunc(s.x.Limits.cfg.HeaderWait, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header})
 	wait.Stop() // at once: a late firing would cancel the stream the headers began

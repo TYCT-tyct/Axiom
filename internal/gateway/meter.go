@@ -9,8 +9,15 @@ import (
 	"axiom/internal/protocol"
 )
 
-// errCut is the cause an attempt is cancelled for when its reservation could not be extended.
+// errCut is the cause an attempt is cancelled for when the owner finds its reservation could not be extended.
 var errCut = errors.New("gateway: the reservation could not be extended")
+
+// extendFailed is the cause an attempt is cancelled for by an extension that failed while the owner was waiting for
+// the upstream, which cuts the read short; it carries the failure for the owner to end the call with (cut).
+type extendFailed struct{ err error }
+
+func (e *extendFailed) Error() string { return errCut.Error() + ": " + e.err.Error() }
+func (e *extendFailed) Unwrap() error { return e.err }
 
 // metered meters what the relay has seen and acts on what the meter says (README.md「计量与追加」): it starts the
 // extension asked for, takes the outcome of one that came back, and when the approved segments are spent it stops
@@ -57,7 +64,13 @@ func (a *attempt) extend(ctx context.Context, r billing.ExtendRequest) {
 	go func() {
 		ctx, cancel := SettleContext(ctx, s.x.Limits.cfg.ExtendWait)
 		defer cancel()
-		landing <- s.x.withFunds(ctx, s.c, func(ctx context.Context) error { return s.x.Ledger.Extend(ctx, s.c.Hold, r) })
+		err := s.x.withFunds(ctx, s.c, func(ctx context.Context) error { return s.x.Ledger.Extend(ctx, s.c.Hold, r) })
+		landing <- err
+		if err != nil {
+			// The owner may be blocked in a read of an upstream that has gone quiet, which would not return before
+			// the idle timeout: the failure ends it now (README.md「计量与追加」).
+			a.cancel(&extendFailed{err})
+		}
 	}()
 }
 

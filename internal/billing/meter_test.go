@@ -149,6 +149,31 @@ func TestMeterLeft(t *testing.T) {
 	}
 }
 
+// TestMeterLeftNeedsAnExtension: whenever Left is 0 an extension is in flight (it was asked for in that step or before),
+// whatever the read, so the owner that waits for one at Left 0 has one to wait for.
+func TestMeterLeftNeedsAnExtension(t *testing.T) {
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	for bytes := range int64(60) {
+		if step := m.Observe(Progress{ContentBytes: bytes}); step.Left == 0 && !m.flying {
+			t.Fatalf("after %d bytes: Left 0 with no extension in flight, %+v", bytes, step)
+		}
+	}
+}
+
+// TestMeterFreeOutput: output that costs nothing spends no segment however much of it there is, so no step is Exhausted,
+// no extension is due, and Left is unbounded. Left of 0 means an extension is due or in flight, which the owner waits
+// for; with nothing to ask for, it would wait on none, for ever.
+func TestMeterFreeOutput(t *testing.T) {
+	free := entry(t, true, 3)
+	free.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"0"}}`)
+	m := meter(t, Demand{TextBytes: 80}, free)
+	for _, bytes := range []int64{0, 4, 8, 9, 100, 5000} {
+		if step := m.Observe(Progress{ContentBytes: bytes}); step != (MeterStep{Left: math.MaxInt64}) {
+			t.Errorf("after %d bytes: %+v, want to read on, unbounded", bytes, step)
+		}
+	}
+}
+
 // TestMeterLargeEvent: one read of 30 bytes passes the extension point and the whole segment at once, so the step
 // carries both; the request covers the 30 tokens already read plus a segment, so once approved the meter continues.
 func TestMeterLargeEvent(t *testing.T) {

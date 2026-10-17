@@ -137,6 +137,9 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
 	target := c.Target
 	target.Format = c.callFormat(n.req.Format)
+	if c.MaxOutput > 0 { // a model whose limit is unknown has no default to send: the upstream's own applies
+		target.MaxOutput = out
+	}
 	return Entry{
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
 		Segmentable: segmentable,

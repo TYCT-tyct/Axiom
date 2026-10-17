@@ -103,10 +103,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		rec.Costed = true
 		return
 	}
-	d := routing.DemandOf(&s.c.Request)
-	d.TextBytes = tokensOf(d.TextBytes, inputBytesPerToken)
-	input, _ := billing.InputBound(d, a.entry.Limits)
-	rec.Segments = estimated(a.usage, a.seen, input)
+	rec.Segments = estimated(a.usage, a.seen, routing.DemandOf(&s.c.Request), a.entry.Limits, a.meter.OutputCap())
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
@@ -121,12 +118,16 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
-// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by input,
-// the first sampling's input with its text at inputBytesPerToken, unless any input-side item was reported; the output
-// by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far; the web
-// searches by the events seen. Fixed ratios stand in for the estimates by model the docs want, which have no data yet;
-// each is at most the bound the reservation covers, and a supplier's record corrects it.
-func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Segment {
+// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the
+// first sampling's bound over the request's text at inputBytesPerToken, unless any input-side item was reported; the
+// output by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far and
+// never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
+// to); the web searches by the events seen. The ratios stand in for the estimates by model the docs want, which have no
+// data yet; the bounds and the cap keep an estimate within what the reservation covers, and a supplier's record
+// corrects it.
+func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64) []billing.Segment {
+	d.TextBytes = tokensOf(d.TextBytes, inputBytesPerToken)
+	input, _ := billing.InputBound(d, m)
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
 	for i, seg := range u.Segments {
 		segments[i] = billing.Segment{Usage: seg.Usage, Reported: seg.Reported}
@@ -140,7 +141,8 @@ func estimated(u protocol.Usage, p protocol.Progress, input int64) []billing.Seg
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), tokensOf(p.ContentBytes, outputBytesPerToken)) - counts[catalog.ItemReasoning]
+		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
+		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning]
 	}
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)

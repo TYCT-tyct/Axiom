@@ -72,7 +72,9 @@ const MaxEntries = 3
 // Entry is one endpoint to try, with what billing needs to quote it: the price version it will be charged under, the
 // output limit that applies to it, whether its reservation can be made in segments, and the model's limits at this
 // endpoint, the same ones the route was filtered by; and what the attempt needs to make the call: the supplier, whose
-// retry budget it spends, and how the endpoint is called for this request (Target).
+// retry budget it spends, and how the endpoint is called for this request (Target). The output limit is one value for
+// both: a request that sets no cap is sent with Target.MaxOutput, which is MaxOutput, so what is quoted is what the
+// upstream may produce (I1).
 type Entry struct {
 	Endpoint    EndpointID
 	Supplier    SupplierID

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -290,8 +291,46 @@ func TestEstimated(t *testing.T) {
 			map[catalog.Item]int64{in: 900, out: 3},
 		},
 	} {
-		got := estimated(tc.usage, tc.progress, 900)
+		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64)
 		for it := range catalog.NumItems {
+			if n := got[0].Usage.Count(it); n != tc.want[it] {
+				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
+			}
+		}
+	}
+}
+
+// TestAnEstimateStaysWithinTheOutputLimit: the bytes of a stream are read at 3 bytes a token, rounded up, and what they
+// say is held to the output limit the attempt was quoted at, the one metering holds it to, so a stream that never
+// reported its usage is not charged for more than the reservation covers; a count the upstream did report stays
+// whatever it is, and reasoning is part of the limit.
+func TestAnEstimateStaysWithinTheOutputLimit(t *testing.T) {
+	t.Parallel()
+	usage := func(counts map[catalog.Item]int64) catalog.Usage {
+		u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	const out, reasoning = catalog.ItemOutput, catalog.ItemReasoning
+	reported := func(counts map[catalog.Item]int64) protocol.Usage {
+		return protocol.Usage{Segments: []protocol.Segment{{Usage: usage(counts), Reported: 1 << reasoning}}}
+	}
+	for _, tc := range []struct {
+		name  string
+		usage protocol.Usage
+		bytes int64
+		want  map[catalog.Item]int64
+	}{
+		{"bytes past the limit", protocol.Usage{}, 4000, map[catalog.Item]int64{out: 1000}},
+		{"bytes within it", protocol.Usage{}, 2400, map[catalog.Item]int64{out: 800}},
+		{"a ratio that rounds up to the limit", protocol.Usage{}, 2999, map[catalog.Item]int64{out: 1000}},
+		{"reasoning is part of the limit", reported(map[catalog.Item]int64{reasoning: 300}), 4000, map[catalog.Item]int64{reasoning: 300, out: 700}},
+		{"a count above the limit stays", reported(map[catalog.Item]int64{reasoning: 1200}), 4000, map[catalog.Item]int64{reasoning: 1200}},
+	} {
+		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000)
+		for _, it := range []catalog.Item{out, reasoning} {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
 			}

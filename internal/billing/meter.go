@@ -21,7 +21,8 @@ type Progress struct {
 // the extension in flight returns, or both, when one read crossed the extension point and the segment together. Left
 // is how many more output tokens the approved segments cover, which bounds how long the owner may stop reading
 // (internal/gateway/README.md「计量与追加」): math.MaxInt64 for an attempt reserved in full, or once the approved
-// segments cover the output limit, which the upstream does not pass.
+// segments cover the output limit, which the upstream does not pass, or when output costs nothing, so that no amount of
+// it spends a segment. So Left is 0 only while an extension is due or in flight, and that is what the owner waits for.
 type MeterStep struct {
 	Extend    bool
 	Request   ExtendRequest
@@ -52,6 +53,10 @@ type Meter struct {
 	stop    platform.Exact // spend past it exhausts the approved segments
 	ask     platform.Exact // spend past it asks for the next segment
 }
+
+// OutputCap is the most output tokens the attempt can have: the entry's output limit on each choice. Metering holds the
+// output to it, and so must any estimate of what the upstream did not report; it is one value for both.
+func (m *Meter) OutputCap() int64 { return m.q.outputCap }
 
 // ceiling is what a run of segments covers: output tokens up to tokens, of which the last segment began at start, and
 // web searches beyond the quote up to excess.
@@ -98,7 +103,7 @@ func (m *Meter) Observe(p Progress) MeterStep {
 	out, excess := m.used(p)
 	spend := sum(m.q.output.Mul(out), m.searchCost(excess))
 	step := MeterStep{Left: max(m.ceiling.tokens-out, 0)}
-	if m.ceiling.tokens >= m.q.outputCap {
+	if m.ceiling.tokens >= m.q.outputCap || m.q.output.Cmp(platform.UnitPrice{}) == 0 {
 		step.Left = math.MaxInt64
 	}
 	if !m.flying && (m.asked || spend.Cmp(m.ask) > 0) {
