@@ -329,7 +329,7 @@ func TestRefusalsThatGuessNothingAreNotCounted(t *testing.T) {
 func scrapeMisses(t *testing.T, tel *telemetry.Telemetry) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	for line := range strings.Lines(rec.Body.String()) {
 		if value, ok := strings.CutPrefix(line, "axiom_accounts_key_cache_misses_total "); ok {
 			return strings.TrimSpace(value)
