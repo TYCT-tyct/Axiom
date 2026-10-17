@@ -14,20 +14,20 @@ import (
 // true. An endpoint that does not stream keeps what the client asked.
 func TestPrepareAsksForAStream(t *testing.T) {
 	w := protocol.Rewrites{Identity: derive}
-	prepared := func(t *testing.T, f protocol.Format, body string, streams bool) protocol.Request {
+	prepared := func(t *testing.T, from, to protocol.Format, body string, streams bool) protocol.Request {
 		t.Helper()
-		r, err := protocol.Inspect(f, []byte(body))
+		r, err := protocol.Inspect(from, []byte(body))
 		if err != nil {
 			t.Fatal(err)
 		}
-		target := protocol.Target{Format: f, Model: "up", MaxOutput: 100, Streams: streams}
+		target := protocol.Target{Format: to, Model: "up", MaxOutput: 100, Streams: streams}
 		u, err := protocol.Prepare(&r, []byte(body), target, w)
 		if err != nil {
-			t.Fatalf("format %d: %v", f, err)
+			t.Fatalf("format %d to %d: %v", from, to, err)
 		}
-		got, err := protocol.Inspect(f, u.Body)
+		got, err := protocol.Inspect(from, u.Body)
 		if err != nil {
-			t.Fatalf("format %d: %v", f, err)
+			t.Fatalf("format %d to %d: %v", from, to, err)
 		}
 		return got
 	}
@@ -38,16 +38,16 @@ func TestPrepareAsksForAStream(t *testing.T) {
 			{"null", `{"model":"m","stream":null}`},
 			{"true", `{"model":"m","stream":true}`},
 		} {
-			if !prepared(t, f, c.body, true).Stream {
+			if !prepared(t, f, f, c.body, true).Stream {
 				t.Errorf("format %d, %s: the request does not ask for a stream", f, c.name)
 			}
-			if prepared(t, f, `{"model":"m","stream":false}`, false).Stream {
+			if prepared(t, f, f, `{"model":"m","stream":false}`, false).Stream {
 				t.Errorf("format %d: an endpoint that cannot stream was asked for one", f)
 			}
 		}
 	}
 	// A Chat request is converted, and gets the member the same way.
-	if !prepared(t, protocol.Chat, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, true).Stream {
+	if !prepared(t, protocol.Chat, protocol.Messages, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, true).Stream {
 		t.Error("the converted request does not ask for a stream")
 	}
 }
