@@ -117,9 +117,8 @@ test("a server failure is retried, then shows its request ID, and retrying asks 
     return calls <= 3 ? route.fulfill({ status: 500, headers: { "X-Request-ID": "req-500" } }) : route.fallback();
   });
   await page.goto("/console/");
-  await advanceUntil(page, () =>
-    expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible({ timeout: 100 }),
-  );
+  const failed = page.getByRole("heading", { name: "没能加载" });
+  await advanceUntil(page, () => expect(failed).toBeVisible({ timeout: 100 }));
   await expect(page.getByText("请求 ID req-500")).toBeVisible();
   expect(calls).toBe(3);
 
