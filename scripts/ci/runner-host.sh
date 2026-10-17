@@ -24,6 +24,7 @@ toolcache=/opt/hostedtoolcache
 slice=axiom-ci.slice
 parent_dropin=/etc/systemd/system/axiom.slice.d/axiom-ci.conf
 runners=${RUNNERS:-8} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
+cpu_weight=${CPU_WEIGHT:-20}
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 go_version=$(awk '$1 == "go" { print $2 }' "$root/go.mod")
@@ -40,14 +41,16 @@ download() {
   echo "$3  $2" | sha256sum -c --quiet -
 }
 
+# write_changed FILE CONTENT: writes CONTENT unless FILE already holds it; succeeds only when it wrote
+write_changed() { [ "$(cat "$1" 2>/dev/null)" != "$2" ] && printf '%s\n' "$2" > "$1"; }
+
 # A tool in the layout actions/setup-go and actions/setup-node look up first (<cache>/<tool>/<version>/x64 with its
 # .complete marker), so no job downloads or unpacks it; parallel jobs unpacking one tool overwrite each other.
+cached() { [ -f "$toolcache/$1/$2/x64.complete" ]; } # tool version
 cache_tool() { # tool version url sha256
-  local dir=$toolcache/$1/$2/x64
-  [ -f "$dir.complete" ] && return
-  local tarball
+  local dir=$toolcache/$1/$2/x64 tarball
   tarball=$(mktemp)
-  download "$3" "$tarball" "$4"
+  download "$3" "$tarball" "$4" || { rm -f "$tarball"; return 1; }
   rm -rf "$dir" && mkdir -p "$dir"
   tar -xf "$tarball" -C "$dir" --strip-components=1
   rm -f "$tarball"
@@ -57,10 +60,15 @@ cache_tool() { # tool version url sha256
 install_tools() {
   mkdir -p "$toolcache"
   local go_file=go$go_version.linux-amd64.tar.gz node_file=node-v$node_version-linux-x64.tar.xz
-  cache_tool go "$go_version" "https://go.dev/dl/$go_file" \
-    "$(curl -sSfL 'https://go.dev/dl/?mode=json&include=all' | jq -r --arg f "$go_file" '.[].files[] | select(.filename == $f).sha256')"
-  cache_tool node "$node_version" "https://nodejs.org/dist/v$node_version/$node_file" \
-    "$(curl -sSfL "https://nodejs.org/dist/v$node_version/SHASUMS256.txt" | awk -v f="$node_file" '$2 == f { print $1 }')"
+  # Checked before the call, not in it, so a cached tool costs no checksum request
+  if ! cached go "$go_version"; then
+    cache_tool go "$go_version" "https://go.dev/dl/$go_file" \
+      "$(curl -sSfL 'https://go.dev/dl/?mode=json&include=all' | jq -r --arg f "$go_file" '.[].files[] | select(.filename == $f).sha256')"
+  fi
+  if ! cached node "$node_version"; then
+    cache_tool node "$node_version" "https://nodejs.org/dist/v$node_version/$node_file" \
+      "$(curl -sSfL "https://nodejs.org/dist/v$node_version/SHASUMS256.txt" | awk -v f="$node_file" '$2 == f { print $1 }')"
+  fi
   chown -R "$user:" "$toolcache"
   # The system libraries and fonts chromium needs, then the browser itself for the runner user; the CDN can be slow
   # from some hosts, so the connection gets five minutes instead of Playwright's 30 seconds
@@ -78,12 +86,14 @@ MemoryHigh=${MEMORY_HIGH:-45G}
 MemoryMax=${MEMORY_MAX:-50G}
 EOF
   mkdir -p "$(dirname "$parent_dropin")"
-  printf '[Slice]\nCPUWeight=%s\n' "${CPU_WEIGHT:-20}" > "$parent_dropin"
+  printf '[Slice]\nCPUWeight=%s\n' "$cpu_weight" > "$parent_dropin"
   systemctl daemon-reload
 }
 
 install_runner() { # number
   local name=$prefix$1 dir=$home/$prefix$1 tarball=$home/actions-runner-linux-x64-$runner_version.tar.gz
+  local unit restart=
+  unit=$(service "$1")
   if [ ! -f "$tarball" ]; then
     local url=https://github.com/actions/runner/releases/download/v$runner_version/actions-runner-linux-x64-$runner_version.tar.gz
     download "$url" "$tarball" "$(curl -sSfL "https://api.github.com/repos/actions/runner/releases/tags/v$runner_version" \
@@ -94,25 +104,27 @@ install_runner() { # number
     as_user tar -xzf "$tarball" -C "$dir"
     (cd "$dir" && as_user ./config.sh --unattended --replace --url "$repo_url" --token "$RUNNER_TOKEN" \
       --name "$name" --labels "$labels" --work _work)
-    (cd "$dir" && ./svc.sh install "$user")
   fi
+  # Apart from the configuration, so a service install that failed after it is retried on the next run
+  [ -f "/etc/systemd/system/$unit" ] || (cd "$dir" && ./svc.sh install "$user")
   # Each runner its own temporary directory and Go caches: jobs sharing one GOCACHE crashed the linker with SIGBUS
   # on an object file another job was rewriting (2026-10-17)
   as_user mkdir -p "$dir/_tmp" "$dir/_gocache" "$dir/_lintcache"
-  cat > "$dir/.env" <<EOF
-LANG=en_US.UTF-8
+  if write_changed "$dir/.env" "LANG=en_US.UTF-8
 RUNNER_TOOL_CACHE=$toolcache
 TMPDIR=$dir/_tmp
 PATH=$node_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 GOMAXPROCS=$procs
 GOCACHE=$dir/_gocache
-GOLANGCI_LINT_CACHE=$dir/_lintcache
-EOF
-  chown "$user:" "$dir/.env"
-  mkdir -p "/etc/systemd/system/$(service "$1").d"
-  printf '[Service]\nSlice=%s\n' "$slice" > "/etc/systemd/system/$(service "$1").d/slice.conf"
+GOLANGCI_LINT_CACHE=$dir/_lintcache"; then
+    chown "$user:" "$dir/.env"
+    restart=1
+  fi
+  mkdir -p "/etc/systemd/system/$unit.d"
+  if write_changed "/etc/systemd/system/$unit.d/slice.conf" "$(printf '[Service]\nSlice=%s' "$slice")"; then restart=1; fi
   systemctl daemon-reload
-  systemctl restart "$(service "$1")"
+  # Restarted only on a change, so running install again does not kill the jobs that are running
+  if [ -n "$restart" ]; then systemctl restart "$unit"; else systemctl start "$unit"; fi
 }
 
 install() {
@@ -134,8 +146,8 @@ check() {
   cd "$home"
   ok() { if "${@:2}" >/dev/null 2>&1; then echo "ok    $1"; else echo "FAIL  $1"; failed=1; fi; }
   ok "user $user can use docker" as_user docker info
-  ok "go $go_version in the tool cache" test -f "$toolcache/go/$go_version/x64.complete"
-  ok "node $node_version in the tool cache" test -f "$toolcache/node/$node_version/x64.complete"
+  ok "go $go_version in the tool cache" cached go "$go_version"
+  ok "node $node_version in the tool cache" cached node "$node_version"
   local race
   race=$(as_user mktemp -d)
   printf 'package main\nfunc main() {}\n' | as_user tee "$race/main.go" >/dev/null
@@ -144,7 +156,7 @@ check() {
   local browser
   browser=$(as_user npx -y "playwright@$playwright_version" install --dry-run --only-shell chromium 2>/dev/null | awk '/Install location:/ { print $3; exit }') || true
   ok "chromium headless shell for playwright $playwright_version" test -n "$browser" -a -d "$browser"
-  ok "$slice and the CPU weight on its parent" test -f "/etc/systemd/system/$slice" -a -f "$parent_dropin"
+  ok "CPUWeight=$cpu_weight on the parent of $slice" test "$(systemctl show axiom.slice -p CPUWeight --value)" = "$cpu_weight"
   for i in $(seq 1 "$runners"); do
     ok "$prefix$i is running" systemctl is-active "$(service "$i")"
     ok "$prefix$i runs in $slice" test "$(systemctl show "$(service "$i")" -p Slice --value)" = "$slice"
@@ -154,16 +166,23 @@ check() {
   return "$failed"
 }
 
+# Removes what install made and nothing else on a host the runners may share: every runner named $prefix<number>,
+# found on the host rather than counted from RUNNERS; the tool versions it cached; the user once no runner of any
+# name is left in its home.
 remove() {
-  for i in $(seq 1 "$runners"); do
-    systemctl disable --now "$(service "$i")" 2>/dev/null || true
-    rm -rf "/etc/systemd/system/$(service "$i")" "/etc/systemd/system/$(service "$i").d"
+  local unit
+  for unit in $(systemctl list-unit-files --no-legend "$(service '[0-9]*')" | awk '{ print $1 }'); do
+    systemctl disable --now "$unit" || true
+    rm -rf "/etc/systemd/system/$unit" "/etc/systemd/system/$unit.d"
   done
   rm -f "/etc/systemd/system/$slice" "$parent_dropin"
   systemctl daemon-reload
-  pkill -u "$user" 2>/dev/null || true
-  ! id "$user" >/dev/null 2>&1 || userdel -r "$user"
-  rm -rf "$home" "$toolcache"
+  rm -rf "$home/$prefix"[0-9]* "$toolcache/go/$go_version" "$toolcache/node/$node_version"
+  rmdir "$toolcache/go" "$toolcache/node" "$toolcache" 2>/dev/null || true
+  if id "$user" >/dev/null 2>&1 && ! compgen -G "$home/*/.runner" >/dev/null; then
+    pkill -u "$user" || true
+    userdel -r "$user"
+  fi
   echo "Removed. gcc, libc6-dev and chromium's system libraries stay installed. Delete these registrations on GitHub:"
   echo "  gh api repos/TYCT-tyct/Axiom/actions/runners --jq '.runners[] | select(.name | startswith(\"$prefix\")) | .id'"
   echo "  then gh api -X DELETE repos/TYCT-tyct/Axiom/actions/runners/<id> for each"
