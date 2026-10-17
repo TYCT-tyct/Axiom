@@ -73,7 +73,7 @@ scope:
 # egress.NewForTesting lives in egress itself, so it stays listed.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed -E 's/^(.+\.go):([0-9]+):[0-9]+: unreachable func: (.+)$/only tests reach: \3 (\1 line \2)/'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The
