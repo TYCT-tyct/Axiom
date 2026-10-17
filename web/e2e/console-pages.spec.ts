@@ -59,8 +59,12 @@ test.describe("signing in", () => {
 
   test("pressing twice while the request is out sends it once", async ({ page }) => {
     const state = await mockConsole(page);
+    // The request is held until both presses are made, not for a fixed time: on a loaded runner the presses can take
+    // longer than any delay, and the page would have answered and signed in before the second one.
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
     await page.route("**/api/console/v1/auth/sign-in", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await held;
       await route.fallback();
     });
     await page.goto("/console/sign-in");
@@ -70,6 +74,7 @@ test.describe("signing in", () => {
     await submit.click();
     await expect(submit).toBeDisabled();
     await submit.click({ force: true, noWaitAfter: true }).catch(() => {});
+    answer();
     await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
     expect(state.log.filter((line) => line === "POST /auth/sign-in")).toHaveLength(1);
   });
