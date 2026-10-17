@@ -116,7 +116,7 @@
 ### 监控与告警
 
 - **指标与链路的约定**：命名、标签的基数上限、采样与导出配置见 [platform 的「遥测」](../../internal/platform/README.md#遥测)；各模块只按那里的规则加指标。
-- **被丢弃的作业**：River 在任务用尽重试后把它标为 `discarded`，作业从此不再运行。队列这时记一条 error 日志，消息是稳定的事件名 `queue.job_discarded`（`job_id`、`kind`、`attempt`、`err`），并累加 `axiom.pg.queue.discarded_jobs`（标签 `kind`；Prometheus 里是 `axiom_pg_queue_discarded_jobs_total`）。告警规则按 `kind` 收窄；校正是其中一种，排障步骤见 [billing 的「被丢弃的校正作业」](../../internal/billing/README.md#被丢弃的校正作业)。
+- **被丢弃的作业**：River 在任务用尽重试后把它标为 `discarded`，作业从此不再运行；最后一次尝试所在的节点消失时，River 的救援（JobRescuer）也会直接把它标为 `discarded`，不经过 worker 或错误回调。队列每分钟扫描一次持久化的 `river.river_job`（`state = 'discarded'`），为每个任务在 `river.axiom_discarded_job` 记一行（主键是任务 ID），并按 `kind` 记 error 日志 `queue.job_discarded`（`job_id`、`kind`、`attempt`）和累加 `axiom.pg.queue.discarded_jobs`（Prometheus 里是 `axiom_pg_queue_discarded_jobs_total`）。认领行让同一任务在重启、另一个节点或再次扫描时不再上报；扫描事务若在上报后回滚，下一次会重复上报，所以指标计的是上报次数，告警按增量而不是总数。认领行保留 7 天，长于 River 对 `discarded` 任务的 24 小时保留；告警规则按 `kind` 收窄，校正是其中一种，排障步骤见 [billing 的「被丢弃的校正作业」](../../internal/billing/README.md#被丢弃的校正作业)。
 - **指标**：每个端点、供应商、节点、模型的请求量、错误率、延迟；收入、利润率、各供应商余额；底线指标的达成情况（见[总体架构的「底线指标」](../architecture.md#底线指标)）。指标只按这些维度区分，不按账户、key、用户区分，避免数量失控；按账户的统计从调用记录里算。
 - **告警规则是后台数据**：阈值、持续时间、严重程度都可配置；另有自动的异常检测，例如某个端点的错误率突然升高。
 - **在哪里判断**：告警规则在运维节点上判断；最关键的几项健康检查同时在核心节点和外部在线监测服务上判断，运维节点故障时它们通过直通通道告警（见[运营的「通知」](operations.md#通知)）。

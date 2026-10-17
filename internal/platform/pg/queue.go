@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -31,11 +30,21 @@ const (
 	rescueAfter = jobTimeout + 5*time.Minute
 	// stopCancelGrace is how long jobs still running get, after the deadline given to Stop, to notice they are cancelled.
 	stopCancelGrace = 5 * time.Second
-	// discardedEvent is the stable name of the error log a job's discard writes, for alerting
-	// (docs/domains/observability.md「监控与告警」). River itself logs the final failure only at info level.
+	// discardedEvent is the stable name of the error log a discarded job's report writes, for alerting
+	// (docs/domains/observability.md「监控与告警」). River itself logs a final failure only at info level.
 	discardedEvent = "queue.job_discarded"
-	// discardedMetric counts the jobs River discards, by kind, so an alert can select the kinds that must not fail.
+	// discardedMetric counts the discarded jobs the queue reports, by kind, so an alert can select the kinds that must
+	// not fail. A failed scan transaction can report the same job again; the alert watches a rise, not a total.
 	discardedMetric = "axiom.pg.queue.discarded_jobs"
+	// discardedScanEvery is how often the queue looks for jobs that reached the discarded state. It must be shorter
+	// than the time an operator is willing to wait, and longer than a scan.
+	discardedScanEvery = time.Minute
+	// discardedRetention is how long River keeps a discarded job's row. The queue's claim on the job is kept longer,
+	// so the row cannot go before the claim does; a claim older than this is pruned.
+	discardedRetention = 24 * time.Hour
+	// discardedSeenDays is how long the queue keeps a claim. It is longer than discardedRetention, so a job cannot
+	// reappear as new after its claim is pruned.
+	discardedSeenDays = 7
 )
 
 // Queue is the job queue, River on the application's connection pool (docs/architecture.md「技术选型」). A module
@@ -43,17 +52,22 @@ const (
 // write that causes it, so the job exists if and only if that write does. A job runs at least once, so a worker must
 // tolerate a repeat.
 type Queue struct {
-	db       *DB
-	logger   *slog.Logger
-	workers  *river.Workers
-	periodic []*river.PeriodicJob
-	handler  *discardHandler
-	client   atomic.Pointer[river.Client[pgx.Tx]]
+	db        *DB
+	logger    *slog.Logger
+	workers   *river.Workers
+	periodic  []*river.PeriodicJob
+	discarded metric.Int64Counter
+	client    atomic.Pointer[river.Client[pgx.Tx]]
 }
 
-// NewQueue makes a queue that does nothing until Start. meter reports jobs River discards; nil for none.
+// NewQueue makes a queue that does nothing until Start. meter reports the discarded jobs the queue finds; nil for none.
 func (db *DB) NewQueue(logger *slog.Logger, meter metric.Meter) *Queue {
-	return &Queue{db: db, logger: logger, workers: river.NewWorkers(), handler: newDiscardHandler(logger, meter)}
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("pg")
+	}
+	q := &Queue{db: db, logger: logger, workers: river.NewWorkers(), discarded: newDiscardedCounter(meter)}
+	q.Every(discardedScanEvery, func() river.JobArgs { return discardedScanArgs{} })
+	return q
 }
 
 // Workers is where a module registers the workers of its jobs (river.AddWorker), before Start.
@@ -72,9 +86,12 @@ func (q *Queue) Every(interval time.Duration, args func() river.JobArgs) {
 // that decides how long they get has begun, and a job that is cut short mid-way (a login token spent and not yet
 // stored, say) is the harm Stop's deadline exists to avoid.
 func (q *Queue) Start(ctx context.Context) error {
+	if err := river.AddWorkerSafely(q.workers, river.WorkFunc(q.workDiscardedScan)); err != nil {
+		return fmt.Errorf("queue: %w", err)
+	}
 	client, err := river.NewClient(riverpgxv5.New(q.db.pool), &river.Config{
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
-		RescueStuckJobsAfter: rescueAfter, ErrorHandler: q.handler,
+		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: discardedRetention,
 		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: queueWorkers}},
 	})
 	if err != nil {
@@ -123,43 +140,70 @@ func (q *Queue) InsertManyTx(ctx context.Context, tx Tx, jobs []river.InsertMany
 	return inserted, nil
 }
 
-// discardHandler turns the last failure of a job into an error log and a metric. River uses the same condition for
-// the last attempt (Attempt >= MaxAttempts) and then marks the job discarded, so the alert fires exactly when a job
-// will not run again. A cancelled or snoozed job ends another way and never reaches the handler.
-type discardHandler struct {
-	logger    *slog.Logger
-	discarded metric.Int64Counter
+// discardedScanArgs is the queue's periodic scan of jobs River has discarded.
+type discardedScanArgs struct{}
+
+// Kind implements river.JobArgs.
+func (discardedScanArgs) Kind() string { return "queue.discard_scan" }
+
+// InsertOpts implements river.JobArgsWithInsertOpts. The next scan is the retry: a scan that fails is itself a
+// discarded job the next scan reports.
+func (discardedScanArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 1} }
+
+// discardedJob is a job the scan claimed to report.
+type discardedJob struct {
+	id      int64
+	kind    string
+	attempt int16
 }
 
-func newDiscardHandler(logger *slog.Logger, meter metric.Meter) *discardHandler {
-	if meter == nil {
-		meter = noop.NewMeterProvider().Meter("pg")
+func (q *Queue) workDiscardedScan(ctx context.Context, _ *river.Job[discardedScanArgs]) error {
+	return q.scanDiscarded(ctx)
+}
+
+// scanDiscarded claims every discarded job not reported before, in the transaction that reads them, and reports each
+// as it is claimed. The claim is a row keyed by job id, so a second scan, another node or a restart reports nothing;
+// if the transaction rolls back after a report, the next scan reports again (at least once). The report is the error
+// log alerts watch and the counter, labelled by kind.
+func (q *Queue) scanDiscarded(ctx context.Context) error {
+	err := q.db.Tx(ctx, Scope{}, func(tx Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM river.axiom_discarded_job
+			WHERE seen_at < now() - make_interval(days => $1)`, int32(discardedSeenDays)); err != nil {
+			return fmt.Errorf("prune reported discards: %w", err)
+		}
+		rows, err := tx.Query(ctx, `INSERT INTO river.axiom_discarded_job (job_id, kind, attempt)
+			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
+			ON CONFLICT (job_id) DO NOTHING
+			RETURNING job_id, kind, attempt`)
+		if err != nil {
+			return fmt.Errorf("claim discarded jobs: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d discardedJob
+			if err := rows.Scan(&d.id, &d.kind, &d.attempt); err != nil {
+				return fmt.Errorf("read a discarded job: %w", err)
+			}
+			q.reportDiscarded(ctx, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return fmt.Errorf("scan discarded jobs: %w", err)
 	}
-	return &discardHandler{logger: logger, discarded: newDiscardedCounter(meter)}
+	return nil
+}
+
+// reportDiscarded is the signal for one job River will not run again: the error log and the counter.
+func (q *Queue) reportDiscarded(ctx context.Context, d discardedJob) {
+	q.discarded.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", d.kind)))
+	q.logger.ErrorContext(ctx, discardedEvent, "job_id", d.id, "kind", d.kind, "attempt", d.attempt)
 }
 
 func newDiscardedCounter(meter metric.Meter) metric.Int64Counter {
-	c, err := meter.Int64Counter(discardedMetric, metric.WithDescription("Jobs River discarded after their last attempt failed."))
+	c, err := meter.Int64Counter(discardedMetric, metric.WithDescription("Discarded jobs reported by the queue, by kind."))
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
 	return c
-}
-
-// HandleError implements river.ErrorHandler.
-func (h *discardHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
-	if job.Attempt >= job.MaxAttempts {
-		h.discarded.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", job.Kind)))
-		h.logger.ErrorContext(ctx, discardedEvent, "job_id", job.ID, "kind", job.Kind, "attempt", job.Attempt, "err", err)
-	}
-	return nil
-}
-
-// HandlePanic implements river.ErrorHandler. A panic on the last attempt discards the job just as an error does.
-func (h *discardHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, _ string) *river.ErrorHandlerResult {
-	if job.Attempt >= job.MaxAttempts {
-		h.discarded.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", job.Kind)))
-		h.logger.ErrorContext(ctx, discardedEvent, "job_id", job.ID, "kind", job.Kind, "attempt", job.Attempt, "panic", panicVal)
-	}
-	return nil
 }
