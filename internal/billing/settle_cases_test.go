@@ -2,7 +2,6 @@ package billing
 
 import (
 	"context"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -162,111 +161,6 @@ func unknown(t *testing.T, input int64, field, value string) Segment {
 		t.Fatal(err)
 	}
 	return Segment{Usage: u, Reported: 1<<in | 1<<catalog.ItemOutput}
-}
-
-// TestSettleUnknownUsage: usage protocol could not map is never free (docs/domains/billing.md「价目表缺项」). Tokens are
-// charged at the highest token price, 1, from the first charge through a correction to the end of the window; a retry
-// returns the stored Final, unknown usage included. Usage with no fallback price is charged its known part and held,
-// past any window, until a supplier record prices it.
-func TestSettleUnknownUsage(t *testing.T) {
-	// The window is long enough that the corrections this test makes inside it cannot fall outside it on a loaded
-	// machine; where a subtest needs the window to have ended, it moves it into the past itself.
-	config := Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour}
-	settle := func(b *bank, h *Hold, s Segment) Final {
-		t.Helper()
-		f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, s))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return f
-	}
-	retried := func(b *bank, h *Hold, want Final) {
-		t.Helper()
-		if again := settle(b, h, used(t, 1, 1, 0)); !reflect.DeepEqual(again, want) {
-			t.Errorf("retry = %+v, want the stored %+v", again, want)
-		}
-	}
-	expect := func(b *bank, state string, charged int64) {
-		t.Helper()
-		if s, n := b.state(), b.count("SELECT charged FROM billing.reservations"); s != state || n != charged {
-			t.Errorf("%s charged %d, want %s charged %d", s, n, state, charged)
-		}
-		b.balanced()
-	}
-	endWindow := func(b *bank, h *Hold) {
-		t.Helper()
-		b.closeWindow(h)
-		b.cleanup()
-	}
-	t.Run("tokens, corrected", func(t *testing.T) {
-		b := newBank(t, 10_000, 0, config)
-		h := b.hold(1000)
-		first := settle(b, h, unknown(t, 50, "usage.new_thing_tokens", "30"))
-		if !first.Estimated || first.Charged != platform.AmountExact(100) {
-			t.Errorf("Settle = %+v, want 100 estimated", first)
-		}
-		expect(b, "estimated", 100)
-		retried(b, h, first)
-		corrected := unknown(t, 400, "usage.new_thing_tokens", "40")
-		b.correct(h, 1, 1, 9, corrected)
-		expect(b, "estimated", 460)
-		retried(b, h, Final{Segments: []Segment{{Usage: corrected.Usage, Reported: ^catalog.ItemSet(0)}}, Charged: platform.AmountExact(460), Estimated: true})
-		endWindow(b, h)
-		expect(b, "settled", 460)
-	})
-	t.Run("tokens, window ends", func(t *testing.T) {
-		b := newBank(t, 10_000, 0, config)
-		h := b.hold(1000)
-		settle(b, h, unknown(t, 50, "usage.new_thing_tokens", "30"))
-		endWindow(b, h)
-		expect(b, "settled", 100)
-	})
-	unpriced := func(b *bank, h *Hold, charged int64) {
-		t.Helper()
-		b.closeWindow(h)
-		if n, err := b.billing.Cleanup(t.Context(), 100); err != nil || n != 0 {
-			t.Errorf("Cleanup = %d, %v; want nothing to end", n, err)
-		}
-		expect(b, "estimated", charged)
-	}
-	fetches := func(input int64) Segment {
-		return unknown(t, input, "usage.server_tool_use.web_fetch_requests", "2")
-	}
-	t.Run("no fallback price", func(t *testing.T) {
-		b := newBank(t, 10_000, 0, config)
-		h := b.hold(1000)
-		first := settle(b, h, fetches(50))
-		unpriced(b, h, 70)
-		retried(b, h, first)
-		b.correct(h, 1, 1, 9, used(t, 400, 20, 1)) // priced at last: the window opens
-		expect(b, "estimated", 430)
-		endWindow(b, h)
-		expect(b, "settled", 430)
-	})
-	t.Run("no fallback price in the record", func(t *testing.T) {
-		b := newBank(t, 10_000, 0, config)
-		h := b.hold(1000)
-		settle(b, h, used(t, 300, 20, 0, in))
-		b.correct(h, 1, 1, 9, fetches(400))
-		unpriced(b, h, 420) // past the window the estimate opened
-		b.correct(h, 1, 2, 9, used(t, 400, 20, 1))
-		expect(b, "estimated", 430)
-		endWindow(b, h)
-		expect(b, "settled", 430)
-	})
-	t.Run("no fallback price in a cleaned-up call's record", func(t *testing.T) {
-		lapsed := config
-		lapsed.Lifetime = time.Millisecond
-		b := newBank(t, 10_000, 0, lapsed)
-		h := b.hold(1000)
-		b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
-		b.cleanup()
-		b.correct(h, 1, 1, 9, fetches(400))
-		unpriced(b, h, 420)
-		b.correct(h, 1, 2, 9, used(t, 400, 20, 1))
-		endWindow(b, h)
-		expect(b, "settled", 430)
-	})
 }
 
 // TestSettleReturnsTheStoredFinal: a retry returns what the first Settle stored, whatever outcome it carries, and the

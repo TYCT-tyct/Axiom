@@ -96,6 +96,7 @@ func TestFilters(t *testing.T) {
 			in.Override.MaxPrice.Max[catalog.ItemOutput] = price(t, "0.000001")
 		}, nil, routing.OverrideFilter, true},
 		{"no sale price", func(e *routing.Endpoint) { e.Price = routing.PriceRef{} }, nil, nil, routing.NoPrice, true},
+		{"an unknown billing item", func(e *routing.Endpoint) { e.UnknownItem = true }, nil, nil, routing.UnknownItem, true},
 		{"no egress", func(e *routing.Endpoint) { e.Egresses = 0 }, nil, nil, routing.NoEgress, false},
 	}
 	for _, c := range cases {

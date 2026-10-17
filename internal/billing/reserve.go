@@ -75,6 +75,10 @@ func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor i
 // source allows, and writes the reservation and its three counters in one statement. It returns the kept entries'
 // indexes, or *Insufficient when the preferred entry is unaffordable.
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
+	q, fallbacks, err := withFallbacks(ctx, tx, q) // before the lock: it reads platform data only
+	if err != nil {
+		return nil, nil, err
+	}
 	balance, err := lockAccount(ctx, tx, a.Account)
 	if errors.Is(err, errNoBalance) {
 		return nil, nil, &Insufficient{Source: SourceBalance} // nothing to reserve against, not even a zero price
@@ -98,9 +102,13 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	if err != nil {
 		return nil, nil, err
 	}
+	locked, models := make([]string, len(q)), make([]uuid.UUID, len(q))
+	for _, i := range r.Kept {
+		locked[i], models[i] = fallbacks[i], uuid.UUID(q[i].Model.ID)
+	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		Prices:    prices,
+		Prices: prices, Fallbacks: locked, Models: models,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),

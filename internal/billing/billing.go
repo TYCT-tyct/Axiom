@@ -1,11 +1,13 @@
 package billing
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -34,7 +36,8 @@ type Config struct {
 	// CorrectionWindow is how long an estimated or cleaned-up charge may be corrected, holding the rest of its
 	// reservation until then (an hour, docs/domains/billing.md「用量来源与暂估」).
 	CorrectionWindow time.Duration
-	WaiverCap        int64 // what an account's waived calls may cost the platform in a UTC day, in billionths
+	WaiverCap        int64        // what an account's waived calls may cost the platform in a UTC day, in billionths
+	Logger           *slog.Logger // where alerts go; default slog.Default()
 }
 
 // Billing writes reservations under one holder, this start of the process.
@@ -44,6 +47,7 @@ type Billing struct {
 	holder    uuid.UUID
 	config    Config
 	suppliers Suppliers
+	logger    *slog.Logger
 	beat      atomic.Int64 // unix nanoseconds of the last time the holder's expiry was known to be pushed out
 }
 
@@ -59,18 +63,36 @@ var ErrTerminated = errors.New("billing: the reservation's holder was reaped or 
 // holder (Start).
 var ErrReaped = errors.New("billing: the holder was reaped")
 
-// Start registers a new holder. platform is the platform scope, which only cmd/ builds.
+// Start checks the fallback prices, without valid ones billing does not run (docs/domains/billing.md「价目表缺项」), and
+// registers a new holder. platform is the platform scope, which only cmd/ builds.
 func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s Suppliers) (*Billing, error) {
-	b := &Billing{db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s}
+	b := &Billing{
+		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
+		logger: cmp.Or(config.Logger, slog.Default()),
+	}
 	registered := time.Now()
 	err := db.Tx(ctx, platform, func(tx pg.Tx) error {
-		return queries.InsertHolder(ctx, tx, InsertHolderParams{ID: b.holder, TtlSeconds: config.HolderTTL.Seconds()})
+		if err := CheckFallbacks(ctx, tx); err != nil {
+			return err
+		}
+		if err := queries.InsertHolder(ctx, tx, InsertHolderParams{ID: b.holder, TtlSeconds: config.HolderTTL.Seconds()}); err != nil {
+			return fmt.Errorf("billing: register the holder: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("billing: register the holder: %w", err)
+		return nil, err
 	}
 	b.beat.Store(registered.UnixNano())
 	return b, nil
+}
+
+// alert reports each unknown item seen for the first time: its model has left routing and needs an administrator.
+func (b *Billing) alert(seen []UnknownItem) {
+	for _, u := range seen {
+		b.logger.Error("billing: an unknown billing item appeared; the model takes no new requests until it is priced",
+			"model", u.Model.String(), "field", u.Field, "request", u.Request.String())
+	}
 }
 
 // Heartbeat extends the holder's life by the TTL from now, by the database's clock.

@@ -187,6 +187,8 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return OverrideFilter, true
 	case c.Price.none():
 		return NoPrice, true
+	case c.UnknownItem:
+		return UnknownItem, true
 	case c.full():
 		return Full, true
 	}

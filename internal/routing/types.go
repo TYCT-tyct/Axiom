@@ -143,6 +143,7 @@ const (
 	NoEgress
 	RetryBudget // a later entry at a supplier whose retry budget is used up
 	Full        // not a refusal: the endpoint would do if it had room
+	UnknownItem // billing met a usage field on the model that it cannot price, until an admin prices it
 )
 
 var reasonNames = [...]string{
@@ -150,6 +151,7 @@ var reasonNames = [...]string{
 	SupplierBalance: "supplier_balance", MissingCapability: "missing_capability", ContextTooSmall: "context_too_small",
 	FormatNotServed: "format_not_served", ServiceTierNotServed: "service_tier_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
 	NoPrice: "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
+	UnknownItem: "unknown_item",
 }
 
 func (r Reason) String() string { return reasonNames[r] }
@@ -158,7 +160,7 @@ func (r Reason) String() string { return reasonNames[r] }
 func (r Reason) Permanent() bool {
 	switch r {
 	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
-		PresetFilter, OverrideFilter, NoPrice:
+		PresetFilter, OverrideFilter, NoPrice, UnknownItem:
 		return true
 	case BreakerOpen, SupplierBalance, NoEgress, RetryBudget, Full:
 		return false

@@ -35,6 +35,7 @@ type ServerTool struct {
 
 // Model is the model data a quote needs, filled by the caller from the catalog snapshot.
 type Model struct {
+	ID                      catalog.ModelID
 	ContextLength           int64
 	ImageTokens, PageTokens int64                  // the most input tokens one image or one document page can take
 	FilePages               int64                  // the most pages one file can have; 0 when no limit is known

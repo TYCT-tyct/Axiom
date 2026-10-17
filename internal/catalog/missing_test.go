@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // Missing lists what an upstream may report and the schedule cannot price, for billing's listing threshold: standard
@@ -54,4 +55,42 @@ func serviceTierMembers(s catalog.ServiceTierSet) []catalog.ServiceTier {
 		}
 	}
 	return tiers
+}
+
+// Fill prices an item every offered service tier lacks at its base, in every band, and keeps what the schedule sets:
+// the priority tier's own search price, and the standard tier's long-context output.
+func TestFill(t *testing.T) {
+	s := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"output":"4"}}]},
+		"service_tiers":{"priority":{"context_tiers":[{"above":10,"rates":{}}],"rates":{"input":"1","output":"3","web_search":"7"}}}}`)
+	filled := s.Fill(map[catalog.Item]platform.UnitPrice{webSearch: mustPrice(t, "0.5"), codeExec: mustPrice(t, "0.25")})
+	got, err := filled.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"output":"4"}}]},` +
+		`"currency":"USD","rates":{"code_execution":"0.25","input":"1","output":"2","web_search":"0.5"},` +
+		`"service_tiers":{"priority":{"context_tiers":[{"above":10,"rates":{}}],` +
+		`"rates":{"code_execution":"0.25","input":"1","output":"3","web_search":"7"}}},"v":1}`
+	if string(got) != want {
+		t.Errorf("Fill =\n%s\nwant\n%s", got, want)
+	}
+	if m := filled.Missing(catalog.Reportable{Items: 1<<webSearch | 1<<codeExec, ServiceTiers: 1 << catalog.ServiceTierPriority}); m != (catalog.Reportable{}) {
+		t.Errorf("filled schedule misses %+v", m)
+	}
+	if again, err := s.MarshalJSON(); err != nil || string(again) == want {
+		t.Error("Fill changed the schedule it was called on")
+	}
+	if filled.Currency().String() != "USD" {
+		t.Errorf("currency %s", filled.Currency())
+	}
+}
+
+func mustPrice(tb testing.TB, s string) platform.UnitPrice {
+	tb.Helper()
+	p, err := platform.ParseUnitPrice(s)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return p
 }
