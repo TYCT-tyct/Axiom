@@ -166,7 +166,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
 func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；key 打不开或缺适配器就失败，旧快照不动
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较交换；ErrNoEndpoint、ErrNoSlot
-func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Body, Header}
+func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Path, Body, Header}
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
 type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
 func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
@@ -187,12 +187,12 @@ func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalE
 func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
 ```
 
-与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数和单位价值（单位价值表随 billing 的换算加入）；`Send` 的入参是 `Call{Format, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Failure` 是 `adapter.Failure`。
+与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数和单位价值（单位价值表随 billing 的换算加入）；`Send` 的入参是 `Call{Format, Path, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Path` 覆盖格式自己的路径，只给 `/responses/compact` 用：那个端点不是格式的路径，由 gateway 传进来（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
 
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **日志写入有期限**：`Run` 的每次写都有自己的期限（`FlushTimeout`，默认 10 秒），超时保留数据、记日志、退避后重试。
 - **`Acquire`**：在没有冷却、没有过期（按时钟，不靠数据库变更）、在途数低于上限的凭证里挑负载最低的，对在途数做一次比较交换；拿不到返回 `ErrNoSlot`，gateway 跳过这个条目，不算尝试。在途数和冷却时间按凭证 ID 存在快照之外，重建快照不清零。
-- **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
+- **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（`Call.Path` 给了就用它）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。

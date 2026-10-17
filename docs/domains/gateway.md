@@ -196,6 +196,7 @@
 | 续接在第一版做，排在 M2；M1 对 `previous_response_id` 返回 400 | 开发者按负责人的授权决定（对话中的全权委托）。负责人同意的是第一版要有续接（本表「Responses 会话状态由我们保存」），第一版是 M0–M3，排进哪个里程碑由开发者定。M1 的验收客户端用不到：Codex 的 HTTP 传输每轮发完整历史（OpenAI《Unrolling the Codex agent loop》，2026-01-23："Codex does not use it today"），只有 WebSocket 用它，M1 不支持 WebSocket。M1 的端到端测试用录制样本验证这个前提，不成立就提前到 M1。省四个 PR，不推迟验收 |
 | 跨格式时缓存标记按 OpenRouter 转换，表达不了的丢掉，不拒绝请求 | 负责人在对话中授权开发者按推荐自行决定。CONTRIBUTING「产品设计」要求对齐 OpenRouter：它把文本块的 `cache_control` 转成 OpenAI 的 `prompt_cache_breakpoint`，TTL 不转（OpenRouter《Prompt caching》，2026-10-16）。拒绝会让带缓存标记的 Chat 请求到不了任何 Responses 端点；标记不改变模型读到的内容，收费按上游报告的实际缓存用量，丢掉只影响命中率，不会算错钱 |
 | 结算写不进时，内容完整的照常结束、不带费用、带 `billing_pending`；只有截断的才报 `billing_unavailable` | 不发出没入账的费用，也不让客户端把已完成的一轮当失败重发、付两次。没选一律报 `billing_unavailable`：主库切换时，整批在途的请求会被客户端重发、重复收费 |
+| `/responses/compact` 原样透传：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 它是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求体因此也原样转发（不改模型名和 `store`），空闲超时与预算照旧；费用和校正只在调用记录里查（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份请求体：前者改了上游的回复，后者要猜它接受哪些成员 |
 
 ## 待定问题
 

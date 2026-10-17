@@ -338,26 +338,16 @@ func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
 	})
 }
 
-// TestWhenTheHolderMayBeGoneNothingIsStarted, and a request that wants no stream is refused (G8 will take it): both end
-// the call by a settlement without an attempt, which releases the reservation.
+// TestWhenTheHolderMayBeGoneNothingIsStarted: a holder that may be gone starts no attempt, and the call ends by a
+// settlement without one, which releases the reservation.
 func TestWhenTheHolderMayBeGoneNothingIsStarted(t *testing.T) {
-	no := false
-	for _, tc := range []struct {
-		name   string
-		o      options
-		status int
-	}{
-		{"holder", options{alive: func() bool { return false }}, 503},
-		{"no stream", options{stream: &no}, 400},
-	} {
-		run(t, func(t *testing.T, ctx context.Context) {
-			h := newHarness(t, ctx, tc.o)
-			h.run()
-			if h.w.status != tc.status || h.up.endpoint(1).acquired != 0 || len(h.ended().outcome.Attempts) != 0 {
-				t.Errorf("%s: status %d, %d acquired", tc.name, h.w.status, h.up.endpoint(1).acquired)
-			}
-		})
-	}
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{alive: func() bool { return false }})
+		h.run()
+		if h.w.status != 503 || h.up.endpoint(1).acquired != 0 || len(h.ended().outcome.Attempts) != 0 {
+			t.Errorf("status %d, %d acquired", h.w.status, h.up.endpoint(1).acquired)
+		}
+	})
 }
 
 func uuidOf(id routing.EndpointID) suppliers.EndpointID { return suppliers.EndpointID(id) }

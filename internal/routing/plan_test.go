@@ -59,6 +59,10 @@ func TestFilters(t *testing.T) {
 			"format nobody converts to", func(e *routing.Endpoint) { e.Served = routing.Of(protocol.Chat); e.Native = routing.Of(protocol.Chat) },
 			nil, nil, routing.FormatNotServed, true,
 		},
+		{
+			"a Chat request where only Chat is spoken", func(e *routing.Endpoint) { e.Native = routing.Of(protocol.Chat); e.Served = routing.Of(protocol.Chat) },
+			func(in *routing.Input) { in.Req.Format = protocol.Chat }, nil, routing.FormatNotServed, true,
+		},
 		{"context too small", func(e *routing.Endpoint) { e.Context = 500 }, nil, nil, routing.ContextTooSmall, true},
 		{
 			"output does not fit the context", func(e *routing.Endpoint) { e.Context = 2000 },
@@ -291,6 +295,7 @@ func TestSegmentable(t *testing.T) {
 		{"the request hides reasoning", nil, func(in *routing.Input) { in.Req.HidesReasoning = true }, false},
 		{"the limit is near the overshoot", nil, func(in *routing.Input) { in.Req.MaxOutput = 1500 }, false},
 		{"just above it", nil, func(in *routing.Input) { in.Req.MaxOutput = 1501 }, true},
+		{"the gateway cannot meter the call", nil, func(in *routing.Input) { in.NoSegments = true }, false},
 	}
 	for _, c := range cases {
 		h := newHarness(t, routing.Config{FirstSegment: 1000, Overshoot: 500}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
@@ -396,7 +401,8 @@ func TestSnapshotRejectsBadData(t *testing.T) {
 }
 
 // TestEntryTellsHowToCallTheEndpoint: an entry carries the supplier and the endpoint's target, with the format the
-// request is called in: its own when the endpoint speaks it, otherwise the one a Chat request is converted to.
+// request is called in: its own when the endpoint serves it, or the one a Chat request is converted to, which is always
+// a conversion since M1 rewrites no Chat request (docs/domains/gateway.md「转发规则」).
 func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -406,7 +412,7 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 		want   protocol.Format
 	}{
 		{"its own format", protocol.Messages, routing.Of(protocol.Messages, protocol.Chat), protocol.Messages},
-		{"chat to chat", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), protocol.Chat},
+		{"chat to an endpoint that speaks both", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), protocol.Messages},
 		{"chat to messages", protocol.Chat, routing.Of(protocol.Messages), protocol.Messages},
 		{"chat to responses", protocol.Chat, routing.Of(protocol.Responses), protocol.Responses},
 		{"chat prefers messages", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages), protocol.Messages},

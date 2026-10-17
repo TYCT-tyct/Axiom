@@ -20,7 +20,7 @@ import (
 func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageContext) (step, ended) {
 	s := a.s
 	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
-		ID: s.c.ID.String(), Model: s.c.Request.Model, Created: s.start.Unix(), Memory: s.x.Memory,
+		ID: s.c.ID.String(), Model: s.c.Request.Model, Created: s.start.Unix(), Memory: s.x.Memory, Aggregate: s.aggregate,
 	})
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
@@ -61,9 +61,14 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 
 // commit is the first content: from here the status is 200 and nothing is retried (I4). The journal learns of it
 // before the client does, so that a crash after the first write still leaves the cleanup the attempt to settle by. A
-// client that is gone gets nothing, and the attempt, if it goes on, is not committed.
+// client that is gone gets nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is
+// written to once, at the end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
+	a.content = true
 	if s.isGone() {
+		return
+	}
+	if s.aggregate {
 		return
 	}
 	s.journal(a, true)
@@ -141,6 +146,24 @@ func (s *session) finish(out []byte) {
 	}
 }
 
+// respond writes a whole body to a client that did not stream: it is the call's only write, so the status is set here.
+func (s *session) respond(status int, body []byte) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.closed = true
+	if s.keepAlive != nil {
+		s.keepAlive.Stop()
+	}
+	if s.started || s.gone || s.req.Context().Err() != nil {
+		return
+	}
+	s.started = true
+	h := s.w.Header()
+	h.Set("Content-Type", "application/json")
+	s.w.WriteHeader(status)
+	s.put(body)
+}
+
 // answer writes the error a call that forwarded nothing ends with, in the client's own format, with what was charged
 // anyway when the settlement says so.
 func (s *session) answer(e ended, fin *protocol.Final) {
@@ -213,6 +236,9 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	}
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), finish
+	if s.aggregate {
+		return s.brokeAggregate(a, relay, e, again)
+	}
 	if s.isStarted() {
 		rec.Result = billing.Committed
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
@@ -231,13 +257,77 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	return nextEntry, ended{}
 }
 
+// brokeAggregate ends an attempt of a call that did not stream: the client has nothing yet, so an attempt that
+// generated content may still be given up on for another entry, and what it generated answers the call if no entry is
+// left (docs/domains/gateway.md「转发规则」). An attempt that cannot be retried answers with the error, without what it
+// made: the reservation is what failed, or the call is out of road.
+func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool) (step, ended) {
+	rec := &s.ends[a.i]
+	rec.Result = billing.FailedBeforeCommit
+	switch {
+	case s.isGone():
+		drop(relay)
+		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		return over, ended{}
+	case !again: // the call is out of road or the reservation failed: the error alone answers it
+		drop(relay)
+		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		return over, ended{err: e}
+	case a.content:
+		s.keep(relay) // it answers the call if no entry is left, and nothing else of it reaches the client
+	default:
+		drop(relay)
+	}
+	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
+	return nextEntry, ended{}
+}
+
+// keep holds the reply of an aggregate attempt that generated content: the answer when no entry is left. The reply kept
+// before it goes, so that only the last attempt's content is returned, never two (docs/domains/gateway.md「转发规则」).
+func (s *session) keep(relay *protocol.Relay) {
+	s.let()
+	s.part = relay
+}
+
+// left ends a call that has no entry left: an aggregate attempt that generated content answers with it, as the last
+// attempt that failed with content is answered with what it made (docs/domains/gateway.md「错误」).
+func (s *session) left(e ended) ended {
+	if s.part == nil || e.relay != nil {
+		return e
+	}
+	e.relay, s.part = s.part, nil
+	if s.c.Format != protocol.Messages { // Messages has no stop reason for an error: it answers the error alone
+		s.ends[len(s.ends)-1].Result = billing.Aggregated
+	}
+	return e
+}
+
 // complete handles the upstream's normal end. After the commit point the stream is done and the call settles before it
 // ends. Before it, there was no content: a 200 with nothing in it is a failure and the next entry is tried, unless the
-// client is gone, whose upstream was read to the end for the usage it will be billed.
+// client is gone, whose upstream was read to the end for the usage it will be billed. A call that did not stream has
+// its whole reply at its end, and answers with it.
 func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	s := a.s
 	rec := &s.ends[a.i]
 	a.usage = relay.Usage()
+	if s.aggregate {
+		rec.Finish = billing.FinishStop
+		switch {
+		case s.isGone():
+			rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishCancelled
+			drop(relay)
+			s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+			return over, ended{}
+		case !a.content: // a 200 with nothing in it is a failure: the next entry answers
+			rec.Result = billing.FailedBeforeCommit
+			drop(relay)
+			s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
+			return nextEntry, ended{}
+		}
+		rec.Result = billing.Aggregated
+		s.record(a, false, 0, 0)
+		return over, ended{relay: relay, done: true}
+	}
 	if s.isStarted() {
 		rec.Result, rec.Finish = billing.Committed, billing.FinishStop
 		if s.isGone() {

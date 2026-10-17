@@ -32,7 +32,7 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 			return nil, err
 		}
 	}
-	out = responsesSettings(out, c, t.MaxOutput)
+	out = responsesSettings(out, c, t)
 	for _, id := range []struct {
 		name  string
 		value *string
@@ -59,9 +59,9 @@ func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
 }
 
 // responsesSettings writes the cap, sampling, reasoning, streaming and service tier. A request that sets no cap gets
-// defaultCap, if there is one.
-func responsesSettings(out []byte, c *canon, defaultCap int64) []byte {
-	if n := cmp.Or(c.maxOutput(), defaultCap); n > 0 {
+// t.MaxOutput, if there is one.
+func responsesSettings(out []byte, c *canon, t Target) []byte {
+	if n := cmp.Or(c.maxOutput(), t.MaxOutput); n > 0 {
 		out = strconv.AppendInt(append(out, `,"max_output_tokens":`...), n, 10)
 	}
 	for _, member := range []struct {
@@ -79,7 +79,7 @@ func responsesSettings(out []byte, c *canon, defaultCap int64) []byte {
 		}
 		out = append(out, '}')
 	}
-	if c.Stream != nil && *c.Stream {
+	if t.Streams || c.Stream != nil && *c.Stream { // a client that wants one has it even at an endpoint that cannot stream
 		out = append(out, `,"stream":true`...)
 	}
 	if c.ServiceTier != nil {

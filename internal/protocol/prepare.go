@@ -26,6 +26,10 @@ type Target struct {
 	// the gateway takes from the route's entry. Messages requires one; Responses gets it as max_output_tokens, whether
 	// the request is converted or rewritten.
 	MaxOutput int64
+	// Streams is set when the endpoint streams a response. The request sent asks for one whatever the client asked,
+	// since the gateway reads every answer as a stream and aggregates it for a client that wants none
+	// (docs/domains/gateway.md「转发规则」).
+	Streams bool
 	// Thinking is how the model is asked to reason.
 	Thinking Thinking
 	// MidSystem is set when the model takes a system message after the conversation has started, and
@@ -141,7 +145,7 @@ func usageContext(r *Request) UsageContext {
 func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	rules := rewriteRules[f]
 	if rules.members == nil {
-		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
+		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
 	w = w.withDefaults()
 	p := &rewriter{
@@ -216,18 +220,21 @@ type formatRules struct {
 var (
 	rewriteRules = [...]formatRules{
 		Messages: {
-			members:    withRouting(map[string]rule{"model": (*rewriter).model, "metadata": object(metadataRules)}),
-			identities: 1,
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "metadata": object(metadataRules), "stream": (*rewriter).stream,
+			}),
+			add: (*rewriter).addStream, identities: 1, room: len(addStream),
 		},
 		Responses: {
 			members: withRouting(map[string]rule{
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
 				"store": (*rewriter).store, "include": (*rewriter).include, "prompt_cache_key": (*rewriter).identity,
 				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
-				"max_output_tokens": (*rewriter).outputCap,
+				"max_output_tokens": (*rewriter).outputCap, "stream": (*rewriter).stream,
 			}),
 			add: (*rewriter).addResponses, identities: 3,
-			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) + len(maxInt64),
+			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) +
+				len(maxInt64) + len(addStream),
 		},
 		Chat: {},
 	}
@@ -249,7 +256,7 @@ var routingParameters = []string{"provider", "models", "route", "transforms", "p
 // nothing (OpenAI《Create a model response》, include, read 2026-10-14).
 const encrypted = "reasoning.encrypted_content"
 
-// What Responses rewrites add to a body: the members it lacks, and the array that wraps a string input in the history.
+// What the rewrites add to a body: the members it lacks, and the array that wraps a string input in the history.
 const (
 	addStore   = `,"store":false`
 	addInclude = `,"include":["` + encrypted + `"]`
@@ -258,6 +265,9 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
+	// addStream asks for the upstream's stream when the endpoint streams one, since the gateway reads every call as a
+	// stream and a client that wants no stream gets the events aggregated (docs/domains/gateway.md「转发规则」).
+	addStream = `,"stream":true`
 )
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
@@ -268,6 +278,7 @@ type rewriter struct {
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
+	streamed                              bool            // the stream member seen
 	capped                                bool            // max_output_tokens was given a value
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
@@ -478,6 +489,16 @@ func (p *rewriter) history() {
 	}
 }
 
+// addStream asks for the upstream's stream when the endpoint streams one and the request did not name it: the gateway
+// reads a stream for every call and aggregates it for a client that wants none (docs/domains/gateway.md「转发规则」).
+func (p *rewriter) addStream() error {
+	if p.t.Streams && !p.streamed {
+		p.out = append(p.out, addStream...)
+	}
+	return nil
+}
+
+// addResponses appends what a Responses request lacks.
 func (p *rewriter) addResponses() error {
 	if p.continues != (len(p.w.History) > 0) {
 		return errHistory
@@ -496,5 +517,17 @@ func (p *rewriter) addResponses() error {
 		p.history()
 		p.out = append(p.out, ']')
 	}
-	return nil
+	return p.addStream()
+}
+
+// stream asks for the upstream's stream whatever the client asked, when the endpoint streams one: the gateway relays
+// every answer as a stream, and a client that wants no stream gets the events aggregated
+// (docs/domains/gateway.md「转发规则」).
+func (p *rewriter) stream() error {
+	p.streamed = true
+	v, err := p.dec.ReadValue()
+	if err == nil && p.t.Streams && string(v) != "true" {
+		p.replace(len(v), "true")
+	}
+	return err
 }

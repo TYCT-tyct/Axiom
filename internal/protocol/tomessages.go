@@ -25,7 +25,7 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if c.Stream != nil && *c.Stream {
+	if t.Streams || c.Stream != nil && *c.Stream { // a client that wants one has it even at an endpoint that cannot stream
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {

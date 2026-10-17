@@ -384,6 +384,28 @@ func TestPathsAndFormats(t *testing.T) {
 	}
 }
 
+// TestTheCompactPath: the Responses compact endpoint is a call path of its own under both prefixes, and the call knows
+// it is passed through; a stream asked for there is refused before the route is planned.
+func TestTheCompactPath(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for _, prefix := range []string{"/v1", "/api/v1"} {
+		resp, body := r.do(http.MethodPost, prefix+"/responses/compact", a.key, strings.NewReader(`{"model":"acme/beta","input":"hi"}`))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", prefix, resp.StatusCode, body)
+		}
+		calls := r.calls()
+		if c := calls[len(calls)-1]; !c.Compact || c.Format != protocol.Responses {
+			t.Errorf("%s: compact %t, format %v", prefix, c.Compact, c.Format)
+		}
+	}
+	resp, body := r.do(http.MethodPost, "/v1/responses/compact", a.key, strings.NewReader(`{"model":"acme/beta","input":"hi","stream":true}`))
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+		t.Errorf("a stream asked for there: %d %s", resp.StatusCode, body)
+	}
+}
+
 // TestAlternateModels: the models a request lists follow its own in the route, and one that does not exist is left
 // out.
 func TestAlternateModels(t *testing.T) {

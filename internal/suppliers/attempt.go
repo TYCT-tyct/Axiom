@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"maps"
@@ -25,9 +26,11 @@ type CallPolicy = adapter.CallPolicy
 
 // Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint, and the
 // request headers that go with it (gateway's whitelist: anthropic-beta and anthropic-version). Header never replaces
-// the credential or the content type, and gives the version the client chose over the default.
+// the credential or the content type, and gives the version the client chose over the default. Path overrides the
+// format's own, for the Responses compact endpoint the client called, whose path the format alone does not name.
 type Call struct {
 	Format protocol.Format
+	Path   string
 	Body   []byte
 	Header http.Header
 }
@@ -157,7 +160,8 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+w.path, bytes.NewReader(call.Body))
+	path := cmp.Or(call.Path, w.path)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+path, bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}

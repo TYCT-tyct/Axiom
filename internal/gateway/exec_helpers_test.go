@@ -34,24 +34,6 @@ const (
 	evStart, evBlock, evPing, evHello, evBang, evBlockStop, evMsgDelta, evMsgStop = 0, 1, 2, 3, 4, 5, 6, 7
 )
 
-func messagesSample(t *testing.T) (events []string, request []byte) {
-	t.Helper()
-	sample, err := os.ReadFile("../protocol/testdata/messages/text/upstream.sse")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err = os.ReadFile("../protocol/testdata/messages/text/request.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range strings.SplitAfter(strings.TrimSpace(string(sample))+"\n\n", "\n\n") {
-		if e != "" {
-			events = append(events, e)
-		}
-	}
-	return events, request
-}
-
 func events(all []string, which ...int) string {
 	var b strings.Builder
 	for _, i := range which {
@@ -333,8 +315,10 @@ type settlement struct {
 }
 
 type options struct {
-	entries     int // endpoints in the route; 1 when zero
-	maxAttempts int // 3 when zero
+	client      protocol.Format  // the client's format; Messages when zero
+	upstream    *protocol.Format // the endpoint's format; the client's when nil, which makes it a converted call
+	entries     int              // endpoints in the route; 1 when zero
+	maxAttempts int              // 3 when zero
 	config      func(*Config)
 	routing     routing.Config
 	script      map[int][]scripted // by endpoint number, from 1
@@ -380,10 +364,18 @@ type harness struct {
 const memorySize = 1 << 30
 
 // newHarness builds a call with an executor; it must be called inside the bubble. The route has endpoints 1..entries,
-// each of the Messages format, which answer by script (a refusal at the start of the attempt when none).
+// each of the upstream's format, which answer by script (a refusal at the start of the attempt when none). The client's
+// request comes from its format's sample, the stream from the upstream's, which is the upstream's own for a same-format
+// call and another's for a converted one.
 func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	t.Helper()
-	all, request := messagesSample(t)
+	client := cmpOr(o.client, protocol.Messages)
+	upstream := client
+	if o.upstream != nil {
+		upstream = *o.upstream
+	}
+	all, _ := sample(t, upstream)
+	_, request := sample(t, client)
 	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{})}
 	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w, flushed: o.flushed}
 	if h.up.flushed == nil {
@@ -415,27 +407,30 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.call = h.newCall(o, request)
+	h.call = h.newCall(o, request, client, upstream)
 	clientCtx, cancel := context.WithCancel(ctx)
 	h.client = cancel
 	h.req = httptest.NewRequestWithContext(clientCtx, http.MethodPost, "/v1/messages", nil)
 	return h
 }
 
-func (h *harness) newCall(o options, request []byte) *Call {
+func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
 	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	req, err := protocol.Inspect(protocol.Messages, request)
+	req, err := protocol.Inspect(client, request)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
 	if o.stream != nil {
 		req.Stream = *o.stream
+		if !*o.stream { // the client's body says so too, and the endpoint still has to be asked for a stream
+			request = bytes.Replace(request, []byte(`"stream": true`), []byte(`"stream": false`), 1)
+		}
 	}
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
@@ -447,7 +442,7 @@ func (h *harness) newCall(o options, request []byte) *Call {
 			supplier = o.supplier(i)
 		}
 		plan.Entries = append(plan.Entries, routing.Entry{
-			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{Format: protocol.Messages, Model: "up-" + string(rune('0'+i))},
+			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{Format: upstream, Model: "up-" + string(rune('0'+i)), Streams: true},
 			MaxOutput: 1000, Limits: limits, Segmentable: o.segmentable, Price: routing.PriceRef{Version: uuid.UUID{1}, Schedule: schedule},
 		})
 		plan.Record.Route = append(plan.Record.Route, ep(i))
@@ -462,7 +457,7 @@ func (h *harness) newCall(o options, request []byte) *Call {
 		h.t.Fatal(err)
 	}
 	c := &Call{
-		ID: uuid.NewV7(), Format: protocol.Messages, Request: req, Body: request,
+		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
 	c.hold(func() { close(h.released) })

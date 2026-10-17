@@ -214,6 +214,32 @@ func TestASuccessfulSendIsAuthenticatedAndKeepsTheKey(t *testing.T) {
 	}
 }
 
+// TestACallCanNameItsPath: the path is the format's own unless the call names one, which the Responses compact endpoint
+// needs: it is not a format's path, so the gateway passes it (docs/domains/gateway.md「路径与格式」).
+func TestACallCanNameItsPath(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	server := newSupplierServer(t)
+	w.pointAt(server.URL)
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	resp, f := a.Send(ctx, Call{Format: protocol.Responses, Path: "/v1/responses/compact", Body: []byte(`{"model":"m"}`)})
+	if f != nil {
+		t.Fatalf("%+v", f)
+	}
+	_ = resp.Body.Close() //nolint:errcheck // nothing was read
+	a.Done()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.path != "/v1/responses/compact" {
+		t.Errorf("the path is %q", server.path)
+	}
+}
+
 // TestTheClientsProtocolHeadersGoUpstream: anthropic-beta reaches the supplier, the client's anthropic-version beats
 // the default, and a header cannot replace the credential or the content type.
 func TestTheClientsProtocolHeadersGoUpstream(t *testing.T) {

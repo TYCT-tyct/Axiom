@@ -2,7 +2,7 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发流的 `Relay`（同格式，以及把 Messages、Responses 的流转给 Chat 客户端）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」。
+目前有读请求摘要的 `Inspect`、改写同格式请求并把 Chat 请求转换给另两种格式的 `Prepare`、转发流的 `Relay`（同格式，以及把 Messages、Responses 的流转给 Chat 客户端）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」；`UsageOf` 读一份完整答复（compact 端点透传的那种）里的用量。
 
 ## 包
 
@@ -40,12 +40,13 @@
 
 ## 同格式改写
 
-`Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写取决于端点的方言（推理载体、`cache_control`、推理参数的写法，也包括没写输出上限时补上 `Target.MaxOutput`），随 Chat 的转换一起加入，现在对 Chat 返回错误。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
+`Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写取决于端点的方言（推理载体、`cache_control`、推理参数的写法，也包括没写输出上限时补上 `Target.MaxOutput`），随 Chat 的转换一起加入，现在返回 `*NotSupported`，网关因此跳过 Chat 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
 
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
 | `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | OpenRouter 的路由参数和本站扩展，gateway 已经用过；官方接口拒绝不认识的成员 |
+| `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；不能流式的端点保持客户端的写法 |
 | 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
 | `store` | — | 一律 `false`，没有就加上 | 状态由本站保存 |
@@ -59,12 +60,12 @@
 
 ## 跨格式转换
 
-M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；Messages、Responses 客户端只走原格式的端点，其他方向返回 `*NotSupported`。本节是请求一侧，流见「跨格式的流」，非流式聚合随后加入。
+M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；Messages、Responses 客户端只走原格式的端点，其他方向返回 `*NotSupported`。本节是请求一侧，流见「跨格式的流」，非流式聚合见「非流式聚合」。
 
 - **规范模型**：`canon` 用 jsonx 读 Chat 请求，形状就是 Chat 的：M1 只有 Chat 请求要转换，以后另两种格式的客户端要跨格式时，各自读进同一个模型。凡是原样搬运的字符串都存成原文（`jsontext.Value`），引号和转义照旧写出，所以上游读到的解码值与客户端写的完全相同，不经过解码再编码。
 - **读一次**：每条消息的内容在读请求时一次读成部件，两个方向都用它；名字和拒答按下表放进部件，流式交回的推理条目在这里合并。
 - **先查形状，再查能不能表达**：函数工具和函数调用的名字、文本部件的 `text` 是字符串，调用的 `arguments` 是字符串，名字和拒答是字符串，JSON schema 回复有名字和对象 schema，否则是客户端的错（`ErrInvalid`）；Chat 有而目标格式表达不了的，是这个端点的不足（`*NotSupported`），gateway 换端点。Chat 定义了而 `canon` 没读的成员，只有取默认值或 `null` 时才放过（`frequency_penalty` 0、`n` 1、`logprobs` false、`modalities` 只有文本等），否则 `*NotSupported`；路由参数和本站扩展读过就丢。工具调用要一一配对、ID 不重复不为空，函数以外的工具和调用（如 `custom`）也是 `*NotSupported`，不当成形状错。
-- **`Target` 里的模型数据**：`MaxOutput`（请求没写输出上限时发给上游的上限，也就是它被报价的上限，gateway 取条目的输出上限；Messages 必须有，Responses 写成 `max_output_tokens`，0 为不发）、`Thinking`（`ThinkingAdaptive` 用 `thinking.type: adaptive` 和 `output_config.effort`，`ThinkingManual` 用 `budget_tokens`）、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`，Responses 端点的 `CacheBreakpoints`，由 gateway 从模型规格填，不按模型名猜。
+- **`Target` 里的模型数据**：`MaxOutput`（请求没写输出上限时发给上游的上限，也就是它被报价的上限，gateway 取条目的输出上限；Messages 必须有，Responses 写成 `max_output_tokens`，0 为不发）、`Streams`（端点能流式：请求里一律要流，见「同格式改写」）、`Thinking`（`ThinkingAdaptive` 用 `thinking.type: adaptive` 和 `output_config.effort`，`ThinkingManual` 用 `budget_tokens`）、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`，Responses 端点的 `CacheBreakpoints`，由 gateway 从模型规格填，不按模型名猜。
 
 | Chat | → Messages（Anthropic《Messages API reference》，2026-10-14） | → Responses（OpenAI《Create a model response》，2026-10-14） |
 |---|---|---|
@@ -92,6 +93,7 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 | 输出上限 | `max_tokens`：`max_tokens`、`max_completion_tokens` 取大，都没有用 `Target.MaxOutput` | `max_output_tokens`，没有时用 `Target.MaxOutput`（大于 0 才写） |
 | `user`、`safety_identifier`、`prompt_cache_key` | `user` 的派生值写进 `metadata.user_id`，另两个不写 | 都换成派生值 |
 | `service_tier` | `auto` 照写，`default` 写成 `standard_only`，其余 `*NotSupported` | 照写 |
+| `stream` | `Target.Streams` 或客户端要流时写 `"stream": true` | 同左 |
 | 存储 | — | `store: false`，加密推理的模型带 `include`，与同格式改写相同 |
 
 - **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`。合规且不以 `axid_` 开头的 ID 原样；其余写成 `axid_` 加原 ID 字节的十六进制。两类不相交、十六进制一一对应，所以不同的 ID 写出来仍不同；调用和结果用同一个函数，配得上。
@@ -230,6 +232,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
   聚合器可以拒绝 `streamcheck` 接受、却造不出回复的流（没有 `message` 的 `message_start`、顺序不对的块、不是 JSON 的工具输入、没有 `response` 的结尾），按上游的失败处理：在 `Next` 里是 `ErrUpstream`，在结尾里则 `Finish` 改以 `upstream_error` 失败，结算已写的费用照常在里面。
 - **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），所以 `Relay` 扣住到正常结束才交给聚合器的事件（Chat 的结束选项），在扣住的那一刻就让聚合器按它们要开的选项和结束原因记账（`aggregator.hold`），超限在 `Next` 里就以 `ErrMemory` 结束；结束时全部归还；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
 - **分配**：聚合器按位置读事件，不把事件解成树；每个事件的分配次数有常数上界，缓冲翻倍带来的分配随长度对数增长，与增量的大小无关（`TestAggregateAllocs`）。
+- **整份答复的用量**：`UsageOf(body)` 读一份完整的 Responses 回复（`/responses/compact` 的答案，gateway 原样透传）顶层的 `usage` 与 `service_tier`，按与流的结尾相同的口径折算成计费项；没有 `usage` 是没用模型，读不出或折算不了判为 `Invalid`，由计费按估算收（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。`TestUsageOf` 覆盖拆分、等级和两种无效。
 ## 录制样本
 
 协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：
@@ -266,6 +269,8 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 |---|---|
 | 读请求摘要、改写请求比 `jsonx.Validate` 多出的分配次数与请求体大小无关 | `TestAllocs` 对 `Inspect` 的三种格式和 `Prepare` 的两种格式 1 KiB、1 MiB 的请求体，分别在普通对象和含 100 个成员的宽对象下比较两者分配次数之差；`BenchmarkInspect`、`BenchmarkPrepare` 由 `just bench-compare` 与 `main` 比较 |
 | 同格式改写只改「同格式改写」表里的位置，其余字节原样；签名、加密内容、压缩项原样到达 | `TestPrepare` 逐字节比较整个请求体，用例含签名和 `redacted_thinking`、转义的思考正文、Codex 压缩后的第二轮（OpenAI《Compaction》的做法，ID 和密文是编的）、表里每条规则；`TestPrepareSamples` 对已提交的样本请求只差模型名（Responses 再加 `store`） |
+| 端点能流式时发给它的请求总带 `stream: true`，不能流式的端点保持客户端的写法 | `TestPrepareAsksForAStream` 覆盖同格式与转换、没有/`false`/`null`/`true` 四种写法；`TestPrepareSamples`、`TestConvertSamples` 的目标不流式，黄金输出不变 |
+| `UsageOf` 读出的用量与流的结尾同一口径 | `TestUsageOf`：输入拆成缓存读、输出拆成推理、服务等级、没有 `usage` 为空、部件超过总数和不是 JSON 都判无效 |
 | 改写后准入和路由读到的摘要不变，输出合规 | 模糊测试 `FuzzPrepare`：`Inspect` 接受的请求，改写结果仍被 jsonx 接受，再读出的摘要除模型名、`Previous` 和 `TextBytes`（随增删的字节变）外完全相同；`Prepare` 返回 `ErrInvalid` 当且仅当把请求体整体解码后看到上面「出错」里的类型错误，所以错拒合法请求和漏拒错误类型都会失败；以 `Inspect` 和 `Prepare` 的表驱动用例（含拒绝的用例）为种子；每条规则都经过变异验证 |
 | `Inspect` 接受的请求体 jsonx 也接受；读出的 `model`、`stream` 与完整解码一致；`0 ≤ TextBytes ≤` 请求体字节数 | 模糊测试 `FuzzInspect`，以下面的表驱动用例和样本为种子 |
 | 每个字段都按上表读；客户端数据里的同名键不改变摘要 | 表驱动用例：三种格式各读全部字段，加 schema 和工具参数里放同名键的用例；每条规则都经过变异验证 |
@@ -327,6 +332,10 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
 | 录制命令放在 protocol 的 `internal/record`，不放 `tools/` | 写盘前要用 `streamcheck` 检查，Go 只允许 `internal/protocol` 之下的包引用它；它只用标准库和本模块，`tools/` 单独成模块是为了锁定第三方工具的版本，这里用不上 | 放 `tools/`：只能另起进程跑测试来检查，或者为它把检查提前做成 protocol 的公开接口 |
 | 录制命令用自己的 HTTP 客户端，只加上不跟随重定向和空闲超时 | 地址是开发者自己填的，可能是本机或局域网里的中转站，也可能要经代理才连得上 | `platform/egress`：它拒绝回环和内网地址、不读代理环境变量，防的是站长配置的上游地址带来的 SSRF |
 | 录下的流按事件解析后重建，ID 只在各格式的 ID 位置上替换，key 在解码后的字符串上查 | 前两轮评审的阻断问题都出自同一个机制：在 SSE 文本上用手写的 JSON 字符串扫描器找 ID 和 key，单独 CR 的行尾、注释里的落单引号或行末反斜杠、像 `"input": {` 的注释行都能让它错位。改用已有的 `sse.Reader`（按 SSE 规则分行、跳过注释）和经 `jsonx.Validate` 的 JSON 后，这一类错位不再存在；找字符串的位置用 `jsontext`，因为 `jsonx` 不提供按 token 读的接口。按位置替换，漏列一个位置只会留下一个真实 ID，录制者提交前看得到；按成员名猜，会改掉工具参数这类调用方的数据，改错了没有检查能发现。数据的字节除 ID 外原样拼回，空白、键序、数字写法照旧可测；SSE 的分帧（注释、行尾、`id`、`retry`）不保留，读流的代码本来不看它们，要测分帧的用官方样本，它们仍是原样的字节 | 在原始字节上扫描（前一版）：两轮评审各找出新的错位反例，补一处又出一处；解码后重新编码整个 JSON：改变键序和数字写法；按 `id`、`*_id` 成员名猜 ID 再加一张跳过调用方数据的列表：列表外的工具参数照样被改；在没列出的位置发现像 ID 的值时提醒：现在三种格式的位置都已列出，等录到新形状的上游时再看是否需要 |
+| `Prepare` 只在 `Target.Streams` 时把 `stream` 写成 true | gateway 总是以流读上游，非流式客户端拿聚合结果；端点能否流式是适配器的声明，不流式的端点保持客户端的写法 | 无条件改写：给不能流式的端点发它不支持的请求 |
+| 同格式 Chat 的改写返回 `*NotSupported`，不拼近似 | 方言（推理载体、缓存标记、推理参数的写法）决定请求对不对，拼错了模型做的不是客户端要的；gateway 跳过这个端点，不再回 503 | 返回普通错误：网关认成节点故障，与端点的能力无关 |
+| `Target` 加 `Streams`，由路由按端点的能力填 | 请求发出去的 `stream` 是端点的属性，不是请求的；网关一处设置，`Prepare` 两处（改写、转换）照它写 | 在网关里改请求体：protocol 拥有请求体 |
+| `UsageOf` 只读顶层 `usage` 与 `service_tier` | compact 的回复整份读一次就完了，复用聚合器的成员读出即可，不需要新的解码器 | 解成结构体：多一份随回复大小增长的分配 |
 | 两个文件共用一张替换表，并替换请求里的 ID | 多轮请求里的工具调用 ID、`previous_response_id` 会出现在流里，替换后两边仍对得上 | 只替换流：请求里留下真实 ID，两边也对不上 |
 | 摘要一次扫描：按 token 读，深度在每个 token 上对照 `jsonx.MaxDepth` 检查 | 请求体可达数 MB，先 `jsonx.Validate` 再读字段要扫两遍；`jsontext` 的默认选项就是 jsonx 的严格程度，只有深度要自己查，所以 `jsontext` 只在这里和录制命令里引用，各自注明理由 | 先校验再读：两遍；解码到结构体：要为每种内容形状写解码器，分配随部件个数增长 |
 | 输入上界是请求体字节数减去图片、文件的数据，不是只数正文字段 | 只数正文要认出每一种放文本的字段，漏认一种就少算，少算就是欠款；多算的只是 JSON 语法和成员名 | 只数 `text` 等正文字段 |
