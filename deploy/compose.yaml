@@ -1,16 +1,24 @@
 # The program and its database on one machine (docs/architecture.md「部署拓扑」). Start it with `just up`, which also
-# writes the passwords this file reads to deploy/.env; deploy/.env.example describes them.
+# writes the passwords this file reads to deploy/.env; deploy/.env.example describes them. The project name, the image
+# tag, the host ports and the restart policy are variables so that CI jobs sharing a host keep their stacks apart
+# (scripts/ci/deploy-check.sh sets them); local `just up` uses the defaults and the project name axiom.
 name: axiom
 
 x-hardened: &hardened
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
+  labels:
+    # Marks the stacks scripts/ci/deploy-check.sh may remove when a killed job left one behind: it touches only
+    # projects named axiom-ci-* with this label, and only ones older than its step timeout.
+    axiom.ci.deploy-check: "true"
 
 services:
   postgres:
     image: postgres:18.6-alpine
-    restart: unless-stopped
+    # A CI job sets DEPLOY_RESTART_POLICY=no, so containers a killed job leaves behind never start again; local
+    # `just up` keeps the restart the machine wants.
+    restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
     # As the image's postgres user from the start, so its entrypoint needs no capability to change owners and users.
     user: postgres
     tmpfs: [/var/run/postgresql] # the server's socket and lock files; the data are on the volume
@@ -32,7 +40,7 @@ services:
     <<: *hardened
 
   migrate:
-    image: axiom:local
+    image: ${DEPLOY_IMAGE:-axiom:local}
     command: [migrate]
     environment:
       AXIOM_MIGRATE_DATABASE_URL: postgres://axiom_migrator:${AXIOM_MIGRATOR_PASSWORD}@postgres/axiom?sslmode=disable
@@ -62,8 +70,8 @@ services:
 
   axiom:
     build: .
-    image: axiom:local
-    restart: unless-stopped
+    image: ${DEPLOY_IMAGE:-axiom:local}
+    restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
     stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
@@ -73,8 +81,10 @@ services:
     volumes:
       - keys:/keys:ro
     ports:
-      - 127.0.0.1:8080:8080 # the public listener, reachable from this machine only
-      - 127.0.0.1:8082:8082 # the admin listener, likewise
+      # An empty DEPLOY_PORT or DEPLOY_ADMIN_PORT publishes a port the kernel picks, so two jobs on one host cannot take
+      # each other's; local `just up` sets neither and gets 8080 and 8082. Both bind this machine only.
+      - 127.0.0.1:${DEPLOY_PORT-8080}:8080
+      - 127.0.0.1:${DEPLOY_ADMIN_PORT-8082}:8082
     depends_on:
       migrate: {condition: service_completed_successfully}
       keys: {condition: service_completed_successfully}

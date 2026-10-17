@@ -85,12 +85,12 @@ jobs:
       # compares allocations without -race.
       - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
         run: just check-all
-      # The deployment checks below start the stack on this host under fixed names (project axiom, port 8080, image
-      # axiom:local, volume axiom_postgres). Jobs on runners sharing a host take turns through a host-wide lock, and each
-      # turn ends with `just down -v`, so the next one starts from no database. On a hosted runner the lock is free.
-      # Waiting at most 20 minutes for the lock, then three `just up` of at most 5 minutes each, the checks and the teardown
+      # The deployment checks below start the stack on this host with the job's own compose project, image tag, volumes
+      # and kernel-picked host ports, and tear it down however the step ends (scripts/ci/deploy-check.sh), so jobs on
+      # runners sharing a host neither collide nor wait for each other. Without a turn to wait for, three `just up` of
+      # at most 5 minutes each, the checks and the teardown fit.
       - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
+        run: bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
       - if: github.event_name == 'pull_request'
         run: just migrations "$BASE"
