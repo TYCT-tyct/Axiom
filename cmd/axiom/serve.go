@@ -107,9 +107,6 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
-	if err := checkPool(db); err != nil {
-		return err
-	}
 
 	recorder := startRecorder(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
@@ -265,8 +262,9 @@ func node(publicAddr string, routes http.Handler, adminAddr string, admin http.H
 
 // checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
 // Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
-// a larger pool is left to the deployment. The gateway's settings are its defaults until the call path is wired, so
-// the check reads them there.
+// a larger pool is left to the deployment. It runs in openDatabase, so every command that opens the database holds to
+// the one pool configuration; the gateway's settings are its defaults until the call path is wired, so the check reads
+// them there.
 func checkPool(db *pg.DB) error {
 	gate := gateway.DefaultConfig()
 	if have := int(db.MaxConns()); have < gate.PoolSize {
@@ -284,6 +282,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkPool(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

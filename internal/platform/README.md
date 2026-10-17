@@ -205,7 +205,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - **一个账户占不满**：单个账户受账户闸和每秒 135–200 个请求的上限约束，约占 2 条。
 - **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
 
-连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：`serve` 启动时用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
+连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
 
 ### 范围
 
