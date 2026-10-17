@@ -25,6 +25,7 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		"queue longer than StartBy":                    {func(c *Config) { c.QueueWait = c.StartBy + time.Second }, "QueueWait"},
 		"StartBy reaches the longest call":             {func(c *Config) { c.StartBy = c.MaxCall }, "StartBy"},
 		"header wait reaches the longest call":         {func(c *Config) { c.HeaderWait = c.MaxCall }, "HeaderWait"},
+		"compact wait reaches the longest call":        {func(c *Config) { c.CompactHeaderWait = c.MaxCall }, "CompactHeaderWait"},
 		"idle timeout reaches the longest call":        {func(c *Config) { c.IdleTimeout = c.MaxCall }, "IdleTimeout"},
 		"keep-alive not below the idle timeout":        {func(c *Config) { c.KeepAlive = c.IdleTimeout }, "KeepAlive"},
 		"TTL under three heartbeats":                   {func(c *Config) { c.HolderTTL = 3*c.HolderHeartbeat - 1 }, "HolderTTL"},

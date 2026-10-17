@@ -152,10 +152,12 @@
 | 接口契约 | OpenAPI 3.0.3；Go 端用 oapi-codegen，TypeScript 端用 openapi-typescript + openapi-fetch；生成器固定版本 | 先写契约再生成代码，前后端类型不会漂移；运营 agent 也直接读它。oapi-codegen 对 3.1 的支持 2026-07 才初步加入（oapi-codegen 讨论 #2478），所以先用成熟的 3.0.3 | 手写接口类型 |
 | 前端 | React 19 + TypeScript 严格模式 + Vite + TanStack Router/Query + shadcn/ui + Tailwind CSS + i18next（中英文） | 生态最大，AI 写得最好；路由和数据请求都有完整类型；组件代码在仓库里，可以随意改 | Next.js：多一个 Node 服务进程，且安全更新频繁；用户控制台不需要服务端渲染，官网的公开页怎么给搜索引擎见下一行 |
 | 前端交付 | 官网、控制台和管理后台是三个应用，共享设计系统和模型价格组件，构建产物都嵌入 Go 程序。官网的静态页面在构建时生成；模型与价格页由 Go 在返回页面时把当时的数据、标题、分享卡片和结构化数据写进页面，搜索引擎和分享预览不用执行脚本就能读到。节点有三个监听：公网监听提供模型调用、官网、控制台、控制台接口和支付回调，对公网开放；管理监听只在核心上，目前只有管理后台；管理接口、运营接口，以及只对管理域名和受限来源开放，随管理接口落地（[Issue #171](https://github.com/TYCT-tyct/Axiom/issues/171)）；探针监听只答健康检查，默认只听本机 | 一个文件部署，普通用户拿不到管理后台的代码。官网单独成一个应用，公开页和登录状态彻底分开，各自有构建和性能预算，互不拖累。代价是改前端也要重启核心，靠优雅退出不打断在途调用 | 前后端分开部署；官网并入控制台：按路由拆包也能做到，但公开页与登录状态的边界要靠约定长期维护，性能预算也混在一起；在 Go 里嵌 JavaScript 引擎实时渲染：多一个运行时；另起 Node 服务（如 Next.js）渲染：多一种部署和语言运行时 |
-| 测试 | `go test -race`；testcontainers 跑真实 PostgreSQL 和 Valkey；协议转换用录制样本回放；解析器做模糊测试；计费用性质测试（随机生成大量输入，检查规则始终成立）验证不变量；前端 Vitest + Playwright | 测试对着真实依赖跑，不靠模拟 | — |
+| 测试 | `go test -race`，只用可缓存的参数，结果按输入复用；testcontainers 跑真实 PostgreSQL 和 Valkey；协议转换用录制样本回放；解析器做模糊测试；计费用性质测试（随机生成大量输入，检查规则始终成立）验证不变量；前端 Vitest + Playwright | 测试对着真实依赖跑，不靠模拟；数据库测试每次用 `pgtest` 新建的库，集群连接串每次运行都变，它不是测试输入，所以经 `os.Environ` 读取而不进缓存键，复用的通过仍是有效的通过 | — |
 | 静态检查 | golangci-lint（启用的检查和阈值见 `.golangci.yml`）、deadcode、govulncheck、gitleaks；前端 Biome | 私有仓库在 GitHub 免费版上用不了 CodeQL（GitHub 文档，2026-10），以这些工具替代 | — |
 | 部署 | 静态编译的单个程序 → 非 root 的最小容器镜像；每个节点用 Docker Compose | 起步最简单；节点多了再换编排工具，程序不变 | 一开始就上 Kubernetes |
 | 命令入口 | just | 跨平台，Windows 开发机和 Linux CI 用同一套命令 | Makefile：Windows 上不好用 |
+
+`just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：每个 PR 和主分支都由 `just check-all` 里的 `just bench-once` 带竞态检测各跑一次；PR 上除 Markdown-only 和 `web/`-only 外的改动，`just bench-compare` 都再比较分配。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`NODE_`/`AXIOM_` 变量和 `web_cache.py` 自身的哈希）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum`、测试配置、Go 版本和同一组环境变量的哈希复用，任何 Go 变化都会重跑。缓存目录不自动淘汰，定期清理 `<cache>/web-build` 和 `<cache>/e2e`（例如 `find ~/.cache/axiom/web-build -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} +`）。只改 Markdown 的 PR 不跑完整 build，只跑 `just md-checks`（`docs`、`modules` 和读依赖表的 pg 测试），跳过 web、deploy-check 和基准；主分支和其余 PR 全跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
 
 具体小库（如缓存客户端）在实现时按兼容性测试选定，记在对应模块的 README。
 
@@ -202,7 +204,7 @@ docs/                         文档
   - 凭证按供应商类型定义成有类型的结构，不用字符串键值包。sub2api 因为字段白名单漏了几个键，导致一整类账号永远选不中（sub2api issue #7758，2026-10）。
 - **不用隐式机制**：不用 ORM、依赖注入框架、反射加载配置。
 - **反馈要快**：一条命令跑完格式化、lint 和单元测试。契约代码由生成得到，CI 检查生成结果是否最新。
-- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）用固定的项目名、端口、镜像和数据卷，靠机器级的文件锁轮流执行，每次以 `just down -v` 收尾。机器地址和凭证不入库。
+- **CI 在哪跑**：任务的 `runs-on` 读仓库的 Actions 变量 `RUNS_ON`（project-workflow 的约定，见其工程基线），不设就用 GitHub 托管的 `ubuntu-latest`；本仓库设为自托管 runner，几个 runner 共用一台机器。`just check`/`check-all` 的测试各用随机端口和容器名，可以并行；部署检查（`scripts/ci/deploy-check.sh`）给每个作业自己的 compose 项目名、镜像标签、数据卷和内核分配的空闲端口（项目名由 runner 名和工作区路径的短哈希组成），开始和结束时都拆掉自己的容器、数据卷和镜像，`down` 最多等 5 秒，CI 的容器没有重启策略。被 SIGKILL 的作业由同一个 runner 的下一个作业清理；如果那个 runner 不再跑，任何 runner 的下一次部署检查会清掉带本脚本标签、名字以 `axiom-ci-` 开头、容器创建超过作业超时（40 分钟）的栈——只动这些，别的容器不碰。所以同一台机器上的作业可以同时跑，不需要文件锁；`just up` 在本地仍用项目名 `axiom`、镜像 `axiom:local` 和 8080/8082 端口。只改 Markdown 的 PR 只跑 `just md-checks`（读 Markdown 的便宜检查），跳过 web、deploy-check 和基准；`docs` 检查仍跑。机器地址和凭证不入库。
 - **每个模块的 README 写明不变量**；测试和代码放在一起。
 
 ## 底线指标

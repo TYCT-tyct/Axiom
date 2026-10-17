@@ -187,6 +187,7 @@ func TestAStreamThatBreaksAfterTheCommitPointEndsWithAnErrorAndSettlesWhatCameFi
 func TestTheCallStopsAtItsLongestTime(t *testing.T) {
 	config := func(c *Config) {
 		c.MaxCall, c.IdleTimeout, c.StartBy, c.QueueWait = 10*time.Minute, 9*time.Minute, 9*time.Minute, 9*time.Minute
+		c.CompactHeaderWait = c.HeaderWait // it is below the call's longest time too (internal/gateway/README.md「超时与限额」)
 	}
 	run(t, func(t *testing.T, ctx context.Context) {
 		// Two entries that never say anything: the first is given up at the idle timeout, the second is out of time.

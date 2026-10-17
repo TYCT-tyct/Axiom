@@ -12,6 +12,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -25,20 +26,25 @@ type CallPolicy = adapter.CallPolicy
 
 // Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint, and the
 // request headers that go with it (gateway's whitelist: anthropic-beta and anthropic-version). Header never replaces
-// the credential or the content type, and gives the version the client chose over the default.
+// the credential or the content type, and gives the version the client chose over the default. Compact sends the call to
+// the format's compaction endpoint instead of its own path, the one call that is not a generation.
 type Call struct {
-	Format protocol.Format
-	Body   []byte
-	Header http.Header
+	Format  protocol.Format
+	Compact bool
+	Body    []byte
+	Header  http.Header
 }
 
-// AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, and the
-// supplier's own id of the request once a response header gave it. Billing passes it back unread; its fields are
-// not for anyone else.
+// AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, the unit
+// value it is costed at and the row that value came from, and the supplier's own id of the request once a response
+// header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
 	supplier, credential, endpoint, schedule uuid.UUID
+	unitValueID                              uuid.UUID
 	ref                                      string
 	pricedAt                                 time.Time
+	currency                                 platform.Currency  // the supplier's settlement currency
+	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 }
 
 // Key is the supplier's own id of the request, which reconciliation matches its charge records by; empty when no
@@ -55,6 +61,10 @@ var wire = map[protocol.Format]struct {
 	protocol.Responses: {path: "/v1/responses"},
 	protocol.Messages:  {path: "/v1/messages", version: "2023-06-01"},
 }
+
+// compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
+// format's own (docs/domains/gateway.md「转发规则」). Only Responses compacts one.
+var compactPaths = map[protocol.Format]string{protocol.Responses: "/v1/responses/compact"}
 
 // maxErrorBody is how much of a failed response is read for the adapter to classify.
 const maxErrorBody = 64 << 10
@@ -130,7 +140,7 @@ func (a *Attempt) Receipt() AttemptReceipt {
 	defer a.mu.Unlock()
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
-		ref: a.ref, pricedAt: a.priced,
+		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
 	}
 }
 
@@ -157,7 +167,13 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+w.path, bytes.NewReader(call.Body))
+	path := w.path
+	if call.Compact {
+		if path, ok = compactPaths[call.Format]; !ok {
+			return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
+		}
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+path, bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}

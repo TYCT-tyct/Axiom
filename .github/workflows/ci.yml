@@ -4,10 +4,9 @@ name: ci
 
 on:
   pull_request:
-    # edited: docs-impact reads the description. Every job reruns on an edit; build cannot be skipped instead, because
-    # a skipped required check counts as passed. project-workflow 9f60686 lets docs-impact move to describe.yml so
-    # this file can drop edited; until that move lands, keep description edits few: write it in full before review.
-    types: [opened, synchronize, reopened, edited, ready_for_review] # ready_for_review: a draft gets its first build when it is marked ready
+    # No edited: a description edit would rerun build for nothing, and skipping build on it is no way out, because a
+    # skipped required check counts as passed. docs-impact, which reads the description, is in describe.yml.
+    types: [opened, synchronize, reopened, ready_for_review] # ready_for_review: a draft gets its first build when it is marked ready
   push:
     branches: [main]
 
@@ -33,6 +32,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
           fetch-depth: 0 # the benchmark comparison checks out the base commit
+      # A Markdown-only PR runs the cheap checks that read Markdown (`just md-checks`) and skips web, deploy-check and
+      # the benchmark comparison; main, and every other PR, runs everything.
+      - id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          if python3 scripts/ci_skips.py md-only "$BASE"; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -41,13 +52,15 @@ jobs:
           # directories other jobs on the host are using
           cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: "**/go.sum"
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; the version is web/package.json's packageManager
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; the version is web/package.json's packageManager
         with:
           package_json_file: web/package.json
           # Not the default ~/setup-pnpm: runners sharing a host share a home, and two jobs installing pnpm into one
           # directory at once leave it broken
           dest: ${{ runner.temp }}/setup-pnpm
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.node-version
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }} # as for Go above
@@ -55,7 +68,8 @@ jobs:
       # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs on a hosted runner.
       # A self-hosted host has the browser's system libraries installed once; installing them per job would take the
       # host's apt lock from parallel jobs at once
-      - run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
         env:
           DEPS: ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}
       - run: |
@@ -63,39 +77,35 @@ jobs:
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - run: just check
-      # The deployment checks below start the stack on this host under fixed names (project axiom, port 8080, image
-      # axiom:local, volume axiom_postgres). Jobs on runners sharing a host take turns through a host-wide lock, and each
-      # turn ends with `just down -v`, so the next one starts from no database. On a hosted runner the lock is free.
-      # Waiting at most 20 minutes for the lock, then three `just up` of at most 5 minutes each, the checks and the teardown
-      - run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
+      # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table.
+      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only == 'true'
+        run: just md-checks
+      # The tests stay cacheable; bench-once runs every benchmark under -race on PRs too, and bench-compare below still
+      # compares allocations without -race.
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: just check-all
+      # The deployment checks below start the stack on this host with the job's own compose project, image tag, volumes
+      # and kernel-picked host ports, and tear it down however the step ends (scripts/ci/deploy-check.sh), so jobs on
+      # runners sharing a host neither collide nor wait for each other. Without a turn to wait for, three `just up` of
+      # at most 5 minutes each, the checks and the teardown fit.
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
       - if: github.event_name == 'pull_request'
         run: just migrations "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-      - if: github.event_name == 'pull_request'
-        run: just bench-compare "$BASE"
+      # A Markdown-only or web/-only change cannot move a Go allocation; every other change, testdata, *.sql and test
+      # files included, runs the comparison. Exit 10 is the only "not needed"; every other outcome runs it.
+      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+        run: |
+          status=0
+          python3 scripts/ci_skips.py bench-needed "$BASE" || status=$?
+          if [ "$status" -eq 10 ]; then
+            echo "bench-compare skipped: only Markdown or web/ changed between $BASE and HEAD"
+          else
+            [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
+            just bench-compare "$BASE"
+          fi
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-
-  docs-impact:
-    if: github.event_name == 'pull_request'
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
-    permissions:
-      contents: read
-      pull-requests: read # the description, read when the job runs
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - run: |
-          PR_BODY="$(gh api "repos/$REPO/pulls/$NUMBER" --jq .body)" # bash -e: a failed API call fails the step
-          export PR_BODY
-          python3 scripts/check_docs_impact.py "$BASE"
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.sha }}

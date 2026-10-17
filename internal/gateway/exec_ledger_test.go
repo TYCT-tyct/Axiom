@@ -79,7 +79,7 @@ func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 	}
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
-		Ledger: ledger, Costs: fakeCosts(1000), Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: ledger, Costs: fakeCosts{cost: 1000, known: true}, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -133,7 +133,7 @@ func TestALostAcknowledgementChargesOnce(t *testing.T) {
 	}}
 	up := withExecutor(r, ledger)
 	a := r.funded(1e12)
-	sample, _ := messagesSample(t)
+	sample, _ := sample(t, protocol.Messages)
 	for _, e := range up.eps {
 		e.script = []scripted{streamed(sample, 3, 50, false)}
 	}
@@ -162,7 +162,7 @@ func TestAnEstimateIsNeverChargedBeyondTheReservation(t *testing.T) {
 	r := ledgerRig(t)
 	up := withExecutor(r, &flakyLedger{})
 	a := r.funded(1e12)
-	sample, _ := messagesSample(t)
+	sample, _ := sample(t, protocol.Messages)
 	for _, e := range up.eps {
 		e.script = []scripted{streamed(sample, 6, maxOutput, true)}
 	}
@@ -190,7 +190,7 @@ func TestTheLedgerBalancesWhateverHappens(t *testing.T) {
 	rng := rand.New(rand.NewPCG(seed, 1))    //nolint:gosec // G404: test data
 	faults := rand.New(rand.NewPCG(seed, 2)) //nolint:gosec // G404: test data; the ledger's, drawn under its lock
 	r := ledgerRig(t)
-	sample, _ := messagesSample(t)
+	sample, _ := sample(t, protocol.Messages)
 	fault := func() (bool, error) {
 		switch faults.IntN(6) {
 		case 0:

@@ -54,9 +54,10 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 		if !s.outcome.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled || len(a.Segments) != 1 {
 			t.Errorf("ending %+v", s.outcome)
 		}
-		// Charged by the usage so far: the input as reported, the output it never reported by what was read, estimated.
+		// Charged by the usage so far: the input as reported, the output it never reported by what was read (5 bytes at 3
+		// a token), estimated.
 		if u := a.Segments[0]; u.Usage.Count(catalog.ItemInput) != 25 || !u.Reported.Has(catalog.ItemInput) ||
-			u.Usage.Count(catalog.ItemOutput) != 5 || u.Reported.Has(catalog.ItemOutput) {
+			u.Usage.Count(catalog.ItemOutput) != 2 || u.Reported.Has(catalog.ItemOutput) {
 			t.Errorf("usage %+v", u)
 		}
 		if strings.Contains(h.w.body(), "event: error") || h.w.wrote() != 1 {

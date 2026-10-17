@@ -38,12 +38,24 @@ var platformScope = pg.NewScope(true, nil, nil)
 
 func accountScope(accounts ...uuid.UUID) pg.Scope { return pg.NewScope(false, nil, accounts) }
 
-// record is a complete call of account, started at at.
+// record is a complete call of account, started at at, with two attempts: the first failed and the second committed.
 func record(account uuid.UUID, at time.Time) CallRecord {
 	return CallRecord{
 		ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
 		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: "claude-code", Class: "chat", Language: "en", UsedTools: true,
-		Model: "claude-opus", Endpoint: uuid.NewV7(), SourceClass: "official", Attempts: 2, Route: []byte(`{"preset":"p1"}`),
+		Model: "claude-opus",
+		Attempts: []AttemptRecord{
+			{
+				Seq: 1, Endpoint: uuid.NewV7(), Supplier: uuid.NewV7(), SourceClass: "relay", Egress: "direct",
+				Outcome: AttemptFailed, ErrorKind: "rate_limited", StartedAt: at, FinishedAt: at.Add(100 * time.Millisecond),
+			},
+			{
+				Seq: 2, Endpoint: uuid.NewV7(), Supplier: uuid.NewV7(), SourceClass: "official", Egress: "direct",
+				Outcome: AttemptCommitted, StartedAt: at.Add(200 * time.Millisecond),
+				FinishedAt: at.Add(900 * time.Millisecond), FirstToken: 300 * time.Millisecond,
+			},
+		},
+		Route:  []byte(`{"preset":"p1"}`),
 		Ledger: []uuid.UUID{uuid.NewV7()}, Usage: map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30},
 		ServiceTier: catalog.ServiceTierStandard, PriceNano: 5_000_000, CostNano: 3_000_000,
 		Currency: mustCurrency("USD"), Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,

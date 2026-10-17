@@ -34,24 +34,6 @@ const (
 	evStart, evBlock, evPing, evHello, evBang, evBlockStop, evMsgDelta, evMsgStop = 0, 1, 2, 3, 4, 5, 6, 7
 )
 
-func messagesSample(t *testing.T) (events []string, request []byte) {
-	t.Helper()
-	sample, err := os.ReadFile("../protocol/testdata/messages/text/upstream.sse")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err = os.ReadFile("../protocol/testdata/messages/text/request.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range strings.SplitAfter(strings.TrimSpace(string(sample))+"\n\n", "\n\n") {
-		if e != "" {
-			events = append(events, e)
-		}
-	}
-	return events, request
-}
-
 func events(all []string, which ...int) string {
 	var b strings.Builder
 	for _, i := range which {
@@ -163,6 +145,9 @@ type fakeUpstreams struct {
 	client  *clientWriter
 	settled int           // calls of Settled
 	flushed chan struct{} // what JournalFlushed returns; closed unless a test holds it
+	// beforeAcquire acts when an attempt asks for a credential of the endpoint, before it gets one: a test's way to
+	// have the client leave between two attempts.
+	beforeAcquire func(id suppliers.EndpointID)
 }
 
 type fakeEndpoint struct {
@@ -181,6 +166,9 @@ func (u *fakeUpstreams) endpoint(n int) *fakeEndpoint {
 }
 
 func (u *fakeUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
+	if u.beforeAcquire != nil {
+		u.beforeAcquire(id)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	e, ok := u.eps[id]
@@ -255,6 +243,7 @@ type clientWriter struct {
 	deadline time.Time // the last write deadline set
 	failFrom int       // writes from this one on fail; 0 never
 	stall    bool      // a write waits for its deadline and then fails, as one to a client that does not read
+	rate     int64     // bytes a second the client reads at; 0 as fast as it is given
 	deadlns  int
 }
 
@@ -280,7 +269,7 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	deadline, stall := w.deadline, w.stall
+	deadline, stall, rate := w.deadline, w.stall, w.rate
 	fail := w.failFrom > 0 && len(w.writes)+1 >= w.failFrom
 	w.mu.Unlock()
 	if stall {
@@ -289,6 +278,12 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	}
 	if fail {
 		return 0, io.ErrClosedPipe
+	}
+	if rate > 0 { // a slow client: the write takes what the bytes take, and its deadline holds meanwhile
+		time.Sleep(time.Duration(int64(len(b)) * int64(time.Second) / rate))
+		if !time.Now().Before(deadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -333,27 +328,31 @@ type settlement struct {
 }
 
 type options struct {
-	entries     int // endpoints in the route; 1 when zero
-	maxAttempts int // 3 when zero
-	config      func(*Config)
-	routing     routing.Config
-	script      map[int][]scripted // by endpoint number, from 1
-	policy      suppliers.CallPolicy
-	startBy     time.Duration // after the start of the call; two minutes when zero
-	final       billing.Final
-	settleErr   error               // every settlement fails with it
-	settle      func(try int) error // the error of each settlement, from 1, when settleErr is nil
-	extend      func(ctx context.Context, r billing.ExtendRequest) error
-	segmentable bool          // the entries are reserved by segment of 40 output tokens
-	cost        int64         // of every attempt
-	flushed     chan struct{} // the journal's flush; closed when nil
-	stream      *bool         // the request's stream member; true when nil
-	supplier    func(n int) int
-	alive       func() bool
-	mutate      func(*Call)
-	noSlot      []int
-	memory      int64  // the node's budget; memorySize when zero
-	price       string // the entries' price schedule; cheap when empty
+	client       protocol.Format  // the client's format; Messages when zero
+	upstream     *protocol.Format // the endpoint's format; the client's when nil, which makes it a converted call
+	entries      int              // endpoints in the route; 1 when zero
+	maxAttempts  int              // 3 when zero
+	config       func(*Config)
+	routing      routing.Config
+	script       map[int][]scripted // by endpoint number, from 1
+	policy       suppliers.CallPolicy
+	startBy      time.Duration // after the start of the call; two minutes when zero
+	final        billing.Final
+	settleErr    error               // every settlement fails with it
+	settle       func(try int) error // the error of each settlement, from 1, when settleErr is nil
+	extend       func(ctx context.Context, r billing.ExtendRequest) error
+	segmentable  bool          // the entries are reserved by segment of 40 output tokens
+	cost         int64         // of every attempt
+	costNotKnown bool          // whether Costs says the cost leaves something out
+	costErr      error         // the error Costs fails with
+	flushed      chan struct{} // the journal's flush; closed when nil
+	stream       *bool         // the request's stream member; true when nil
+	supplier     func(n int) int
+	alive        func() bool
+	mutate       func(*Call)
+	noSlot       []int
+	memory       int64  // the node's budget; memorySize when zero
+	price        string // the entries' price schedule; cheap when empty
 }
 
 type harness struct {
@@ -380,10 +379,18 @@ type harness struct {
 const memorySize = 1 << 30
 
 // newHarness builds a call with an executor; it must be called inside the bubble. The route has endpoints 1..entries,
-// each of the Messages format, which answer by script (a refusal at the start of the attempt when none).
+// each of the upstream's format, which answer by script (a refusal at the start of the attempt when none). The client's
+// request comes from its format's sample, the stream from the upstream's, which is the upstream's own for a same-format
+// call and another's for a converted one.
 func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	t.Helper()
-	all, request := messagesSample(t)
+	client := cmpOr(o.client, protocol.Messages)
+	upstream := client
+	if o.upstream != nil {
+		upstream = *o.upstream
+	}
+	all, _ := sample(t, upstream)
+	_, request := sample(t, client)
 	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{})}
 	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w, flushed: o.flushed}
 	if h.up.flushed == nil {
@@ -410,32 +417,36 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
-		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts(o.cost), Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.call = h.newCall(o, request)
+	h.call = h.newCall(o, request, client, upstream)
 	clientCtx, cancel := context.WithCancel(ctx)
 	h.client = cancel
 	h.req = httptest.NewRequestWithContext(clientCtx, http.MethodPost, "/v1/messages", nil)
 	return h
 }
 
-func (h *harness) newCall(o options, request []byte) *Call {
+func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
 	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	req, err := protocol.Inspect(protocol.Messages, request)
+	req, err := protocol.Inspect(client, request)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
 	if o.stream != nil {
 		req.Stream = *o.stream
+		if !*o.stream { // the client's body says so too, and the endpoint still has to be asked for a stream
+			request = bytes.Replace(request, []byte(`"stream": true`), []byte(`"stream": false`), 1)
+		}
 	}
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
@@ -447,7 +458,9 @@ func (h *harness) newCall(o options, request []byte) *Call {
 			supplier = o.supplier(i)
 		}
 		plan.Entries = append(plan.Entries, routing.Entry{
-			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{Format: protocol.Messages, Model: "up-" + string(rune('0'+i))},
+			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{
+				Format: upstream, Model: "up-" + string(rune('0'+i)), Streams: true, MaxOutput: 1000,
+			},
 			MaxOutput: 1000, Limits: limits, Segmentable: o.segmentable, Price: routing.PriceRef{Version: uuid.UUID{1}, Schedule: schedule},
 		})
 		plan.Record.Route = append(plan.Record.Route, ep(i))
@@ -462,7 +475,7 @@ func (h *harness) newCall(o options, request []byte) *Call {
 		h.t.Fatal(err)
 	}
 	c := &Call{
-		ID: uuid.NewV7(), Format: protocol.Messages, Request: req, Body: request,
+		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
 	c.hold(func() { close(h.released) })
@@ -514,10 +527,15 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 	return l.o.final, nil
 }
 
-type fakeCosts int64
+// fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with.
+type fakeCosts struct {
+	cost  int64
+	known bool
+	err   error
+}
 
-func (c fakeCosts) Cost(suppliers.AttemptReceipt, []catalog.Usage) (int64, error) {
-	return int64(c), nil
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (int64, bool, error) {
+	return c.cost, c.known, c.err
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no

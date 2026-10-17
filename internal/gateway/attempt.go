@@ -43,7 +43,7 @@ func (s *session) attempts(ctx context.Context) ended {
 	maxAttempts := min(s.c.Plan.MaxAttempts, platform.MaxAttempts)
 	for i := 0; i < len(s.c.Plan.Entries); {
 		if e, stop := s.mayStart(maxAttempts); stop {
-			return e
+			return s.left(e)
 		}
 		next, e := s.try(ctx, i)
 		switch next {
@@ -54,7 +54,7 @@ func (s *session) attempts(ctx context.Context) ended {
 		case sameEntry:
 		}
 	}
-	return s.exhausted()
+	return s.left(s.exhausted())
 }
 
 // mayStart says whether another attempt may begin, and if not how the call ends. A client that has gone gets nothing,
@@ -138,14 +138,18 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
 // charged before it allocates (a charge made after would be an allocation already done), and what stays, the capacity
 // of the request as this endpoint takes it, which is a copy of the body, is all that remains charged: held, which the
-// attempt gives back once the request is sent. A refusal is ErrOverloaded.
+// attempt gives back once the request is sent. A refusal is ErrOverloaded. The compact call is the one request that is
+// not a generation: its body is rewritten by the members that must not go upstream as they are (the endpoint's model
+// name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
 	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
-	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, entry.Target, w)
+	target := entry.Target
+	target.Compact = s.c.Compact
+	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
 	if !s.x.Memory.Charge(cost) {
 		return up, 0, ErrOverloaded
 	}
-	up, err = protocol.Prepare(&s.c.Request, s.c.Body, entry.Target, w)
+	up, err = protocol.Prepare(&s.c.Request, s.c.Body, target, w)
 	held = min(cost, int64(cap(up.Body)))
 	if err != nil {
 		held = 0
@@ -187,8 +191,9 @@ type attempt struct {
 	release context.CancelFunc
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
-	usage protocol.Usage    // what the stream reported, once it is over
-	seen  protocol.Progress // what the relay had seen last
+	content bool              // the upstream sent content: the commit point came
+	usage   protocol.Usage    // what the stream reported, once it is over
+	seen    protocol.Progress // what the relay had seen last
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -202,6 +207,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
 	s.currency = entry.Price.Schedule.Currency()
+	s.last = a
 	policy := conn.Policy()
 	ctx, release := AttemptContext(ctx, s.deadline, policy.Cancels)
 	ctx, a.cancel = context.WithCancelCause(ctx)
@@ -236,8 +242,10 @@ func (s *session) journal(a *attempt, committed bool) {
 	})
 }
 
-// attempt runs one try: send, and either a failure to decide on or a stream to relay.
+// attempt runs one try: send, and either a failure to decide on or an answer to read, a stream for a client relayed, a
+// whole body for one that is passed through.
 func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream, held int64) (step, ended) {
+	s.let() // another attempt answers the call: the reply kept before it is not part of it
 	a, ctx := s.bind(ctx, i, entry, conn)
 	defer a.close()
 	resp, fail := a.send(ctx, up, held)
@@ -245,17 +253,26 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 		return s.failed(a, fail)
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	if s.c.Compact {
+		return a.pass(ctx, resp)
+	}
 	return a.stream(ctx, resp.Body, up.Usage)
 }
 
 // send posts the request, within the wait for the response headers, and journals the attempt again when they come: that
 // is when the supplier's request id is known. The prepared body, held in the node's budget, is given back as soon as it
-// has been sent.
+// has been sent. The compact endpoint is the one whose reply is not a stream: it gets a longer wait for its headers, and
+// its own path (docs/domains/gateway.md「路径与格式」).
 func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*http.Response, *suppliers.Failure) {
 	s := a.s
 	defer s.x.Memory.Refund(held)
-	wait := time.AfterFunc(s.x.Limits.cfg.HeaderWait, func() { a.cancel(errHeaderWait) })
-	resp, fail := a.conn.Send(ctx, suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header})
+	waitFor := s.x.Limits.cfg.HeaderWait
+	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header}
+	if s.c.Compact {
+		waitFor, call.Compact = s.x.Limits.cfg.CompactHeaderWait, true
+	}
+	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
+	resp, fail := a.conn.Send(ctx, call)
 	wait.Stop() // at once: a late firing would cancel the stream the headers began
 	s.journal(a, false)
 	return resp, fail

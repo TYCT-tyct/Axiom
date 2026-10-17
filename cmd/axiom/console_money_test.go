@@ -141,7 +141,7 @@ func newCall(account uuid.UUID, at time.Time, model, app string) observability.C
 	}
 	return observability.CallRecord{
 		ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
-		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: app, Class: "chat", Model: model, Attempts: 1, Route: []byte(`{}`),
+		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: app, Class: "chat", Model: model, Route: []byte(`{}`),
 		Usage: map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30}, ServiceTier: catalog.ServiceTierStandard,
 		PriceNano: 5_000_000, CostNano: 3_000_000, Currency: currency, Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,
 		FinishReason: "stop", ConsentVersion: "2026-10",
@@ -153,7 +153,7 @@ func (f consoleFixture) record(calls ...observability.CallRecord) {
 	f.t.Helper()
 	r := observability.NewRecorder(f.t.Context(), f.db, pg.PlatformScope(), callRecords, slog.New(slog.DiscardHandler))
 	for _, c := range calls {
-		if err := r.Enqueue(f.t.Context(), c); err != nil {
+		if err := r.Enqueue(c); err != nil {
 			f.t.Fatal(err)
 		}
 	}
