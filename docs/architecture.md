@@ -146,7 +146,7 @@
 | 变更通知 | PostgreSQL LISTEN/NOTIFY | 事务提交后才送达，快照重建不会读到未提交的数据。通知只带 ID；监听用直连数据库的独立连接，不经事务模式的连接池；断线重连后全量重建快照 | 定时轮询：new-api 改配置后多节点最长 60 秒才生效（new-api 源码，2026-10） |
 | 对象存储 | 只依赖 S3 接口；云厂商的对象存储或自托管 SeaweedFS | 对话内容体量最大，与数据库分开 | MinIO：社区版仓库已于 2026-04 归档、停止维护（GitHub） |
 | 调用记录分析 | 先用 PostgreSQL 分区表，量大后加 ClickHouse | 调用路径从不读记录表；记录经异步管道写入，以后换存储不影响调用 | 让请求路径查记录表：LiteLLM 和 sub2api 都因此变慢（LiteLLM 文档《Spend Monitoring》，2026-10；sub2api issue #7867，2026-10） |
-| 可观测性 | OpenTelemetry（链路、指标）+ 标准库 slog 结构化日志 | 标准协议，后端存储可以随部署选择 | — |
+| 可观测性 | OpenTelemetry 的 API 与 SDK（链路、指标）+ 标准库 slog 结构化日志；指标经 Prometheus 导出器由探针监听抓取，链路在有收集器的部署再用 OTLP/HTTP 导出 | 各模块只认一套接口，换导出方式不改模块；记一次测量不分配内存（基准测试守住）；抓取不需要额外依赖和收集器，数据不离开自己的部署。命名、标签基数上限、采样与导出配置见 [platform 的「遥测」](../internal/platform/README.md#遥测) | `prometheus/client_golang` 直接记指标：模块要认两套接口，改推送要改遍所有模块，性能没有优势；现在就上 OTLP 推送：没有收集器，且 `otlptracehttp` 带进 grpc、grpc-gateway、proto/otlp 一批依赖（其 go.mod，2026-10-16）；厂商 SDK 或托管服务：端点在境外，国内节点不一定连得上，调用元数据离开部署 |
 | 配置 | 环境变量解析成带类型的结构，启动时校验；业务配置在数据库 | 简单、可审查；错了就不启动 | viper 等隐式加载配置的库 |
 | 依赖组装 | 在程序入口手写构造函数调用 | 一眼看清依赖关系，AI 不会被生成代码绕晕 | Wire 等依赖注入框架：sub2api 的组装代码超过 2000 行（sub2api 源码，2026-10） |
 | 接口契约 | OpenAPI 3.0.3；Go 端用 oapi-codegen，TypeScript 端用 openapi-typescript + openapi-fetch；生成器固定版本 | 先写契约再生成代码，前后端类型不会漂移；运营 agent 也直接读它。oapi-codegen 对 3.1 的支持 2026-07 才初步加入（oapi-codegen 讨论 #2478），所以先用成熟的 3.0.3 | 手写接口类型 |
