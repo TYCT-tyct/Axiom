@@ -65,6 +65,22 @@ func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
 	}
 }
 
+// TestHandlerErrorThroughARealRequest: a request the guard admits fails in the handler on a real database error; the
+// client gets the contract's bare 500, and the log has the error but the answer does not.
+func TestHandlerErrorThroughARealRequest(t *testing.T) {
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.run(`ALTER TABLE accounts.api_keys RENAME TO api_keys_missing`)
+	rec := f.do(http.MethodGet, "/keys", "", as(s))
+	expect(t, "a handler's database error", rec, http.StatusInternalServerError, consoleapi.ErrorCodeInternal)
+	if strings.Contains(rec.Body.String(), "api_keys_missing") {
+		t.Errorf("the answer repeats the database's error: %s", rec.Body)
+	}
+	if !strings.Contains(f.logs.String(), "console API handler failed") {
+		t.Errorf("the log does not record the handler's failure: %s", f.logs)
+	}
+}
+
 // checkSecrecy: a response is uncached JSON that does not tell the client the handler's error, and the log has it
 // exactly when the handler failed.
 func checkSecrecy(t *testing.T, rec *httptest.ResponseRecorder, logs string, failed bool) {

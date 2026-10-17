@@ -1,21 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
+import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { goodInvite, knownEmail, knownPassword, limitedEmail, mfaEmail } from "./console-data.ts";
 
 // The console's pages against the mocked API (console-api.ts): the main flows of M1, each as a user would walk it.
 
 test.use({ timezoneId: "Asia/Shanghai" });
-
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  return errors;
-}
 
 async function signIn(page: Page, email = knownEmail, password = knownPassword) {
   await page.getByLabel("邮箱").fill(email);
