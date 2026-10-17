@@ -157,7 +157,7 @@
 | 部署 | 静态编译的单个程序 → 非 root 的最小容器镜像；每个节点用 Docker Compose | 起步最简单；节点多了再换编排工具，程序不变 | 一开始就上 Kubernetes |
 | 命令入口 | just | 跨平台，Windows 开发机和 Linux CI 用同一套命令 | Makefile：Windows 上不好用 |
 
-`just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：每个 PR 和主分支都由 `just check-all` 里的 `just bench-once` 带竞态检测各跑一次；PR 上生产 Go 或 `go.mod`/`go.sum` 有变化时，`just bench-compare` 再比较分配，否则跳过。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`AXIOM_` 变量和 `web_cache.py` 自身的哈希）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum`、测试配置、Go 版本和 `AXIOM_` 测试变量的哈希复用，任何 Go 变化都会重跑。缓存目录不自动淘汰，定期清理 `<cache>/web-build` 和 `<cache>/e2e`（例如 `find ~/.cache/axiom/web-build -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} +`）。只改 Markdown 的 PR 不跑完整 build，只跑 `just md-checks`（`docs`、`modules` 和读依赖表的 pg 测试），跳过 web、deploy-check 和基准；主分支和其余 PR 全跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
+`just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：每个 PR 和主分支都由 `just check-all` 里的 `just bench-once` 带竞态检测各跑一次；PR 上除 Markdown-only 和 `web/`-only 外的改动，`just bench-compare` 都再比较分配。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`NODE_`/`AXIOM_` 变量和 `web_cache.py` 自身的哈希）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum`、测试配置、Go 版本和同一组环境变量的哈希复用，任何 Go 变化都会重跑。缓存目录不自动淘汰，定期清理 `<cache>/web-build` 和 `<cache>/e2e`（例如 `find ~/.cache/axiom/web-build -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} +`）。只改 Markdown 的 PR 不跑完整 build，只跑 `just md-checks`（`docs`、`modules` 和读依赖表的 pg 测试），跳过 web、deploy-check 和基准；主分支和其余 PR 全跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
 
 具体小库（如缓存客户端）在实现时按兼容性测试选定，记在对应模块的 README。
 
