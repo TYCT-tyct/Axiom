@@ -79,14 +79,16 @@ deadcode:
 # Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The
 # packages share one PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test
 # ./pkg` alone starts its own. The test build still compiles every benchmark; they run in `bench-once` and bench-compare.
+# At most four packages at once: eight, the default on the 8-core host, raced with the shared cluster and starved the
+# timing-sensitive database tests; four is the limit the server proof used.
 test: web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
     go test -C tools -race ./...
 
 # Every benchmark compiles and runs once, with the race detector. Main pushes run this, since bench-compare runs only on
 # PRs; PRs run every benchmark through bench-compare.
 bench-once: web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race -run '^$' -bench . -benchtime 1x ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
 
 # Every check, including one run of each benchmark
 check-all: check bench-once
