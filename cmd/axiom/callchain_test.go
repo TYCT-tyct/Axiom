@@ -39,59 +39,83 @@ func (silentSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, 
 	return nil
 }
 
-// TestTraceReadsTheWholeChain: one request ID links a call with two attempts, routing's record of the candidates it
-// left out and why, and the ledger transactions a real settlement posts. Observability reads the call and its attempts,
-// billing reads the ledger, and the ledger's attempts and charge are the call's (Issue #29「从任意一条调用记录都能串起
-// 它的每次尝试、路由过程和账本交易」).
-func TestTraceReadsTheWholeChain(t *testing.T) {
+// chainFixture is a database with all modules, one funded account, and billing started under a live holder.
+type chainFixture struct {
+	app           *pg.DB
+	platformScope pg.Scope
+	scope         pg.Scope
+	site          uuid.UUID
+	account       uuid.UUID
+	workspace     uuid.UUID
+	key           uuid.UUID
+	currency      platform.Currency
+	schedule      catalog.Schedule
+	billing       *billing.Billing
+}
+
+func newChainFixture(t *testing.T) chainFixture {
+	t.Helper()
 	database := pgtest.New(t, modules()...)
 	app, err := pg.Open(t.Context(), database.App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
-
 	ctx := t.Context()
-	platformScope := pg.PlatformScope()
-	site, account, workspace, key := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-	scope := pg.NewScope(false, nil, []uuid.UUID{account})
-	currency, err := platform.ParseCurrency("USD")
-	if err != nil {
+	f := chainFixture{
+		app: app, platformScope: pg.PlatformScope(),
+		site: uuid.NewV7(), account: uuid.NewV7(), workspace: uuid.NewV7(), key: uuid.NewV7(),
+	}
+	f.scope = pg.NewScope(false, nil, []uuid.UUID{f.account})
+	if f.currency, err = platform.ParseCurrency("USD"); err != nil {
 		t.Fatal(err)
 	}
-	schedule, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`))
-	if err != nil {
+	if f.schedule, err = catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)); err != nil {
 		t.Fatal(err)
 	}
-
-	b, err := billing.Start(ctx, app, platformScope, billing.Config{
+	if f.billing, err = billing.Start(ctx, app, f.platformScope, billing.Config{
 		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour,
 		Logger: slog.New(slog.DiscardHandler),
-	}, silentSuppliers{})
-	if err != nil {
+	}, silentSuppliers{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Tx(ctx, scope, func(tx pg.Tx) error {
-		return billing.OpenBalance(ctx, tx, site, account, 0)
+	if err := app.Tx(ctx, f.scope, func(tx pg.Tx) error {
+		return billing.OpenBalance(ctx, tx, f.site, f.account, 0)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Tx(ctx, platformScope, func(tx pg.Tx) error {
+	if err := app.Tx(ctx, f.platformScope, func(tx pg.Tx) error {
 		return billing.AddCredit(ctx, tx, billing.Credit{
-			ID: uuid.NewV7(), Site: site, Account: account, Amount: 10_000_000,
+			ID: uuid.NewV7(), Site: f.site, Account: f.account, Amount: 10_000_000,
 			Actor: audit.System("chain.test"), Reason: "a funded account for the chain test",
 		})
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return f
+}
 
-	request := uuid.NewV7()
-	admitted := billing.Admitted{Scope: scope, Site: site, Account: account, Workspace: workspace, Key: key}
+// chain is one call after a real settlement, read back through both modules' public reads.
+type chain struct {
+	request       uuid.UUID
+	first, second uuid.UUID
+	call          observability.CallRecord
+	ledger        []billing.LedgerTransaction
+	charged       int64
+}
+
+// makeChain reserves and settles two attempts, writes the call with routing's record of the same two tries, and reads
+// the call, its attempts and the ledger back under the account's scope.
+func makeChain(t *testing.T, f chainFixture) chain {
+	t.Helper()
+	ctx := t.Context()
+	c := chain{request: uuid.NewV7(), first: uuid.NewV7(), second: uuid.NewV7()}
+	admitted := billing.Admitted{Scope: f.scope, Site: f.site, Account: f.account, Workspace: f.workspace, Key: f.key}
 	var hold *billing.Hold
-	if err := app.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+	if err := f.app.Tx(ctx, f.scope, func(tx pg.Tx) (err error) {
 		var kept []int
-		hold, kept, err = b.Reserve(ctx, tx, admitted, request, billing.Demand{TextBytes: 1000},
-			[]billing.Quotable{{Price: schedule, Model: billing.Model{ContextLength: 1e12}, MaxOutput: 100}})
+		hold, kept, err = f.billing.Reserve(ctx, tx, admitted, c.request, billing.Demand{TextBytes: 1000},
+			[]billing.Quotable{{Price: f.schedule, Model: billing.Model{ContextLength: 1e12}, MaxOutput: 100}})
 		if err == nil && len(kept) != 1 {
 			t.Errorf("the reservation kept %v, want the one entry", kept)
 		}
@@ -99,76 +123,86 @@ func TestTraceReadsTheWholeChain(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	final, err := b.Settle(ctx, hold, billing.Outcome{Attempts: []billing.AttemptResult{
+	final, err := f.billing.Settle(ctx, hold, billing.Outcome{Attempts: []billing.AttemptResult{
 		{Seq: 1, Entry: 0, Cost: 5, Costed: true, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
 		{Seq: 2, Entry: 0, Cost: 7, Costed: true, Segments: []billing.Segment{segment(t, 50, 10)}, Result: billing.Committed, Finish: billing.FinishStop},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	charged := final.Charged.CeilAmount()
+	c.charged = final.Charged.CeilAmount()
+	c.call = callRecord(t, f, c)
+	recorder := observability.NewRecorder(ctx, f.app, f.platformScope, observability.Config{
+		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+	if err := recorder.Enqueue(c.call); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.app.ReadTx(ctx, f.scope, func(tx pg.Tx) (err error) {
+		if c.call, err = observability.GetTrace(ctx, tx, c.request); err != nil {
+			return err
+		}
+		c.ledger, err = billing.LedgerOf(ctx, tx, c.request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
 
-	first, second := uuid.NewV7(), uuid.NewV7()
+// callRecord is what the gateway would hand the recorder: the request, its two attempts and routing's record.
+func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord {
+	t.Helper()
 	route, err := routing.Record{
 		Excluded: []routing.Excluded{
-			{Endpoint: routing.EndpointID(second), Reason: routing.ContextTooSmall},
+			{Endpoint: routing.EndpointID(c.second), Reason: routing.ContextTooSmall},
 			{Endpoint: routing.EndpointID(uuid.NewV7()), Reason: routing.NoEgress},
 		},
-		Route: []routing.EndpointID{routing.EndpointID(first), routing.EndpointID(second)},
+		Route: []routing.EndpointID{routing.EndpointID(c.first), routing.EndpointID(c.second)},
 		Attempts: []routing.Attempt{
-			{Endpoint: routing.EndpointID(first), Egress: "direct", Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
+			{Endpoint: routing.EndpointID(c.first), Egress: "direct", Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
 		},
 	}.JSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now().UTC().Add(-time.Second).Truncate(time.Microsecond)
-	rec := observability.CallRecord{
-		ID: request, At: started, Site: site, Account: account, Workspace: workspace, Key: key,
+	return observability.CallRecord{
+		ID: c.request, At: started, Site: f.site, Account: f.account, Workspace: f.workspace, Key: f.key,
 		IP: netip.MustParseAddr("203.0.113.9"), ClientApp: "claude-code", Class: "chat", Language: "en",
 		UsedTools: true, Model: "claude-opus", Route: route,
 		Attempts: []observability.AttemptRecord{
-			{Seq: 1, Endpoint: first, Supplier: key, SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
+			{Seq: 1, Endpoint: c.first, Supplier: f.key, SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
 				ErrorKind: "rate_limited", StartedAt: started, FinishedAt: started.Add(100 * time.Millisecond)},
-			{Seq: 2, Endpoint: second, Supplier: site, SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
+			{Seq: 2, Endpoint: c.second, Supplier: f.site, SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
 				StartedAt: started.Add(200 * time.Millisecond), FinishedAt: started.Add(900 * time.Millisecond),
 				FirstToken: 300 * time.Millisecond},
 		},
 		Usage:       map[catalog.Item]int64{catalog.ItemInput: 50, catalog.ItemOutput: 10},
-		ServiceTier: catalog.ServiceTierStandard, PriceNano: charged, CostNano: 12, Currency: currency,
+		ServiceTier: catalog.ServiceTierStandard, PriceNano: c.charged, CostNano: 12, Currency: f.currency,
 		Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond, FinishReason: "stop",
 		ConsentVersion: "2026-10", TrainingAllowed: true,
 	}
-	recorder := observability.NewRecorder(ctx, app, platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
-		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
-	}, slog.New(slog.DiscardHandler))
-	if err := recorder.Enqueue(rec); err != nil {
-		t.Fatal(err)
-	}
-	if err := recorder.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	var call observability.CallRecord
-	var ledger []billing.LedgerTransaction
-	if err := app.ReadTx(ctx, scope, func(tx pg.Tx) (err error) {
-		if call, err = observability.GetTrace(ctx, tx, request); err != nil {
-			return err
-		}
-		ledger, err = billing.LedgerOf(ctx, tx, request)
-		return err
-	}); err != nil {
-		t.Fatal(err)
+// TestTraceReadsTheWholeChain: one request ID links a call with two attempts, routing's record of the candidates it
+// left out and why, and the ledger transactions a real settlement posts. Observability reads the call and its attempts,
+// billing reads the ledger, and the ledger's attempts and charge are the call's (Issue #29「从任意一条调用记录都能串起
+// 它的每次尝试、路由过程和账本交易」).
+func TestTraceReadsTheWholeChain(t *testing.T) {
+	f := newChainFixture(t)
+	c := makeChain(t, f)
+	checkAttempts(t, c.call.Attempts, c.first, c.second)
+	checkRoute(t, c.call.Route)
+	if c.call.PriceNano != c.charged || c.call.CostNano != 12 {
+		t.Errorf("the call's amounts: price %d (settled %d), cost %d", c.call.PriceNano, c.charged, c.call.CostNano)
 	}
-
-	checkAttempts(t, call.Attempts, first, second)
-	checkRoute(t, call.Route)
-	if call.PriceNano != charged || call.CostNano != 12 {
-		t.Errorf("the call's amounts: price %d (settled %d), cost %d", call.PriceNano, charged, call.CostNano)
-	}
-	checkLedger(t, ledger, charged)
-	checkNoTraceForAnotherAccount(t, app, request)
+	checkLedger(t, c.ledger, c.charged)
+	checkNoTraceForAnotherAccount(t, f.app, c.request)
 }
 
 // checkAttempts: the call carries both attempts in order, each on the endpoint it went to.
