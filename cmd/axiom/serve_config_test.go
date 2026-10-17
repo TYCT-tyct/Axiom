@@ -2,15 +2,70 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"axiom/internal/gateway"
+	"axiom/internal/platform/pgtest"
 )
+
+// TestServeRefusesAPoolBelowTheGate: the gateway hands out Config.PoolSize database connections and keeps the last
+// Config.PoolReserve of them for completions, so a connection string that shrinks the pool below them would queue the
+// ones the reserve promised. The node refuses to start and names the variable and both sizes, not the string; a pool
+// of exactly that size starts.
+func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
+	url := pgtest.New(t, modules()...).App
+	gate := gateway.DefaultConfig().PoolSize
+	base := []string{
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
+		"AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+	}
+	withPool := func(size int) []string {
+		return append(slices.Clone(base), fmt.Sprintf("AXIOM_DATABASE_URL=%s&pool_max_conns=%d", url, size))
+	}
+
+	t.Run("below the gate", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		err := serve(ctx, withPool(gate-1), slog.New(slog.DiscardHandler))
+		if err == nil {
+			t.Fatal("the node started with fewer connections than the gateway hands out")
+		}
+		for _, want := range []string{"AXIOM_DATABASE_URL", fmt.Sprintf("pool_max_conns %d", gate-1), fmt.Sprintf("%d database connections", gate)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%q does not say %q", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), url) {
+			t.Errorf("%q quotes the connection string", err)
+		}
+	})
+
+	t.Run("at the gate", func(t *testing.T) {
+		logs := make(records, 16)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- serve(ctx, withPool(gate), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		servingAddrs(t, logs, done)
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("shutdown: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the node did not shut down")
+		}
+	})
+}
 
 // TestServeRefusesBadKeysAndSettings: the key files and the new settings are checked before the database is touched,
 // every problem named at once, and no value or path quoted.
