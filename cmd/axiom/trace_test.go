@@ -112,15 +112,9 @@ func TestRequestTraceCarriesTheRequestID(t *testing.T) {
 	if got := attribute(server, "request_id"); got != requestID || requestID == "" {
 		t.Errorf("server span request_id = %q, the client saw %q", got, requestID)
 	}
-	if got := attribute(tx, "db.system"); got != "postgresql" {
-		t.Errorf("transaction span db.system = %q, want postgresql", got)
-	}
-	if got := attribute(out, "server.address"); got != upstreamHost {
-		t.Errorf("outbound span server.address = %q, want %q", got, upstreamHost)
-	}
-	if got := attribute(out, "http.response.status_code"); got != "200" {
-		t.Errorf("outbound span status = %q, want 200", got)
-	}
+	wantAttribute(t, tx, "db.system", "postgresql")
+	wantAttribute(t, out, "server.address", upstreamHost)
+	wantAttribute(t, out, "http.response.status_code", "200")
 	for _, child := range []sdktrace.ReadOnlySpan{tx, out} {
 		if child.Parent().SpanID() != server.SpanContext().SpanID() || child.SpanContext().TraceID() != server.SpanContext().TraceID() {
 			t.Errorf("span %s is not a child of the request's span", child.Name())
@@ -143,4 +137,12 @@ func attribute(s sdktrace.ReadOnlySpan, key string) string {
 		}
 	}
 	return ""
+}
+
+// wantAttribute fails the test when the span does not carry key with the given value.
+func wantAttribute(t *testing.T, s sdktrace.ReadOnlySpan, key, value string) {
+	t.Helper()
+	if got := attribute(s, key); got != value {
+		t.Errorf("span %s attribute %s = %q, want %q", s.Name(), key, got, value)
+	}
 }
