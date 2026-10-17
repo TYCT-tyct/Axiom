@@ -195,6 +195,9 @@ type program struct {
 	stderr  lockedBuffer
 	waitErr error
 	waiting sync.Once
+	mu      sync.Mutex
+	partial []byte
+	logged  []string
 }
 
 func startAxiom(t *testing.T, environ []string, args ...string) *program {
@@ -219,16 +222,38 @@ func (p *program) wait() error {
 	return p.waitErr
 }
 
-// Write reads the program's log records. The JSON handler writes each record in one call.
+// Write reads the program's log records. The JSON handler writes each record in one call, but the pipe may join or
+// split them, so the bytes are split at their newlines first.
 func (p *program) Write(b []byte) (int, error) {
-	var record addresses
-	if err := json.Unmarshal(b, &record); err == nil {
-		select {
-		case p.records <- record:
-		default: // a full channel must not stall the node; the test reads only the first records
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.partial = append(p.partial, b...)
+	for {
+		line, rest, ok := bytes.Cut(p.partial, []byte("\n"))
+		if !ok {
+			break
+		}
+		p.partial = rest
+		p.logged = append(p.logged, string(line))
+		if len(p.logged) > 20 {
+			p.logged = p.logged[1:]
+		}
+		var record addresses
+		if json.Unmarshal(line, &record) == nil {
+			select {
+			case p.records <- record:
+			default: // a full channel must not stall the node; the test reads only the first records
+			}
 		}
 	}
 	return len(b), nil
+}
+
+// output is the last log lines, for a failure that has to say what the program did instead.
+func (p *program) output() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return strings.Join(p.logged, "\n")
 }
 
 // until waits for the program to log the record with msg.
@@ -241,7 +266,7 @@ func (p *program) until(t *testing.T, msg string) addresses {
 				return record
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatalf("the program logged no %q: %s", msg, p.stderr.String())
+			t.Fatalf("the program logged no %q: %s\n%s", msg, p.output(), p.stderr.String())
 		}
 	}
 }
