@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import check_pr
-from check_pr import describe, review, unfinished, waiver_allowed
+from check_pr import change, closing, describe, review, unfinished, unticked_acceptance, waiver_allowed
 
 TEMPLATE = "## Background / 背景\n<!-- why -->\n\n## Verification / 验证\n<!-- evidence -->\n"
 BODY = "## Background / 背景\nbecause\n## Verification / 验证\nran it\n"
@@ -72,37 +72,169 @@ class DescribeTest(unittest.TestCase):
                 self.assertEqual(describe("docs: x y", BODY + text + "\n", "someone", TEMPLATE) == [], ok)
 
 
+RENDERED = {  # body_html as GitHub renders each description: gh api -X POST markdown -f mode=gfm, verbatim
+    "the issue's example": (
+        '\n<h3>验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> unfinished</li>\n</ul>'
+    ),
+    "a marker in an inline code span": (
+        '<h3>验收</h3>\n<p>Explain <code class="notranslate">&lt;!--</code> here.</p>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a marker in an indented code block": (
+        '<h3>验收</h3>\n<pre class="notranslate"><code class="notranslate">```\n&lt;!--\n```\n</code></pre>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a comment inside a heading": (
+        '<h3> 验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "several comments on one heading": (
+        '<h3> 验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "a tilde fence after a comment": (
+        '<h3>验收</h3>\n<p>~~~</p>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "an unmatched backtick before a comment": (
+        '<h3>Other ` </h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> unrelated</li>\n</ul>'
+    ),
+    "a box inside a comment": (
+        '<h3>验收</h3>\n\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>'
+    ),
+    "a comment marker inside a fence": (
+        '<h3>验收</h3>\n<div class="highlight highlight-text-md"><pre class="notranslate"><span class="pl-c">'
+        '<span class="pl-c">&lt;!--</span></span>\n<span class="pl-c">- [ ] in code</span></pre></div>'
+        '\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>'
+    ),
+    "a heading and a box inside a fence": (
+        '<h3>验收</h3>\n<div class="highlight highlight-text-md"><pre class="notranslate"><span class="pl-mh">'
+        '### <span class="pl-en">验收标准</span></span>\n<span class="pl-v">-</span> <span class="pl-k">[ ]</span>'
+        ' in code</pre></div>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> real</li>\n</ul>'
+    ),
+    "subheadings and a checked box": (
+        '<h3>验收标准</h3>\n<h4>功能</h4>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> a</li>\n</ul>\n<h4>其他</h4>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task"'
+        ' checked=""> b</li>\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> c</li>\n</ul>\n<h3>下一步</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> not acceptance</li>\n</ul>'
+    ),
+    "a second acceptance section": (
+        '<h3>验收标准</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Completed task"'
+        ' checked=""> a</li>\n</ul>\n<h3>其他</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> no</li>\n</ul>\n<h3>验收标准（补充）</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> b</li>\n</ul>\n<ol class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> c</li>\n</ol>'
+    ),
+    "no acceptance": (
+        '<h3>要解决什么问题</h3>\n<ul class="contains-task-list">\n<li class="task-list-item">'
+        '<input type="checkbox" id="" disabled="" class="task-list-item-checkbox" aria-label="Incomplete task'
+        '"> a task</li>\n</ul>'
+    ),
+}
+
+
 class ClosingTest(unittest.TestCase):
+    def test_unticked_boxes_in_the_rendered_description(self):
+        cases = {
+            "the issue's example": 1,
+            "a marker in an inline code span": 1,
+            "a marker in an indented code block": 1,
+            "a comment inside a heading": 1,
+            "several comments on one heading": 1,
+            "a tilde fence after a comment": 1,
+            "an unmatched backtick before a comment": 0,
+            "a box inside a comment": 1,
+            "a comment marker inside a fence": 1,
+            "a heading and a box inside a fence": 1,
+            "subheadings and a checked box": 2,
+            "a second acceptance section": 2,
+            "no acceptance": 0,
+        }
+        for name, count in cases.items():
+            with self.subTest(name):
+                self.assertEqual(unticked_acceptance(RENDERED[name]), count)
+
     def test_a_closed_issue_needs_its_acceptance_boxes_ticked(self):
         issues = {
-            1: {"body": "### 要解决什么问题\n- [ ] not acceptance\n\n### 验收标准\n\n- [x] done\n- [ ] not yet\n- [ ] nor this\n"},
-            2: {"body": "### 验收标准\r\n\r\n- [x] done\r\n"},
-            3: {"body": "no acceptance section\n- [ ] a task\n"},
-            4: {"body": "### 验收标准\n- [ ] a PR's own checklist\n", "pull_request": {}},
+            ("owner/repo", 1): {"body_html": RENDERED["subheadings and a checked box"]},
+            ("owner/repo", 2): {"body_html": RENDERED["an unmatched backtick before a comment"]},
+            ("owner/repo", 3): {"body_html": RENDERED["no acceptance"]},
+            ("other/repo", 4): {"body_html": RENDERED["the issue's example"]},  # in another repository, or linked in the sidebar
         }
-        fetched = []
+        self.assertEqual(unfinished(list(issues), lambda repo, number: issues[repo, number]), [
+            "owner/repo#1 still has 2 unticked acceptance boxes: tick each with its evidence, or stop closing it (write "
+            "Refs owner/repo#1, or unlink it in the PR's sidebar); then rerun the pr check",
+            "other/repo#4 still has 1 unticked acceptance boxes: tick each with its evidence, or stop closing it (write "
+            "Refs other/repo#4, or unlink it in the PR's sidebar); then rerun the pr check"])
 
-        def issue(number):
-            fetched.append(number)
-            return issues[number]
-        body = ("Closes #1\nCloses #1\nFixes #2\nResolves #3\nCloses #4\nCloses other/repo#5\n"
-                "Closes https://github.com/Owner/Repo/issues/1\n<!-- Closes #6 -->\nRefs #7\n")
-        self.assertEqual(unfinished(body, "owner/repo", issue), [
-            "#1 still has 2 unticked acceptance boxes: tick each with its evidence, or write Refs #1 instead; then edit this "
-            "description or rerun the pr check"])
-        self.assertEqual(fetched, [1, 2, 3, 4])  # each issue once; other repositories, comments and Refs are not fetched
+    def test_an_issue_read_without_rendered_html_is_a_problem(self):
+        self.assertEqual(unfinished([("owner/repo", 1)], lambda repo, number: {"body_html": None}), [])  # no description
+        self.assertEqual(unfinished([("owner/repo", 1)], lambda repo, number: {}),
+                         ["could not read owner/repo#1 as GitHub renders it: no body_html in the reply"])
 
-    def test_an_unreadable_issue_fails_with_the_reason_and_keeps_the_other_problems(self):
-        error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 404: Not Found\n")
-        env = {"PR_TITLE": "Bad title", "PR_BODY": BODY + "Closes #1\n", "PR_AUTHOR": "someone", "REPO": "owner/repo"}
+    def test_the_closing_references_reply(self):
+        def reply(nodes, more=False):
+            return {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"pageInfo": {"hasNextPage": more}, "nodes": nodes}}}}}
+        issue = {"number": 1, "repository": {"nameWithOwner": "owner/repo"}}
+        self.assertEqual(closing(reply([])), ([], []))  # the usual case: the PR closes nothing
+        self.assertEqual(closing(reply([issue])), ([("owner/repo", 1)], []))
+        self.assertEqual(closing(reply([issue], more=True)),
+                         ([("owner/repo", 1)], ["this PR closes more than 100 issues; the check reads only the first 100"]))
+
+    def test_the_issues_come_from_github_and_a_failed_request_fails(self):
+        graphql = b'{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/repo"}}]}}}}}'
+        replies = [subprocess.CompletedProcess([], 0, graphql), subprocess.CompletedProcess([], 0, b'{}')]
+        env = {"PR_TITLE": "Bad title", "PR_BODY": BODY, "PR_AUTHOR": "someone", "REPO": "owner/repo", "NUMBER": "9"}
+        with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
+              mock.patch("subprocess.run", side_effect=replies) as run, redirect_stdout(io.StringIO()) as out):
+            self.assertEqual(check_pr.main(), 1)
+        query, read = (call.args[0] for call in run.call_args_list)
+        self.assertEqual(query[:3], ["gh", "api", "graphql"])
+        self.assertTrue({"owner=owner", "name=repo", "number=9"} <= set(query))
+        self.assertIn("Accept: application/vnd.github.html+json", read)  # the reply must carry body_html
+        self.assertEqual(read[-1], "repos/owner/repo/issues/1")
+        self.assertIn("could not read owner/repo#1 as GitHub renders it", out.getvalue())
+        error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 502\n")
         with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
               mock.patch("subprocess.run", side_effect=error), redirect_stdout(io.StringIO()) as out):
             self.assertEqual(check_pr.main(), 1)
-        self.assertIn("title 'Bad title'", out.getvalue())
-        self.assertIn("could not read an issue this PR closes: HTTP 404: Not Found", out.getvalue())
+        self.assertIn("title 'Bad title'", out.getvalue())  # the other problems are kept
+        self.assertIn("could not read the issues this PR closes: HTTP 502", out.getvalue())
 
 
 class ReviewTest(unittest.TestCase):
+    def test_a_missing_review_says_how_to_write_one(self):
+        # AGENTS.md only points at this check, so its message alone must yield a first line the check accepts
+        problem, = review("abcdef1234", "", "someone", [])
+        line = problem.split("first line is ")[1].split(" (")[0].replace("<model>", "m").replace("<n>", "0")
+        self.assertEqual(review("abcdef1234", "", "someone", [{"body": line, "author_association": "OWNER"}]), [])
+
     def test_the_head_commit_needs_a_passing_answered_review(self):
         answer = comment(f"作者回应 · 提交 {HEAD[:7]} · 修改在 abc1234")
         cases = {
@@ -119,6 +251,59 @@ class ReviewTest(unittest.TestCase):
         for name, (comments, ok) in cases.items():
             with self.subTest(name):
                 self.assertEqual(review(HEAD, BODY, "someone", comments) == [], ok)
+
+    def test_a_review_holds_while_later_commits_only_merge_the_base_in(self):
+        same = lambda commit: commit == "fedcba9"
+        older = [reviewed(should=1, sha="fedcba9"), comment("作者回应 · 提交 fedcba9")]
+        self.assertEqual(review(HEAD, BODY, "someone", older, same_change=same), [])
+        self.assertNotEqual(review(HEAD, BODY, "someone", older[:1], same_change=same), [])  # its should-fix still needs the answer
+        self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="fedcba9")], same_change=same), [])
+        self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(sha="1234567")], same_change=same), [])  # another change
+
+    def test_change_ignores_base_merges_but_not_the_prs_own_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                                                "-c", "core.autocrlf=false", "-C", tmp, *args],
+                                               capture_output=True, check=True, text=True).stdout.strip()
+            def commit(files, message):
+                for name, content in files.items():
+                    Path(tmp, name).write_bytes(content)
+                git("add", "-A")
+                git("commit", "-q", "-m", message)
+                return git("rev-parse", "HEAD")
+            far = b"\n\n\n\n"
+            git("init", "-q", "-b", "main")
+            commit({"a.py": b"import os" + far + b"x = 1\n", "b.py": b"foo\n" + far + far + b"foo\n", "c.bin": b"\0aaaa"}, "base")
+            git("checkout", "-q", "-b", "pr")
+            reviewed_commit = commit({"a.py": b"import os" + far + b"x = 2\n", "b.py": b"bar\n" + far + far + b"foo\n",
+                                      "c.bin": b"\0bbbb"}, "the PR")
+            git("checkout", "-q", "main")
+            commit({"a.py": b"import os\nimport sys" + far + b"x = 1\n"}, "main moves on")  # shifts the PR's line
+            git("checkout", "-q", "pr")
+            git("merge", "-q", "--no-edit", "main")
+            merged = git("rev-parse", "HEAD")
+            later = {  # each edit after the merge, made on its own from the merged commit
+                "whitespace": {"a.py": b"import os\nimport sys" + far + b"x  = 2\n"},
+                "line ending": {"a.py": b"import os\nimport sys" + far + b"x = 2\r\n"},
+                "the same edit moved": {"b.py": b"foo\n" + far + far + b"bar\n"},
+                "binary content": {"c.bin": b"\0cccc"},  # same size, so only --binary tells them apart
+            }
+            edited = {}
+            for name, files in later.items():
+                git("checkout", "-q", merged)
+                edited[name] = commit(files, name)
+            cwd = os.getcwd()
+            os.chdir(tmp)  # the review job runs git in the checkout
+            try:
+                mine = change("main", reviewed_commit)
+                self.assertIsNotNone(mine)
+                self.assertEqual(change("main", merged), mine)  # merging the base in keeps the change
+                for name, sha in edited.items():
+                    with self.subTest(name):
+                        self.assertNotEqual(change("main", sha), mine)
+                self.assertIsNone(change("main", "0" * 40))
+            finally:
+                os.chdir(cwd)
 
     def test_waivers(self):
         self.assertEqual(review(HEAD, BODY + "免评审：只改了措辞\n", "someone", []), [])

@@ -18,15 +18,16 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
 
 // The executor's tests run in a synctest bubble, with nothing real in the way: a supplier that is a script of answers
-// and bodies the test feeds, a client that is a writer which keeps what it is given, and a settlement that is a
-// recorder. Time is the bubble's, so a three-minute idle timeout is waited for in no time, and no test passes or
-// fails by the clock.
+// and bodies the test feeds, a client that is a writer which keeps what it is given, and a ledger that is a recorder.
+// Time is the bubble's, so a three-minute idle timeout is waited for in no time, and no test passes or fails by the
+// clock.
 
 // The events of the recorded Messages stream (protocol/testdata/messages/text), in the order the upstream sent them.
 const (
@@ -160,6 +161,8 @@ type fakeUpstreams struct {
 	journal []suppliers.JournalEntry
 	writes  []int // how many writes the client had had when each journal entry was made
 	client  *clientWriter
+	settled int           // calls of Settled
+	flushed chan struct{} // what JournalFlushed returns; closed unless a test holds it
 }
 
 type fakeEndpoint struct {
@@ -197,6 +200,14 @@ func (u *fakeUpstreams) Journal(e suppliers.JournalEntry) {
 	u.journal = append(u.journal, e)
 	u.writes = append(u.writes, u.client.wrote())
 }
+
+func (u *fakeUpstreams) Settled(platform.RequestID) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.settled++
+}
+
+func (u *fakeUpstreams) JournalFlushed(platform.RequestID) <-chan struct{} { return u.flushed }
 
 // outstanding is how many credentials are held.
 func (u *fakeUpstreams) outstanding() (n int) {
@@ -248,8 +259,8 @@ type clientWriter struct {
 }
 
 type write struct {
-	at   time.Time
-	data string
+	at, deadline time.Time
+	data         string
 }
 
 func newClientWriter() *clientWriter { return &clientWriter{header: http.Header{}} }
@@ -281,7 +292,7 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.writes = append(w.writes, write{time.Now(), string(b)})
+	w.writes = append(w.writes, write{time.Now(), w.deadline, string(b)})
 	return len(b), nil
 }
 
@@ -311,12 +322,14 @@ func (w *clientWriter) wrote() int {
 	return len(w.writes)
 }
 
-// settlement is one call of Settle, with what the client had been given by then.
+// settlement is one call of Settle, with what the client had been given by then and what it returned.
 type settlement struct {
-	ending   Ending
+	outcome  billing.Outcome
 	body     string
 	held     int // credentials still held
 	callerOK bool
+	err      error
+	at       time.Time
 }
 
 type options struct {
@@ -327,14 +340,20 @@ type options struct {
 	script      map[int][]scripted // by endpoint number, from 1
 	policy      suppliers.CallPolicy
 	startBy     time.Duration // after the start of the call; two minutes when zero
-	final       *protocol.Final
-	settleErr   error
-	stream      *bool // the request's stream member; true when nil
+	final       billing.Final
+	settleErr   error               // every settlement fails with it
+	settle      func(try int) error // the error of each settlement, from 1, when settleErr is nil
+	extend      func(ctx context.Context, r billing.ExtendRequest) error
+	segmentable bool          // the entries are reserved by segment of 40 output tokens
+	cost        int64         // of every attempt
+	flushed     chan struct{} // the journal's flush; closed when nil
+	stream      *bool         // the request's stream member; true when nil
 	supplier    func(n int) int
 	alive       func() bool
 	mutate      func(*Call)
 	noSlot      []int
-	memory      int64 // the node's budget; memorySize when zero
+	memory      int64  // the node's budget; memorySize when zero
+	price       string // the entries' price schedule; cheap when empty
 }
 
 type harness struct {
@@ -354,6 +373,8 @@ type harness struct {
 
 	mu          sync.Mutex
 	settlements []settlement
+	extensions  []billing.ExtendRequest
+	released    chan struct{} // closed by the call's Done
 }
 
 const memorySize = 1 << 30
@@ -363,8 +384,12 @@ const memorySize = 1 << 30
 func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	t.Helper()
 	all, request := messagesSample(t)
-	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now()}
-	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w}
+	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{})}
+	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w, flushed: o.flushed}
+	if h.up.flushed == nil {
+		h.up.flushed = make(chan struct{})
+		close(h.up.flushed)
+	}
 	h.cfg = DefaultConfig()
 	if o.config != nil {
 		o.config(&h.cfg)
@@ -385,7 +410,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
-		Settle: h.settle(o), Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts(o.cost), Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +425,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 func (h *harness) newCall(o options, request []byte) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
-	schedule, err := catalog.ParseSchedule([]byte(cheap))
+	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -415,14 +440,15 @@ func (h *harness) newCall(o options, request []byte) *Call {
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
 	for i := 1; i <= n; i++ {
-		quotes = append(quotes, billing.Quotable{Price: schedule, Model: billing.Model{ContextLength: 100000, OutputSpeed: 100}, MaxOutput: 1000})
+		limits := billing.Model{ContextLength: 100000, OutputSpeed: 100}
+		quotes = append(quotes, billing.Quotable{Price: schedule, Model: limits, MaxOutput: 1000, Segmentable: o.segmentable})
 		supplier := i
 		if o.supplier != nil {
 			supplier = o.supplier(i)
 		}
 		plan.Entries = append(plan.Entries, routing.Entry{
 			Endpoint: ep(i), Supplier: sup(supplier), Target: protocol.Target{Format: protocol.Messages, Model: "up-" + string(rune('0'+i))},
-			MaxOutput: 1000,
+			MaxOutput: 1000, Limits: limits, Segmentable: o.segmentable, Price: routing.PriceRef{Version: uuid.UUID{1}, Schedule: schedule},
 		})
 		plan.Record.Route = append(plan.Record.Route, ep(i))
 		script := o.script[i]
@@ -431,7 +457,7 @@ func (h *harness) newCall(o options, request []byte) *Call {
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
-	r, err := billing.Quote(routing.DemandOf(&req), quotes, billing.Segments{Output: 40, Overshoot: time.Second}, nil)
+	r, err := billing.Quote(routing.DemandOf(&req), quotes, billing.Segments{Output: 200, Overshoot: time.Second}, nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -439,6 +465,7 @@ func (h *harness) newCall(o options, request []byte) *Call {
 		ID: uuid.NewV7(), Format: protocol.Messages, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
+	c.hold(func() { close(h.released) })
 	if o.mutate != nil {
 		o.mutate(c)
 	}
@@ -453,15 +480,44 @@ func cmpOr[T comparable](v, fallback T) T {
 	return v
 }
 
-// settle is the recorder that stands in for G7's settlement. It keeps what the client had seen when it was called,
-// which is what shows the order of the ending: the cost is only written after it.
-func (h *harness) settle(o options) SettleFunc {
-	return func(ctx context.Context, c *Call, e Ending) (*protocol.Final, error) {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.settlements = append(h.settlements, settlement{ending: e, body: h.w.body(), held: h.up.outstanding(), callerOK: ctx.Err() == nil})
-		return o.final, o.settleErr
+// fakeLedger records the settlements, with what the client had seen when each was asked for, which is what shows the
+// order of the ending: the cost is only written after it.
+type fakeLedger struct {
+	h *harness
+	o options
+}
+
+func (l *fakeLedger) Extend(ctx context.Context, _ *billing.Hold, r billing.ExtendRequest) error {
+	l.h.mu.Lock()
+	l.h.extensions = append(l.h.extensions, r)
+	l.h.mu.Unlock()
+	if l.o.extend == nil {
+		return nil
 	}
+	return l.o.extend(ctx, r)
+}
+
+func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outcome) (billing.Final, error) {
+	h := l.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	err := l.o.settleErr
+	if err == nil && l.o.settle != nil {
+		err = l.o.settle(len(h.settlements) + 1)
+	}
+	h.settlements = append(h.settlements, settlement{
+		outcome: o, body: h.w.body(), held: h.up.outstanding(), callerOK: ctx.Err() == nil, err: err, at: time.Now(),
+	})
+	if err != nil {
+		return billing.Final{}, err
+	}
+	return l.o.final, nil
+}
+
+type fakeCosts int64
+
+func (c fakeCosts) Cost(suppliers.AttemptReceipt, []catalog.Usage) (int64, error) {
+	return int64(c), nil
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no
@@ -487,13 +543,26 @@ func (h *harness) start() <-chan struct{} {
 	return done
 }
 
+// check waits for the call to give its slots back, which may be after Run returns, and checks what holds however it
+// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and no memory is
+// left charged.
 func (h *harness) check() {
 	h.t.Helper()
+	<-h.released
 	h.mu.Lock()
-	n := len(h.settlements)
+	all := slices.Clone(h.settlements)
 	h.mu.Unlock()
-	if n != 1 {
-		h.t.Errorf("settled %d times, want once", n)
+	written := 0
+	for _, s := range all {
+		if s.err == nil {
+			written++
+		}
+		if !reflect.DeepEqual(s.outcome, all[0].outcome) {
+			h.t.Errorf("a retry settled %+v, the first try %+v", s.outcome, all[0].outcome)
+		}
+	}
+	if len(all) == 0 || written > 1 {
+		h.t.Errorf("%d tries of the settlement, %d written", len(all), written)
 	}
 	if held := h.up.outstanding(); held != 0 {
 		h.t.Errorf("%d credentials still held", held)
@@ -504,15 +573,15 @@ func (h *harness) check() {
 	h.memory.Refund(h.budget)
 }
 
-// settlement is the one settlement, or fails.
+// ended is the last try of the settlement, or fails.
 func (h *harness) ended() settlement {
 	h.t.Helper()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.settlements) != 1 {
-		h.t.Fatalf("%d settlements", len(h.settlements))
+	if len(h.settlements) == 0 {
+		h.t.Fatal("no settlement")
 	}
-	return h.settlements[0]
+	return h.settlements[len(h.settlements)-1]
 }
 
 func ep(n int) routing.EndpointID  { return routing.EndpointID(uuid.UUID{15: byte(n)}) }        //nolint:gosec // a test number

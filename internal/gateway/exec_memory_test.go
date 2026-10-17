@@ -61,7 +61,7 @@ func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 			if h.w.status != c.status {
 				t.Errorf("%s: status %d, want %d\n%s", c.name, h.w.status, c.status, h.w.body())
 			}
-			if n := len(h.ended().ending.Attempts); n != 0 || h.up.endpoint(1).sends != 0 {
+			if n := len(h.ended().outcome.Attempts); n != 0 || h.up.endpoint(1).sends != 0 {
 				t.Errorf("%s: %d attempts, %d sends", c.name, n, h.up.endpoint(1).sends)
 			}
 		})
