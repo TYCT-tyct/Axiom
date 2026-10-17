@@ -312,10 +312,10 @@ func columns(t *testing.T, db *pg.DB, table string) (all map[string]string, unbo
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		rows, err := tx.Query(t.Context(), `SELECT column_name, data_type, NOT EXISTS (
 				SELECT FROM pg_constraint k
-				WHERE k.conrelid = format('observability.%I', $1)::regclass AND k.contype = 'c'
+				WHERE k.conrelid = format('observability.%I', $1::text)::regclass AND k.contype = 'c'
 				AND pg_get_constraintdef(k.oid) LIKE '%' || column_name || '%'
 				AND pg_get_constraintdef(k.oid) ~ '(char_length|octet_length|~|ANY)')
-			FROM information_schema.columns WHERE table_schema = 'observability' AND table_name = $1`, table)
+			FROM information_schema.columns WHERE table_schema = 'observability' AND table_name = $1::text`, table)
 		if err != nil {
 			return err
 		}
