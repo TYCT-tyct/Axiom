@@ -125,7 +125,7 @@ func (q *Queue) InsertManyTx(ctx context.Context, tx Tx, jobs []river.InsertMany
 
 // discardHandler turns the last failure of a job into an error log and a metric. River uses the same condition for
 // the last attempt (Attempt >= MaxAttempts) and then marks the job discarded, so the alert fires exactly when a job
-// will not run again. A cancelled or snoozed job also returns an error but ends in another state: neither is a loss.
+// will not run again. A cancelled or snoozed job ends another way and never reaches the handler.
 type discardHandler struct {
 	logger    *slog.Logger
 	discarded metric.Int64Counter
@@ -148,7 +148,7 @@ func newDiscardedCounter(meter metric.Meter) metric.Int64Counter {
 
 // HandleError implements river.ErrorHandler.
 func (h *discardHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
-	if discards(job, err) {
+	if job.Attempt >= job.MaxAttempts {
 		h.discarded.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", job.Kind)))
 		h.logger.ErrorContext(ctx, discardedEvent, "job_id", job.ID, "kind", job.Kind, "attempt", job.Attempt, "err", err)
 	}
@@ -157,19 +157,9 @@ func (h *discardHandler) HandleError(ctx context.Context, job *rivertype.JobRow,
 
 // HandlePanic implements river.ErrorHandler. A panic on the last attempt discards the job just as an error does.
 func (h *discardHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, _ string) *river.ErrorHandlerResult {
-	if discards(job, nil) {
+	if job.Attempt >= job.MaxAttempts {
 		h.discarded.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", job.Kind)))
 		h.logger.ErrorContext(ctx, discardedEvent, "job_id", job.ID, "kind", job.Kind, "attempt", job.Attempt, "panic", panicVal)
 	}
 	return nil
-}
-
-// discards reports whether River will discard the job after this attempt, whose error is err.
-func discards(job *rivertype.JobRow, err error) bool {
-	if job.Attempt < job.MaxAttempts {
-		return false
-	}
-	var cancelled *rivertype.JobCancelError
-	var snoozed *rivertype.JobSnoozeError
-	return !errors.As(err, &cancelled) && !errors.As(err, &snoozed)
 }

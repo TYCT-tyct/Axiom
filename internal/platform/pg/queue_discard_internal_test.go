@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/otel/attribute"
@@ -15,7 +14,7 @@ import (
 )
 
 // TestOnlyADiscardIsAlarmed: the last failure of a job is what River discards, and it alerts; a failure with an
-// attempt left, a cancellation and a snooze are not discarded, so they must not alert.
+// attempt left is not discarded and must not alert.
 func TestOnlyADiscardIsAlarmed(t *testing.T) {
 	t.Parallel()
 	correction := func(attempt, max int) *rivertype.JobRow {
@@ -30,8 +29,6 @@ func TestOnlyADiscardIsAlarmed(t *testing.T) {
 	}{
 		{"the last attempt fails", correction(3, 3), errors.New("the attempt has no entry yet"), nil, 1},
 		{"an attempt remains", correction(2, 3), errors.New("the attempt has no entry yet"), nil, 0},
-		{"cancelled", correction(3, 3), rivertype.JobCancel(errors.New("cancelled")), nil, 0},
-		{"snoozed", correction(3, 3), &rivertype.JobSnoozeError{Duration: time.Minute}, nil, 0},
 		{"the last attempt panics", correction(1, 1), nil, "boom", 1},
 	}
 	for _, c := range cases {
