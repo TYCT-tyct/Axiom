@@ -24,8 +24,9 @@ import (
 )
 
 // The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
-// README「并发、背压与共享状态」), so a request waits for room only when the database is far behind; batches
-// of 500 rows or 200 ms keep the insert rate low (internal/observability README「写入」).
+// README「并发、背压与共享状态」); when it is full the recorder drops the new record rather than slow a call, so the
+// queue only bounds memory and loss. Batches of 500 records or 200 ms keep the insert rate low (internal/observability
+// README「写入」).
 var callRecords = observability.Config{
 	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
 	RetryMax:     5 * time.Second,
