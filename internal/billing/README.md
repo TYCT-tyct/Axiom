@@ -195,7 +195,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 
 ## 定价规则
 
-已实现存储与维护（`pricing.go`、`queries/pricing.sql`、迁移 `00003_pricing_rules.sql`）；报价**还不读规则**，规则怎么变成售价、试算（`previewPricing`）和成本侧（供应商单位价值、汇率、保本价）随后续 PR，现在存的是人的决定。
+已实现存储与维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）；报价**还不读规则**，规则怎么变成售价、试算（`previewPricing`）和成本侧（供应商单位价值、汇率、保本价）随后续 PR，现在存的是人的决定。
 
 一条规则：目标（端点、分组、供应商、模型、厂商、来源类型或全部）、受众（账户、等级或全部）、方法（`cost_plus`：加成率或毛利率二选一、可附固定加价；`reference_multiplier`：参考价倍率；`fixed`：整张固定价格表）和约束（最低毛利率、相对参考价的上下限）。同一站点里目标和受众相同的规则只能有一条（唯一约束），所以任意两条都能排出先后：`Rules` 按目标越具体越先、受众越具体越先、ID 排序。
 
