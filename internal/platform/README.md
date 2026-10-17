@@ -14,8 +14,8 @@
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」 |
-| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
+| `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
@@ -64,7 +64,7 @@
 
 ## 凭证加密
 
-`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥的封装）和 `AXIOM_KEY_HASH_FILE`（API key 的哈希），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这两个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
+`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥的封装）和 `AXIOM_KEY_HASH_FILE`（API key 的哈希），缺了或不合法就不启动；主密钥也用来解密供应商的登录令牌（同步）；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这两个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
 文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同；数值最大的版本用于写入，读取按记录的 `KeyVersion` 选择，旧版本需保留至存量数据迁移完成。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 
@@ -167,11 +167,34 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 指标和链路追踪的基座（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）：OpenTelemetry 的 API 与 SDK，指标经 Prometheus 导出器暴露。`telemetry.New` 在 `serve` 里建出提供者，`cmd/axiom` 把它们作为参数交给 `pg.Open`（`pg.WithTracerProvider`）、`egress`（`egress.WithTracerProvider`）、`httpserver.NewTelemetry` 和各模块；**不用 OpenTelemetry 的全局**，并行的测试各自持有自己的，互不影响。
 
+**决策与理由**（2026-10-16）：
+
+- **选 OpenTelemetry 的 API 与 SDK 做指标和链路，指标用 Prometheus 导出器暴露，抓取式。** 各模块只依赖 `metric.Meter` 一套接口，换导出方式（以后推到收集器）不用改任何模块；指标和链路同属一个系列，请求的上下文把二者连起来；Prometheus 文本格式是运维节点上监控系统通用的读法。
+- **不选 `prometheus/client_golang` 直接记指标、链路另用 OpenTelemetry**：模块要认两套接口，以后改成推送要改遍所有模块；性能没有优势（两者记一次测量都是零分配，见下文「调用路径」）。client_golang 仍是依赖，但只做导出器的底层和 `/metrics` 的处理器。
+- **不选现在就用 OTLP 推送指标和链路**：要先有收集器，部署还没有；OTLP/HTTP 导出器会带进 grpc、grpc-gateway、`go.opentelemetry.io/proto/otlp`、genproto 一批依赖（`otlptracehttp` v1.47.0 的 go.mod，2026-10-16 查），而现在 `go.mod` 里只有 protobuf。抓取不需要这些，等有收集器的部署再加，只是 `telemetry.New` 的一个处理器参数。
+- **不选厂商的 SDK 或托管服务（Datadog、New Relic 等）**：端点在境外，国内的节点不一定连得上，调用元数据也会离开部署；换厂商要改调用代码。指标靠本机抓取，将来的链路只发到自己部署的收集器，都不依赖境外的服务。
+- **产品基线**：OpenRouter 不给用户暴露指标端点；它的 Broadcast 把每次调用的链路用 OTLP/HTTP 发到用户指定的收集器，每个目的地可设 0.0001 到 1 的采样率，默认 1（OpenRouter 文档「Broadcast」，2026-10-16）。这是面向用户的功能，属于调用记录的导出（见[记录与告警](../../docs/domains/observability.md)）；本节是运维用的节点遥测，选 OTLP/HTTP 与它的做法一致，便于以后接同一类收集器。
+
 - **指标只在探针监听 `/metrics` 上**，公网监听没有这个路径（测试：公网 404，探针 200，`text/plain`）。指标放在专用的注册表里，只有经 `Metrics` 注册的才会出现，不带 Go 运行时和进程的默认集合（运行时指标随第一个需要它们的告警加入）。
-- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`，如 `axiom_http_server_requests_total`、`axiom_http_server_duration_seconds`、`axiom_observability_queue_depth`。
+- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`。现有的指标：
+
+  | 指标（Prometheus 名） | 类型 | 标签 |
+  |---|---|---|
+  | `axiom_http_server_requests_total` | 计数 | `route`、`status_class`、`outcome` |
+  | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
+  | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
+  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_observability_queue_depth` | 仪表 | 无 |
+
+  新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
 - **链路**：每个公网请求一个服务端跨度，名字是路由模式，属性 `request_id`（与 `X-Request-ID` 相同）、状态码；`pg` 的事务（`db.tx`）和 `egress` 的出站请求（`egress.request`，到响应头为止）是它的子跨度，同一个 trace。跨度属性只有主机名、状态码、`db.system` 这类有界的值：不记语句（可能含数据）、不记错误文本（可能引用地址或数据）、不记路径和查询。测试：请求路径、查询和语句里放入标记值，没有任何跨度属性含它；并核对父子关系和请求 ID。
-- **采样与导出**：提供者现在不带导出器，跨度在进程内产生后丢弃，所以没有采样可调；导出器是 `telemetry.New` 的一个 `SpanProcessor` 参数。设计：接上第一个收集器时用父级决定加按比例采样（默认 10%，出错的请求总采），OTLP/HTTP 导出，地址和凭证由标准的 `OTEL_EXPORTER_OTLP_*` 变量给，配置错了不启动。OTLP 导出器要带进 gRPC、protobuf 等一批依赖，等有收集器的部署再决定并评审，不在这里预先引入。
+- **调用路径**：标签组合初始化后，稳态下记一次测量不分配内存，指标就不会让调用路径的垃圾回收随流量增长；一个组合第一次出现时要建属性和选项切片并复制缓存的映射，是一次性的开销，组合数有上限，基准重复同一个组合，量不到它。`BenchmarkRecord`（无标签的计数、带标签的计数和直方图，上下文里是被采样的跨度）全部是 0 allocs/op，`bench-compare` 在任何一项开始分配时失败。做到的两条规则：标签集合预先建好、按组合缓存（`httpserver` 的 `seriesCache`，组合数就是标签上限里的那个数，读取是一次原子加载），因为每次调用现建 `metric.WithAttributes` 要分配；选项切片也建一次，用 `Add(ctx, 1, opts...)` 传入，因为逐个传的可变参数会在接口调用处分配一个切片。每个请求的跨度仍有开销：`BenchmarkRequestTelemetry` 在没有处理器时是 3 allocs/op（240 B，跨度的上下文和结束函数），有处理器、跨度被采样时是 9 allocs/op（约 1.5 KiB）；关闭遥测是 0。
+- **采样**：没有处理器时没有人读跨度，`telemetry.New` 不采样（`NeverSample`）：跨度仍在，子跨度照常连在一起，但不记属性、不记事件；公网请求的服务端跨度（`httpserver`）因此不构造属性。`pg` 的事务和 `egress` 的出站请求跨度仍无条件构造属性（Go 会先求值参数，`NeverSample` 拦不住），那是原有的写法，尚未改。有处理器（接上了导出器）时用默认的父级决定加全采，下一条定下比例。
+- **导出**：
+  - **指标**：只抓取，没有推送，不需要配置：监控系统从探针监听（`AXIOM_PROBES_ADDR`，默认只听本机；要跨机抓取就把它绑到内网地址，由部署的防火墙限制来源）取 `/metrics`。
+  - **链路**：现在没有导出器，跨度在进程内产生后丢弃，所以没有导出配置可错。第一个有收集器的部署再加：OTLP/HTTP 导出，作为 `telemetry.New` 的一个 `SpanProcessor`，只发到自己部署的收集器；端点和凭证用标准的 `OTEL_EXPORTER_OTLP_*` 变量，采样比例是 `AXIOM_TRACE_SAMPLE_RATIO`（0 到 1，默认 0.1，父级已决定的跟随父级）。**配置错了不启动**：端点不是绝对的 http(s) 地址、比例不在 0 到 1 之间、凭证没配而端点配了，都在 `serve` 解析配置时报错，报错只说变量名，不带值。出错的请求总采要靠收集器的尾部采样，节点上的比例采样事先不知道请求会不会出错；用哪一种等有收集器时和它的容量一起定。
+  - 这条的实现和依赖随那个部署的 PR 评审；现在加，是为一个没有使用者的导出器多带一批依赖和一个没有效果的配置项。
 - **不记**对话正文和密钥：指标没有任何自由文本，跨度属性按上面的白名单。
 
 ## 健康检查
@@ -208,9 +231,14 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - **期限**：每个连接从域名解析到握手结束合计最多等 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒；一个主机有几个地址也合计，URL 里的 `connect_timeout` 只能让它更短），整次执行最多 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟，长 DDL 要的时间）。到期时迁移自己结束它在服务器上的会话：每个连接带着本次执行独有的 `application_name`，期限到后用一个独立的短连接（自己最多 5 秒）对这些会话执行 `pg_terminate_backend`，等它返回才返回。这样结果既不依赖 pgx 在后台发出的取消请求（进程退出可能抢在它前面，语句也可以写成吞掉取消），也不是每条语句各自重新计时的语句超时；按应用名而不是按进程号，是因为进程号可能被别的会话复用。事务回滚，会话级的 goose 锁随会话释放。goose 释放会话锁用的是取消不掉的 context，服务器不应答时解锁会一直等，所以终止之后再给 15 秒宽限，仍未返回就放弃等待、让进程退出。两者都在连接之前校验：必须是正的时长，连接期限必须短于执行期限，拼错的变量名报错。执行期限让一次卡住的迁移不会一直占着 goose 的会话锁，挡住下一次部署。
+- 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务不存租户的行），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。
 - 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
 - 删除旧结构的收缩迁移怎么与滚动发布共存，随第一个收缩迁移确定。
+
+### 任务队列
+
+`pg.Queue`（`db.NewQueue(logger)`）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
 
 ### 查询（sqlc）
 
@@ -256,6 +284,8 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 全量校验 DNS 结果后按 IP 拨号，连接池仍按原主机复用 | 混合公网/内网结果整体拒绝，DNS 后续变化不能替换已经选择的连接目标；保留 TLS 证书校验和长连接 | 只在 URL 保存时校验或让 Transport 再解析：存在 DNS 重绑定窗口 |
 | 私有测试能力值，只能在测试进程构造 | 类型和未导出字段阻止伪造，测试开关不能在生产启用 | 导出 AllowPrivate、任意 Resolver/Dialer：生产调用方能绕过 SSRF 边界 |
 | RoundTrip 返回第一个响应 | 重定向既不请求也不解析，畸形 Location 也不能把凭证带进重定向错误 | 默认 http.Client：默认跟随重定向；拒绝回调前仍可能解析 Location |
+| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围 |
+| River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |

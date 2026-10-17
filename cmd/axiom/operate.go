@@ -163,8 +163,8 @@ func readPassword(stdin io.Reader) (string, error) {
 // withOperator opens the database and the accounts' command-line access to it, and closes the database after do.
 func withOperator(ctx context.Context, environ []string, do func(*accounts.Operator) error) error {
 	env := config.New(environ)
-	databaseURL := env.Required("AXIOM_DATABASE_URL")
-	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
+	databaseURL := env.Required(pg.DatabaseURLVar)
+	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}

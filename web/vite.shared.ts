@@ -11,12 +11,17 @@ import { defineConfig, type Plugin, type UserConfig } from "vite";
 // server.
 export const servedOffset = 1000;
 
-// The apps' dev server ports. AXIOM_WEB_PORT moves them all, and the test servers with them, so another worktree can
-// run its servers and end-to-end tests at the same time.
-const firstPort = Number(process.env.AXIOM_WEB_PORT ?? 5173);
-if (!Number.isInteger(firstPort) || firstPort < 1 || firstPort + 2 + servedOffset > 65_535) {
-  throw new Error(`AXIOM_WEB_PORT must leave room for three ports and their test server ports, not ${firstPort}`);
+// firstAppPort reads AXIOM_WEB_PORT: the three apps' dev server ports start here, and their test servers sit
+// servedOffset above them, so all six must be ports.
+export function firstAppPort(value: string | undefined): number {
+  const raw = value ?? "5173";
+  const first = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isInteger(first) || first < 1 || first + 2 + servedOffset > 65_535) {
+    throw new Error(`AXIOM_WEB_PORT must leave room for three ports and their test server ports, not ${raw}`);
+  }
+  return first;
 }
+const firstPort = firstAppPort(process.env.AXIOM_WEB_PORT);
 export const ports = { site: firstPort, console: firstPort + 1, admin: firstPort + 2 };
 
 // The content security policy pages must work under (docs/security.md「网页与域名」): no inline script or style, nothing

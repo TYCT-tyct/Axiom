@@ -13,6 +13,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -38,7 +39,7 @@ const bodyTimeout = 2 * time.Minute
 const defaultStartupTimeout = 30 * time.Second
 
 // probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func probesListenAddr(env *config.Env) string { return env.Addr("AXIOM_PROBES_ADDR", "127.0.0.1:8081") }
+func probesListenAddr(env *config.Env) string { return env.Addr(probesAddrVar, "127.0.0.1:8081") }
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
@@ -62,19 +63,19 @@ type nodeSettings struct {
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		publicAddr:      env.Addr("AXIOM_PUBLIC_ADDR", ":8080"),         // model calls, the console, payment callbacks
-		adminAddr:       env.Addr("AXIOM_ADMIN_ADDR", "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
+		publicAddr:      env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
+		adminAddr:       env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:      probesListenAddr(env),
-		startupTimeout:  env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout),
-		shutdownTimeout: env.Duration("AXIOM_SHUTDOWN_TIMEOUT", 30*time.Second),
+		startupTimeout:  env.Duration(startupTimeoutVar, defaultStartupTimeout),
+		shutdownTimeout: env.Duration(shutdownTimeoutVar, 30*time.Second),
 		databaseURL:     env.Required(pg.DatabaseURLVar),
-		masterKeyFile:   env.Required("AXIOM_MASTER_KEY_FILE"),
-		keyHashFile:     env.Required("AXIOM_KEY_HASH_FILE"),
+		masterKeyFile:   env.Required(masterKeyFileVar),
+		keyHashFile:     env.Required(keyHashFileVar),
 		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 		// GOMAXPROCS and 2 seconds).
-		hashConcurrency: env.Int("AXIOM_HASH_CONCURRENCY", 0, 1),
-		hashWait:        env.Duration("AXIOM_HASH_WAIT", 0),
-		trustedProxies:  env.Prefixes("AXIOM_TRUSTED_PROXIES"),
+		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
+		hashWait:        env.Duration(hashWaitVar, 0),
+		trustedProxies:  env.Prefixes(trustedProxiesVar),
 	}
 	if err := env.Err(); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
@@ -83,7 +84,7 @@ func readSettings(environ []string) (nodeSettings, error) {
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
-// and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
+// and requests in flight and the jobs of the queue get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
@@ -92,10 +93,6 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 		return err
 	}
 	console, err := loadConsole(cfg)
-	if err != nil {
-		return err
-	}
-	frontend, err := webui.Embedded()
 	if err != nil {
 		return err
 	}
@@ -115,16 +112,23 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
+	queue, err := startSync(ctx, db, console.master, tel, logger)
+	if err != nil {
+		return err
+	}
+	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
+	// deadline, and a second Stop does nothing.
+	defer stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, frontend, logger)
+	routes, err := console.routes(ctx, db, tel, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.adminAddr, frontend.Admin(), cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, console.frontend.Admin(), cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -140,7 +144,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
 	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), recorder.Close(ctx))
+	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
 }
 
 // consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
@@ -151,6 +155,7 @@ type consoleParts struct {
 	master   *secret.Keyring // seals users' TOTP secrets
 	hashes   *secret.MACKeys // keys API keys are hashed with
 	contract *contract
+	frontend *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -163,12 +168,16 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	contract, err := consoleContract()
-	return consoleParts{cfg, master, hashes, contract}, err
+	if err != nil {
+		return consoleParts{}, err
+	}
+	frontend, err := webui.Embedded()
+	return consoleParts{cfg, master, hashes, contract, frontend}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
 // ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, frontend *webui.Frontend, logger *slog.Logger) (http.Handler, error) {
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
@@ -180,7 +189,35 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nil, err
 	}
 	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, frontend, logger), nil
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger), nil
+}
+
+// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
+// address (egress.Direct).
+func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, err
+	}
+	queue := db.NewQueue(logger)
+	if err := suppliers.RegisterSync(suppliers.SyncConfig{
+		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+	}); err != nil {
+		return nil, err
+	}
+	if err := queue.Start(ctx); err != nil {
+		return nil, err
+	}
+	return queue, nil
+}
+
+// stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
+func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := queue.Stop(ctx); err != nil {
+		logger.Error("stopping the job queue", "err", err)
+	}
 }
 
 // startServing serves every listener and reports the node ready. The channel carries the error of the first listener to
@@ -216,16 +253,16 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 // 「前端交付」); its API and the limits to the admin domain and to restricted sources come with the admin API.
 func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
-		{"AXIOM_PUBLIC_ADDR", publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_ADMIN_ADDR", adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{"AXIOM_PROBES_ADDR", probesAddr, health.Server(logger), nil},
+		{publicAddrVar, publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{adminAddrVar, adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{probesAddrVar, probesAddr, health.Server(logger), nil},
 	}
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
-	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
+	noAnswer := errors.New("database: " + pg.DatabaseURLVar + ": no answer within " + startupTimeoutVar)
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, noAnswer)
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
