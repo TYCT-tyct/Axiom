@@ -216,6 +216,34 @@ func checkCosted(t *testing.T, a []billing.AttemptResult) {
 	}
 }
 
+// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, reaches billing as not known,
+// with whatever cost came back: the waiver cap then counts the attempt at its sale price
+// (docs/domains/billing.md「免单规则」). A failure is never a known cost, whatever the implementation says.
+func TestACostThatIsNotKnown(t *testing.T) {
+	errPricing := errors.New("the cost schedule could not be read")
+	for _, tc := range []struct {
+		name string
+		o    options
+		cost int64
+	}{
+		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70},
+		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, tc.o)
+			h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+			h.run()
+			a := h.ended().outcome.Attempts
+			if len(a) != 1 {
+				t.Fatalf("%s: attempts %+v", tc.name, a)
+			}
+			if a[0].Costed || a[0].Cost != tc.cost {
+				t.Errorf("%s: cost %d, known %v; want %d, not known", tc.name, a[0].Cost, a[0].Costed, tc.cost)
+			}
+		})
+	}
+}
+
 // estimatedInput is the input of the call's second entry with its text at 4 bytes a token, which must be below the
 // admission's bound for the test to tell them apart.
 func estimatedInput(t *testing.T, h *harness) int64 {

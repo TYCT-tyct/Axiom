@@ -111,10 +111,11 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	cost, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: reconciliation sets it from the supplier's record, and a settlement
-		// held back for it would leave a call that can be priced to the cleanup.
+		// held back for it would leave a call that can be priced to the cleanup. A cost that could not be priced is
+		// not known, whatever came back with it: the waiver cap then counts the attempt at its sale price.
 		s.logger.Error("an attempt's cost could not be priced; it is booked as 0", "err", err)
 	}
-	rec.Cost, rec.Costed = cost, known
+	rec.Cost, rec.Costed = cost, known && err == nil
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the

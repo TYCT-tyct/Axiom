@@ -171,6 +171,12 @@ func TestWaiverCapCountsCosts(t *testing.T) {
 	waived := func(cost int64, costed bool) Outcome {
 		return Outcome{Attempts: []AttemptResult{{Seq: 1, Cost: cost, Costed: costed, Segments: []Segment{full}, Result: Unknown}}}
 	}
+	// two is a call whose first attempt cost 7, known, and whose last cost is not known: the cap must count 7 + the
+	// last one's sale price.
+	two := Outcome{Attempts: []AttemptResult{
+		{Seq: 1, Cost: 7, Costed: true},
+		{Seq: 2, Segments: []Segment{full}, Result: Unknown},
+	}}
 	for _, tc := range []struct {
 		name  string
 		cap   int64
@@ -182,6 +188,8 @@ func TestWaiverCapCountsCosts(t *testing.T) {
 		{"a cost not known counts its sale price", 79, []Outcome{waived(7, false)}, []int64{80}},
 		{"a sale price within the cap is waived", 80, []Outcome{waived(7, false)}, []int64{10}},
 		{"a known part above the sale price counts as itself", 99, []Outcome{waived(100, false)}, []int64{80}},
+		{"a known cost and an unknown one add up", 86, []Outcome{two}, []int64{80}},
+		{"a known cost and an unknown one within the cap", 87, []Outcome{two}, []int64{10}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, WaiverCap: tc.cap})
