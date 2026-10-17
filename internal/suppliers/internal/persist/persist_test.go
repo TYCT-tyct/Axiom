@@ -276,6 +276,36 @@ func TestAStepIsStoredWholeOrNotAtAll(t *testing.T) {
 	}
 }
 
+// TestLoadDerivesTheRemovalAlert: whether the catch-up alert was sent is not in the state (an older node refuses a member
+// it does not name), so Load reads it back from the removal_slow event the alert wrote. A removal that has not alerted
+// loads with it clear.
+func TestLoadDerivesTheRemovalAlert(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	s := c.acquire(c.node("a"))
+	removal := func(version int64, alerted bool) syncer.Commit {
+		st := stateAt(version)
+		st.Removal, st.RemovalAt = syncer.StepFinalScan, t0
+		commit := syncer.Commit{State: st}
+		if alerted {
+			commit.Events = []syncer.Event{{Kind: syncer.RemovalSlow, Why: "the charge records are still being read"}}
+		}
+		return commit
+	}
+	if err := s.Store().Commit(t.Context(), 0, removal(1, false)); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.Store().Load(t.Context()); err != nil || st.CatchUpNotified {
+		t.Fatalf("the state before the alert: %+v, %v; want it not alerted", st, err)
+	}
+	if err := s.Store().Commit(t.Context(), 1, removal(2, true)); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.Store().Load(t.Context()); err != nil || !st.CatchUpNotified {
+		t.Errorf("the state after the alert: %+v, %v; want it alerted", st, err)
+	}
+}
+
 // TestALoginIsSwappedOnlyOverTheVersionReadInTheGenerationItWasReadIn: Load opens what was sealed; Swap stores a new
 // login over the version read and raises it; a version already replaced, and a generation of the supplier's
 // credentials that has moved on, are refused.

@@ -43,7 +43,7 @@ func twoAttempts(t *testing.T, last Segment, result Result) Outcome {
 // TestCorrectCosts: every attempt's cost follows its own supplier record, by its own revisions, in any state, even
 // after the reservation settled or its window closed; only the charged attempt's record touches the user's charge.
 func TestCorrectCosts(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 500 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour})
 	h := b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, twoAttempts(t, used(t, 300, 20, 0, in), Committed)); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestCorrectCosts(t *testing.T) {
 	if c1, c2, charged := b.cost(h, 1), b.cost(h, 2), b.count("SELECT charged FROM billing.reservations"); c1 != 11 || c2 != 9 || charged != 420 {
 		t.Errorf("costs %d and %d, charged %d; want 11, 9 and 420", c1, c2, charged)
 	}
-	time.Sleep(600 * time.Millisecond)
+	b.closeWindow(h)
 	b.cleanup() // the window closes and the estimate settles
 	b.correct(h, 2, 2, 13, used(t, 10, 0, 0))
 	if c2, charged := b.cost(h, 2), b.count("SELECT charged FROM billing.reservations"); c2 != 13 || charged != 420 {
@@ -166,13 +166,13 @@ func unknown(t *testing.T, input int64, field, value string) Segment {
 // TestSettleReturnsTheStoredFinal: a retry returns what the first Settle stored, whatever outcome it carries, and the
 // estimate stays an estimate after its window closes.
 func TestSettleReturnsTheStoredFinal(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 20 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour})
 	h := b.hold(1000)
 	first, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 300, 20, 0, in)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(30 * time.Millisecond)
+	b.closeWindow(h)
 	b.cleanup()
 	again, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 1, 1, 0)))
 	if err != nil || !again.Estimated || again.Charged != first.Charged || len(again.Segments) != 1 || again.Segments[0].Usage.Count(in) != 300 {
@@ -182,7 +182,7 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 
 // TestEndRequest: suppliers learn of a request's end once it is terminal, in the same transaction, and not before.
 func TestEndRequest(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 500 * time.Millisecond})
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: time.Hour})
 	settled, estimated, lost, pending := b.hold(100), b.hold(100), b.hold(100), b.hold(100)
 	b.supplies.journal[pending.id] = JournalAttempt{Seq: 1, Key: "client:k"}
 	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
@@ -201,7 +201,8 @@ func TestEndRequest(t *testing.T) {
 			t.Errorf("%s ended %d times, want %d", id, got, want)
 		}
 	}
-	time.Sleep(600 * time.Millisecond)
+	b.closeWindow(estimated)
+	b.closeWindow(pending)
 	b.cleanup() // the estimate settles, the cleaned-up one is lost
 	if b.supplies.ended[estimated.id] != 1 || b.supplies.ended[pending.id] != 1 {
 		t.Errorf("after the window: ended %d and %d times, want once each", b.supplies.ended[estimated.id], b.supplies.ended[pending.id])
