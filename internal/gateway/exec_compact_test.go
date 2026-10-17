@@ -308,7 +308,7 @@ func TestASlowClientGetsItsWholeReply(t *testing.T) {
 // write's deadline, whichever is longer — and each chunk's deadline is what is left of it. A client that would take
 // longer than that is taken for one that has gone: the writes stop, the settlement stays what it was (the reply was
 // read, the report was charged) and the call's slot and memory are given back. The client here reads a 64 KiB chunk in
-// 8s, which one write's own deadline would allow; the reply's total of 16s is what stops it after the first chunk
+// 8s, which one write's own deadline would allow; the reply's total of 10s is what stops it after the first chunk
 // (docs/domains/gateway.md「转发规则」, README.md「超时与限额」).
 func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
