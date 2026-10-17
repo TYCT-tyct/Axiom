@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"uuid"
@@ -22,49 +23,26 @@ import (
 // only fake, as it is in the ledger tests: what is checked is the money.
 
 const (
+	// supplierInput is what the fake upstream reports as input tokens.
+	supplierInput = 130
 	// supplierSchedule prices an input token at 0.00001 quota and an output token at 0.00004, the native unit of a
 	// new-api relay. The supplier's unit value is 0.001 in seedSupplierCost, so a quota is worth a thousandth of a USD.
 	supplierSchedule = `{"v":1,"currency":"XXX","rates":{"input":"0.00001","output":"0.00004"}}`
-	// knownCost is what the 100 input tokens the fake upstream reports cost: 100 × 0.00001 quota × 0.001 USD, in
-	// billionths of a credit. It is below the sale price, as the 保本线 keeps a real one, so a cost taken for the sale
-	// price would count 100 times as much and the waived case would be charged: that is what pins the known cost.
-	knownCost = 1000
+	// knownCost is what those tokens cost: 0.00001 quota × 0.001 USD is ten billionths of a credit a token, below the
+	// sale price as the 保本线 keeps a real one, so a cost taken for the sale price would count far more and the waived
+	// case would be charged: that is what pins the known cost. It is not the ledger tests' default fake cost (1000),
+	// so wiring that fake back in fails the booked amount.
+	knownCost = supplierInput * 10
 	// saleForTheInput is what billing charges the user for those tokens at the rig's own price, 0.000001 a token.
 	saleForTheInput = supplierInput * inputUnit
-	supplierInput   = 100
 )
 
-// TestAnAttemptCostsTheSuppliersPrice: the executor's Costs is the suppliers service in production, and this one is
-// real. An attempt books the schedule's native amount times the unit value the supplier's balance was confirmed at,
-// and the cap set exactly at that cost waives the call: a cost taken for the attempt's sale price (100,000) would not,
-// so this case proves the cap used the known cost and the books hold the cost itself.
-func TestAnAttemptCostsTheSuppliersPrice(t *testing.T) {
-	t.Parallel()
-	r, svc, receipt := costedRig(t, knownCost)
-	sample, _ := sample(t, protocol.Messages)
-	up := withCosts(r, r.billing, svc)
-	up.setReceipt(receipt)
-	up.setScript(costedScript(sample, false))
-	a := r.funded(1e12)
-	r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
-	if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got != knownCost {
-		t.Errorf("the attempt cost the books %d, want the suppliers service's %d", got, knownCost)
-	}
-	if got := r.count("SELECT coalesce(sum(cost), 0) FROM billing.waivers"); got != knownCost {
-		t.Errorf("the cap counted the attempt at %d, want the known %d", got, knownCost)
-	}
-	if got := r.charged(r.lastCall().ID); got != 0 {
-		t.Errorf("the call within the cap was charged %d, want nothing", got)
-	}
-	r.ledgerBalanced()
-}
-
-// TestTheWaiverCapStopsAtTheKnownCost: the daily cap counts an attempt's cost as the suppliers service prices it, so
-// the call that takes the account past the cap is charged its sale price, and of the waivable calls only a delivered
-// one whose output was reported zero still waives past it (docs/domains/billing.md「免单规则」). The first case's cap
-// is the known cost itself, far below the sale price: a cost taken for the sale price would not waive at all, so that
-// case shows which of the two the cap used. Past the cap the zero-output waiver is not counted: it is the condition,
-// not room the cap had.
+// TestTheWaiverCapStopsAtTheKnownCost: the executor's Costs is the suppliers service in production, and here it is
+// real. The first case's books hold the schedule's native amount times the unit value the supplier's balance was
+// confirmed at, the cap counts that cost and, set exactly there, waives the call; a cost taken for the sale price would
+// not. The call that takes the account past the cap is charged its sale price, and of the waivable calls only a
+// delivered one whose output was reported zero still waives past it (docs/domains/billing.md「免单规则」). Past the
+// cap the zero-output waiver is not counted: it is the condition, not room the cap had.
 func TestTheWaiverCapStopsAtTheKnownCost(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -74,7 +52,7 @@ func TestTheWaiverCapStopsAtTheKnownCost(t *testing.T) {
 		wantCharged int64
 		wantCounted bool // the cap had room for the call's cost and counted it; past the cap it never does
 	}{
-		{"within the cap, the failed call is waived", knownCost, false, 0, true},
+		{"the books hold the schedule times the unit value; the cap set there waives", knownCost, false, 0, true},
 		{"past the cap, the failed call is charged its sale price", knownCost - 1, false, saleForTheInput, false},
 		{"past the cap, a delivered zero-output finish still waives", knownCost - 1, true, 0, false},
 	} {
@@ -87,7 +65,7 @@ func TestTheWaiverCapStopsAtTheKnownCost(t *testing.T) {
 			a := r.funded(1e12)
 			r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
 			if got := r.charged(r.lastCall().ID); got != tc.wantCharged {
-				t.Errorf("the call past the cap was charged %d, want %d", got, tc.wantCharged)
+				t.Errorf("the call was charged %d, want %d", got, tc.wantCharged)
 			}
 			wantCounted := int64(0)
 			if tc.wantCounted {
@@ -200,9 +178,9 @@ func masterKey(t *testing.T) *secret.Keyring {
 // Output is reported as 0 when reported, and left out otherwise, because a count never reported proves nothing about a
 // zero output (billing's zeroOutput reads it that way).
 func supplierStart(reported bool) string {
-	usage := `{"input_tokens":100}`
+	usage := `{"input_tokens":` + strconv.Itoa(supplierInput) + `}`
 	if reported {
-		usage = `{"input_tokens":100,"output_tokens":0}`
+		usage = `{"input_tokens":` + strconv.Itoa(supplierInput) + `,"output_tokens":0}`
 	}
 	return "event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant",` +
 		`"model":"up","content":[],"stop_reason":null,"stop_sequence":null,"usage":` + usage + "}}\n\n"
