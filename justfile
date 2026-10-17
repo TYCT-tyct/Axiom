@@ -116,11 +116,11 @@ compose := "docker compose -f deploy/compose.yaml"
 # Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to
 # deploy/.env, readable only by its owner, the first time; returns once it reports ready, or, when a step outlasts
 # its limit, fails with the containers' state, health-check output and logs. New passwords would not open a database
-# created with the old ones, so a missing deploy/.env next to an existing database volume stops it; only the migration
-# administrator's password is added to a deploy/.env written before that role existed, and postgres/roles.sh, run
-# before migrating, creates the role in such a database.
+# created with the old ones, so a missing deploy/.env next to the project's existing database volume stops it; only the
+# migration administrator's password is added to a deploy/.env written before that role existed, and postgres/roles.sh,
+# run before migrating, creates the role in such a database.
 up: web-embed
-    umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^axiom_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
+    umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^${COMPOSE_PROJECT_NAME:-axiom}_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the project's database volume exists: restore the file, or delete the database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
