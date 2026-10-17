@@ -47,6 +47,9 @@ function useChange<Input, Out>(send: Props<Input, Out>["send"]) {
   const queryClient = useQueryClient();
   const key = useRef(crypto.randomUUID());
   return useMutation({
+    // The variables hold what the person typed, a supplier's login among it. Nothing keeps them once the dialog is
+    // gone: gcTime 0 drops the cache entry as soon as no dialog watches it.
+    gcTime: 0,
     mutationFn: ({ input, reason }: { input: Input; reason: string }) => send(input, { reason, key: key.current }),
     onError: (error) => {
       if (!mayHaveBeenDone(error)) {
