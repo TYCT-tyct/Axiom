@@ -146,7 +146,9 @@ func (s *session) finish(out []byte) {
 	}
 }
 
-// respond writes a whole body to a client that did not stream: it is the call's only write, so the status is set here.
+// respond writes a whole body to a client that did not stream: it is the call's only answer, so the status is set here.
+// A body larger than one write goes out in chunks, each within its own write deadline, so that a client that reads
+// slowly but keeps reading is not taken for one that has gone (docs/domains/gateway.md「转发规则」).
 func (s *session) respond(status int, body []byte) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
@@ -161,8 +163,18 @@ func (s *session) respond(status int, body []byte) {
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
 	s.w.WriteHeader(status)
-	s.put(body)
+	for b := body; len(b) > 0; {
+		n := min(len(b), respondChunk)
+		if !s.put(b[:n]) {
+			return
+		}
+		b = b[n:]
+	}
 }
+
+// respondChunk is how much of a whole reply one write takes: the write deadline is a chunk's, not the reply's, so a
+// reply of the 16 MiB a call may hold is written for as long as the client keeps reading it.
+const respondChunk = 64 << 10
 
 // answer writes the error a call that forwarded nothing ends with, in the client's own format, with what was charged
 // anyway when the settlement says so.
@@ -218,22 +230,10 @@ func (s *session) isStarted() bool {
 // is ended where it is.
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
-	cause := context.Cause(ctx)
-	if failed, ok := errors.AsType[*extendFailed](cause); ok {
+	if failed, ok := errors.AsType[*extendFailed](context.Cause(ctx)); ok {
 		return a.truncate(relay, cut(failed.err))
 	}
-	e := protocol.Error{Type: protocol.UpstreamFailed}
-	finish, again := billing.FinishError, true
-	switch {
-	case s.isGone():
-		finish, again = billing.FinishCancelled, false
-	case errors.Is(cause, errIdle):
-		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
-	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
-		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
-	case errors.Is(err, protocol.ErrMemory):
-		e, again = protocol.Error{Type: protocol.Overloaded}, false
-	}
+	e, finish, again := s.classify(ctx, err)
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), finish
 	if s.aggregate {
@@ -246,6 +246,32 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	}
 	rec.Result = billing.FailedBeforeCommit
 	drop(relay)
+	return s.unanswered(a, e, again)
+}
+
+// classify says how a failed attempt ended: the error the client is answered with, the finish reason, and whether
+// another entry may be tried. A relay that broke and a whole reply that could not be read fail for the same reasons
+// (docs/domains/gateway.md「错误」).
+func (s *session) classify(ctx context.Context, err error) (protocol.Error, billing.FinishReason, bool) {
+	e := protocol.Error{Type: protocol.UpstreamFailed}
+	finish, again := billing.FinishError, true
+	cause := context.Cause(ctx)
+	switch {
+	case s.isGone():
+		finish, again = billing.FinishCancelled, false
+	case errors.Is(cause, errIdle):
+		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
+	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
+		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
+	case errors.Is(err, protocol.ErrMemory):
+		e, again = protocol.Error{Type: protocol.Overloaded}, false
+	}
+	return e, finish, again
+}
+
+// unanswered ends an attempt that has nothing for the client: one that may still be given up on moves to the next
+// entry; one that may not answers with the error, unless the client is gone, which gets nothing.
+func (s *session) unanswered(a *attempt, e protocol.Error, again bool) (step, ended) {
 	if !again {
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		if s.isGone() {
@@ -264,22 +290,16 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool) (step, ended) {
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
-	switch {
-	case s.isGone():
+	if !again { // the client is gone, the call is out of road or the reservation failed: the error alone answers it
 		drop(relay)
-		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
-		return over, ended{}
-	case !again: // the call is out of road or the reservation failed: the error alone answers it
-		drop(relay)
-		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
-		return over, ended{err: e}
-	case a.content:
+		return s.unanswered(a, e, false)
+	}
+	if a.content {
 		s.keep(relay) // it answers the call if no entry is left, and nothing else of it reaches the client
-	default:
+	} else {
 		drop(relay)
 	}
-	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
-	return nextEntry, ended{}
+	return s.unanswered(a, e, true)
 }
 
 // keep holds the reply of an aggregate attempt that generated content: the answer when no entry is left. The reply kept
@@ -290,9 +310,14 @@ func (s *session) keep(relay *protocol.Relay) {
 }
 
 // left ends a call that has no entry left: an aggregate attempt that generated content answers with it, as the last
-// attempt that failed with content is answered with what it made (docs/domains/gateway.md「错误」).
+// attempt that failed with content is answered with what it made (docs/domains/gateway.md「错误」). A client that has
+// gone gets nothing, and what was kept is let go: nothing of it reached it.
 func (s *session) left(e ended) ended {
 	if s.part == nil || e.relay != nil {
+		return e
+	}
+	if s.isGone() {
+		s.let()
 		return e
 	}
 	e.relay, s.part = s.part, nil

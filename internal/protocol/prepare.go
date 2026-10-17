@@ -30,6 +30,10 @@ type Target struct {
 	// since the gateway reads every answer as a stream and aggregates it for a client that wants none
 	// (docs/domains/gateway.md「转发规则」).
 	Streams bool
+	// Compact is set for a compaction request, the one request that is not a generation: it is rewritten by the
+	// members that must not reach an upstream as they are — the model, the identifiers, the routing parameters — and
+	// every other byte is copied as the client wrote it (README.md「同格式改写」).
+	Compact bool
 	// Thinking is how the model is asked to reason.
 	Thinking Thinking
 	// MidSystem is set when the model takes a system message after the conversation has started, and
@@ -106,7 +110,8 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
-// as it is. A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
+// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
@@ -143,7 +148,7 @@ func usageContext(r *Request) UsageContext {
 // rewrite is Prepare for an endpoint of the request's format. Chat's rewrites depend on the endpoint's dialect,
 // which come later (#27).
 func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	rules := rewriteRules[f]
+	rules := rulesFor(f, t)
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
@@ -193,7 +198,7 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rewriteRules[r.Format], len(body), t, w)) + 3*n
+		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
 	}
 	if r.Format != Chat {
 		return 0 // Prepare refuses at once: nothing is converted from another format
@@ -238,8 +243,30 @@ var (
 		},
 		Chat: {},
 	}
+	// compactRules rewrite a compaction request: the members that must not reach an upstream as they are — the
+	// endpoint's model name, the identifiers, the routing parameters — and nothing else. A generation's rewrite adds
+	// what a compaction request does not take (store, include, the output cap, a stream) and rewrites its input and
+	// history, which compaction has neither (docs/domains/gateway.md「转发规则」).
+	compactRules = [...]formatRules{
+		Responses: {
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "prompt_cache_key": (*rewriter).identity,
+				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
+			}),
+			identities: 3,
+		},
+	}
 	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
 )
+
+// rulesFor is how a request of format f is rewritten for the endpoint t: a compaction request is the one that is not a
+// generation, and a format without compaction has no rules for it.
+func rulesFor(f Format, t Target) formatRules {
+	if t.Compact {
+		return compactRules[f]
+	}
+	return rewriteRules[f]
+}
 
 // withRouting adds the members that are OpenRouter's routing parameters or our extensions, which the gateway has
 // used and no upstream defines: an official endpoint refuses a member it does not know (gateway.md「路由参数」).

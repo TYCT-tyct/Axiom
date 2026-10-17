@@ -236,8 +236,8 @@ func (*responsesStream) usageEvent(dst []byte, _ catalog.Usage, _, _ string) []b
 
 // UsageOf reads the usage of a complete Responses reply, for the calls the gateway passes through whole: the compact
 // endpoint does not stream, so its body is not relayed (docs/domains/gateway.md「转发规则」, OpenAI《Compaction》,
-// read 2026-10-14). A reply without a usage object used nothing of the model; one protocol cannot read or map is
-// invalid, which billing estimates rather than waives (docs/domains/billing.md「免单规则」).
+// read 2026-10-14). A reply that names no usage reports nothing of it, which the call estimates rather than waives; one
+// protocol cannot read or map is invalid, which billing estimates too (docs/domains/billing.md「免单规则」).
 func UsageOf(body []byte) Usage {
 	m := meter{final: true}
 	members, err := membersOf(body)

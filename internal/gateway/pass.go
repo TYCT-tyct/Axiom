@@ -12,10 +12,6 @@ import (
 	"axiom/internal/routing"
 )
 
-// compactPath is the Responses compact endpoint's path: the one call an upstream answers whole instead of as a stream
-// (docs/domains/gateway.md「转发规则」).
-const compactPath = "/v1/responses/compact"
-
 // compactLimit is the most of a compact reply the gateway holds: the cap a reply aggregated from a stream has too. A
 // larger body would only be passed on for the client to store, and the node's budget is what reading it would spend.
 const compactLimit = 16 << 20
@@ -35,6 +31,12 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	}
 	a.usage = protocol.UsageOf(body)
 	rec := &s.ends[a.i]
+	if s.isGone() { // the reply was read to the end for what it says it used, but nothing of it reaches the client
+		s.x.Memory.Refund(held)
+		rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishCancelled
+		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		return over, ended{}
+	}
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
 	return over, ended{reply: body, status: resp.StatusCode, held: held}
@@ -42,7 +44,9 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 
 // readWhole reads a reply whole within the node's memory budget, charging each growth of its buffer before it is made,
 // and keeps the idle timer from firing while the upstream says something. It holds, and leaves charged, the capacity of
-// what it returns, which the caller gives back.
+// what it returns, which the caller gives back. Growing the buffer holds the old one and the new one at once, so the
+// node's real peak at a growth is the capacity charged plus the old one, at most twice what was charged (1.5 times it
+// for the doubling steps): the charge bounds the reply, not the instant of a copy.
 func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFor time.Duration) (reply []byte, held int64, err error) {
 	for {
 		if len(reply) == cap(reply) {
@@ -79,28 +83,8 @@ func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFo
 // what the upstream did is given up on for the next entry, as a stream that fails before its commit point is; one that
 // fails because the client left, the node is out of memory, or the call is out of road answers with the error.
 func (s *session) failedReply(a *attempt, ctx context.Context, err error) (step, ended) {
+	e, finish, again := s.classify(ctx, err)
 	rec := &s.ends[a.i]
-	e := protocol.Error{Type: protocol.UpstreamFailed}
-	finish, again := billing.FinishError, true
-	cause := context.Cause(ctx)
-	switch {
-	case s.isGone():
-		finish, again = billing.FinishCancelled, false
-	case errors.Is(cause, errIdle):
-		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
-	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
-		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
-	case errors.Is(err, protocol.ErrMemory):
-		e, again = protocol.Error{Type: protocol.Overloaded}, false
-	}
 	rec.Result, rec.Finish = billing.FailedBeforeCommit, finish
-	if !again {
-		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
-		if s.isGone() {
-			return over, ended{}
-		}
-		return over, ended{err: e}
-	}
-	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
-	return nextEntry, ended{}
+	return s.unanswered(a, e, again)
 }

@@ -145,6 +145,9 @@ type fakeUpstreams struct {
 	client  *clientWriter
 	settled int           // calls of Settled
 	flushed chan struct{} // what JournalFlushed returns; closed unless a test holds it
+	// beforeAcquire acts when an attempt asks for a credential of the endpoint, before it gets one: a test's way to
+	// have the client leave between two attempts.
+	beforeAcquire func(id suppliers.EndpointID)
 }
 
 type fakeEndpoint struct {
@@ -163,6 +166,9 @@ func (u *fakeUpstreams) endpoint(n int) *fakeEndpoint {
 }
 
 func (u *fakeUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
+	if u.beforeAcquire != nil {
+		u.beforeAcquire(id)
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	e, ok := u.eps[id]
@@ -237,6 +243,7 @@ type clientWriter struct {
 	deadline time.Time // the last write deadline set
 	failFrom int       // writes from this one on fail; 0 never
 	stall    bool      // a write waits for its deadline and then fails, as one to a client that does not read
+	rate     int64     // bytes a second the client reads at; 0 as fast as it is given
 	deadlns  int
 }
 
@@ -262,7 +269,7 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	deadline, stall := w.deadline, w.stall
+	deadline, stall, rate := w.deadline, w.stall, w.rate
 	fail := w.failFrom > 0 && len(w.writes)+1 >= w.failFrom
 	w.mu.Unlock()
 	if stall {
@@ -271,6 +278,12 @@ func (w *clientWriter) Write(b []byte) (int, error) {
 	}
 	if fail {
 		return 0, io.ErrClosedPipe
+	}
+	if rate > 0 { // a slow client: the write takes what the bytes take, and its deadline holds meanwhile
+		time.Sleep(time.Duration(int64(len(b)) * int64(time.Second) / rate))
+		if !time.Now().Before(deadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()

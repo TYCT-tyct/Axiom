@@ -63,6 +63,11 @@ func TestFilters(t *testing.T) {
 			"a Chat request where only Chat is spoken", func(e *routing.Endpoint) { e.Native = routing.Of(protocol.Chat); e.Served = routing.Of(protocol.Chat) },
 			func(in *routing.Input) { in.Req.Format = protocol.Chat }, nil, routing.FormatNotServed, true,
 		},
+		{
+			// The gateway reads every answer as a stream but the compact call's, whose answer arrives whole.
+			"an endpoint that cannot stream", func(e *routing.Endpoint) { e.Streams = false },
+			nil, nil, routing.FormatNotServed, true,
+		},
 		{"context too small", func(e *routing.Endpoint) { e.Context = 500 }, nil, nil, routing.ContextTooSmall, true},
 		{
 			"output does not fit the context", func(e *routing.Endpoint) { e.Context = 2000 },
@@ -403,22 +408,24 @@ func TestSnapshotRejectsBadData(t *testing.T) {
 // TestEntryTellsHowToCallTheEndpoint: an entry carries the supplier and the endpoint's target, with the format the
 // request is called in — its own when the endpoint serves it, or the one a Chat request is converted to, which is always
 // a conversion since M1 rewrites no Chat request (docs/domains/gateway.md「转发规则」) — and whether the endpoint
-// streams, so that the request sent asks for a stream.
+// streams, which every endpoint of a call read as a stream must. The compact call's answer arrives whole, so it is the
+// one request an endpoint that does not stream can serve.
 func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name    string
-		client  protocol.Format
-		native  routing.FormatSet
-		streams bool
-		want    protocol.Format
+		name       string
+		client     protocol.Format
+		native     routing.FormatSet
+		streams    bool
+		noSegments bool
+		want       protocol.Format
 	}{
-		{"its own format", protocol.Messages, routing.Of(protocol.Messages, protocol.Chat), true, protocol.Messages},
-		{"chat to an endpoint that speaks both", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), true, protocol.Messages},
-		{"chat to messages", protocol.Chat, routing.Of(protocol.Messages), true, protocol.Messages},
-		{"chat to responses", protocol.Chat, routing.Of(protocol.Responses), true, protocol.Responses},
-		{"chat prefers messages", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages), true, protocol.Messages},
-		{"an endpoint that does not stream", protocol.Messages, routing.Of(protocol.Messages), false, protocol.Messages},
+		{"its own format", protocol.Messages, routing.Of(protocol.Messages, protocol.Chat), true, false, protocol.Messages},
+		{"chat to an endpoint that speaks both", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), true, false, protocol.Messages},
+		{"chat to messages", protocol.Chat, routing.Of(protocol.Messages), true, false, protocol.Messages},
+		{"chat to responses", protocol.Chat, routing.Of(protocol.Responses), true, false, protocol.Responses},
+		{"chat prefers messages", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages), true, false, protocol.Messages},
+		{"the compact call needs no stream", protocol.Responses, routing.Of(protocol.Responses), false, true, protocol.Responses},
 	}
 	for _, c := range cases {
 		e := endpoint(t, 1, func(e *routing.Endpoint) {
@@ -426,7 +433,7 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: true, Format: protocol.Responses}
 		})
 		in := input()
-		in.Req.Format = c.client
+		in.Req.Format, in.NoSegments = c.client, c.noSegments
 		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
 		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || !entry.Target.EncryptedReasoning ||
 			entry.Target.Streams != c.streams || entry.Supplier != sup(1) {

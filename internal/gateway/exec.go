@@ -240,7 +240,8 @@ func (s *session) conclude(ctx context.Context, e ended) {
 
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
 // aggregated, or the failure, which carries what was generated and the error for a Chat or Responses client and is the
-// error alone for a Messages one (docs/domains/gateway.md「错误」).
+// error alone for a Messages one (docs/domains/gateway.md「错误」). Finish and Fail return the body and the status of a
+// relay that has not ended yet, which is always the case here.
 func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 	final := protocol.Final{Pending: err != nil}
 	if fin != nil {
@@ -250,12 +251,12 @@ func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 	if e.done {
 		body = e.relay.Finish(final)
 	} else {
+		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
+			fin = nil // an error that cost nothing says nothing of the charge
+		}
 		body = e.relay.Fail(e.err, fin)
 	}
 	status := e.relay.Status()
-	if body == nil || status == 0 {
-		return // the relay wrote its ending already: there is nothing to answer with
-	}
 	if status == http.StatusOK {
 		s.journalLast()
 	}

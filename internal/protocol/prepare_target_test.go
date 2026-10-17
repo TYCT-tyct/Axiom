@@ -57,6 +57,34 @@ func preparedReply(t *testing.T, from, to protocol.Format, body string, streams 
 	return got
 }
 
+// TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream: a compaction request is not a generation, so only the members
+// that must not reach an upstream as they are change: the model becomes the endpoint's name, the three identifiers are
+// derived, and the routing parameters go. Nothing is added — store, include, the output cap and the input stay as the
+// client wrote them (docs/domains/gateway.md「转发规则」).
+func TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream(t *testing.T) {
+	body := `{"model":"client-model","input":[{"role":"user","content":"hi"}],"store":true,"max_output_tokens":7,` +
+		`"include":["reasoning.encrypted_content"],"user":"u","prompt_cache_key":"k","safety_identifier":"s",` +
+		`"provider":{"order":["a"]},"models":["m"],"route":"fallback","session_id":"abc","axiom":{"trace":"t"}}`
+	want := `{"model":"endpoint-model","input":[{"role":"user","content":"hi"}],"store":true,"max_output_tokens":7,` +
+		`"include":["reasoning.encrypted_content"],"user":"h(u)","prompt_cache_key":"h(k)","safety_identifier":"h(s)"}`
+	target := protocol.Target{Format: protocol.Responses, Model: "endpoint-model", MaxOutput: 100, Streams: true, Compact: true}
+	w := protocol.Rewrites{Identity: derive}
+	r, err := protocol.Inspect(protocol.Responses, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := protocol.Prepare(&r, []byte(body), target, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(u.Body) != want {
+		t.Errorf("the compaction request sent is\n%s\nwant\n%s", u.Body, want)
+	}
+	if cost := protocol.PrepareCost(&r, []byte(body), target, w); cost < int64(cap(u.Body)) {
+		t.Errorf("the cost %d does not cover the %d bytes written", cost, cap(u.Body))
+	}
+}
+
 // TestPrepareRefusesChat: Chat's rewrites depend on the endpoint's dialect and are still to come, so a Chat endpoint
 // cannot express a request. The gateway passes the endpoint over (a *NotSupported) instead of failing the call.
 func TestPrepareRefusesChat(t *testing.T) {

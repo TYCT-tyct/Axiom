@@ -2,7 +2,6 @@ package suppliers
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"io"
 	"maps"
@@ -26,13 +25,13 @@ type CallPolicy = adapter.CallPolicy
 
 // Call is what is sent to the supplier: a request body in a call format, already prepared for this endpoint, and the
 // request headers that go with it (gateway's whitelist: anthropic-beta and anthropic-version). Header never replaces
-// the credential or the content type, and gives the version the client chose over the default. Path overrides the
-// format's own, for the Responses compact endpoint the client called, whose path the format alone does not name.
+// the credential or the content type, and gives the version the client chose over the default. Compact sends the call to
+// the format's compaction endpoint instead of its own path, the one call that is not a generation.
 type Call struct {
-	Format protocol.Format
-	Path   string
-	Body   []byte
-	Header http.Header
+	Format  protocol.Format
+	Compact bool
+	Body    []byte
+	Header  http.Header
 }
 
 // AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, and the
@@ -58,6 +57,10 @@ var wire = map[protocol.Format]struct {
 	protocol.Responses: {path: "/v1/responses"},
 	protocol.Messages:  {path: "/v1/messages", version: "2023-06-01"},
 }
+
+// compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
+// format's own (docs/domains/gateway.md「转发规则」). Only Responses compacts one.
+var compactPaths = map[protocol.Format]string{protocol.Responses: "/v1/responses/compact"}
 
 // maxErrorBody is how much of a failed response is read for the adapter to classify.
 const maxErrorBody = 64 << 10
@@ -160,7 +163,12 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	path := cmp.Or(call.Path, w.path)
+	path := w.path
+	if call.Compact {
+		if path, ok = compactPaths[call.Format]; !ok {
+			return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
+		}
+	}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+path, bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}

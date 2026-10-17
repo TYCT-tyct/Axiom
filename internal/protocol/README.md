@@ -40,13 +40,13 @@
 
 ## 同格式改写
 
-`Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写取决于端点的方言（推理载体、`cache_control`、推理参数的写法，也包括没写输出上限时补上 `Target.MaxOutput`），随 Chat 的转换一起加入，现在返回 `*NotSupported`，网关因此跳过 Chat 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
+`Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写取决于端点的方言（推理载体、`cache_control`、推理参数的写法，也包括没写输出上限时补上 `Target.MaxOutput`），随 Chat 的转换一起加入，现在返回 `*NotSupported`，网关因此跳过 Chat 端点（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
 
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
 | `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | OpenRouter 的路由参数和本站扩展，gateway 已经用过；官方接口拒绝不认识的成员 |
-| `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；不能流式的端点保持客户端的写法 |
+| `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路由对生成请求只保留能流式的端点，`Streams` 为假时保持客户端的写法是协议层的约定（压缩请求用不到它，见下） |
 | 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
 | `store` | — | 一律 `false`，没有就加上 | 状态由本站保存 |
@@ -54,6 +54,7 @@
 | `include` | — | `Target.EncryptedReasoning` 时保证含 `reasoning.encrypted_content`：没有就加，`null` 换成只含它的数组，数组里没有就插在开头；否则不动 | 上游不保存状态时，推理只能加密后带回下一轮；不推理的模型收到它返回 400 |
 
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
+- **压缩请求**（`Target.Compact`）：它不是生成，只改必须改的三样——`model` 换成端点的名字，`prompt_cache_key`、`user`、`safety_identifier` 换成派生值，路由参数删除——其余成员原样，`store`、`include`、`max_output_tokens`、`stream`、`input` 既不补也不改，也不拼历史，因为压缩请求没有这些语义（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream` 逐字节核对。
 - **输出缓冲**：一次分配，容量是原请求体加模型名、每个可换标识的 `Rewrites.IdentityLen`（`Identity` 返回的最大字节数，转义前；不写按 128；返回更长的值是 gateway 的错，`Prepare` 拒绝，这样不论客户端原来写了什么，容量都能事先定下），两者都按 JSON 编码后最坏的长度算（每字节最多 6 字节）、以及表里新增成员的字节数（`store`、`include`、`max_output_tokens`、包住字符串 `input` 或补出 `input` 的字节），所以改写不会因为缓冲不够把整个请求体再拷一遍；`TestPrepareBuffer`、`TestPrepareBufferEscapes`（模型名和标识全是要转义的字节）、`TestPrepareBufferDefaultIdentityLen`（不写 `IdentityLen`，标识是 128 个要转义的字节）用带长派生标识和历史的大请求核对分配次数与短标识时相同。
 - **`PrepareCost(r, body, t, w)`**：`Prepare` 一次最多同时占用多少内存（不含请求体本身），让 gateway 在 `Prepare` 分配之前就向节点的内存预算申请，申请不到就不调用。同格式改写是输出缓冲的容量加请求体的三倍：缓冲的容量事先定得下，另外对标识和 `previous_response_id` 去转义要一块临时缓冲、再转成字符串、缓冲翻倍增长，最坏的是一个很长的标识，实测（2026-10-16）为请求体的 2.5 倍。跨格式转换是 6 × 请求体字节数 + 2048 × （`{` 与 `null` 的个数）+ 1024 × `:` 的个数：转换把字符串多拷几份，并把每个对象读进一个结构（`canonMessage` 224 字节，所在的切片翻倍增长），对象里不认识的成员每个进一个映射项；请求体不说有几个对象和成员，但数括号、`null` 和冒号给出上界（字符串里的只会多算；`null` 元素也各解出一个零值的结构，数组里其他非对象的元素在原地就被拒绝，`Inspect` 先拒绝了）。实测每个 `{}` 消息分配约 1.3 KiB、每个不认识的成员约 485 字节，都在常数之内；评审 #157 指出过只按字节数的 32 倍不是上界（一堆 `{}` 是 74 倍）。结果保留的是 `Upstream.Body` 的容量。不是从别的格式转换的请求不分配，成本为 0。`TestPrepareCost` 用最坏形状的请求体（全是空对象、最小的消息、不认识的成员、全是转义的标识）核对实际分配不超过成本。
 - **出错**：标识不是字符串、`metadata` 不是对象、要加 `include` 时它不是数组或含非字符串的元素、有历史时 `input` 不是字符串、数组或 `null`，返回 `ErrInvalid`；`previous_response_id` 非空与是否给了历史不一致是 gateway 的错，返回另一个错误，不当成客户端的 400。历史条目是本站存下的原样 JSON，不再校验。
@@ -232,7 +233,7 @@ type Final struct{ Usage Usage; Cost platform.Exact; Currency platform.Currency;
   聚合器可以拒绝 `streamcheck` 接受、却造不出回复的流（没有 `message` 的 `message_start`、顺序不对的块、不是 JSON 的工具输入、没有 `response` 的结尾），按上游的失败处理：在 `Next` 里是 `ErrUpstream`，在结尾里则 `Finish` 改以 `upstream_error` 失败，结算已写的费用照常在里面。
 - **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），所以 `Relay` 扣住到正常结束才交给聚合器的事件（Chat 的结束选项），在扣住的那一刻就让聚合器按它们要开的选项和结束原因记账（`aggregator.hold`），超限在 `Next` 里就以 `ErrMemory` 结束；结束时全部归还；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
 - **分配**：聚合器按位置读事件，不把事件解成树；每个事件的分配次数有常数上界，缓冲翻倍带来的分配随长度对数增长，与增量的大小无关（`TestAggregateAllocs`）。
-- **整份答复的用量**：`UsageOf(body)` 读一份完整的 Responses 回复（`/responses/compact` 的答案，gateway 原样透传）顶层的 `usage` 与 `service_tier`，按与流的结尾相同的口径折算成计费项；没有 `usage` 是没用模型，读不出或折算不了判为 `Invalid`，由计费按估算收（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。`TestUsageOf` 覆盖拆分、等级和两种无效。
+- **整份答复的用量**：`UsageOf(body)` 读一份完整的 Responses 回复（`/responses/compact` 的答案，gateway 把回复原样透传、只改写请求）顶层的 `usage` 与 `service_tier`，按与流的结尾相同的口径折算成计费项；没有 `usage` 是上游没报告用量（不是没用模型），由调用方按暂估收，读不出或折算不了判为 `Invalid`，同样按估算（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。`TestUsageOf` 覆盖拆分、等级和两种无效。
 ## 录制样本
 
 协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：

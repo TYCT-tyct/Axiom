@@ -217,6 +217,8 @@ func (c *candidate) unfit(n *need) Reason {
 		return MissingCapability
 	case !c.servesFormat(n):
 		return FormatNotServed
+	case !c.streamsFor(n):
+		return FormatNotServed
 	case n.req.ServiceTiers&c.ServiceTiers == 0:
 		return ServiceTierNotServed
 	}
@@ -225,6 +227,10 @@ func (c *candidate) unfit(n *need) Reason {
 	}
 	return 0
 }
+
+// streamsFor says the endpoint can answer as the gateway reads the answer: every call but the compact one is read as a
+// stream, which an endpoint that does not stream cannot give it (docs/domains/gateway.md「转发规则」).
+func (c *candidate) streamsFor(n *need) bool { return c.Streams || n.in.NoSegments }
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,

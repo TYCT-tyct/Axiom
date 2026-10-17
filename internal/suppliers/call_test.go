@@ -214,9 +214,10 @@ func TestASuccessfulSendIsAuthenticatedAndKeepsTheKey(t *testing.T) {
 	}
 }
 
-// TestACallCanNameItsPath: the path is the format's own unless the call names one, which the Responses compact endpoint
-// needs: it is not a format's path, so the gateway passes it (docs/domains/gateway.md「路径与格式」).
-func TestACallCanNameItsPath(t *testing.T) {
+// TestACompactingCallGoesToItsOwnPath: a call's path is the format's own, but for the compact call, which is not a
+// generation and has an endpoint of its own (docs/domains/gateway.md「路径与格式」, OpenAI《Compaction》, read
+// 2026-10-14).
+func TestACompactingCallGoesToItsOwnPath(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
 	server := newSupplierServer(t)
@@ -227,7 +228,7 @@ func TestACallCanNameItsPath(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	resp, f := a.Send(ctx, Call{Format: protocol.Responses, Path: "/v1/responses/compact", Body: []byte(`{"model":"m"}`)})
+	resp, f := a.Send(ctx, Call{Format: protocol.Responses, Compact: true, Body: []byte(`{"model":"m"}`)})
 	if f != nil {
 		t.Fatalf("%+v", f)
 	}

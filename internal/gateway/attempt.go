@@ -138,18 +138,18 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
 // charged before it allocates (a charge made after would be an allocation already done), and what stays, the capacity
 // of the request as this endpoint takes it, which is a copy of the body, is all that remains charged: held, which the
-// attempt gives back once the request is sent. A refusal is ErrOverloaded. A request the upstream answers whole, the
-// compact one, is passed through as the client wrote it and needs nothing done to it.
+// attempt gives back once the request is sent. A refusal is ErrOverloaded. The compact call is the one request that is
+// not a generation: its body is rewritten by the members that must not go upstream as they are (the endpoint's model
+// name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
-	if s.c.Compact {
-		return protocol.Upstream{Body: s.c.Body}, 0, nil
-	}
 	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
-	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, entry.Target, w)
+	target := entry.Target
+	target.Compact = s.c.Compact
+	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
 	if !s.x.Memory.Charge(cost) {
 		return up, 0, ErrOverloaded
 	}
-	up, err = protocol.Prepare(&s.c.Request, s.c.Body, entry.Target, w)
+	up, err = protocol.Prepare(&s.c.Request, s.c.Body, target, w)
 	held = min(cost, int64(cap(up.Body)))
 	if err != nil {
 		held = 0
@@ -261,15 +261,15 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 
 // send posts the request, within the wait for the response headers, and journals the attempt again when they come: that
 // is when the supplier's request id is known. The prepared body, held in the node's budget, is given back as soon as it
-// has been sent. The compact endpoint is the one whose reply is not a stream: it gets its own path and a longer wait
-// (docs/domains/gateway.md「路径与格式」).
+// has been sent. The compact endpoint is the one whose reply is not a stream: it gets a longer wait for its headers, and
+// its own path (docs/domains/gateway.md「路径与格式」).
 func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*http.Response, *suppliers.Failure) {
 	s := a.s
 	defer s.x.Memory.Refund(held)
 	waitFor := s.x.Limits.cfg.HeaderWait
 	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header}
 	if s.c.Compact {
-		waitFor, call.Path = s.x.Limits.cfg.CompactHeaderWait, compactPath
+		waitFor, call.Compact = s.x.Limits.cfg.CompactHeaderWait, true
 	}
 	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, call)

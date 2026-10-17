@@ -8,27 +8,35 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
 
-// The compact endpoint is the one call an upstream answers whole: the gateway passes the request and the reply through
-// as they are, reserving in full and settling what the reply reports (docs/domains/gateway.md「转发规则」).
+// The compact endpoint is the one call an upstream answers whole: the gateway passes the reply through as it came, sends
+// the request rewritten by the members that must not go upstream as they are, reserves in full and settles what the
+// reply reports (docs/domains/gateway.md「转发规则」).
 
 // compacted is a reply of the Responses compact endpoint: a compacted conversation and what it used.
 const compacted = `{"object":"response.compaction","output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc"}],` +
 	`"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40},"output_tokens":10,` +
 	`"output_tokens_details":{"reasoning_tokens":4}}}`
 
+// compactRequest is the client's compaction request: its own model, a member only a generation takes, the identifiers
+// and the routing parameters that must not reach an upstream as they are.
+const compactRequest = `{"model":"client-model","input":"Hello!","store":true,"max_output_tokens":7,` +
+	`"user":"client-user","prompt_cache_key":"client-key","provider":{"order":["acme"]},"session_id":"abc"}`
+
 // compact makes the call one to the Responses compact endpoint: the client's request as it wrote it, for an endpoint of
 // that format.
 func compact(t *testing.T, c *Call) {
 	t.Helper()
 	c.Compact = true
-	c.Body = []byte(`{"model":"m","input":"Hello!"}`)
+	c.Body = []byte(compactRequest)
 	req, err := protocol.Inspect(protocol.Responses, c.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -40,20 +48,20 @@ func compact(t *testing.T, c *Call) {
 	}
 }
 
-// answer is an upstream that answers with a whole body of a status, as the compact endpoint does.
-func wholeAnswer(status int, body string) scripted {
+// wholeAnswer is an upstream that answers with a whole body, as the compact endpoint does.
+func wholeAnswer(body string) scripted {
 	return func(context.Context) (*http.Response, *suppliers.Failure) {
-		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}
 }
 
-// TestTheCompactEndpointIsPassedThrough: the upstream gets the request as the client wrote it, at the compact path, and
-// the client gets its answer as it came, in one write, after the settlement, which is charged for the usage the reply
-// reports.
+// TestTheCompactEndpointIsPassedThrough: the upstream gets the request rewritten — the endpoint's model, derived
+// identifiers, no routing parameters — at the compact path, and the client gets its answer as it came, in one write,
+// after the settlement, which is charged for the usage the reply reports.
 func TestTheCompactEndpointIsPassedThrough(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(http.StatusOK, compacted)}
+		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(compacted)}
 		h.run()
 		checkCompactReply(t, h)
 		checkCompactRequest(t, h)
@@ -70,12 +78,16 @@ func checkCompactReply(t *testing.T, h *harness) {
 	}
 }
 
-// checkCompactRequest: the upstream got the client's body verbatim, at the compact path of the Responses format.
+// checkCompactRequest: the upstream got the client's body with the model the endpoint knows, the identifiers derived and
+// the routing parameters gone, and every other member as the client wrote it.
 func checkCompactRequest(t *testing.T, h *harness) {
 	t.Helper()
-	if call := h.up.endpoint(1).calls[0]; call.Path != compactPath || string(call.Body) != `{"model":"m","input":"Hello!"}` ||
-		call.Format != protocol.Responses {
-		t.Errorf("the request: path %q, format %v, body %s", call.Path, call.Format, call.Body)
+	derive := h.exec.identity(uuid.UUID(h.call.caller.AccountID()))
+	want := `{"model":"up-1","input":"Hello!","store":true,"max_output_tokens":7,` +
+		`"user":"` + derive("client-user") + `","prompt_cache_key":"` + derive("client-key") + `"}`
+	call := h.up.endpoint(1).calls[0]
+	if !call.Compact || call.Format != protocol.Responses || string(call.Body) != want {
+		t.Errorf("the request: compact %t, format %v, body\n%s\nwant\n%s", call.Compact, call.Format, call.Body, want)
 	}
 }
 
@@ -110,12 +122,36 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 	}
 }
 
+// TestACompactReplyThatNamesNoUsageIsEstimated: what a reply does not report is estimated, not waived and not charged
+// as nothing: the input by the bound of the first sampling, marked as not reported, and the output at nothing, since a
+// whole reply says nothing of what it generated (docs/domains/billing.md「用量来源与暂估」).
+func TestACompactReplyThatNamesNoUsageIsEstimated(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		const noUsage = `{"object":"response.compaction","output":[]}`
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(noUsage)}
+		h.run()
+		if h.w.status != http.StatusOK || h.w.body() != noUsage {
+			t.Fatalf("status %d:\n%s", h.w.status, h.w.body())
+		}
+		bound, _ := billing.InputBound(routing.DemandOf(&h.call.Request), h.call.Plan.Entries[0].Limits)
+		u := h.ended().outcome.Attempts[0].Segments[0]
+		if bound <= 0 || u.Usage.Count(catalog.ItemInput) != bound || u.Reported.Has(catalog.ItemInput) {
+			t.Errorf("the input is %d (reported %t), want the bound %d estimated", u.Usage.Count(catalog.ItemInput),
+				u.Reported.Has(catalog.ItemInput), bound)
+		}
+		if u.Usage.Count(catalog.ItemOutput) != 0 {
+			t.Errorf("the output is %d, want nothing a whole reply cannot tell", u.Usage.Count(catalog.ItemOutput))
+		}
+	})
+}
+
 // TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer: the compact endpoint compacts a whole conversation, so its headers
 // are waited for ten minutes rather than one (docs/domains/gateway.md「路径与格式」).
 func TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{late(11*time.Minute, wholeAnswer(http.StatusOK, compacted))}
+		h.up.eps[uuidOf(ep(1))].script = []scripted{late(11*time.Minute, wholeAnswer(compacted))}
 		h.run()
 		if got := h.elapsed(); got != h.cfg.CompactHeaderWait {
 			t.Errorf("the call took %v, the compact wait is %v", got, h.cfg.CompactHeaderWait)
@@ -139,7 +175,7 @@ func TestACompactReplyThatBreaksIsTriedElsewhere(t *testing.T) {
 				Body:       io.NopCloser(body),
 			}, nil
 		}}
-		h.up.eps[uuidOf(ep(2))].script = []scripted{wholeAnswer(http.StatusOK, compacted)}
+		h.up.eps[uuidOf(ep(2))].script = []scripted{wholeAnswer(compacted)}
 		h.run()
 		if h.w.status != http.StatusOK || h.w.body() != compacted {
 			t.Fatalf("status %d:\n%s", h.w.status, h.w.body())
@@ -182,4 +218,88 @@ func TestACompactReplyHoldsAtMostTheCap(t *testing.T) {
 			t.Fatalf("%s: %d bytes are left of the budget", c.name, got)
 		}
 	}
+}
+
+// TestACompactReplyTooLargeForTheNodeIsNotTriedElsewhere: the reply does not fit the node's budget, which no other
+// endpoint can cure, so the call is answered with the node's error and no other entry is tried (README.md「Relay 的
+// 所有权」).
+func TestACompactReplyTooLargeForTheNodeIsNotTriedElsewhere(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		const budget = 1 << 20
+		h := newHarness(t, ctx, options{entries: 2, memory: budget, mutate: func(c *Call) { compact(t, c) }})
+		large := `{"object":"response.compaction","output":"` + strings.Repeat("x", 2*budget) + `"}`
+		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(large)}
+		h.run()
+		body := h.w.body()
+		if h.w.status != http.StatusServiceUnavailable || !strings.Contains(body, `"error_type":"overloaded"`) {
+			t.Fatalf("status %d:\n%s", h.w.status, body)
+		}
+		if h.up.endpoint(2).sends != 0 {
+			t.Error("another entry was tried for a reply too large for the node")
+		}
+		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.FailedBeforeCommit {
+			t.Errorf("attempts %+v", a)
+		}
+	})
+}
+
+// goneAtEOF cancels the client when its reply ends, as one that leaves as the last byte arrives.
+type goneAtEOF struct {
+	r      io.Reader
+	cancel context.CancelFunc
+}
+
+func (g *goneAtEOF) Read(p []byte) (int, error) {
+	n, err := g.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		g.cancel()
+	}
+	return n, err
+}
+
+// TestACompactReplyReadForAClientThatLeft: the reply was read to its end for what it says it used, but nothing of it
+// reaches a client that has gone: the attempt is a failure before the commit point, and nothing is written
+// (docs/domains/gateway.md「用量与费用」).
+func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
+			body := &goneAtEOF{r: strings.NewReader(compacted), cancel: h.client}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(body)}, nil
+		}}
+		h.run()
+		if h.w.wrote() != 0 || h.w.status != 0 {
+			t.Errorf("a client that had gone was written to: %d writes, status %d", h.w.wrote(), h.w.status)
+		}
+		s := h.ended()
+		a := s.outcome.Attempts
+		if !s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishCancelled {
+			t.Errorf("ending %+v", s.outcome)
+		}
+		if a[0].Segments[0].Usage.Count(catalog.ItemInput) != 60 {
+			t.Errorf("the reply's usage was not booked: %+v", a[0].Segments[0])
+		}
+	})
+}
+
+// TestASlowClientGetsItsWholeReply: a whole reply goes out in chunks, each within its own write deadline, so a client
+// that reads slowly but keeps reading gets all of it, though the reply takes longer than one write deadline
+// (docs/domains/gateway.md「转发规则」).
+func TestASlowClientGetsItsWholeReply(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		reply := `{"object":"response.compaction","output":"` + strings.Repeat("x", 256<<10) + `"}`
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
+		h.w.rate = 16 << 10 // 16 KiB a second: 64 KiB takes 4s, the whole reply 16s
+		h.run()
+		if h.w.status != http.StatusOK || h.w.body() != reply {
+			t.Fatalf("status %d, %d of %d bytes:\n%s", h.w.status, len(h.w.body()), len(reply), h.w.body())
+		}
+		if want := (len(reply) + respondChunk - 1) / respondChunk; h.w.wrote() != want {
+			t.Errorf("%d writes for a reply of %d bytes, want %d chunks", h.w.wrote(), len(reply), want)
+		}
+		if h.elapsed() <= h.cfg.WriteTimeout {
+			t.Errorf("the reply took %v, no longer than one write deadline", h.elapsed())
+		}
+	})
 }
