@@ -51,6 +51,7 @@ const (
 // tolerate a repeat.
 type Queue struct {
 	db        *DB
+	scope     Scope // the queue's own table; jobs carry no tenant's rows
 	logger    *slog.Logger
 	workers   *river.Workers
 	periodic  []*river.PeriodicJob
@@ -58,12 +59,13 @@ type Queue struct {
 	client    atomic.Pointer[river.Client[pgx.Tx]]
 }
 
-// NewQueue makes a queue that does nothing until Start. meter reports the discarded jobs the queue finds; nil for none.
-func (db *DB) NewQueue(logger *slog.Logger, meter metric.Meter) *Queue {
+// NewQueue makes a queue that does nothing until Start. scope is the platform scope, which only cmd/ builds; meter
+// reports the discarded jobs the queue finds, nil for none.
+func (db *DB) NewQueue(logger *slog.Logger, scope Scope, meter metric.Meter) *Queue {
 	if meter == nil {
 		meter = noop.NewMeterProvider().Meter("pg")
 	}
-	q := &Queue{db: db, logger: logger, workers: river.NewWorkers(), discarded: newDiscardedCounter(meter)}
+	q := &Queue{db: db, scope: scope, logger: logger, workers: river.NewWorkers(), discarded: newDiscardedCounter(meter)}
 	q.Every(discardedScanEvery, func() river.JobArgs { return discardedScanArgs{} })
 	return q
 }
@@ -165,8 +167,8 @@ func (q *Queue) workDiscardedScan(ctx context.Context, _ *river.Job[discardedSca
 // once). River's cleaner does not delete discarded jobs, so an unclaimed job older than the retention is still claimed
 // and reported before this cleanup removes it.
 func (q *Queue) scanDiscarded(ctx context.Context) error {
-	err := q.db.Tx(ctx, Scope{}, func(tx Tx) error {
-		rows, err := tx.Query(ctx, `INSERT INTO river.axiom_discarded_job (job_id, kind, attempt)
+	err := q.db.Tx(ctx, q.scope, func(tx Tx) error {
+		rows, err := tx.Query(ctx, `INSERT INTO platform.discarded_jobs (job_id, kind, attempt)
 			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
 			ON CONFLICT (job_id) DO NOTHING
 			RETURNING job_id, kind, attempt`)
@@ -189,11 +191,11 @@ func (q *Queue) scanDiscarded(ctx context.Context) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM river.river_job j
 			WHERE j.state = 'discarded'
 				AND j.finalized_at < now() - make_interval(hours => $1)
-				AND EXISTS (SELECT FROM river.axiom_discarded_job s WHERE s.job_id = j.id)`,
+				AND EXISTS (SELECT FROM platform.discarded_jobs s WHERE s.job_id = j.id)`,
 			int32(discardedRetention.Hours())); err != nil {
 			return fmt.Errorf("delete reported discards: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM river.axiom_discarded_job s
+		if _, err := tx.Exec(ctx, `DELETE FROM platform.discarded_jobs s
 			WHERE NOT EXISTS (SELECT FROM river.river_job j WHERE j.id = s.job_id)`); err != nil {
 			return fmt.Errorf("delete claims whose job is gone: %w", err)
 		}

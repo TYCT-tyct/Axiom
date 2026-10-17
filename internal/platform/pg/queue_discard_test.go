@@ -149,7 +149,7 @@ func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 // newDiscardQueue makes a queue whose logs and counter the test can read.
 func newDiscardQueue(db *pg.DB, reader *sdkmetric.ManualReader, logs *lockedBuffer) *pg.Queue {
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	return db.NewQueue(logger, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+	return db.NewQueue(logger, platform, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 }
 
 // startDiscardQueue starts q and stops it when the test ends.

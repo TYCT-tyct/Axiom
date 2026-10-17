@@ -46,7 +46,7 @@ func startQueue(t *testing.T) (*pg.DB, *pg.Queue, chan int) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	q := db.NewQueue(slog.New(slog.DiscardHandler), nil)
+	q := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
 	worker := &pinger{ran: make(chan int, 10)}
 	river.AddWorker(q.Workers(), worker)
 	if err := q.Start(t.Context()); err != nil {
@@ -177,7 +177,7 @@ func TestAJobCannotBeEnqueuedBeforeTheQueueStarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	q := db.NewQueue(slog.New(slog.DiscardHandler), nil)
+	q := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		_, err := q.InsertManyTx(t.Context(), tx, []river.InsertManyParams{{Args: ping{N: 1}}})
 		return err
@@ -247,7 +247,7 @@ func runningHeldJob(t *testing.T) (q *pg.Queue, h *holder, endNode context.Cance
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	q = db.NewQueue(slog.New(slog.DiscardHandler), nil)
+	q = db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
 	h = &holder{started: make(chan struct{}, 1), release: make(chan struct{}), ended: make(chan error, 1)}
 	river.AddWorker(q.Workers(), h)
 	ctx, endNode := context.WithCancel(t.Context())
