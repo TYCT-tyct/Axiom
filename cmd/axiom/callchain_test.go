@@ -176,11 +176,15 @@ func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord 
 		IP: netip.MustParseAddr("203.0.113.9"), ClientApp: "claude-code", Class: "chat", Language: "en",
 		UsedTools: true, Model: "claude-opus", Route: route,
 		Attempts: []observability.AttemptRecord{
-			{Seq: 1, Endpoint: c.first, Supplier: f.key, SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
-				ErrorKind: "rate_limited", StartedAt: started, FinishedAt: started.Add(100 * time.Millisecond)},
-			{Seq: 2, Endpoint: c.second, Supplier: f.site, SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
+			{
+				Seq: 1, Endpoint: c.first, Supplier: f.key, SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
+				ErrorKind: "rate_limited", StartedAt: started, FinishedAt: started.Add(100 * time.Millisecond),
+			},
+			{
+				Seq: 2, Endpoint: c.second, Supplier: f.site, SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
 				StartedAt: started.Add(200 * time.Millisecond), FinishedAt: started.Add(900 * time.Millisecond),
-				FirstToken: 300 * time.Millisecond},
+				FirstToken: 300 * time.Millisecond,
+			},
 		},
 		Usage:       map[catalog.Item]int64{catalog.ItemInput: 50, catalog.ItemOutput: 10},
 		ServiceTier: catalog.ServiceTierStandard, PriceNano: c.charged, CostNano: 12, Currency: f.currency,

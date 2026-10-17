@@ -60,7 +60,7 @@ func LedgerOf(ctx context.Context, tx pg.Tx, requestID uuid.UUID) ([]LedgerTrans
 		}
 		lines := make([]LedgerEntry, len(entries))
 		for j, e := range entries {
-			lines[j] = LedgerEntry{Book: e.Book, Amount: e.Amount}
+			lines[j] = LedgerEntry(e)
 		}
 		transactions[i] = LedgerTransaction{
 			ID: id, Kind: r.Kind, AttemptSeq: r.AttemptSeq, Revision: r.Revision, CreatedAt: r.CreatedAt,

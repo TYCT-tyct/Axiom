@@ -110,7 +110,7 @@ func traceUsage(s string) (map[catalog.Item]int64, error) {
 }
 
 func itemByName(name string) (catalog.Item, bool) {
-	for item := catalog.Item(0); item < catalog.NumItems; item++ {
+	for item := range catalog.NumItems {
 		if item.String() == name {
 			return item, true
 		}
