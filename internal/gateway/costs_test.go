@@ -44,7 +44,7 @@ func TestAnAttemptCostsTheSuppliersPrice(t *testing.T) {
 	sample, _ := sample(t, protocol.Messages)
 	up := withCosts(r, r.billing, svc)
 	up.setReceipt(receipt)
-	up.setScript(costedScript(sample, false, false))
+	up.setScript(costedScript(sample, false))
 	a := r.funded(1e12)
 	r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
 	if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got != knownCost {
@@ -70,21 +70,20 @@ func TestTheWaiverCapStopsAtTheKnownCost(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		cap         int64
-		deliver     bool // the upstream sends content and the final usage before it breaks: the call was delivered
-		zeroOutput  bool // its final usage reports output 0, which proves the zero-output condition
+		delivered   bool // the upstream sends content and a final usage reporting output 0 before it breaks
 		wantCharged int64
 		wantCounted bool // the cap had room for the call's cost and counted it; past the cap it never does
 	}{
-		{"within the cap, the failed call is waived", knownCost, false, false, 0, true},
-		{"past the cap, the failed call is charged its sale price", knownCost - 1, false, false, saleForTheInput, false},
-		{"past the cap, a delivered zero-output finish still waives", knownCost - 1, true, true, 0, false},
+		{"within the cap, the failed call is waived", knownCost, false, 0, true},
+		{"past the cap, the failed call is charged its sale price", knownCost - 1, false, saleForTheInput, false},
+		{"past the cap, a delivered zero-output finish still waives", knownCost - 1, true, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, svc, receipt := costedRig(t, tc.cap)
 			sample, _ := sample(t, protocol.Messages)
 			up := withCosts(r, r.billing, svc)
 			up.setReceipt(receipt)
-			up.setScript(costedScript(sample, tc.deliver, tc.zeroOutput))
+			up.setScript(costedScript(sample, tc.delivered))
 			a := r.funded(1e12)
 			r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
 			if got := r.charged(r.lastCall().ID); got != tc.wantCharged {
@@ -198,29 +197,26 @@ func masterKey(t *testing.T) *secret.Keyring {
 }
 
 // supplierStart is the message_start of the fake upstream's stream: the input tokens the attempt is costed from.
-// Output is reported as 0 when zeroOutput, and left unreported otherwise, because a count never reported proves
-// nothing about a zero output (billing's zeroOutput reads it that way).
-func supplierStart(zeroOutput bool) string {
+// Output is reported as 0 when reported, and left out otherwise, because a count never reported proves nothing about a
+// zero output (billing's zeroOutput reads it that way).
+func supplierStart(reported bool) string {
 	usage := `{"input_tokens":100}`
-	if zeroOutput {
+	if reported {
 		usage = `{"input_tokens":100,"output_tokens":0}`
 	}
 	return "event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant",` +
 		`"model":"up","content":[],"stop_reason":null,"stop_sequence":null,"usage":` + usage + "}}\n\n"
 }
 
-// costedScript is the upstream's answer: it reports the input and starts the reply, sends content when the call is to
-// be delivered (which commits it) and the final usage event, and then ends without a message_stop, which the relay
-// reads as the upstream breaking off. The final event is what makes an output reported rather than estimated: a count
-// that never came finally is a lower bound, and billing does not take a lower bound for a reported zero.
-func costedScript(sample []string, deliver, zeroOutput bool) scripted {
-	data := supplierStart(zeroOutput) + events(sample, evBlock)
-	if deliver {
-		out := "15"
-		if zeroOutput {
-			out = "0"
-		}
-		data += events(sample, evHello) + strings.Replace(events(sample, evMsgDelta), `"output_tokens": 15`, `"output_tokens": `+out, 1)
+// costedScript is the upstream's answer: it reports the input and starts the reply, and a delivered call then sends
+// content (which commits it) and the final usage event reporting output 0. Either way the stream ends without a
+// message_stop, which the relay reads as the upstream breaking off. The final event is what makes an output reported
+// rather than estimated: a count that never came finally is a lower bound, and billing does not take a lower bound for
+// a reported zero.
+func costedScript(sample []string, delivered bool) scripted {
+	data := supplierStart(delivered) + events(sample, evBlock)
+	if delivered {
+		data += events(sample, evHello) + strings.Replace(events(sample, evMsgDelta), `"output_tokens": 15`, `"output_tokens": 0`, 1)
 	}
 	return serve(beat{data: data})
 }
