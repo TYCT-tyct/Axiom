@@ -202,9 +202,27 @@ var priceNumber = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]
 // has to be a whole number and at most 10¹⁸ (UnitPrice's limit). The digits and the power are checked to be within
 // those bounds before the big integer is made, so what an exponent such as 1e1000000 asks for is never computed.
 func perToken(number []byte) (platform.UnitPrice, bool) {
+	units, ok := readPrice(number)
+	if !ok {
+		return platform.UnitPrice{}, false
+	}
+	return units.price()
+}
+
+// priceUnits is a number within the bounds of a unit price: its significant decimal digits and the power of ten they
+// are multiplied by. Only readPrice makes one, so the big integer in price is reached only by a number whose digits
+// and exponent already fit, and a number beyond them costs no more than the string work of the check.
+type priceUnits struct {
+	digits string
+	shift  int
+}
+
+// readPrice reads a JSON number as the price units it asks for, or reports that it is not one. It is string work only:
+// a huge exponent or a long run of digits is refused here, before any big-integer arithmetic.
+func readPrice(number []byte) (priceUnits, bool) {
 	m := priceNumber.FindSubmatch(number)
 	if m == nil {
-		return platform.UnitPrice{}, false
+		return priceUnits{}, false
 	}
 	exp := 0
 	if len(m[3]) > 0 {
@@ -217,14 +235,22 @@ func perToken(number []byte) (platform.UnitPrice, bool) {
 		digits = trimmed
 	}
 	if digits == "" {
-		return platform.UnitPrice{}, true // the zero value is the price of nothing
+		return priceUnits{}, true // the zero value is the price of nothing, whatever the exponent says
 	}
 	shift := scale + 9
 	if len(digits) > 19 || shift < 0 || shift+len(digits) > 19 {
-		return platform.UnitPrice{}, false
+		return priceUnits{}, false
 	}
-	units, _ := new(big.Int).SetString(digits, 10)
-	units.Mul(units, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(shift)), nil))
+	return priceUnits{digits: digits, shift: shift}, true
+}
+
+// price is the unit price u stands for.
+func (u priceUnits) price() (platform.UnitPrice, bool) {
+	if u.digits == "" {
+		return platform.UnitPrice{}, true // the zero value is the price of nothing
+	}
+	units, _ := new(big.Int).SetString(u.digits, 10)
+	units.Mul(units, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(u.shift)), nil))
 	whole, frac := new(big.Int).QuoRem(units, big.NewInt(1e15), new(big.Int))
 	fraction := frac.String()
 	price, err := platform.ParseUnitPrice(whole.String() + "." + strings.Repeat("0", 15-len(fraction)) + fraction)

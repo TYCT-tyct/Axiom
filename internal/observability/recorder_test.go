@@ -154,13 +154,26 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A partial batch waits for its interval: with an interval this test cannot outlast, nothing is written before
+	// Close, which writes it.
 	s = &sink{}
-	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: 30 * time.Millisecond})
+	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: time.Hour})
 	one := calls(1)
 	enqueueAll(t, r, one)
 	if got, _ := s.stored(); len(got) != 0 {
 		t.Error("a partial batch was written before its interval")
 	}
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.stored(); !slices.Equal(got, ids(one)) {
+		t.Errorf("stored %v on Close, want %v", got, ids(one))
+	}
+
+	// ...and the interval writes it when it passes.
+	s = &sink{}
+	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: 30 * time.Millisecond})
+	enqueueAll(t, r, one)
 	eventually(t, "the interval to flush a partial batch", func() bool { got, _ := s.stored(); return len(got) == 1 })
 	if got := s.attemptsStored(); got != 2 {
 		t.Errorf("%d attempts written with the one call, want 2", got)
@@ -238,8 +251,10 @@ func TestCloseDrainsTheQueue(t *testing.T) {
 func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	t.Parallel()
 	s := &sink{failing: 4}
+	// One batch of exactly the three records, so the four failures and the success are the same write: a short
+	// interval would let a loaded machine split them, and each write would then fail and retry on its own.
 	r := recorderOf(s, Config{
-		QueueSize: 10, BatchSize: 10, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+		QueueSize: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
 		RetryMax: 4 * time.Millisecond,
 	})
 	records := calls(3)
