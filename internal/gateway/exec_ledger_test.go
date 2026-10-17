@@ -72,6 +72,12 @@ func (l *flakyLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Out
 func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 	r.t.Helper()
 	ledger.Billing = r.billing
+	return withCosts(r, ledger, fakeCosts{cost: 1000, known: true})
+}
+
+// withCosts is withExecutor with the executor's Costs given: a fixed answer, or the production suppliers service.
+func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
+	r.t.Helper()
 	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: newClientWriter(), flushed: make(chan struct{})}
 	close(up.flushed)
 	for _, e := range r.endpoints {
@@ -79,7 +85,7 @@ func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 	}
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
-		Ledger: ledger, Costs: fakeCosts{cost: 1000, known: true}, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		r.t.Fatal(err)

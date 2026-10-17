@@ -29,6 +29,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 const (
@@ -82,6 +83,8 @@ type rigOptions struct {
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 	segments  billing.Segments
+	suppliers bool  // the suppliers tables too, for a real suppliers service to price attempts
+	waiverCap int64 // what the account's waived calls may cost a day; billing's default when zero
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -111,7 +114,11 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	r.database = pgtest.New(t, accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module())
+	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module()}
+	if o.suppliers {
+		mods = append(mods, suppliers.Module())
+	}
+	r.database = pgtest.New(t, mods...)
 	var err error
 	dsn := r.database.App
 	if o.conns > 0 {
@@ -130,7 +137,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedRouting(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
-		Segments: o.segments,
+		Segments: o.segments, WaiverCap: o.waiverCap,
 	}, noSuppliers{}); err != nil {
 		t.Fatal(err)
 	}
