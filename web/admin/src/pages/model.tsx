@@ -151,7 +151,7 @@ function NamesPanel({ model }: { model: Model }) {
         <thead>
           <tr>
             <Th>{t("models.names.name")}</Th>
-            <Th>{t("models.names.visibility")}</Th>
+            <Th className="whitespace-nowrap">{t("models.names.visibility")}</Th>
           </tr>
         </thead>
         <tbody>

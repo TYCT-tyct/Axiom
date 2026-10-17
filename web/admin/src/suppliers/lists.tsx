@@ -150,7 +150,7 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
         cols={[
           [t("suppliers.credentials.key")],
           [t("suppliers.unbound.groupRef"), "hidden md:table-cell"],
-          [t("suppliers.col.status")],
+          [t("suppliers.col.status"), "whitespace-nowrap"],
         ]}
         action={onOpen !== undefined}
       />
@@ -165,7 +165,7 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
             <Td className="hidden max-w-48 truncate md:table-cell">
               {key.group_ref ? <Code>{key.group_ref}</Code> : "—"}
             </Td>
-            <Td>{t(`suppliers.unbound.state.${key.status}`)}</Td>
+            <Td className="whitespace-nowrap">{t(`suppliers.unbound.state.${key.status}`)}</Td>
             {onOpen ? (
               <Td className="whitespace-nowrap">
                 <Button size="sm" onClick={() => onOpen({ kind: "bind", key })}>
