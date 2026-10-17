@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,10 +58,69 @@ func probeModule(t *testing.T, test string) string {
 	return dir
 }
 
+// TestBenchmarksRunFixedIterations runs the go command: the benchmark command asks for a fixed count of iterations, and
+// every run of every benchmark reports that count, -count times over, so what a run pays once is spread over the same
+// count on both sides. With a duration instead the count follows the machine's speed (see the comment on benchtime).
+func TestBenchmarksRunFixedIterations(t *testing.T) {
+	count, fixed := strings.CutSuffix(benchtime, "x")
+	iterations, err := strconv.Atoi(count)
+	if !fixed || err != nil || iterations < 2 {
+		t.Fatalf("-benchtime %s is not a fixed count of at least two iterations", benchtime)
+	}
+	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n"+
+		"func BenchmarkIters(b *testing.B) {\n\tfor i := 0; i < b.N; i++ {\n\t\tsink = make([]byte, 8)\n\t}\n"+
+		"\tb.ReportMetric(float64(b.N), \"iters\")\n}\n")
+	run, err := benchmarks(t.Context(), dir, "the probe module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(slices.Repeat([]float64{float64(iterations)}, 6), metric(run, "iters")); diff != "" {
+		t.Errorf("iteration counts of the 6 runs (-want +got):\n%s", diff)
+	}
+}
+
+// TestBenchmarksQuietTheRuntime runs the go command: a benchmark reports the collector's target percentage and the
+// processors it runs on, -1 and 1 for no collection inside a run and no move to another processor's pools between runs,
+// and every run must see both, or one side's counts come out higher than the other's for the same code (see the comment
+// in benchmarks).
+func TestBenchmarksQuietTheRuntime(t *testing.T) {
+	dir := probeModule(t, "package probe\n\nimport (\n\t\"runtime\"\n\t\"runtime/debug\"\n\t\"testing\"\n)\n\n"+
+		"func BenchmarkRuntime(b *testing.B) {\n\tfor b.Loop() {\n\t}\n"+
+		"\twas := debug.SetGCPercent(100)\n\tdebug.SetGCPercent(was)\n"+
+		"\tb.ReportMetric(float64(was), \"gcpercent\")\n"+
+		"\tb.ReportMetric(float64(runtime.GOMAXPROCS(0)), \"processors\")\n}\n")
+	run, err := benchmarks(t.Context(), dir, "the probe module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct {
+		unit string
+		want float64
+	}{{"gcpercent", -1}, {"processors", 1}} {
+		if diff := cmp.Diff(slices.Repeat([]float64{m.want}, 6), metric(run, m.unit)); diff != "" {
+			t.Errorf("%s of the 6 runs (-want +got):\n%s", m.unit, diff)
+		}
+	}
+}
+
+// metric returns the numbers reported under unit, one per run of the benchmark.
+func metric(run measurements, unit string) []float64 {
+	var values []float64
+	fields := strings.Fields(string(run.text))
+	for i := 1; i < len(fields); i++ {
+		if fields[i] != unit {
+			continue
+		}
+		if n, err := strconv.ParseFloat(fields[i-1], 64); err == nil {
+			values = append(values, n)
+		}
+	}
+	return values
+}
+
 // TestBenchmarksSeeRealSkips runs the go command: a b.Skip() at the start is reported only as an event, and one after
 // the calibrating first run only as a result line with zero iterations.
 func TestBenchmarksSeeRealSkips(t *testing.T) {
-	t.Setenv("GOMAXPROCS", "2") // fixes the -2 suffix of the names; one CPU would print none
 	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n"+
 		"func BenchmarkKept(b *testing.B) {\n\tfor b.Loop() {\n\t\tsink = make([]byte, 8)\n\t}\n}\n\n"+
 		"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n\n"+
@@ -71,10 +131,10 @@ func TestBenchmarksSeeRealSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	skipped := slices.Compact(slices.Sorted(slices.Values(run.skipped)))
-	if diff := cmp.Diff([]string{"BenchmarkSkipped", "probe.Late-2 (no iterations)"}, skipped); diff != "" {
+	if diff := cmp.Diff([]string{"BenchmarkSkipped", "probe.Late (no iterations)"}, skipped); diff != "" {
 		t.Errorf("skipped (-want +got):\n%s", diff)
 	}
-	if samples := run.allocs["probe.Kept-2"]; len(samples) != 6 {
+	if samples := run.allocs["probe.Kept"]; len(samples) != 6 {
 		t.Errorf("BenchmarkKept: %d samples, want 6 (%v)", len(samples), run.allocs)
 	}
 }
