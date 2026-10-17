@@ -3,6 +3,7 @@ package billing
 import (
 	"bytes"
 	"errors"
+	"math"
 	"os"
 	"slices"
 	"testing"
@@ -126,6 +127,53 @@ func TestMeterOutput(t *testing.T) {
 	}
 }
 
+// TestMeterLeft: Left is what the approved segments still cover of the output, never below zero, and grows by the
+// segment an extension adds; once they cover the output limit nothing more can come.
+func TestMeterLeft(t *testing.T) {
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	for _, tc := range []struct {
+		bytes, left int64
+	}{{0, 8}, {3, 5}, {8, 0}} {
+		if got := m.Observe(Progress{ContentBytes: tc.bytes}).Left; got != tc.left {
+			t.Errorf("after %d bytes: Left %d, want %d", tc.bytes, got, tc.left)
+		}
+	}
+	m.Extended(2, nil) // asked for at 8 bytes: cover them and a segment, 16 tokens
+	if got := m.Observe(Progress{ContentBytes: 9}).Left; got != 7 {
+		t.Errorf("after the extension: Left %d, want 7", got)
+	}
+	limited := entry(t, true, 3)
+	limited.MaxOutput = 6
+	if got := meter(t, Demand{TextBytes: 80}, limited).Observe(Progress{ContentBytes: 6}).Left; got != math.MaxInt64 {
+		t.Errorf("at the output limit: Left %d, want no bound", got)
+	}
+}
+
+// TestMeterLeftNeedsAnExtension: whenever Left is 0 an extension is in flight (it was asked for in that step or before),
+// whatever the read, so the owner that waits for one at Left 0 has one to wait for.
+func TestMeterLeftNeedsAnExtension(t *testing.T) {
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	for bytes := range int64(60) {
+		if step := m.Observe(Progress{ContentBytes: bytes}); step.Left == 0 && !m.flying {
+			t.Fatalf("after %d bytes: Left 0 with no extension in flight, %+v", bytes, step)
+		}
+	}
+}
+
+// TestMeterFreeOutput: output that costs nothing spends no segment however much of it there is, so no step is Exhausted,
+// no extension is due, and Left is unbounded. Left of 0 means an extension is due or in flight, which the owner waits
+// for; with nothing to ask for, it would wait on none, for ever.
+func TestMeterFreeOutput(t *testing.T) {
+	free := entry(t, true, 3)
+	free.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"0"}}`)
+	m := meter(t, Demand{TextBytes: 80}, free)
+	for _, bytes := range []int64{0, 4, 8, 9, 100, 5000} {
+		if step := m.Observe(Progress{ContentBytes: bytes}); step != (MeterStep{Left: math.MaxInt64}) {
+			t.Errorf("after %d bytes: %+v, want to read on, unbounded", bytes, step)
+		}
+	}
+}
+
 // TestMeterLargeEvent: one read of 30 bytes passes the extension point and the whole segment at once, so the step
 // carries both; the request covers the 30 tokens already read plus a segment, so once approved the meter continues.
 func TestMeterLargeEvent(t *testing.T) {
@@ -234,7 +282,7 @@ func TestMeterSearches(t *testing.T) {
 
 // TestMeterFull: an entry reserved in full is never extended or truncated.
 func TestMeterFull(t *testing.T) {
-	if step := meter(t, Demand{TextBytes: 80}, entry(t, false, 3)).Observe(Progress{ContentBytes: 1e6, Searches: 50}); step != (MeterStep{}) {
+	if step := meter(t, Demand{TextBytes: 80}, entry(t, false, 3)).Observe(Progress{ContentBytes: 1e6, Searches: 50}); step != (MeterStep{Left: math.MaxInt64}) {
 		t.Errorf("Observe = %+v, want to continue", step)
 	}
 }

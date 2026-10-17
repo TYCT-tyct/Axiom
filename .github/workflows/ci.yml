@@ -5,8 +5,8 @@ name: ci
 on:
   pull_request:
     # edited: docs-impact reads the description. Every job reruns on an edit; build cannot be skipped instead, because
-    # a skipped required check counts as passed, and docs-impact cannot move to its own workflow, because a check
-    # must have one source. So keep description edits few: write it in full before asking for review.
+    # a skipped required check counts as passed. project-workflow 9f60686 lets docs-impact move to describe.yml so
+    # this file can drop edited; until that move lands, keep description edits few: write it in full before review.
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
