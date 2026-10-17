@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"slices"
 	"time"
 	"uuid"
@@ -17,6 +18,8 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 	"github.com/pressly/goose/v3/lock"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 //go:embed migrations/*.sql
@@ -219,6 +222,57 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	return nil
 }
 
+// queueGrants let the application work jobs: read and write the queue's tables and use its sequences and functions.
+const queueGrants = `
+GRANT USAGE ON SCHEMA ` + queueSchema + ` TO axiom_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + queueSchema + ` TO axiom_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + queueSchema + ` TO axiom_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ` + queueSchema + ` TO axiom_app;`
+
+// migrateQueue brings River's tables up to the version of the library, as axiom_owner, in one transaction that holds a
+// lock, so concurrent runs wait for each other. River's migrations are its own and are not goose files; the grants
+// repeat on every run, so a table a newer River adds is granted too.
+func migrateQueue(ctx context.Context, conn *pgx.Conn) error {
+	migrator, err := queueMigrator()
+	if err != nil {
+		return err
+	}
+	return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('axiom queue migrate')); SET LOCAL ROLE axiom_owner"); err != nil {
+			return err
+		}
+		// Migrate wants a pool of its own, with the role switched and without the lock this transaction holds. Every migration
+		// River has runs inside one transaction, which TestMigrateMakesTheQueueTables proves on each upgrade of River.
+		if _, err := migrator.MigrateTx(ctx, tx, rivermigrate.DirectionUp, nil); err != nil { //nolint:staticcheck // see above
+			return err
+		}
+		_, err := tx.Exec(ctx, queueGrants)
+		return err
+	})
+}
+
+// queueMigrator is River's migrator for the queue's schema. It works on a transaction given to it, so it holds no pool.
+func queueMigrator() (*rivermigrate.Migrator[pgx.Tx], error) {
+	return rivermigrate.New(riverpgxv5.New(nil), &rivermigrate.Config{Schema: queueSchema, Logger: slog.New(slog.DiscardHandler)})
+}
+
+// connectAdmin connects as the migration administrator within connectTimeout.
+func connectAdmin(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration) (*pgx.Conn, error) {
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	conn, err := pgx.ConnectConfig(connectCtx, config)
+	if err != nil {
+		return nil, fmt.Errorf("connect as the migration administrator: %w", err)
+	}
+	return conn, nil
+}
+
+func closeAdmin(ctx context.Context, conn *pgx.Conn) {
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancel()
+	_ = conn.Close(closeCtx) //nolint:errcheck // the transaction already reported the outcome
+}
+
 // up applies one module's pending migrations, holding goose's session lock.
 func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) error {
 	store, err := database.NewStore(database.DialectPostgres, versionTable(m.Name))
@@ -238,26 +292,21 @@ func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) er
 	return err
 }
 
-// prepare runs bootstrap and creates each module's schema for axiom_owner, which may not create schemas itself, in
-// one transaction on its own connection.
+// prepare runs bootstrap, creates each module's schema and the queue's for axiom_owner, which may not create schemas
+// itself, in one transaction on its own connection, and then migrates the queue on the same connection: one connection
+// more would be one more that a loaded machine may fail to make.
 func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
-	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-	conn, err := pgx.ConnectConfig(connectCtx, config)
-	cancel()
+	conn, err := connectAdmin(ctx, config, connectTimeout)
 	if err != nil {
 		return fmt.Errorf("connect as the migration administrator: %w", redactConnect(MigrateDatabaseURLVar, err))
 	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
-		defer cancel()
-		_ = conn.Close(closeCtx) //nolint:errcheck // the transaction already reported the outcome
-	}()
+	defer closeAdmin(ctx, conn)
 	if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, bootstrap); err != nil {
 			return err
 		}
-		for _, m := range modules {
-			schema := pgx.Identifier{m.Name}.Sanitize()
+		for _, name := range append([]string{queueSchema}, moduleNames(modules)...) {
+			schema := pgx.Identifier{name}.Sanitize()
 			if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema+" AUTHORIZATION axiom_owner"); err != nil {
 				return err
 			}
@@ -266,7 +315,18 @@ func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	}); err != nil {
 		return fmt.Errorf("prepare roles and schemas: %w", err)
 	}
+	if err := migrateQueue(ctx, conn); err != nil {
+		return fmt.Errorf("migrate the queue: %w", err)
+	}
 	return nil
+}
+
+func moduleNames(modules []Module) []string {
+	names := make([]string, len(modules))
+	for i, m := range modules {
+		names[i] = m.Name
+	}
+	return names
 }
 
 // latestVersion is the newest of a module's migrations.
