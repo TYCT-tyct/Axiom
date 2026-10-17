@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -47,7 +48,12 @@ type Billing struct {
 	config    Config
 	suppliers Suppliers
 	logger    *slog.Logger
+	beat      atomic.Int64 // unix nanoseconds of the last time the holder's expiry was known to be pushed out
 }
+
+// holderMargin is how much of the holder's TTL Alive keeps back: a write that starts inside it may find the holder
+// expired by the time it is fenced.
+const holderMargin = 5 * time.Second
 
 // ErrTerminated is the refusal of a write whose holder was reaped or expired, or of an extension of a reservation
 // that already ended. The call it belongs to must stop: cleanup owns its reservation now.
@@ -64,6 +70,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
 		logger: cmp.Or(config.Logger, slog.Default()),
 	}
+	registered := time.Now()
 	err := db.Tx(ctx, platform, func(tx pg.Tx) error {
 		if err := CheckFallbacks(ctx, tx); err != nil {
 			return err
@@ -76,6 +83,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 	if err != nil {
 		return nil, err
 	}
+	b.beat.Store(registered.UnixNano())
 	return b, nil
 }
 
@@ -89,7 +97,8 @@ func (b *Billing) alert(seen []UnknownItem) {
 
 // Heartbeat extends the holder's life by the TTL from now, by the database's clock.
 func (b *Billing) Heartbeat(ctx context.Context) error {
-	return b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
+	sent := time.Now() // before the write: the expiry it sets is at least this far out
+	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
 		n, err := queries.Heartbeat(ctx, tx, HeartbeatParams{ID: b.holder, TtlSeconds: b.config.HolderTTL.Seconds()})
 		if err != nil {
 			return fmt.Errorf("billing: heartbeat: %w", err)
@@ -99,6 +108,19 @@ func (b *Billing) Heartbeat(ctx context.Context) error {
 		}
 		return nil
 	})
+	if err == nil {
+		b.beat.Store(sent.UnixNano())
+	}
+	return err
+}
+
+// Alive reports, from memory, whether this process's holder can still be taken to be alive: the last successful
+// heartbeat, or the registration, is less than the TTL minus a margin ago. A call checks it before it starts an
+// attempt, so that a process cut off from the database stops spending money its reservations may no longer cover
+// (internal/gateway/README.md「尝试」). False is not a verdict that the holder was reaped: only a heartbeat finding
+// that says so (ErrReaped).
+func (b *Billing) Alive() bool {
+	return time.Now().UnixNano() < b.beat.Load()+int64(b.config.HolderTTL-holderMargin)
 }
 
 // Reap marks every holder that expired more than the grace ago as reaped and returns how many. Its FOR UPDATE waits

@@ -22,10 +22,17 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "serve":
-		// The first SIGINT or SIGTERM starts a graceful shutdown; stopping the notification then restores the default
-		// action, so a second signal ends the process at once.
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		context.AfterFunc(ctx, stop)
+		// The first SIGINT or SIGTERM starts a graceful shutdown. Stopping the notification before the shutdown begins
+		// restores the default action, so a signal that arrives after it ends the process at once instead of being
+		// swallowed by a channel whose context has already ended.
+		ctx, cancel := context.WithCancel(context.Background())
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-signals
+			signal.Stop(signals)
+			cancel()
+		}()
 		logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("version", version())
 		if err := serve(ctx, os.Environ(), logger); err != nil {
 			logger.Error("serve failed", "err", err)

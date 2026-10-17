@@ -43,11 +43,29 @@ const (
 	MigrateDatabaseURLVar = "AXIOM_MIGRATE_DATABASE_URL"
 )
 
+// PoolSize is how many connections the process keeps open at most (platform README「连接池」). It follows the gateway's
+// gate for database work rather than the machine's cores, so pgx's default does not decide it.
+const PoolSize = 64
+
+// errNotDatabaseURL is what both parse failures report: pgxpool parses the string again and then checks the pool_*
+// parameters, so a string pgx accepted can still fail there, and neither error may quote the string, which holds a
+// password.
+var errNotDatabaseURL = errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
+
 // Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
 func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
+	// pgxpool removes pool_max_conns from the config it parses, so ask pgx, which keeps the parameter, whether the
+	// connection string sizes the pool itself: a deployment that says so owns the number.
+	conn, err := pgx.ParseConfig(url)
+	if err != nil {
+		return nil, errNotDatabaseURL
+	}
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
+		return nil, errNotDatabaseURL
+	}
+	if _, set := conn.RuntimeParams["pool_max_conns"]; !set {
+		config.MaxConns = PoolSize
 	}
 	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not
 	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
@@ -68,6 +86,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 
 // Close waits for borrowed connections to come back and closes the pool.
 func (db *DB) Close() { db.pool.Close() }
+
+// MaxConns is the pool's ceiling: how many connections it may open at once, not how many are open now.
+func (db *DB) MaxConns() int32 { return db.pool.Stat().MaxConns() }
 
 // ErrNoRows is what a Row's Scan returns when its query found no row, for the modules that must tell "none" from a
 // failure; they may not import pgx.

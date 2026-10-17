@@ -33,9 +33,6 @@ func (s Schedule) unpriced(st ServiceTier, items ItemSet) (missing ItemSet) {
 	return missing
 }
 
-// Currency is the currency the schedule's prices are in.
-func (s Schedule) Currency() platform.Currency { return s.currency }
-
 // Fill returns the schedule with each of prices given to every offered service tier that has no base price of its own
 // for the item. A context tier only adds prices to its tier's base, so the filled item is priced in every band, and a
 // price the schedule sets anywhere is kept. Billing fills the known per-use items with the site's default prices

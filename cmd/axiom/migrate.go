@@ -20,11 +20,11 @@ const defaultMigrateTimeout = 30 * time.Minute
 func migrate(ctx context.Context, environ []string) error {
 	env := config.New(environ)
 	adminURL := env.Required(pg.MigrateDatabaseURLVar)
-	connectTimeout := env.Duration("AXIOM_MIGRATE_CONNECT_TIMEOUT", pg.DefaultConnectTimeout)
-	timeout := env.Duration("AXIOM_MIGRATE_TIMEOUT", defaultMigrateTimeout)
+	connectTimeout := env.Duration(migrateConnectTimeoutVar, pg.DefaultConnectTimeout)
+	timeout := env.Duration(migrateTimeoutVar, defaultMigrateTimeout)
 	err := env.Err()
 	if err == nil && connectTimeout >= timeout {
-		err = errors.New("AXIOM_MIGRATE_CONNECT_TIMEOUT: must be shorter than AXIOM_MIGRATE_TIMEOUT")
+		err = errors.New(migrateConnectTimeoutVar + ": must be shorter than " + migrateTimeoutVar)
 	}
 	if err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
@@ -33,7 +33,7 @@ func migrate(ctx context.Context, environ []string) error {
 	defer cancel()
 	err = pg.MigrateWith(ctx, adminURL, connectTimeout, modules()...)
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: the run did not finish within AXIOM_MIGRATE_TIMEOUT (%s)", err, timeout)
+		return fmt.Errorf("%w: the run did not finish within %s (%s)", err, migrateTimeoutVar, timeout)
 	}
 	return err
 }

@@ -125,6 +125,11 @@ type Endpoint struct {
 	// UnknownItem: billing met a usage field on the model it cannot price (billing.UnknownItems), so the model takes no
 	// new requests until an admin prices it (docs/domains/billing.md「价目表缺项」).
 	UnknownItem bool
+
+	// Target is how the endpoint is called: its name for the model and what the model's spec says of how it is asked.
+	// Its Format and MaxOutput are left out: Plan chooses the format a request is called in (callFormat), and the cap a
+	// request that sets none is sent with, which is the one it is quoted at (Entry.MaxOutput).
+	Target protocol.Target
 }
 
 // Override is what a request's provider parameter may change: filters only tighten a preset's, the price limits only

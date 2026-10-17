@@ -51,13 +51,16 @@ var (
 		"message":       func(s *messagesStream) error { return walk(&s.reader, s, messageFields) },
 		"usage":         (*messagesStream).usage,
 	}
+	// contentFields and blockFields carry the members the client is given that the upstream bills as output:
+	// thinking's signature and redacted_thinking's data count like its text (README.md「字节上界」).
 	contentFields = map[string]func(*messagesStream) error{
 		"text": (*messagesStream).text, "thinking": (*messagesStream).text, "partial_json": (*messagesStream).text,
-		"stop_reason": (*messagesStream).stopReason,
+		"signature": (*messagesStream).text, "stop_reason": (*messagesStream).stopReason,
 	}
 	blockFields = map[string]func(*messagesStream) error{
 		"text": (*messagesStream).text, "thinking": (*messagesStream).text, "type": (*messagesStream).blockType,
-		"name": (*messagesStream).toolName, "input": (*messagesStream).rawContent,
+		"name": (*messagesStream).toolName, "input": (*messagesStream).rawContent, "signature": (*messagesStream).text,
+		"data": (*messagesStream).text,
 	}
 	messageFields = map[string]func(*messagesStream) error{"usage": (*messagesStream).usage}
 )
