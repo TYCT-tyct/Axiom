@@ -175,7 +175,7 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 
 ### 被丢弃的校正作业
 
-供应商记录先于 `Settle` 到达、记录里又有映射不了的字段时，`Correct` 返回 `ErrNotRecorded`，作业重试到 `Settle` 或清理写入那次尝试；两者一直不写入，作业用尽重试，被 River 标为 `discarded`，不再运行。校正作业还没有接入 River，接入后它的失败由队列的通用告警报出来（见[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）：error 日志 `queue.job_discarded`，指标 `axiom.pg.queue.discarded_jobs` 的 `kind` 标签是它的任务类型。
+校正作业接入后，供应商记录先于 `Settle` 到达、记录里又有映射不了的字段时，`Correct` 返回 `ErrNotRecorded`，作业重试到 `Settle` 或清理写入那次尝试；两者一直不写入，作业用尽重试，被 River 标为 `discarded`，不再运行。它的失败由队列的通用告警报出来（见[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）：error 日志 `queue.job_discarded`，指标 `axiom.pg.queue.discarded_jobs` 的 `kind` 标签是它的任务类型。
 
 1. 按日志里的 `job_id` 在 `river.river_job` 读出任务的 `args` 和 `errors`，确认请求、尝试和记录版本。
 2. 在 `billing.corrections` 看那次尝试已生效的版本，在 `billing.reservations` 看请求状态，在 `suppliers.attempt_costs`、`suppliers.charge_records` 看尝试和扣费记录是否已经写入。
