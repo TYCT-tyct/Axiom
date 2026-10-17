@@ -237,7 +237,7 @@ func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	t.Parallel()
 	s := &sink{failing: 4}
 	r := recorderOf(s, Config{
-		QueueSize: 10, BatchSize: 10, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
+		QueueSize: 10, BatchSize: 10, FlushInterval: time.Hour, RetryBase: time.Millisecond,
 		RetryMax: 4 * time.Millisecond,
 	})
 	records := calls(3)
