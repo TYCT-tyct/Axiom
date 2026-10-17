@@ -113,32 +113,48 @@ func benchScan(b *testing.B, router *routing.Router, f protocol.Format, size int
 // and their collections are not counted as the scans'.
 func TestScanAllocationsDoNotGrow(t *testing.T) {
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
-		t.Run(fmt.Sprintf("format=%d", f), func(t *testing.T) {
-			router := scanRouter(t)
-			var funcs []alloctest.Function
-			for _, size := range pastThePrefix {
-				body := scanBody(f, size)
-				funcs = append(funcs,
-					alloctest.Function{Name: fmt.Sprintf("scan/%d", size), F: func() {
-						if err := scan(router, f, body); err != nil {
-							t.Fatal(err)
-						}
-					}},
-					alloctest.Function{Name: fmt.Sprintf("validate/%d", size), F: func() {
-						if err := jsonx.Validate(body); err != nil {
-							t.Fatal(err)
-						}
-					}},
-				)
-			}
-			got := alloctest.Measure(t, funcs...)
-			var extra []float64
-			for _, size := range pastThePrefix {
-				extra = append(extra, got[fmt.Sprintf("scan/%d", size)].Count-got[fmt.Sprintf("validate/%d", size)].Count)
-			}
-			if extra[0] != extra[len(extra)-1] {
-				t.Errorf("format %d: allocations beyond jsonx.Validate %v grow with the body sizes %v", f, extra, pastThePrefix)
-			}
-		})
+		t.Run(fmt.Sprintf("format=%d", f), func(t *testing.T) { checkScanAllocations(t, f) })
 	}
+}
+
+// checkScanAllocations holds the scans' allocations beyond jsonx.Validate constant across the body sizes.
+func checkScanAllocations(t *testing.T, f protocol.Format) {
+	t.Helper()
+	got := alloctest.Measure(t, scanAllocFunctions(t, scanRouter(t), f)...)
+	var extra []float64
+	for _, size := range pastThePrefix {
+		extra = append(extra, got[fmt.Sprintf("scan/%d", size)].Count-got[fmt.Sprintf("validate/%d", size)].Count)
+	}
+	if extra[0] != extra[len(extra)-1] {
+		t.Errorf("format %d: allocations beyond jsonx.Validate %v grow with the body sizes %v", f, extra, pastThePrefix)
+	}
+}
+
+// scanAllocFunctions measures the scans and the jsonx.Validate beside them for each body size.
+func scanAllocFunctions(t *testing.T, router *routing.Router, f protocol.Format) []alloctest.Function {
+	t.Helper()
+	var funcs []alloctest.Function
+	for _, size := range pastThePrefix {
+		body := scanBody(f, size)
+		funcs = append(funcs, scanFunction(t, router, f, size, body), validateFunction(t, size, body))
+	}
+	return funcs
+}
+
+// scanFunction is the three scans of one body.
+func scanFunction(t *testing.T, router *routing.Router, f protocol.Format, size int, body []byte) alloctest.Function {
+	return alloctest.Function{Name: fmt.Sprintf("scan/%d", size), F: func() {
+		if err := scan(router, f, body); err != nil {
+			t.Fatal(err)
+		}
+	}}
+}
+
+// validateFunction is jsonx.Validate on the same body, the scans' baseline.
+func validateFunction(t *testing.T, size int, body []byte) alloctest.Function {
+	return alloctest.Function{Name: fmt.Sprintf("validate/%d", size), F: func() {
+		if err := jsonx.Validate(body); err != nil {
+			t.Fatal(err)
+		}
+	}}
 }

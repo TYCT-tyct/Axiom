@@ -77,9 +77,20 @@ func Measure(t *testing.T, funcs ...Function) map[string]Allocs {
 	return results
 }
 
+// runPattern is the -test.run expression that selects exactly name. The go command splits the expression on "/" and
+// matches each element on its own, so every element is anchored: without the ends a test whose name begins with a
+// selected one would run in the child too.
+func runPattern(name string) string {
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		parts[i] = "^" + regexp.QuoteMeta(part) + "$"
+	}
+	return strings.Join(parts, "/")
+}
+
 // spawn starts the child that measures t's functions and returns its combined output.
 func spawn(t *testing.T) ([]byte, error) {
-	args := []string{"-test.count=1", "-test.timeout=10m", "-test.run=^" + regexp.QuoteMeta(t.Name()) + "$"}
+	args := []string{"-test.count=1", "-test.timeout=10m", "-test.run=" + runPattern(t.Name())}
 	cmd := exec.CommandContext(t.Context(), os.Args[0], args...) //nolint:gosec // this test binary, selected by its own name
 	cmd.Env = append(os.Environ(), childEnv+"="+t.Name())
 	out, err := cmd.CombinedOutput()
@@ -124,38 +135,59 @@ func report(t *testing.T, name string, mallocs, bytes uint64) {
 func parse(out []byte, funcs []Function) (map[string]Allocs, error) {
 	results := make(map[string]Allocs, len(funcs))
 	for line := range strings.Lines(string(out)) {
-		rest, ok := strings.CutPrefix(line, marker+"\t")
+		name, allocs, ok, err := parseLine(line)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			continue
-		}
-		name, rest, ok := strings.Cut(rest, "\t")
-		if !ok {
-			return nil, fmt.Errorf("malformed measurement %q", line)
-		}
-		count, rest, ok := strings.Cut(rest, "\t")
-		if !ok {
-			return nil, fmt.Errorf("malformed measurement %q", line)
-		}
-		mallocs, err := strconv.ParseUint(count, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("malformed allocation count in %q: %w", line, err)
-		}
-		bytes, err := strconv.ParseUint(strings.TrimSuffix(rest, "\n"), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("malformed allocation bytes in %q: %w", line, err)
 		}
 		if _, ok := results[name]; ok {
 			return nil, fmt.Errorf("the child reported %q twice", name)
 		}
-		results[name] = Allocs{Count: float64(mallocs), Bytes: float64(bytes)}
+		results[name] = allocs
 	}
+	if err := checkResults(results, funcs); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// parseLine reads one line of the child's output; ok is false for a line that is not a measurement.
+func parseLine(line string) (name string, allocs Allocs, ok bool, err error) {
+	rest, found := strings.CutPrefix(line, marker+"\t")
+	if !found {
+		return "", Allocs{}, false, nil
+	}
+	name, rest, found = strings.Cut(rest, "\t")
+	if !found {
+		return "", Allocs{}, true, fmt.Errorf("malformed measurement %q", line)
+	}
+	count, rest, found := strings.Cut(rest, "\t")
+	if !found {
+		return "", Allocs{}, true, fmt.Errorf("malformed measurement %q", line)
+	}
+	mallocs, err := strconv.ParseUint(count, 10, 64)
+	if err != nil {
+		return "", Allocs{}, true, fmt.Errorf("malformed allocation count in %q: %w", line, err)
+	}
+	bytes, err := strconv.ParseUint(strings.TrimSuffix(rest, "\n"), 10, 64)
+	if err != nil {
+		return "", Allocs{}, true, fmt.Errorf("malformed allocation bytes in %q: %w", line, err)
+	}
+	return name, Allocs{Count: float64(mallocs), Bytes: float64(bytes)}, true, nil
+}
+
+// checkResults reports the first function the child did not measure, or measurements it reported beyond those asked
+// for.
+func checkResults(results map[string]Allocs, funcs []Function) error {
 	for _, f := range funcs {
 		if _, ok := results[f.Name]; !ok {
-			return nil, fmt.Errorf("the child did not report %q", f.Name)
+			return fmt.Errorf("the child did not report %q", f.Name)
 		}
 	}
 	if len(results) != len(funcs) {
-		return nil, fmt.Errorf("the child reported %d measurements, want %d", len(results), len(funcs))
+		return fmt.Errorf("the child reported %d measurements, want %d", len(results), len(funcs))
 	}
-	return results, nil
+	return nil
 }

@@ -194,33 +194,41 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 // goroutine of this test binary adds to the process's count: a million-digit integer would be hundreds of kilobytes.
 func TestPriceParsingIsBounded(t *testing.T) {
 	huge := []string{"1e1000000", "1e-1000000", "1e999", "1e-999", "0.1e999999999"}
-	t.Run("bounds", func(t *testing.T) {
-		for _, number := range huge {
-			if _, ok := readPrice([]byte(number)); ok {
-				t.Errorf("%s passed the bound check", number)
-			}
-			if _, ok := perToken([]byte(number)); ok {
-				t.Errorf("%s was accepted", number)
-			}
+	t.Run("bounds", func(t *testing.T) { checkPriceBounds(t, huge) })
+	t.Run("allocations", func(t *testing.T) { checkPriceAllocations(t, huge) })
+}
+
+// checkPriceBounds confirms that the huge exponents are refused by the bound check before any big integer is made.
+func checkPriceBounds(t *testing.T, huge []string) {
+	t.Helper()
+	for _, number := range huge {
+		if _, ok := readPrice([]byte(number)); ok {
+			t.Errorf("%s passed the bound check", number)
 		}
-		for _, number := range []string{"1e3", "0e999", "0", "0.0000015"} {
-			if _, ok := readPrice([]byte(number)); !ok {
-				t.Errorf("%s was refused by the bound check", number)
-			}
+		if _, ok := perToken([]byte(number)); ok {
+			t.Errorf("%s was accepted", number)
 		}
-	})
-	t.Run("allocations", func(t *testing.T) {
-		var funcs []alloctest.Function
-		for _, number := range huge {
-			funcs = append(funcs, alloctest.Function{Name: number, F: func() { perToken([]byte(number)) }})
+	}
+	for _, number := range []string{"1e3", "0e999", "0", "0.0000015"} {
+		if _, ok := readPrice([]byte(number)); !ok {
+			t.Errorf("%s was refused by the bound check", number)
 		}
-		got := alloctest.Measure(t, funcs...)
-		for _, number := range huge {
-			if got[number].Bytes > 4<<10 {
-				t.Errorf("%s: %v bytes allocated, want a few hundred", number, got[number].Bytes)
-			}
+	}
+}
+
+// checkPriceAllocations holds each refused price to the bytes a short parse allocates.
+func checkPriceAllocations(t *testing.T, huge []string) {
+	t.Helper()
+	var funcs []alloctest.Function
+	for _, number := range huge {
+		funcs = append(funcs, alloctest.Function{Name: number, F: func() { perToken([]byte(number)) }})
+	}
+	got := alloctest.Measure(t, funcs...)
+	for _, number := range huge {
+		if got[number].Bytes > 4<<10 {
+			t.Errorf("%s: %v bytes allocated, want a few hundred", number, got[number].Bytes)
 		}
-	})
+	}
 }
 
 // TestSortRanksAsAsked: sort throughput ranks by throughput, price by price, and latency is refused, not served as
