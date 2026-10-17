@@ -391,7 +391,8 @@ func TestTheCompactPath(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for _, prefix := range []string{"/v1", "/api/v1"} {
-		resp, body := r.do(http.MethodPost, prefix+"/responses/compact", a.key, strings.NewReader(`{"model":"acme/beta","input":"hi"}`))
+		resp, body := r.do(http.MethodPost, prefix+"/responses/compact", a.key,
+			strings.NewReader(`{"model":"acme/beta","service_tier":"default","input":"hi"}`))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s: %d %s", prefix, resp.StatusCode, body)
 		}
@@ -400,7 +401,8 @@ func TestTheCompactPath(t *testing.T) {
 			t.Errorf("%s: compact %t, format %v", prefix, c.Compact, c.Format)
 		}
 	}
-	resp, body := r.do(http.MethodPost, "/v1/responses/compact", a.key, strings.NewReader(`{"model":"acme/beta","input":"hi","stream":true}`))
+	resp, body := r.do(http.MethodPost, "/v1/responses/compact", a.key,
+		strings.NewReader(`{"model":"acme/beta","service_tier":"default","input":"hi","stream":true}`))
 	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 		t.Errorf("a stream asked for there: %d %s", resp.StatusCode, body)
 	}
