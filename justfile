@@ -105,7 +105,8 @@ up: web-embed
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
-# Stop everything; `just down -v` also deletes the local database. By project name, so it works without deploy/.env.
+# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name, so it
+# works without deploy/.env.
 down *flags:
     docker compose --project-name axiom down {{ flags }}
 
