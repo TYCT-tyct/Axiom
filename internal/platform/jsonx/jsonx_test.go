@@ -202,7 +202,18 @@ func TestValidatorKeeps(t *testing.T) {
 	}
 }
 
-// retainedBy is the heap a Validator holds after validating docs in turn.
+// heapGrowth is the heap that grew from before to after. HeapAlloc is the whole process heap, so another allocation
+// freed between the two readings can make the second smaller: a shrinking heap grew by nothing, where subtracting the
+// two unsigned readings would wrap into a huge number.
+func heapGrowth(before, after uint64) uint64 {
+	if after <= before {
+		return 0
+	}
+	return after - before
+}
+
+// retainedBy estimates the heap a Validator holds after validating docs in turn, as the growth of the process heap: it
+// is an estimate, because other heap activity during the run adds to it or hides part of it.
 func retainedBy(t *testing.T, docs []string) uint64 {
 	t.Helper()
 	var v Validator
@@ -220,8 +231,24 @@ func retainedBy(t *testing.T, docs []string) uint64 {
 	runtime.ReadMemStats(&after)
 	runtime.KeepAlive(&v)
 	runtime.KeepAlive(docs)
-	// The documents are alive in both readings, so the difference cannot wrap.
-	return after.HeapAlloc - before.HeapAlloc
+	return heapGrowth(before.HeapAlloc, after.HeapAlloc)
+}
+
+// TestHeapGrowth: a heap that shrank between the readings grew by nothing, so it cannot fail a retention test.
+func TestHeapGrowth(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after uint64
+		want          uint64
+	}{
+		{"grew", 1 << 20, 3 << 20, 2 << 20},
+		{"unchanged", 1 << 20, 1 << 20, 0},
+		{"shrank", 3 << 20, 1 << 20, 0},
+	} {
+		if got := heapGrowth(tc.before, tc.after); got != tc.want {
+			t.Errorf("%s: heapGrowth(%d, %d) = %d, want %d", tc.name, tc.before, tc.after, got, tc.want)
+		}
+	}
 }
 
 // TestValidatorRetains: what a Validator holds after documents of any shape stays small. A decoder keeps a table of
