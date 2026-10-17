@@ -1,7 +1,10 @@
 // Command benchgate runs the benchmarks at a base commit and in the working tree, and fails if a benchmark allocates
-// more per operation, was skipped, or if no measurement can be compared any more. Allocations per operation are stable
-// from run to run, up to noise that only adds, so the smallest of the runs is compared; time and bytes are noisy on
-// shared CI machines, so they are only reported through benchstat (docs/performance.md「怎么验证」).
+// more per operation, was skipped, or if no measurement can be compared any more. Every run of every benchmark runs the
+// same fixed number of iterations on both sides, with the garbage collector off and on one processor, so what a run pays
+// once — refilling the pools the collection before it emptied — divides by the same count in both and cancels;
+// allocations per operation are then stable from run to run, up to noise that only adds, so the smallest of the runs is
+// compared. Time and bytes are noisy on shared CI machines, so they are only reported through benchstat
+// (docs/performance.md「怎么验证」).
 //
 // The go command reports in its JSON form, so skipped benchmarks arrive as events rather than as text that only verbose
 // mode prints, and the benchmark lines are read with golang.org/x/perf/benchfmt, the reader benchstat itself uses.
@@ -33,7 +36,19 @@ import (
 
 const allocsUnit = "allocs/op"
 
-var bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", "100ms", "./..."}
+// benchtime makes every run of every benchmark run the same fixed count of iterations, and the base commit and the
+// working tree run it alike. allocs/op is the allocations of a run divided by the iterations it ran, so what a run
+// allocates once per run — the testing package collects the garbage of the previous run before each run, and the first
+// iteration of the next one then refills the pools it emptied — is spread over the same count on both sides and cancels
+// out. With a duration instead (-benchtime 100ms, as benchmarks run by hand) the count follows the machine's speed: the
+// slowest benchmarks here (Aggregate and Relay of 64-KiB deltas) manage two or three iterations per run on the loaded CI
+// server, so the same code reads one to six allocations per operation higher than a longer run reads it, and the two
+// sides are measured minutes apart, under different load: a pull request that touched no benchmarked code failed on
+// that difference (#150, #157, #158). Twenty iterations keep the slowest benchmark near half a second per run and the
+// whole gate as short as the 100 ms it replaced.
+const benchtime = "20x"
+
+var bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", benchtime, "./..."}
 
 func main() {
 	if len(os.Args) != 3 {
@@ -138,9 +153,20 @@ func sameDir(a, b string) bool {
 	return a == b
 }
 
-// benchmarks runs every benchmark in dir; the go command's stderr goes straight to ours.
+// benchmarks runs every benchmark in dir at the fixed iteration count, with the garbage collector off and on one
+// processor; the go command's stderr goes straight to ours.
 func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 	cmd := exec.CommandContext(ctx, "go", bench...)
+	// A collection empties the pools the code keeps its buffers in, and the run then allocates them again: that cost is
+	// per operation, not per run, so more iterations do not spread it. Aggregate with 64-KiB deltas read 582 to 585
+	// allocs/op at five to fifty iterations with the collector on, and 575 with it off; Relay's benchmark turns it off
+	// for the same reason. One processor keeps a benchmark's goroutine on the same pools from run to run; with more it
+	// moves between them, finds the other processor's pools empty after the collection the testing package runs before
+	// each run, and allocates them again — Convert with four turns read 430 in two of five runs with eight processors and
+	// in none of five with one. What is left is one re-warming per run, which divides by the fixed iteration count
+	// (benchtime) and cancels between the base commit and the working tree. The heap grows until a package's run ends:
+	// protocol, the heaviest, peaks near 530 MiB at twenty iterations.
+	cmd.Env = append(os.Environ(), "GOGC=off", "GOMAXPROCS=1")
 	cmd.Dir, cmd.Stderr = dir, os.Stderr
 	out, runErr := cmd.Output()
 	run, parseErr := parse(bytes.NewReader(out))
@@ -260,10 +286,11 @@ func gate(base, head measurements) (problems, removed []string) {
 }
 
 // tolerance is how far above the base count a benchmark's count may be: a thousandth of it, rounded down, so counts
-// below a thousand are exact. allocs/op is the total allocations over the iterations, rounded down, and a run of few
-// iterations spreads the runtime's occasional allocations of its own into one more per iteration, in every run alike,
-// so the minimum cannot remove it. A relay or conversion that allocates once more per event rises by tens to hundreds,
-// far above a thousandth of a count of thousands.
+// below a thousand are exact. A run still pays for the one collection the testing package makes before it, and the total
+// divided by the iterations can then land one or two higher on one side than on the other, where the two minima fall on
+// either side of a multiple of the iteration count; the minimum of six runs cannot remove what every run pays. A relay
+// or conversion that allocates once more per event rises by tens to hundreds, far above a thousandth of a count of
+// thousands.
 func tolerance(base float64) float64 { return math.Floor(base / 1000) }
 
 // lowest is the allocation count of a benchmark: the runtime only ever adds allocations of its own to a run (after
