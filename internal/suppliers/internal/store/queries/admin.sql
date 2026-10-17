@@ -33,11 +33,11 @@ FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
--- name: LockSupplier :many
+-- name: LockSupplierForAdmin :many
 -- The supplier's turn: its changes are applied one after the other, each against the state the one before left.
 SELECT id, kind, status, config_gen FROM suppliers.suppliers WHERE id = @id FOR UPDATE;
 
--- name: SetSupplierStatus :exec
+-- name: SetSupplierStatusForAdmin :exec
 -- A change of status raises the configuration generation, so a round of the sync that began before is discarded.
 UPDATE suppliers.suppliers SET status = @status, status_reason = sqlc.narg(status_reason), config_gen = config_gen + 1
 WHERE id = @id;

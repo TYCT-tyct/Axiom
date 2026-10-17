@@ -10,7 +10,9 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
 )
 
@@ -66,12 +68,17 @@ func (a adminAPI) GetVersion(context.Context, adminapi.GetVersionRequestObject) 
 	}, nil
 }
 
-// adminRoutes are the admin listener's routes: the admin's contract behind the guard (apiRoutes).
-func adminRoutes(api adminapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
-	return apiRoutes(g, logger, func(m mounting) http.Handler {
+// adminRoutes are the admin listener's routes: the admin's contract behind the guard (apiRoutes), and the admin pages
+// for every path the API does not claim.
+func adminRoutes(api adminapi.StrictServerInterface, g *guard, frontend *webui.Frontend, logger *slog.Logger) http.Handler {
+	apiHandler := apiRoutes(g, logger, func(m mounting) http.Handler {
 		admin := adminapi.NewStrictHandlerWithOptions(api, nil, adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc: invalidRequest, ResponseErrorHandlerFunc: m.handlerFailed,
 		})
 		return adminapi.HandlerWithOptions(admin, adminapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
+	routes := http.NewServeMux()
+	routes.Handle("/api/", httpserver.Compress(apiHandler))
+	routes.Handle("/", frontend.Admin())
+	return frontend.Secured(routes)
 }

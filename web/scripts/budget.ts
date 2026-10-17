@@ -1,10 +1,10 @@
 // Fails when a built app loads more than its budget (docs/frontend.md「前端性能指标」): the script the first screen
 // loads, the script each further page adds, and the font Latin text and digits need. Scripts count at their brotli
-// size, the transfer size; fonts are already compressed. Run after `pnpm build`.
+// size, the transfer size (scripts/compress.ts, as the program sends them); fonts are already compressed. Run after `pnpm build`.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { brotliCompressSync, constants } from "node:zlib";
+import { brotli } from "./compress.ts";
 
 const kB = 1000;
 // firstPage names the lazily loaded page the entry address opens (its manifest key): the first screen loads it too.
@@ -19,9 +19,9 @@ const latinFont = /-latin-wght-normal-[\w-]+\.woff2$/;
 
 type Chunk = { file: string; isEntry?: boolean; isDynamicEntry?: boolean; imports?: string[] };
 
+// The size the program sends: the same compression embed.ts ships.
 function brotliSize(path: string) {
-  const compressed = brotliCompressSync(readFileSync(path), { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } });
-  return compressed.length;
+  return brotli(readFileSync(path)).length;
 }
 
 // closure returns the chunk keys a chunk loads before it runs: itself and its static imports, recursively.

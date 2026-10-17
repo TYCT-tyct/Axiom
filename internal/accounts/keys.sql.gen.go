@@ -13,30 +13,6 @@ import (
 	"uuid"
 )
 
-const accountWorkspaces = `-- name: AccountWorkspaces :many
-SELECT id FROM accounts.workspaces WHERE account_id = $1 ORDER BY id
-`
-
-func (q *Queries) AccountWorkspaces(ctx context.Context, db DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, accountWorkspaces, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const admitKey = `-- name: AdmitKey :many
 SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id
 FROM accounts.api_keys k
@@ -231,6 +207,31 @@ func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRo
 	return items, nil
 }
 
+const getKeyInfo = `-- name: GetKeyInfo :one
+SELECT name, prefix, last4, expires_at FROM accounts.api_keys WHERE id = $1 AND deleted_at IS NULL
+`
+
+type GetKeyInfoRow struct {
+	Name      string
+	Prefix    string
+	Last4     string
+	ExpiresAt *time.Time
+}
+
+// What a key shows of itself: its name, the text a client may see (the prefix and the last four characters), and when
+// it expires. Read in the key's account scope, so another account's key is not found.
+func (q *Queries) GetKeyInfo(ctx context.Context, db DBTX, id uuid.UUID) (GetKeyInfoRow, error) {
+	row := db.QueryRow(ctx, getKeyInfo, id)
+	var i GetKeyInfoRow
+	err := row.Scan(
+		&i.Name,
+		&i.Prefix,
+		&i.Last4,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const insertKey = `-- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
     secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
@@ -308,6 +309,31 @@ func (q *Queries) KeyTenant(ctx context.Context, db DBTX, arg KeyTenantParams) (
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAccountWorkspaces = `-- name: ListAccountWorkspaces :many
+SELECT id FROM accounts.workspaces WHERE account_id = $1 ORDER BY id
+`
+
+// Every workspace of the scope's account, deleted ones included: what billing summed once belongs to them still.
+func (q *Queries) ListAccountWorkspaces(ctx context.Context, db DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, listAccountWorkspaces, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

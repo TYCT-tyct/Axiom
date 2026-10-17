@@ -28,31 +28,77 @@ var (
 	errTrailing = errors.New("jsonx: data after the JSON value")
 )
 
+// keepMax and keepDepth bound the documents a Validator keeps its decoder after. A decoder keeps a table of the member
+// names for every nesting level it has seen, and clears one only when a later document reaches that level again, so
+// what it holds is the sum over levels of what some earlier document put there: not bounded by the size of the last
+// document, nor by the size of any one document alone (documents of falling depth, each with many members at its
+// deepest level, leave a table at every level behind). Keeping the decoder only after documents of at most keepMax
+// bytes and keepDepth levels bounds that sum by keepDepth tables of at most keepMax bytes' worth of names: about
+// 120 KiB for documents made to fill it (TestValidatorRetains), little for real events. They cover the events
+// streams are made of; any other document, whose cost dwarfs a decoder's, gets a decoder of its own.
+const (
+	keepMax   = 2 << 10
+	keepDepth = 8
+)
+
+// Validator is Validate for a caller that validates many documents one after another, such as the events of a stream:
+// it keeps the decoder instead of building one each time. The zero value is ready; it is not safe for concurrent use.
+type Validator struct {
+	buf bytes.Buffer
+	dec *jsontext.Decoder
+}
+
 // Validate returns nil when data is exactly one JSON value, optionally surrounded by whitespace, that satisfies the
 // policy in the package comment.
 func Validate(data []byte) error {
 	// A bytes.Buffer lets the decoder parse data in place instead of copying it.
-	dec := jsontext.NewDecoder(bytes.NewBuffer(data))
+	_, err := validate(jsontext.NewDecoder(bytes.NewBuffer(data)))
+	return err
+}
+
+// Validate is the function Validate, reusing the decoder of the documents before.
+func (v *Validator) Validate(data []byte) error {
+	v.buf = *bytes.NewBuffer(data)
+	if v.dec == nil {
+		v.dec = jsontext.NewDecoder(&v.buf)
+	} else {
+		v.dec.Reset(&v.buf)
+	}
+	deepest, err := validate(v.dec)
+	v.buf = bytes.Buffer{} // neither the buffer nor the decoder may keep data alive
+	if len(data) > keepMax || deepest > keepDepth {
+		v.dec = nil
+	} else {
+		v.dec.Reset(&v.buf)
+	}
+	return err
+}
+
+// validate checks the one value dec reads and returns how deep it got.
+func validate(dec *jsontext.Decoder) (int, error) {
+	deepest := 0
 	for {
 		if _, err := dec.ReadToken(); err != nil {
 			if errors.Is(err, io.EOF) {
-				return errEmpty
+				return deepest, errEmpty
 			}
-			return err
+			return deepest, err
 		}
-		if depth := dec.StackDepth(); depth > MaxDepth {
-			return errTooDeep
+		depth := dec.StackDepth()
+		deepest = max(deepest, depth)
+		if depth > MaxDepth {
+			return deepest, errTooDeep
 		} else if depth == 0 {
 			break
 		}
 	}
 	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return errTrailing
+			return deepest, errTrailing
 		}
-		return err
+		return deepest, err
 	}
-	return nil
+	return deepest, nil
 }
 
 // Unmarshal decodes data into v when Validate accepts it. It reads data twice, once to enforce MaxDepth, which

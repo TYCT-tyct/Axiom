@@ -19,6 +19,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
 )
 
@@ -114,6 +115,13 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
+	queue, err := startSync(ctx, db, console.master, tel, logger)
+	if err != nil {
+		return err
+	}
+	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
+	// deadline, and a second Stop does nothing.
+	defer stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
@@ -144,18 +152,20 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
 	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), recorder.Close(ctx))
+	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
 }
 
 // consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
-// read from protected files, whose errors name the variable and never the path or the contents, and the contract
-// the guard enforces. The admin API, when the node serves it, stands on the same accounts module and the same files.
+// read from protected files, whose errors name the variable and never the path or the contents, the contract the guard
+// enforces, and the pages of the three apps. The admin API, when the node serves it, stands on the same accounts module
+// and the same files.
 type consoleParts struct {
 	cfg           nodeSettings
 	master        *secret.Keyring // seals users' TOTP secrets
 	hashes        *secret.MACKeys // keys API keys are hashed with
 	contract      *contract
 	adminContract *contract
+	frontend      *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -172,7 +182,14 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	admin, err := adminContract()
-	return consoleParts{cfg, master, hashes, console, admin}, err
+	if err != nil {
+		return consoleParts{}, err
+	}
+	frontend, err := webui.Embedded()
+	if err != nil {
+		return consoleParts{}, err
+	}
+	return consoleParts{cfg, master, hashes, console, admin, frontend}, nil
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
@@ -190,7 +207,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nil, nil, err
 	}
 	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, logger)
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
 	if p.cfg.adminAddr != "" {
 		if admin, err = p.adminHandler(db, service, tel, logger); err != nil {
 			return nil, nil, err
@@ -215,7 +232,35 @@ func (p consoleParts) adminHandler(db *pg.DB, service *accounts.Service, tel *te
 		return nil, err
 	}
 	return adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
-		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, logger), nil
+		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger), nil
+}
+
+// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
+// address (egress.Direct).
+func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	if err != nil {
+		return nil, err
+	}
+	queue := db.NewQueue(logger)
+	if err := suppliers.RegisterSync(suppliers.SyncConfig{
+		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+	}); err != nil {
+		return nil, err
+	}
+	if err := queue.Start(ctx); err != nil {
+		return nil, err
+	}
+	return queue, nil
+}
+
+// stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
+func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := queue.Stop(ctx); err != nil {
+		logger.Error("stopping the job queue", "err", err)
+	}
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.

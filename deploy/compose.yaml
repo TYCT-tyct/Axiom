@@ -69,7 +69,7 @@ services:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
-      AXIOM_ADMIN_ADDR: ":8082"
+      AXIOM_ADMIN_ADDR: ":8082" # the admin listener: the admin app and its API; a node without it serves neither
     volumes:
       - keys:/keys:ro
     ports:

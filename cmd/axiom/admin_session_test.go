@@ -145,7 +145,7 @@ func TestSessionsBelongToTheirSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	console := publicRoutes(consoleAPI{version: "test", accounts: f.svc, db: f.db}, &guard{contract: contract, accounts: f.svc, logger: logger}, logger)
+	console := publicRoutes(consoleAPI{version: "test", accounts: f.svc, db: f.db}, &guard{contract: contract, accounts: f.svc, logger: logger}, testFrontend(t), logger)
 
 	signIn := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+consoleHost+"/api/console/v1/auth/sign-in",
 		strings.NewReader(`{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`))

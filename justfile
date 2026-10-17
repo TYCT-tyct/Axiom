@@ -77,7 +77,7 @@ deadcode:
 
 # Tests, plus one iteration of every benchmark so benchmarks keep compiling and running. The packages share one
 # PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test ./pkg` alone starts its own.
-test:
+test: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -bench . -benchtime 1x ./...
     go test -C tools -race ./...
 
@@ -93,19 +93,20 @@ bench-compare base:
 
 compose := "docker compose -f deploy/compose.yaml"
 
-# Build the program for Linux and start it with its database on this machine, writing random local passwords to
+# Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to
 # deploy/.env, readable only by its owner, the first time; returns once it reports ready, or, when a step outlasts
 # its limit, fails with the containers' state, health-check output and logs. New passwords would not open a database
 # created with the old ones, so a missing deploy/.env next to an existing database volume stops it; only the migration
 # administrator's password is added to a deploy/.env written before that role existed, and postgres/roles.sh, run
 # before migrating, creates the role in such a database.
-up:
+up: web-embed
     umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^axiom_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the database volume axiom_postgres exists: restore the file, or delete the local database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
-# Stop everything; `just down -v` also deletes the local database. By project name, so it works without deploy/.env.
+# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name, so it
+# works without deploy/.env.
 down *flags:
     docker compose --project-name axiom down {{ flags }}
 
@@ -153,11 +154,18 @@ axiom_version := quote(just_executable()) + " --justfile " + quote(justfile()) +
 web-build: web-install
     version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} build
 
+# Copy the three built apps into the Go tree for the program to embed (internal/platform/webui), each text file beside
+# its brotli and gzip copies, with the content security policy the server sends. Every recipe that builds or tests the
+# program depends on this, so what is embedded is always the build of this tree: a program built without it refuses to
+# start and says to run this.
+web-embed: web-build
+    {{ web }} embed
+
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files
 # and functions too hard to follow; functions with too many paths or lines and files too long; unused files, exports
 # and dependencies; duplicated code; unit tests; the build within its size budget; and the end-to-end tests against
-# that build, which are told the version it was stamped with
-web: web-build
+# that build, served by the program's own server from the embedded copy, which are told the version it was stamped with
+web: web-embed
     {{ web }} typecheck
     {{ web }} lint
     {{ web }} limits

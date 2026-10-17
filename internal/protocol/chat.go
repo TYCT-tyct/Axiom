@@ -24,11 +24,9 @@ import (
 // the upstream's failure (OpenRouter《Errors》, read 2026-10-14).
 type chatStream struct {
 	eventReader
-	created string // the created of the upstream's first chunk, for the chunks we write
-	// choices are the choices started so far, each set once it gave a finish_reason; first is choice 0's, as written,
-	// which our usage chunk repeats.
+	chatWriter // created is the upstream's first chunk's
+	// choices are the choices started so far, each set once it gave a finish_reason.
 	choices map[int64]bool
-	first   string
 	// The chunk being read: the choice being read and its finish_reason, in the chunk's data; the finish signals split
 	// from the chunk so far; whether anything but them is left; and what else it carries.
 	index                             int64
@@ -40,15 +38,16 @@ type chatStream struct {
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
-	s := &chatStream{created: "0", choices: map[int64]bool{}}
+	s := &chatStream{choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
+	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"} // quoted by init already
 	return s
 }
 
 var (
 	chatFields = map[string]func(*chatStream) error{
-		"id":      func(s *chatStream) error { return s.replace(s.id) },
-		"model":   func(s *chatStream) error { return s.replace(s.model) },
+		"id":      func(s *chatStream) error { return s.replace(s.eventReader.id) },
+		"model":   func(s *chatStream) error { return s.replace(s.eventReader.model) },
 		"created": (*chatStream).createdAt,
 		"choices": func(s *chatStream) error {
 			s.noChoices = true
@@ -252,16 +251,26 @@ func (s *chatStream) meter(m *meter) {
 	m.report(r, nil)
 }
 
-// chatErrorCodes are the HTTP statuses the error chunk's code gives for ours, as OpenRouter's error chunk gives one,
-// matching the statuses of docs/domains/gateway.md「错误」.
-var chatErrorCodes = [...]int{402, 503, 502, 408}
+func (s *chatStream) dropBuffers() {
+	s.eventReader.dropBuffers()
+	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
+}
+
+// chatWriter writes the chunks of ours a Chat client gets: the usage chunk and the error chunk, and for a stream
+// converted from another format every chunk. id, model and created are JSON values; first is choice 0's
+// finish_reason, as written, which the usage chunk repeats.
+type chatWriter struct{ id, model, created, first string }
+
+func newChatWriter(o RelayOptions, created string) chatWriter {
+	return chatWriter{id: string(appendQuoted(nil, o.ID)), model: string(appendQuoted(nil, o.Model)), created: created}
+}
 
 // failure appends a chunk with a top-level error, finish_reason error and our error type in error.metadata
 // (docs/domains/gateway.md「错误」).
-func (s *chatStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
+func (s *chatWriter) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	data := s.chunk(`[{"index":0,"delta":{},"finish_reason":"error"}]`)
-	data = fmt.Appendf(data, `,"error":{"code":%d,"message":`, chatErrorCodes[e.Type])
-	data = append(appendQuoted(data, e.Message), `,"metadata":{"error_type":"`+errorTypeNames[e.Type]+`"}},"usage":`...)
+	data = fmt.Appendf(data, `,"error":{"code":%d,"message":`, errorTypes[e.Type].status) // OpenRouter's chunk gives one
+	data = append(appendErrorType(append(appendQuoted(data, e.message()), `,"metadata":{`...), e), `}},"usage":`...)
 	data = append(appendOpenAIUsage(data, chatNames, u, cost), '}')
 	return sse.AppendEvent(dst, "", data)
 }
@@ -270,7 +279,7 @@ func (s *chatStream) failure(dst []byte, e Error, u catalog.Usage, cost string) 
 // always sees the usage and cost. Like OpenRouter's, it has one choice with a delta without content that repeats the
 // finish_reason, since many clients read choices[0] of every chunk (OpenRouter《Streaming》"The final usage chunk",
 // read 2026-10-15).
-func (s *chatStream) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
+func (s *chatWriter) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
 	choices := "[]"
 	if s.first != "" {
 		choices = `[{"index":0,"delta":{"content":""},"finish_reason":` + s.first + `}]`
@@ -279,13 +288,8 @@ func (s *chatStream) usageEvent(dst []byte, u catalog.Usage, cost, top string) [
 	return sse.AppendEvent(dst, "", data)
 }
 
-func (s *chatStream) dropBuffers() {
-	s.eventReader.dropBuffers()
-	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
-}
-
 // chunk is the start of a chunk of ours with choices, missing its closing brace.
-func (s *chatStream) chunk(choices string) []byte {
+func (s *chatWriter) chunk(choices string) []byte {
 	return []byte(`{"id":` + s.id + `,"object":"chat.completion.chunk","created":` + s.created + `,"model":` + s.model +
 		`,"choices":` + choices)
 }

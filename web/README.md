@@ -14,6 +14,7 @@
 | `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端（`consoleApi`、`adminApi`）；`@axiom/api/auth` 是两个界面的登录、两步验证调用，形状相同，登录页面只对着它写 | — |
 | `packages/app/` | 控制台和后台共用、又不属于设计系统的部分：会话与 `Gate`、登录、第二步、强制开启两步验证、恢复码、外壳、新版本提示、错误译文。设计系统不依赖路由，所以它们不放进 `packages/ui/` | — |
 | `e2e/` | Playwright 端到端测试 | — |
+| `scripts/embed.ts`、`scripts/compress.ts` | 把构建产物复制到 Go 代码树供程序嵌入，附预压缩的副本和内容安全策略；压缩函数只有这一个，体积预算也用它 | — |
 | `scripts/budget.ts` | 体积预算检查 | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |
 
@@ -27,6 +28,7 @@
 |---|---|
 | `just web-dev` | 开发服务器：官网 `:5173`，控制台 `:5174/console/`（官网的 `/console/` 也转给它，和线上一样从官网点进去），后台 `:5175`；接口请求转给 `just up` 起的程序（`:8080`） |
 | `just web-build` | 构建三个应用到各自的 `dist/`，控制台带上同一棵代码树构建出的程序的版本号 |
+| `just web-embed` | 先构建，再把三个应用复制到 `internal/platform/webui/build/`（不入库）供程序嵌入；`just up`、`just test`、`just web` 都先做这一步，没做的程序启动时会说要做 |
 | `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
 
@@ -36,7 +38,7 @@
 |---|---|
 | 页面上的文字全部来自翻译文件；中文是源文件，英文的键与中文完全一致 | Biome 的 `noJsxLiterals` 拒绝写在 JSX 里的文字；`Messages<typeof zh>` 让缺键、多键都编译不过；`t()` 的键有类型。属性里的文字（`aria-label` 等）这条规则查不到，靠评审 |
 | 颜色、圆角、阴影只用 `styles.css` 的变量 | Tailwind 自带的调色板已清空，写死的颜色没有对应的类可用 |
-| 页面在 `vite.shared.ts` 的内容安全策略下工作：没有内联脚本，没有 `<style>` 元素 | 端到端测试在同一策略下加载三个应用，违规会成为控制台错误，测试失败；响应头必须与 `vite.shared.ts` 的定义完全一致，且不含 `unsafe-` |
+| 页面在 `vite.shared.ts` 的内容安全策略下工作：没有内联脚本，没有 `<style>` 元素 | 端到端测试在 Go 服务发送的同一策略下加载三个应用，违规会成为控制台错误，测试失败；`embed.ts` 把 `vite.shared.ts` 的字符串交给 Go 服务原样发送，测试核对响应头与它完全一致，且不含 `unsafe-` |
 | 保存的外观在首次绘制前生效，不先闪一下系统的外观 | `theme.js` 作为同源的普通脚本在 `<head>` 开头同步运行，读 `preferences.ts` 的同一个键；端到端测试拦下应用脚本后检查 |
 | 构建产物的文件名带内容哈希，可以长期缓存 | Vite 给打包的文件命名；它不打包的 `theme.js` 由 `vite.shared.ts` 按内容算哈希。端到端测试检查入口页的每个脚本 |
 | 每个页面有自己的标题；跳转后焦点移到页面，读屏软件会读出新页面 | `PageHeader` 和整页的状态设置标题，路由的 `onResolved` 调 `focusPage`；端到端测试检查 |
@@ -61,11 +63,11 @@
 | 认知复杂度不超过 15，圈复杂度不超过 12，函数不超过 60 行，文件不超过 500 行，与 Go 一侧相同 | 认知复杂度由 Biome 的 `noExcessiveCognitiveComplexity`（`biome.json`）查；圈复杂度和长度由 `scripts/limits.ts` 查，覆盖 git 不忽略的每个 TypeScript 和 JavaScript 文件（生成的 `*.gen.ts` 除外），长度不计空行和注释，测试不限函数长度。理由见[前端的「决策与理由」](../docs/frontend.md#决策与理由) |
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
-| 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按 brotli 压缩后的大小计；首屏算入口页加载的每个脚本和它们的静态依赖 |
+| 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计；首屏算入口页加载的每个脚本和它们的静态依赖 |
 
 ## 测试
 
 - 接口模拟的机制集中在 `e2e/mock.ts`（会话、权限、CSRF、Origin 的校验，后台操作的 Idempotency-Key 与理由），各界面只写自己的路由和数据：`e2e/console-api.ts`、`e2e/console-data.ts` 和 `e2e/admin-*.ts`（数据：常见、空、最坏）。路径、方法、请求体和每个响应的状态与 JSON 都由契约的类型约束，与契约不符就编译不过。
 - 验收门槛的截图：`AXIOM_SHOTS_DIR=<目录> pnpm --dir web e2e shots`（可用 `-g "admin users"` 缩小范围），写出控制台和后台每个页面在四种宽度、深浅色、中英文下的截图，以及最坏数据和极端品牌色（改令牌）的截图，只给人看，不入库。
 - 单元测试（Vitest）测不需要浏览器的逻辑，和代码放在一起（`*.test.ts`）。
-- 端到端测试（Playwright）对着构建产物跑：`vite preview` 起服务并发送内容安全策略，接口用 `page.route` 模拟，不需要数据库和 Go 程序。用 `just web` 跑：它把构建写入的版本号传给测试；测试自己挑三个应用及其预览服务都空闲的端口（随机选，两个工作区同时跑不会撞），不设固定端口，也不会拿别的工作区的服务测；`AXIOM_WEB_PORT` 设了就用它，端口已被占用时测试失败。开发服务器要在另一个工作区同时跑，设环境变量 `AXIOM_WEB_PORT` 把三个应用的端口整体挪开（默认 `5173`，预览服务器在其上加 1000），例如 `AXIOM_WEB_PORT=5273 just web`。
+- 端到端测试（Playwright）对着嵌入程序的构建产物跑：`internal/platform/webui/cmd/serveweb` 起程序自己的静态服务（公网监听上是官网和控制台，管理监听上是管理后台），发送服务端真实的缓存头、压缩和内容安全策略；接口用 `page.route` 模拟，不需要数据库。用 `just web` 跑：它先构建并嵌入，再把构建写入的版本号传给测试；测试自己挑三个应用及其服务端口都空闲的端口（随机选，两个工作区同时跑不会撞），不设固定端口，也不会拿别的工作区的服务测；`AXIOM_WEB_PORT` 设了就用它，端口已被占用时测试失败。开发服务器要在另一个工作区同时跑，设环境变量 `AXIOM_WEB_PORT` 把三个应用的端口整体挪开（默认 `5173`，测试用的服务端口在其上加 1000），例如 `AXIOM_WEB_PORT=5273 just web`。

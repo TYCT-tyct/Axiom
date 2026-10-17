@@ -76,7 +76,7 @@ func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleF
 	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, logger)
+	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 
