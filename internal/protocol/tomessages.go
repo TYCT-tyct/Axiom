@@ -25,7 +25,7 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if c.Stream != nil && *c.Stream {
+	if t.Streams { // the gateway reads every answer as a stream, and routing sends a conversion only to an endpoint that streams
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {

@@ -296,7 +296,6 @@ var prepareRejects = []struct {
 	want      string // the error's text
 	invalid   bool   // the client's to fix, not the gateway's
 }{
-	{"chat", protocol.Chat, false, `{"model":"m"}`, "does not rewrite format 2 yet", false},
 	{"continues without a history", protocol.Responses, false, `{"model":"m","previous_response_id":"r"}`, "disagree", false},
 	{"history without continuing", protocol.Responses, true, `{"model":"m"}`, "disagree", false},
 	{"end user not a string", protocol.Responses, false, `{"model":"m","user":1}`, "user is not a string", true},

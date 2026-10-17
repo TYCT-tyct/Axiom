@@ -29,62 +29,64 @@ type Config struct {
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key
 
-	KeyLookup        time.Duration // an unknown key's lookup in the database
-	RateWindow       time.Duration // the sliding window KeyRate counts over
-	AccountGateWait  time.Duration // an admission's wait for its account's gate
-	QueueWait        time.Duration // wait for a slot when every candidate endpoint is full
-	StartBy          time.Duration // after admission, no new attempt starts
-	MaxCall          time.Duration // longest single call
-	HeaderWait       time.Duration // an upstream's wait for the response headers; then the next entry
-	IdleTimeout      time.Duration // an upstream that sends nothing new for this long: the next entry, or the end of the stream
-	KeepAlive        time.Duration // a stream that has written nothing to the client for this long gets a keep-alive
-	WriteTimeout     time.Duration // one write to the client; a client that does not take it in time is treated as gone
-	ExtendWait       time.Duration // one extension of a reservation, gate included; then the stream is cut short
-	AdmissionBudget  time.Duration // gate, connection and transaction of an admission
-	LockTimeout      time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
-	StatementTimeout time.Duration // the transaction's statement_timeout; likewise
-	HolderTTL        time.Duration // lifetime of a holder row that is not renewed
-	HolderHeartbeat  time.Duration
-	ReclaimGrace     time.Duration // wait after the TTL before the cleanup reclaims a holder
-	SettleGrace      time.Duration // reservation deadline = admission + MaxCall + SettleGrace
-	SettleRetry      time.Duration // how long a settlement is retried before the ending is written without its cost
-	SettleBackground time.Duration // how long a failed settlement is retried after SettleRetry, in the background
+	KeyLookup         time.Duration // an unknown key's lookup in the database
+	RateWindow        time.Duration // the sliding window KeyRate counts over
+	AccountGateWait   time.Duration // an admission's wait for its account's gate
+	QueueWait         time.Duration // wait for a slot when every candidate endpoint is full
+	StartBy           time.Duration // after admission, no new attempt starts
+	MaxCall           time.Duration // longest single call
+	HeaderWait        time.Duration // an upstream's wait for the response headers; then the next entry
+	CompactHeaderWait time.Duration // the same for the Responses compact endpoint, which compacts a whole conversation
+	IdleTimeout       time.Duration // an upstream that sends nothing new for this long: the next entry, or the end of the stream
+	KeepAlive         time.Duration // a stream that has written nothing to the client for this long gets a keep-alive
+	WriteTimeout      time.Duration // one write to the client; a client that does not take it in time is treated as gone
+	ExtendWait        time.Duration // one extension of a reservation, gate included; then the stream is cut short
+	AdmissionBudget   time.Duration // gate, connection and transaction of an admission
+	LockTimeout       time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
+	StatementTimeout  time.Duration // the transaction's statement_timeout; likewise
+	HolderTTL         time.Duration // lifetime of a holder row that is not renewed
+	HolderHeartbeat   time.Duration
+	ReclaimGrace      time.Duration // wait after the TTL before the cleanup reclaims a holder
+	SettleGrace       time.Duration // reservation deadline = admission + MaxCall + SettleGrace
+	SettleRetry       time.Duration // how long a settlement is retried before the ending is written without its cost
+	SettleBackground  time.Duration // how long a failed settlement is retried after SettleRetry, in the background
 }
 
 // DefaultConfig returns the defaults of docs/domains/gateway.md and internal/gateway/README.md.
 func DefaultConfig() Config {
 	return Config{
-		NodeInFlight:     5000,
-		IPConnections:    1000,
-		IPInFlight:       500,
-		MaxBody:          32 << 20,
-		KeyRate:          6000,
-		CountRate:        6000,
-		KeyLookup:        time.Second,
-		RateWindow:       time.Minute,
-		PoolSize:         pg.PoolSize,
-		PoolReserve:      16,
-		BatchConnections: 2,
-		QueueMax:         256,
-		QueuePerKey:      16,
-		AccountGateWait:  200 * time.Millisecond,
-		QueueWait:        20 * time.Second,
-		StartBy:          120 * time.Second,
-		MaxCall:          60 * time.Minute,
-		HeaderWait:       60 * time.Second,
-		IdleTimeout:      180 * time.Second,
-		KeepAlive:        15 * time.Second,
-		WriteTimeout:     10 * time.Second,
-		ExtendWait:       time.Second,
-		AdmissionBudget:  time.Second,
-		LockTimeout:      500 * time.Millisecond,
-		StatementTimeout: 800 * time.Millisecond,
-		HolderTTL:        60 * time.Second,
-		HolderHeartbeat:  10 * time.Second,
-		ReclaimGrace:     60 * time.Second,
-		SettleGrace:      30 * time.Minute,
-		SettleRetry:      10 * time.Second,
-		SettleBackground: 20 * time.Minute,
+		NodeInFlight:      5000,
+		IPConnections:     1000,
+		IPInFlight:        500,
+		MaxBody:           32 << 20,
+		KeyRate:           6000,
+		CountRate:         6000,
+		KeyLookup:         time.Second,
+		RateWindow:        time.Minute,
+		PoolSize:          pg.PoolSize,
+		PoolReserve:       16,
+		BatchConnections:  2,
+		QueueMax:          256,
+		QueuePerKey:       16,
+		AccountGateWait:   200 * time.Millisecond,
+		QueueWait:         20 * time.Second,
+		StartBy:           120 * time.Second,
+		MaxCall:           60 * time.Minute,
+		HeaderWait:        60 * time.Second,
+		CompactHeaderWait: 10 * time.Minute,
+		IdleTimeout:       180 * time.Second,
+		KeepAlive:         15 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		ExtendWait:        time.Second,
+		AdmissionBudget:   time.Second,
+		LockTimeout:       500 * time.Millisecond,
+		StatementTimeout:  800 * time.Millisecond,
+		HolderTTL:         60 * time.Second,
+		HolderHeartbeat:   10 * time.Second,
+		ReclaimGrace:      60 * time.Second,
+		SettleGrace:       30 * time.Minute,
+		SettleRetry:       10 * time.Second,
+		SettleBackground:  20 * time.Minute,
 	}
 }
 
@@ -109,8 +111,9 @@ func (c Config) Validate() error {
 		"LockTimeout %v and StatementTimeout %v must be below AdmissionBudget %v", c.LockTimeout, c.StatementTimeout, c.AdmissionBudget)
 	relation(c.QueueWait <= c.StartBy && c.StartBy < c.MaxCall,
 		"QueueWait %v <= StartBy %v < MaxCall %v must hold", c.QueueWait, c.StartBy, c.MaxCall)
-	relation(c.HeaderWait < c.MaxCall && c.IdleTimeout < c.MaxCall && c.KeepAlive < c.IdleTimeout,
-		"HeaderWait %v and IdleTimeout %v must be below MaxCall %v, and KeepAlive %v below IdleTimeout", c.HeaderWait, c.IdleTimeout, c.MaxCall, c.KeepAlive)
+	relation(c.HeaderWait < c.MaxCall && c.CompactHeaderWait < c.MaxCall && c.IdleTimeout < c.MaxCall && c.KeepAlive < c.IdleTimeout,
+		"HeaderWait %v and CompactHeaderWait %v and IdleTimeout %v must be below MaxCall %v, and KeepAlive %v below IdleTimeout",
+		c.HeaderWait, c.CompactHeaderWait, c.IdleTimeout, c.MaxCall, c.KeepAlive)
 	// Divided, not multiplied: 3*HolderHeartbeat overflows to a negative number for a huge heartbeat and would pass.
 	relation(c.HolderHeartbeat <= c.HolderTTL/3, "HolderTTL %v must be at least 3 x HolderHeartbeat %v", c.HolderTTL, c.HolderHeartbeat)
 	relation(c.ReclaimGrace >= c.HolderTTL, "ReclaimGrace %v must be at least HolderTTL %v", c.ReclaimGrace, c.HolderTTL)

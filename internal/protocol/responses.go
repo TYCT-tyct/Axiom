@@ -233,3 +233,41 @@ func (s *responsesStream) failure(dst []byte, e Error, u catalog.Usage, cost str
 
 // usageEvent is never needed: response.completed is the ending and the end at once.
 func (*responsesStream) usageEvent(dst []byte, _ catalog.Usage, _, _ string) []byte { return dst }
+
+// UsageOf reads the usage of a complete Responses reply, for the calls the gateway passes through whole: the compact
+// endpoint does not stream, so its body is not relayed (docs/domains/gateway.md「转发规则」, OpenAI《Compaction》,
+// read 2026-10-14). A reply that names no usage reports nothing of it, which the call estimates rather than waives; one
+// protocol cannot read or map is invalid, which billing estimates too (docs/domains/billing.md「免单规则」).
+func UsageOf(body []byte) Usage {
+	m := meter{final: true}
+	members, err := membersOf(body)
+	if err != nil {
+		m.invalid = fmt.Errorf("usage: %w", err)
+		return m.result()
+	}
+	var report *openAIUsage
+	var tier *string
+	for _, mem := range members {
+		switch mem.name {
+		case "usage":
+			report = &openAIUsage{}
+			if err := jsonx.Unmarshal(mem.value, report); err != nil {
+				m.invalid = fmt.Errorf("usage: %w", err)
+				return m.result()
+			}
+		case "service_tier":
+			var s string
+			if jsonx.Unmarshal(mem.value, &s) == nil {
+				tier = &s
+			}
+		}
+	}
+	if report != nil {
+		if r, err := report.items(tier); err != nil {
+			m.invalid = err
+		} else {
+			m.report(r, nil)
+		}
+	}
+	return m.result()
+}
