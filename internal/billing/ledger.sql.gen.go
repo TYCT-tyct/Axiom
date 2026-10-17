@@ -14,7 +14,7 @@ import (
 
 const requestLedger = `-- name: RequestLedger :many
 SELECT t.id::text AS id, t.kind, t.attempt_seq, t.revision, t.created_at,
-    coalesce(jsonb_agg(jsonb_build_object('book', e.book, 'amount', e.amount) ORDER BY e.book)
+    coalesce(jsonb_agg(jsonb_build_object('book', e.book, 'amount', e.amount) ORDER BY e.book, e.amount)
         FILTER (WHERE e.transaction_id IS NOT NULL), '[]'::jsonb)::text AS entries
 FROM billing.transactions t
 LEFT JOIN billing.entries e ON e.transaction_id = t.id

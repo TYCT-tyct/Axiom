@@ -102,14 +102,23 @@ type chain struct {
 	call          observability.CallRecord
 	ledger        []billing.LedgerTransaction
 	charged       int64
+	estimated     bool
 }
 
 // makeChain reserves and settles two attempts, writes the call with routing's record of the same two tries, and reads
 // the call, its attempts and the ledger back under the account's scope.
-func makeChain(t *testing.T, f chainFixture) chain {
+func makeChain(t *testing.T, f chainFixture) chain { return makeChainWith(t, f, false) }
+
+// makeChainWith is makeChain with an estimated last attempt when estimated is set: its output was not reported, so the
+// settlement holds a correction window and Correct can replace the charge.
+func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 	t.Helper()
 	ctx := t.Context()
 	c := chain{request: uuid.NewV7(), first: uuid.NewV7(), second: uuid.NewV7()}
+	last := segment(t, 50, 10)
+	if estimated {
+		last = estimatedSegment(t, 50, 10)
+	}
 	admitted := billing.Admitted{Scope: f.scope, Site: f.site, Account: f.account, Workspace: f.workspace, Key: f.key}
 	var hold *billing.Hold
 	if err := f.app.Tx(ctx, f.scope, func(tx pg.Tx) (err error) {
@@ -125,12 +134,12 @@ func makeChain(t *testing.T, f chainFixture) chain {
 	}
 	final, err := f.billing.Settle(ctx, hold, billing.Outcome{Attempts: []billing.AttemptResult{
 		{Seq: 1, Entry: 0, Cost: 5, Costed: true, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
-		{Seq: 2, Entry: 0, Cost: 7, Costed: true, Segments: []billing.Segment{segment(t, 50, 10)}, Result: billing.Committed, Finish: billing.FinishStop},
+		{Seq: 2, Entry: 0, Cost: 7, Costed: true, Segments: []billing.Segment{last}, Result: billing.Committed, Finish: billing.FinishStop},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.charged = final.Charged.CeilAmount()
+	c.charged, c.estimated = final.Charged.CeilAmount(), final.Estimated
 	c.call = callRecord(t, f, c)
 	recorder := observability.NewRecorder(ctx, f.app, f.platformScope, observability.Config{
 		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
@@ -177,11 +186,11 @@ func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord 
 		UsedTools: true, Model: "claude-opus", Route: route,
 		Attempts: []observability.AttemptRecord{
 			{
-				Seq: 1, Endpoint: c.first, Supplier: f.key, SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
+				Seq: 1, Endpoint: c.first, Supplier: uuid.NewV7(), SourceClass: "relay", Egress: "direct", Outcome: observability.AttemptFailed,
 				ErrorKind: "rate_limited", StartedAt: started, FinishedAt: started.Add(100 * time.Millisecond),
 			},
 			{
-				Seq: 2, Endpoint: c.second, Supplier: f.site, SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
+				Seq: 2, Endpoint: c.second, Supplier: uuid.NewV7(), SourceClass: "official", Egress: "direct", Outcome: observability.AttemptCommitted,
 				StartedAt: started.Add(200 * time.Millisecond), FinishedAt: started.Add(900 * time.Millisecond),
 				FirstToken: 300 * time.Millisecond,
 			},
@@ -207,6 +216,99 @@ func TestTraceReadsTheWholeChain(t *testing.T) {
 	}
 	checkLedger(t, c.ledger, c.charged)
 	checkNoTraceForAnotherAccount(t, f.app, c.request)
+}
+
+// TestLedgerPutsTheCorrectionBeforeTheNewSettle: an estimated settlement corrected with one supplier record posts a
+// reverse and the replacement settle; the ledger lists the reverse first, and another account's scope sees no
+// transactions at all (review of #201).
+func TestLedgerPutsTheCorrectionBeforeTheNewSettle(t *testing.T) {
+	f := newChainFixture(t)
+	c := makeChainWith(t, f, true)
+	if !c.estimated {
+		t.Fatal("the settlement is not estimated: nothing to correct")
+	}
+	usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 50, catalog.ItemOutput: 20},
+		catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.billing.Correct(t.Context(), billing.Correction{
+		Request: c.request, Seq: 2, Revision: 1, Usage: []catalog.Usage{usage}, Cost: 9,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ledger []billing.LedgerTransaction
+	if err := f.app.ReadTx(t.Context(), f.scope, func(tx pg.Tx) (err error) {
+		ledger, err = billing.LedgerOf(t.Context(), tx, c.request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reverse, settle := indexOf(ledger, "reverse", 1), indexOf(ledger, "settle", 1)
+	if reverse < 0 || settle < 0 || reverse >= settle {
+		t.Fatalf("the corrected ledger: %+v; the reverse is at %d, the replacement settle at %d", ledger, reverse, settle)
+	}
+	if paid := userBalance(ledger[settle].Entries); paid != 70 {
+		t.Errorf("the replacement charge took %d, want 70", paid)
+	}
+	if refund := userBalance(ledger[reverse].Entries); refund != -60 {
+		t.Errorf("the reverse returned %d, want the original 60", refund)
+	}
+	checkOtherAccountLedger(t, f.app, c.request)
+}
+
+// TestAccountScopeIsNotRefusedByTheChainReads: pg exposes no way to tell a transaction's scope, so the READMEs make the
+// platform scope the caller's rule; an account scope still reads its own chain, supplier cost included. The test pins
+// that, so a future check and the documentation change together.
+func TestAccountScopeIsNotRefusedByTheChainReads(t *testing.T) {
+	f := newChainFixture(t)
+	c := makeChain(t, f) // makeChain reads GetTrace and LedgerOf under the account's scope
+	if c.call.ID != c.request || len(c.ledger) != 3 || c.call.CostNano != 12 {
+		t.Errorf("an account scope read call %s with %d ledger transactions and cost %d; want its own call, 3 and 12",
+			c.call.ID, len(c.ledger), c.call.CostNano)
+	}
+	if supplierCost := entryAmount(c.ledger[0].Entries, "supplier_cost"); supplierCost != 5 {
+		t.Errorf("the account scope read supplier cost %d, want 5", supplierCost)
+	}
+}
+
+// indexOf is the position of the transaction of kind at revision, or -1.
+func indexOf(ledger []billing.LedgerTransaction, kind string, revision int64) int {
+	for i, transaction := range ledger {
+		if transaction.Kind == kind && transaction.Revision == revision {
+			return i
+		}
+	}
+	return -1
+}
+
+// entryAmount is the amount of the entry on book in one transaction, or 0.
+func entryAmount(entries []billing.LedgerEntry, book string) int64 {
+	for _, entry := range entries {
+		if entry.Book == book {
+			return entry.Amount
+		}
+	}
+	return 0
+}
+
+// userBalance is the amount the user was charged in one transaction's entries.
+func userBalance(entries []billing.LedgerEntry) int64 { return entryAmount(entries, "user_balance") }
+
+// checkOtherAccountLedger: another account's scope reads none of the request's transactions.
+func checkOtherAccountLedger(t *testing.T, app *pg.DB, request uuid.UUID) {
+	t.Helper()
+	other := pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})
+	var ledger []billing.LedgerTransaction
+	if err := app.ReadTx(t.Context(), other, func(tx pg.Tx) (err error) {
+		ledger, err = billing.LedgerOf(t.Context(), tx, request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger) != 0 {
+		t.Errorf("another account's ledger read returned %d transactions, want none", len(ledger))
+	}
 }
 
 // checkAttempts: the call carries both attempts in order, each on the endpoint it went to.
@@ -295,4 +397,13 @@ func segment(t *testing.T, in, out int64) billing.Segment {
 		t.Fatal(err)
 	}
 	return billing.Segment{Usage: usage, Reported: catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemOutput)}
+}
+
+// estimatedSegment is one sampling whose output the upstream did not report, so the settlement is estimated and can be
+// corrected by a supplier record.
+func estimatedSegment(t *testing.T, in, out int64) billing.Segment {
+	t.Helper()
+	segment := segment(t, in, out)
+	segment.Reported = catalog.ItemSet(1 << catalog.ItemInput)
+	return segment
 }

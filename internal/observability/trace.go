@@ -19,8 +19,9 @@ import (
 // how the endpoint was chosen. Its request ID is the key the ledger transactions and the supplier charges are read by,
 // so a caller reads the rest of the chain from their owners under the same ID (README「追溯」). It is the internal trace
 // read: unlike GetOwn it carries the cost, the endpoint and the route, so only an operator's or an administrator's
-// handler may call it. The transaction's scope is the whole of the access control: an account's scope finds only its
-// own call, the platform scope any call. A call that has not been written yet, or is not in the scope, is pg.ErrNoRows.
+// handler may call it, with the platform scope. pg exposes no way to tell a transaction's scope, so the function cannot
+// refuse an account's; the caller's choice of scope is the access control. A call that has not been written yet, or is
+// not in the scope, is pg.ErrNoRows.
 func GetTrace(ctx context.Context, tx pg.Tx, id uuid.UUID) (CallRecord, error) {
 	q := store.New()
 	r, err := q.GetCallTrace(ctx, tx, id.String())
@@ -73,8 +74,8 @@ func traceCall(r store.GetCallTraceRow) (CallRecord, error) {
 	if c.Usage, err = traceUsage(r.Usage); err != nil {
 		return CallRecord{}, err
 	}
-	if c.ServiceTier, err = traceServiceTier(r.ServiceTier); err != nil {
-		return CallRecord{}, err
+	if c.ServiceTier, err = catalog.ParseServiceTier(r.ServiceTier); err != nil {
+		return CallRecord{}, fmt.Errorf("service tier: %w", err)
 	}
 	c.Currency, err = platform.ParseCurrency(r.Currency)
 	return c, err
@@ -100,32 +101,13 @@ func traceUsage(s string) (map[catalog.Item]int64, error) {
 	}
 	usage := make(map[catalog.Item]int64, len(named))
 	for name, n := range named {
-		item, ok := itemByName(name)
-		if !ok {
-			return nil, fmt.Errorf("usage: unknown billing item %q", name)
+		item, err := catalog.ParseItem(name)
+		if err != nil {
+			return nil, fmt.Errorf("usage: %w", err)
 		}
 		usage[item] = n
 	}
 	return usage, nil
-}
-
-func itemByName(name string) (catalog.Item, bool) {
-	for item := range catalog.NumItems {
-		if item.String() == name {
-			return item, true
-		}
-	}
-	return 0, false
-}
-
-// traceServiceTier maps the stored name back to its tier. The names are the enum's, in order.
-func traceServiceTier(s string) (catalog.ServiceTier, error) {
-	for tier := catalog.ServiceTierStandard; tier <= catalog.ServiceTierFast; tier++ {
-		if tier.String() == s {
-			return tier, nil
-		}
-	}
-	return 0, fmt.Errorf("service tier: unknown value %q", s)
 }
 
 // traceAttempts converts the call's attempt rows, which come in attempt order, back to the records written with it.

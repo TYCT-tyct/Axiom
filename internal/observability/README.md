@@ -13,7 +13,7 @@ func (r *Recorder) Enqueue(rec CallRecord) error          // 从不等待；队�
 func (r *Recorder) Close(ctx context.Context) error       // 写完队列里的，ctx 到期则报告丢了几条（含入队时丢的）
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
-func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；账本由 billing 按同一个 ID 读
+func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
 func (c Cursor) String() string; func ParseCursor(s string) (Cursor, error) // 控制台翻页用的不透明游标；格式不对 ErrBadCursor
 func HashEndUser(key []byte, id string) EndUserHash       // 带密钥的哈希；EndUserHash 的数组是私有的，包外只能经它得到非零值，零值表示没有终端用户
 var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close 之后、或在队列满时给出的错误
@@ -88,10 +88,11 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 一条调用、它的每次尝试和它的账本交易只靠一个键相连：请求 ID（调用编号）。它已经是 `call_log.id`、`call_attempt.request_id`、`billing.reservations.request_id` 和 `billing.transactions.request_id`，suppliers 的扣费和 `billing.corrections` 也按请求 ID 加尝试序号关联（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）。
 
-- **调用和尝试**：`GetTrace(ctx, tx, id)` 按请求 ID 读调用行，再按同一个 ID 和调用的 `at` 读尝试，按 `attempt_seq` 排序；返回的就是写进去的 `CallRecord`，带 `Attempts` 和 `Route`。按 `at` 查才能只读一个分区；调用行不存在时返回 `pg.ErrNoRows`。它和 `GetOwn` 一样只看事务的范围：账户范围读自己的，平台范围读全部。它是运营和管理读的链，不是用户的接口：它带成本、端点和路由，用户读的是 `ListOwn`/`GetOwn`，那几个没有这些字段。
+- **调用和尝试**：`GetTrace(ctx, tx, id)` 按请求 ID 读调用行，再按同一个 ID 和调用的 `at` 读尝试，按 `attempt_seq` 排序；返回的就是写进去的 `CallRecord`，带 `Attempts` 和 `Route`。**调用行只按 `id` 查、不带 `at`，所以每个分区各探查一次主键索引**（和 `GetOwn` 一样，次数随保留的月份增长）；返回的 `at` 再用来只读尝试所在的那一个分区。调用行不存在时返回 `pg.ErrNoRows`。
+- **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户读 `ListOwn`/`GetOwn`，那两个没有这些字段）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
-- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，队列满时会丢而账本照记，校正还会在记录写好后再记交易，抄下来的链接会缺、会旧。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。迁移 `00004` 删除这一列。
+- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，队列满时会丢而账本照记，校正还会在记录写好后再记交易，抄下来的链接会缺、会旧。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删。
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 3（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
@@ -114,7 +115,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 |---|---|---|
 | 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，对账日志是临时的，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
-| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 删除 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致（迁移 `00004`） | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
+| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 不再读写 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。列按平台的迁移规则留到停止使用它的版本之后删除 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
 | 队列满时丢掉新记录并计数，不等待 | 写记录不能阻塞或拖慢调用（Issue #29 的验收「写记录不阻塞调用」）；容量与在途名额相当，只有数据库长期落后才会丢；丢失的条数进指标和 `Close`，可以告警。负责人已在对话中把这一取舍交给开发者 | 等待空位：违反不阻塞，还会把数据库的慢传回调用；丢最旧：要加锁、会悄悄丢掉已经接受的记录；写本地磁盘缓冲：文件 I/O 同样会阻塞，重放和崩溃一致性也不在本 PR 的范围；无界队列：内存没有上限 |
 | 整批行作为一个 JSON 数组传给一条 `INSERT … SELECT` | 一次往返、一个参数；类型转换和检查留给表。sqlc 不认 30 多个参数的 `unnest`，也没有 `:copyfrom`（`pg.Tx` 没有 `CopyFrom`） | 逐行 `INSERT`：每条一次往返；列式 `unnest`：生成不了 |
 | 金额存最小单位的整数，币种单列 | 与 billing 的存储一致（[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)），汇总不丢精度 | 浮点数、字符串 |

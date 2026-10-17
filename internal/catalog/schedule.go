@@ -133,7 +133,7 @@ func (w *contextTiersJSON) parseBasis() (basis ItemSet, err error) {
 // parseServiceTier refuses thresholds that differ from the standard tier's: a service tier that left out the
 // long-context tier would price long requests at its base prices.
 func parseServiceTier(name string, w levelJSON, standardAbove []int64) (st ServiceTier, l level, err error) {
-	if st, err = lookup[ServiceTier](serviceTierNames[:], name); err != nil {
+	if st, err = ParseServiceTier(name); err != nil {
 		return st, l, err
 	}
 	if st == ServiceTierStandard {

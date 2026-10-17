@@ -44,7 +44,7 @@ func (b *Billing) Correct(ctx context.Context, c Correction) error       // 已�
 func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：只有赠送；tx 须是平台范围（审计日志要求）
 func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 做的批次（金额、过期、创建时间），管理接口回答赠送时读
 func (b *Billing) Reconcile(ctx context.Context) ([]string, error)    // 已实现：每日对账，列出不平的交易和与账本不符的余额
-func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；范围就是访问控制
+func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；只从运营或管理的处理器调用，事务须是平台范围
 type Suppliers interface{ RecordAttempts; CommittedAttempt; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
 func (b *Billing) Run(ctx context.Context) error // 心跳、回收、截止时间清理、按 ChargeSettled 校正、到期释放保留
@@ -140,7 +140,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 | `waivers` | 账户每个 UTC 日免单的成本 | 账户范围；可改 `cost` |
 
 - **账本**：一笔交易的分录合计为 0（写入时断言），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
-- **按请求读账本**：`LedgerOf(ctx, tx, requestID)` 按 `transactions.request_id` 读一个请求的全部交易，每笔带自己的分录；交易按 `created_at, id`、分录按 `book` 排序。`(request_id, attempt_seq, kind, revision)` 的唯一索引以请求 ID 开头，所以是一次范围扫描加按 `transaction_id` 的连接，与账本总量无关。`tx` 的范围就是访问控制：账户范围只读到自己的交易，平台范围读到全部。它是运营和管理读的内部接口，不是用户的：分录里也有供应商成本。调用记录不复制交易或分录的 ID，调用、尝试和账本都只用请求 ID 关联（[observability 的「追溯」](../observability/README.md#追溯)）。
+- **按请求读账本**：`LedgerOf(ctx, tx, requestID)` 按 `transactions.request_id` 读一个请求的全部交易，每笔带自己的分录；交易按 `created_at, id`、分录按 `book, amount` 排序。`(request_id, attempt_seq, kind, revision)` 的唯一索引以请求 ID 开头，所以是一次范围扫描加按 `transaction_id` 的连接，与账本总量无关。它是运营和管理读的内部接口，不是用户的：分录里也有供应商成本。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己的这些分录。调用记录不复制交易或分录的 ID，调用、尝试和账本都只用请求 ID 关联（[observability 的「追溯」](../observability/README.md#追溯)）。
 - **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本（已有供应商记录的尝试不再记估算的成本）和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，按精确值算，超出部分记 `platform_borne`；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。语句依次发出、没有批量，尝试成本逐次写（查已有记录、写交易、写分录）：一次尝试、成本非零、走免单检查并进入终态时 15 次往返（开始、设范围、锁余额行、读预留行、每次尝试 3 条、写尝试、记免单、记收费 2 条、移动计数、写预留行、`EndRequest`、提交），每多一次尝试多 3 次；从锁余额行到提交持锁 13 次；各段先按精确值求和再向上取整一次。纯成本的分录不动余额行。
 - **免单**：最后一次尝试 `NotExecuted` 不收；客户端取消照收；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、输出与推理合计为 0、结束原因为空或出错的，可以免单：账户当天免单成本（这个请求全部尝试的成本之和；`Costed` 为假的尝试按它的用量在它条目的锁定价格下的售价计，已知部分更高时取已知部分）不超过 `WaiverCap` 时只收按次项目（仍按整次采样所在的档位计价），超过后只有零输出的条件还能免。站点级的每日上限还没有：它要一个所有账户范围都能写的计数，行级安全的口径待定。
 - **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估、留住预留里没用掉的部分到 `correct_by`。映射不了的按「兜底价」收，首次结算、窗口到期和迟到的 `Settle` 都按它，所以从不免费。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估；其他已知项缺价仍按 0 计，靠上架门槛排除。

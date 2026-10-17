@@ -37,9 +37,9 @@ type ledgerEntryJSON struct {
 // LedgerOf returns the ledger transactions of a request, oldest first, each with its entries. Every transaction of a
 // call carries the call's request ID, so this is the ledger half of the chain that starts at a call record
 // (README.md「按请求读账本」): no transaction or entry ID is copied onto the call. The entries carry our supplier cost
-// as well as the user's charge, so this is an internal read: only an operator's or an administrator's handler may call
-// it. The transaction's scope is the whole of the access control: an account's scope sees only its own transactions, the
-// platform scope all of them. A request with no transactions is an empty result, not an error.
+// as well as the user's charge, so only an operator's or an administrator's handler may call it, with the platform
+// scope; pg exposes no way to tell a transaction's scope, so the function cannot refuse an account's and the caller's
+// choice of scope is the access control. A request with no transactions is an empty result, not an error.
 func LedgerOf(ctx context.Context, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) {
 	rows, err := queries.RequestLedger(ctx, tx, requestID)
 	if err != nil {
