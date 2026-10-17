@@ -113,7 +113,7 @@ func failedHandler(t *testing.T, logs string) handlerFailure {
 		if err := jsonx.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatalf("log record %q: %v", line, err)
 		}
-		if record.Msg == "console API handler failed" {
+		if record.Msg == "API handler failed" {
 			return record
 		}
 	}
