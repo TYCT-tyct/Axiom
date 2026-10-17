@@ -246,6 +246,7 @@ type UnknownUsage struct{ Field, Value string }
 type Schedule struct{ /* 币种、门槛口径、门槛、每个服务等级的单价；字段不导出 */ }
 func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝还不支持的条件
 func (s Schedule) MarshalJSON() ([]byte, error)                      // 规范编码
+func (s Schedule) Currency() platform.Currency                       // 价格的币种，结尾的 cost_currency
 func (s Schedule) Cost(u Usage) (platform.Exact, ItemSet, error)     // 纯函数、精确、不分配内存；返回已定价部分和缺价的项
 func (s Schedule) Ceiling(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // 预留的单价上界，见下
 func (s Schedule) Highest(items ItemSet, tiers ServiceTierSet, length int64) (platform.UnitPrice, bool) // Ceiling 不在缺价处停下：已知价格里最高的，以及是否有缺价
