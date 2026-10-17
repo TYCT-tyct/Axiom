@@ -55,8 +55,8 @@ func TestOnlyADiscardIsAlarmed(t *testing.T) {
 	}
 }
 
-// discardCount is the discard counter for the billing.correction kind, as reader has collected it.
-func discardCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+// discardPoints is the collected discard counter, and whether reader has one.
+func discardPoints(t *testing.T, reader *sdkmetric.ManualReader) (metricdata.Sum[int64], bool) {
 	t.Helper()
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(t.Context(), &collected); err != nil {
@@ -71,11 +71,22 @@ func discardCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 			if !ok {
 				t.Fatalf("%s is %T, want an int64 sum", m.Name, m.Data)
 			}
-			for _, point := range sum.DataPoints {
-				if kind, _ := point.Attributes.Value(attribute.Key("kind")); kind.AsString() == "billing.correction" {
-					return point.Value
-				}
-			}
+			return sum, true
+		}
+	}
+	return metricdata.Sum[int64]{}, false
+}
+
+// discardCount is the discard counter for the billing.correction kind, as reader has collected it.
+func discardCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	sum, ok := discardPoints(t, reader)
+	if !ok {
+		return 0
+	}
+	for _, point := range sum.DataPoints {
+		if kind, _ := point.Attributes.Value(attribute.Key("kind")); kind.AsString() == "billing.correction" {
+			return point.Value
 		}
 	}
 	return 0
