@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"axiom/internal/platform/telemetry"
 )
 
 // TestAbortedResponseIsRecordedAsAborted: a handler that has sent 200 and then aborts leaves a broken response, which
@@ -83,4 +85,27 @@ func requestCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int6
 		}
 	}
 	return seen
+}
+
+// BenchmarkRequestTelemetry is what reporting one request costs: "off" is a zero Telemetry, "on" the providers the
+// node builds (no span processor, as serve has none yet). The difference is the call path's price for the span and
+// the two metrics; bench-compare fails if it grows.
+func BenchmarkRequestTelemetry(b *testing.B) {
+	node, err := telemetry.New()
+	if err != nil {
+		b.Fatal(err)
+	}
+	on, err := NewTelemetry(node.Traces, node.Metrics)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for name, tel := range map[string]Telemetry{"off": {}, "on": on} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, done := tel.start(b.Context(), "0123456789abcdef")
+				done("GET /v1/models", http.StatusOK, false, 42*time.Millisecond)
+			}
+		})
+	}
 }
