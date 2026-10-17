@@ -33,6 +33,10 @@ type Config struct {
 	QueueWait        time.Duration // wait for a slot when every candidate endpoint is full
 	StartBy          time.Duration // after admission, no new attempt starts
 	MaxCall          time.Duration // longest single call
+	HeaderWait       time.Duration // an upstream's wait for the response headers; then the next entry
+	IdleTimeout      time.Duration // an upstream that sends nothing new for this long: the next entry, or the end of the stream
+	KeepAlive        time.Duration // a stream that has written nothing to the client for this long gets a keep-alive
+	WriteTimeout     time.Duration // one write to the client; a client that does not take it in time is treated as gone
 	AdmissionBudget  time.Duration // gate, connection and transaction of an admission
 	LockTimeout      time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
 	StatementTimeout time.Duration // the transaction's statement_timeout; likewise
@@ -63,6 +67,10 @@ func DefaultConfig() Config {
 		QueueWait:        20 * time.Second,
 		StartBy:          120 * time.Second,
 		MaxCall:          60 * time.Minute,
+		HeaderWait:       60 * time.Second,
+		IdleTimeout:      180 * time.Second,
+		KeepAlive:        15 * time.Second,
+		WriteTimeout:     10 * time.Second,
 		AdmissionBudget:  time.Second,
 		LockTimeout:      500 * time.Millisecond,
 		StatementTimeout: 800 * time.Millisecond,
@@ -95,6 +103,8 @@ func (c Config) Validate() error {
 		"LockTimeout %v and StatementTimeout %v must be below AdmissionBudget %v", c.LockTimeout, c.StatementTimeout, c.AdmissionBudget)
 	relation(c.QueueWait <= c.StartBy && c.StartBy < c.MaxCall,
 		"QueueWait %v <= StartBy %v < MaxCall %v must hold", c.QueueWait, c.StartBy, c.MaxCall)
+	relation(c.HeaderWait < c.MaxCall && c.IdleTimeout < c.MaxCall && c.KeepAlive < c.IdleTimeout,
+		"HeaderWait %v and IdleTimeout %v must be below MaxCall %v, and KeepAlive %v below IdleTimeout", c.HeaderWait, c.IdleTimeout, c.MaxCall, c.KeepAlive)
 	// Divided, not multiplied: 3*HolderHeartbeat overflows to a negative number for a huge heartbeat and would pass.
 	relation(c.HolderHeartbeat <= c.HolderTTL/3, "HolderTTL %v must be at least 3 x HolderHeartbeat %v", c.HolderTTL, c.HolderHeartbeat)
 	relation(c.ReclaimGrace >= c.HolderTTL, "ReclaimGrace %v must be at least HolderTTL %v", c.ReclaimGrace, c.HolderTTL)
