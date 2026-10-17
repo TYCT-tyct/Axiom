@@ -29,13 +29,26 @@ func TestACallThatDoesNotStreamIsAnsweredWithOneReply(t *testing.T) {
 		o     options
 		shape []string // what the reply of the format must carry
 	}{
-		{"messages", options{client: messages, stream: &no}, []string{`"type":"message"`, `"stop_reason":"end_turn"`, `"text":"Hello!"`}},
-		{"responses", options{client: responses, stream: &no},
-			[]string{`"object":"response"`, `"status":"completed"`, `"text":"Hi there! How can I assist you today?"`}},
-		{"chat from messages", options{client: chat, upstream: &messages, stream: &no},
-			[]string{`"object":"chat.completion"`, `"content":"Hello!"`}},
-		{"chat from responses", options{client: chat, upstream: &responses, stream: &no},
-			[]string{`"object":"chat.completion"`, `"content":"Hi there! How can I assist you today?"`}},
+		{
+			name:  "messages",
+			o:     options{client: messages, stream: &no},
+			shape: []string{`"type":"message"`, `"stop_reason":"end_turn"`, `"text":"Hello!"`},
+		},
+		{
+			name:  "responses",
+			o:     options{client: responses, stream: &no},
+			shape: []string{`"object":"response"`, `"status":"completed"`, `"text":"Hi there! How can I assist you today?"`},
+		},
+		{
+			name:  "chat from messages",
+			o:     options{client: chat, upstream: &messages, stream: &no},
+			shape: []string{`"object":"chat.completion"`, `"content":"Hello!"`},
+		},
+		{
+			name:  "chat from responses",
+			o:     options{client: chat, upstream: &responses, stream: &no},
+			shape: []string{`"object":"chat.completion"`, `"content":"Hi there! How can I assist you today?"`},
+		},
 	}
 	for _, c := range cases {
 		run(t, func(t *testing.T, ctx context.Context) {
@@ -50,8 +63,7 @@ func TestACallThatDoesNotStreamIsAnsweredWithOneReply(t *testing.T) {
 }
 
 // checkReply holds an aggregated reply to what a client that wants no stream is promised: one JSON body, one write, the
-// call's number and its model in it, the cost of the settlement, and one attempt whose content reached the client
-// (billing.Aggregated), settled before the write and journalled before it.
+// call's number and its model in it, and the cost of the settlement.
 func checkReply(t *testing.T, h *harness, name string, shape []string) {
 	t.Helper()
 	body := h.w.body()
@@ -67,6 +79,13 @@ func checkReply(t *testing.T, h *harness, name string, shape []string) {
 			t.Errorf("%s: the reply lacks %s:\n%s", name, w, body)
 		}
 	}
+	checkAggregateSettlement(t, h, name)
+}
+
+// checkAggregateSettlement: one attempt whose content reached the client (billing.Aggregated), settled before the write
+// and journalled before it.
+func checkAggregateSettlement(t *testing.T, h *harness, name string) {
+	t.Helper()
 	s := h.ended()
 	if s.body != "" {
 		t.Errorf("%s: something was written before the settlement:\n%s", name, s.body)
@@ -118,19 +137,27 @@ func TestTheLastAttemptOfAnAggregateAnswersWithWhatItMade(t *testing.T) {
 		shape   []string
 	}{
 		{
-			"chat", options{client: protocol.Chat, upstream: &messages},
-			func(h *harness) []beat { return []beat{h.feed(evStart, evBlock, evHello), beat{hangup: true}} },
-			http.StatusOK, "Hello", []string{`"finish_reason":"error"`, `"metadata":{"error_type":"upstream_error"}`},
+			name:    "chat",
+			o:       options{client: protocol.Chat, upstream: &messages},
+			beats:   func(h *harness) []beat { return []beat{h.feed(evStart, evBlock, evHello), {hangup: true}} },
+			status:  http.StatusOK,
+			content: "Hello",
+			shape:   []string{`"finish_reason":"error"`, `"metadata":{"error_type":"upstream_error"}`},
 		},
 		{
-			"responses", options{client: responses},
-			func(h *harness) []beat { return []beat{h.feed(0, 1, 2, 3, 4), beat{hangup: true}} },
-			http.StatusOK, "Hi", []string{`"status":"failed"`, `"error":{"code":"upstream_error"`},
+			name:    "responses",
+			o:       options{client: responses},
+			beats:   func(h *harness) []beat { return []beat{h.feed(0, 1, 2, 3, 4), {hangup: true}} },
+			status:  http.StatusOK,
+			content: "Hi",
+			shape:   []string{`"status":"failed"`, `"error":{"code":"upstream_error"`},
 		},
 		{
-			"messages", options{},
-			func(h *harness) []beat { return []beat{h.feed(evStart, evBlock, evHello), beat{hangup: true}} },
-			http.StatusBadGateway, "", []string{`"error_type":"upstream_error"`},
+			name:   "messages",
+			o:      options{},
+			beats:  func(h *harness) []beat { return []beat{h.feed(evStart, evBlock, evHello), {hangup: true}} },
+			status: http.StatusBadGateway,
+			shape:  []string{`"error_type":"upstream_error"`},
 		},
 	}
 	for _, c := range cases {
@@ -140,27 +167,33 @@ func TestTheLastAttemptOfAnAggregateAnswersWithWhatItMade(t *testing.T) {
 			h := newHarness(t, ctx, o)
 			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(c.beats(h)...)}
 			h.run()
-			body := h.w.body()
-			if h.w.status != c.status {
-				t.Fatalf("%s: status %d:\n%s", c.name, h.w.status, body)
-			}
-			for _, w := range c.shape {
-				if !strings.Contains(body, w) {
-					t.Errorf("%s: the reply lacks %s:\n%s", c.name, w, body)
-				}
-			}
-			if c.content != "" && !strings.Contains(body, c.content) {
-				t.Errorf("%s: the reply does not hold what it made:\n%s", c.name, body)
-			}
-			a := h.ended().outcome.Attempts
-			want := billing.Aggregated
-			if c.status != http.StatusOK { // what it made is not in the reply: Messages answers the error alone
-				want = billing.FailedBeforeCommit
-			}
-			if len(a) != 1 || a[0].Result != want || a[0].Finish != billing.FinishError {
-				t.Errorf("%s: attempts %+v", c.name, a)
-			}
+			checkLastAttemptReply(t, h, c.name, c.status, c.content, c.shape)
 		})
+	}
+}
+
+// checkLastAttemptReply: the reply has the status, the shape and what was made, and the attempt is booked as what
+// reached the client: Aggregated when the reply carries it, FailedBeforeCommit for the Messages 502 without it.
+func checkLastAttemptReply(t *testing.T, h *harness, name string, status int, content string, shape []string) {
+	t.Helper()
+	body := h.w.body()
+	if h.w.status != status {
+		t.Fatalf("%s: status %d:\n%s", name, h.w.status, body)
+	}
+	for _, w := range shape {
+		if !strings.Contains(body, w) {
+			t.Errorf("%s: the reply lacks %s:\n%s", name, w, body)
+		}
+	}
+	if content != "" && !strings.Contains(body, content) {
+		t.Errorf("%s: the reply does not hold what it made:\n%s", name, body)
+	}
+	want := billing.Aggregated
+	if status != http.StatusOK { // what it made is not in the reply, which is what Messages does
+		want = billing.FailedBeforeCommit
+	}
+	if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != want || a[0].Finish != billing.FinishError {
+		t.Errorf("%s: attempts %+v", name, a)
 	}
 }
 

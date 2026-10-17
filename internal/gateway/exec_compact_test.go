@@ -55,36 +55,59 @@ func TestTheCompactEndpointIsPassedThrough(t *testing.T) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(http.StatusOK, compacted)}
 		h.run()
-		if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "application/json" || h.w.body() != compacted || h.w.wrote() != 1 {
-			t.Fatalf("status %d, %d writes:\n%s", h.w.status, h.w.wrote(), h.w.body())
-		}
-		if call := h.up.endpoint(1).calls[0]; call.Path != compactPath || string(call.Body) != `{"model":"m","input":"Hello!"}` ||
-			call.Format != protocol.Responses {
-			t.Errorf("the request: path %q, format %v, body %s", call.Path, call.Format, call.Body)
-		}
-		s := h.ended()
-		if s.body != "" {
-			t.Errorf("the reply was written before the settlement:\n%s", s.body)
-		}
-		a := s.outcome.Attempts
-		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
-			t.Fatalf("ending %+v", s.outcome)
-		}
-		u := a[0].Segments[0]
-		for _, it := range []struct {
-			item catalog.Item
-			want int64
-		}{
-			{catalog.ItemInput, 60}, {catalog.ItemCacheRead, 40}, {catalog.ItemOutput, 6}, {catalog.ItemReasoning, 4},
-		} {
-			if got := u.Usage.Count(it.item); got != it.want || !u.Reported.Has(it.item) {
-				t.Errorf("%s is %d (reported %t), want %d", it.item, got, u.Reported.Has(it.item), it.want)
-			}
-		}
-		if n := len(h.up.journal); n == 0 || !h.up.journal[n-1].Committed {
-			t.Errorf("the journal does not say the reply reached the client: %+v", h.up.journal)
-		}
+		checkCompactReply(t, h)
+		checkCompactRequest(t, h)
+		checkCompactSettlement(t, h)
 	})
+}
+
+// checkCompactReply: the reply reached the client as it came, in one write, as JSON.
+func checkCompactReply(t *testing.T, h *harness) {
+	t.Helper()
+	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "application/json" || h.w.body() != compacted ||
+		h.w.wrote() != 1 {
+		t.Fatalf("status %d, %d writes:\n%s", h.w.status, h.w.wrote(), h.w.body())
+	}
+}
+
+// checkCompactRequest: the upstream got the client's body verbatim, at the compact path of the Responses format.
+func checkCompactRequest(t *testing.T, h *harness) {
+	t.Helper()
+	if call := h.up.endpoint(1).calls[0]; call.Path != compactPath || string(call.Body) != `{"model":"m","input":"Hello!"}` ||
+		call.Format != protocol.Responses {
+		t.Errorf("the request: path %q, format %v, body %s", call.Path, call.Format, call.Body)
+	}
+}
+
+// checkCompactSettlement: one attempt whose reply reached the client, settled before the write and journalled before it,
+// charged for the usage the reply reported.
+func checkCompactSettlement(t *testing.T, h *harness) {
+	t.Helper()
+	s := h.ended()
+	if s.body != "" {
+		t.Errorf("the reply was written before the settlement:\n%s", s.body)
+	}
+	a := s.outcome.Attempts
+	if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
+		t.Fatalf("ending %+v", s.outcome)
+	}
+	u := a[0].Segments[0]
+	for _, it := range []struct {
+		item catalog.Item
+		want int64
+	}{
+		{item: catalog.ItemInput, want: 60},
+		{item: catalog.ItemCacheRead, want: 40},
+		{item: catalog.ItemOutput, want: 6},
+		{item: catalog.ItemReasoning, want: 4},
+	} {
+		if got := u.Usage.Count(it.item); got != it.want || !u.Reported.Has(it.item) {
+			t.Errorf("%s is %d (reported %t), want %d", it.item, got, u.Reported.Has(it.item), it.want)
+		}
+	}
+	if n := len(h.up.journal); n == 0 || !h.up.journal[n-1].Committed {
+		t.Errorf("the journal does not say the reply reached the client: %+v", h.up.journal)
+	}
 }
 
 // TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer: the compact endpoint compacts a whole conversation, so its headers
@@ -109,8 +132,12 @@ func TestACompactReplyThatBreaksIsTriedElsewhere(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{},
-				Body: io.NopCloser(io.MultiReader(strings.NewReader(`{"object":`), iotestErr{io.ErrUnexpectedEOF}))}, nil
+			body := io.MultiReader(strings.NewReader(`{"object":`), iotestErr{io.ErrUnexpectedEOF})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       io.NopCloser(body),
+			}, nil
 		}}
 		h.up.eps[uuidOf(ep(2))].script = []scripted{wholeAnswer(http.StatusOK, compacted)}
 		h.run()
