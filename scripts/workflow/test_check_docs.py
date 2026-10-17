@@ -68,7 +68,8 @@ class CheckDocsTest(unittest.TestCase):
     def test_config_mistakes_fail_instead_of_falling_back(self):
         config = ".github/project-workflow.toml"
         cases = {
-            "misspelled table": ("[limit]\ndoc_lines = 10\n", [f"{config}: unknown key limit; known: limits, merge, review, source"]),
+            "misspelled table": ("[limit]\ndoc_lines = 10\n", [f"{config}: unknown key limit; known: lanes, limits, merge, review, source"]),
+            "lanes as a string": ('[lanes]\nlight = "docs/*"\n', [f"{config}: [lanes] takes only light and code, each a list of path patterns"]),
             "strict as a string": ('[merge]\nstrict = "false"\n', [f"{config}: [merge] takes only strict = true or false"]),
             "waiver as a string": ('[review]\nwaiver = "false"\n', [f"{config}: [review] takes only waiver = true or false"]),
             "unknown review key": ("[review]\nwaivers = false\n", [f"{config}: [review] takes only waiver = true or false"]),
