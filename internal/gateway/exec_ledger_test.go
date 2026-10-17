@@ -79,7 +79,7 @@ func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 	}
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
-		Ledger: ledger, Costs: fakeCosts(1000), Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: ledger, Costs: fakeCosts{cost: 1000, known: true}, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		r.t.Fatal(err)

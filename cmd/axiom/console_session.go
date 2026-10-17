@@ -7,14 +7,7 @@ import (
 	"axiom/internal/platform/consoleapi"
 )
 
-// setCookie is the Set-Cookie header that gives the browser the new session.
-func (c consoleAPI) setCookie(host string, issued accounts.Issued) (string, error) {
-	cookie, err := c.accounts.Cookie(host, issued)
-	if err != nil {
-		return "", err
-	}
-	return cookie.String(), nil
-}
+func (c consoleAPI) sessions() sessionOps { return sessionOps{c.accounts} }
 
 // grant is what a sign-in or a verification tells the page of the session it set.
 func grant(issued accounts.Issued) consoleapi.SessionGrant {
@@ -48,14 +41,7 @@ func (c consoleAPI) Register(ctx context.Context, request consoleapi.RegisterReq
 
 // SignIn checks the password and sets a session, a pending one when the user has two-step verification.
 func (c consoleAPI) SignIn(ctx context.Context, request consoleapi.SignInRequestObject) (consoleapi.SignInResponseObject, error) {
-	cl := callOf(ctx)
-	issued, err := c.accounts.SignIn(ctx, accounts.SignInRequest{
-		Host: cl.r.Host, Email: request.Body.Email, Password: request.Body.Password, ClientIP: cl.ip, UserAgent: cl.r.UserAgent(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	cookie, err := c.setCookie(cl.r.Host, issued)
+	issued, cookie, err := c.sessions().signIn(ctx, callOf(ctx), request.Body.Email, request.Body.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +50,7 @@ func (c consoleAPI) SignIn(ctx context.Context, request consoleapi.SignInRequest
 
 // VerifyMfa turns the pending session into a verified one.
 func (c consoleAPI) VerifyMfa(ctx context.Context, request consoleapi.VerifyMfaRequestObject) (consoleapi.VerifyMfaResponseObject, error) {
-	cl := callOf(ctx)
-	issued, err := c.accounts.VerifyMFA(ctx, cl.r, request.Body.Code, cl.ip, cl.r.UserAgent())
-	if err != nil {
-		return nil, err
-	}
-	cookie, err := c.setCookie(cl.r.Host, issued)
+	issued, cookie, err := c.sessions().verify(ctx, callOf(ctx), request.Body.Code)
 	if err != nil {
 		return nil, err
 	}
@@ -78,15 +59,11 @@ func (c consoleAPI) VerifyMfa(ctx context.Context, request consoleapi.VerifyMfaR
 
 // SignOut ends the session of the cookie, whatever its level, and expires the cookie.
 func (c consoleAPI) SignOut(ctx context.Context, _ consoleapi.SignOutRequestObject) (consoleapi.SignOutResponseObject, error) {
-	cl := callOf(ctx)
-	if err := c.accounts.SignOut(ctx, cl.principal); err != nil {
-		return nil, err
-	}
-	cookie, err := c.accounts.ExpiredCookie(cl.r.Host)
+	cookie, err := c.sessions().signOut(ctx, callOf(ctx))
 	if err != nil {
 		return nil, err
 	}
-	return consoleapi.SignOut204Response{Headers: consoleapi.SignOut204ResponseHeaders{SetCookie: cookie.String()}}, nil
+	return consoleapi.SignOut204Response{Headers: consoleapi.SignOut204ResponseHeaders{SetCookie: cookie}}, nil
 }
 
 // GetSession tells a page who is signed in, what the session may do, and its CSRF token.
@@ -111,34 +88,22 @@ func (c consoleAPI) BeginTotpSetup(ctx context.Context, _ consoleapi.BeginTotpSe
 
 // ConfirmTotpSetup turns on two-step verification with the secret the user proved.
 func (c consoleAPI) ConfirmTotpSetup(ctx context.Context, request consoleapi.ConfirmTotpSetupRequestObject) (consoleapi.ConfirmTotpSetupResponseObject, error) {
-	cl := callOf(ctx)
-	issued, codes, err := c.accounts.ConfirmTOTP(ctx, cl.principal, accounts.FactorChange{
-		Secret: request.Body.Secret, Password: request.Body.Password, Code: request.Body.Code, ClientIP: cl.ip, UserAgent: cl.r.UserAgent(),
-	})
+	f, err := c.sessions().confirmTOTP(ctx, callOf(ctx), request.Body.Secret, request.Body.Password, request.Body.Code)
 	if err != nil {
 		return nil, err
 	}
-	cookie, err := c.setCookie(cl.r.Host, issued)
-	if err != nil {
-		return nil, err
-	}
-	body := consoleapi.FactorChange{CsrfToken: issued.CSRFToken, RecoveryCodes: codes}
-	return consoleapi.ConfirmTotpSetup200JSONResponse{Body: body, Headers: consoleapi.ConfirmTotpSetup200ResponseHeaders{SetCookie: cookie}}, nil
+	return consoleapi.ConfirmTotpSetup200JSONResponse{
+		Body: consoleapi.FactorChange{CsrfToken: f.csrf, RecoveryCodes: f.codes}, Headers: consoleapi.ConfirmTotpSetup200ResponseHeaders{SetCookie: f.cookie},
+	}, nil
 }
 
 // RegenerateRecoveryCodes replaces the recovery codes; the old ones and the user's other sessions end.
 func (c consoleAPI) RegenerateRecoveryCodes(ctx context.Context, request consoleapi.RegenerateRecoveryCodesRequestObject) (consoleapi.RegenerateRecoveryCodesResponseObject, error) {
-	cl := callOf(ctx)
-	issued, codes, err := c.accounts.RegenerateRecoveryCodes(ctx, cl.principal, accounts.FactorChange{
-		Code: request.Body.Code, ClientIP: cl.ip, UserAgent: cl.r.UserAgent(),
-	})
+	f, err := c.sessions().regenerateCodes(ctx, callOf(ctx), request.Body.Code)
 	if err != nil {
 		return nil, err
 	}
-	cookie, err := c.setCookie(cl.r.Host, issued)
-	if err != nil {
-		return nil, err
-	}
-	body := consoleapi.FactorChange{CsrfToken: issued.CSRFToken, RecoveryCodes: codes}
-	return consoleapi.RegenerateRecoveryCodes200JSONResponse{Body: body, Headers: consoleapi.RegenerateRecoveryCodes200ResponseHeaders{SetCookie: cookie}}, nil
+	return consoleapi.RegenerateRecoveryCodes200JSONResponse{
+		Body: consoleapi.FactorChange{CsrfToken: f.csrf, RecoveryCodes: f.codes}, Headers: consoleapi.RegenerateRecoveryCodes200ResponseHeaders{SetCookie: f.cookie},
+	}, nil
 }

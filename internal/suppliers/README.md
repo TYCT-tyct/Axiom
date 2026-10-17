@@ -26,7 +26,7 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表。单位价值随 billing 的换算加入，迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
@@ -47,6 +47,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `sync_states` | 每个供应商一行：引擎的整份状态（jsonb，`format` 记格式）、`version`（引擎的栅栏）、`next_due`、租约（`lease_holder`、`lease_fence`、`lease_until`） | PK `supplier_id`；`lease_holder` 与 `lease_until` 同有同无；平台范围 |
 | `sync_events` | 引擎每一步产生的事件，只插入，事件按名字存 | PK `(supplier_id, version, seq)`；平台范围 |
 | `sync_plans` | 引擎算出的成本计划的每个版本（端点是「分组/模型」文本），只插入 | PK `(supplier_id, version, seq)`；平台范围 |
+| `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，管理员确认的值、操作人、理由 | 只插入，最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
 
 - **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；角色隔离随后台任务角色加入。
@@ -151,6 +152,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 不变量 | 靠什么保证 |
 |---|---|
 | 密钥明文不落库 | 表里没有明文列，加密列只由 CHECK 约束长度（不证明是密文）；加密由写入边界保证，真实性由 `Open` 验证；测试在整行、全部列里搜索 key 的字节（文本和十六进制），并且加密值只能在自己那一行打开。**尚未覆盖**：写入处只传 `secret.Sealed`，由第一个适配器的编解码函数保证，随它的 PR 加测试 |
+| 没有确认单位价值的供应商不被调用；一次尝试的成本按它开始时的单位价值换算，向上取整一次，只换成结算币种；回执记下那一行的 id | `ListRoutable` 的 LATERAL 连接；`TestOnlySuppliersWithAUnitValueAreRouted`、`TestCreditsPricesAtTheUnitValue` |
 | 供应商只在自己的范围内可见、可写；子表经父表判断 | 策略；测试覆盖无范围、平台、站点、账户、另一个站点或账户，以及六张子表各自的插入 |
 | 分组、凭证、模型、别名、端点属于同一个供应商 | 复合外键；测试对四张表各试一次跨供应商引用 |
 | 身份和发往的地址不能改，不能删除 | 按列授权、不授 DELETE；测试逐列、逐表 |
@@ -192,11 +194,12 @@ func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) /
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
 type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
 func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
-func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、已到的对账键
+func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键
 func (r AttemptReceipt) Key() string                           // 对账键，结算写进 billing.AttemptResult；其余字段不对外
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
 func (s *Service) Cost(r AttemptReceipt, u []catalog.Usage) (AttemptCost, error) // 纯内存：原生金额、缺项、cost_flag
+func (s *Service) Credits(r AttemptReceipt, u []catalog.Usage, c platform.Currency) (int64, bool, error) // 纯内存：c 的十亿分之一；即 gateway 的 Costs
 func (s *Service) Journal(e JournalEntry)                      // 非阻塞，进程内缓冲
 func (s *Service) JournalFlushed(id platform.RequestID) <-chan struct{}
 func (s *Service) Settled(id platform.RequestID)
@@ -209,7 +212,7 @@ func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalE
 func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
 ```
 
-与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数和单位价值（单位价值表随 billing 的换算加入）；`Send` 的入参是 `Call{Format, Compact, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Compact` 选格式的压缩端点路径（`compactPaths` 表里，目前只有 Responses 的 `/v1/responses/compact`）：那个端点不是格式自己的路径，路径只在 `wire` 与 `compactPaths` 两张表里（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
+与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数，按回执里的成本计划计价；`Send` 的入参是 `Call{Format, Compact, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Compact` 选格式的压缩端点路径（`compactPaths` 表里，目前只有 Responses 的 `/v1/responses/compact`）：那个端点不是格式自己的路径，路径只在 `wire` 与 `compactPaths` 两张表里（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
 
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **日志写入有期限**：`Run` 的每次写都有自己的期限（`FlushTimeout`，默认 10 秒），超时保留数据、记日志、退避后重试。
@@ -217,6 +220,8 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 - **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
+- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。`Correct` 按同一个值换算时，再给 `attempt_costs` 加 `unit_value_id` 列，是兼容的改动。
+- **`Credits`** = `Cost` 的原生金额 × 单位价值，精确相乘，转成十亿分之一时向上取整一次。只有结算币种就是要的币种时才能换算（还没有汇率）；币种不同、超出金额的范围时给 0 和"未知"，成本计划缺项时给已定价的部分和"未知"。gateway 把"未知"交给 billing，免单上限按售价计入（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
 
@@ -246,6 +251,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
+| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
 | 用周期扫描补任务，不让每个任务在结束时入队它的后继 | River 的唯一性必须含"运行"这一状态，任务结束前不能为同一个供应商插入后继；不唯一的后继链会在多入队一次后永远多一条。扫描没有状态，节点挂了、任务丢了都自愈，代价是到期后最多晚一个扫描间隔 | 后继链加扫描补漏：两套机制，还要防链增殖 |
 | 任务失败不由队列重试 | 重试的时间由引擎的退避决定，写在状态里，队列再重试一份会绕过它 | River 的重试：两份退避 |
 | 适配器的 `Open` 推迟到任务第一次用 | 登录失败成为那个任务的失败，进入引擎的处理（需处理、退避）；提前打开则一轮之前就失败，引擎看不到 | 轮前打开：登录被拒时引擎不知道，下一轮还会再登录，正是要避免的封号 |

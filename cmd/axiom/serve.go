@@ -24,8 +24,9 @@ import (
 )
 
 // The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
-// README「并发、背压与共享状态」), so a request waits for room only when the database is far behind; batches
-// of 500 rows or 200 ms keep the insert rate low (internal/observability README「写入」).
+// README「并发、背压与共享状态」); when it is full the recorder drops the new record rather than slow a call, so the
+// queue only bounds memory and loss. Batches of 500 records or 200 ms keep the insert rate low (internal/observability
+// README「写入」).
 var callRecords = observability.Config{
 	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
 	RetryMax:     5 * time.Second,
@@ -124,12 +125,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger)
+	routes, adminRoutes, err := console.routes(ctx, db, tel, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.adminAddr, console.frontend.Admin(), cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, adminRoutes, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -152,11 +153,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 // read from protected files, whose errors name the variable and never the path or the contents, and the contract
 // the guard enforces.
 type consoleParts struct {
-	cfg      nodeSettings
-	master   *secret.Keyring // seals users' TOTP secrets
-	hashes   *secret.MACKeys // keys API keys are hashed with
-	contract *contract
-	frontend *webui.Frontend // the pages of the three apps
+	cfg           nodeSettings
+	master        *secret.Keyring // seals users' TOTP secrets
+	hashes        *secret.MACKeys // keys API keys are hashed with
+	contract      *contract
+	adminContract *contract
+	frontend      *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -168,29 +170,37 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
-	contract, err := consoleContract()
+	console, err := consoleContract()
+	if err != nil {
+		return consoleParts{}, err
+	}
+	admin, err := adminContract()
 	if err != nil {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	return consoleParts{cfg, master, hashes, contract, frontend}, err
+	return consoleParts{cfg, master, hashes, console, admin, frontend}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
-// ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+// ctx ends, and puts the console's API in front of it for the public listener and the admin's API for the admin
+// listener. Opening an account also opens its balance (openBalance).
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (public, admin http.Handler, err error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := service.Load(ctx, logger); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger), nil
+	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
+	admin = adminRoutes(adminAPI{version: version(), accounts: service, db: db, logger: logger},
+		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
+	return public, admin, nil
 }
 
 // startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own

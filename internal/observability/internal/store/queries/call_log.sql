@@ -4,13 +4,14 @@
 -- was unknown and is retried, is left as it is.
 INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, key_id, end_user_hash, ip, client_app,
     session_id, subagent_id, request_class, language, used_tools, has_image, has_file, model, endpoint_id, source_class,
-    attempt_count, route, ledger_entry_ids, usage, service_tier, price_nano, cost_nano, currency, free_of_charge,
+    egress, attempt_count, route, ledger_entry_ids, usage, service_tier, price_nano, cost_nano, currency, free_of_charge,
     latency_ms, first_token_ms, finish_reason, error_kind, consent_version, training_allowed)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'request_class', r ->> 'language',
     (r ->> 'used_tools')::boolean, (r ->> 'has_image')::boolean, (r ->> 'has_file')::boolean, r ->> 'model',
-    (r ->> 'endpoint_id')::uuid, r ->> 'source_class', (r ->> 'attempt_count')::smallint, (r ->> 'route')::jsonb,
+    (r ->> 'endpoint_id')::uuid, r ->> 'source_class', r ->> 'egress', (r ->> 'attempt_count')::smallint,
+    (r ->> 'route')::jsonb,
     ARRAY(SELECT jsonb_array_elements_text(r -> 'ledger_entry_ids'))::uuid[], r -> 'usage', r ->> 'service_tier',
     (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',

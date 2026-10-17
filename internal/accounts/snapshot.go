@@ -43,6 +43,11 @@ type Site struct {
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
 type lifetime struct{ idle, max time.Duration }
 
+// seconds are the lifetimes as the queries that check a session against its site's now take them.
+func (l lifetime) seconds() (maxAge, idle int64) {
+	return int64(l.max / time.Second), int64(l.idle / time.Second)
+}
+
 // The defaults of a site that sets none: 10 credits a day for a new key; console sessions idle out after 7 days and
 // last at most 30, admin sessions 30 minutes and 12 hours.
 const defaultNewKeyDailyLimit = 10_000_000_000

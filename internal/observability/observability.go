@@ -1,5 +1,5 @@
-// Package observability keeps the call log: one metadata row per request, written after the request ends, read back
-// by the account it belongs to (README.md). It holds no conversation content and no credential.
+// Package observability keeps the call log: one metadata row per request and one per attempt, written after the request
+// ends, read back by the account the call belongs to (README.md). It holds no conversation content and no credential.
 package observability
 
 import (
@@ -48,9 +48,37 @@ func HashEndUser(key []byte, id string) EndUserHash {
 	return EndUserHash{sum: [sha256.Size]byte(mac.Sum(nil))}
 }
 
-// CallRecord is everything the log keeps of one request, known only while it happened. Amounts are in billing's
-// smallest unit. It names no key, credential or conversation text; the attempts, the ledger entries and the
-// supplier charges are kept by their owners under the same ID, which this record names where it can.
+// AttemptOutcome is how an attempt ended. Committed means content reached the client; Failed means it did not; Unknown
+// means the supplier may have run the request.
+type AttemptOutcome string
+
+// The outcomes an attempt record keeps.
+const (
+	AttemptCommitted AttemptOutcome = "committed"
+	AttemptFailed    AttemptOutcome = "failed"
+	AttemptUnknown   AttemptOutcome = "unknown"
+)
+
+// AttemptRecord is one try at an endpoint, known only while it happened. The call it belongs to gives the request ID,
+// the request's start (the partition key) and the tenant. The supplier's cost and reconciliation key stay with
+// suppliers, which keeps them by (request ID, sequence); this record is what makes the attempt findable there.
+type AttemptRecord struct {
+	Seq         platform.AttemptSeq // 1 to platform.MaxAttempts, in the order the attempts were made
+	Endpoint    uuid.UUID
+	Supplier    uuid.UUID
+	SourceClass string // official, cloud or relay
+	Egress      string // the outbound route, by name
+	Outcome     AttemptOutcome
+	ErrorKind   string
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	FirstToken  time.Duration // 0 when the attempt produced no output
+}
+
+// CallRecord is everything the log keeps of one request, known only while it happened, and its attempts. Amounts are
+// in billing's smallest unit. It names no key, credential or conversation text; the ledger entries and supplier
+// charges are kept by their owners under the same ID. The call's endpoint, source class, egress and attempt count are
+// the last attempt's, so the row cannot disagree with its attempts.
 type CallRecord struct {
 	ID                               uuid.UUID // the request ID
 	At                               time.Time // when the request started
@@ -61,10 +89,8 @@ type CallRecord struct {
 	Class                            string // request class, such as chat or embeddings
 	Language                         string
 	UsedTools, HasImage, HasFile     bool
-	Model                            string    // the public name the client asked for
-	Endpoint                         uuid.UUID // the endpoint of the final attempt; the nil UUID if none was made
-	SourceClass                      string
-	Attempts                         int
+	Model                            string // the public name the client asked for
+	Attempts                         []AttemptRecord
 	Route                            []byte // a JSON object, routing's record of how the endpoint was chosen
 	Ledger                           []uuid.UUID
 	Usage                            map[catalog.Item]int64
@@ -99,6 +125,7 @@ type row struct {
 	Model           string           `json:"model"`
 	EndpointID      string           `json:"endpoint_id"`
 	SourceClass     string           `json:"source_class"`
+	Egress          string           `json:"egress"`
 	AttemptCount    int              `json:"attempt_count"`
 	Route           string           `json:"route"`
 	LedgerEntryIDs  []string         `json:"ledger_entry_ids"`
@@ -116,8 +143,49 @@ type row struct {
 	TrainingAllowed bool             `json:"training_allowed"`
 }
 
-// newRow checks what the database cannot say well and converts r. Everything else is the table's to refuse.
-func newRow(r CallRecord) (row, error) {
+// attemptRow is an AttemptRecord as the insert statement reads it: the call's ID, start and tenant, then its own
+// fields. Its members are the table's column names.
+type attemptRow struct {
+	RequestID    string    `json:"request_id"`
+	At           time.Time `json:"at"`
+	Seq          int16     `json:"attempt_seq"`
+	SiteID       string    `json:"site_id"`
+	AccountID    string    `json:"account_id"`
+	EndpointID   string    `json:"endpoint_id"`
+	SupplierID   string    `json:"supplier_id"`
+	SourceClass  string    `json:"source_class"`
+	Egress       string    `json:"egress"`
+	Outcome      string    `json:"outcome"`
+	ErrorKind    string    `json:"error_kind"`
+	StartedAt    time.Time `json:"started_at"`
+	FinishedAt   time.Time `json:"finished_at"`
+	FirstTokenMs int64     `json:"first_token_ms"`
+}
+
+// newRows checks what the database cannot say well and converts r and its attempts. The call's endpoint, source
+// class, egress and attempt count come from the last attempt, so the two statements below always agree.
+func newRows(r CallRecord) (row, []attemptRow, error) {
+	if len(r.Attempts) > platform.MaxAttempts {
+		return row{}, nil, fmt.Errorf("attempts: %d, at most %d", len(r.Attempts), platform.MaxAttempts)
+	}
+	attempts := make([]attemptRow, len(r.Attempts))
+	want := platform.AttemptSeq(1)
+	for i, a := range r.Attempts {
+		if a.Seq != want {
+			return row{}, nil, fmt.Errorf("attempt %d: sequence %d, want %d", i+1, a.Seq, want)
+		}
+		want++
+		var err error
+		if attempts[i], err = newAttemptRow(r, a); err != nil {
+			return row{}, nil, err
+		}
+	}
+	call, err := newCallRow(r)
+	return call, attempts, err
+}
+
+// newCallRow converts the call's own fields. It derives what each attempt already says.
+func newCallRow(r CallRecord) (row, error) {
 	route := string(r.Route)
 	if route == "" {
 		route = "{}"
@@ -131,14 +199,12 @@ func newRow(r CallRecord) (row, error) {
 		}
 		usage[item.String()] = n
 	}
-	for name, text := range map[string]string{
+	if err := checkText(map[string]string{
 		"client app": r.ClientApp, "session": r.SessionID, "subagent": r.SubagentID,
-		"class": r.Class, "language": r.Language, "model": r.Model, "source class": r.SourceClass,
+		"class": r.Class, "language": r.Language, "model": r.Model,
 		"finish reason": r.FinishReason, "error kind": r.ErrorKind, "consent version": r.ConsentVersion,
-	} {
-		if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
-			return row{}, fmt.Errorf("%s: not valid text (bad UTF-8 or a NUL)", name)
-		}
+	}); err != nil {
+		return row{}, err
 	}
 	if r.ServiceTier > catalog.ServiceTierFast {
 		return row{}, fmt.Errorf("service tier: unknown value %d", uint8(r.ServiceTier))
@@ -154,15 +220,60 @@ func newRow(r CallRecord) (row, error) {
 	if r.EndUser != (EndUserHash{}) {
 		endUser = hex.EncodeToString(r.EndUser.sum[:])
 	}
+	endpoint, sourceClass, egress := uuid.Nil().String(), "", ""
+	if n := len(r.Attempts); n > 0 {
+		last := r.Attempts[n-1]
+		endpoint, sourceClass, egress = last.Endpoint.String(), last.SourceClass, last.Egress
+	}
 	return row{
 		ID: r.ID.String(), At: r.At, SiteID: r.Site.String(), AccountID: r.Account.String(),
 		WorkspaceID: r.Workspace.String(), KeyID: r.Key.String(), EndUserHash: endUser, IP: r.IP.String(),
 		ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, RequestClass: r.Class,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
-		EndpointID: r.Endpoint.String(), SourceClass: r.SourceClass, AttemptCount: r.Attempts, Route: route,
+		EndpointID: endpoint, SourceClass: sourceClass, Egress: egress, AttemptCount: len(r.Attempts), Route: route,
 		LedgerEntryIDs: ledger, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed,
 	}, nil
+}
+
+// newAttemptRow converts one attempt, taking the request ID, start and tenant from the call it belongs to.
+func newAttemptRow(call CallRecord, a AttemptRecord) (attemptRow, error) {
+	switch a.Outcome {
+	case AttemptCommitted, AttemptFailed, AttemptUnknown:
+	default:
+		return attemptRow{}, fmt.Errorf("attempt %d: outcome %q, want committed, failed or unknown", a.Seq, a.Outcome)
+	}
+	if a.Endpoint == uuid.Nil() || a.Supplier == uuid.Nil() {
+		return attemptRow{}, fmt.Errorf("attempt %d: endpoint and supplier are required", a.Seq)
+	}
+	if a.StartedAt.IsZero() || a.FinishedAt.IsZero() || a.FinishedAt.Before(a.StartedAt) {
+		return attemptRow{}, fmt.Errorf("attempt %d: start and finish times are required, finish not before start", a.Seq)
+	}
+	if a.FirstToken < 0 {
+		return attemptRow{}, fmt.Errorf("attempt %d: first token %s is negative", a.Seq, a.FirstToken)
+	}
+	if err := checkText(map[string]string{
+		"source class": a.SourceClass, "egress": a.Egress, "error kind": a.ErrorKind,
+	}); err != nil {
+		return attemptRow{}, fmt.Errorf("attempt %d: %w", a.Seq, err)
+	}
+	return attemptRow{
+		RequestID: call.ID.String(), At: call.At, Seq: int16(a.Seq), SiteID: call.Site.String(),
+		AccountID: call.Account.String(), EndpointID: a.Endpoint.String(), SupplierID: a.Supplier.String(),
+		SourceClass: a.SourceClass, Egress: a.Egress, Outcome: string(a.Outcome), ErrorKind: a.ErrorKind,
+		StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, FirstTokenMs: a.FirstToken.Milliseconds(),
+	}, nil
+}
+
+// checkText refuses text the database cannot store, before it reaches a batch: bad UTF-8 and a NUL have no place in
+// any of the log's text columns.
+func checkText(fields map[string]string) error {
+	for name, text := range fields {
+		if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+			return fmt.Errorf("%s: not valid text (bad UTF-8 or a NUL)", name)
+		}
+	}
+	return nil
 }
