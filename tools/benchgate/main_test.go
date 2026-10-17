@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,63 @@ func TestParse(t *testing.T) {
 	if diff := cmp.Diff([]string{"BenchmarkSlow"}, run.skipped); diff != "" {
 		t.Errorf("skipped (-want +got):\n%s", diff)
 	}
+}
+
+// TestBenchmarksRunPackagesInParallel runs the go command: one `go test` runs the benchmark packages of an invocation
+// one after another whatever -p says, so benchmarks() gives each package its own invocation and runs four at once. Each
+// package writes a marker of its own and waits for the other package's, so the other marker appears only while both run
+// at once; packages run one after another fail after the deadline.
+func TestBenchmarksRunPackagesInParallel(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module probe\n\ngo 1.27.2\n",
+		"a/a_test.go": overlapBenchmark("a", "b"),
+		"b/b_test.go": overlapBenchmark("b", "a"),
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := benchmarks(t.Context(), dir, "the probe module"); err != nil {
+		t.Fatalf("the packages did not run at the same time: %v", err)
+	}
+}
+
+// overlapBenchmark is a benchmark that writes its package's marker and waits for the other package's. A benchmark runs
+// in its package's directory, so the module root is one up. Both markers exist from the second run on, which ends the
+// wait at once; a package whose partner never runs fails after the deadline.
+func overlapBenchmark(mine, theirs string) string {
+	return fmt.Sprintf(`package %[1]s
+
+import (
+	"os"
+	"testing"
+	"time"
+)
+
+func BenchmarkOverlap(b *testing.B) {
+	if err := os.WriteFile("../marker-%[1]s", nil, 0o600); err != nil {
+		b.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat("../marker-%[2]s"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			b.Fatal("the other package did not run at the same time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for b.Loop() {
+	}
+}
+`, mine, theirs)
 }
 
 // probeModule writes a throwaway module with the given test file and returns its directory.

@@ -105,14 +105,11 @@ md-checks: docs modules
 record format scenario request:
     go run ./internal/protocol/internal/record internal/protocol/testdata {{ quote(format) }} {{ quote(scenario) }} {{ quote(request) }}
 
-# Benchmarks of two jobs at once measure each other, so on a shared machine they take turns, as the CI server's README
-# asks of every shared resource: through a /tmp lock, which is what flock is for and where it exists. Windows and macOS
-# have neither the other jobs nor flock, and a developer's machine benchmarks alone.
-bench_lock := if os() == "linux" { "flock /tmp/axiom-bench.lock" } else { "" }
-
-# Run the benchmarks at a base commit and here: more allocations fail, timings are only reported
+# Run the benchmarks at a base commit and here: more allocations fail, timings are only reported. Jobs on a shared
+# machine can run it at the same time: every benchmark has a fixed iteration count with the collector off on one
+# processor per binary, so another job's load cannot move its allocation count (tools/benchgate, docs/performance.md).
 bench-compare base:
-    {{ bench_lock }} go run -C tools ./benchgate .. {{ quote(base) }}
+    go run -C tools ./benchgate .. {{ quote(base) }}
 
 compose := "docker compose -f deploy/compose.yaml"
 
@@ -128,10 +125,10 @@ up: web-embed
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
-# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name, so it
-# works without deploy/.env.
+# Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name — the
+# one COMPOSE_PROJECT_NAME names for a CI job, otherwise axiom — so it works without deploy/.env.
 down *flags:
-    docker compose --project-name axiom down {{ flags }}
+    docker compose --project-name "${COMPOSE_PROJECT_NAME:-axiom}" down {{ flags }}
 
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the

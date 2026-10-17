@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -28,7 +29,9 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/perf/benchfmt"
@@ -48,7 +51,21 @@ const allocsUnit = "allocs/op"
 // whole gate as short as the 100 ms it replaced.
 const benchtime = "20x"
 
-var bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", benchtime, "./..."}
+// packages is how many benchmark packages run at once. One `go test` cannot do it: cmd/go runs the benchmark packages
+// of an invocation one after another whatever -p says ("Force benchmarks to run in serial" in cmd/go/internal/test), so
+// the gate gives every package its own invocation and keeps `packages` of them in flight. The test binaries still get
+// one processor each and the collector off, so their allocation counts do not depend on how many run at once. Four at
+// once, the same bound as `just test`: the host is shared with other jobs, and with the collector off the heaviest
+// package (protocol) peaks near 530 MiB.
+const packages = 4
+
+var (
+	// list asks the testing package which benchmarks each package has; -list runs none of them, and -p builds the test
+	// binaries four at a time.
+	list = []string{"test", "-json", "-run", "^$", "-list", "^Benchmark", "-p", strconv.Itoa(packages), "./..."}
+	// bench runs every benchmark of the one package benchmarks() appends to it.
+	bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", benchtime, "-p", strconv.Itoa(packages)}
+)
 
 func main() {
 	if len(os.Args) != 3 {
@@ -153,10 +170,92 @@ func sameDir(a, b string) bool {
 	return a == b
 }
 
-// benchmarks runs every benchmark in dir at the fixed iteration count, with the garbage collector off and on one
-// processor; the go command's stderr goes straight to ours.
+// benchmarks runs every benchmark in dir at the fixed iteration count, one `go test` per package that has some, up to
+// `packages` at a time (see packages). The discovery pass is the go command's own answer to which packages have
+// benchmarks, and it builds their test binaries, so the runs that follow only start them.
 func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
-	cmd := exec.CommandContext(ctx, "go", bench...)
+	targets, err := benchmarkPackages(ctx, dir)
+	if err != nil {
+		return measurements{}, fmt.Errorf("list the benchmarks of %s: %w", label, err)
+	}
+	var (
+		slots    = make(chan struct{}, packages)
+		wg       sync.WaitGroup
+		runs     = make([]measurements, len(targets))
+		failures = make([]error, len(targets))
+	)
+	for i, pkg := range targets {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			run, err := benchmark(ctx, dir, pkg)
+			if err != nil {
+				failures[i] = fmt.Errorf("package %s: %w", pkg, err)
+				return
+			}
+			runs[i] = run
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(failures...); err != nil {
+		return measurements{}, fmt.Errorf("run the benchmarks of %s: %w", label, err)
+	}
+	all := measurements{allocs: map[string][]float64{}}
+	for _, run := range runs {
+		all.text = append(all.text, run.text...)
+		all.diagnostics = append(all.diagnostics, run.diagnostics...)
+		all.skipped = append(all.skipped, run.skipped...)
+		for name, samples := range run.allocs {
+			all.allocs[name] = append(all.allocs[name], samples...)
+		}
+	}
+	return all, nil
+}
+
+// benchmarkPackages returns the packages of dir that have a benchmark, in the go command's order.
+func benchmarkPackages(ctx context.Context, dir string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "go", list...)
+	cmd.Env = append(os.Environ(), "GOGC=off", "GOMAXPROCS=1")
+	cmd.Dir, cmd.Stderr = dir, os.Stderr
+	out, runErr := cmd.Output()
+	found := map[string]bool{}
+	var diagnostics, text []byte
+	dec := jsontext.NewDecoder(bytes.NewReader(out))
+	for {
+		var ev event
+		if err := json.UnmarshalDecode(dec, &ev); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("decode go test events: %w", err)
+		}
+		switch ev.Action {
+		case "build-output":
+			diagnostics = append(diagnostics, ev.Output...)
+		case "output":
+			text = append(text, ev.Output...)
+			for line := range strings.Lines(ev.Output) {
+				if strings.HasPrefix(line, "Benchmark") { // -list prints the name of every benchmark it found
+					found[ev.Package] = true
+				}
+			}
+		}
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("%w\n%s%s", runErr, diagnostics, text)
+	}
+	targets := slices.Sorted(maps.Keys(found))
+	if len(targets) == 0 {
+		return nil, errors.New("no package has a benchmark")
+	}
+	return targets, nil
+}
+
+// benchmark runs the benchmarks of one package at the fixed iteration count, with the garbage collector off and on one
+// processor; the go command's stderr goes straight to ours.
+func benchmark(ctx context.Context, dir, pkg string) (measurements, error) {
+	cmd := exec.CommandContext(ctx, "go", append(slices.Clone(bench), pkg)...)
 	// A collection empties the pools the code keeps its buffers in, and the run then allocates them again: that cost is
 	// per operation, not per run, so more iterations do not spread it. Aggregate with 64-KiB deltas read 582 to 585
 	// allocs/op at five to fifty iterations with the collector on, and 575 with it off; Relay's benchmark turns it off
@@ -171,19 +270,20 @@ func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
 	out, runErr := cmd.Output()
 	run, parseErr := parse(bytes.NewReader(out))
 	if runErr != nil {
-		return measurements{}, fmt.Errorf("run the benchmarks of %s: %w\n%s%s", label, runErr, run.diagnostics, run.text)
+		return measurements{}, fmt.Errorf("%w\n%s%s", runErr, run.diagnostics, run.text)
 	}
 	if parseErr != nil {
-		return measurements{}, fmt.Errorf("read the benchmarks of %s: %w", label, parseErr)
+		return measurements{}, fmt.Errorf("read the benchmarks: %w", parseErr)
 	}
 	return run, nil
 }
 
-// event is the part of a `go test -json` event the gate needs.
+// event is the part of a `go test -json` event the gate needs; Package names the package of the events of the list pass.
 type event struct {
-	Action string
-	Test   string
-	Output string
+	Action  string
+	Package string
+	Test    string
+	Output  string
 }
 
 // parse reads `go test -json` output: the text of every output event, in order, and the benchmarks that were skipped.
