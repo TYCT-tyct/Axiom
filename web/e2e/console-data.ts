@@ -71,7 +71,7 @@ const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
-    site: { name: "Axiom", key_prefix: "sk-ax-v1-", registration: "invite" },
+    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
