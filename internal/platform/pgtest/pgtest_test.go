@@ -30,6 +30,18 @@ func TestDockerHostFor(t *testing.T) {
 	}
 }
 
+// TestClusterURLIn: withcluster hands the run's cluster to every test binary by appending ClusterEnv to the
+// environment, so the last value is the run's; without one, the binary starts its own cluster.
+func TestClusterURLIn(t *testing.T) {
+	env := []string{"PATH=/bin", ClusterEnv + "=first", "HOME=/home", ClusterEnv + "=second"}
+	if got := clusterURLIn(env); got != "second" {
+		t.Errorf("clusterURLIn = %q, want the last value in %s", got, ClusterEnv)
+	}
+	if got := clusterURLIn([]string{"PATH=/bin"}); got != "" {
+		t.Errorf("clusterURLIn without %s = %q, want empty", ClusterEnv, got)
+	}
+}
+
 func nameOf(t *testing.T, databaseURL string) string {
 	t.Helper()
 	u, err := url.Parse(databaseURL)

@@ -333,27 +333,29 @@ type settlement struct {
 }
 
 type options struct {
-	entries     int // endpoints in the route; 1 when zero
-	maxAttempts int // 3 when zero
-	config      func(*Config)
-	routing     routing.Config
-	script      map[int][]scripted // by endpoint number, from 1
-	policy      suppliers.CallPolicy
-	startBy     time.Duration // after the start of the call; two minutes when zero
-	final       billing.Final
-	settleErr   error               // every settlement fails with it
-	settle      func(try int) error // the error of each settlement, from 1, when settleErr is nil
-	extend      func(ctx context.Context, r billing.ExtendRequest) error
-	segmentable bool          // the entries are reserved by segment of 40 output tokens
-	cost        int64         // of every attempt
-	flushed     chan struct{} // the journal's flush; closed when nil
-	stream      *bool         // the request's stream member; true when nil
-	supplier    func(n int) int
-	alive       func() bool
-	mutate      func(*Call)
-	noSlot      []int
-	memory      int64  // the node's budget; memorySize when zero
-	price       string // the entries' price schedule; cheap when empty
+	entries      int // endpoints in the route; 1 when zero
+	maxAttempts  int // 3 when zero
+	config       func(*Config)
+	routing      routing.Config
+	script       map[int][]scripted // by endpoint number, from 1
+	policy       suppliers.CallPolicy
+	startBy      time.Duration // after the start of the call; two minutes when zero
+	final        billing.Final
+	settleErr    error               // every settlement fails with it
+	settle       func(try int) error // the error of each settlement, from 1, when settleErr is nil
+	extend       func(ctx context.Context, r billing.ExtendRequest) error
+	segmentable  bool          // the entries are reserved by segment of 40 output tokens
+	cost         int64         // of every attempt
+	costNotKnown bool          // whether Costs says the cost leaves something out
+	costErr      error         // the error Costs fails with
+	flushed      chan struct{} // the journal's flush; closed when nil
+	stream       *bool         // the request's stream member; true when nil
+	supplier     func(n int) int
+	alive        func() bool
+	mutate       func(*Call)
+	noSlot       []int
+	memory       int64  // the node's budget; memorySize when zero
+	price        string // the entries' price schedule; cheap when empty
 }
 
 type harness struct {
@@ -410,7 +412,8 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
-		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts(o.cost), Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -514,10 +517,15 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 	return l.o.final, nil
 }
 
-type fakeCosts int64
+// fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with.
+type fakeCosts struct {
+	cost  int64
+	known bool
+	err   error
+}
 
-func (c fakeCosts) Cost(suppliers.AttemptReceipt, []catalog.Usage) (int64, error) {
-	return int64(c), nil
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (int64, bool, error) {
+	return c.cost, c.known, c.err
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no

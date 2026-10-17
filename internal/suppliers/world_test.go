@@ -60,8 +60,8 @@ func (fakeQuirks) Classify(status int, _ http.Header, _ []byte) adapter.Failure 
 	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Unknown{Status: status}}
 }
 
-// world is a database with one supplier, group, credential and endpoint priced at 0.075 per input token and 0.3 per
-// output token, and a service that has loaded them.
+// world is a database with one supplier, settled in USD at 2 a unit, its group, credential and endpoint priced at 0.075
+// per input token and 0.3 per output token, and a service that has loaded them.
 type world struct {
 	t                                         *testing.T
 	db                                        *pg.DB
@@ -174,6 +174,9 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active' WHERE id = $1", w.supplier); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 2, 'test', 'seed')", w.supplier); err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = 'maple' WHERE id = $1", w.group)
 	return err
 }
@@ -184,6 +187,25 @@ func (w *world) tx(fn func(ctx context.Context, tx pg.Tx) error) {
 	if err := w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) error { return fn(w.t.Context(), tx) }); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// addValue gives the supplier another unit value and returns the row's id.
+func (w *world) addValue(v string) uuid.UUID {
+	w.t.Helper()
+	var id uuid.UUID
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return tx.QueryRow(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'later') RETURNING id", w.supplier, v).Scan(&id)
+	})
+	return id
+}
+
+// insertValue writes a unit value and returns the database's answer, for a value the table may refuse.
+func (w *world) insertValue(v string) error {
+	w.t.Helper()
+	return w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := tx.Exec(w.t.Context(), "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'bad')", w.supplier, v)
+		return err
+	})
 }
 
 // pointAt makes the endpoint's calls go to a test server instead of the supplier's address.

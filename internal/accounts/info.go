@@ -11,7 +11,8 @@ import (
 )
 
 // SessionInfo is what a page shows of the session it is in: who is signed in, the CSRF token it must send back, how
-// long the session lasts if it is not used again, and what it may do on its own account.
+// long the session lasts if it is not used again, and what it may do on its own scope: the user's account on the
+// console, the platform on the admin.
 type SessionInfo struct {
 	User        UserID
 	Account     AccountID
@@ -29,9 +30,15 @@ type SessionInfo struct {
 // every request (Authorize); this list only tells the page what to show.
 func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error) {
 	var rows []SessionInfoRow
+	life := s.snapshot.Load().sites[p.site].sessions[p.surface]
+	maxAge, idle := life.seconds()
 	var roles []uuid.UUID
 	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) (err error) {
-		if rows, err = s.queries.SessionInfo(ctx, tx, uuid.UUID(p.session)); err != nil {
+		if rows, err = s.queries.SessionInfo(ctx, tx, SessionInfoParams{ID: uuid.UUID(p.session), MaxAgeSeconds: maxAge, IdleSeconds: idle}); err != nil {
+			return err
+		}
+		if p.surface == Admin { // the admin session acts on the platform: its roles are the user's platform grants
+			roles, err = s.queries.PlatformRoles(ctx, tx, uuid.UUID(p.user))
 			return err
 		}
 		roles, err = s.queries.MemberRoles(ctx, tx, MemberRolesParams{AccountID: uuid.UUID(p.account), UserID: uuid.UUID(p.user)})

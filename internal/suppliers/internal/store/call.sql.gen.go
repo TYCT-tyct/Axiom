@@ -303,11 +303,13 @@ func (q *Queries) ListJournal(ctx context.Context, db DBTX, requestID uuid.UUID)
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
+    v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
+JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
@@ -316,25 +318,29 @@ ORDER BY e.id, c.id
 `
 
 type ListRoutableRow struct {
-	EndpointID     uuid.UUID
-	Formats        []string
-	SupplierID     uuid.UUID
-	Kind           string
-	Origin         string
-	NativeUnit     string
-	CredentialID   uuid.UUID
-	Ciphertext     []byte
-	Nonce          []byte
-	WrappedDek     []byte
-	KeyVersion     *int64
-	MaxConcurrency int32
-	ExpiresAt      *time.Time
-	CostScheduleID uuid.UUID
-	Schedule       []byte
+	EndpointID         uuid.UUID
+	Formats            []string
+	SupplierID         uuid.UUID
+	Kind               string
+	Origin             string
+	NativeUnit         string
+	SettlementCurrency string
+	UnitValueID        uuid.UUID
+	UnitValue          string
+	CredentialID       uuid.UUID
+	Ciphertext         []byte
+	Nonce              []byte
+	WrappedDek         []byte
+	KeyVersion         *int64
+	MaxConcurrency     int32
+	ExpiresAt          *time.Time
+	CostScheduleID     uuid.UUID
+	Schedule           []byte
 }
 
-// Every credential that can serve an endpoint: the supplier in use, the group chosen, the endpoint enabled with a cost
-// known, and a key that is bound. Expiry and cooldown are judged by the clock when a credential is picked.
+// Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
+// endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
+// cooldown are judged by the clock when a credential is picked.
 func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow, error) {
 	rows, err := db.Query(ctx, listRoutable)
 	if err != nil {
@@ -351,6 +357,9 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.Kind,
 			&i.Origin,
 			&i.NativeUnit,
+			&i.SettlementCurrency,
+			&i.UnitValueID,
+			&i.UnitValue,
 			&i.CredentialID,
 			&i.Ciphertext,
 			&i.Nonce,

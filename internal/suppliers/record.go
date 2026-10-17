@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 	"uuid"
@@ -73,6 +74,26 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 		cost.Flag = CostUnpriced
 	}
 	return cost, nil
+}
+
+// Credits is the attempt's Cost in billionths of a credit of currency: its native amount times the unit value the
+// attempt began with, rounded up once (docs/domains/billing.md「钱的表示」). known is false when that is not the whole
+// cost: the estimate leaves some usage out, the supplier is paid in another currency (there are no exchange rates yet),
+// or the amount is beyond what an amount holds. The priced part is still given when it can be told in currency.
+func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (credits int64, known bool, err error) {
+	c, err := s.Cost(r, usage)
+	if err != nil || r.currency != currency {
+		return 0, false, err
+	}
+	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
+	q, m := new(big.Int).DivMod(new(big.Int).Mul(money.Num(), big.NewInt(1e9)), money.Denom(), new(big.Int))
+	if m.Sign() != 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if !q.IsInt64() {
+		return 0, false, nil
+	}
+	return q.Int64(), c.Flag != CostUnpriced, nil
 }
 
 // usedItems are the items the usage has a count of.
