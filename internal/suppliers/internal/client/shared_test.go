@@ -134,3 +134,26 @@ func TestASharedLimiterRefusesABucketNobodyDeclared(t *testing.T) {
 		t.Errorf("an undeclared bucket: %v, want an error that is not a full bucket", err)
 	}
 }
+
+// TestARepeatedBucketIsCountedOnceInTheDatabase: the shared limiter counts a bucket a request names twice once, and the
+// statements that make and close it hold one key once, which is what ON CONFLICT DO UPDATE requires: naming a key twice
+// in one statement is the error "cannot affect a row a second time".
+func TestARepeatedBucketIsCountedOnceInTheDatabase(t *testing.T) {
+	t.Parallel()
+	database, c := newDatabase(t), newClock()
+	a, b := node(t, database, c, specs, "account:1"), node(t, database, c, specs, "account:1")
+	repeated := []string{"global", "global"}
+	for i := range 3 { // global allows three
+		if err := a.Take(t.Context(), repeated); err != nil {
+			t.Fatalf("request %d naming its bucket twice: %v", i+1, err)
+		}
+	}
+	blockedUntil(t, a.Take(t.Context(), []string{"global"}))
+	until := c.t.Add(20 * time.Minute)
+	if err := a.Block(t.Context(), repeated, until); err != nil {
+		t.Fatalf("closing a bucket named twice: %v", err)
+	}
+	if got := blockedUntil(t, b.Take(t.Context(), []string{"global"})); !got.Equal(until) {
+		t.Errorf("blocked until %v, want %v", got, until)
+	}
+}
