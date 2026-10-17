@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: Prepare walks the body token by token
 	"errors"
 	"fmt"
+	"strconv"
 
 	"axiom/internal/catalog"
 )
@@ -21,7 +22,9 @@ type Target struct {
 	// The rest is what a conversion needs to know of a Messages model (README.md「跨格式转换」). The gateway fills it
 	// from the model's spec: it is data, never guessed from the model's name.
 	//
-	// MaxOutput is the model's default output cap, which Messages requires when the request sets none.
+	// MaxOutput is the output cap a request that sets none is sent with, 0 for none: the one it was quoted at, which
+	// the gateway takes from the route's entry. Messages requires one; Responses gets it as max_output_tokens, whether
+	// the request is converted or rewritten.
 	MaxOutput int64
 	// Thinking is how the model is asked to reason.
 	Thinking Thinking
@@ -65,6 +68,14 @@ type Rewrites struct {
 // defaultIdentityLen is what Identity may return when Rewrites.IdentityLen is 0: derived identifiers are short opaque
 // values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
 const defaultIdentityLen = 128
+
+// withDefaults fills in what a zero Rewrites value leaves to its defaults.
+func (w Rewrites) withDefaults() Rewrites {
+	if w.IdentityLen == 0 {
+		w.IdentityLen = defaultIdentityLen
+	}
+	return w
+}
 
 // errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
 var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
@@ -132,15 +143,9 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
 	}
-	if w.IdentityLen == 0 {
-		w.IdentityLen = defaultIdentityLen
-	}
-	size := len(body) + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
-	for _, item := range w.History {
-		size += len(item) + 1
-	}
+	w = w.withDefaults()
 	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
+		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
 	}
 	if err := p.top(rules); err != nil {
 		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
@@ -149,6 +154,48 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return p.out, nil
+}
+
+// rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
+func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
+	w = w.withDefaults()
+	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
+	for _, item := range w.History {
+		size += len(item) + 1
+	}
+	return size
+}
+
+// What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
+// reads them into structures, one for every object or null in an array of them and, in an object whose members it does
+// not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
+// The body does not say how many there are, but counting its braces, nulls and colons bounds them (any other element
+// of such an array is refused where it stands): those inside strings only add. The constants are
+// the structures' sizes, doubled for the growth of the slices they sit in, with room to spare (measured 2026-10-16, a
+// body of "{}," allocates 1.3 KiB for each object, and 100,000 unknown members 485 bytes each); TestPrepareCost holds
+// them to what bodies of the worst shapes allocate.
+const (
+	convertPerByte   = 6
+	convertPerObject = 2048
+	convertPerMember = 1024
+)
+
+// PrepareCost is the most memory Prepare holds at once for a request, besides the body itself, so that the node's
+// budget is asked for it before Prepare allocates it. A rewrite writes into one buffer whose capacity is known before
+// it starts, and unquotes an identifier or a response ID into a scratch, copies it to a string and grows the scratch by
+// doubling, which the body's size bounds three times over (2.5 measured, for an identifier of escapes); a conversion's
+// working set is bounded by the body's size, braces and colons (above). What stays is the capacity of Upstream.Body,
+// which is never more than the cost.
+func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
+	n := int64(len(body))
+	if r.Format == t.Format {
+		return int64(rewriteSize(rewriteRules[r.Format], len(body), t, w)) + 3*n
+	}
+	if r.Format != Chat {
+		return 0 // Prepare refuses at once: nothing is converted from another format
+	}
+	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
+	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
@@ -177,9 +224,10 @@ var (
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
 				"store": (*rewriter).store, "include": (*rewriter).include, "prompt_cache_key": (*rewriter).identity,
 				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
+				"max_output_tokens": (*rewriter).outputCap,
 			}),
 			add: (*rewriter).addResponses, identities: 3,
-			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}"),
+			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) + len(maxInt64),
 		},
 		Chat: {},
 	}
@@ -207,6 +255,9 @@ const (
 	addInclude = `,"include":["` + encrypted + `"]`
 	addInput   = `,"input":[`
 	wrapInput  = `,{"type":"message","role":"user","content":`
+	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
+	addOutputCap = `,"max_output_tokens":`
+	maxInt64     = "9223372036854775807"
 )
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
@@ -217,6 +268,7 @@ type rewriter struct {
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
+	capped                                bool            // max_output_tokens was given a value
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
 }
@@ -346,6 +398,16 @@ func (p *rewriter) store() error {
 	return err
 }
 
+// outputCap gives max_output_tokens the cap the request was quoted at when it is null, which stands for none.
+func (p *rewriter) outputCap() error {
+	v, err := p.dec.ReadValue()
+	if err == nil && v.Kind() == 'n' && p.t.MaxOutput > 0 {
+		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
+	}
+	p.capped = true
+	return err
+}
+
 func (p *rewriter) include() error {
 	p.included = true
 	if !p.t.EncryptedReasoning {
@@ -422,6 +484,9 @@ func (p *rewriter) addResponses() error {
 	}
 	if !p.stored {
 		p.out = append(p.out, addStore...)
+	}
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addOutputCap...), p.t.MaxOutput, 10)
 	}
 	if p.t.EncryptedReasoning && !p.included {
 		p.out = append(p.out, addInclude...)
