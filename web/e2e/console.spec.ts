@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page, type Route, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
+import { advanceUntil } from "./page-clock.ts";
 
 // The version `just web` stamped the build with; a test that compares against it fails when it is missing.
 const built = process.env.AXIOM_VERSION ?? "";
@@ -105,6 +106,10 @@ test("a refused call says the account may not see it, without asking again", asy
 });
 
 test("a server failure is retried, then shows its request ID, and retrying asks again", async ({ page }) => {
+  // The query waits between retries on the page's clock, which advanceUntil moves: the three attempts and the moment
+  // the error shows then cost no wall-clock time, so a loaded runner cannot make them arrive after the assertion gave
+  // up.
+  await page.clock.install();
   await openConsole(page, built);
   let calls = 0;
   await page.route(balancePath, (route) => {
@@ -112,12 +117,14 @@ test("a server failure is retried, then shows its request ID, and retrying asks 
     return calls <= 3 ? route.fulfill({ status: 500, headers: { "X-Request-ID": "req-500" } }) : route.fallback();
   });
   await page.goto("/console/");
-  await expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible();
+  await advanceUntil(page, () =>
+    expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible({ timeout: 100 }),
+  );
   await expect(page.getByText("请求 ID req-500")).toBeVisible();
   expect(calls).toBe(3);
 
   await page.getByRole("button", { name: "重试" }).click();
-  await expect(page.getByText("US$11.75")).toBeVisible();
+  await advanceUntil(page, () => expect(page.getByText("US$11.75")).toBeVisible({ timeout: 100 }));
   expect(calls).toBe(4);
 });
 
@@ -133,10 +140,7 @@ for (const { cause, answer } of [
     await page.route(balancePath, answer);
     await page.goto("/console/");
     const failed = page.getByText("连不上 Axiom，请检查网络后重试。");
-    await expect(async () => {
-      await page.clock.runFor(5_000);
-      await expect(failed).toBeVisible({ timeout: 100 });
-    }).toPass();
+    await advanceUntil(page, () => expect(failed).toBeVisible({ timeout: 100 }));
   });
 }
 
