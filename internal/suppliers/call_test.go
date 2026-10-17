@@ -214,6 +214,33 @@ func TestASuccessfulSendIsAuthenticatedAndKeepsTheKey(t *testing.T) {
 	}
 }
 
+// TestACompactingCallGoesToItsOwnPath: a call's path is the format's own, but for the compact call, which is not a
+// generation and has an endpoint of its own (docs/domains/gateway.md「路径与格式」, OpenAI《Compaction》, read
+// 2026-10-14).
+func TestACompactingCallGoesToItsOwnPath(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	server := newSupplierServer(t)
+	w.pointAt(server.URL)
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	resp, f := a.Send(ctx, Call{Format: protocol.Responses, Compact: true, Body: []byte(`{"model":"m"}`)})
+	if f != nil {
+		t.Fatalf("%+v", f)
+	}
+	_ = resp.Body.Close() //nolint:errcheck // nothing was read
+	a.Done()
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.path != "/v1/responses/compact" {
+		t.Errorf("the path is %q", server.path)
+	}
+}
+
 // TestTheClientsProtocolHeadersGoUpstream: anthropic-beta reaches the supplier, the client's anthropic-version beats
 // the default, and a header cannot replace the credential or the content type.
 func TestTheClientsProtocolHeadersGoUpstream(t *testing.T) {

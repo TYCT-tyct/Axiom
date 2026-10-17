@@ -193,7 +193,7 @@ func checkCharged(t *testing.T, h *harness) {
 	if len(a) != 3 {
 		t.Fatalf("attempts %+v", a)
 	}
-	input := estimatedInput(t, h)
+	input := estimatedInput(t, h, 1)
 	checkCosted(t, a)
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
@@ -244,14 +244,14 @@ func TestACostThatIsNotKnown(t *testing.T) {
 	}
 }
 
-// estimatedInput is the input of the call's second entry with its text at 4 bytes a token, which must be below the
-// admission's bound for the test to tell them apart.
-func estimatedInput(t *testing.T, h *harness) int64 {
+// estimatedInput is the input of the call's entry with its text at 4 bytes a token, which must be below the admission's
+// bound for the test to tell them apart.
+func estimatedInput(t *testing.T, h *harness, entry int) int64 {
 	t.Helper()
 	d := routing.DemandOf(&h.call.Request)
-	bound, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	bound, _ := billing.InputBound(d, h.call.Plan.Entries[entry].Limits)
 	d.TextBytes = (d.TextBytes + 3) / 4
-	input, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	input, _ := billing.InputBound(d, h.call.Plan.Entries[entry].Limits)
 	if input >= bound {
 		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
 	}

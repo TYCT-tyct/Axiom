@@ -2,7 +2,7 @@
 
 编排一次模型调用：认 key、读请求、准入与路由、调上游、计量与追加、结算、记录。对外行为见[接入与对外接口](../../docs/domains/gateway.md)，调用经过哪些模块见[总体架构的「一次调用怎么走」](../../docs/architecture.md#一次调用怎么走)；这里写代码层面的顺序、所有权、期限、并发、故障和测试。
 
-> 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G7（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
+> 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G8（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
 
 M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2。出口只有 `platform/egress` 直连。
 
@@ -45,7 +45,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 
 ## 入口与准入
 
-G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/messages`，`GET /models`；三个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。`/responses/compact` 随 G8；`count_tokens` 和只读的账户接口见「辅助接口」。
+G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`，`GET /models`；四个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。`count_tokens` 和只读的账户接口见「辅助接口」。
 
 **一次请求的顺序**（任何一步失败都由错误出口作答，已取的名额和内存经 `Call.Done` 归还）：
 
@@ -64,7 +64,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 **提交确认丢失**：`fn` 写完预留后 `Admit` 仍返回错误（提交失败、确认丢失、期限到），无法区分已提交还是已回滚，一律按"可能已提交"处理：回 503，不发上游，名额不立即归还，后台 `settleOrphan` 调 `billing.SettleOrphan`（账户闸的完成类、2s 一次，库出错退避 50ms 到 2s 重试，到 `SettleBackground` 为止），成功或放弃后才 `Call.Done`。`Handler.Drain` 等它们，期限到则停止重试，剩下的归清理。
 
-**`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
+**`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、compact 标记（`/responses/compact` 的调用原样透传）、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
 
 **错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的；Messages 的 `type` 由状态码决定。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
 - 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。所需金额和在途预留、`pending` 两种来源还没有，待 billing 报告。
@@ -143,7 +143,9 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 上游正常结束 | — | `Settle` 后 `Finish`；结算写不进则 `Final{Pending}` |
 | 追加没批准 | 截断：回 402 / 503，不再换 | 截断：以 `credits_insufficient` / `billing_unavailable` 结束 |
 
-**收尾**（`session.conclude`）只在这一处结算，所以每条出口恰好一次：运行 panic 时 `settleOnPanic` 以已有的尝试结算再让 panic 继续。尝试在 `attempt` 返回时已 `close`：取消它的 context、还凭证的名额和端点的在途数，按用量和回执（有上游的请求号）写好它的 `billing.AttemptResult`；`Settle` 之后才写结尾（I3）；提交前的错误用 `protocol.RenderError`，收了费的带上用量和费用（`axiom` 对象），没收费的不带。非流式请求（`stream` 不为 true）在准入后以 400 拒绝并释放预留，G8 取代。
+**收尾**（`session.conclude`）只在这一处结算，所以每条出口恰好一次：运行 panic 时 `settleOnPanic` 以已有的尝试结算再让 panic 继续。尝试在 `attempt` 返回时已 `close`：取消它的 context、还凭证的名额和端点的在途数，按用量和回执（有上游的请求号）写好它的 `billing.AttemptResult`；`Settle` 之后才写结尾（I3）；提交前的错误用 `protocol.RenderError`，收了费的带上用量和费用（`axiom` 对象），没收费的不带。
+
+**不要流的客户端**（`!Request.Stream`）走同一条收尾路径，只是答案是一整份响应体：见下文「非流式聚合与 compact」。
 
 **接缝**（没有生产路径上的 stub；`cmd/axiom` 还没有接线，这些补上才能接）：
 
@@ -210,7 +212,25 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - 一个请求一个所有者 goroutine：只有它调 `Relay` 的方法，同一时刻至多一个 `Next` 在读；`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效，所有者写完才再调 `Next`。
 - 写客户端经一把写锁（`session.wmu`），写锁还守着“已开始”“客户端已走”“已收尾”三个标志：提交后的保活由计时器在写锁下写 `protocol.KeepAlive(format)` 的预生成字节，不碰 `Relay`；每次写都在写期限内并推迟保活，收尾时先停保活再写结尾，之后不再写。空闲计时到期只取消 `attemptCtx`。
 - 收尾顺序固定：取消 `attemptCtx` → 等 `Next` 返回 → 所有者调 `Settle` → `Finish` 或 `Fail`。
-- 非流式客户端：`RelayOptions.Aggregate`，`Next` 不返回 `Out`，`Finish`、`Fail` 返回整个响应体，`Status()` 给它的状态码，没有内容时的失败是 `RenderError` 的答案，可以换端点（[protocol 的「非流式聚合」](../protocol/README.md#非流式聚合)）；每路输出预算 16 MiB；聚合内存申请不到（`ErrMemory`）是本地容量故障，按对外错误结束，不再回退。
+- 非流式客户端：`RelayOptions.Aggregate`，`Next` 不返回 `Out`，`Finish`、`Fail` 返回整个响应体，`Status()` 给它的状态码，没有内容时的失败是 `RenderError` 的答案，可以换端点（[protocol 的「非流式聚合」](../protocol/README.md#非流式聚合)）；每路输出预算 16 MiB；聚合内存申请不到（`ErrMemory`）是本地容量故障，按对外错误结束，不再回退。网关怎么用它见下文「非流式聚合与 compact」。
+
+## 非流式聚合与 compact
+
+G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`、`answerReply`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
+
+**不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真，`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`），不写响应头、不写对账日志。
+
+- **可以换端点**：读到内容之后断流、空闲超时，把这次尝试的 `Relay` 留下来（`session.part`），按 `routing.Decide` 的 `NextEntry` 换下一条，下一次尝试开始时把上一条放掉，所以各次尝试的内容从不混在一起。没有条目可试、或 `mayStart` 不再放行时，`left` 把留下的那一个交回，由它作答：Chat、Responses 以 200 带上已生成的内容和错误，Messages 以 502 只带错误（`Relay.Fail` 按格式决定），尝试的结局记 `Aggregated`（内容随回复交到客户端）或 `FailedBeforeCommit`（Messages 的 502）。保留的那次尝试在 `Run` 退出时也一定放掉（`defer s.let()`），容量与节点预算随之归还。
+- **不换端点的失败**：截断（预留追加不到）、节点内存不够（`ErrMemory`）、单次调用最长、客户端已走：没有内容交给客户端，`conclude` 直接以错误作答（402 / 503 / 408 / 不写），这次尝试记 `FailedBeforeCommit`，不再换条目——分别因为钱、本地容量和期限。
+- **写出**：`answerAggregate` 在 `Settle` 之后调 `Finish` 或 `Fail`，拿到整个响应体和 `Status()`；答 200 时先给对账日志补一条"已提交"（在写出之前，崩溃时清理才有依据），再用 `respond` 按 64 KiB 一块写出（每块重设写期限，整份另有总期限，见「超时与限额」；`Content-Type: application/json`，状态码取自 `Status()`）。结算写不进时照 `Final{Pending: true}` 走，响应体带 `axiom.billing_pending`、不带费用，与流式相同；失败且费用为零时与 `answer` 一样不带 `axiom` 对象。
+- **16 MiB**：每个聚合的回复最多持有 `aggregateLimit`（protocol 的「非流式聚合」），超出或节点预算不够都以 `ErrMemory` 结束，不换端点。
+
+**`/responses/compact`**（`Call.Compact`）：上游不流式、回复原样透传、请求只做最小的同格式改写、一次预留足（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。
+
+- 准入：`routing.Input.NoSegments` 让条目不可分段，预留按输出上限一次报足；这类调用读的是整份答复，所以端点不必能流式（路由对此例外）。`NativeOnly` 已有（请求格式是 Responses）：只有原生支持 Responses 的端点能服务它。
+- 请求：`protocol.Prepare` 按 `Target.Compact` 只改必须改的成员——模型名换成端点的名字，`user`、`safety_identifier`、`prompt_cache_key` 换成派生值，路由参数删除——`store`、`include`、输出上限、`input` 既不补也不改（[protocol 的「同格式改写」](../protocol/README.md#同格式改写)）；路径由 `suppliers.Call.Compact` 选（`/v1/responses/compact`，在 suppliers 的路径表里），等响应头的期限是 `CompactHeaderWait`（10 分钟，[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。请求带 `stream: true` 的在准入前就回 400：这个端点只给整份回复。
+- 回复：`readWhole` 一次读完，边读边向节点预算申请（上限 `compactLimit`，与聚合的 16 MiB 相同；扩容时新旧两块缓冲同时在，峰值见函数注释），每次读到字节就重置空闲计时；读完用 `protocol.UsageOf` 读出顶层 `usage` 作为这次尝试的用量，上游没报告的部分由结算暂估。读成功、客户端还在，就是这次调用的答案：`Settle` 之后 `answerReply` 把上游的状态码和字节按 64 KiB 一块写出（每块一个写期限，整份的总期限见「超时与限额」），并在写之前给对账日志补"已提交"；客户端已走则不写，记 `FailedBeforeCommit`。客户端在结算之后、写出之前离开，或写到一半停读：不再写，结算与金额不变，只是调用记录仍按已读到的报告记 `Aggregated`（内容没送到，这类回复没有可报告的输出，不会因此免单）。读失败（断流、空闲、断开、内存）时什么都没写，按失败的作用范围换条目或直接以错误作答（`failedReply`，与流式提交前相同）。
+- **费用**：透传的响应体里没有本站的费用字段，`Settle` 写不进时也不加 `axiom.billing_pending`（加了就不是原样）；费用与校正只在调用记录里查。
 
 ## 超时与限额
 
@@ -223,10 +243,11 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | 账户闸等待 | 200ms | 429 |
 | 准入名额加事务 | 合计 1s（一个 context 期限，闸、连接和事务共用）；`lock_timeout` 500ms、`statement_timeout` 800ms 只校验、暂不下发（见「入口与准入」） | 503，回滚无副作用 |
 | 建连、TLS | 各 10s（egress） | 换条目 |
-| 等上游的响应头（`HeaderWait`） | 60s | 取消这次尝试，换条目 |
+| 等上游的响应头（`HeaderWait`） | 60s；`/responses/compact` 是 `CompactHeaderWait`，10 分钟 | 取消这次尝试，换条目 |
 | 上游没有新数据（`IdleTimeout`） | 180s | 提交前换条目，提交后以 `timeout` 结束 |
 | 保活（`KeepAlive`） | 提交后 15s 没有写过就写一次 | — |
 | 向客户端写一次（`WriteTimeout`） | 10s；可分段的取 min(10s, 当前段余量 ÷ 最快输出速度) | 按客户端已走处理 |
+| 向客户端写一整份回复（`respond`） | 每块 64 KiB，期限取 min(10s, 距总期限还剩)；总期限取 max(`WriteTimeout`, 回复字节数 ÷ 64 KiB/s)，16 MiB 约 4 分 16 秒 | 到期不再写，按客户端已走处理（结算已提交，金额不变） |
 | 追加（`ExtendWait`） | 1s，含等账户闸 | 截断 |
 | 结算（`SettleRetry`、`SettleBackground`） | 单次 2s，退避重试 10s 后改为后台重试 20 分钟 | 「计量、追加与结算」 |
 | 持有者 | TTL 60s，心跳 10s，回收宽限 60s | billing 的「持有者与截止时间」 |
@@ -308,7 +329,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 
 ## PR 拆分
 
-每个约 400 行非生成代码，测试先行；G1–G7、G9 已落地（G6、G7 合为一个 PR，约 1400 行，其中测试约 900 行，因为追加在途时不能结算、截断要经结算才能结束，两者共用读循环的出口；G1、G3 合为一个 PR，约 900 行非生成代码，因为准入的错误出口和限额由入口一并定下；G4、G5 合为一个 PR，约 700 行非生成代码，因为尝试循环和提交点之后的转发共用同一个读循环和同一个收尾）。下层的工作在各自的 Issue：accounts #23（关键路径：G1 要 `SiteForHost`、`AuthenticateKey`，G3 要 `Admit`）；catalog #24（名字解析、快照）；suppliers #25（S8 调用面、`Journal`、`Cost`、`RecordAttempts`；S9 对账）；routing #26（R1 快照含负载与端点实测的取消；R2 `Plan`、`Segmentable`、`NoEndpoint`、`Decide`；R3 路由记录）；protocol #27（P4 `Prepare`，已合并（#78），按 protocol 的「转发（草图）」扩展签名；P5 `Relay`；P6–P10 跨格式与聚合）；billing #28（B1 表、持有者、截止时间；B2 `Reserve`；B3 `Meter`、`Extend`；B4 `Settle`；B5 回收、清理、`SettleOrphan`、补扣；B6 校正与保留释放）；observability #29、#54（O1 调用记录批量写；O2 指标与链路）。各线按各模块 README 的接口草图用测试替身并行。
+每个约 400 行非生成代码，测试先行；G1–G9 已落地（G6、G7 合为一个 PR，约 1400 行，其中测试约 900 行，因为追加在途时不能结算、截断要经结算才能结束，两者共用读循环的出口；G1、G3 合为一个 PR，约 900 行非生成代码，因为准入的错误出口和限额由入口一并定下；G4、G5 合为一个 PR，约 700 行非生成代码，因为尝试循环和提交点之后的转发共用同一个读循环和同一个收尾）。下层的工作在各自的 Issue：accounts #23（关键路径：G1 要 `SiteForHost`、`AuthenticateKey`，G3 要 `Admit`）；catalog #24（名字解析、快照）；suppliers #25（S8 调用面、`Journal`、`Cost`、`RecordAttempts`；S9 对账）；routing #26（R1 快照含负载与端点实测的取消；R2 `Plan`、`Segmentable`、`NoEndpoint`、`Decide`；R3 路由记录）；protocol #27（P4 `Prepare`，已合并（#78），按 protocol 的「转发（草图）」扩展签名；P5 `Relay`；P6–P10 跨格式与聚合）；billing #28（B1 表、持有者、截止时间；B2 `Reserve`；B3 `Meter`、`Extend`；B4 `Settle`；B5 回收、清理、`SettleOrphan`、补扣；B6 校正与保留释放）；observability #29、#54（O1 调用记录批量写；O2 指标与链路）。各线按各模块 README 的接口草图用测试替身并行。
 
 | # | 内容 | 依赖 |
 |---|---|---|
@@ -368,7 +389,15 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | 重试预算在尝试之前取（`TakeRetry`），第一次尝试记 `Sent` | `Plan` 只看不取；并发的重试靠 `TakeRetry` 各占一次 | 在 `Plan` 里扣 |
 | 过了 `Plan.StartBy` 不再发起尝试，且以它为准，不读 `Config.StartBy` | 它由路由器按预设的窗口算好，`Config.StartBy` 只是种子；默认值下（StartBy 120s、空闲 180s）提交前空闲超时那次已过了窗口，所以只有空闲超时调短（按模型可调）才会换端点，返回最后一次尝试的错误（502）是文档的规则 | 两处都读：同一个值两个来源 |
 | 上游因请求自身拒绝（`ScopeRequest`）回 400 `invalid_request`，不带上游原文 | `suppliers.Failure` 按设计不带上游文字，文档的“保留原文、`upstream_rejected`”做不到；见 gateway.md 的待定问题 | 在 Failure 里带原文：违背“对方的文字不进错误、日志和表” |
-| 非流式请求在准入后以 400 拒绝，G8 取代 | 聚合有自己的设计：提交前后的换端点语义、Messages 的 502；这一步不做半个 | 在循环里直接开 `Aggregate`：提交点的含义在聚合时不同，要连同 G8 的测试一起定 |
+| 非流式的答案也由同一个读循环聚合，而不是另开一条路 | 上游一律以流调用，计量、追加、截断、结算、断开四种情况都只有一份；聚合只是出口不同（`RelayOptions.Aggregate`） | 上游按客户端的 `stream` 调用：计量看不到进度，非分段预留，转换后的请求体还得再转换回复 |
+| 聚合时提交点不写响应头，失败的尝试可以换端点 | 客户端在整份回复写好之前什么都没收到，所以"I4 提交后不换尝试"对它是写出那一刻；代价是聚合的回复在最后一次尝试之前不占状态码 | 见到第一个内容就定 200：中途失败只能返回半截内容，或丢掉已生成的内容报错 |
+| 聚合保留"最后一次有内容的尝试"，下一次尝试开始时放掉 | 文档只让"最后一次尝试生成了部分内容"随错误返回，各次尝试的内容不混；保留一个 `Relay` 最多 16 MiB | 把每次尝试的内容都留着：容量随尝试数翻倍，且违反不混的要求 |
+| 聚合回复的"已提交"在对账日志里补在写出之前，不是提交点 | 对账日志的"已提交"指内容交到客户端；聚合时那发生在最后一次写，补得太早会让清理为没交出去的内容收费 | 与流式一样在提交点写：崩溃时多扣用户的模型用量 |
+| `/responses/compact` 的回复原样透传，请求只经最小的同格式改写（`Target.Compact`：模型名、标识、路由参数） | 回复是上游的整份回复，不是我们生成的流，加任何字段就不再是原样；请求则不能原样：模型名对不上上游、终端用户标识会泄露、官方端点拒绝未知的路由参数。生成请求的改写（`store`、`include`、输出上限、`stream`、`input` 与历史）对压缩请求没有依据，所以只留必须改的三样 | 请求也原样发：模型名不同时调用失败，或按别的模型计费；标识泄露。套用生成的改写：猜压缩请求接受哪些成员 |
+| compact 的请求体读进节点预算、上限 16 MiB，读完分块写出 | 节点内存有界；读失败时客户端什么都没收到，还能换条目；`usage` 只能从整份回复里读。写出按 64 KiB 一块、每块一个写期限，慢但一直在读的手机不会被当成已走 | 边读边透传：`usage` 读不到就没法计费，失败时也收不回已写的字节；整份一个写期限：16 MiB 在限速网络下超过 10 秒，结算已提交而客户端只拿到半截 |
+| compact 的答复不带本站的费用字段，结算写不进时也不加 `billing_pending` | 原样透传的响应体加了字段就不再是上游的回复；费用与校正只在调用记录里查 | 在透传的 JSON 里插字段：客户端按上游的格式读它 |
+| Chat 请求只经转换交给 Messages、Responses 端点（网关对非 Chat 的请求设 `routing.Input.NativeOnly`，Chat 请求由路由挑一个它能转换的原生格式） | M1 不做同格式 Chat 的改写（protocol #27 待做），Chat 端点因此不接 Chat 请求；等 `Prepare` 能改写 Chat 后放开这一条 | 让 Chat 请求落到 Chat 端点：`Prepare` 返回 `*NotSupported`，请求 400 |
+| `Target.Streams` 告诉 `Prepare` 端点能流式，请求里一律要流；路由对生成请求只保留能流式的端点（`FormatNotServed`） | 网关总是以流读上游，非流式客户端拿聚合结果，不能流式的端点必然让这次尝试失败：花了上游的钱、用户免单、还占一次尝试。压缩调用读的是整份答复，是唯一的例外 | 让不能流式的端点接生成请求：`Relay` 只按事件流读，整份 JSON 读不出内容，只能失败；启动时断言所有端点都能流式：适配器注册表不在路由手里 |
 | 日志在 `Send` 返回时总是追加 | 同一尝试的条目合并成一行，追加是一次加锁和一次写 map；比较回执有没有变要多一个状态，还测不到（回执的字段不对外） | 只在回执变了才追加 |
 | `Prepare` 之前按它最多同时占用的量（`protocol.PrepareCost`）向节点内存预算申请，之后只留结果缓冲的容量，`Send` 返回即退还 | 之后再记，预算满了分配也已经发生，503 撤销不了峰值（评审 #157）。申请量是请求体的字节数、`{`、`null` 和 `:` 的个数的函数（常数和实测见 protocol README），而不是请求体的固定倍数：一堆 `{}` 每 3 字节占 1.3 KiB，固定倍数挡不住。申请只在 `Prepare` 期间占着（毫秒级、纯 CPU），所以多留对吞吐几乎没有影响，少留则预算形同虚设。代价：数 `{`、`null` 和 `:` 要多扫几遍请求体（只在跨格式时，`bytes.Count` 每秒数十 GB），含大量括号的文本（代码）申请得多些 | 之后再按 `len` 记：低估（容量大于长度），且在分配之后；请求体的固定倍数：不是上界；让 `Prepare` 逐次增长时记账：转换里的解码是一次调用，没有可记账的点 |
 | 没写输出上限的请求，发给上游的是报价用的上限（条目的输出上限），不是模型默认值 | 路由把默认值裁到上下文剩下的部分来报价，上游不知道就按默认值生成，多出来的不在预留里（I1）；条目的上限只有一个来源，`Entry.MaxOutput`，`Target.MaxOutput` 与它相同 | 只改跨格式：同格式的 Responses 仍会超出；靠计量器的输出上限封顶：上游照常生成，封顶只少记，花费并没有少 |
