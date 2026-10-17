@@ -56,7 +56,10 @@ jobs:
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - run: just check
+      # PRs run every benchmark through bench-compare below; main has no bench-compare, so it runs each once here.
+      - run: just "$RECIPE"
+        env:
+          RECIPE: ${{ github.event_name == 'push' && 'check-all' || 'check' }}
       # The deployment checks below start the stack on this host under fixed names (project axiom, port 8080, image
       # axiom:local, volume axiom_postgres). Jobs on runners sharing a host take turns through a host-wide lock, and each
       # turn ends with `just down -v`, so the next one starts from no database. On a hosted runner the lock is free.

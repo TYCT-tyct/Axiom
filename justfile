@@ -6,7 +6,8 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
-# Run every check the CI build job runs
+# Run every check the CI build job runs, except one run of each benchmark: PRs get those from `bench-compare`, main from
+# `check-all`
 check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
@@ -75,11 +76,20 @@ deadcode:
     out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed 's/^/only tests reach: /'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
-# Tests, plus one iteration of every benchmark so benchmarks keep compiling and running. The packages share one
-# PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test ./pkg` alone starts its own.
+# Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The
+# packages share one PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test
+# ./pkg` alone starts its own. The test build still compiles every benchmark; they run in `bench-once` and bench-compare.
 test: web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race -bench . -benchtime 1x ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race ./...
     go test -C tools -race ./...
+
+# Every benchmark compiles and runs once, with the race detector. Main pushes run this, since bench-compare runs only on
+# PRs; PRs run every benchmark through bench-compare.
+bench-once: web-embed
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -run '^$' -bench . -benchtime 1x ./...
+
+# Every check, including one run of each benchmark
+check-all: check bench-once
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
 # stream as internal/protocol/testdata/<format>/<scenario>/, scrubbed and checked. Base URLs and keys come from the
