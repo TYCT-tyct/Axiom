@@ -1,20 +1,10 @@
 import { expect, type Page, test } from "@playwright/test";
+import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { knownPassword } from "./console-data.ts";
 import { advanceUntil } from "./page-clock.ts";
 
 // The security page against the mocked API (console-api.ts): two-step verification and the codes it hands out once.
-
-function collectErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      errors.push(message.text());
-    }
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  return errors;
-}
 
 // What a page does when its window comes back to the front, which is when it asks again for the session.
 const returnToWindow = (page: Page) =>
