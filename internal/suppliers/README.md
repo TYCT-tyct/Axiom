@@ -46,7 +46,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `sync_states` | 每个供应商一行：引擎的整份状态（jsonb，`format` 记格式）、`version`（引擎的栅栏）、`next_due`、租约（`lease_holder`、`lease_fence`、`lease_until`） | PK `supplier_id`；`lease_holder` 与 `lease_until` 同有同无；平台范围 |
 | `sync_events` | 引擎每一步产生的事件，只插入，事件按名字存 | PK `(supplier_id, version, seq)`；平台范围 |
 | `sync_plans` | 引擎算出的成本计划的每个版本（端点是「分组/模型」文本），只插入 | PK `(supplier_id, version, seq)`；平台范围 |
-| `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，管理员确认的值、操作人、理由 | 只插入，最新一行生效；`value` 在 (0, 1000]；行级安全随所属供应商可见 |
+| `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，管理员确认的值、操作人、理由 | 只插入，最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
 
 - **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；角色隔离随后台任务角色加入。
@@ -136,7 +136,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 不变量 | 靠什么保证 |
 |---|---|
 | 密钥明文不落库 | 表里没有明文列，加密列只由 CHECK 约束长度（不证明是密文）；加密由写入边界保证，真实性由 `Open` 验证；测试在整行、全部列里搜索 key 的字节（文本和十六进制），并且加密值只能在自己那一行打开。**尚未覆盖**：写入处只传 `secret.Sealed`，由第一个适配器的编解码函数保证，随它的 PR 加测试 |
-| 没有确认单位价值的供应商不被调用；一次尝试的成本按它开始时的单位价值换算，向上取整一次，只换成结算币种 | `ListRoutable` 的 LATERAL 连接；`TestOnlySuppliersWithAUnitValueAreRouted`、`TestCreditsPricesAtTheUnitValue` |
+| 没有确认单位价值的供应商不被调用；一次尝试的成本按它开始时的单位价值换算，向上取整一次，只换成结算币种；回执记下那一行的 id | `ListRoutable` 的 LATERAL 连接；`TestOnlySuppliersWithAUnitValueAreRouted`、`TestCreditsPricesAtTheUnitValue` |
 | 供应商只在自己的范围内可见、可写；子表经父表判断 | 策略；测试覆盖无范围、平台、站点、账户、另一个站点或账户，以及六张子表各自的插入 |
 | 分组、凭证、模型、别名、端点属于同一个供应商 | 复合外键；测试对四张表各试一次跨供应商引用 |
 | 身份和发往的地址不能改，不能删除 | 按列授权、不授 DELETE；测试逐列、逐表 |
@@ -198,7 +198,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 - **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
-- **单位价值**：`Reload` 随端点读出供应商最新的单位价值和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。`unit_values.id` 是 UUIDv7，一次尝试用的是哪个值，可以按 `attempt_costs.priced_at` 之前最新的一行复原；`Correct` 要按同一个值换算时，再给 `attempt_costs` 加一列，是兼容的改动。
+- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。`Correct` 按同一个值换算时，再给 `attempt_costs` 加 `unit_value_id` 列，是兼容的改动。
 - **`Credits`** = `Cost` 的原生金额 × 单位价值，精确相乘，转成十亿分之一时向上取整一次。只有结算币种就是要的币种时才能换算（还没有汇率）；币种不同、超出金额的范围时给 0 和"未知"，成本计划缺项时给已定价的部分和"未知"。gateway 把"未知"交给 billing，免单上限按售价计入（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
@@ -229,7 +229,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
-| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它 | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询 | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
+| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
 | 同步状态存成一份 jsonb，加格式号，不拆成列 | 引擎的状态整份读出、整份提交，字段随引擎演进；拆成列每加一个字段就要迁移，且读出时要拼回去。查询只需要 `next_due`，它单独成列。代价：不能用 SQL 查状态里的细节，要看时读 jsonb | 状态的每个字段一列：引擎一变就要迁移 |
 | 栅栏是租约的 `lease_fence`，时钟只决定何时可以接手 | 两个节点的时钟差不能让它们同时写进去；写入由数据库里一个只增的数字挡住，与时钟、网络延迟、暂停无关 | 只靠 `lease_until > now()` 判断：被暂停的节点醒来时租约已过期，但这一刻它的判断与别的节点接手之间没有顺序 |
 | 限速桶放数据库里，每个请求一个事务 | 多节点共享一个出口地址时，各自在内存里计数会让合计超过对方的限速，被封号的是预付的账号；管理面请求少，一次事务的代价可忽略 | 把名额均分给各节点：节点数一变就要重分，空闲节点的名额浪费 |

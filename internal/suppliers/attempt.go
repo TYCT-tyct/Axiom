@@ -34,10 +34,11 @@ type Call struct {
 }
 
 // AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, the unit
-// value it is costed at, and the supplier's own id of the request once a response header gave it. Billing passes it
-// back unread; its fields are not for anyone else.
+// value it is costed at and the row that value came from, and the supplier's own id of the request once a response
+// header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
 	supplier, credential, endpoint, schedule uuid.UUID
+	unitValueID                              uuid.UUID
 	ref                                      string
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
@@ -133,7 +134,7 @@ func (a *Attempt) Receipt() AttemptReceipt {
 	defer a.mu.Unlock()
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
-		ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
+		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
 	}
 }
 

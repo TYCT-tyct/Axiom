@@ -113,9 +113,10 @@ type credRuntime struct {
 }
 
 // endpoint is what is needed to call one endpoint, and to turn its costs into money: what a unit of its supplier's
-// balance is worth in the supplier's settlement currency.
+// balance is worth in the supplier's settlement currency, and the row that gave the value.
 type endpoint struct {
 	id, supplier, schedule uuid.UUID
+	unitValueID            uuid.UUID
 	origin                 string
 	quirks                 adapter.CallQuirks
 	creds                  []*credential
@@ -191,7 +192,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	}
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls(),
-		currency: currency, unitValue: value,
+		currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
