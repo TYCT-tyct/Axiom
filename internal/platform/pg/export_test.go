@@ -18,6 +18,9 @@ func (db *DB) SessionScope(ctx context.Context) (string, error) {
 // LatestVersion is the newest of a module's migrations.
 func LatestVersion(m Module) (int64, error) { return latestVersion(m) }
 
+// PoolMaxConns is the pool's ceiling as configured, not the number of open connections.
+func (db *DB) PoolMaxConns() int32 { return db.pool.Stat().MaxConns() }
+
 // ModuleOrder is the order migrations run in.
 var ModuleOrder = moduleOrder
 

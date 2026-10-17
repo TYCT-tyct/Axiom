@@ -195,6 +195,17 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 [安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
 
+### 连接池
+
+进程最多保持 64 条数据库连接（`pg.PoolSize`，`pg.Open` 里设，不跟机器的核数走；pgx 的默认是 max(4, NumCPU)）。取值按这几条算：
+
+- **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
+- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+- **一个账户占不满**：单个账户受账户闸和每秒 135–200 个请求的上限约束，约占 2 条。
+- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
+
+连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定；它不能小于 gateway 的 N，理由同上。
+
 ### 范围
 
 - 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。

@@ -43,11 +43,24 @@ const (
 	MigrateDatabaseURLVar = "AXIOM_MIGRATE_DATABASE_URL"
 )
 
+// PoolSize is how many connections the process keeps open at most (platform README「连接池」). It follows the gateway's
+// gate for database work rather than the machine's cores, so pgx's default does not decide it.
+const PoolSize = 64
+
 // Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
 func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
+	// pgxpool removes pool_max_conns from the config it parses, so ask pgx, which keeps the parameter, whether the
+	// connection string sizes the pool itself: a deployment that says so owns the number.
+	conn, err := pgx.ParseConfig(url)
+	if err != nil {
+		return nil, errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
+	}
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
+	}
+	if _, set := conn.RuntimeParams["pool_max_conns"]; !set {
+		config.MaxConns = PoolSize
 	}
 	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not
 	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
