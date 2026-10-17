@@ -137,7 +137,7 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 入口 | ingress | 节点角色之一 |
 | 核心 | core | 节点角色之一 |
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
-| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、控制台和支付回调 / 只在核心上的管理后台、管理接口和运营接口 / 只答健康检查，默认只听本机。见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
+| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、控制台和支付回调 / 只在核心上的管理后台（管理接口、运营接口和来源限制随管理接口落地，[Issue #171](https://github.com/TYCT-tyct/Axiom/issues/171)） / 只答健康检查，默认只听本机。见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
 | 收款渠道 | payment_channel | 充值用的收款插件，如支付宝、Stripe、USDT，见[支付](domains/payments.md) |
