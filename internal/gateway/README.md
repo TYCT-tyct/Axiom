@@ -147,7 +147,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 **接缝**（没有生产路径上的 stub；`cmd/axiom` 还没有接线，这些补上才能接）：
 
-- `Costs`：尝试的成本，十亿分之一额度。suppliers 的 `Cost` 给的是供应商的原生单位，换算成额度的单位价值还没有（[suppliers 的「调用面」](../suppliers/README.md#调用面)），所以没有生产实现；测试用固定值。
+- `Costs`：尝试的成本，按这次尝试的价格币种计的十亿分之一额度，以及它是否完整已知；生产实现是 `*suppliers.Service` 的 `Credits`（[suppliers 的「调用面」](../suppliers/README.md#调用面)），测试用固定值。
 - `Alive`：`billing.Alive`，由 cmd 接上；`Upstreams`：`NewUpstreams(*suppliers.Service)`；`Ledger`：`*billing.Billing`。billing 的 `Suppliers` 在结算事务里写尝试行要回执，`billing.AttemptRecord` 现在只带对账键，cmd 的适配要补上它。
 - `Endpoint.Target` 没有生产者（见 routing README 的「现在的输入类型」），`ExecDeps.IdentitySecret` 要由 cmd 从配置文件读出：所有节点必须相同，否则会话的上游缓存换节点就断。两者都补上之前，`Executor` 接不进 `cmd/axiom`。
 - 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。粘性的写回（`Router.Stick`）和 quality 的观测在 G10。
@@ -168,7 +168,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - **任何一次追加失败都截断**，不等到当前段用完，也不等上游再发数据：追加的 goroutine 失败时，除了把结果放进通道，还以 `*extendFailed`（带着失败）为原因取消尝试，阻塞在 `Relay.Next` 里的所有者因此立刻醒来，`broke` 认出这个原因，按它的失败走 `truncate`，所以一个追加失败后上游完全静默的流，立即以 `billing_unavailable` 结束，不是等 180s 的空闲超时再报 `timeout`。`*Insufficient` 截断为 `credits_insufficient`（带 `limit_source`，会重置的上限在提交前的回答带 `Retry-After: 60`），其余（数据库错误、超时、`ErrTerminated`）为 `billing_unavailable`。截断（`attempt.truncate`）取消上游（原因 `errCut`），结束原因 `FinishTruncated`，花掉这一段的那一步不写；提交后以 `Relay.Fail` 结束，提交前没有内容交到客户端，以错误码回答（402 / 503），结局 `FailedBeforeCommit`，所以只收按次项目，不再换条目：别的条目花的是同一个账户。
 - **结算前没有追加在途**（billing 的前提）：`stream` 退出时（含出错、panic）`defer` 等在途的那次返回，至多 `ExtendWait`。
 
-**尝试的结局**（`attempt.result`，在 `close` 里）：对账键取回执的 `Key()`；确知未执行的没有用量、成本 0；其余按 `estimated` 补齐上游没报告的项再交 `Costs` 定成本（定不出就记 0 并记 error 日志：成本由对账按供应商记录改正，为它扣住结算会把能定价的调用推给清理）。`estimated` 只动回复那一段：输入侧一项都没报告时输入取准入的首次采样上界（`billing.InputBound`），输出没报告最终值时取 max(已报告的下界, min(读到的正文、推理、工具参数字节, 本次尝试的输出上限))（上限是计量器自己用的那个值，`Meter.OutputCap`：条目的输出上限乘选择数；推理算在上限里，已报告的下界高于上限时照报告），搜索没报告时取事件数；报告了的原样保留，billing 据"有数但没报告"标暂估。按上界暂估是比例有数据之前的做法，见[计费的「待定问题」](../../docs/domains/billing.md#待定问题)：不会超过预留覆盖的部分（`TestAnEstimateIsNeverChargedBeyondTheReservation` 用真实账本核对），由供应商记录校正。
+**尝试的结局**（`attempt.result`，在 `close` 里）：对账键取回执的 `Key()`；确知未执行的没有用量、成本 0，成本已知；其余按 `estimated` 补齐上游没报告的项再交 `Costs` 定成本，币种取这次尝试条目的价格币种；`Costs` 的"是否完整已知"原样记进 `AttemptResult.Costed`（定不出就记 0、未知，并记 error 日志：成本由对账按供应商记录改正，为它扣住结算会把能定价的调用推给清理）。`estimated` 只动回复那一段：输入侧一项都没报告时输入取首次采样的输入，其中文本按 4 字节 1 个 token（`billing.InputBound` 算，图片和文件仍按上界，合计不超过准入的上界），输出没报告最终值时取 max(已报告的下界, min(读到的正文、推理和工具参数的字节 ÷ 3 向上取整, 本次尝试的输出上限))（上限是计量器自己用的那个值，`Meter.OutputCap`：条目的输出上限乘选择数；推理算在上限里，已报告的下界高于上限时照报告），搜索没报告时取事件数；报告了的原样保留，billing 据"有数但没报告"标暂估。比例的口径和理由见[计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)：比例和上限都在 `estimated` 里，不会超过预留覆盖的部分（`TestAnEstimateIsNeverChargedBeyondTheReservation` 用真实账本核对），由供应商记录校正。
 
 **结算**（`Executor.settle`，前台与后台共用）：同一个 `billing.Outcome` 反复交给 `Ledger.Settle`，每次 2s，间隔 50ms 起翻倍到 2s（`background.retry`）；确认丢失后的重试拿回 billing 存的 `Final`，不补扣。前台试满 `SettleRetry`（10s）：写进就 `Upstreams.Settled`，结尾带费用；没写进，内容完整的以 `Final{Pending}` 结束（`billing_pending`），其余结尾不带费用。之后（`Executor.settled`）：
 
@@ -244,7 +244,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - **内存**：每路 64 KiB 加节点预算 2 GiB，由 protocol 记账，请求体、转换（分配之前按上界申请，见「尝试与转发」）、暂存、聚合都计入。
 - **连接池** N（默认取 [platform 定的连接池上限](../platform/README.md#连接池)），所有入口都经分类的信号量 `Pool`：只有完成类（追加、结算、`SettleOrphan`）能用到最后 16 个，即池内在用的连接数达到 N − 16 之后，准入类（准入、冷 key 查找、只读 key 接口）和批量写都不再授予；冷 key 查找经 `accounts.Config.LookupSlot`（`Backpressure.KeyLookupSlot`）取准入类名额：名额由共享的那一次查库持有，等它的所有请求只占一个，发起的请求中途走了也不提前还；`NewHandler` 检查 accounts 配了名额（`Service.GatesLookups`），没配就不启动；调用记录与对账日志的批量写各自最多持有 2 个。批量写也不动保留的 16 个：它们是后台任务，让它们侵蚀结算的保底得不偿失。各类内部先到先得，等待者不占连接，等待的期限就是调用者给的 context（准入事务合计 1s 是调用者的期限）。心跳与回收用池外的一条专用连接，不会被饿死。
 - **排队**：只在候选端点都满载时，在事务之外；全局最多 256、每 key 最多 16 个等待者，满了 429；FIFO，每释放一个名额调一次 `Queue.Wake`，唤醒一个。调用者在看负载之前先取 `Queue.Epoch()` 并传给 `Wait`：看负载和入队之间释放的名额没有等待者可唤醒，`Epoch` 会记下这种释放，`Wait` 见到就直接返回让调用者重做，不会睡到 20 秒期限；有人在排队时的释放归队首，不计入，新来的不会插队。醒来时 context 已结束的等待者把唤醒转给下一个。排队期限是 `QueueWait`，从调用第一次排队起算一次，之后再排队共用剩余时间，到期 429；调用者的 context 结束则返回它的错误，什么都不写。
-- **调用记录与观测**：`observability.Recorder.Enqueue(ctx, CallRecord)` 是有界队列，满了等待，在释放名额之前调用，背压规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Observe(Observation)` 非阻塞，有界缓冲满了丢弃并计数（只是观测）。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
+- **调用记录与观测**：`observability.Recorder.Enqueue(CallRecord)` 非阻塞，记录里带这次调用的每次尝试；队列满时丢掉新记录并计数，从不等待，所以在释放名额之前或之后调用都可以，规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Observe(Observation)` 非阻塞，有界缓冲满了丢弃并计数（只是观测）。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
 - **预检计数**：`RateCounter` 按键做滑动窗口计数（当前窗口加上一窗口按重叠比例折算的部分），只计数不判定，不需要释放；两张轮换的表使内存只与最近两个窗口出现过的键成正比。会话粘性随 routing 的端点类型落地，不在 G2。
 - **粘性**：排序第 2 位用预检取到的端点；成功端点不同时，结束后异步写回。
 
@@ -276,7 +276,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | — | 数据库不可用短于 TTL + 宽限（120s） | 新准入 503；恢复后心跳续上，在途照常结算 |
 | — | 数据库不可用达到 TTL + 宽限 | 持有者被回收，在途的追加得 `ErrTerminated` 截断；迟到的 `Settle` 按终态分支，钱不重复 |
 | — | 主备切换 | 已确认的提交不丢，靠[运营的复制要求](../../docs/domains/operations.md#部署与节点管理)；切换演练在 G11 |
-| 10 | 调用记录写不进 | 队列满即背压到节点名额，不丢；崩溃丢最近一次成功写入之后的记录，`generation` 在那之前返回 404，没有账本兜底 |
+| 10 | 调用记录写不进 | 队列满即丢弃新记录并计数，不阻塞调用；崩溃丢最近一次成功写入之后的记录。记录不在时 `generation` 返回 404 `generation_not_found`，不提供账本精简版（见[「辅助接口」的 `generation`](#辅助接口)） |
 | 校正 | 1 小时内中转站记录缺失 | 暂估定死，释放保留余额；以后到的记录只调成本 |
 | 对账 | 某供应商持续缺逐笔记录 | 停止向它路由并告警 |
 | 退出 | 优雅退出到期 | 取消全部上游（不传递取消的因此暂估、按记录校正），结算 30s，之后的交给回收 |
@@ -378,7 +378,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | 追加失败即取消尝试，所有者从被取消的读里认出原因 | 所有者只在 `Next` 返回时才处理通道里的失败；上游静默时它到空闲超时才返回，把计费故障报成 `timeout`，期间继续生成 | 所有者另起 goroutine 监听通道：多一个等读的 goroutine，取消还是要经 context；通道旁加计时器：又一个期限 |
 | 输出免费的条目 `Left` 不设界 | 费用不随输出增长，段永远用不完；`Left` 为 0 被当作「有追加要等」，没有追加时所有者空转，取消不了，`Drain` 也结束不了 | 所有者见没有在途就不等：把计量器的契约漏洞留在调用方里补 |
 | 提交前截断不换条目，回 402 / 503 | 别的条目花的是同一账户的钱；没有内容交到客户端，只收按次项目 | 换条目：同一个余额再被拒一次 |
-| 暂估按上界：输入按准入的首次采样上界，输出按读到的字节，不超过本次尝试的输出上限 | 按模型的比例还没有数据；上界不超过预留覆盖的部分，所以不会落到底线以下，由供应商记录校正；字节数没有上界（一个事件可以很大），输出上限才是计量器截住的值，估算和计量用同一个；是否先用固定比例见计费的「待定问题」 | 按 0 记缺项：免费；编一个比例：没有依据 |
+| 暂估按固定比例：输入的文本 4 字节、输出 3 字节 1 个 token，向上取整，都不超过预留覆盖的上界（输出的上界是计量器自己用的 `Meter.OutputCap`） | 按模型的比例还没有数据；口径和理由在计费的「决策与理由」；比例和上限都在 `estimated` 里，算出的数不超过预留覆盖的部分，所以不会落到底线以下，由供应商记录校正 | 按 0 记缺项：免费；按上界：查不到记录时约多收四倍 |
 | 结算的永久性错误只认 `ErrNoAttempt`、找不到预留行和 SQLSTATE 22、23、42 类，其余都重试 | 文档的"违反约束、范围被拒"；认错成暂时的只是多重试到 `SettleBackground`，认错成永久的会把能结算的调用推给清理 | 只重试连接类错误：认不出的错误一律放弃 |
 | 成本定不出时记 0、记 error，照常结算 | 成本是平台的，对账按供应商记录改正；为它扣住结算会把能向用户定价的调用推给清理 | 当作结算失败 |
 | 收了费的提交前错误才带 `axiom` 对象 | 文档：流开始前出错也可能收费，带上用量和费用；没收费时多一个 0 只是噪声 | 一律带 |

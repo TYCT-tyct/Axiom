@@ -4,5 +4,5 @@ Axiom 是一个 LLM API 网关，对标 [OpenRouter](https://openrouter.ai)：�
 
 - 参与开发：[AGENTS.md](AGENTS.md)（通用规则）和 [CONTRIBUTING.md](CONTRIBUTING.md)（本项目的补充）
 - 文档地图：[docs/README.md](docs/README.md)
-- 开发环境：Go（`GOTOOLCHAIN=auto` 会自动取 `go.mod` 里的版本）、[just](https://github.com/casey/just)、Python 3.11+、C 编译器（竞态检测要用），Node 24 和 pnpm（前端，见 [web/README.md](web/README.md)），Windows 上还要 Git Bash；`just check` 跑完全部检查，命令见 [justfile](justfile)
+- 开发环境：Go（`GOTOOLCHAIN=auto` 会自动取 `go.mod` 里的版本）、[just](https://github.com/casey/just)、Python 3.11+、C 编译器（竞态检测要用），Node 24 和 pnpm（前端，见 [web/README.md](web/README.md)），Windows 上还要 Git Bash；`just check-all` 跑完全部检查（`just check` 省掉每个基准的一次运行），命令见 [justfile](justfile)
 - 本机部署：`just up` 先构建前端并嵌入，再构建程序并在 Docker 里启动，就绪检查通过才返回，官网在 `http://127.0.0.1:8080`，控制台在 `/console/`，管理后台在 `http://127.0.0.1:8082`（只在管理监听上）；`just down` 停止，`just down -v` 同时删除本地数据库。需要 Docker 和 Compose

@@ -59,11 +59,11 @@ type Ledger interface {
 	Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error)
 }
 
-// Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit. suppliers.Cost gives it
-// in the supplier's own unit; the unit values that turn that into credits are still to come (suppliers README.md), and
-// until they do nothing implements this outside the tests.
+// Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the
+// attempt's price is in; *suppliers.Service is one. known is false when that leaves part of the cost out or none of it
+// is known; billing then counts the attempt toward the waiver cap at its sale price (docs/domains/billing.md「免单规则」).
 type Costs interface {
-	Cost(r suppliers.AttemptReceipt, usage []catalog.Usage) (int64, error)
+	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (cost int64, known bool, err error)
 }
 
 // ExecDeps are what an Executor needs. Every one is required.

@@ -20,7 +20,11 @@ func consoleContract() (*contract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the console contract: %w", err)
 	}
-	return loadContract(doc)
+	c, err := loadContract(doc)
+	if err != nil {
+		return nil, fmt.Errorf("the console contract: %w", err)
+	}
+	return c, nil
 }
 
 // The levels an operation's `x-axiom-level` names (internal/platform/README.md「接口约定」).
@@ -41,8 +45,9 @@ type rules struct {
 	permission *accounts.Permission
 	// changes data: such a request must come from the site's origin as JSON, and with a session carry its CSRF token.
 	changes bool
-	query   []*openapi3.Parameter
-	body    *openapi3.RequestBody
+	// params are the query and header parameters; a path parameter is not checked (a malformed ID is a 404).
+	params []*openapi3.Parameter
+	body   *openapi3.RequestBody
 }
 
 // contract is the console's API as api/console.yaml declares it: the rules of each operation, by the pattern its
@@ -61,7 +66,7 @@ func loadContract(doc *openapi3.T) (*contract, error) {
 		for method, op := range item.Operations() {
 			r, err := rulesOf(method, op, item.Parameters)
 			if err != nil {
-				return nil, fmt.Errorf("the console contract: %s %s: %w", method, path, err)
+				return nil, fmt.Errorf("%s %s: %w", method, path, err)
 			}
 			c.byPattern[method+" "+path] = r
 		}
@@ -86,8 +91,8 @@ func rulesOf(method string, op *openapi3.Operation, pathParameters openapi3.Para
 		}
 	}
 	for _, p := range append(append(openapi3.Parameters{}, pathParameters...), op.Parameters...) {
-		if p.Value.In == openapi3.ParameterInQuery {
-			r.query = append(r.query, p.Value)
+		if in := p.Value.In; in == openapi3.ParameterInQuery || in == openapi3.ParameterInHeader {
+			r.params = append(r.params, p.Value)
 		}
 	}
 	if op.RequestBody != nil {
@@ -120,16 +125,16 @@ func (r *rules) sessionRules(op *openapi3.Operation, csrf bool) error {
 	return nil
 }
 
-// validate checks the request's query parameters and body against the contract's schemas: patterns, lengths, ranges,
+// validate checks the request's query and header parameters and body against the contract's schemas: patterns, lengths, ranges,
 // enums and what is required. Path parameters are not checked here: a malformed ID is a 404 like an unknown one. The
 // body is read and put back for the handler. It returns the parts of the request that broke the contract, naming
 // none of their values.
-func (r *rules) validate(ctx context.Context, req *http.Request) []consoleapi.ErrorField {
+func (r *rules) validate(ctx context.Context, req *http.Request) []errorField {
 	input := &openapi3filter.RequestValidationInput{
 		Request: req, Options: &openapi3filter.Options{MultiError: true, SkipSettingDefaults: true},
 	}
 	var errs []error
-	for _, p := range r.query {
+	for _, p := range r.params {
 		if err := openapi3filter.ValidateParameter(ctx, input, p); err != nil {
 			errs = append(errs, err)
 		}
@@ -139,7 +144,7 @@ func (r *rules) validate(ctx context.Context, req *http.Request) []consoleapi.Er
 			errs = append(errs, err)
 		}
 	}
-	var fields []consoleapi.ErrorField
+	var fields []errorField
 	for _, err := range errs {
 		fields = appendFields(fields, "", err)
 	}
@@ -148,7 +153,7 @@ func (r *rules) validate(ctx context.Context, req *http.Request) []consoleapi.Er
 
 // appendFields flattens a validation error into the parts of the request it names. A value never appears in a
 // message: only the schema's rule does.
-func appendFields(fields []consoleapi.ErrorField, parameter string, err error) []consoleapi.ErrorField {
+func appendFields(fields []errorField, parameter string, err error) []errorField {
 	switch e := err.(type) { //nolint:errorlint // the validator's own types, matched one level at a time
 	case openapi3.MultiError:
 		for _, inner := range e {
@@ -160,7 +165,7 @@ func appendFields(fields []consoleapi.ErrorField, parameter string, err error) [
 			parameter = e.Parameter.Name
 		}
 		if e.Err == nil {
-			return append(fields, consoleapi.ErrorField{Pointer: parameter, Message: e.Reason})
+			return append(fields, errorField{Pointer: parameter, Message: e.Reason})
 		}
 		return appendFields(fields, parameter, e.Err)
 	case *openapi3.SchemaError:
@@ -168,10 +173,10 @@ func appendFields(fields []consoleapi.ErrorField, parameter string, err error) [
 		if parameter == "" {
 			pointer = "/" + strings.Join(e.JSONPointer(), "/")
 		}
-		return append(fields, consoleapi.ErrorField{Pointer: strings.TrimSuffix(pointer, "/"), Message: e.Reason})
+		return append(fields, errorField{Pointer: strings.TrimSuffix(pointer, "/"), Message: e.Reason})
 	}
 	if errors.Is(err, openapi3filter.ErrInvalidRequired) {
-		return append(fields, consoleapi.ErrorField{Pointer: parameter, Message: "a value is required"})
+		return append(fields, errorField{Pointer: parameter, Message: "a value is required"})
 	}
-	return append(fields, consoleapi.ErrorField{Pointer: parameter, Message: "the value or the request body is malformed"})
+	return append(fields, errorField{Pointer: parameter, Message: "the value or the request body is malformed"})
 }

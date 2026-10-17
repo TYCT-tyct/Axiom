@@ -418,7 +418,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"members":         nil,
 		"platform_grants": {"revoked_at"},
 		"api_keys":        {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":        {"last_seen_at", "mfa_attempts", "revoked_at"},
+		"sessions":        {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":  {"used_at"},
 	}
 	// Generated columns are left out: the database refuses to set them before it looks at privileges.

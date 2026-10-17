@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
-	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -50,8 +49,38 @@ type guard struct {
 	accounts *accounts.Service
 	proxies  []netip.Prefix
 	logger   *slog.Logger
-	// timeout is the request's deadline when a test wants another than consoleDeadline.
+	// timeout is the request's deadline when a test wants another than the surface's.
 	timeout time.Duration
+	// admin makes this the admin listener's guard: the host must be an admin domain, and the permission an operation
+	// names is asked of the platform (accounts.PlatformTarget) instead of the session's own account.
+	admin bool
+}
+
+// surface is the kind of domain this guard serves.
+func (g *guard) surface() accounts.Surface {
+	if g.admin {
+		return accounts.Admin
+	}
+	return accounts.Console
+}
+
+// target is what a permission is asked of for p.
+func (g *guard) target(p accounts.Principal) accounts.Target {
+	if g.admin {
+		return accounts.PlatformTarget()
+	}
+	return accounts.AccountTarget(p.AccountID())
+}
+
+// deadline is the time a request has: the guard's own when a test sets one, else the surface's.
+func (g *guard) deadline() time.Duration {
+	switch {
+	case g.timeout != 0:
+		return g.timeout
+	case g.admin:
+		return adminDeadline
+	}
+	return consoleDeadline
 }
 
 // consoleDeadline bounds a console request from the moment it is read: a sign-in waiting for the user's row, a key
@@ -60,10 +89,14 @@ type guard struct {
 // argon2id hash after its wait for a slot (accounts.Config.HashWait), takes a few seconds.
 const consoleDeadline = 15 * time.Second
 
+// adminDeadline is the admin's: its operations include a probe of a third party's site (detectSupplier, which gives up
+// after 45 seconds) and the catalog's, which read and rebuild a snapshot, and its callers are people who wait.
+const adminDeadline = time.Minute
+
 // errDeadline is a request that ran out of time. The work may or may not have been done, so the client is told to
 // look before it tries again.
 var errDeadline = &apiError{
-	status: http.StatusServiceUnavailable, code: consoleapi.ErrorCodeUnavailable,
+	status: http.StatusServiceUnavailable, code: codeUnavailable,
 	message: "the request took too long; check whether it took effect before trying again",
 }
 
@@ -74,11 +107,7 @@ var unscoped = map[string]bool{"GetVersion": true}
 // serve answers the request, or passes it to routes (the generated routes) with what it learned in its context.
 // pattern is the route the request matched.
 func (g *guard) serve(w http.ResponseWriter, r *http.Request, pattern string, routes http.Handler) {
-	timeout := g.timeout
-	if timeout == 0 {
-		timeout = consoleDeadline
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), g.deadline())
 	defer cancel()
 	r = r.WithContext(ctx)
 	rl, ok := g.contract.byPattern[pattern]
@@ -104,7 +133,7 @@ func (g *guard) serve(w http.ResponseWriter, r *http.Request, pattern string, ro
 	}
 	if fields := rl.validate(ctx, r); len(fields) > 0 {
 		respond(w, r, g.logger, &apiError{
-			status: http.StatusBadRequest, code: consoleapi.ErrorCodeInvalidRequest,
+			status: http.StatusBadRequest, code: codeInvalidRequest,
 			message: "the request breaks the contract", fields: fields,
 		})
 		return
@@ -115,8 +144,8 @@ func (g *guard) serve(w http.ResponseWriter, r *http.Request, pattern string, ro
 // notJSON is a body the project's JSON policy refuses (internal/platform/jsonx): not UTF-8, a member name twice, or
 // nested too deep. Two parsers may keep different copies of a repeated name, so none is let through.
 var notJSON = &apiError{
-	status: http.StatusBadRequest, code: consoleapi.ErrorCodeInvalidRequest, message: "the request body is not JSON of the kind this API reads",
-	fields: []consoleapi.ErrorField{{Pointer: "", Message: "must be valid UTF-8 JSON with no member name twice, nested at most 256 levels"}},
+	status: http.StatusBadRequest, code: codeInvalidRequest, message: "the request body is not JSON of the kind this API reads",
+	fields: []errorField{{Pointer: "", Message: "must be valid UTF-8 JSON with no member name twice, nested at most 256 levels"}},
 }
 
 // checkBody reads the request's body whole, applies the JSON policy to it, and puts it back for the schema check and
@@ -141,7 +170,7 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 	if err != nil {
 		return call{}, err
 	}
-	if surface != accounts.Console { // an admin or API domain is no console, and no session of it serves here
+	if surface != g.surface() { // another surface's domain is no domain of this API, and no session of it serves here
 		return call{}, accounts.ErrUnknownHost
 	}
 	c := call{r: r, site: site, ip: clientIP(r, g.proxies)}
@@ -155,8 +184,8 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 		return call{}, err
 	}
 	if rl.permission != nil {
-		c.scope, err = g.accounts.Authorize(r.Context(), c.principal, *rl.permission, accounts.AccountTarget(c.principal.AccountID()))
-		if errors.Is(err, accounts.ErrNotFound) { // the user has no part in their own account: as forbidden as it gets
+		c.scope, err = g.accounts.Authorize(r.Context(), c.principal, *rl.permission, g.target(c.principal))
+		if errors.Is(err, accounts.ErrNotFound) { // the user has no part in the target (no role in the account, no grant on the platform): as forbidden as it gets
 			err = accounts.ErrForbidden
 		}
 		if err != nil {
@@ -189,7 +218,7 @@ func (g *guard) authenticate(r *http.Request, rl *rules) (accounts.Principal, er
 
 // errMFARequired is a session that has not passed two-step verification asking for what needs it.
 var errMFARequired = &apiError{
-	status: http.StatusForbidden, code: consoleapi.ErrorCodeMfaRequired, message: "this needs a session that passed two-step verification",
+	status: http.StatusForbidden, code: codeMfaRequired, message: "this needs a session that passed two-step verification",
 }
 
 // clientIP is the address a request came from. Only the connection's own address is believed, unless it is a trusted

@@ -173,8 +173,9 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 }
 
 // TestWhatIsCharged: the outcome of each attempt, as billing charges it. One known not to have run used and cost
-// nothing; one whose result is unknown is the input estimated, at the cost of that usage; an answer that broke after
-// the content began has the output read, the input it reported, and its cost.
+// nothing; one whose result is unknown is the input estimated, its text at 4 bytes a token, at the cost of that usage;
+// an answer that broke after the content began has the output read at 3 bytes a token, the input it reported, and its
+// cost.
 func TestWhatIsCharged(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 3, cost: 70})
@@ -192,16 +193,69 @@ func checkCharged(t *testing.T, h *harness) {
 	if len(a) != 3 {
 		t.Fatalf("attempts %+v", a)
 	}
-	input, _ := billing.InputBound(routing.DemandOf(&h.call.Request), h.call.Plan.Entries[1].Limits)
+	input := estimatedInput(t, h)
+	checkCosted(t, a)
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
 	}
 	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
 		t.Errorf("unknown: %+v", a[1])
 	}
-	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 5, 1<<catalog.ItemInput) || a[2].Cost != 70 {
+	if a[2].Result != billing.Committed || !usageIs(a[2].Segments, 25, 2, 1<<catalog.ItemInput) || a[2].Cost != 70 {
 		t.Errorf("broken after the commit point: %+v", a[2])
 	}
+}
+
+// checkCosted: every attempt's cost is known, the one known not to have run as well as those priced.
+func checkCosted(t *testing.T, a []billing.AttemptResult) {
+	t.Helper()
+	for _, at := range a {
+		if !at.Costed {
+			t.Errorf("attempt %d: its cost is not known", at.Seq)
+		}
+	}
+}
+
+// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, reaches billing as not known,
+// with whatever cost came back: the waiver cap then counts the attempt at its sale price
+// (docs/domains/billing.md「免单规则」). A failure is never a known cost, whatever the implementation says.
+func TestACostThatIsNotKnown(t *testing.T) {
+	errPricing := errors.New("the cost schedule could not be read")
+	for _, tc := range []struct {
+		name string
+		o    options
+		cost int64
+	}{
+		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70},
+		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, tc.o)
+			h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+			h.run()
+			a := h.ended().outcome.Attempts
+			if len(a) != 1 {
+				t.Fatalf("%s: attempts %+v", tc.name, a)
+			}
+			if a[0].Costed || a[0].Cost != tc.cost {
+				t.Errorf("%s: cost %d, known %v; want %d, not known", tc.name, a[0].Cost, a[0].Costed, tc.cost)
+			}
+		})
+	}
+}
+
+// estimatedInput is the input of the call's second entry with its text at 4 bytes a token, which must be below the
+// admission's bound for the test to tell them apart.
+func estimatedInput(t *testing.T, h *harness) int64 {
+	t.Helper()
+	d := routing.DemandOf(&h.call.Request)
+	bound, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	d.TextBytes = (d.TextBytes + 3) / 4
+	input, _ := billing.InputBound(d, h.call.Plan.Entries[1].Limits)
+	if input >= bound {
+		t.Fatalf("the estimate %d is not below the bound %d: the test proves nothing", input, bound)
+	}
+	return input
 }
 
 // usageIs: one sampling, of that input and output, and those items reported.
@@ -210,7 +264,9 @@ func usageIs(segments []billing.Segment, input, output int64, reported catalog.I
 		segments[0].Usage.OutputTotal() == output && segments[0].Reported == reported
 }
 
-// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated by its bound.
+// TestEstimated: the upstream's report stands for what it reported; what it did not is estimated, the input at 4 bytes
+// of the request's text a token and the output at 3 bytes read a token, both rounded up, the output never below a count
+// reported.
 func TestEstimated(t *testing.T) {
 	t.Parallel()
 	usage := func(counts map[catalog.Item]int64) catalog.Usage {
@@ -234,7 +290,9 @@ func TestEstimated(t *testing.T) {
 			protocol.Progress{ContentBytes: 50, Searches: 2},
 			map[catalog.Item]int64{in: 10, out: 3},
 		},
-		{"nothing", protocol.Usage{}, protocol.Progress{ContentBytes: 50, Searches: 2}, map[catalog.Item]int64{in: 900, out: 50, search: 2}},
+		{"nothing", protocol.Usage{}, protocol.Progress{ContentBytes: 50, Searches: 2}, map[catalog.Item]int64{in: 900, out: 17, search: 2}},
+		{"no bytes", protocol.Usage{}, protocol.Progress{}, map[catalog.Item]int64{in: 900}},
+		{"bytes that divide", protocol.Usage{}, protocol.Progress{ContentBytes: 51}, map[catalog.Item]int64{in: 900, out: 17}},
 		{
 			"the input from the cache",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{cached: 400}), Reported: 1 << cached}}},
@@ -250,18 +308,20 @@ func TestEstimated(t *testing.T) {
 		{
 			"reasoning stays",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10, catalog.ItemReasoning: 30}), Reported: 1 << in}}},
-			protocol.Progress{ContentBytes: 50},
+			protocol.Progress{ContentBytes: 150},
 			map[catalog.Item]int64{in: 10, catalog.ItemReasoning: 30, out: 20},
 		},
 		{"bytes past any count", protocol.Usage{}, protocol.Progress{ContentBytes: 1 << 40}, map[catalog.Item]int64{in: 900, out: maxCount}},
+		{"a count reported above the ratio", protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{out: 40})}}}, protocol.Progress{ContentBytes: 30}, map[catalog.Item]int64{in: 900, out: 40}},
 		{
 			"a report found invalid",
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10})}}, Invalid: errors.New("went down")},
 			protocol.Progress{ContentBytes: 7},
-			map[catalog.Item]int64{in: 900, out: 7},
+			map[catalog.Item]int64{in: 900, out: 3},
 		},
 	} {
-		got := estimated(tc.usage, tc.progress, 900, math.MaxInt64)
+		// 3600 bytes of text at 4 a token, inside the model's window: the first sampling's input is 900.
+		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64)
 		for it := range catalog.NumItems {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
@@ -270,9 +330,10 @@ func TestEstimated(t *testing.T) {
 	}
 }
 
-// TestAnEstimateStaysWithinTheOutputLimit: what the bytes of a stream say is held to the output limit the attempt was
-// quoted at, the one metering holds it to, so a stream that never reported its usage is not charged for more than the
-// reservation covers; a count the upstream did report stays whatever it is, and reasoning is part of the limit.
+// TestAnEstimateStaysWithinTheOutputLimit: the bytes of a stream are read at 3 bytes a token, rounded up, and what they
+// say is held to the output limit the attempt was quoted at, the one metering holds it to, so a stream that never
+// reported its usage is not charged for more than the reservation covers; a count the upstream did report stays
+// whatever it is, and reasoning is part of the limit.
 func TestAnEstimateStaysWithinTheOutputLimit(t *testing.T) {
 	t.Parallel()
 	usage := func(counts map[catalog.Item]int64) catalog.Usage {
@@ -293,11 +354,12 @@ func TestAnEstimateStaysWithinTheOutputLimit(t *testing.T) {
 		want  map[catalog.Item]int64
 	}{
 		{"bytes past the limit", protocol.Usage{}, 4000, map[catalog.Item]int64{out: 1000}},
-		{"bytes within it", protocol.Usage{}, 400, map[catalog.Item]int64{out: 400}},
+		{"bytes within it", protocol.Usage{}, 2400, map[catalog.Item]int64{out: 800}},
+		{"a ratio that rounds up to the limit", protocol.Usage{}, 2999, map[catalog.Item]int64{out: 1000}},
 		{"reasoning is part of the limit", reported(map[catalog.Item]int64{reasoning: 300}), 4000, map[catalog.Item]int64{reasoning: 300, out: 700}},
 		{"a count above the limit stays", reported(map[catalog.Item]int64{reasoning: 1200}), 4000, map[catalog.Item]int64{reasoning: 1200}},
 	} {
-		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, 0, 1000)
+		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000)
 		for _, it := range []catalog.Item{out, reasoning} {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])

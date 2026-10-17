@@ -25,15 +25,31 @@ var (
 	ViewBalance          = Permission{"balance.view", false}
 	ManageSites          = Permission{"sites.manage", true}
 	ManagePlatformGrants = Permission{"platform_grants.manage", true}
+
+	// The admin API's, asked of the platform. The ones that change money, credentials, prices or the catalog are sensitive.
+	ViewUsers       = Permission{"users.view", false}
+	GrantCredits    = Permission{"credits.grant", true}
+	ViewSuppliers   = Permission{"suppliers.view", false}
+	ManageSuppliers = Permission{"suppliers.manage", true}
+	ViewCatalog     = Permission{"catalog.view", false}
+	ManageCatalog   = Permission{"catalog.manage", true}
+	ViewPricing     = Permission{"pricing.view", false}
+	ManagePricing   = Permission{"pricing.manage", true}
 )
 
 var permissions = func() map[string]Permission {
 	declared := map[string]Permission{}
-	for _, p := range []Permission{ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, ManageSites, ManagePlatformGrants} {
+	for _, p := range []Permission{
+		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, ManageSites, ManagePlatformGrants,
+		ViewUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
+	} {
 		declared[p.name] = p
 	}
 	return declared
 }()
+
+// Name is the permission's name, as roles and interface contracts spell it.
+func (p Permission) Name() string { return p.name }
 
 // PermissionNamed is the declared permission called name, for an interface contract that names the permission an
 // operation needs.
