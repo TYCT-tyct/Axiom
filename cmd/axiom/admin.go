@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
@@ -22,6 +23,7 @@ type adminAPI struct {
 	pendingAdmin
 	version  string
 	accounts *accounts.Service
+	catalog  *catalog.Catalog
 	db       *pg.DB
 	logger   *slog.Logger
 }

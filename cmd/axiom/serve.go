@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
@@ -199,7 +200,11 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	}
 	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
-	admin = adminRoutes(adminAPI{version: version(), accounts: service, db: db, logger: logger},
+	cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
+	if err != nil {
+		return nil, nil, err
+	}
+	admin = adminRoutes(adminAPI{version: version(), accounts: service, catalog: cat, db: db, logger: logger},
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return public, admin, nil
 }
@@ -211,7 +216,7 @@ func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *teleme
 	if err != nil {
 		return nil, err
 	}
-	queue := db.NewQueue(logger)
+	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {

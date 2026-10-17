@@ -74,12 +74,11 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 }
 
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
-// (billing.InputBound), and the gateway reserves for the same demand it was routed by. Compaction is not in the request
-// summary yet.
+// (billing.InputBound), and the gateway reserves for the same demand it was routed by.
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
-		InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
+		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
 	if req.Needs.Has(protocol.WebSearch) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
@@ -132,12 +131,14 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 func (r *Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
-	// whose speed is unknown is reserved in full.
-	segmentable := c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
+	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments).
+	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
 		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
 	target := c.Target
-	target.Format = c.callFormat(n.req.Format)
-	if c.MaxOutput > 0 { // a model whose limit is unknown has no default to send: the upstream's own applies
+	format, _ := c.callFormat(n)
+	target.Format = format
+	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
+	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
 		target.MaxOutput = out
 	}
 	return Entry{
@@ -146,19 +147,25 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	}
 }
 
-// callFormat is the format a request of format f is called in at the endpoint: its own when the endpoint speaks it,
-// otherwise the first format it speaks that protocol converts a Chat request to. A request that the endpoint serves
-// by conversion is Chat, which Native does not hold when it gets here, so Messages, then Responses.
-func (c *candidate) callFormat(f protocol.Format) protocol.Format {
-	if c.Native.Has(f) {
-		return f
+// callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
+// the endpoint's own format is called in it, or in one protocol converts it to. A Chat request is only ever converted:
+// M1 rewrites no Chat request for an endpoint of its own format, so it is called in the first format the endpoint
+// speaks that protocol converts a Chat request to, Messages before Responses (docs/domains/gateway.md「转发规则」).
+// NativeOnly says only the request's own format will do.
+func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
+	f := n.req.Format
+	if n.in.NativeOnly {
+		return f, c.Native.Has(f)
+	}
+	if f != protocol.Chat {
+		return f, c.Served.Has(f)
 	}
 	for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
 		if c.Native.Has(g) {
-			return g
+			return g, true
 		}
 	}
-	return f // no such endpoint is a candidate: servesFormat held it out
+	return f, false
 }
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
@@ -212,6 +219,8 @@ func (c *candidate) unfit(n *need) Reason {
 		return MissingCapability
 	case !c.servesFormat(n):
 		return FormatNotServed
+	case !c.streamsFor(n):
+		return FormatNotServed
 	case n.req.ServiceTiers&c.ServiceTiers == 0:
 		return ServiceTierNotServed
 	}
@@ -220,6 +229,10 @@ func (c *candidate) unfit(n *need) Reason {
 	}
 	return 0
 }
+
+// streamsFor says the endpoint can answer as the gateway reads the answer: every call but the compact one is read as a
+// stream, which an endpoint that does not stream cannot give it (docs/domains/gateway.md「转发规则」).
+func (c *candidate) streamsFor(n *need) bool { return c.Streams || n.in.NoSegments }
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,
@@ -243,10 +256,8 @@ func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int6
 }
 
 func (c *candidate) servesFormat(n *need) bool {
-	if n.in.NativeOnly {
-		return c.Native.Has(n.req.Format)
-	}
-	return c.Served.Has(n.req.Format)
+	_, ok := c.callFormat(n)
+	return ok
 }
 
 func (c *candidate) full() bool {

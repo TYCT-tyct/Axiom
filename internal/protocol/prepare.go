@@ -26,6 +26,14 @@ type Target struct {
 	// the gateway takes from the route's entry. Messages requires one; Responses gets it as max_output_tokens, whether
 	// the request is converted or rewritten.
 	MaxOutput int64
+	// Streams is set when the endpoint streams a response. The request sent asks for one whatever the client asked,
+	// since the gateway reads every answer as a stream and aggregates it for a client that wants none
+	// (docs/domains/gateway.md「转发规则」).
+	Streams bool
+	// Compact is set for a compaction request, the one request that is not a generation: it is rewritten by the
+	// members that must not reach an upstream as they are — the model, the identifiers, the routing parameters — and
+	// every other byte is copied as the client wrote it (README.md「同格式改写」).
+	Compact bool
 	// Thinking is how the model is asked to reason.
 	Thinking Thinking
 	// MidSystem is set when the model takes a system message after the conversation has started, and
@@ -102,7 +110,8 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
-// as it is. A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
+// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
@@ -139,9 +148,9 @@ func usageContext(r *Request) UsageContext {
 // rewrite is Prepare for an endpoint of the request's format. Chat's rewrites depend on the endpoint's dialect,
 // which come later (#27).
 func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	rules := rewriteRules[f]
+	rules := rulesFor(f, t)
 	if rules.members == nil {
-		return nil, fmt.Errorf("protocol: Prepare does not rewrite format %d yet", f)
+		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
 	w = w.withDefaults()
 	p := &rewriter{
@@ -189,7 +198,7 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rewriteRules[r.Format], len(body), t, w)) + 3*n
+		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
 	}
 	if r.Format != Chat {
 		return 0 // Prepare refuses at once: nothing is converted from another format
@@ -216,23 +225,49 @@ type formatRules struct {
 var (
 	rewriteRules = [...]formatRules{
 		Messages: {
-			members:    withRouting(map[string]rule{"model": (*rewriter).model, "metadata": object(metadataRules)}),
-			identities: 1,
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "metadata": object(metadataRules), "stream": (*rewriter).stream,
+			}),
+			add: (*rewriter).addStream, identities: 1, room: len(addStream),
 		},
 		Responses: {
 			members: withRouting(map[string]rule{
 				"model": (*rewriter).model, "previous_response_id": (*rewriter).previous, "input": (*rewriter).input,
 				"store": (*rewriter).store, "include": (*rewriter).include, "prompt_cache_key": (*rewriter).identity,
 				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
-				"max_output_tokens": (*rewriter).outputCap,
+				"max_output_tokens": (*rewriter).outputCap, "stream": (*rewriter).stream,
 			}),
 			add: (*rewriter).addResponses, identities: 3,
-			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) + len(maxInt64),
+			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) +
+				len(maxInt64) + len(addStream),
 		},
 		Chat: {},
 	}
+	// compactRules rewrite a compaction request: the members that must not reach an upstream as they are — the
+	// endpoint's model name, the identifiers, the routing parameters — and nothing else. A generation's rewrite adds
+	// what a compaction request does not take (store, include, the output cap, a stream) and rewrites its input and
+	// history, which compaction has neither (docs/domains/gateway.md「转发规则」).
+	compactRules = [...]formatRules{
+		Responses: {
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "prompt_cache_key": (*rewriter).identity,
+				"user": (*rewriter).identity, "safety_identifier": (*rewriter).identity,
+			}),
+			identities: 3,
+		},
+		Chat: {}, // spelled out so that the array covers every format, as rewriteRules does: rulesFor never indexes past it
+	}
 	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
 )
+
+// rulesFor is how a request of format f is rewritten for the endpoint t: a compaction request is the one that is not a
+// generation, and a format without compaction has no rules for it.
+func rulesFor(f Format, t Target) formatRules {
+	if t.Compact {
+		return compactRules[f]
+	}
+	return rewriteRules[f]
+}
 
 // withRouting adds the members that are OpenRouter's routing parameters or our extensions, which the gateway has
 // used and no upstream defines: an official endpoint refuses a member it does not know (gateway.md「路由参数」).
@@ -249,7 +284,7 @@ var routingParameters = []string{"provider", "models", "route", "transforms", "p
 // nothing (OpenAI《Create a model response》, include, read 2026-10-14).
 const encrypted = "reasoning.encrypted_content"
 
-// What Responses rewrites add to a body: the members it lacks, and the array that wraps a string input in the history.
+// What the rewrites add to a body: the members it lacks, and the array that wraps a string input in the history.
 const (
 	addStore   = `,"store":false`
 	addInclude = `,"include":["` + encrypted + `"]`
@@ -258,6 +293,9 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
+	// addStream asks for the upstream's stream when the endpoint streams one, since the gateway reads every call as a
+	// stream and a client that wants no stream gets the events aggregated (docs/domains/gateway.md「转发规则」).
+	addStream = `,"stream":true`
 )
 
 // rewriter copies a body to out, rewriting members on the way. body[:at] is settled: copied to out or dropped.
@@ -268,6 +306,7 @@ type rewriter struct {
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
+	streamed                              bool            // the stream member seen
 	capped                                bool            // max_output_tokens was given a value
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
@@ -478,6 +517,16 @@ func (p *rewriter) history() {
 	}
 }
 
+// addStream asks for the upstream's stream when the endpoint streams one and the request did not name it: the gateway
+// reads a stream for every call and aggregates it for a client that wants none (docs/domains/gateway.md「转发规则」).
+func (p *rewriter) addStream() error {
+	if p.t.Streams && !p.streamed {
+		p.out = append(p.out, addStream...)
+	}
+	return nil
+}
+
+// addResponses appends what a Responses request lacks.
 func (p *rewriter) addResponses() error {
 	if p.continues != (len(p.w.History) > 0) {
 		return errHistory
@@ -496,5 +545,17 @@ func (p *rewriter) addResponses() error {
 		p.history()
 		p.out = append(p.out, ']')
 	}
-	return nil
+	return p.addStream()
+}
+
+// stream asks for the upstream's stream whatever the client asked, when the endpoint streams one: the gateway relays
+// every answer as a stream, and a client that wants no stream gets the events aggregated
+// (docs/domains/gateway.md「转发规则」).
+func (p *rewriter) stream() error {
+	p.streamed = true
+	v, err := p.dec.ReadValue()
+	if err == nil && p.t.Streams && string(v) != "true" {
+		p.replace(len(v), "true")
+	}
+	return err
 }

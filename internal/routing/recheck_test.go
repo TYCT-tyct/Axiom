@@ -36,6 +36,9 @@ func TestPriceLimitHoldsForTheLongestPrompt(t *testing.T) {
 		{"code execution does too", func(in *routing.Input) {
 			in.Req.Needs, in.Req.CodeExecutions = protocol.CodeExecution, 1
 		}, false},
+		{"compaction samples again and rereads the context", func(in *routing.Input) {
+			in.Req.Compacts = true
+		}, false},
 	}
 	for _, c := range cases {
 		in := input()

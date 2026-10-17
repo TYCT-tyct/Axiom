@@ -61,9 +61,11 @@ func NewHandler(d Deps) (*Handler, error) {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
 		} {
-			h.mux.HandleFunc("POST "+prefix+path, h.call(format))
+			h.mux.HandleFunc("POST "+prefix+path, h.call(format, false))
 			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))
 		}
+		h.mux.HandleFunc("POST "+prefix+"/responses/compact", h.call(protocol.Responses, true))
+		h.mux.HandleFunc("GET "+prefix+"/responses/compact", refuseUpgrade(protocol.Responses))
 		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
 		h.auxRoutes(prefix)
 	}
@@ -83,6 +85,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type Call struct {
 	ID        uuid.UUID // the request ID, which is also the call number
 	Format    protocol.Format
+	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
 	Header    http.Header // the request headers that may go upstream
@@ -124,8 +127,8 @@ func (c *Call) Done() {
 	}
 }
 
-// call serves one of the three call paths.
-func (h *Handler) call(format protocol.Format) http.HandlerFunc {
+// call serves one of the call paths, or the Responses compact endpoint, which is passed through instead of relayed.
+func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
 		if err != nil {
@@ -133,7 +136,7 @@ func (h *Handler) call(format protocol.Format) http.HandlerFunc {
 			return
 		}
 		defer release()
-		c, err := h.accept(w, r, format)
+		c, err := h.accept(w, r, format, compact)
 		if err != nil {
 			h.fail(w, r, format, err)
 			return
@@ -159,7 +162,7 @@ func refuseUpgrade(format protocol.Format) http.HandlerFunc {
 // accept takes a request as far as admission: recognise the site and the key from the headers alone, take the
 // slots, read the body, resolve the model, admit. On any failure the call's holds are given back; the one exception
 // is a lost admission, whose reservation may exist, so its settlement keeps them until it is done.
-func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol.Format) (*Call, error) {
+func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol.Format, compact bool) (*Call, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return nil, errUpgrade
 	}
@@ -171,7 +174,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, Format: format, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: clientIP(r)}
+	c := &Call{ID: id, Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: clientIP(r)}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()
@@ -257,6 +260,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	}
 	if req.Previous != "" { // continuing a stored response is M2 (docs/domains/gateway.md「Responses 的会话状态」)
 		return invalid("previous_response_id is not supported yet.")
+	}
+	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
+		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
 	}
 	over, err := override(req.Provider)
 	if err != nil {

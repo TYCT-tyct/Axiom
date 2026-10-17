@@ -46,7 +46,9 @@ func (a Admission) allows(m catalog.ModelID) bool {
 
 // Input is one request to plan. Models are the resolved model and, after it, the alternates the request listed or a
 // preset allows, in order. NativeOnly is set when the request uses something only its own format can express (an
-// Anthropic beta, a reasoning signature). Sticky is the endpoint the session stuck to, zero if none.
+// Anthropic beta, a reasoning signature). NoSegments is set when the gateway reads the answer whole instead of as a
+// stream, as for a call the upstream answers whole: its reservation is made in full (gateway README.md「Relay 的所有权」)
+// and the endpoint need not stream one. Sticky is the endpoint the session stuck to, zero if none.
 type Input struct {
 	Admission  Admission
 	Req        *protocol.Request
@@ -54,6 +56,7 @@ type Input struct {
 	Override   Override
 	Sticky     EndpointID
 	NativeOnly bool
+	NoSegments bool
 }
 
 // Plan is the route of a request: at most MaxEntries entries in order, the most attempts to make (a credential or

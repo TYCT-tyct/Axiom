@@ -119,17 +119,21 @@ func (x *Executor) identity(account uuid.UUID) func(string) string {
 
 // ended is how the attempts ended the call. err answers it when nothing was written to the client yet; relay is the
 // stream the call ends in, nil when no attempt got as far as one that the call ends with; done says the upstream ended
-// normally.
+// normally. reply is the whole body of a call the upstream answered at once, the compact one, whose status passes
+// through with it and whose memory is given back once it is written.
 type ended struct {
-	err   protocol.Error
-	after int // Retry-After of the answer, in seconds
-	relay *protocol.Relay
-	done  bool
+	err    protocol.Error
+	after  int // Retry-After of the answer, in seconds
+	relay  *protocol.Relay
+	done   bool
+	reply  []byte
+	status int
+	held   int64
 }
 
 // Run is Deps.Run: it takes the call from admission to the end of its answer, and settles it once however it ends.
 // The call's slots go when its settlement is written, or once it is the cleanup's (README.md「结束与结算」), which may
-// be after Run returns. A request that wants no stream is refused until G8 aggregates it.
+// be after Run returns.
 func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	defer x.bg.add()()
 	s := newSession(x, w, r, c)
@@ -139,12 +143,9 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 		}
 	}()
 	defer s.finish(nil) // whatever the way out, the keep-alive stops before the handler returns
+	defer s.let()       // a reply no answer was made of, as a panic leaves, is let go
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
-	if !c.Request.Stream {
-		s.conclude(ctx, ended{err: protocol.Error{Type: protocol.InvalidRequest, Message: "Requests that do not stream are not supported yet; set stream to true."}})
-		return
-	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -176,6 +177,10 @@ type session struct {
 	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
 	currency platform.Currency       // of the last attempt's price
 	skips    skips
+	last     *attempt // the attempt in progress, or the last one made
+
+	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
+	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -195,7 +200,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 	return &session{
 		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
-		writeFor: x.Limits.cfg.WriteTimeout,
+		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
 	}
 }
 
@@ -212,11 +217,15 @@ func (s *session) conclude(ctx context.Context, e ended) {
 		fin = s.final(f)
 	}
 	switch {
+	case e.reply != nil:
+		s.answerReply(e)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
 		}
 		s.answer(e, fin)
+	case s.aggregate:
+		s.answerAggregate(e, fin, err)
 	case e.done:
 		final := protocol.Final{Pending: err != nil}
 		if fin != nil {
@@ -227,6 +236,55 @@ func (s *session) conclude(ctx context.Context, e ended) {
 		s.finish(e.relay.Fail(e.err, fin))
 	}
 	s.handedOff = s.x.settled(ctx, s.c, o, err)
+}
+
+// answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
+// aggregated, or the failure, which carries what was generated and the error for a Chat or Responses client and is the
+// error alone for a Messages one (docs/domains/gateway.md「错误」). Finish and Fail return the body and the status of a
+// relay that has not ended yet, which is always the case here.
+func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
+	final := protocol.Final{Pending: err != nil}
+	if fin != nil {
+		final = *fin
+	}
+	var body []byte
+	if e.done {
+		body = e.relay.Finish(final)
+	} else {
+		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
+			fin = nil // an error that cost nothing says nothing of the charge
+		}
+		body = e.relay.Fail(e.err, fin)
+	}
+	status := e.relay.Status()
+	if status == http.StatusOK {
+		s.journalLast()
+	}
+	s.respond(status, body)
+}
+
+// answerReply writes the body an upstream answered whole, as the compact endpoint does: it goes to the client as it came
+// (docs/domains/gateway.md「转发规则」), after the settlement, which nothing in it reports.
+func (s *session) answerReply(e ended) {
+	defer s.x.Memory.Refund(e.held)
+	s.journalLast()
+	s.respond(e.status, e.reply)
+}
+
+// journalLast tells the journal that the last attempt's content reached the client, before it does, as a stream's
+// commit point does: a crash after the write must leave the cleanup that attempt.
+func (s *session) journalLast() {
+	if s.last != nil && !s.isGone() {
+		s.journal(s.last, true)
+	}
+}
+
+// let drops the aggregate reply kept for the answer, if there is one: the call is over, or another attempt replaced it.
+func (s *session) let() {
+	if s.part != nil {
+		drop(s.part)
+		s.part = nil
+	}
 }
 
 // final is what the ending reports of a settlement.

@@ -195,6 +195,20 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 - **校正**：`ChargeSettled{charge_record_id, revision}` 的处理见「结算与账本」的 `Correct`：版本按尝试记在 `corrections`，0 行即重复或陈旧，直接成功（River 至少一次投递）；以库时钟对照 `correct_by`，到期后只调供应商成本、不动用户。扫描任务把到 `correct_by` 的保留余额释放。记录先到时：清理待定的按记录收费后立即释放；已暂估的照样保留到 `correct_by`，以便更新的版本。
 - **找不到预留行**（例如主备切换丢了提交）：按清理释放处理，补扣并记丢失的请求。
 
+### 被丢弃的校正作业
+
+校正作业还没有接入 River（`ErrNotRecorded` 也只存在于未合并的 PR #150，main 上的 `Correct` 不返回它），所以今天没有会被 River 丢弃的校正作业；等待 `Settle`、重试和放弃的语义等接入作业的 PR 定，属于待定。队列的通用告警已经能看到任何被丢弃的任务（见[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）：error 日志 `queue.job_discarded`（`job_id`、`kind`、`attempt`），指标 `axiom.pg.queue.discarded_jobs` 的 `kind` 标签是任务类型；错误的正文在 `river.river_job.errors` 里。
+
+今天要补一条校正，只有调用 `Correct` 一次（main 上只有测试调用它）。重放前先确认：
+
+1. **版本**：`billing.corrections` 里 `(request_id, attempt_seq)` 的 `revision` 必须小于要投递的版本。`ApplyRevision` 只接受更新的版本；同版本或更旧的版本返回成功，但**什么也不改**（成本也不改）。
+2. **预留**：`billing.reservations` 里必须有这条请求；`Correct` 先按请求找到账户并锁余额行。
+3. **成本**：版本更新时，`adjustCost` 一定调整这次尝试的供应商成本，即使 `suppliers.attempt_costs` 里还没有这次尝试（从 0 起算）；这项只动 `cost_adjust` 的账，不动用户收费。
+4. **收费**：只有同时满足下面全部条件，`recharges` 才会冲正再重记用户收费：预留状态是 `estimated` 或 `cleanup_pending`；`correction_closed` 为假（数据库时钟未过 `correct_by`，或这条预留还是 `unpriced`）；`charged_seq` 是这次尝试；`entry` 不为空。这时补扣以 `amount - charged` 为上限，超出部分由平台承担。其他状态（`pending`、`settled`、`released`、`cleanup_settled`、`cleanup_released`）或收费的是别的尝试时，重放只调整成本。
+5. **核对账本**：成功只表示事务提交（或版本已应用/过旧，直接返回成功），不表示收费变了。重放后查 `billing.transactions`（`(request_id, attempt_seq, kind, revision)`）、`billing.entries` 和 `billing.reservations` 的 `state`、`charged`、`charged_seq`、`correct_by`，确认成本和收费确实按预期变化；没有变化就按上一条判断是否本来就只有成本该变。
+
+找不到预留行时 `Correct` 返回错误，不会补一行；清理已经释放、那次尝试没有 `attempt_costs` 行时，记录里的用量不会写进尝试（`Correct` 只按记录的成本调整这次尝试的供应商成本）。此时按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)给缺的计费项补价并把模型移出路由，避免它继续接单。处理完把 `job_id`、`charge_events` 里的记录和处理结果写进同一个工单。
+
 ## 写入的数据
 
 | 写什么 | 事务 | 谁写 | 幂等键 / 守护 |
@@ -209,6 +223,18 @@ type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } 
 | 清理待定 / 清理结算 / 清理释放、丢失的请求 | 清理任务（后台角色） | billing + suppliers | 预留比较后再写；`lost_requests` 主键 `request_id` |
 | 迟到补扣 / 补差 | 迟到结算 | billing + suppliers | `(request_id, 0, reverse / settle, -1)`；只对清理释放、清理结算发生 |
 | 调用记录 | 异步批量 | observability | 主键 `request_id`，`ON CONFLICT DO NOTHING` |
+
+## 定价规则
+
+已实现存储与维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）；报价**还不读规则**，规则怎么变成售价、试算（`previewPricing`）和成本侧（供应商单位价值、汇率、保本价）随后续 PR，现在存的是人的决定。
+
+一条规则：目标（端点、分组、供应商、模型、厂商、来源类型或全部）、受众（账户、等级或全部）、方法（`cost_plus`：加成率或毛利率二选一、可附固定加价；`reference_multiplier`：参考价倍率；`fixed`：整张固定价格表）和约束（最低毛利率、相对参考价的上下限）。同一站点里目标和受众相同的规则只能有一条（唯一约束），所以任意两条都能排出先后：`Rules` 按目标越具体越先、受众越具体越先、ID 排序。
+
+- **函数**：`Rules(ctx, tx, site)`、`CreateRule(ctx, tx, actor, site, currency, input, reason)`、`UpdateRule(..., id, rev, input, reason)`，都在调用方的平台范围事务里；`currency` 是站点的结算货币，固定价格必须是它。`RuleInput.Check` 检查契约的模式表达不了的部分：目标和受众的 ID 是对应种类的 ID，每种方法只带自己的成员，比率是不为负的十进制，毛利率（含最低毛利率）小于 1，参考价的上下限大于 0 且下限不超过上限，固定价格表合法且是站点的币种。出错是 `*RuleError`，只带成员名与规则，不带值。
+- **从不删除**：停用代替删除；每次修改把当时的整条规则存进 `pricing_rule_versions`（带操作者和原因，只追加），说明过去的价格是怎么来的。
+- **乐观令牌**：`rev` 从 0 起，修改必须带读到的 `rev`，不同报 `ErrStaleRule`（锁住行后比较）；目标和受众撞上另一条规则报 `ErrRuleExists`，找不到报 `ErrRuleNotFound`。
+- **审计**：`pricing_rule.create`、`pricing_rule.update` 带原因，`detail` 只放规则 ID 和 `rev`。
+- **范围**：两张表只有平台范围能读写；站点由调用方传入（管理接口按路径里的站点），表里的 `site_id` 不是租户隔离，是规则的归属。
 
 ## 决策与理由
 
