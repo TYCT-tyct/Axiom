@@ -27,7 +27,7 @@
 
 ## 评审
 
-每个 PR，包括 AGENTS.md 里不要求独立评审的类别，都过一道 Codex（gpt-6-astra）只读评审，同时看正确性和代码质量；本项目不用「免评审」。同一时间完成的几个 PR 可以合成一次评审运行，按 PR 分节，各节原文贴到对应的 PR。推理等级按风险：钱、安全、数据、对外接口的改动用 `high`，其余用 `medium`。作者是 Codex 时换成 Claude 模型。Dependabot 的 PR 只升级依赖，由开发者读完变更说明，把结论写在 PR 评论里。先 `git fetch origin`，在这个 PR 自己的 worktree 里运行，评审期间不切换它的分支：
+每个 PR，包括 AGENTS.md 里不要求独立评审的类别，都过一道 Codex（gpt-6-astra）只读评审，同时看正确性和代码质量；本项目不用「免评审」。同一时间完成的几个 PR 可以合成一次评审运行，按 PR 分节，各节原文贴到对应的 PR。推理等级按风险：钱、安全、数据、对外接口、并发与状态机的改动用 `high`，一般功能和修复用 `medium`，只改测试、文档措辞、CI 配置或机械性的改动用 `low`。PR 一开就评审，与 CI 同时进行，不等 CI 通过。作者是 Codex 时换成 Claude 模型。Dependabot 的 PR 只升级依赖，由开发者读完变更说明，把结论写在 PR 评论里。先 `git fetch origin`，在这个 PR 自己的 worktree 里运行，评审期间不切换它的分支：
 
 - 命令：`codex exec -s read-only -m gpt-6-astra -c model_reasoning_effort=<等级> "<提示词>"`，要它审查 `git diff origin/main...HEAD`（批量时逐个 PR 的范围）及其调用和被调用的代码：先找正确性问题，再对照下文「代码质量标准」逐条找问题，每条给出文件、行号和改法。设计的反方审查也用 `codex exec`，提示词写清方案、背景和要攻击的点；只有设计的反方审查和里程碑审计用 `xhigh`。
 
