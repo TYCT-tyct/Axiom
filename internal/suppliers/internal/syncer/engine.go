@@ -62,6 +62,8 @@ type Engine struct {
 	mgr   adapter.Manager
 	set   Settings
 	now   func() time.Time
+	// held is, for each task that the supplier's limits held up and that has not gone on since, when it may.
+	held map[Task]time.Time
 }
 
 // New makes the engine of one supplier. now is the clock; tests move it.
@@ -89,6 +91,19 @@ func (e *Engine) commit(ctx context.Context, st *State, c *Commit) error {
 	return nil
 }
 
+// Blocked is when the first of the tasks that the supplier's limits held up may go on, or the zero time if none is
+// waiting. A task stays waiting over the Rounds until it succeeds or fails otherwise, so a caller that keeps the Manager
+// can run the Round again at each time Blocked gives, for a Manager that keeps how far a listing got (adapter.Manager)
+// only keeps it while it lives.
+func (e *Engine) Blocked() (first time.Time) {
+	for _, at := range e.held {
+		if first.IsZero() || at.Before(first) {
+			first = at
+		}
+	}
+	return first
+}
+
 // Round runs the tasks of the supplier that are due, in order. A task's failure is recorded in the state and does not
 // stop the others, except an auth rejection, which ends the round and all polling: the error returned is the store's
 // (including ErrFenced), never a task's.
@@ -96,6 +111,9 @@ func (e *Engine) Round(ctx context.Context) error {
 	st, err := e.store.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("syncer: load: %w", err)
+	}
+	if st.Status != Normal {
+		clear(e.held) // no task runs again, so none is waited for
 	}
 	for t := Task(0); t < numTasks && st.Status == Normal; t++ {
 		if err := e.step(ctx, &st, t); err != nil {
@@ -107,6 +125,9 @@ func (e *Engine) Round(ctx context.Context) error {
 
 func (e *Engine) step(ctx context.Context, st *State, t Task) error {
 	ts, now := st.Tasks[t], e.now()
+	if ts.Halted {
+		delete(e.held, t)
+	}
 	if ts.Halted || now.Before(ts.Due) || now.Before(ts.BackoffUntil) {
 		return nil
 	}
@@ -130,6 +151,7 @@ var runners = [numTasks]func(e *Engine, ctx context.Context, st *State, c *Commi
 // settle records how a task went: its next due time, or the failure and what it means.
 func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 	ts := &c.State.Tasks[t]
+	delete(e.held, t)
 	switch {
 	case err == nil:
 		*ts = TaskState{Due: now.Add(e.set.Interval[t]), LastOK: now}
@@ -144,6 +166,10 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
 			ts.Due = blocked.Until
 		}
+		if e.held == nil {
+			e.held = map[Task]time.Time{}
+		}
+		e.held[t] = ts.Due
 	case errors.Is(err, adapter.ErrUnrecognised):
 		ts.Halted = true
 		c.Events = append(c.Events, Event{Kind: TaskHalted, Subject: t.String(), Why: "the response is not in a form the adapter knows"})

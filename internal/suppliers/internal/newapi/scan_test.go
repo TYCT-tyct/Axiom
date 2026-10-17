@@ -74,10 +74,10 @@ func (s *logServer) fill(n int, from, to time.Time) {
 	}
 }
 
-func (s *logServer) Do(_ context.Context, r adapter.Request) (adapter.Response, error) {
+func (s *logServer) Do(ctx context.Context, r adapter.Request) (adapter.Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.limiter.Take(r.Buckets); err != nil {
+	if err := s.limiter.Take(ctx, r.Buckets); err != nil {
 		return adapter.Response{}, err
 	}
 	s.requests = append(s.requests, s.clk.now())

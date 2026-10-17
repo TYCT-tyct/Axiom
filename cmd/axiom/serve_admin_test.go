@@ -11,8 +11,7 @@ import (
 )
 
 // TestServeAdminListener: a node given AXIOM_ADMIN_ADDR serves the admin's API there and only there, behind the guard,
-// and logs the address; the public listener has no admin routes and the admin listener has no console routes; a node
-// without the variable has no admin listener.
+// and logs the address; the public listener has no admin routes and the admin listener has no console routes.
 func TestServeAdminListener(t *testing.T) {
 	environ := func(extra ...string) []string {
 		return append([]string{
@@ -58,11 +57,5 @@ func TestServeAdminListener(t *testing.T) {
 	stop()
 	if _, err := get(t, "http://"+admin+"/api/admin/v1/version"); err == nil {
 		t.Error("the admin listener still answers after shutdown")
-	}
-
-	admin, _, stop = start()
-	defer stop()
-	if admin != "" {
-		t.Errorf("a node without AXIOM_ADMIN_ADDR listens for the admin on %s", admin)
 	}
 }

@@ -111,3 +111,20 @@ func TestRemovalReadsAgainFromBeforeTheGracePeriod(t *testing.T) {
 		t.Errorf("the rescan position was not the one read from: %v", seen)
 	}
 }
+
+// TestEveryEventKindHasAName: events are stored and delivered under their names, so a kind without one would be written
+// as a panic or as a name that belongs to another.
+func TestEveryEventKindHasAName(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for k := GroupAdded; k <= BalanceRecovered; k++ {
+		name := k.String()
+		if name == "" || seen[name] {
+			t.Errorf("kind %d is named %q, which is empty or another's", k, name)
+		}
+		seen[name] = true
+	}
+	if len(kindNames) != int(BalanceRecovered)+1 {
+		t.Errorf("%d names for %d kinds", len(kindNames), int(BalanceRecovered)+1)
+	}
+}

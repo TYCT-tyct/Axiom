@@ -68,7 +68,7 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	routes := adminRoutes(adminAPI{version: "test", accounts: svc, catalog: cat, db: c.db, logger: logger}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, logger)
+	routes := adminRoutes(adminAPI{version: "test", accounts: svc, catalog: cat, db: c.db, logger: logger}, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
 }
 

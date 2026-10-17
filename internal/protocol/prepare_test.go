@@ -69,6 +69,11 @@ var prepareCases = []struct {
 			`"prompt_cache_key":"h(conv_1)","stream":true}`,
 	},
 	{
+		"responses: empty previous_response_id with no history continues nothing", protocol.Responses, false, false,
+		`{"model":"m","previous_response_id":"","input":"next"}`,
+		`{"model":"up","input":"next","store":false}`,
+	},
+	{
 		"responses: history before input items, storage off, end users derived", protocol.Responses, true, true,
 		`{"model":"m","previous_response_id":"resp_1","input":[{"role":"user","content":"next"}],"store":true,` +
 			`"user":"u","safety_identifier":"s"}`,
@@ -99,6 +104,16 @@ var prepareCases = []struct {
 	},
 }
 
+// inspected is the summary Prepare is given, read outside the code whose allocations a test counts.
+func inspected(t *testing.T, f protocol.Format, body []byte) protocol.Request {
+	t.Helper()
+	r, err := protocol.Inspect(f, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte, error) {
 	w := protocol.Rewrites{Identity: derive}
 	if continues {
@@ -124,6 +139,119 @@ func TestPrepare(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+// routingParameters are the members README.md「同格式改写」 lists, written out so that a name lost from Prepare's list shows.
+var routingParameters = []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
+
+// TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
+func TestPrepareDropsRoutingParameters(t *testing.T) {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		want := `{"model":"up"}`
+		if f == protocol.Responses {
+			want = `{"model":"up","store":false}`
+		}
+		for _, name := range routingParameters {
+			value := "{}"
+			if name == "models" { // the one routing parameter whose shape Inspect checks: an array of model names
+				value = `["alt"]`
+			}
+			got, err := prepare(f, []byte(`{"model":"m","`+name+`":`+value+`}`), false, false)
+			if err != nil || string(got) != want {
+				t.Errorf("format %d, %s: got %s (%v), want %s", f, name, got, err, want)
+			}
+		}
+	}
+}
+
+// TestPrepareBuffer holds the output buffer to the room README.md「同格式改写」 promises: whatever Prepare adds, with
+// derived identifiers as long as Rewrites.IdentityLen says, fits without the body being copied again. The body is small
+// so that the allocator's rounding up leaves less room than what is added.
+func TestPrepareBuffer(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef0123456789abcdef"
+	body := []byte(`{"model":"m","previous_response_id":"r","input":"next","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`)
+	allocs := func(identity string, identityLen int) float64 {
+		w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: identityLen, History: history}
+		r := inspected(t, protocol.Responses, body)
+		return testing.AllocsPerRun(5, func() {
+			if _, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Responses, Model: "up", EncryptedReasoning: true}, w); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	long := allocs(id, len(id))
+	// A one-byte identifier replaces a one-byte original: the body grows only by what is added.
+	if short := allocs("k", 0); long != short {
+		t.Errorf("%d allocations with long identifiers, %d with short ones", int(long), int(short))
+	}
+	// Room to spare for the identifiers, which the added members must fit in as well.
+	if roomy := allocs(id, 10*len(id)); long != roomy {
+		t.Errorf("%d allocations with room for the identifiers, %d with room to spare", int(long), int(roomy))
+	}
+}
+
+// TestPrepareBufferEscapes holds the room to the JSON escapes of the values put in: a model name and identifiers
+// made of bytes that take six bytes each still fit in one allocation, as short ones do.
+func TestPrepareBufferEscapes(t *testing.T) {
+	nasty := strings.Repeat("\x01\"\\", 40)
+	for _, c := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"u"}}`},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`},
+	} {
+		allocs := func(model, identity string) float64 {
+			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity)}
+			r := inspected(t, c.format, []byte(c.body))
+			return testing.AllocsPerRun(5, func() {
+				if _, err := protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: model}, w); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+		if long, short := allocs(nasty, nasty), allocs("m", "u"); long != short {
+			t.Errorf("format %d: %d allocations with escaped values, %d without", c.format, int(long), int(short))
+		}
+	}
+}
+
+// TestPrepareBufferDefaultIdentityLen holds the room for Identity's values to the default bound when IdentityLen is
+// not set: values as long as the bound, all of bytes that need escaping, replacing originals that need none, fit in
+// one allocation; a longer one is refused as the gateway's error.
+func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
+	for _, c := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`},
+	} {
+		prepareWith := func(n int) (float64, error) {
+			id := strings.Repeat(`\`, n)
+			w := protocol.Rewrites{Identity: func(string) string { return id }}
+			r := inspected(t, c.format, []byte(c.body))
+			var err error
+			allocs := testing.AllocsPerRun(5, func() {
+				_, err = protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: "m"}, w)
+			})
+			return allocs, err
+		}
+		long, err := prepareWith(128)
+		if err != nil {
+			t.Fatal(err)
+		}
+		short, err := prepareWith(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if long != short {
+			t.Errorf("format %d: %d allocations with 128 escaped bytes, %d with one", c.format, int(long), int(short))
+		}
+		if _, err := prepareWith(129); err == nil || errors.Is(err, protocol.ErrInvalid) {
+			t.Errorf("format %d: got %v for 129 bytes, want the gateway's error", c.format, err)
+		}
 	}
 }
 
