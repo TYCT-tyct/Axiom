@@ -9,6 +9,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/webui"
 )
 
 //go:generate go run -C ../../tools ./pendingapi ../api/admin.yaml ../cmd/axiom admin_pending.gen.go axiom/internal/platform/adminapi adminAPI pendingAdmin
@@ -47,12 +48,17 @@ func (a adminAPI) GetVersion(context.Context, adminapi.GetVersionRequestObject) 
 	}, nil
 }
 
-// adminRoutes are the admin listener's routes: the admin's contract behind the guard (apiRoutes).
-func adminRoutes(api adminapi.StrictServerInterface, g *guard, logger *slog.Logger) http.Handler {
-	return apiRoutes(g, logger, func(m mounting) http.Handler {
-		admin := adminapi.NewStrictHandlerWithOptions(api, nil, adminapi.StrictHTTPServerOptions{
+// adminRoutes are the admin listener's routes: the admin's contract behind the guard (apiRoutes), and the admin app for
+// every path the API does not claim.
+func adminRoutes(api adminapi.StrictServerInterface, g *guard, frontend *webui.Frontend, logger *slog.Logger) http.Handler {
+	admin := apiRoutes(g, logger, func(m mounting) http.Handler {
+		handler := adminapi.NewStrictHandlerWithOptions(api, nil, adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc: invalidRequest, ResponseErrorHandlerFunc: m.handlerFailed,
 		})
-		return adminapi.HandlerWithOptions(admin, adminapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
+		return adminapi.HandlerWithOptions(handler, adminapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
+	routes := http.NewServeMux()
+	routes.Handle("/api/", admin)
+	routes.Handle("/", frontend.Admin())
+	return frontend.Secured(routes)
 }

@@ -159,10 +159,11 @@ func (s scanning) Charges(_ context.Context, state adapter.ScanState) (adapter.C
 }
 
 // TestScanProblemFindsWhatBreaksTheProtocol: a manager that follows the protocol passes; one that refuses a position it
-// returned, one that returns none, and one that never ends a pass each fail.
+// returned, one that returns none, one that never ends a pass, and one whose pass ends without saying how far it read
+// each fail.
 func TestScanProblemFindsWhatBreaksTheProtocol(t *testing.T) {
 	t.Parallel()
-	done := adapter.ChargePage{Done: true}
+	done := adapter.ChargePage{Done: true, Through: time.Unix(1_700_000_000, 0)}
 	for name, c := range map[string]struct {
 		charges func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error)
 		fails   bool
@@ -177,6 +178,9 @@ func TestScanProblemFindsWhatBreaksTheProtocol(t *testing.T) {
 			return done, []byte(`{"v":1}`), nil
 		}, true},
 		"returns no position": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) { return done, nil, nil }, true},
+		"ends a pass without Through": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+			return adapter.ChargePage{Done: true}, []byte(`{"v":1}`), nil
+		}, true},
 		"never ends a pass": {func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 			return adapter.ChargePage{}, []byte(`{"v":1}`), nil
 		}, true},

@@ -29,7 +29,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	})
 	var health httpserver.Health
 	health.SetReady(true)
-	servers := node("127.0.0.1:0", slow, "", nil, "127.0.0.1:0", &health, logger, httpserver.Telemetry{})
+	servers := node("127.0.0.1:0", slow, "127.0.0.1:0", slow, "127.0.0.1:0", &health, logger, httpserver.Telemetry{})
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}

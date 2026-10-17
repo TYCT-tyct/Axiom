@@ -1,6 +1,15 @@
+import io
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
 
-from check_pr import describe, review
+import check_pr
+from check_pr import describe, review, unfinished, waiver_allowed
 
 TEMPLATE = "## Background / 背景\n<!-- why -->\n\n## Verification / 验证\n<!-- evidence -->\n"
 BODY = "## Background / 背景\nbecause\n## Verification / 验证\nran it\n"
@@ -63,6 +72,36 @@ class DescribeTest(unittest.TestCase):
                 self.assertEqual(describe("docs: x y", BODY + text + "\n", "someone", TEMPLATE) == [], ok)
 
 
+class ClosingTest(unittest.TestCase):
+    def test_a_closed_issue_needs_its_acceptance_boxes_ticked(self):
+        issues = {
+            1: {"body": "### 要解决什么问题\n- [ ] not acceptance\n\n### 验收标准\n\n- [x] done\n- [ ] not yet\n- [ ] nor this\n"},
+            2: {"body": "### 验收标准\r\n\r\n- [x] done\r\n"},
+            3: {"body": "no acceptance section\n- [ ] a task\n"},
+            4: {"body": "### 验收标准\n- [ ] a PR's own checklist\n", "pull_request": {}},
+        }
+        fetched = []
+
+        def issue(number):
+            fetched.append(number)
+            return issues[number]
+        body = ("Closes #1\nCloses #1\nFixes #2\nResolves #3\nCloses #4\nCloses other/repo#5\n"
+                "Closes https://github.com/Owner/Repo/issues/1\n<!-- Closes #6 -->\nRefs #7\n")
+        self.assertEqual(unfinished(body, "owner/repo", issue), [
+            "#1 still has 2 unticked acceptance boxes: tick each with its evidence, or write Refs #1 instead; then edit this "
+            "description or rerun the pr check"])
+        self.assertEqual(fetched, [1, 2, 3, 4])  # each issue once; other repositories, comments and Refs are not fetched
+
+    def test_an_unreadable_issue_fails_with_the_reason_and_keeps_the_other_problems(self):
+        error = subprocess.CalledProcessError(1, ["gh"], stderr=b"HTTP 404: Not Found\n")
+        env = {"PR_TITLE": "Bad title", "PR_BODY": BODY + "Closes #1\n", "PR_AUTHOR": "someone", "REPO": "owner/repo"}
+        with (mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]),
+              mock.patch("subprocess.run", side_effect=error), redirect_stdout(io.StringIO()) as out):
+            self.assertEqual(check_pr.main(), 1)
+        self.assertIn("title 'Bad title'", out.getvalue())
+        self.assertIn("could not read an issue this PR closes: HTTP 404: Not Found", out.getvalue())
+
+
 class ReviewTest(unittest.TestCase):
     def test_the_head_commit_needs_a_passing_answered_review(self):
         answer = comment(f"作者回应 · 提交 {HEAD[:7]} · 修改在 abc1234")
@@ -87,6 +126,22 @@ class ReviewTest(unittest.TestCase):
         self.assertNotEqual(review(HEAD, BODY + "<!--\n免评审：模板里的提示\n-->\n", "someone", []), [])
         self.assertNotEqual(review(HEAD, "免评审：\n" + BODY, "someone", []), [])  # an empty reason does not borrow the next line
         self.assertNotEqual(review(HEAD, BODY + "免评审：只改了措辞\n", "someone", [reviewed(blocking=1)]), [])  # cannot overrule a review
+
+    def test_a_project_can_refuse_waivers(self):
+        waived = BODY + "免评审：只改了措辞\n"
+        self.assertEqual(review(HEAD, waived, "someone", [], allow_waiver=False),
+                         ["this project does not accept 免评审 ([review] waiver = false in .github/project-workflow.toml): get an independent review of 0123456"])
+        self.assertEqual(review(HEAD, waived, "someone", [reviewed()], allow_waiver=False), [])  # a review still passes
+        self.assertEqual(review(HEAD, waived, "dependabot[bot]", [], allow_waiver=False), [])
+        cases = {"no config": (None, True), "switched off": ("[review]\nwaiver = false\n", False),
+                 "limits only": ("[limits]\ndoc_lines = 400\n", True), "malformed, reported by check_docs": ("[review\n", True)}
+        for name, (config, expected) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                if config is not None:
+                    (root / ".github").mkdir()
+                    (root / ".github/project-workflow.toml").write_text(config, encoding="utf-8")
+                self.assertEqual(waiver_allowed(root), expected)
 
 
 if __name__ == "__main__":
