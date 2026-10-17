@@ -366,8 +366,6 @@ func TestTheSweepEnqueuesOnlyWhatIsDueAndFree(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, &system{account: healthy()})
 	n := c.node("a", time.Hour)
-	// The queue is not started: its periodic sweep would run beside the three explicit ones below, and a supplier
-	// added after that sweep looked would be enqueued by the background job before this test gives it its state.
 	paused := c.addSupplier("paused.example", "paused")
 	held, notDue := c.addSupplier("held.example", "active"), c.addSupplier("notdue.example", "active")
 	err := n.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
@@ -379,6 +377,10 @@ func TestTheSweepEnqueuesOnlyWhatIsDueAndFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The queue must be started for the sweep to enqueue through it, and its periodic sweep runs once at the start
+	// beside the three explicit ones below: every supplier's state is in place before it can, so it enqueues the same
+	// one job and nothing for the suppliers this test accounts for.
+	c.start(n)
 	for range 3 {
 		if err := n.s.sweep(t.Context()); err != nil {
 			t.Fatal(err)
