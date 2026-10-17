@@ -62,6 +62,7 @@ func TestRemovalCompletesFromAnyInterruption(t *testing.T) {
 func removalInterrupted(t *testing.T, failAt int, hookFail string) {
 	m := healthy()
 	e, st, clk := engine(m)
+	scanThrough(m, clk)
 	round(t, e)
 	if failAt > 0 {
 		st.failAt = st.commits + failAt
@@ -84,6 +85,7 @@ func TestRemovalWaitsForInFlightAndGrace(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	e, st, clk := engine(m)
+	scanThrough(m, clk)
 	round(t, e)
 	h := &hooks{inFlight: 1}
 	expect := func(step RemovalStep, why string) {
@@ -140,7 +142,7 @@ type catchingUp struct {
 
 // TestRemovalReadsUntilTheAdapterHasCaughtUp: one pass does not end at the present, so the first read of a removal goes
 // on pass after pass until the adapter says it has read to where the removal began, and only then the grace period
-// starts. An adapter that does not say is taken to have caught up when its pass ends.
+// starts.
 func TestRemovalReadsUntilTheAdapterHasCaughtUp(t *testing.T) {
 	t.Parallel()
 	c := &catchingUp{supplier: healthy(), read: t0}
@@ -161,5 +163,107 @@ func TestRemovalReadsUntilTheAdapterHasCaughtUp(t *testing.T) {
 	}
 	if c.passes != 4 || st.state.Through.Before(st.state.RemovalAt.Add(-2*time.Minute)) {
 		t.Errorf("%d passes, read to %v for a removal at %v; want 4 passes to the start", c.passes, st.state.Through, st.state.RemovalAt)
+	}
+}
+
+// TestRemovalDoesNotTakeAPageWithoutThroughForCaughtUp: a Done page that does not say how far the records are read is
+// not taken for a caught-up one. The removal keeps reading, starts no grace period and deletes nothing, and it goes on
+// as soon as the adapter does say. The contract test requires the report, so this is what an adapter that never went
+// through it looks like: a supplier that cannot be removed, rather than a backlog quietly taken for read (#109).
+func TestRemovalDoesNotTakeAPageWithoutThroughForCaughtUp(t *testing.T) {
+	t.Parallel()
+	m := healthy() // its Done page leaves Through out
+	e, st, clk := engine(m)
+	h := &hooks{}
+	for range 3 {
+		if done, err := e.Remove(t.Context(), h); done || err != nil {
+			t.Fatalf("Remove = %v, %v; want it to keep reading", done, err)
+		}
+		clk.advance(time.Minute)
+	}
+	if st.state.Removal != StepFinalScan || st.state.ScanOpen || h.deletes != 0 {
+		t.Fatalf("step %v, scan open %v, deletes %d; want it still reading the records", st.state.Removal, st.state.ScanOpen, h.deletes)
+	}
+	scanThrough(m, clk)
+	if done, err := e.Remove(t.Context(), h); done || err != nil || st.state.Removal != StepGrace {
+		t.Fatalf("Remove = %v, %v at step %v; want it past the read once the adapter says", done, err, st.state.Removal)
+	}
+}
+
+// TestRemovalAlertsOnceWhenCatchingUpTakesLong: a removal held up by ten hours of records, a minute of them read per
+// pass, waits inside the bound without a word and then tells a person once; the removal reads on and finishes when the
+// adapter has caught up.
+func TestRemovalAlertsOnceWhenCatchingUpTakesLong(t *testing.T) {
+	t.Parallel()
+	m, read := healthy(), t0.Add(-10*time.Hour)
+	m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+		read = read.Add(time.Minute) // the backlog, one pass and one page at a time
+		return adapter.ChargePage{Done: true, Through: read}, adapter.ScanState(`{"v":1}`), nil
+	}
+	e, st, clk := engine(m)
+	h := &hooks{}
+	remove := func() (done bool) {
+		t.Helper()
+		done, err := e.Remove(t.Context(), h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return done
+	}
+	for range 3 { // twenty minutes of catching up, the last call made at that point
+		if remove() {
+			t.Fatal("the removal ended with ten hours of records unread")
+		}
+		clk.advance(10 * time.Minute)
+	}
+	if st.count(RemovalSlow) != 0 {
+		t.Errorf("the removal alerted %v into the read, inside the %v bound", clk.now().Sub(st.state.RemovalAt), e.set.CatchUpAlert)
+	}
+	for range 40 {
+		if remove() {
+			break
+		}
+		clk.advance(10 * time.Minute)
+	}
+	if st.state.Status != Removed || st.count(RemovalSlow) != 1 {
+		t.Errorf("status %v, %d alerts; want it removed after one alert", st.state.Status, st.count(RemovalSlow))
+	}
+}
+
+// TestRemovalDoesNotAlertInTheSecondRead: the first read catches up at once, so the removal enters the grace period well
+// inside the bound; the second read, made after it, is held up by the supplier's limits or by a pass that does not end.
+// It waits, and sends no catch-up alert: that alert is about the first read, and these records were read to the
+// removal's start before the grace period began.
+func TestRemovalDoesNotAlertInTheSecondRead(t *testing.T) {
+	t.Parallel()
+	for name, heldUp := range map[string]func(*supplier){
+		"rate limited": func(m *supplier) {
+			m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+				return adapter.ChargePage{}, nil, adapter.Blocked{Until: t0.Add(2 * time.Hour)}
+			}
+		},
+		"a pass that does not end": func(m *supplier) {
+			m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
+				return adapter.ChargePage{}, adapter.ScanState(`{"v":1}`), nil
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := healthy()
+			e, st, clk := engine(m)
+			scanThrough(m, clk)
+			if done, err := e.Remove(t.Context(), &hooks{}); done || err != nil || st.state.Removal != StepGrace {
+				t.Fatalf("first Remove = %v, %v at step %v; want it waiting in the grace period", done, err, st.state.Removal)
+			}
+			clk.advance(31 * time.Minute) // past the grace period, and past CatchUpAlert from the removal's start
+			heldUp(m)
+			if done, err := e.Remove(t.Context(), &hooks{}); done || err != nil {
+				t.Fatalf("Remove in the second read = %v, %v; want it waiting", done, err)
+			}
+			if st.state.Removal != StepLateScan || st.count(RemovalSlow) != 0 {
+				t.Errorf("step %v, %d alerts; want the second read waiting without the catch-up alert", st.state.Removal, st.count(RemovalSlow))
+			}
+		})
 	}
 }

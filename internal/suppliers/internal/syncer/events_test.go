@@ -97,11 +97,11 @@ func TestRemovalReadsAgainFromBeforeTheGracePeriod(t *testing.T) {
 	t.Parallel()
 	r := &rescanning{supplier: healthy()}
 	var seen []string
+	e, _, clk := engine(r)
 	r.charges = func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 		seen = append(seen, string(scan))
-		return adapter.ChargePage{Done: true}, scan, nil
+		return adapter.ChargePage{Done: true, Through: clk.now()}, scan, nil
 	}
-	e, _, clk := engine(r)
 	started := clk.now()
 	removeAll(t, e, clk, &hooks{})
 	if len(r.since) != 1 || !r.since[0].Equal(started.Add(-30*time.Minute)) {
@@ -117,14 +117,14 @@ func TestRemovalReadsAgainFromBeforeTheGracePeriod(t *testing.T) {
 func TestEveryEventKindHasAName(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
-	for k := GroupAdded; k <= BalanceRecovered; k++ {
+	for k := GroupAdded; k <= RemovalSlow; k++ {
 		name := k.String()
 		if name == "" || seen[name] {
 			t.Errorf("kind %d is named %q, which is empty or another's", k, name)
 		}
 		seen[name] = true
 	}
-	if len(kindNames) != int(BalanceRecovered)+1 {
-		t.Errorf("%d names for %d kinds", len(kindNames), int(BalanceRecovered)+1)
+	if len(kindNames) != int(RemovalSlow)+1 {
+		t.Errorf("%d names for %d kinds", len(kindNames), int(RemovalSlow)+1)
 	}
 }

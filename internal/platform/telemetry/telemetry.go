@@ -26,7 +26,7 @@ type Telemetry struct {
 // New builds the providers. Metrics are kept in a registry of their own, not Prometheus's default one, so only what
 // the program registers through Metrics is exposed. Spans go to processors, none yet: an exporter arrives with the
 // first deployment that runs a collector, and it is a processor added here. With no processor nothing would read a
-// span, so none is sampled: the HTTP server span builds no attributes for it (the pg and egress spans still do).
+// span, so none is sampled, and the spans of httpserver, pg and egress build no attributes for one.
 func New(processors ...sdktrace.SpanProcessor) (*Telemetry, error) {
 	registry := prometheus.NewRegistry()
 	reader, err := otelprom.New(otelprom.WithRegisterer(registry), otelprom.WithoutScopeInfo(), otelprom.WithoutTargetInfo())
