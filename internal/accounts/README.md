@@ -277,6 +277,7 @@ func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c Fa
 func NewOperator(db *pg.DB, platform pg.Scope, opened OpenedFunc) *Operator // 命令行：InitSite、CreateUser、GrantPlatform、SetPassword、ResetMFA
 func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) // 同 Authenticate，但接受待验证会话：getSession、signOut
 func (p Principal) Pending() bool; func (p Principal) Verified() bool
+func (p Principal) SessionID() SessionID // 认出主体的会话，管理接口的探测限次按会话计
 func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
 func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
