@@ -122,6 +122,11 @@ type Endpoint struct {
 	MaxConcurrent    int64     // 0 for no limit at the endpoint itself
 
 	Price PriceRef // the sale price version; a zero Version means none
+
+	// Target is how the endpoint is called: its name for the model and what the model's spec says of how it is asked.
+	// Its Format and MaxOutput are left out: Plan chooses the format a request is called in (callFormat), and the cap a
+	// request that sets none is sent with, which is the one it is quoted at (Entry.MaxOutput).
+	Target protocol.Target
 }
 
 // Override is what a request's provider parameter may change: filters only tighten a preset's, the price limits only
