@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
-import { Code } from "../parts";
+import { Code, mainCell } from "../parts";
 import { authorsQuery } from "../queries";
 
 type Author = AdminSchemas["Author"];
@@ -58,10 +58,12 @@ function AuthorsTable({ authors, onEdit }: { authors: Author[]; onEdit: ((author
       <tbody>
         {authors.map((author) => (
           <tr key={author.slug}>
-            <Td className="max-w-48 truncate">
-              <Code>{author.slug}</Code>
+            <Td className="max-w-48">
+              <p className="truncate" title={author.slug}>
+                <Code>{author.slug}</Code>
+              </p>
             </Td>
-            <Td className="max-w-72">
+            <Td className={mainCell}>
               <span className="block truncate" title={author.name}>
                 {author.name}
               </span>

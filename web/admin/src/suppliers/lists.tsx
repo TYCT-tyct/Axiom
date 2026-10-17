@@ -1,7 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Button, EmptyState, Table, Td } from "@axiom/ui";
+import { Button, EmptyState, Table, Td, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
-import { Code, Head, State, Time } from "../parts";
+import { Code, Head, mainCell, State, Time } from "../parts";
 import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
@@ -19,6 +19,7 @@ function Empty({ what }: { what: "groups" | "credentials" | "unbound" }) {
 // models endpoints.
 export function Groups({ groups, onOpen }: { groups: AdminSchemas["SupplierGroup"][]; onOpen: OnOpen }) {
   const { t } = useTranslation();
+  const format = useFormat();
   if (groups.length === 0) {
     return <Empty what="groups" />;
   }
@@ -36,7 +37,7 @@ export function Groups({ groups, onOpen }: { groups: AdminSchemas["SupplierGroup
       <tbody>
         {groups.map((group) => (
           <tr key={group.id}>
-            <Td className="max-w-56 min-w-32">
+            <Td className={mainCell}>
               <p className="truncate text-t1" title={group.name}>
                 {group.name}
               </p>
@@ -44,7 +45,7 @@ export function Groups({ groups, onOpen }: { groups: AdminSchemas["SupplierGroup
                 <Code>{group.upstream_ref}</Code>
               </p>
             </Td>
-            <Td className="tabular-nums">{`×${group.ratio}`}</Td>
+            <Td className="tabular-nums">{`×${format.decimal(group.ratio)}`}</Td>
             <Td className="hidden max-w-48 truncate md:table-cell">
               {group.codename ? <Code>{group.codename}</Code> : "—"}
             </Td>
@@ -88,6 +89,7 @@ export function Credentials({
   groups: AdminSchemas["SupplierGroup"][];
 }) {
   const { t } = useTranslation();
+  const format = useFormat();
   if (credentials.length === 0) {
     return <Empty what="credentials" />;
   }
@@ -107,8 +109,10 @@ export function Credentials({
           const group = groups.find((candidate) => candidate.id === credential.group_id);
           return (
             <tr key={credential.id}>
-              <Td className="max-w-48 truncate">
-                <Code>{credential.upstream_key_ref}</Code>
+              <Td className="max-w-48">
+                <p className="truncate" title={credential.upstream_key_ref}>
+                  <Code>{credential.upstream_key_ref}</Code>
+                </p>
               </Td>
               <Td className="max-w-48 truncate">{group?.codename ?? group?.name ?? credential.group_id}</Td>
               <Td>
@@ -125,7 +129,7 @@ export function Credentials({
                   <Time at={credential.expires_at} />
                 )}
               </Td>
-              <Td className="hidden tabular-nums md:table-cell">{credential.max_concurrency}</Td>
+              <Td className="hidden tabular-nums md:table-cell">{format.number(credential.max_concurrency)}</Td>
             </tr>
           );
         })}
@@ -153,8 +157,10 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
       <tbody>
         {keys.map((key) => (
           <tr key={key.ref}>
-            <Td className="max-w-56 truncate">
-              <Code>{key.ref}</Code>
+            <Td className={mainCell}>
+              <p className="truncate" title={key.ref}>
+                <Code>{key.ref}</Code>
+              </p>
             </Td>
             <Td className="hidden max-w-48 truncate md:table-cell">
               {key.group_ref ? <Code>{key.group_ref}</Code> : "—"}

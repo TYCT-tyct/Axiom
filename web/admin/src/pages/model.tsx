@@ -9,7 +9,7 @@ import { ModelStatusDialog, NameDialog, SpecDialog } from "../models/dialogs";
 import { ModelState } from "../models/parts";
 import { Prices } from "../models/prices";
 import { otherFacts } from "../models/spec-fields";
-import { Actions, Code, Facts, PageBody, State } from "../parts";
+import { Actions, Code, Facts, mainCell, PageBody, State } from "../parts";
 import { modelQuery } from "../queries";
 
 type Model = AdminSchemas["Model"];
@@ -20,7 +20,7 @@ export default function ModelPage() {
   const { modelId } = useParams({ from: "/app/models/$modelId" });
   const model = useQuery(modelQuery(modelId));
   return (
-    <DataState query={model}>
+    <DataState query={model} page>
       {(data) => (
         <>
           <PageHeader title={data.slug} description={t("models.detail.description")} />
@@ -157,12 +157,14 @@ function NamesPanel({ model }: { model: Model }) {
         <tbody>
           {model.names.map((name) => (
             <tr key={name.name}>
-              <Td className="max-w-72">
+              <Td className={mainCell}>
                 <span className="block truncate" title={name.name}>
                   <Code>{name.name}</Code>
                 </span>
               </Td>
-              <Td>{name.visibility === "public" ? t("models.names.public") : t("models.names.internal")}</Td>
+              <Td className="whitespace-nowrap">
+                {name.visibility === "public" ? t("models.names.public") : t("models.names.internal")}
+              </Td>
             </tr>
           ))}
         </tbody>

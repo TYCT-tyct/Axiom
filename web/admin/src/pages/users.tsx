@@ -4,7 +4,7 @@ import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Text
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { FilterBar, PageBody, State, text } from "../parts";
+import { FilterBar, mainCell, PageBody, State, text } from "../parts";
 import { usersQuery } from "../queries";
 
 export default function Users() {
@@ -73,7 +73,7 @@ function UsersTable({ rows }: { rows: AdminSchemas["UserSummary"][] }) {
       <tbody>
         {rows.map((user) => (
           <tr key={user.id}>
-            <Td className="w-full max-w-0 sm:w-auto sm:max-w-72 sm:min-w-40">
+            <Td className={mainCell}>
               <p className="truncate text-t1" title={user.email}>
                 {user.email}
               </p>

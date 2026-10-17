@@ -4,7 +4,8 @@ import { suites } from "./suites.ts";
 
 // The acceptance gate of docs/frontend.md「验收门槛」 as checks, for the console and the admin: WCAG 2.2 AA in both
 // colour schemes and both languages, and no page wider than the window from 360px to 2560px, with the worst realistic
-// data on screen.
+// data on screen. A table may scroll sideways inside its own box, which the page's width does not show: the buttons
+// and links of its rows must still be in view without scrolling it.
 
 const schemes = ["light", "dark"] as const;
 const languages = ["zh", "en"] as const;
@@ -43,6 +44,15 @@ for (const suite of suites) {
         await scene.open(page);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow).toBeLessThanOrEqual(0);
+        const hidden = await page.evaluate(() =>
+          [...document.querySelectorAll("table :is(a, button)")].flatMap((control) => {
+            const box = control.getBoundingClientRect();
+            const frame = control.closest("table")?.parentElement?.getBoundingClientRect();
+            const out = frame && box.width > 0 && (box.left < frame.left - 0.5 || box.right > frame.right + 0.5);
+            return out ? [control.getAttribute("aria-label") ?? control.textContent] : [];
+          }),
+        );
+        expect(hidden).toEqual([]);
       });
     }
   }

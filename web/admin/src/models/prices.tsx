@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, EmptyState, Icon, Panel, Table, Td, Th } from "@axiom/ui";
+import { Button, EmptyState, Icon, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Time } from "../parts";
@@ -92,6 +92,7 @@ function PriceCard({ price, onPublish }: { price: Price; onPublish: (() => void)
 
 function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
   const { t } = useTranslation();
+  const { decimal } = useFormat();
   const priced = billingItems.filter((item) => schedule.rates[item] !== undefined);
   const extra = [
     schedule.context_tiers ? t("models.prices.contextTiers", { count: schedule.context_tiers.tiers.length }) : null,
@@ -113,7 +114,7 @@ function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
             <tr key={item}>
               <Td>{t(`models.item.${item}`)}</Td>
               <Td className="text-right tabular-nums">
-                {schedule.rates[item] === undefined ? "—" : showRate(item, schedule.rates[item])}
+                {schedule.rates[item] === undefined ? "—" : decimal(showRate(item, schedule.rates[item]))}
                 <span className="ml-1 text-label text-t4">
                   {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
                 </span>

@@ -16,7 +16,7 @@ export default function AccountPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const account = useQuery(accountQuery(accountId as AdminSchemas["AccountId"]));
   return (
-    <DataState query={account}>
+    <DataState query={account} page>
       {(data) => (
         <>
           <PageHeader title={data.owner.email} description={t("users.account.description")} />

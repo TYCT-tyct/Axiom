@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, DataState, Icon, PageHeader, Panel } from "@axiom/ui";
+import { Button, DataState, Icon, PageHeader, Panel, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
@@ -27,7 +27,7 @@ export default function SupplierPage() {
   const { supplierId } = useParams({ from: "/app/suppliers/$supplierId" });
   const detail = useQuery(supplierQuery(supplierId));
   return (
-    <DataState query={detail}>
+    <DataState query={detail} page>
       {(data) => (
         <>
           <PageHeader title={data.supplier.name} description={t("suppliers.detail.description")} />
@@ -42,6 +42,7 @@ export default function SupplierPage() {
 
 function Body({ detail }: { detail: Detail }) {
   const { t } = useTranslation();
+  const format = useFormat();
   const manage = can(useSession(), "suppliers.manage");
   const [open, setOpen] = useState<Open | null>(null);
   const { supplier } = detail;
@@ -71,7 +72,10 @@ function Body({ detail }: { detail: Detail }) {
           ],
           [t("suppliers.col.balance"), <NativeBalance key="balance" supplier={supplier} />],
           [t("suppliers.detail.observed"), <Time key="observed" at={supplier.balance_observed_at} />],
-          [t("suppliers.detail.lowLine"), supplier.low_balance_threshold ?? "—"],
+          [
+            t("suppliers.detail.lowLine"),
+            supplier.low_balance_threshold ? format.decimal(supplier.low_balance_threshold) : "—",
+          ],
           [t("suppliers.col.unit"), <UnitValue key="unit" supplier={supplier} />],
           [t("suppliers.detail.currency"), supplier.settlement_currency],
         ]}

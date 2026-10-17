@@ -101,6 +101,10 @@ export function text(value: string | undefined) {
   return trimmed ? trimmed : undefined;
 }
 
+// mainCell is the class of the cell that names a row. On a phone it takes the room left by the others and truncates,
+// so the row's buttons stay on screen; from sm up it keeps a readable width.
+export const mainCell = "w-full max-w-0 sm:w-auto sm:max-w-72 sm:min-w-40";
+
 // Head is the header row of a table: a label per column, with the classes that hide a column on a narrow window, and an
 // empty last column for the buttons of a row.
 export function Head({ cols, action = false }: { cols: [label: string, className?: string][]; action?: boolean }) {

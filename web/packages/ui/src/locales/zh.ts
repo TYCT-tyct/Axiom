@@ -109,6 +109,8 @@ export default {
     pageFailed: "页面没能加载",
     pageFailedBody: "可能是网络中断，或 Axiom 刚刚更新。刷新页面再试一次。",
     reload: "刷新页面",
+    goneTitle: "找不到要查看的内容",
+    goneBody: "它可能已被删除，或链接有误，重试也找不到。请回到首页重新查找。",
     notFoundTitle: "找不到这个页面",
     notFoundBody: "链接可能有误，或页面已经移走。",
     home: "回到首页",

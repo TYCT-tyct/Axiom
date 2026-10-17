@@ -4,7 +4,7 @@ import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Actions, Code, PageBody, State } from "../parts";
+import { Actions, Code, mainCell, PageBody, State } from "../parts";
 import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
 import { RuleDialog } from "../pricing/rule-dialog";
@@ -57,7 +57,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
       <thead>
         <tr>
           <Th>{t("pricing.rules.target")}</Th>
-          <Th>{t("pricing.rules.audience")}</Th>
+          <Th className="hidden sm:table-cell">{t("pricing.rules.audience")}</Th>
           <Th className="hidden md:table-cell">{t("pricing.rules.method")}</Th>
           <Th>{t("pricing.rules.state")}</Th>
           <Th className="hidden xl:table-cell">{t("pricing.rules.updated")}</Th>
@@ -67,7 +67,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
       <tbody>
         {rules.map((rule) => (
           <tr key={rule.id}>
-            <Td className="max-w-56 min-w-32">
+            <Td className={mainCell}>
               <p className="truncate text-t1">{t(`pricing.target.${rule.target.kind}`)}</p>
               {rule.target.id ? (
                 <p className="truncate text-label text-t4" title={rule.target.id}>
@@ -75,7 +75,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
                 </p>
               ) : null}
             </Td>
-            <Td className="max-w-48 min-w-24">
+            <Td className="hidden max-w-48 min-w-24 sm:table-cell">
               <p className="truncate">{t(`pricing.audience.${rule.audience.kind}`)}</p>
               {rule.audience.id ? (
                 <p className="truncate text-label text-t4" title={rule.audience.id}>

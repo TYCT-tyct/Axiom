@@ -4,7 +4,7 @@ import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th }
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Actions, ChoiceFilter, Code, FilterBar, NewButton, PageBody } from "../parts";
+import { Actions, ChoiceFilter, Code, FilterBar, mainCell, NewButton, PageBody } from "../parts";
 import { suppliersQuery } from "../queries";
 import { ConnectDialog } from "../suppliers/connect";
 import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
@@ -84,7 +84,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
       <tbody>
         {rows.map((supplier) => (
           <tr key={supplier.id}>
-            <Td className="w-full max-w-0 sm:w-auto sm:max-w-72 sm:min-w-40">
+            <Td className={mainCell}>
               <p className="truncate text-t1" title={supplier.name}>
                 {supplier.name}
               </p>
@@ -95,7 +95,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
               </p>
             </Td>
             <Td>
-              <SupplierState supplier={supplier} />
+              <SupplierState supplier={supplier} brief />
             </Td>
             <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
               <NativeBalance supplier={supplier} />

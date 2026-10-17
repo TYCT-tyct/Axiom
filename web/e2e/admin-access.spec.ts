@@ -1,5 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
+import { uuid } from "./admin-data.ts";
+import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail, signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
@@ -139,6 +141,18 @@ test.describe("the four states of a view of data", () => {
     await expect(page.getByRole("heading", { name: zhText("mappings.empty.title") })).toBeVisible();
     await page.getByRole("link", { name: zhText("nav.pricing") }).click();
     await expect(page.getByRole("heading", { name: zhText("pricing.empty.title") })).toBeVisible();
+  });
+
+  test("an address of something that is not there names the page so and offers home, not a retry", async ({ page }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    for (const path of [`/accounts/${acct(999)}`, `/suppliers/${uuid(2, 999)}`, `/models/${uuid(5, 999)}`]) {
+      await page.goto(path);
+      await expect(h1(page, "找不到要查看的内容")).toBeVisible();
+      await expect(page).toHaveTitle("找不到要查看的内容 · Axiom");
+      await expect(page.getByRole("button", { name: "重试" })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "回到首页" })).toBeVisible();
+    }
   });
 
   test("a server failure is retried, then shows its request ID, and retrying asks again", async ({ page }) => {

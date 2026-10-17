@@ -7,7 +7,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { ModelField } from "../models/model-field";
-import { ChoiceFilter, Code, FilterBar, PageBody, text } from "../parts";
+import { ChoiceFilter, Code, FilterBar, mainCell, PageBody, text } from "../parts";
 import { pendingMappingsQuery, suppliersQuery } from "../queries";
 
 type Pending = AdminSchemas["PendingMapping"];
@@ -65,11 +65,13 @@ function PendingTable({
       <tbody>
         {rows.map((row) => (
           <tr key={`${row.supplier_id}/${row.group_id}/${row.upstream_name}`}>
-            <Td className="max-w-72 min-w-40">
+            <Td className={mainCell}>
               <p className="truncate text-t1" title={row.upstream_name}>
                 <Code>{row.upstream_name}</Code>
               </p>
-              <p className="truncate text-label text-t4">{row.group_codename}</p>
+              <p className="truncate text-label text-t4" title={row.group_codename}>
+                {row.group_codename}
+              </p>
             </Td>
             <Td className="hidden max-w-56 truncate md:table-cell">{names.get(row.supplier_id) ?? row.supplier_id}</Td>
             <Td className="hidden lg:table-cell">{row.formats.join(" · ")}</Td>

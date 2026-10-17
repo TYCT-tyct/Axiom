@@ -75,7 +75,7 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
     return [
       t(`settings.field.${name}`),
       <span key={name}>
-        {duration(shown)} <span className="text-t4">{t("settings.raw", { seconds: shown })}</span>{" "}
+        {duration(shown)} <span className="text-t4">{t("settings.raw", { seconds: format.number(shown) })}</span>{" "}
         {value === undefined ? standard : own}
       </span>,
     ];

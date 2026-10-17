@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { DataState, EmptyState, Table, Td, Th } from "@axiom/ui";
+import { DataState, EmptyState, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { billingItems, percent } from "../models/catalog";
@@ -33,6 +33,7 @@ const tones = {
 // The two prices people compare first, input and output, as they read them: per million tokens.
 function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefined }) {
   const { t } = useTranslation();
+  const { decimal } = useFormat();
   if (!schedule) {
     return <>{"—"}</>;
   }
@@ -44,7 +45,7 @@ function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefin
         return (
           <span key={item} className="mr-3 inline-block">
             <span className="text-label text-t4">{t(`models.item.${item}`)}</span>{" "}
-            {price === undefined ? "—" : showRate(item, price)}
+            {price === undefined ? "—" : decimal(showRate(item, price))}
           </span>
         );
       })}
@@ -56,12 +57,15 @@ function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefin
 // The lowest margin of the sale over the cost, as a percentage; a loss shows as one.
 function Margin({ row }: { row: Row }) {
   const { t } = useTranslation();
+  const { decimal } = useFormat();
   if (row.margin_ratio === undefined) {
     return <>{"—"}</>;
   }
   const loss = row.margin_ratio.startsWith("-");
   return (
-    <State tone={loss ? "bad" : "good"}>{t("pricing.preview.margin", { percent: percent(row.margin_ratio) })}</State>
+    <State tone={loss ? "bad" : "good"}>
+      {t("pricing.preview.margin", { percent: decimal(percent(row.margin_ratio)) })}
+    </State>
   );
 }
 

@@ -105,6 +105,9 @@ export default {
     pageFailed: "This page didn’t load",
     pageFailedBody: "The network may have dropped, or Axiom was just updated. Reload the page to try again.",
     reload: "Reload page",
+    goneTitle: "Not found",
+    goneBody:
+      "It may have been deleted, or the link is wrong. Trying again won’t find it; start again from the home page.",
     notFoundTitle: "Page not found",
     notFoundBody: "The link may be wrong, or the page has moved.",
     home: "Go home",

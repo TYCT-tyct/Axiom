@@ -24,12 +24,13 @@ export function LoadMore({
 }
 
 // Stat is one figure the user looks at first: what it is, then the number, large. The number may be as long as an
-// amount can be, so it wraps rather than pushing the page wider.
+// amount can be, so it wraps rather than pushing the page wider, filling each line: breaking only where a word may would
+// leave a minus sign alone on the first line.
 export function Stat({ label, value, note }: { label: string; value: string; note?: ReactNode }) {
   return (
     <Panel className="p-4">
       <p className="text-label text-t3">{label}</p>
-      <p className="mt-1.5 text-xl font-medium tracking-[-0.01em] text-t1 tabular-nums [overflow-wrap:anywhere] sm:text-2xl">
+      <p className="mt-1.5 text-xl font-medium tracking-[-0.01em] text-t1 tabular-nums break-all sm:text-2xl">
         {value}
       </p>
       {note ? <p className="mt-1 text-ui text-t3">{note}</p> : null}
