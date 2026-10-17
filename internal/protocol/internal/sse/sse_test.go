@@ -5,9 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"runtime"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -152,17 +157,240 @@ func (d *dataThenErr) Read(p []byte) (int, error) {
 }
 
 // TestReaderReadError: the events complete before a read fails are returned whether the failure comes with the last
-// bytes or in a later read; the unfinished event after them is not.
+// bytes or in a later read, with each line ending, even when the last event's blank line is a CR at the very end,
+// which would otherwise wait for a byte that never comes; the unfinished event after them is not.
 func TestReaderReadError(t *testing.T) {
-	const stream = "data: 1\n\ndata: 2\n\ndata: 3"
-	for name, src := range map[string]io.Reader{
-		"separate read": io.MultiReader(strings.NewReader(stream), iotest.ErrReader(errRead)),
-		"same read":     &dataThenErr{stream, errRead},
+	for _, eol := range []string{"\n", "\r\n", "\r"} {
+		for _, tail := range []string{"", "data: 3"} {
+			stream := "data: 1" + eol + eol + "data: 2" + eol + eol + tail
+			for name, src := range map[string]io.Reader{
+				"separate read": io.MultiReader(strings.NewReader(stream), iotest.ErrReader(errRead)),
+				"same read":     &dataThenErr{stream, errRead},
+			} {
+				t.Run(fmt.Sprintf("%q/%q/%s", eol, tail, name), func(t *testing.T) {
+					events, err := readAll(src, 1<<10)
+					if !cmp.Equal(events, []string{"1", "2"}) || !errors.Is(err, errRead) {
+						t.Fatalf("readAll = %q, %v; want [1 2], %v", events, err, errRead)
+					}
+				})
+			}
+		}
+	}
+}
+
+// stalls reads from src, then blocks until release is closed instead of reporting its end, as an upstream does
+// between events.
+type stalls struct {
+	src     io.Reader
+	release chan struct{}
+}
+
+func (s *stalls) Read(p []byte) (int, error) {
+	n, err := s.src.Read(p)
+	if n == 0 && errors.Is(err, io.EOF) {
+		<-s.release
+	}
+	return n, err
+}
+
+// TestReaderHandsOverAtOnce: an event is returned as soon as its last byte has arrived, while the upstream still has
+// nothing more to say, however the bytes were split into reads. A CR ends a line only once the next byte shows it is
+// not half a CRLF, so that byte is part of the CR stream.
+func TestReaderHandsOverAtOnce(t *testing.T) {
+	for _, tc := range []struct{ name, stream string }{
+		{"LF", "data: 1\n\n"},
+		{"CRLF", "data: 1\r\n\r\n"},
+		{"CR", "data: 1\r\rd"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			events, err := readAll(src, 1<<10)
-			if !cmp.Equal(events, []string{"1", "2"}) || !errors.Is(err, errRead) {
-				t.Fatalf("readAll = %q, %v; want [1 2], %v", events, err, errRead)
+		for name, wrap := range map[string]func(io.Reader) io.Reader{"whole": func(r io.Reader) io.Reader { return r }, "byte by byte": iotest.OneByteReader} {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				release := make(chan struct{})
+				t.Cleanup(func() { close(release) }) // lets a reader that failed this test finish
+				r := sse.NewReader(&stalls{wrap(strings.NewReader(tc.stream)), release}, 1<<10)
+				got := make(chan string, 1)
+				go func() {
+					data, err := r.Next()
+					got <- fmt.Sprintf("%s, %v", data, err)
+				}()
+				select {
+				case g := <-got:
+					if g != "1, <nil>" {
+						t.Fatalf("Next = %s, want 1, <nil>", g)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("Next did not return the event while the upstream was silent")
+				}
+			})
+		}
+	}
+}
+
+var errSlow = errors.New("past its deadline")
+
+// filler reads n bytes of 'x', a few KiB per read, as a connection does, and fails with errSlow once stop has passed.
+type filler struct {
+	left int
+	stop time.Time
+}
+
+func (f *filler) Read(p []byte) (int, error) {
+	n := min(len(p), f.left, 4<<10)
+	if n == 0 {
+		return 0, io.EOF
+	}
+	if time.Now().After(f.stop) {
+		return 0, errSlow
+	}
+	for i := range p[:n] {
+		p[i] = 'x'
+	}
+	f.left -= n
+	return n, nil
+}
+
+// TestReaderLineScales: reading a line that does not end takes time in proportion to its length (README.md「不变量」).
+// A line eight times as long should take about eight times as long; scanning it again after every read, or moving it
+// onto itself, takes sixty-four times, so one of five runs of the long line must finish within three times what
+// proportion allows from the fastest run of the short one (the way TestPlanScales in routing holds its bound). A run that
+// is past its deadline stops, so the quadratic reader fails in seconds.
+func TestReaderLineScales(t *testing.T) {
+	const small, large, runs = 1 << 20, 8 << 20, 5
+	read := func(size int, within time.Duration) (time.Duration, error) {
+		start := time.Now()
+		_, err := sse.NewReader(&filler{left: size, stop: start.Add(within)}, 2*large).Next()
+		return time.Since(start), err
+	}
+	fastest := time.Duration(math.MaxInt64)
+	for range runs {
+		took, err := read(small, time.Hour)
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next = %v, want %v", err, io.EOF)
+		}
+		fastest = min(fastest, took)
+	}
+	within := 3 * large / small * fastest
+	for range runs {
+		if _, err := read(large, within); errors.Is(err, io.EOF) {
+			return
+		}
+	}
+	t.Errorf("a line %d times as long took more than %v, %d times as long as the shorter, in each of %d runs", large/small, within, 3*large/small, runs)
+}
+
+// TestReaderAppendToEvent: the data of an event may share the reader's buffer, but not its room, so appending to it
+// cannot overwrite the bytes that follow.
+func TestReaderAppendToEvent(t *testing.T) {
+	r := sse.NewReader(strings.NewReader("data: 1\n\ndata: 2\n\n"), 1<<10)
+	first, err := r.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = append(first, "-----------"...)
+	if second, err := r.Next(); err != nil || string(second) != "2" {
+		t.Fatalf("Next after appending to the first event = %q, %v; want 2", second, err)
+	}
+}
+
+// steadyAllocs is testing.AllocsPerRun without the runtime's own allocations, which a collection during a run adds and
+// which only ever raise a count: the collector is off and runs just before.
+func steadyAllocs(f func()) float64 {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	runtime.GC()
+	return testing.AllocsPerRun(5, f)
+}
+
+// TestReaderAllocs: once the buffers have grown, reading an event allocates nothing, whether it has one data line or
+// several, so a longer stream costs no more allocations (docs/performance.md「调用路径上的规则」).
+func TestReaderAllocs(t *testing.T) {
+	for _, event := range []string{"data: {\"a\":[1,\"b\"]}\n\n", "data: {\"a\":\ndata: [1,\"b\"]}\n\n"} {
+		allocs := func(events int) float64 {
+			stream := []byte(strings.Repeat(event, events))
+			return steadyAllocs(func() {
+				r := sse.NewReader(bytes.NewReader(stream), 1<<10)
+				for {
+					if _, err := r.Next(); err != nil {
+						return
+					}
+				}
+			})
+		}
+		if few, many := allocs(1000), allocs(2000); few != many {
+			t.Errorf("%q: %v allocations for 1000 events, %v for 2000", event, few, many)
+		}
+	}
+}
+
+// drain returns the data of every event r reads to the end of its stream.
+func drain(t *testing.T, r *sse.Reader) []string {
+	t.Helper()
+	var events []string
+	for {
+		data, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return events
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, string(data))
+	}
+}
+
+// TestReaderShrinks: a large event does not leave the stream holding its buffers: they are given back, to the budget
+// ChargeGrowth reports to, once reads have stayed small for a while, but not between large events that follow one
+// another, which would allocate them again every time.
+func TestReaderShrinks(t *testing.T) {
+	largeData := `"` + strings.Repeat("x", 512<<10) + `"`
+	large := "data: " + largeData + "\n\n"
+	small := "data: 1\n\n"
+	// An event of many data lines, so that the reader's data buffer grows, followed by small events whose reads each
+	// stop right after the event's data line: the reader has copied that line into the data buffer by the time it
+	// could give the buffer back.
+	lines := []string{"["}
+	for range 4 {
+		lines = append(lines, `"`+strings.Repeat("x", 128<<10)+`",`)
+	}
+	lines = append(lines, "0]")
+	splitReads := []io.Reader{strings.NewReader("data: " + strings.Join(lines, "\ndata: ") + "\n\n"), strings.NewReader("data: 1\n")}
+	for range 40 {
+		splitReads = append(splitReads, strings.NewReader("\ndata: 1\n"))
+	}
+	splitReads = append(splitReads, strings.NewReader("\n"))
+	for _, tc := range []struct {
+		name         string
+		stream       io.Reader
+		events       []string
+		wantReleased bool
+		wantHeld     int // at most, at the end
+	}{
+		{
+			// Byte by byte, so that some read finds the reader with a small event half read when it gives the buffers back.
+			"small events after a large one",
+			io.MultiReader(strings.NewReader(large), iotest.OneByteReader(strings.NewReader(strings.Repeat(small, 40)))),
+			append([]string{largeData}, slices.Repeat([]string{"1"}, 40)...), true, 64 << 10,
+		},
+		{
+			"reads ending after a data line",
+			io.MultiReader(splitReads...),
+			append([]string{strings.Join(lines, "\n")}, slices.Repeat([]string{"1"}, 41)...), true, 64 << 10,
+		},
+		{"large events in a row", strings.NewReader(strings.Repeat(large, 8)), slices.Repeat([]string{largeData}, 8), false, 4 * len(large)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var held, peak int
+			released := false
+			r := sse.NewReader(tc.stream, 2*len(large))
+			r.ChargeGrowth(func(n int) error {
+				held += n
+				peak = max(peak, held)
+				released = released || n < 0
+				return nil
+			})
+			if events := drain(t, r); !slices.Equal(events, tc.events) {
+				t.Errorf("read %d events, want %d, and these", len(events), len(tc.events))
+			}
+			if released != tc.wantReleased || held > tc.wantHeld || peak < len(largeData) {
+				t.Errorf("released %t, holding %d at the end and %d at most; want released %t, at most %d at the end, at least %d at most",
+					released, held, peak, tc.wantReleased, tc.wantHeld, len(largeData))
 			}
 		})
 	}
@@ -259,7 +487,7 @@ func TestChargeGrowth(t *testing.T) {
 		if fits := budget > 4*len(event); fits != (err == nil) || !fits && !errors.Is(err, errBudget) {
 			t.Errorf("budget %d: error %v after granting %d", budget, err, granted)
 		}
-		if err == nil && granted < 2*len(data) { // the event's line and its data are both held
+		if err == nil && granted < len(data) { // the event is held in the buffer at least
 			t.Errorf("budget %d: granted %d for an event of %d", budget, granted, len(data))
 		}
 	}
