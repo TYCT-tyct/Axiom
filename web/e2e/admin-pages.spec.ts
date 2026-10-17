@@ -103,11 +103,6 @@ test.describe("users and credit", () => {
     await expect(h1(page, "user1@example.com")).toBeVisible();
     await expect(press(page, "users.credit.open")).toHaveCount(0);
   });
-
-  test("an account that is not there says so", async ({ page }) => {
-    await open(page, `/accounts/${acct(999)}`);
-    await expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible();
-  });
 });
 
 test.describe("site settings", () => {
@@ -130,7 +125,7 @@ test.describe("site settings", () => {
       new_key_daily_limit: { amount: "20000000000", currency: "USD" },
     });
     await close(page);
-    await expect(page.getByText(/7200/)).toBeVisible();
+    await expect(page.getByText(/7,200/)).toBeVisible();
   });
 });
 

@@ -97,7 +97,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
             <Td>
               <SupplierState supplier={supplier} brief />
             </Td>
-            <Td className="hidden whitespace-nowrap tabular-nums md:table-cell">
+            <Td className="hidden min-w-28 tabular-nums [overflow-wrap:anywhere] md:table-cell">
               <NativeBalance supplier={supplier} />
             </Td>
             <Td className="hidden lg:table-cell">
