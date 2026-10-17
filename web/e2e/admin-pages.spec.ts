@@ -3,7 +3,7 @@ import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
-import { signedInAs } from "./mock-auth.ts";
+import { knownPassword, mfaEmail, signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // The admin's pages against the mocked API (admin-api.ts): the main flows of M1, each as an operator would walk it. The
@@ -93,6 +93,47 @@ test.describe("users and credit", () => {
     await dialog(page).locator("button[type=submit]").click();
     await expect(done(page)).toBeVisible();
     await expect(dialog(page).getByText(zhText("change.replayed"))).toHaveCount(0);
+  });
+
+  test("a write that finds the session over goes to sign in, comes back, and asks with a new key", async ({ page }) => {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    const keys: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith(`/accounts/${acct(1)}/credit-grants`)) {
+        const key = request.headers()["idempotency-key"];
+        if (key !== undefined) {
+          keys.push(key);
+        }
+      }
+    });
+    await press(page, "users.credit.open").click();
+    await dialog(page).getByLabel(words("users.credit.amount")).fill("2.5");
+    // The session ends after the page opened: the write is refused as unauthenticated, and the page goes to sign in
+    // with the way back, taking the dialog and the key it made with it.
+    state.level = "none";
+    await send(page);
+    await expect(h1(page, "登录")).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("next")).toBe(`/accounts/${acct(1)}`);
+    expect(keys).toHaveLength(1);
+
+    // Signing in with a second factor returns to the page the person was on.
+    state.mfaEnabled = true;
+    await page.getByLabel("邮箱").fill(mfaEmail);
+    await page.getByLabel("密码").fill(knownPassword);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(h1(page, "user1@example.com")).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe(`/accounts/${acct(1)}`);
+
+    // A new dialog makes a new key: the first one went with the page that held it.
+    await press(page, "users.credit.open").click();
+    await dialog(page).getByLabel(words("users.credit.amount")).fill("2.5");
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(state.stored.size).toBe(1);
   });
 
   test("an operator without the permission to grant sees the account but no way to add credit", async ({ page }) => {
