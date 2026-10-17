@@ -20,13 +20,15 @@ func blockBuckets(ctx context.Context, tx pg.Tx, buckets []store.RateBucket) err
 	return store.BlockRateBuckets(ctx, tx, buckets, time.Now().Add(time.Minute))
 }
 
-// someoneWaits blocks until a statement of another connection is waiting for a lock.
-func someoneWaits(ctx context.Context, t *testing.T, db *pg.DB) {
+// someoneWaits blocks until a statement of the connection pid is waiting for a lock. Tests run at the same time on one
+// server, so a wait of another test's connection does not count: only this one means the statement of the side that was
+// to come later is really waiting.
+func someoneWaits(ctx context.Context, t *testing.T, db *pg.DB, pid int32) {
 	t.Helper()
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		var n int
 		err := db.ReadTx(ctx, platform, func(tx pg.Tx) error {
-			return tx.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&n)
+			return tx.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'", pid).Scan(&n)
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -35,7 +37,34 @@ func someoneWaits(ctx context.Context, t *testing.T, db *pg.DB) {
 			return
 		}
 	}
-	t.Fatal("no statement waited for a lock")
+	t.Fatal("no statement of this connection waited for a lock")
+}
+
+// waitsOnAnotherConnection runs op in a transaction of its own — on a connection of its own — and returns when a statement
+// of that connection is waiting for a lock of the transaction this is called in; the channel it returns carries how op
+// ended. The connection reports its pid before op, which is what tells this test's wait from the waits of the other tests
+// running at the same time on the same server.
+func waitsOnAnotherConnection(ctx context.Context, t *testing.T, db *pg.DB, buckets []store.RateBucket, op bucketOp) <-chan error {
+	t.Helper()
+	pids, ended := make(chan int32, 1), make(chan error, 1)
+	go func() {
+		ended <- db.Tx(ctx, platform, func(tx pg.Tx) error {
+			var pid int32
+			if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+				return err
+			}
+			pids <- pid
+			return op(ctx, tx, buckets)
+		})
+	}()
+	var pid int32
+	select {
+	case pid = <-pids:
+	case err := <-ended: // the transaction ended before op: no statement of it waits
+		t.Fatalf("the statement that was to wait ended instead: %v", err)
+	}
+	someoneWaits(ctx, t, db, pid)
+	return ended
 }
 
 // crossed has holder take the bucket "critical" and, once late — started meanwhile on another connection and naming both
@@ -44,14 +73,13 @@ func crossed(t *testing.T, db *pg.DB, holder, late bucketOp) {
 	t.Helper()
 	critical := store.RateBucket{Scope: "ip:a", Name: "critical"}
 	both := []store.RateBucket{{Scope: "ip:a", Name: "global"}, critical}
-	ended := make(chan error, 1)
+	var ended <-chan error
 	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		ctx := t.Context()
 		if err := holder(ctx, tx, []store.RateBucket{critical}); err != nil {
 			return err
 		}
-		go func() { ended <- db.Tx(ctx, platform, func(tx pg.Tx) error { return late(ctx, tx, both) }) }()
-		someoneWaits(ctx, t, db)
+		ended = waitsOnAnotherConnection(ctx, t, db, both, late)
 		return holder(ctx, tx, both)
 	})
 	if err != nil {
@@ -103,14 +131,13 @@ func TestMakingBucketsLocksTheExistingOnesToo(t *testing.T) {
 	if err := run(t, db, platform, func(ctx context.Context, tx pg.Tx) error { return takeBuckets(ctx, tx, []store.RateBucket{critical}) }); err != nil {
 		t.Fatal(err)
 	}
-	ended := make(chan error, 1)
+	var ended <-chan error
 	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		ctx := t.Context()
 		if err := store.EnsureRateBuckets(ctx, tx, both); err != nil {
 			return err
 		}
-		go func() { ended <- db.Tx(ctx, platform, func(tx pg.Tx) error { return blockBuckets(ctx, tx, both) }) }()
-		someoneWaits(ctx, t, db)
+		ended = waitsOnAnotherConnection(ctx, t, db, both, blockBuckets)
 		return takeBuckets(ctx, tx, both)
 	})
 	if err != nil {

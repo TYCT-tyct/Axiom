@@ -12,13 +12,31 @@ import (
 )
 
 // Buckets is the supplier's rate limits as the client asks of them. Limiter counts in one process; SharedLimiter, in the
-// database, for nodes that reach the supplier from one address.
+// database, for nodes that reach the supplier from one address. A name that repeats among the buckets of one call is
+// that one bucket: the request counts once in it, and the statements that make and close the shared buckets cannot name
+// one key twice.
 type Buckets interface {
 	// Take takes one request from each bucket in names, or from none. It returns Blocked, with the time the last of the
 	// refusing buckets reopens, when it takes nothing.
 	Take(ctx context.Context, names []string) error
 	// Block closes the buckets in names until then, as the supplier's own refusal says to.
 	Block(ctx context.Context, names []string, until time.Time) error
+}
+
+// dedupe leaves each bucket name once, in the order given: a request takes one allowance from each bucket it names, not
+// one per mention, and ON CONFLICT DO UPDATE cannot affect a row a second time, so the statements that make and close
+// the shared buckets may not name one key twice.
+func dedupe(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	once := make([]string, 0, len(names))
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		once = append(once, name)
+	}
+	return once
 }
 
 // Limiter counts requests against a supplier's rate limits, in this process: for the tests of the adapters, and for a
@@ -50,6 +68,7 @@ func NewLimiter(specs []adapter.BucketSpec, now func() time.Time) *Limiter {
 func (l *Limiter) Take(_ context.Context, names []string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	names = dedupe(names)
 	now := l.now()
 	var until time.Time
 	for _, name := range names {

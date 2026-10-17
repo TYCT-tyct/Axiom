@@ -144,7 +144,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ### 出站入口（`client`）
 
-`client.Client` 实现 `adapter.Client`：地址是创建时给的 origin 加适配器给的路径（路径必须以单个 `/` 开头，所以改不了主机），请求经 `platform/egress`，响应正文上限 8 MiB。`Limiter` 是进程内的固定窗口计数：请求声明的桶要么全部取到名额，要么一个都不取；429 把请求所占的全部桶封到 `Retry-After`（new-api 的 429 没有正文，认不出是哪个桶），并返回 `adapter.Blocked`（包装 `ErrBucketsFull`）。多节点共享一个出口地址时要把名额分给各节点或把状态放进数据库，接口不变。
+`client.Client` 实现 `adapter.Client`：地址是创建时给的 origin 加适配器给的路径（路径必须以单个 `/` 开头，所以改不了主机），请求经 `platform/egress`，响应正文上限 8 MiB。`Limiter` 是进程内的固定窗口计数：请求声明的桶要么全部取到名额，要么一个都不取；429 把请求所占的全部桶封到 `Retry-After`（new-api 的 429 没有正文，认不出是哪个桶），并返回 `adapter.Blocked`（包装 `ErrBucketsFull`）。桶名在入口去重：`Limiter.Take` 与 `SharedLimiter` 的 `Take`、`Block` 都把重复的名字合并成一个，所以一次请求重复声明同一个桶只算一次，共享桶的建桶和封桶语句（`INSERT … ON CONFLICT DO UPDATE`）也不会在同一句里改同一行两次。多节点共享一个出口地址时要把名额分给各节点或把状态放进数据库，接口不变。
 
 ## 不变量
 
