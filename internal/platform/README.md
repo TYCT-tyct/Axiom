@@ -45,6 +45,7 @@
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
 | 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
+| 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，要求函数体的两个 `current_setting` 都在、函数名不出现，两组断言同时排除空计划和子查询写法（带子查询的函数体不再被内联，每行一次调用） |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
 | 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
@@ -99,7 +100,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 监听 | 提供什么 |
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；以后加模型调用接口、支付回调 |
-| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口（`/api/admin/v1/…`，见 `api/admin.yaml`）尚未实现；「只对管理域名和受限来源开放」随管理接口一起加 |
+| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作中，会话类、站点设置、等级、用户、账户和手动加额度已有处理器，其余还在写（见「接口约定」）。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
 `serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
@@ -146,8 +147,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 比率与十进制数 | 倍率、单位价值、余额的原生数量都是十进制文本（`Decimal`），单价是 `UnitPrice`（至多 15 位小数），不经过浮点数 | — |
 | ID | 账户模块的实体用 TypeID（`user_…`、`acct_…`、`key_…`、`ws_…`、`site_…`、`tier_…`）；调用编号、目录、供应商、定价的行用 UUID 文本。路径里格式不对和不存在一样返回 404 | 模式写在契约里 |
 | 缺省与空 | 响应里没有的值就不出现，不写 null（`next_cursor` 是唯一的例外）；`PUT` 整体替换，请求里没写的可选项取「没有限制」或默认值，所以页面把读到的设置连同修改一起送回 | — |
-| 管理接口的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID，对应目录的 `op_key`；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别种改动用过是 409 `idempotency_key_reused`）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
-| 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同 `//go:generate` 和嵌入一起删掉。控制台的 18 个操作都有处理器，已经删掉；管理接口的还在写 | `just generated` |
+| 管理接口的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别的操作者、别的操作或别的内容用过是 409 `idempotency_key_reused`，存法见「幂等」）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
+| 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同 `//go:generate` 和嵌入一起删掉。控制台的 18 个操作都有处理器，已经删掉；管理接口的还在写（目录与定价、供应商两组没有处理器） | `just generated` |
 | 两份契约共有的部分 | 会话与两步验证的操作和 `Error`、`Money`、`Balance` 等模式在两份契约里各写一遍，不引用外部文件（生成器要为外部引用另做一个包，每份契约才不自成一体）。两份里同名的操作和定义必须完全相同 | 检查 |
 | 契约的约束谁来强制 | **定论**：`cmd/axiom` 的守卫（`guard`）在处理器之前，按嵌入程序的契约本身强制；契约由 oapi-codegen 的 `embedded-spec` 编进生成的 `consoleapi`（`GetSpec`，随 `just generate` 更新，`just generated` 保证不过期），启动时用 kin-openapi 读出每个操作的规则，读不通或有操作的声明程序强制不了（没有 `security`、会话操作缺 `x-axiom-level`、权限名没在 accounts 声明、改数据的会话操作没有 `csrf`）就不启动。守卫在生成的路由之前运行（生成的包装先解析查询参数、后跑中间件，守卫放在中间件里就挡不住"无会话却先得到 400"），整个请求有 15 秒的期限（`consoleDeadline`），到期是 503 `unavailable`，说明工作可能已经做完，让客户端先看再重试。守卫的顺序：站点（Host 是某站点的控制台域名，否则 404）→ 改数据的请求的 Origin 与 JSON → 会话与它的级别、CSRF 令牌（`verifyMfa` 的待验证会话和令牌也先在这里认出，用户行锁内的复核仍在 accounts）→ 账户上的权限 → 请求体先过 `jsonx` 的策略（UTF-8、成员名不重复、嵌套不超过 256 层，生成代码和校验器用的解析器不执行它，所以在守卫里读一遍）→ 查询参数与请求体的 schema。生成的处理器读请求体也用 `jsonx.Decode`（名字区分大小写，未知成员跳过），与校验器按同一条规则读成员名；用 encoding/json 读，`MODELS` 会被校验器当作未知成员放行、又被读进 `models`，绕过 schema 的上限。生成代码走的是 `consoleapi/templates/strict-http.tmpl`，即 oapi-codegen v2.8.0 的同名模板改了解码那一行，升级 oapi-codegen 时按新模板重做这一处。生成的包装自己的解析失败只答"请求读不了"，不重复解析器看到的内容。所以没有会话的客户端只会知道它没有会话；校验失败是 400 `invalid_request`，`fields` 逐条写出出错的位置（请求体的 JSON 指针，或查询参数名）和规则，不写值。路径里的 ID 不在此校验：格式不对与不存在同样是 404。契约表达不了的（跨成员的规则，如 `limit_reset` 要有 `spend_limit`；表的约束，如地址能解析）由处理器的输入检查补上，同样写成 400 和 `fields` | — |
 
@@ -159,7 +160,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
-控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器还要：`accounts` 的用户和账户列表、站点设置的读写；`billing` 的赠送批次；`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
+控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）。还要补：`catalog` 的模型和参考价的读取；`suppliers` 的管理操作与待映射队列；定价规则。
 
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
@@ -167,11 +168,34 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 指标和链路追踪的基座（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）：OpenTelemetry 的 API 与 SDK，指标经 Prometheus 导出器暴露。`telemetry.New` 在 `serve` 里建出提供者，`cmd/axiom` 把它们作为参数交给 `pg.Open`（`pg.WithTracerProvider`）、`egress`（`egress.WithTracerProvider`）、`httpserver.NewTelemetry` 和各模块；**不用 OpenTelemetry 的全局**，并行的测试各自持有自己的，互不影响。
 
+**决策与理由**（2026-10-16）：
+
+- **选 OpenTelemetry 的 API 与 SDK 做指标和链路，指标用 Prometheus 导出器暴露，抓取式。** 各模块只依赖 `metric.Meter` 一套接口，换导出方式（以后推到收集器）不用改任何模块；指标和链路同属一个系列，请求的上下文把二者连起来；Prometheus 文本格式是运维节点上监控系统通用的读法。
+- **不选 `prometheus/client_golang` 直接记指标、链路另用 OpenTelemetry**：模块要认两套接口，以后改成推送要改遍所有模块；性能没有优势（两者记一次测量都是零分配，见下文「调用路径」）。client_golang 仍是依赖，但只做导出器的底层和 `/metrics` 的处理器。
+- **不选现在就用 OTLP 推送指标和链路**：要先有收集器，部署还没有；OTLP/HTTP 导出器会带进 grpc、grpc-gateway、`go.opentelemetry.io/proto/otlp`、genproto 一批依赖（`otlptracehttp` v1.47.0 的 go.mod，2026-10-16 查），而现在 `go.mod` 里只有 protobuf。抓取不需要这些，等有收集器的部署再加，只是 `telemetry.New` 的一个处理器参数。
+- **不选厂商的 SDK 或托管服务（Datadog、New Relic 等）**：端点在境外，国内的节点不一定连得上，调用元数据也会离开部署；换厂商要改调用代码。指标靠本机抓取，将来的链路只发到自己部署的收集器，都不依赖境外的服务。
+- **产品基线**：OpenRouter 不给用户暴露指标端点；它的 Broadcast 把每次调用的链路用 OTLP/HTTP 发到用户指定的收集器，每个目的地可设 0.0001 到 1 的采样率，默认 1（OpenRouter 文档「Broadcast」，2026-10-16）。这是面向用户的功能，属于调用记录的导出（见[记录与告警](../../docs/domains/observability.md)）；本节是运维用的节点遥测，选 OTLP/HTTP 与它的做法一致，便于以后接同一类收集器。
+
 - **指标只在探针监听 `/metrics` 上**，公网监听没有这个路径（测试：公网 404，探针 200，`text/plain`）。指标放在专用的注册表里，只有经 `Metrics` 注册的才会出现，不带 Go 运行时和进程的默认集合（运行时指标随第一个需要它们的告警加入）。
-- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`，如 `axiom_http_server_requests_total`、`axiom_http_server_duration_seconds`、`axiom_observability_queue_depth`。
+- **命名**：`axiom.<模块或包>.<对象>.<量>`，单位写进 `WithUnit`；Prometheus 里点变下划线，计数加 `_total`，秒加 `_seconds`。现有的指标：
+
+  | 指标（Prometheus 名） | 类型 | 标签 |
+  |---|---|---|
+  | `axiom_http_server_requests_total` | 计数 | `route`、`status_class`、`outcome` |
+  | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
+  | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
+  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_observability_queue_depth` | 仪表 | 无 |
+
+  新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
 - **链路**：每个公网请求一个服务端跨度，名字是路由模式，属性 `request_id`（与 `X-Request-ID` 相同）、状态码；`pg` 的事务（`db.tx`）和 `egress` 的出站请求（`egress.request`，到响应头为止）是它的子跨度，同一个 trace。跨度属性只有主机名、状态码、`db.system` 这类有界的值：不记语句（可能含数据）、不记错误文本（可能引用地址或数据）、不记路径和查询。测试：请求路径、查询和语句里放入标记值，没有任何跨度属性含它；并核对父子关系和请求 ID。
-- **采样与导出**：提供者现在不带导出器，跨度在进程内产生后丢弃，所以没有采样可调；导出器是 `telemetry.New` 的一个 `SpanProcessor` 参数。设计：接上第一个收集器时用父级决定加按比例采样（默认 10%，出错的请求总采），OTLP/HTTP 导出，地址和凭证由标准的 `OTEL_EXPORTER_OTLP_*` 变量给，配置错了不启动。OTLP 导出器要带进 gRPC、protobuf 等一批依赖，等有收集器的部署再决定并评审，不在这里预先引入。
+- **调用路径**：标签组合初始化后，稳态下记一次测量不分配内存，指标就不会让调用路径的垃圾回收随流量增长；一个组合第一次出现时要建属性和选项切片并复制缓存的映射，是一次性的开销，组合数有上限，基准重复同一个组合，量不到它。`BenchmarkRecord`（无标签的计数、带标签的计数和直方图，上下文里是被采样的跨度）全部是 0 allocs/op，`bench-compare` 在任何一项开始分配时失败。做到的两条规则：标签集合预先建好、按组合缓存（`httpserver` 的 `seriesCache`，组合数就是标签上限里的那个数，读取是一次原子加载），因为每次调用现建 `metric.WithAttributes` 要分配；选项切片也建一次，用 `Add(ctx, 1, opts...)` 传入，因为逐个传的可变参数会在接口调用处分配一个切片。每个请求的跨度仍有开销：`BenchmarkRequestTelemetry` 在没有处理器时是 3 allocs/op（240 B，跨度的上下文和结束函数），有处理器、跨度被采样时是 9 allocs/op（约 1.5 KiB）；关闭遥测是 0。事务和出站请求的跨度同理，量的是开关一次跨度的开销：`BenchmarkTransactionSpan` 未采样时是 4 allocs/op（176 B），采样时 8（约 1.1 KiB）；`BenchmarkEgressSpan` 未采样时是 4（176 B），采样时 10（约 1.3 KiB）；未采样时不为属性构造参数。
+- **采样**：没有处理器时没有人读跨度，`telemetry.New` 不采样（`NeverSample`）：跨度仍在，子跨度照常连在一起，但不记属性、不记事件。公网请求的服务端跨度（`httpserver`）、事务跨度（`pg`）和出站请求跨度（`egress`）因此都只在 `span.IsRecording()` 为真时构造属性：`trace.WithAttributes`、`SetAttributes` 的参数先求值、再由不记录的跨度丢掉，不判断就白建。`BenchmarkRequestTelemetry`、`BenchmarkTransactionSpan`、`BenchmarkEgressSpan` 守住这一步。有处理器（接上了导出器）时用默认的父级决定加全采，下一条定下比例。
+- **导出**：
+  - **指标**：只抓取，没有推送，不需要配置：监控系统从探针监听（`AXIOM_PROBES_ADDR`，默认只听本机；要跨机抓取就把它绑到内网地址，由部署的防火墙限制来源）取 `/metrics`。
+  - **链路**：现在没有导出器，跨度在进程内产生后丢弃，所以没有导出配置可错。第一个有收集器的部署再加：OTLP/HTTP 导出，作为 `telemetry.New` 的一个 `SpanProcessor`，只发到自己部署的收集器；端点和凭证用标准的 `OTEL_EXPORTER_OTLP_*` 变量，采样比例是 `AXIOM_TRACE_SAMPLE_RATIO`（0 到 1，默认 0.1，父级已决定的跟随父级）。**配置错了不启动**：端点不是绝对的 http(s) 地址、比例不在 0 到 1 之间、凭证没配而端点配了，都在 `serve` 解析配置时报错，报错只说变量名，不带值。出错的请求总采要靠收集器的尾部采样，节点上的比例采样事先不知道请求会不会出错；用哪一种等有收集器时和它的容量一起定。
+  - 这条的实现和依赖随那个部署的 PR 评审；现在加，是为一个没有使用者的导出器多带一批依赖和一个没有效果的配置项。
 - **不记**对话正文和密钥：指标没有任何自由文本，跨度属性按上面的白名单。
 
 ## 健康检查
@@ -194,6 +218,17 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner`、`axiom_lookup` 由别的角色建好时，还要有它们的 ADMIN 权限。建好 `axiom_owner`、`axiom_lookup` 和各模块的 schema，再切成 `axiom_owner` 执行迁移 |
 
 [安全](../../docs/security.md#租户隔离)角色表里的后台任务角色，由第一个用到它的模块在迁移里建立并授予 `axiom_app`，任务的事务用 `pg.Tx.SetRole` 切过去；`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖它。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
+
+### 连接池
+
+进程最多保持 64 条数据库连接（`pg.PoolSize`，`pg.Open` 里设，不跟机器的核数走；pgx 的默认是 max(4, NumCPU)）。取值按这几条算：
+
+- **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
+- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+- **一个账户占不满**：单个账户受账户闸和每秒 135–200 个请求的上限约束，约占 2 条。
+- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
+
+连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
 
 ### 范围
 
@@ -250,6 +285,25 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - **保留**：保留期待定，由负责人决定；与钱有关的条目至少与账本保留一样久。到期删除由一个后台任务角色执行，只授予它删除过期条目的权限，随删除任务一起做；在那之前不删除任何条目。
 - **防篡改**：数据库权限只挡住应用，拥有表的 `axiom_owner` 和数据库管理员仍能改。运营的哈希链和异地留存建在已提交的条目之上，由 `operations` 实现（[运营的「审计」](../../docs/domains/operations.md#审计)）。
 
+## 幂等
+
+管理接口的写操作带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID）：丢了响应就用同一个键重发，得到第一次的结果，改动不做第二次。`internal/platform/idem` 把键存在 `platform.idempotency`，只有平台范围读写。
+
+| 列 | 内容 |
+|---|---|
+| `key` | 调用方的 UUID，主键 |
+| `actor`、`operation` | 第一次用它的操作者（`audit.Actor.String()`）和操作名（契约里的 operationId） |
+| `fingerprint` | 请求的指纹：路径参数和请求体的规范 JSON（`jsonx.MarshalCanonical`，成员顺序和空白不算）的 SHA-256 |
+| `response` | 当时回答调用方的对象，JSON；与占键在同一个事务里写入 |
+
+- **`idem.Once(ctx, tx, claim, do)`** 在改动自己的事务里：先 `INSERT … ON CONFLICT DO NOTHING` 占键，再执行 `do`，最后把响应写进同一行。占到键就执行；没占到，读出第一次的行，操作者、操作、指纹都相同则返回存下的响应（`replayed`），不执行 `do`，否则 `ErrReused`（409 `idempotency_key_reused`）。
+- **改动与占键同成同败**：`do` 失败则事务回滚，占键随之消失，调用方可以带同一个键、改正后重发；键被占用的行一定带着响应，所以重放不会读到做到一半的改动。
+- **同键的并发请求**：第二个请求的 `INSERT` 在唯一索引上等第一个事务提交或回滚；提交则重放，回滚则轮到它自己执行。所以同一个键至多执行一次，不需要应用层的锁。
+- **键属于一次改动**：另一个操作者、另一个操作、同一个操作但内容不同，都是 `ErrReused`。这比契约的字面（"另一种改动"）严：内容不同的请求若重放"第一次的结果"，调用方会以为新的金额已经生效。
+- **缺键与坏键**：守卫在生成的路由之前，按契约校验头参数：缺 `Idempotency-Key`、不是小写 UUID 都是 400 `invalid_request`，`fields` 点名这个头，在会话和权限之后。全零的 UUID 由 `idempotently` 拒绝。
+- **目录的写操作**自带 `op_key` 和 `catalog.change`，直接用同一个键；它不存响应，重放时处理器按资源现在的样子重读，`ErrOpKeyReused` 同为 409。
+- **保留**：与审计日志同，期限待定；重放要读那一行，所以在那之前不删。响应里不放密钥：会话类操作不带键，供应商的登录、key 只进密文表。
+
 ## 测试
 
 在 Windows 上，`pgtest` 没有 `DOCKER_HOST` 时先把它设成 Docker Desktop 的命名管道：不设的话 testcontainers 靠 `os.Stat` 管道路径找 Docker，所有管道实例都忙（很多测试二进制同时启动）时这个检查失败，转到无根 Docker 的分支，报“rootless Docker is not supported on Windows”，而 Docker 其实在运行；设了以后它直接拨管道，会等到有空闲实例。`pgtest` 的集群：`just test` 经 `internal/platform/pgtest/cmd/withcluster` 起一个 PostgreSQL 容器，把它的超级用户连接串放进环境变量 `PGTEST_CLUSTER_URL`，再运行 `go test`，结束后删除容器；连接串每次都变，所以 `pgtest` 用 `os.Environ` 而不是 `os.Getenv` 读取它，不让它进入 `go test` 的测试结果缓存键（每个测试的库由 `pgtest.New` 新建，连接串不是测试输入）；这一次运行里所有测试包共用它，容器数是同时进行的运行数，不是运行数乘包数。没有这个变量时（直接 `go test ./某包`），`pgtest` 自己起一个容器，行为和以前一样。集群准备好时已建好角色，并用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，名字带本测试二进制的随机标识（共用集群里不同二进制不会重名），测试结束时不单个删库（`DROP DATABASE` 会强制做一次检查点，共用集群时会拖住其他包），整个集群在运行结束时连同这些库一起删掉。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时，在集群的 advisory lock 下复制模板、执行迁移，改名为最终名字（按模块名排序拼成），之后的二进制和测试直接复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里；先用固定的短名字建，做完再改名，建到一半退出的二进制不会留下看起来完整的模板。容器关闭 fsync 以求快，`max_connections` 调到 1000，因为所有二进制的连接池都在同一个集群里。连接串的主机用 `127.0.0.1` 而不是 `localhost`：`localhost` 让 pgx 先试 `::1`，Docker Desktop 的 IPv6 转发在负载下会卡几十秒，握手超时。会改集群范围状态的测试包要有自己的集群：`internal/platform/pg` 的测试创建、修改、改名角色，还数整个服务器的会话，它的 `TestMain` 清掉 `PGTEST_CLUSTER_URL`，自己起容器；其他包的测试不得依赖整个集群的状态，查 `pg_stat_activity` 要加 `datname = current_database()`。容器由 testcontainers 的 Ryuk 兜底删除：运行被强杀时，Ryuk 在最后一个客户端断开约 2 分钟后删掉容器，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`。
@@ -266,6 +320,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
+| `in_scope` 的函数体保持简单表达式，不放子查询 | PostgreSQL 只内联简单的函数体；带子查询后策略里每行调用一次，2M 行的扫描实测 53 秒，原来的函数体是 1.9 秒（#63）。要一次解析，只能让策略把解析好的数组当参数传进来，那要改每张表的策略 | 把设置读成标量子查询（#63 原本的写法）：慢 29 倍；用 `IMMUTABLE` 包一层让计划只解析一次：计划在连接上复用，范围会串到别的事务 |
 | 登录角色和密码由部署创建 | 密码不经过本程序。部署的初始化脚本用 `CREATE ROLE … PASSWORD` 设置它，语句里有明文密码，数据库开启 DDL 日志时会记下来，所以初始化时不开 | `axiom migrate` 按连接串设置密码：密码要经过程序 |
 | 一次 `just test` 的所有测试包共用一个 PostgreSQL 集群，由 `withcluster` 启动，连接串经 `PGTEST_CLUSTER_URL` 传入；没有变量就自己起容器 | 容器数从“包数 × 并发运行数”降到“并发运行数”：几个 worktree 同时检查时，每包一个容器会让 Docker 虚拟机里同时有几十个容器，连接握手超时、测试随机失败；变量缺省时 `go test ./某包` 照旧能单独跑；每个运行自己的容器，不同 worktree、不同 runner 互不串 | testcontainers 的复用（固定容器名加 reuse）：名字要带运行标识才不串，复用的容器没有明确的结束时刻，清不掉；一台机器一个常驻集群：并发运行共用同一份角色和模板，改集群范围状态的测试会互相影响 |
 | 模块把迁移作为 `pg.Module` 值交给 `cmd/axiom`，由它传给 `Migrate` 和 `Check`；执行顺序和合法的模块名在 `pg` 的清单里固定 | 依赖一眼可见，没有导入顺序决定的全局状态；顺序与调用方怎么排无关；拼错的模块名在迁移和启动时就失败 | 各模块在包初始化时登记到全局表：靠导入的副作用，gochecknoinits 也禁止；按传入的顺序执行：测试和生产可能以不同顺序迁移 |
@@ -299,6 +354,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 每个监听面一份自成一体的契约，会话操作在两份里各写一遍，检查保证两份相同 | 会话属于签发它的面（域名、Cookie、路径各一套），管理接口不能被挂到公网（上一节）。跨文件引用在 oapi-codegen 里要 `--import-mapping`，还得为共享部分另生成一个包（2026-10-15 实测：不给映射直接报错）；共享一份会话契约、两个前缀各挂一次，则前端要为同一组操作维护两套路径 | 外部引用加共享包：多一个包、三条生成命令，换来省下约十个操作的重复；一份大契约：管理接口容易挂错监听 |
 | 契约先行，没有处理器的操作由生成的桩返回 501 | 处理器分几个 PR 并行写；生成的 `StrictServerInterface` 要求每个操作都有方法，没有桩则契约一加操作构建就断，有了桩，每个 PR 只加自己的方法 | 手写桩：并行的 PR 改同一个文件；嵌入空接口：未实现的操作调用时 panic；等所有处理器写完再合契约：前后端不能并行 |
 | 管理接口的写操作一律带 `Idempotency-Key` 和 `reason` | [运营](../../docs/domains/operations.md#运营接口)要求所有写操作能防重复、能审计；目录的 `op_key`、`reason`、`rev` 已经是这个形状，接口原样透传；一个形状，agent 和管理后台用同一套 | 只给花钱的操作加：agent 要判断哪些要加 |
+| 管理接口的幂等键存在平台的一张表里，在改动自己的事务里占键 | accounts 的设置、供应商、计费的赠送都没有自己的 `op_key`，各加一个，每个模块一份实现，也查不出一个键被别种改动用过；一张平台表一份实现，占键与改动同成同败，并发由唯一索引排队。代价是平台多一张只增长的表（保留期待定）和一个泛型函数 | 每个模块各加 `op_key` 列（目录的做法）：重复实现，不能跨操作检出复用；用赠送批次的 ID 当键（`AddCredit` 的 ID 幂等）：只覆盖一个操作；应用层锁加缓存：多节点不成立 |
 | 设置用 `PUT` 整体替换，不用带 `null` 的 `PATCH` | Go 生成的类型分不清「没写」和「写成了 null」；整体替换没有这个歧义，页面本来就提交整张表单 | JSON Merge Patch：要引入可空类型，两端的语义要对齐 |
 | 契约的约束由守卫按嵌入程序的契约统一强制（kin-openapi），会话、CSRF、权限也从契约的 `security`、`x-axiom-level`、`x-axiom-permission` 读 | 规则只有契约一处，不会和处理器漂移；管理接口的契约有上百个约束，逐个处理器手写必漏；契约读不通启动就失败，没有"忘了校验"的操作。代价是主模块多了 kin-openapi 和它的 5 个依赖（jsonpointer、swag/jsonname、oasdiff/yaml、yaml3、jsonschema/v6），每个请求多一次 schema 校验（微秒级，控制台不在调用路径上） | 每个处理器手写校验：漂移，也要在每个新操作里重写；`go:embed` 契约原文件：`api/` 下不能放 Go 文件（[模块边界规则](../../docs/architecture.md#模块边界规则)），放到别处就要复制一份 YAML；在运行时读文件：部署要多带文件 |
 | 守卫在生成的路由之前运行，不作中间件 | 生成的包装在中间件之前解析查询参数，`/keys?limit=many` 会先得到 400（还带着解析器的原话），绕过本该先答的 401／404；放在前面，顺序就是守卫声明的顺序，包装的解析错误只剩 schema 够不着的角落 | 作为 `Middlewares`：包装的解析抢在前面；守卫里再补一遍参数解析：两处规则会漂移 |

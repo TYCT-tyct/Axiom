@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
@@ -123,12 +124,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger)
+	routes, adminRoutes, err := console.routes(ctx, db, tel, logger)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.adminAddr, console.frontend.Admin(), cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes, cfg.adminAddr, adminRoutes, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
@@ -151,11 +152,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 // read from protected files, whose errors name the variable and never the path or the contents, and the contract
 // the guard enforces.
 type consoleParts struct {
-	cfg      nodeSettings
-	master   *secret.Keyring // seals users' TOTP secrets
-	hashes   *secret.MACKeys // keys API keys are hashed with
-	contract *contract
-	frontend *webui.Frontend // the pages of the three apps
+	cfg           nodeSettings
+	master        *secret.Keyring // seals users' TOTP secrets
+	hashes        *secret.MACKeys // keys API keys are hashed with
+	contract      *contract
+	adminContract *contract
+	frontend      *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -167,29 +169,37 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
-	contract, err := consoleContract()
+	console, err := consoleContract()
+	if err != nil {
+		return consoleParts{}, err
+	}
+	admin, err := adminContract()
 	if err != nil {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	return consoleParts{cfg, master, hashes, contract, frontend}, err
+	return consoleParts{cfg, master, hashes, console, admin, frontend}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
-// ctx ends, and puts the console's API in front of it. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
+// ctx ends, and puts the console's API in front of it for the public listener and the admin's API for the admin
+// listener. Opening an account also opens its balance (openBalance).
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (public, admin http.Handler, err error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := service.Load(ctx, logger); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger), nil
+	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
+		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
+	admin = adminRoutes(adminAPI{version: version(), accounts: service, db: db, logger: logger},
+		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
+	return public, admin, nil
 }
 
 // startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
@@ -259,6 +269,20 @@ func node(publicAddr string, routes http.Handler, adminAddr string, admin http.H
 	}
 }
 
+// checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
+// Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
+// a larger pool is left to the deployment. It runs in openDatabase, so every command that opens the database holds to
+// the one pool configuration; the gateway's settings are its defaults until the call path is wired, so the check reads
+// them there.
+func checkPool(db *pg.DB) error {
+	gate := gateway.DefaultConfig()
+	if have := int(db.MaxConns()); have < gate.PoolSize {
+		return fmt.Errorf("%s: pool_max_conns %d is below the gateway's %d database connections (PoolSize): raise it, or lower PoolSize",
+			pg.DatabaseURLVar, have, gate.PoolSize)
+	}
+	return nil
+}
+
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
 // answers would otherwise hold the node before its listeners open, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
@@ -267,6 +291,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkPool(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

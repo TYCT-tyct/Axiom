@@ -14,17 +14,17 @@ import (
 
 // problems are the parts of a request that break what the contract's schemas cannot say: a rule across fields, or
 // one the table would refuse. They answer as a 400 naming each.
-type problems []consoleapi.ErrorField
+type problems []errorField
 
 func (p *problems) add(pointer, message string) {
-	*p = append(*p, consoleapi.ErrorField{Pointer: pointer, Message: message})
+	*p = append(*p, errorField{Pointer: pointer, Message: message})
 }
 
 func (p *problems) err() error {
 	if len(*p) == 0 {
 		return nil
 	}
-	return &apiError{status: http.StatusBadRequest, code: consoleapi.ErrorCodeInvalidRequest, message: "the request breaks the contract", fields: *p}
+	return &apiError{status: http.StatusBadRequest, code: codeInvalidRequest, message: "the request breaks the contract", fields: *p}
 }
 
 // keyInput is the settings of a key as KeyCreate and KeySettings both give them; expires only a new key has.

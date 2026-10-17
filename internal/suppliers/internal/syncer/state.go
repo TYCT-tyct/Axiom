@@ -82,8 +82,9 @@ type GroupSnap struct {
 }
 
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
-// 「持久化」), so the constants of Task, Status and RemovalStep only gain members at the end, and any other change to its
-// fields that an old stored state would read differently needs a new format number in package persist.
+// 「持久化」), except CatchUpNotified, which a store reads from what it stored besides the state, so the constants of
+// Task, Status and RemovalStep only gain members at the end, and any other change to its fields that an old stored
+// state would read differently needs a new format number in package persist.
 type State struct {
 	Version   int64 // the Store's fence: a Commit must name the version it read
 	ConfigGen int64 // raised when the configuration changes; results of rounds that began before are void
@@ -115,6 +116,11 @@ type State struct {
 	// that said); the first read of a removal goes on until Through reaches RemovalAt, so no backlog is left unread when
 	// the grace period starts.
 	RemovalAt, Through time.Time
+	// CatchUpNotified is whether the alert for a read that has been going on longer than CatchUpAlert has been sent. It
+	// is not stored in the state: a member this version adds to the stored state is one the version before it refuses
+	// (jsonx.UnmarshalKnown), and the two run side by side during a rollout (CONTRIBUTING「发布与缓存」). The store
+	// derives it from the removal_slow event it already has.
+	CatchUpNotified bool `json:"-"`
 }
 
 // Kind names an event.
@@ -140,12 +146,13 @@ const (
 	FundingChanged   // where calls are paid from
 	BalanceCrossed   // the balance went above or below the reserve a route needs
 	BalanceRecovered // the balance rose back over the low-balance line
+	RemovalSlow      // the removal has been reading the charge records for longer than its catch-up bound
 )
 
 var kindNames = [...]string{
 	"group_added", "group_removed", "ratio_changed", "model_added", "model_removed", "plan_changed", "key_changed",
 	"balance_low", "needs_attention", "task_halted", "removal_started", "removal_done", "group_changed", "model_changed",
-	"funding_changed", "balance_crossed", "balance_recovered",
+	"funding_changed", "balance_crossed", "balance_recovered", "removal_slow",
 }
 
 // String is the name an event is stored and delivered under, so that reordering the constants changes no stored event.

@@ -1,6 +1,6 @@
 # Managed by project-workflow: changed only by upgrades.
 # Comments do not trigger pull_request events, so the review check would keep its old result after a review or an answer
-# is posted. This reruns the review job of the PR's latest workflow run; it never runs PR code and is not a required check.
+# is posted. This reruns the review job of the PR's newest workflow-pr run; it never runs PR code and is not a required check.
 name: review-rerun
 
 on:
@@ -23,14 +23,20 @@ jobs:
       actions: write # rerun the job
       pull-requests: read # the PR's head commit
     steps:
-      # A run still in progress needs nothing: review runs last (needs in workflow.yml) and reads the comment itself, unless
+      # A run still in progress needs nothing: review runs last (needs in workflow-pr.yml) and reads the comment itself, unless
       # it already read the comments in the seconds before the run finishes; the review method keeps a manual rerun for that.
       # Returning at once matters on a single self-hosted runner, which waiting here would keep from finishing that run.
+      # A push and a description edit can start two runs for one commit, the later cancelling the earlier (concurrency in
+      # workflow-pr.yml), and rerunning a job puts its run back in that group. So only the newest run counts, read in one
+      # snapshot: nothing is rerun while a run is going, and a cancelled newest run is reported, never replaced by an older
+      # run that checked an older description. A description edit landing between this snapshot and the rerun can still
+      # cancel or be cancelled by the rerun; the check then shows cancelled, and the review method says how to recover.
       - run: |
           head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha)
-          run=$(gh api "repos/$REPO/actions/workflows/workflow.yml/runs?head_sha=$head&event=pull_request&per_page=1" \
-            --jq '.workflow_runs[0] | select(.status == "completed") | .id')
-          if [ -z "$run" ]; then echo "no finished workflow run for $head: its review job will read the comment"; exit 0; fi
+          read -r total going run < <(gh api "repos/$REPO/actions/workflows/workflow-pr.yml/runs?head_sha=$head&event=pull_request&per_page=20"             --jq '.workflow_runs as $r | ($r | map(.created_at) | max) as $t
+              | "\($r | length) \([$r[] | select(.status != "completed")] | length) \([$r[] | select(.created_at == $t and .conclusion != "cancelled")][0].id // "-")"')
+          if [ "$total" = 0 ] || [ "$going" != 0 ]; then echo "a workflow-pr run for $head is pending or going: its review job will read the comment"; exit 0; fi
+          if [ "$run" = - ]; then echo "the newest workflow-pr run for $head was cancelled: rerun it in full (review method)"; exit 1; fi
           job=$(gh api "repos/$REPO/actions/runs/$run/jobs" --jq '.jobs[] | select(.name == "review") | .id')
           [ -n "$job" ] || { echo "run $run has no review job"; exit 1; } # an empty --job would rerun every job
           gh run rerun "$run" --job "$job" --repo "$REPO"

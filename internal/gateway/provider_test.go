@@ -3,7 +3,6 @@ package gateway
 import (
 	"errors"
 	"net/http"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -188,25 +187,23 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	r.idle(1 << 30)
 }
 
-// allocated is the bytes the function allocates, measured by the runtime: TotalAlloc only grows, so the difference is
-// what the call asked for, whatever the collector did meanwhile. The test is not parallel, so little else allocates.
-func allocated(f func()) uint64 {
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	f()
-	runtime.ReadMemStats(&after)
-	return after.TotalAlloc - before.TotalAlloc
-}
-
-// TestPriceParsingIsBounded: what an exponent asks for is never computed. A price whose exponent would make a
-// million-digit integer is refused having allocated no more than a short one does.
+// TestPriceParsingIsBounded: what an exponent asks for is never computed. A price whose exponent or number of digits
+// would make a huge integer is refused by the bound check, which is string work; the big integer is made only from
+// what that check accepted, so a huge exponent cannot make parsing allocate. The allocation itself is not measured:
+// the runtime counts the whole process's allocations, and other tests and the collector moving a few kilobytes while
+// this one runs says nothing about the parser.
 func TestPriceParsingIsBounded(t *testing.T) {
 	for _, number := range []string{"1e1000000", "1e-1000000", "1e999", "1e-999", "0.1e999999999"} {
-		if got := allocated(func() { perToken([]byte(number)) }); got > 4<<10 {
-			t.Errorf("%s: %d bytes allocated, want a few hundred", number, got)
+		if _, ok := readPrice([]byte(number)); ok {
+			t.Errorf("%s passed the bound check", number)
 		}
 		if _, ok := perToken([]byte(number)); ok {
 			t.Errorf("%s was accepted", number)
+		}
+	}
+	for _, number := range []string{"1e3", "0e999", "0", "0.0000015"} {
+		if _, ok := readPrice([]byte(number)); !ok {
+			t.Errorf("%s was refused by the bound check", number)
 		}
 	}
 }

@@ -85,6 +85,10 @@ built="$(just axiom-version)"
 # The console's other operations are served by a node that read its key files and its contract: an address no site
 # registers is the contract's 404
 [ "$(curl -s "http://127.0.0.1:$public/api/console/v1/site" | jq -r .error.code)" = not_found ] || { echo "::error::the node does not answer the console's API as the contract says"; exit 1; }
+# The admin listener runs the same build, and answers its own routes only
+adminDeployed="$(curl -fsS "http://127.0.0.1:$admin/api/admin/v1/version" | jq -r .version)"
+[ "$adminDeployed" = "$built" ] || { echo "::error::the admin listener runs $adminDeployed, this tree builds $built"; exit 1; }
+[ "$(curl -s "http://127.0.0.1:$admin/api/admin/v1/users" | jq -r .error.code)" = not_found ] || { echo "::error::the admin listener does not answer the admin's API as the contract says"; exit 1; }
 
 # The pages: the website and the console on the public port; the admin on its own port, and none of its files on the
 # public one. The admin's own script is asked for, so the embedded files, their caching and their compression are what

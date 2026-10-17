@@ -56,6 +56,7 @@
 - **上游一律流式调用**：适配器允许时，客户端要的是非流式也以流式调用上游，由网关聚合后一次返回，这样计费进度看得见（见[计费的「预留与结算」](billing.md#预留与结算)）。非流式的回答在返回之前没有"已转发内容"这一刻，所以中途失败仍可换端点，各次尝试的内容互不混入。`/responses/compact` 例外：上游不流式，原样透传，一次预留足。
 - **跨格式**：M1 只做 Chat 客户端调用 Messages、Responses 端点；Messages、Responses 客户端只走原格式的端点。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
 - **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。
+- **发出的输出上限就是预留用的上限**：请求没写输出上限（或写 `null`）时，发给上游的是该条目报价用的上限，也就是模型的默认值，上下文装不下时则是裁短后的值（Messages 必须有，Responses 加 `max_output_tokens`）；请求写了就照它发。模型的上限未知时不发，由上游自己的默认值管。否则上游可以生成比预留依据更多的输出。
 - **跨格式时缓存标记按 OpenRouter 的做法转换**（OpenRouter《Prompt caching》「OpenAI」、OpenAI《Prompt caching》，2026-10-16）：发往 Messages 时原样带着；发往 Responses 时，支持显式断点的模型（OpenAI 从 GPT-5.6 起）上，用户、系统、开发者、助手和工具结果的文本块的 `cache_control` 写成 `prompt_cache_breakpoint`，TTL 丢掉；不支持断点的模型上的标记，以及工具定义、图片和文件上的标记丢掉，由 OpenAI 自动缓存前缀。对费用的影响：OpenAI 的缓存写入从 GPT-5.6 起按输入价的 1.25 倍收，更早的模型没有写入加价；Responses 只有 30 分钟起的缓存期，Anthropic 的 1 小时 TTL 表达不了，所以发往 Responses 的请求不会产生 1 小时的写入价（Anthropic 是输入价的 2 倍）；丢掉的标记可能让命中率比在 Anthropic 上低。收费始终按上游报告的实际缓存读写，不按请求里的标记。
 - **只认原上游的内容**：请求里带着只有原上游才认的内容时（Claude 推理块的签名、OpenAI 的加密推理内容），优先粘回产生它们的端点。同格式透传时这些内容原样转发、从不删改：删掉中间的思考块会让其后的块全部失效，而换了模型或账户时，Anthropic 自己丢弃读不了的思考块、请求照常成功（Anthropic《Preserved thinking》，2026-10）；OpenAI 的加密推理换了组织是否可用，要录样本确认，被拒时按原话返回。
 - **格式特有的能力只走原格式的端点**，见[路由的「一个请求的路由步骤」](routing.md#一个请求的路由步骤)。
@@ -96,7 +97,7 @@
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` | `authentication_error` | — |
 | 余额、工作区预算或 key 上限不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`、`workspace_budget` 或 `key_limit`；会重置的上限带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
 | 进行中的请求或暂估待校正的保留暂时占满了余额 | 402 同上，`limit_source` 为 `pending` 或 `pending_correction`，`Retry-After` 是最早释放的时间（待定：见「待定问题」） | `billing_error` | 同上 |
-| 追加预留时数据库出错 | — | `api_error` | `billing_unavailable`，不带费用 |
+| 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
 | 限流；按 IP、按账户的在途上限；同一账户的资金操作排队超时 | 429 `rate_limited` | `rate_limit_error` | — |
 | 端点都满载、排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
@@ -158,6 +159,7 @@
 
 - **排在 M2**：续接是第一版的功能，在 M2 提供。在那之前，带 `previous_response_id` 的请求返回 400，`DELETE /v1/responses/{id}` 返回 404。
 - **单独保存**：会话状态是续接功能所需的内部数据，与对话内容的记录分开保存，不受对话内容开关的影响。保留时间由平台配置，默认 30 天，与 OpenAI 的默认一致（OpenAI《Conversation state》，2026-10）。它和对话内容一样按账户加密、按消息去重，销毁账户密钥时一并销毁（见[记录与告警的「加密与密钥」](observability.md#加密与密钥)）。
+- **读一次会话状态**：续接按工作区和回复 ID 从保存处读一次，是[总体架构的规则 3](../architecture.md#模块边界规则)的第四个例外；读不到就当作没有这个回复，不重试，也不按 ID 扫其他工作区。
 - **不提供读取**：不支持按 ID 读回回复内容（OpenAI 的 `GET /v1/responses/{id}`），因为任何人都不能通过产品查看对话内容；续接不需要这个接口。
 - **按工作区隔离**：同一工作区的 key 可以凭回复 ID 续接，其他工作区不行。
 - **`store: false`** 的请求不保存状态，不能凭 ID 续接。
@@ -201,4 +203,6 @@
 - 各字段的最终名称和结构写入接口契约时确定
 - `provider.only`、`ignore`、`order`：用户写的是官方 API 的名称或中转站分组的代号（[术语表](../glossary.md)），路由按供应商 ID 过滤；名称到 ID 的对应还没有模块提供（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上），有了才能支持，在此之前返回 400。`max_price` 的单位按本站记账单位每百万 token，二级站点用人民币记账时与 OpenRouter 的美元不同，是否要换算待负责人定
 - 402 的错误体附所需金额和在途预留，`limit_source` 区分 `pending`、`pending_correction`，会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`；预留表的状态只有 `pending`、`released`，没有已暂估，`pending_correction` 无从区分，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
+- 上游因请求自身拒绝（4xx）时「保留原文」：suppliers 的 `Failure` 按设计不带上游的文字（对方的文字不进错误、日志和表），gateway 现在回 400 `invalid_request`，不带原文，也没有 `upstream_rejected`；要保留原文，得由适配器把一段筛过的原文放进 `Failure`，并重新评估“对方的文字不进日志和表”这条不变量
+- 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做
