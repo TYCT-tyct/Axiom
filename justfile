@@ -6,8 +6,8 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
-# Run every check the CI build job runs, except one run of each benchmark: PRs get those from `bench-compare`, main from
-# `check-all`
+# Run every check the CI build job runs, except one run of each benchmark: `check-all` adds those, and CI runs it on
+# every pull request and main push
 check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
@@ -78,19 +78,20 @@ deadcode:
 
 # Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The
 # packages share one PostgreSQL cluster, which internal/platform/pgtest/cmd/withcluster starts and removes; `go test
-# ./pkg` alone starts its own. The test build still compiles every benchmark; they run in `bench-once` and bench-compare.
-# At most four packages at once: eight, the default on the 8-core host, raced with the shared cluster and starved the
-# timing-sensitive database tests; four is the limit the server proof used.
+# ./pkg` alone starts its own. The test build still compiles every benchmark; `bench-once` runs them under the race
+# detector, and bench-compare compares their allocations without it. At most four packages at once: eight, the default
+# on the 8-core host, raced with the shared cluster and starved the timing-sensitive database tests; four is the limit
+# the server proof used.
 test: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
     go test -C tools -race ./...
 
-# Every benchmark compiles and runs once, with the race detector. Main pushes run this, since bench-compare runs only on
-# PRs; PRs run every benchmark through bench-compare.
+# Every benchmark compiles and runs once, with the race detector. CI runs this on pull requests and main pushes;
+# bench-compare still compares allocations on PRs, without -race.
 bench-once: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
 
-# Every check, including one run of each benchmark
+# Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
@@ -162,9 +163,11 @@ axiom-version:
 axiom_version := quote(just_executable()) + " --justfile " + quote(justfile()) + " axiom-version"
 
 # Build the website, console and admin into each app's dist/. The console is stamped with the version of the program
-# built from this tree, to notice when the program answering is another one.
+# built from this tree, to notice when the program answering is another one. The output is reused when the hash of its
+# inputs (web/, the version stamp, the toolchain and VITE_/AXIOM_ variables) matches an earlier build on this host;
+# scripts/web_cache.py holds the key and the cache.
 web-build: web-install
-    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} build
+    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py build --version "$version" -- {{ web }} build
 
 # Copy the three built apps into the Go tree for the program to embed (internal/platform/webui), each text file beside
 # its brotli and gzip copies, with the content security policy the server sends. Every recipe that builds or tests the
@@ -176,7 +179,9 @@ web-embed: web-build
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files
 # and functions too hard to follow; functions with too many paths or lines and files too long; unused files, exports
 # and dependencies; duplicated code; unit tests; the build within its size budget; and the end-to-end tests against
-# that build, served by the program's own server from the embedded copy, which are told the version it was stamped with
+# that build, served by the program's own server from the embedded copy, which are told the version it was stamped with.
+# A passing end-to-end run is reused when the hash of everything it checked (web/, api/, all Go code, go.mod/go.sum and
+# the test configuration) matches an earlier pass on this host; any Go change misses.
 web: web-embed
     {{ web }} typecheck
     {{ web }} lint
@@ -185,4 +190,4 @@ web: web-embed
     {{ web }} duplicates
     {{ web }} test
     {{ web }} budget
-    version="$({{ axiom_version }})" && AXIOM_VERSION="$version" {{ web }} e2e
+    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e

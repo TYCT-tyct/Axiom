@@ -30,17 +30,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
           fetch-depth: 0 # the benchmark comparison checks out the base commit
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # The docs check in workflow.yml covers Markdown, so a PR that changes only Markdown needs no build. Every later
+      # step is skipped, and the required build check succeeds at once; main always runs everything.
+      - id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          if python3 scripts/ci_skips.py md-only "$BASE"; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: "**/go.sum"
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; the version is web/package.json's packageManager
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; the version is web/package.json's packageManager
         with:
           package_json_file: web/package.json
           # Not the default ~/setup-pnpm: runners sharing a host share a home, and two jobs installing pnpm into one
           # directory at once leave it broken
           dest: ${{ runner.temp }}/setup-pnpm
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.node-version
           cache: pnpm
@@ -48,30 +63,40 @@ jobs:
       # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs on a hosted runner.
       # A self-hosted host has the browser's system libraries installed once; installing them per job would take the
       # host's apt lock from parallel jobs at once
-      - run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
         env:
           DEPS: ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}
-      - run: |
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: |
           curl -sSfL --retry 3 -o "$RUNNER_TEMP/just.tar.gz" "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz"
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      # PRs run every benchmark through bench-compare below; main has no bench-compare, so it runs each once here.
-      - run: just "$RECIPE"
-        env:
-          RECIPE: ${{ github.event_name == 'push' && 'check-all' || 'check' }}
+      # The tests stay cacheable; bench-once runs every benchmark under -race on PRs too, and bench-compare below still
+      # compares allocations without -race.
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: just check-all
       # The deployment checks below start the stack on this host under fixed names (project axiom, port 8080, image
       # axiom:local, volume axiom_postgres). Jobs on runners sharing a host take turns through a host-wide lock, and each
       # turn ends with `just down -v`, so the next one starts from no database. On a hosted runner the lock is free.
       # Waiting at most 20 minutes for the lock, then three `just up` of at most 5 minutes each, the checks and the teardown
-      - run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
+      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+        run: flock --timeout 1200 /tmp/axiom-ci-deploy.lock bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
         run: just migrations "$BASE"
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-      - if: github.event_name == 'pull_request'
-        run: just bench-compare "$BASE"
+      # A test-only or Markdown change cannot move an allocation; production Go or a module file can. tools/benchgate
+      # stays as it is.
+      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+        run: |
+          if python3 scripts/ci_skips.py bench-needed "$BASE"; then
+            just bench-compare "$BASE"
+          else
+            echo "bench-compare skipped: no non-test Go or go.mod/go.sum changed between $BASE and HEAD"
+          fi
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
 
