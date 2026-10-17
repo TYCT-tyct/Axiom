@@ -230,7 +230,7 @@ func (a *Admin) ReplaceLogin(ctx context.Context, tx pg.Tx, actor audit.Actor, i
 	}); err != nil {
 		return Supplier{}, fmt.Errorf("replace the login: %w", err)
 	}
-	if err := q.SetSupplierStatusForAdmin(ctx, tx, store.SetSupplierStatusForAdminParams{ID: id, Status: string(Connecting)}); err != nil {
+	if err := q.SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Connecting)}); err != nil {
 		return Supplier{}, fmt.Errorf("set the status: %w", err)
 	}
 	if err := a.record(ctx, tx, actor, "supplier.replace_login", id, reason, map[string]any{"from": row.Status}); err != nil {

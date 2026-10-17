@@ -97,7 +97,7 @@
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` | `authentication_error` | — |
 | 余额、工作区预算或 key 上限不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`、`workspace_budget` 或 `key_limit`；会重置的上限带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
 | 进行中的请求或暂估待校正的保留暂时占满了余额 | 402 同上，`limit_source` 为 `pending` 或 `pending_correction`，`Retry-After` 是最早释放的时间（待定：见「待定问题」） | `billing_error` | 同上 |
-| 追加预留时数据库出错 | — | `api_error` | `billing_unavailable`，不带费用 |
+| 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
 | 限流；按 IP、按账户的在途上限；同一账户的资金操作排队超时 | 429 `rate_limited` | `rate_limit_error` | — |
 | 端点都满载、排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
@@ -159,6 +159,7 @@
 
 - **排在 M2**：续接是第一版的功能，在 M2 提供。在那之前，带 `previous_response_id` 的请求返回 400，`DELETE /v1/responses/{id}` 返回 404。
 - **单独保存**：会话状态是续接功能所需的内部数据，与对话内容的记录分开保存，不受对话内容开关的影响。保留时间由平台配置，默认 30 天，与 OpenAI 的默认一致（OpenAI《Conversation state》，2026-10）。它和对话内容一样按账户加密、按消息去重，销毁账户密钥时一并销毁（见[记录与告警的「加密与密钥」](observability.md#加密与密钥)）。
+- **读一次会话状态**：续接按工作区和回复 ID 从保存处读一次，是[总体架构的规则 3](../architecture.md#模块边界规则)的第四个例外；读不到就当作没有这个回复，不重试，也不按 ID 扫其他工作区。
 - **不提供读取**：不支持按 ID 读回回复内容（OpenAI 的 `GET /v1/responses/{id}`），因为任何人都不能通过产品查看对话内容；续接不需要这个接口。
 - **按工作区隔离**：同一工作区的 key 可以凭回复 ID 续接，其他工作区不行。
 - **`store: false`** 的请求不保存状态，不能凭 ID 续接。

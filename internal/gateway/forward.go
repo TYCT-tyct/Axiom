@@ -25,7 +25,11 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
-	var seen protocol.Progress
+	// Billing settles with no extension in flight, and the extension's goroutine must not outlive the call, whose slots
+	// bound it; its outcome changes nothing now.
+	defer a.landed(true) //nolint:errcheck // see above
+	// Once the upstream is no longer read, a write that blocks lets it generate nothing more on the call's account.
+	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
 	for {
 		st, err := relay.Next()
 		if err != nil {
@@ -34,11 +38,15 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 		// The upstream is idle when it sends nothing new: a keep-alive, a comment and a repeated snapshot do not
 		// count, bytes that make progress on an event and content do (docs/domains/gateway.md「路径与格式」).
 		p := relay.Progress()
-		if st.Kind == protocol.StepCommit || p.ContentBytes != seen.ContentBytes ||
-			p.PartialBytes > seen.PartialBytes || p.Searches != seen.Searches {
+		if st.Kind == protocol.StepCommit || p.ContentBytes != a.seen.ContentBytes ||
+			p.PartialBytes > a.seen.PartialBytes || p.Searches != a.seen.Searches {
 			idle.Reset(idleFor)
 		}
-		seen = p
+		a.seen = p
+		// Every read is metered before what it brought is written, before the commit point too (I1).
+		if err := a.metered(ctx, p, st.Kind == protocol.StepUpstreamDone, idle, idleFor); err != nil {
+			return a.truncate(relay, cut(err))
+		}
 		switch st.Kind {
 		case protocol.StepCommit:
 			s.commit(a, st.Out)
@@ -91,8 +99,8 @@ func (s *session) put(b []byte) bool {
 		s.gone = true
 		return false
 	}
-	_ = s.rc.SetWriteDeadline(time.Now().Add(s.x.Limits.cfg.WriteTimeout)) //nolint:errcheck // a writer without deadlines is written to as it is
-	_, err := s.w.Write(b)                                                 //nolint:gosec // an API response, which is never rendered as a page
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.writeFor)) //nolint:errcheck // a writer without deadlines is written to as it is
+	_, err := s.w.Write(b)                                //nolint:gosec // an API response, which is never rendered as a page
 	if err == nil {
 		err = s.rc.Flush()
 	}
@@ -151,6 +159,13 @@ func (s *session) answer(e ended, fin *protocol.Final) {
 	s.put(body)
 }
 
+// setWriteFor sets the deadline of the writes from now on.
+func (s *session) setWriteFor(d time.Duration) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.writeFor = d
+}
+
 // setCancel records how to stop the attempt in progress, for a write that fails.
 func (s *session) setCancel(cancel context.CancelCauseFunc, follows bool) {
 	s.wmu.Lock()
@@ -181,6 +196,9 @@ func (s *session) isStarted() bool {
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
 	cause := context.Cause(ctx)
+	if failed, ok := errors.AsType[*extendFailed](cause); ok {
+		return a.truncate(relay, cut(failed.err))
+	}
 	e := protocol.Error{Type: protocol.UpstreamFailed}
 	finish, again := billing.FinishError, true
 	switch {
@@ -188,13 +206,13 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		finish, again = billing.FinishCancelled, false
 	case errors.Is(cause, errIdle):
 		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
-	case errors.Is(cause, context.DeadlineExceeded):
+	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
 		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
 	case errors.Is(err, protocol.ErrMemory):
 		e, again = protocol.Error{Type: protocol.Overloaded}, false
 	}
 	rec := &s.ends[a.i]
-	rec.Usage, rec.Finish = relay.Usage(), finish
+	a.usage, rec.Finish = relay.Usage(), finish
 	if s.isStarted() {
 		rec.Result = billing.Committed
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
@@ -219,7 +237,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	s := a.s
 	rec := &s.ends[a.i]
-	rec.Usage = relay.Usage()
+	a.usage = relay.Usage()
 	if s.isStarted() {
 		rec.Result, rec.Finish = billing.Committed, billing.FinishStop
 		if s.isGone() {
@@ -237,6 +255,29 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	}
 	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 	return nextEntry, ended{}
+}
+
+// truncate cuts the stream short where its reservation could not be extended: the upstream is stopped at once, and
+// the call ends with the billing error, the stream in place after the commit point, or an answer before it, when
+// nothing reached the client and so no model usage is charged (docs/domains/billing.md「免单规则」). No other entry is
+// tried: it would draw on the same account.
+func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
+	s := a.s
+	a.cancel(errCut)
+	rec := &s.ends[a.i]
+	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
+	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+	if s.isStarted() {
+		rec.Result = billing.Committed
+		e.relay = relay
+		return over, e
+	}
+	rec.Result = billing.FailedBeforeCommit
+	drop(relay)
+	if s.isGone() {
+		return over, ended{}
+	}
+	return over, e
 }
 
 // drop lets go of a relay whose stream is not going to be used: its ending is written for nobody, which gives back

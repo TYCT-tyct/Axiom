@@ -419,11 +419,11 @@ func (q *Queries) LockGroup(ctx context.Context, db DBTX, arg LockGroupParams) (
 	return items, nil
 }
 
-const lockSupplierForAdmin = `-- name: LockSupplierForAdmin :many
+const lockSupplierForChange = `-- name: LockSupplierForChange :many
 SELECT id, kind, status, config_gen FROM suppliers.suppliers WHERE id = $1 FOR UPDATE
 `
 
-type LockSupplierForAdminRow struct {
+type LockSupplierForChangeRow struct {
 	ID        uuid.UUID
 	Kind      string
 	Status    string
@@ -431,15 +431,15 @@ type LockSupplierForAdminRow struct {
 }
 
 // The supplier's turn: its changes are applied one after the other, each against the state the one before left.
-func (q *Queries) LockSupplierForAdmin(ctx context.Context, db DBTX, id uuid.UUID) ([]LockSupplierForAdminRow, error) {
-	rows, err := db.Query(ctx, lockSupplierForAdmin, id)
+func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UUID) ([]LockSupplierForChangeRow, error) {
+	rows, err := db.Query(ctx, lockSupplierForChange, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []LockSupplierForAdminRow
+	var items []LockSupplierForChangeRow
 	for rows.Next() {
-		var i LockSupplierForAdminRow
+		var i LockSupplierForChangeRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
@@ -570,19 +570,19 @@ func (q *Queries) SelectGroup(ctx context.Context, db DBTX, arg SelectGroupParam
 	return err
 }
 
-const setSupplierStatusForAdmin = `-- name: SetSupplierStatusForAdmin :exec
+const setSupplierStatusBumpingConfigGen = `-- name: SetSupplierStatusBumpingConfigGen :exec
 UPDATE suppliers.suppliers SET status = $1, status_reason = $2, config_gen = config_gen + 1
 WHERE id = $3
 `
 
-type SetSupplierStatusForAdminParams struct {
+type SetSupplierStatusBumpingConfigGenParams struct {
 	Status       string
 	StatusReason *string
 	ID           uuid.UUID
 }
 
 // A change of status raises the configuration generation, so a round of the sync that began before is discarded.
-func (q *Queries) SetSupplierStatusForAdmin(ctx context.Context, db DBTX, arg SetSupplierStatusForAdminParams) error {
-	_, err := db.Exec(ctx, setSupplierStatusForAdmin, arg.Status, arg.StatusReason, arg.ID)
+func (q *Queries) SetSupplierStatusBumpingConfigGen(ctx context.Context, db DBTX, arg SetSupplierStatusBumpingConfigGenParams) error {
+	_, err := db.Exec(ctx, setSupplierStatusBumpingConfigGen, arg.Status, arg.StatusReason, arg.ID)
 	return err
 }

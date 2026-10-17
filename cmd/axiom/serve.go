@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
@@ -51,24 +52,22 @@ type listening struct {
 
 // nodeSettings are the node's configuration, all read from the environment before anything starts.
 type nodeSettings struct {
-	publicAddr, probesAddr string
-	// adminAddr is where the admin listener serves; empty, as on a node that is not the core, there is none.
-	adminAddr                       string
-	startupTimeout, shutdownTimeout time.Duration
-	databaseURL                     string
-	masterKeyFile, keyHashFile      string
-	hashConcurrency                 int
-	hashWait                        time.Duration
-	trustedProxies                  []netip.Prefix
+	publicAddr, adminAddr, probesAddr string
+	startupTimeout, shutdownTimeout   time.Duration
+	databaseURL                       string
+	masterKeyFile, keyHashFile        string
+	hashConcurrency                   int
+	hashWait                          time.Duration
+	trustedProxies                    []netip.Prefix
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		publicAddr:      env.Addr(publicAddrVar, ":8080"), // model calls, the console, payment callbacks
+		publicAddr:      env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
+		adminAddr:       env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:      probesListenAddr(env),
-		adminAddr:       env.Addr(adminAddrVar, ""), // the admin API, only on the core
 		startupTimeout:  env.Duration(startupTimeoutVar, defaultStartupTimeout),
 		shutdownTimeout: env.Duration(shutdownTimeoutVar, 30*time.Second),
 		databaseURL:     env.Required(pg.DatabaseURLVar),
@@ -87,7 +86,7 @@ func readSettings(environ []string) (nodeSettings, error) {
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
-// and requests in flight get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
+// and requests in flight and the jobs of the queue get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
@@ -137,7 +136,12 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	served := startServing(servers, &health, logger)
 
-	stopped := waitForStop(ctx, served)
+	var stopped error
+	select {
+	case err := <-served:
+		stopped = fmt.Errorf("a listener stopped: %w", err)
+	case <-ctx.Done():
+	}
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
 	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
@@ -145,32 +149,9 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
 }
 
-// startServing serves every listener and reports the node ready. The channel carries the error of the first listener
-// to stop.
-func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
-	served := make(chan error, len(servers))
-	for _, s := range servers {
-		go func() { served <- s.server.Serve(s.listener) }()
-	}
-	health.SetReady(true)
-	logger.Info("serving", servedAddrs(servers)...)
-	return served
-}
-
-// waitForStop waits until a listener stops or ctx ends, and names the listener that stopped.
-func waitForStop(ctx context.Context, served <-chan error) error {
-	select {
-	case err := <-served:
-		return fmt.Errorf("a listener stopped: %w", err)
-	case <-ctx.Done():
-		return nil
-	}
-}
-
 // consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
-// read from protected files, whose errors name the variable and never the path or the contents, the contract the guard
-// enforces, and the pages of the three apps. The admin API, when the node serves it, stands on the same accounts module
-// and the same files.
+// read from protected files, whose errors name the variable and never the path or the contents, and the contract
+// the guard enforces.
 type consoleParts struct {
 	cfg           nodeSettings
 	master        *secret.Keyring // seals users' TOTP secrets
@@ -198,15 +179,12 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	if err != nil {
-		return consoleParts{}, err
-	}
-	return consoleParts{cfg, master, hashes, console, admin, frontend}, nil
+	return consoleParts{cfg, master, hashes, console, admin, frontend}, err
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
-// ctx ends, and puts the console's API in front of it, and the admin API, which is nil unless the node serves one.
-// Opening an account also opens its balance (openBalance).
+// ctx ends, and puts the console's API in front of it for the public listener and the admin's API for the admin
+// listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (public, admin http.Handler, err error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
@@ -220,31 +198,21 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	}
 	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
-	if p.cfg.adminAddr != "" {
-		if admin, err = p.adminHandler(db, service, tel, logger); err != nil {
-			return nil, nil, err
-		}
-	}
-	return public, admin, nil
-}
-
-// adminHandler is the admin's API on the accounts module, the catalog, the suppliers and the database of this node. The
-// outbound client is the one a probe of a supplier's site goes through.
-func (p consoleParts) adminHandler(db *pg.DB, service *accounts.Service, tel *telemetry.Telemetry, logger *slog.Logger) (http.Handler, error) {
 	cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
-		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger), nil
+	admin = adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
+		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
+	return public, admin, nil
 }
 
 // startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
@@ -275,6 +243,18 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	}
 }
 
+// startServing serves every listener and reports the node ready. The channel carries the error of the first listener to
+// stop.
+func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
+	served := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() { served <- s.server.Serve(s.listener) }()
+	}
+	health.SetReady(true)
+	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
+	return served
+}
+
 // startRecorder starts the call-record writer, reporting to the node's metrics.
 func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
 	cfg := callRecords
@@ -291,28 +271,29 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 	}
 }
 
-// node returns the node's servers in the order shutdown stops them. The public and admin listeners come first, so at
-// shutdown they drain while the probes still answer. The admin listener is there when adminRoutes is.
-func node(publicAddr string, routes http.Handler, adminAddr string, adminRoutes http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
-	server := func(routes http.Handler) *http.Server {
-		return httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
+// node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
+// it drains while the probes still answer. The admin listener serves the admin app alone (docs/architecture.md
+// 「前端交付」); its API and the limits to the admin domain and to restricted sources come with the admin API.
+func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
+	return []*listening{
+		{publicAddrVar, publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{adminAddrVar, adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
+		{probesAddrVar, probesAddr, health.Server(logger), nil},
 	}
-	servers := []*listening{{publicAddrVar, publicAddr, server(routes), nil}}
-	if adminRoutes != nil {
-		servers = append(servers, &listening{adminAddrVar, adminAddr, server(adminRoutes), nil})
-	}
-	return append(servers, &listening{probesAddrVar, probesAddr, health.Server(logger), nil})
 }
 
-// servedAddrs are the addresses the node listens on, named for the log line that reports them: public, admin when
-// the node serves one, and ops.
-func servedAddrs(servers []*listening) []any {
-	names := map[string]string{publicAddrVar: "public", adminAddrVar: "admin", probesAddrVar: "ops"}
-	var attrs []any
-	for _, s := range servers {
-		attrs = append(attrs, names[s.variable], s.listener.Addr().String())
+// checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
+// Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
+// a larger pool is left to the deployment. It runs in openDatabase, so every command that opens the database holds to
+// the one pool configuration; the gateway's settings are its defaults until the call path is wired, so the check reads
+// them there.
+func checkPool(db *pg.DB) error {
+	gate := gateway.DefaultConfig()
+	if have := int(db.MaxConns()); have < gate.PoolSize {
+		return fmt.Errorf("%s: pool_max_conns %d is below the gateway's %d database connections (PoolSize): raise it, or lower PoolSize",
+			pg.DatabaseURLVar, have, gate.PoolSize)
 	}
-	return attrs
+	return nil
 }
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
@@ -323,6 +304,10 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkPool(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

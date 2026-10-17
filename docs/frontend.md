@@ -53,7 +53,7 @@ OpenRouter 的页面构成（openrouter.ai 页脚与 llms.txt，OpenRouter 文�
 | 组织 | 邀请 | 我的邀请码与链接、邀请记录 | 第一版 | [邀请关系](domains/accounts.md#邀请关系) |
 | 设置 | 账户与安全 | 资料、邮箱、密码、第三方登录绑定、通行密钥、两步验证、登录设备、注销 | 第一版（两步验证 M1） | [登录与会话](domains/accounts.md#登录与会话)；[停用与注销](domains/accounts.md#停用与注销)；[账户安全](security.md#账户安全) |
 | 设置 | 外观 | 浅色、深色或跟随系统；主题色；语言 | 第一版 | [主题与自由度](#主题与自由度) |
-| 设置 | 通知 | 可以关闭的邮件提醒：余额不足、异地登录、key 异常花费、key 泄露、充值到账。模型切换与迁移的通知必须送达，不能关闭（切换与迁移在 M1 之后，见 [Issue #24](https://github.com/TYCT-tyct/Axiom/issues/24)） | 第一版 | [防滥用](security.md#防滥用)；[账户安全](security.md#账户安全)；[模型的生命周期](domains/catalog.md#模型的生命周期) |
+| 设置 | 通知 | 可以关闭的邮件提醒：余额不足、异地登录、key 异常花费、key 泄露、充值到账。模型切换与迁移的通知必须送达，不能关闭（切换与迁移在 M1 之后，见 [Issue #24](https://github.com/TYCT-tyct/Axiom/issues/24)） | 第一版 | [给用户的邮件](domains/accounts.md#给用户的邮件)；[防滥用](security.md#防滥用)；[账户安全](security.md#账户安全)；[模型的生命周期](domains/catalog.md#模型的生命周期) |
 | 以后 | 成员与角色、账户切换 | 企业团队 | 以后 | [授权](domains/accounts.md#授权) |
 | 以后 | 我的站点 | 站长管理二级站点 | 以后 | [站点](domains/accounts.md#站点) |
 
