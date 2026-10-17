@@ -1,3 +1,4 @@
 @import "@axiom/ui/styles.css";
 
 @source "./";
+@source "../../packages/app/src";

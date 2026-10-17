@@ -37,12 +37,13 @@
 | 规则 | 靠什么保证 |
 |---|---|
 | 页面上的文字全部来自翻译文件；中文是源文件，英文的键与中文完全一致 | Biome 的 `noJsxLiterals` 拒绝写在 JSX 里的文字；`Messages<typeof zh>` 让缺键、多键都编译不过；`t()` 的键有类型。属性里的文字（`aria-label` 等）这条规则查不到，靠评审 |
+| 共用包里组件写的类名在每个用到它的应用里都生效：Tailwind 只生成 `@source` 指到的文件里的类，且跳过链接到 `node_modules` 的工作区包 | 各应用的 `src/main.css` 用 `@source` 指到它用的每个带组件的包（`ui` 由自己的 `styles.css` 指）；`scripts/sources.test.ts` 按 `package.json` 的依赖核对 |
 | 颜色、圆角、阴影只用 `styles.css` 的变量 | Tailwind 自带的调色板已清空，写死的颜色没有对应的类可用 |
 | 页面在 `vite.shared.ts` 的内容安全策略下工作：没有内联脚本，没有 `<style>` 元素 | 端到端测试在 Go 服务发送的同一策略下加载三个应用，违规会成为控制台错误，测试失败；`embed.ts` 把 `vite.shared.ts` 的字符串交给 Go 服务原样发送，测试核对响应头与它完全一致，且不含 `unsafe-` |
 | 保存的外观在首次绘制前生效，不先闪一下系统的外观 | `theme.js` 作为同源的普通脚本在 `<head>` 开头同步运行，读 `preferences.ts` 的同一个键；端到端测试拦下应用脚本后检查 |
 | 构建产物的文件名带内容哈希，可以长期缓存 | Vite 给打包的文件命名；它不打包的 `theme.js` 由 `vite.shared.ts` 按内容算哈希。端到端测试检查入口页的每个脚本 |
 | 每个页面有自己的标题；跳转后焦点移到页面，读屏软件会读出新页面 | `PageHeader` 和整页的状态设置标题，路由的 `onResolved` 调 `focusPage`；端到端测试检查 |
-| 每个数据视图都有加载中、空、出错、没有权限四种状态 | 用 `DataState`；出错时显示请求 ID和时间；`isTransient` 判定的暂时性失败（没有收到响应、服务端错误 5xx）自动重试两次，被拒绝（4xx）和响应读不出来不重试。端到端测试覆盖没有权限、服务端错误、断网和连接无响应 |
+| 每个数据视图都有加载中、空、出错、没有权限四种状态 | 用 `DataState`；出错时显示请求 ID和时间；要找的东西不存在（404）时说明它找不到、给回首页的链接，不让人重试；整页的视图（详情页）传 `page`，失败时页面仍有一级标题和标签页标题；`isTransient` 判定的暂时性失败（没有收到响应、服务端错误 5xx）自动重试两次，被拒绝（4xx）和响应读不出来不重试。端到端测试覆盖没有权限、服务端错误、断网和连接无响应 |
 | 每个请求都会结束 | `@axiom/api` 的客户端给每个请求设 10 秒超时（含读响应体），并接上调用方的 signal；查询把 TanStack Query 的 signal 传下去，没人再看的查询会取消请求 |
 | 切换页面不出现空白 | 两个应用的路由都从 `routerDefaults` 开始：保留当前页面，等待超过 150 毫秒时只在内容区显示骨架 |
 | 部署后旧页面加载不到新的代码块时自动刷新一次 | 路由的 `lazyRouteComponent`：只在打开页面时刷新，悬停或聚焦链接引起的预加载失败不刷新；同一个代码块在本标签页只刷新一次，再失败就显示 `PageFailedState`；会话存储不可用时不刷新，直接显示。端到端测试覆盖 |
@@ -55,7 +56,7 @@
 | 金额是精确的整数文本，显示和输入都不经过浮点数 | `useFormat().money`、`parseMoney`、`moneyInput`；单元测试含 int64 的上下界 |
 | 只显示一次的内容（key 明文、恢复码）放在不能用 Esc 或点背景关掉的对话框里，用户确认后才关；生成恢复码的请求还没回来时，发起请求的对话框也不能关；确认时读新会话失败，恢复码仍留在屏幕上并说明原因，可以重试 | `Dialog` 的 `dismissible`、`packages/app/src/totp-dialogs.tsx`；端到端测试覆盖 |
 | 两步验证的二维码在本地用 `qrcode-generator` 画成 SVG 的 `<path>`，不拼 HTML 字符串，也不把密钥交给外部服务 | `packages/app/src/qr.tsx` |
-| 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
+| 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动，表格行内的按钮和链接不跑出表格自己的滚动框 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
 | 后台的每个改数据的操作都填理由、有确认（高风险的要输入对象的名字）、防重复提交；一个操作一个 Idempotency-Key，对话框打开时生成，没收到响应时原样重发，被拒绝后换新；结果标明是不是之前已完成的那次 | `admin/src/change.tsx` 的 `ChangeDialog`；端到端的模拟按契约要求 Idempotency-Key 和理由，同一个键再来就返回存下的结果并带 `Idempotency-Replayed` |
 | 后台的所有操作要求通过两步验证的会话：没有第二因素的账户只能到开启两步验证的页面，恢复码对话框在页面之上，换了会话也不会丢 | `packages/app` 的 `Gate` 的 `enroll` 阶段与 `RecoveryCodesHost`；`e2e/admin-access.spec.ts` |
 | 接口只经 `@axiom/api` 调用，错误统一成带状态码和请求 ID的 `ApiError`，状态码 0 表示没有收到响应；收到了但解析不了的响应是普通的 `Error`，没有状态码。都保留原始错误作为 `cause` | 生成的类型不手改；`just generated` 检查 |
