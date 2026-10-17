@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"axiom/internal/platform/telemetry"
 )
 
 // TestAbortedResponseIsRecordedAsAborted: a handler that has sent 200 and then aborts leaves a broken response, which
@@ -83,4 +85,44 @@ func requestCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int6
 		}
 	}
 	return seen
+}
+
+// TestStatusClass: any number the recorder noted names a class, or none for what net/http would not send.
+func TestStatusClass(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[int]string{0: "none", 99: "none", 100: "1xx", 200: "2xx", 404: "4xx", 503: "5xx", 999: "9xx", 1000: "none", 12345: "none"} {
+		if got := statusClass(status); got != want {
+			t.Errorf("status %d is class %s, want %s", status, got, want)
+		}
+	}
+}
+
+// BenchmarkRequestTelemetry is what reporting one request costs: "off" is a zero Telemetry, "unsampled" the providers
+// the node builds (no span processor, as serve has none yet), "sampled" the same with one, as when an exporter is
+// attached. The metrics allocate nothing in any of them; the difference between "off" and "unsampled" is the span's
+// context and the closure that ends it. bench-compare fails if any grows.
+func BenchmarkRequestTelemetry(b *testing.B) {
+	for name, processors := range map[string][]sdktrace.SpanProcessor{
+		"unsampled": nil,
+		"sampled":   {sdktrace.NewSimpleSpanProcessor(tracetest.NewNoopExporter())},
+	} {
+		node, err := telemetry.New(processors...)
+		if err != nil {
+			b.Fatal(err)
+		}
+		tel, err := NewTelemetry(node.Traces, node.Metrics)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(name, func(b *testing.B) { benchmarkRequest(b, tel) })
+	}
+	b.Run("off", func(b *testing.B) { benchmarkRequest(b, Telemetry{}) })
+}
+
+func benchmarkRequest(b *testing.B, tel Telemetry) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_, done := tel.start(b.Context(), "0123456789abcdef")
+		done("GET /v1/models", http.StatusOK, false, 42*time.Millisecond)
+	}
 }
