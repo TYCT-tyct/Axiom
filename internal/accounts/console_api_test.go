@@ -3,19 +3,21 @@ package accounts_test
 import (
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
-	"go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/telemetry"
 )
 
 // accountScope is the scope of the signed-in user's own account.
@@ -322,30 +324,31 @@ func TestRefusalsThatGuessNothingAreNotCounted(t *testing.T) {
 	}
 }
 
-// missesIn is the count of key lookups that went to the database, which reader has collected.
-func missesIn(t *testing.T, reader metric.Reader) int64 {
+// scrapeMisses is the value of the key-cache miss counter in what the ops listener's /metrics handler serves, so the
+// name checked is the one an operator's scrape sees.
+func scrapeMisses(t *testing.T, tel *telemetry.Telemetry) string {
 	t.Helper()
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(t.Context(), &collected); err != nil {
-		t.Fatal(err)
-	}
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "axiom.accounts.key_cache.misses" && len(sum.DataPoints) == 1 {
-				return sum.DataPoints[0].Value
-			}
+	rec := httptest.NewRecorder()
+	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
+	for line := range strings.Lines(rec.Body.String()) {
+		if value, ok := strings.CutPrefix(line, "axiom_accounts_key_cache_misses_total "); ok {
+			return strings.TrimSpace(value)
 		}
 	}
-	return -1
+	return "absent from:\n" + rec.Body.String()
 }
 
-// TestKeyCacheMissesAreCounted: a lookup that goes to the database is counted, one answered from memory is not.
+// TestKeyCacheMissesAreCounted: a lookup that goes to the database is counted, one answered from memory is not, and
+// the count reaches the scrape under its Prometheus name through the process's metrics base.
 func TestKeyCacheMissesAreCounted(t *testing.T) {
 	t.Parallel()
 	db, _, _, key := callSetup(t)
-	reader := metric.NewManualReader()
+	tel, err := telemetry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	s, err := accounts.NewService(db, accounts.Config{
-		Platform: platform, Hashes: hashKeys(t, 1), Keyring: keyring(t), Meter: metric.NewMeterProvider(metric.WithReader(reader)).Meter("test"),
+		Platform: platform, Hashes: hashKeys(t, 1), Keyring: keyring(t), Meter: tel.Metrics.Meter("axiom/accounts"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -361,8 +364,8 @@ func TestKeyCacheMissesAreCounted(t *testing.T) {
 	if _, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), accounts.NewKeyText("sk-ax-v1-")); !errors.Is(err, accounts.ErrUnknownKey) {
 		t.Fatal(err)
 	}
-	if misses := missesIn(t, reader); misses != 2 {
-		t.Errorf("%d misses counted for one known key looked up three times and one unknown, want 2", misses)
+	if misses := scrapeMisses(t, tel); misses != "2" {
+		t.Errorf("the scrape counts %s misses for one known key looked up three times and one unknown, want 2", misses)
 	}
 }
 

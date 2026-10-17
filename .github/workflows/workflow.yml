@@ -1,13 +1,18 @@
 # Base checks, managed by project-workflow: changed only by upgrades, except Dependabot's action-version bumps.
-# Project-specific jobs go in ci.yml.
+# The checks that read the PR description are in workflow-pr.yml, so editing a description does not rerun these.
+# Project-specific jobs go in ci.yml, or in describe.yml when they read the PR description.
 # Every job here is a check the ruleset protecting main requires (set by the skill's manage.py protect); keep the names.
 name: workflow
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened] # edited: a changed title or description is checked again
   push:
     branches: [main]
+
+# A newer push to a PR cancels its older run, which would only hold a runner; pushes to main never cancel each other
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,7 +21,7 @@ jobs:
   docs:
     runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -m unittest discover -s scripts/workflow
       - run: python3 scripts/workflow/check_docs.py
 
@@ -28,7 +33,7 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the commit's whole history is scanned: a secret that was ever committed has leaked
       # --retry alone does not retry a dropped connection (curl exit 56); --retry-all-errors does, and a partial file is
@@ -40,33 +45,3 @@ jobs:
       # --log-opts=HEAD scans what this commit reaches (on a PR: its commits and the base's history), so a leak on another
       # branch fails that branch's own PR, not every PR; --redact keeps found secrets out of the job log
       - run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --log-opts=HEAD .'
-
-  pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
-    steps:
-      - uses: actions/checkout@v7
-      - run: python3 scripts/workflow/check_pr.py describe
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-
-  review:
-    # Comments do not trigger pull_request events: after posting a review or an answer, rerun this job (review method).
-    if: github.event_name == 'pull_request'
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
-    permissions:
-      contents: read
-      pull-requests: read # the PR's comments
-    steps:
-      - uses: actions/checkout@v7
-      - run: gh api --paginate "repos/$REPO/issues/$NUMBER/comments?per_page=100" --jq '.[] | {body, author_association}' | python3 scripts/workflow/check_pr.py review
-        shell: bash # with pipefail: a failed page must fail the check, never pass it on fewer comments
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
