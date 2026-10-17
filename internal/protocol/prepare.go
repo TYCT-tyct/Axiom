@@ -255,6 +255,7 @@ var (
 			}),
 			identities: 3,
 		},
+		Chat: {}, // spelled out so that the array covers every format, as rewriteRules does: rulesFor never indexes past it
 	}
 	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
 )

@@ -97,15 +97,18 @@ func (s *session) write(b []byte) {
 	}
 }
 
-// put writes b and flushes it, within the write deadline. A client whose context has ended, or a write to it that fails,
-// is gone: nothing more is written to it, and an attempt that stops when the client does is stopped now. wmu is held.
-func (s *session) put(b []byte) bool {
+// put writes b and flushes it, within one write's deadline.
+func (s *session) put(b []byte) bool { return s.putFor(b, s.writeFor) }
+
+// putFor writes b and flushes it within d. A client whose context has ended, or a write to it that fails, is gone:
+// nothing more is written to it, and an attempt that stops when the client does is stopped now. wmu is held.
+func (s *session) putFor(b []byte, d time.Duration) bool {
 	if s.gone || s.req.Context().Err() != nil {
 		s.gone = true
 		return false
 	}
-	_ = s.rc.SetWriteDeadline(time.Now().Add(s.writeFor)) //nolint:errcheck // a writer without deadlines is written to as it is
-	_, err := s.w.Write(b)                                //nolint:gosec // an API response, which is never rendered as a page
+	_ = s.rc.SetWriteDeadline(time.Now().Add(d)) //nolint:errcheck // a writer without deadlines is written to as it is
+	_, err := s.w.Write(b)                       //nolint:gosec // an API response, which is never rendered as a page
 	if err == nil {
 		err = s.rc.Flush()
 	}
@@ -147,8 +150,9 @@ func (s *session) finish(out []byte) {
 }
 
 // respond writes a whole body to a client that did not stream: it is the call's only answer, so the status is set here.
-// A body larger than one write goes out in chunks, each within its own write deadline, so that a client that reads
-// slowly but keeps reading is not taken for one that has gone (docs/domains/gateway.md「转发规则」).
+// A body larger than one write goes out in chunks, each within the sooner of one write's deadline and what is left of
+// the reply's own, so that a client that reads slowly but keeps reading is not taken for one that has gone, while a
+// client too slow to be served in the reply's time is (docs/domains/gateway.md「转发规则」, README.md「超时与限额」).
 func (s *session) respond(status int, body []byte) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
@@ -163,18 +167,29 @@ func (s *session) respond(status int, body []byte) {
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
 	s.w.WriteHeader(status)
+	until := time.Now().Add(max(s.writeFor, time.Duration(int64(len(body))*int64(time.Second)/respondRate)))
 	for b := body; len(b) > 0; {
 		n := min(len(b), respondChunk)
-		if !s.put(b[:n]) {
+		left := time.Until(until)
+		if left <= 0 {
+			s.gone = true // too slow to be served in the reply's time: taken for a client that has gone
+			return
+		}
+		if !s.putFor(b[:n], min(s.writeFor, left)) {
 			return
 		}
 		b = b[n:]
 	}
 }
 
-// respondChunk is how much of a whole reply one write takes: the write deadline is a chunk's, not the reply's, so a
-// reply of the 16 MiB a call may hold is written for as long as the client keeps reading it.
-const respondChunk = 64 << 10
+const (
+	// respondChunk is how much of a whole reply one write takes.
+	respondChunk = 64 << 10
+	// respondRate is the slowest reader a whole reply is written for, in bytes a second: the reply as a whole gets the
+	// longer of one write's deadline and its bytes at this rate (16 MiB take 256s), so a client can neither be cut off
+	// by a slow link nor hold a slot and the node's memory for longer than that.
+	respondRate = 64 << 10
+)
 
 // answer writes the error a call that forwarded nothing ends with, in the client's own format, with what was charged
 // anyway when the settlement says so.

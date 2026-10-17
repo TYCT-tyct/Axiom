@@ -88,8 +88,10 @@ func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = true }
 func noMidSystem(t *protocol.Target)    { t.MidSystem = false }
 func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = true }
 func encrypting(t *protocol.Target)     { t.EncryptedReasoning = true }
-func noDefaultCap(t *protocol.Target)   { t.MaxOutput = 0 }
-func quotedCap(t *protocol.Target)      { t.MaxOutput = 7000 }
+func streaming(t *protocol.Target)      { t.Streams = true }
+
+func noDefaultCap(t *protocol.Target) { t.MaxOutput = 0 }
+func quotedCap(t *protocol.Target)    { t.MaxOutput = 7000 }
 
 // messagesHead is a Messages body's start, for the model's default cap.
 const messagesHead = `{"model":"up","max_tokens":4096,`
@@ -101,7 +103,7 @@ func TestConvertToMessages(t *testing.T) {
 			`{"model":"up","max_tokens":7000,"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
 		},
 		{
-			"system and text", chatBody(`"messages":[{"role":"developer","content":"Be brief."},{"role":"system","content":[{"type":"text","text":"Be kind."}]},` + userHi + `],"stream":true`), nil,
+			"system and text", chatBody(`"messages":[{"role":"developer","content":"Be brief."},{"role":"system","content":[{"type":"text","text":"Be kind."}]},` + userHi + `],"stream":true`), streaming,
 			messagesHead + `"system":[{"type":"text","text":"Be brief."},{"type":"text","text":"Be kind."}],"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"stream":true}`,
 		},
 		{
@@ -393,7 +395,7 @@ func TestConvertSamples(t *testing.T) {
 			name string
 		}{{protocol.Messages, "messages"}, {protocol.Responses, "responses"}} {
 			t.Run(dir+"/"+to.name, func(t *testing.T) {
-				got, err := convertBody(to.f, string(sample(t, dir+"/request.json")), nil)
+				got, err := convertBody(to.f, string(sample(t, dir+"/request.json")), streaming)
 				if err != nil {
 					t.Fatal(err)
 				}

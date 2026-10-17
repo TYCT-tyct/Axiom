@@ -79,7 +79,7 @@ func responsesSettings(out []byte, c *canon, t Target) []byte {
 		}
 		out = append(out, '}')
 	}
-	if t.Streams || c.Stream != nil && *c.Stream { // a client that wants one has it even at an endpoint that cannot stream
+	if t.Streams { // the gateway reads every answer as a stream, and routing sends a conversion only to an endpoint that streams
 		out = append(out, `,"stream":true`...)
 	}
 	if c.ServiceTier != nil {
