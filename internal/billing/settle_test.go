@@ -27,6 +27,7 @@ type supplies struct {
 	lost     map[uuid.UUID][]uuid.UUID // the route of each request recorded lost
 	resolved map[uuid.UUID]bool        // the requests a late settlement resolved
 	ended    map[uuid.UUID]int         // how many times each request was told to have ended
+	stuck    chan struct{}             // when set, recording a lost request waits for it to close or the context to end
 }
 
 func newSupplies() *supplies {
@@ -45,7 +46,14 @@ func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, attempts []supplie
 	return nil
 }
 
-func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, route []uuid.UUID) error {
+func (s *supplies) RecordLostRequest(ctx context.Context, _ pg.Tx, id, _, _ uuid.UUID, route []uuid.UUID) error {
+	if s.stuck != nil {
+		select {
+		case <-s.stuck:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lost[id] = route

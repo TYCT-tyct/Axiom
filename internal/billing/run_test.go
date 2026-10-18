@@ -8,19 +8,19 @@ import (
 )
 
 // TestRunKeepsTheHolderAlive: the loop's heartbeat, at the period Start gives it when the configuration names none, is
-// what keeps this process able to write at all. Alive holds for the TTL less a margin of 5s after a beat, 4s here, and
-// the default period is a third of the 9s TTL: a loop that beat less often, or stopped, is seen inside the 7s the test
-// watches, which is two periods and more than the window.
+// what keeps this process able to write at all. Alive holds for the TTL less a margin of 5s after a beat, 10s here, and
+// the default period is a third of the 15s TTL, so every beat has 5s to spare: a loop that beat less often, or stopped,
+// is seen inside the 12s the test watches, which is two periods and more than the window.
 func TestRunKeepsTheHolderAlive(t *testing.T) {
-	b := newBank(t, 0, 0, Config{HolderTTL: 9 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
+	b := newBank(t, 0, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	beats := b.billing.beat.Load()
 	stop := runInBackground(t, b)
-	for deadline := time.Now().Add(7 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
 		if !b.billing.Alive() {
 			t.Fatal("the holder went stale while its loop was beating")
 		}
 	}
-	if b.billing.beat.Load() <= beats+int64(5*time.Second) {
+	if b.billing.beat.Load() <= beats+int64(9*time.Second) {
 		t.Error("the holder's expiry was not pushed out twice, once in each default heartbeat period")
 	}
 	stop()
@@ -93,4 +93,24 @@ func runInBackground(t *testing.T, b *bank) (stop func()) {
 	}
 	t.Cleanup(stop)
 	return stop
+}
+
+// TestRunBeatsWhileTheCleanupIsStuck: a sweep that waits on a lock (here, the supplier side of a cleanup that does not
+// return) does not stop the heartbeat, which is what keeps the node answering: the holder stays alive for longer than
+// its TTL less the margin, which a loop that beat between sweeps could not do.
+func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
+	b := newBank(t, 1_000_000, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Millisecond})
+	b.hold(1000)
+	time.Sleep(5 * time.Millisecond) // past the reservation's deadline
+	b.supplies.stuck = make(chan struct{})
+	stop := runInBackground(t, b)
+	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if !b.billing.Alive() {
+			t.Fatal("the holder went stale while a cleanup was stuck")
+		}
+	}
+	if b.state() != "pending" {
+		t.Errorf("the reservation is %s: the cleanup was not stuck, so the test proved nothing", b.state())
+	}
+	stop()
 }

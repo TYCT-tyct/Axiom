@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -158,8 +159,8 @@ func (b *Billing) fence(ctx context.Context, tx pg.Tx) error {
 }
 
 // The cleanup's pace: a sweep every 30 seconds takes over at most cleanupBatch reservations in each of at most
-// cleanupRounds batches. The work of a sweep is bounded, because one that never returned would also stop the heartbeat
-// and the node would reap itself; a backlog larger than that drains over the sweeps that follow.
+// cleanupRounds batches. The work of a sweep is bounded so that a backlog drains over the sweeps that follow instead of
+// one transaction holding locks for minutes.
 const (
 	cleanupEvery  = 30 * time.Second
 	cleanupBatch  = 200
@@ -167,22 +168,40 @@ const (
 )
 
 // Run keeps this process's holder alive and lets cleanup take over what no Settle will, until ctx ends: a sweep at
-// once and then every 30 seconds, a heartbeat every Config.Heartbeat. A heartbeat finding the holder reaped returns
-// ErrReaped: from then on nothing this process writes is fenced in, so it must stop serving and start over with a new
-// holder (cmd/axiom). Any other failure is logged and retried on the next beat; meanwhile Alive turns false, which
-// stops new attempts (internal/gateway/README.md「尝试」).
+// once and then every 30 seconds, a heartbeat every Config.Heartbeat. The two run apart, so a sweep stuck behind a
+// lock cannot stop the heartbeat and a heartbeat on a hung connection cannot stop the sweeps; each heartbeat has the
+// period for its own deadline. A heartbeat finding the holder reaped ends Run with ErrReaped: from then on nothing this
+// process writes is fenced in, so it must stop serving and start over with a new holder (cmd/axiom). Any other failure
+// is logged and retried on the next beat; meanwhile Alive turns false, which stops new attempts
+// (internal/gateway/README.md「尝试」).
+//
+// The heartbeat still shares the database pool with the calls; a connection of its own, which a pool exhausted by
+// calls cannot starve, is not done yet (see internal/billing/README.md「持有者」).
 func (b *Billing) Run(ctx context.Context) error {
-	b.sweep(ctx) // the predecessor's leftovers, before the first period passes
-	beat := time.NewTicker(b.config.Heartbeat)
-	defer beat.Stop()
-	sweep := time.NewTicker(cleanupEvery)
-	defer sweep.Stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	reaped := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() { reaped <- b.beats(ctx) })
+	wg.Go(func() { b.sweeps(ctx) })
+	err := <-reaped
+	cancel()
+	wg.Wait()
+	return err
+}
+
+// beats pushes the holder's expiry out every Config.Heartbeat until ctx ends (nil) or the holder is found reaped.
+func (b *Billing) beats(ctx context.Context) error {
+	tick := time.NewTicker(b.config.Heartbeat)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-beat.C:
-			err := b.Heartbeat(ctx)
+		case <-tick.C:
+			beat, cancel := context.WithTimeout(ctx, b.config.Heartbeat)
+			err := b.Heartbeat(beat)
+			cancel()
 			if errors.Is(err, ErrReaped) {
 				b.logger.Error("billing: the holder was reaped; this node stops taking requests")
 				return err
@@ -190,11 +209,20 @@ func (b *Billing) Run(ctx context.Context) error {
 			if err != nil && ctx.Err() == nil {
 				b.logger.Error("billing: the heartbeat failed; no attempt starts until it succeeds", "err", err)
 			}
-		case <-sweep.C:
-			if ctx.Err() != nil {
-				return nil
-			}
-			b.sweep(ctx)
+		}
+	}
+}
+
+// sweeps runs a sweep at once, for the predecessor's leftovers, and then every cleanupEvery until ctx ends.
+func (b *Billing) sweeps(ctx context.Context) {
+	tick := time.NewTicker(cleanupEvery)
+	defer tick.Stop()
+	for {
+		b.sweep(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
 		}
 	}
 }
