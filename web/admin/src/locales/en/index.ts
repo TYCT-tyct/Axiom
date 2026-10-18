@@ -33,14 +33,13 @@ export default {
     replayed: "This was already done earlier. Below is the result from then; nothing was done again.",
     close: "Close",
     unknown:
-      "It isn’t known whether this change was made. The form is locked: resending sends the same request, which the server does at most once. To change it, close this and look at the current data first.",
+      "It isn’t known whether this change was made. The form is locked: resending sends the same request, which the server does at most once — the surest way to learn the result. If you close this, the first request may still take effect, and the data on the page does not prove it didn’t.",
     resend: "Resend as it was",
     stale:
       "Someone else changed this after you opened it. Nothing was saved, so their change isn’t overwritten. Reloading fills in the current version and discards what you entered here.",
     reload: "Reload",
     reused:
-      "This request’s key was already used for different content, so the first attempt may have been made. Close this and look at the current data before deciding whether to do it again.",
-    check: "Close and look at the current data",
+      "This request’s key was already used for different content, so the first attempt may have been made; nothing more is sent from here. The data you see after closing may not include it yet, so it can’t tell you whether to do it again.",
   },
   users,
   suppliers,

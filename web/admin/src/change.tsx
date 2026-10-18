@@ -97,8 +97,8 @@ export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
   // The form is made again when it is filled from what is current, so its fields take their new initial values.
   const [form, setForm] = useState(0);
   const { state } = change.attempt;
-  // Whether an earlier try was done is not known here: the page underneath may still show things as they were, so it
-  // is fetched again for the person to see.
+  // Whether an earlier try was done is not known here: the page underneath is fetched again so it does not keep showing
+  // things from before the try, though what comes back cannot prove the try was not done (it may still be committing).
   const uncertain = !change.mutation.isSuccess && (state === "unknown" || state === "reused");
   const close = () => {
     if (uncertain) {
@@ -178,8 +178,9 @@ function ChangeForm<Input, Out>({
     >
       {intro ? <div className="space-y-2 text-t2">{intro}</div> : null}
       {editing ? said : null}
-      {/* Only a form being edited can change: in any other state the dialog sends what it sent before, or nothing. */}
-      <fieldset disabled={!editing} className="min-w-0 space-y-4">
+      {/* Only a form being edited can change, and not while what it holds is on its way: the request already fixed is
+          what a lost answer resends, so the form must keep showing it. */}
+      <fieldset disabled={!editing || mutation.isPending} className="min-w-0 space-y-4">
         <ChangeFields fields={fields} confirm={confirm} error={mutation.error} />
       </fieldset>
       {/* Why the button now does something else sits next to it, where the person is looking after pressing it. */}
@@ -280,7 +281,7 @@ function Footer(props: Moves) {
 }
 
 // Next is the button that moves the change on: send it, send the same request again, fill the form from what is
-// current (once that has arrived), or close and look.
+// current (once that has arrived), or close.
 function Next({ state, action, danger, pending, reload, onClose }: Moves) {
   const { t } = useTranslation();
   const fetching = useIsFetching({ queryKey: [accountKey] }) > 0;
@@ -295,7 +296,7 @@ function Next({ state, action, danger, pending, reload, onClose }: Moves) {
   if (state === "stale" || state === "reused") {
     return (
       <Button variant="primary" size="md" onClick={onClose}>
-        {t("change.check")}
+        {t("change.close")}
       </Button>
     );
   }

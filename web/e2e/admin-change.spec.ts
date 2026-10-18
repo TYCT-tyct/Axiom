@@ -67,6 +67,58 @@ test.describe("a grant whose answer is lost", () => {
     expect(state.stored.size).toBe(1);
   });
 
+  test("cannot be changed while it is on its way, so the locked form shows what is sent again", async ({ page }) => {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    const sent = grants(page);
+    // the first send is held, then its answer is lost
+    let lose = () => {};
+    const lost = new Promise<void>((resolve) => {
+      lose = resolve;
+    });
+    await page.route(
+      "**/credit-grants",
+      async (route) => {
+        await lost;
+        await route.abort("connectionreset");
+      },
+      { times: 1 },
+    );
+    await press(page, "users.credit.open").click();
+    await dialog(page).getByLabel(amount).fill("25");
+    await send(page);
+    await expect(dialog(page).getByLabel(amount)).toBeDisabled();
+    await expect(dialog(page).getByLabel(words("change.reason"))).toBeDisabled();
+    lose();
+    await expect(alert(page)).toContainText(zhText("change.unknown"));
+    await expect(dialog(page).getByLabel(amount)).toHaveValue("25");
+
+    await submit(page).click();
+    await expect(done(page)).toBeVisible();
+    await expect(dialog(page).getByText("$37.00")).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(state.stored.size).toBe(1);
+  });
+
+  test("that cannot be read, as a proxy's page in its place, is sent again with its key", async ({ page }) => {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    const sent = grants(page);
+    await page.route(
+      "**/credit-grants",
+      (route) => route.fulfill({ status: 201, contentType: "text/html", body: "<html>bad gateway</html>" }),
+      { times: 1 },
+    );
+    await press(page, "users.credit.open").click();
+    await dialog(page).getByLabel(amount).fill("2.5");
+    await send(page);
+    await expect(alert(page)).toContainText(zhText("change.unknown"));
+    await submit(page).click();
+    await expect(done(page)).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(state.stored.size).toBe(1);
+  });
+
   test("whose key the server holds for another request stops: nothing more is sent, and the page shows what is true", async ({
     page,
   }) => {
@@ -88,11 +140,13 @@ test.describe("a grant whose answer is lost", () => {
     expect(sent).toHaveLength(2);
     expect(new Set(sent.map((grant) => grant.key)).size).toBe(1);
 
+    // the dialog's own button is the last of the two named Close
     await dialog(page)
-      .getByRole("button", { name: zhText("change.check") })
+      .getByRole("button", { name: zhText("change.close") })
+      .last()
       .click();
     await expect(dialog(page)).toHaveCount(0);
-    // the first try was done: the page fetched the account again and shows the one grant
+    // the page fetched the account again, which here shows the one grant (it cannot prove a try was not done)
     await expect(page.getByText("$14.50").first()).toBeVisible();
     expect(sent).toHaveLength(2);
   });

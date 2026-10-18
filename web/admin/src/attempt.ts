@@ -37,14 +37,16 @@ export function failed<Request>(
   }
   // Once the result is unknown, no other answer proves the first try was not done (a rate limit or a lost session is
   // given before the server looks at the key), so the request stays the one to send until it succeeds.
-  if (from.state === "unknown" || mayHaveBeenDone(error)) {
+  if (from.state === "unknown" || !refused(error)) {
     return { state: "unknown", key: from.key, request };
   }
   // Refused before anything was done: the person may change the request, which makes it another change with its own key.
   return opened(newKey());
 }
 
-// No answer, or a server failure: the change may have been done.
-function mayHaveBeenDone(error: unknown) {
-  return error instanceof ApiError && (error.status === 0 || error.status >= 500);
+// Only the server's own refusal, a 4xx with its error body, proves the change was not done. No answer, a server
+// failure, a response that could not be read (a proxy's page after the change was made) and a success without its
+// result all leave it possible that it was.
+function refused(error: unknown) {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
 }
