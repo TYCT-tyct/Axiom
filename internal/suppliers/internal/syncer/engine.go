@@ -38,16 +38,8 @@ type Settings struct {
 	Jitter func(time.Duration) time.Duration
 	// MaxPages bounds the pages one round reads; the pass continues in the next.
 	MaxPages int
-	// LowBalance is the balance under which BalanceLow is sent; Reserve is held back from a routable balance.
-	LowBalance, Reserve adapter.Amount
-	// DrainLimit and Grace are the waits of a removal: for attempts in flight, and for late charge records.
-	DrainLimit, Grace time.Duration
-	// CatchUp is how close to the removal's start Through must come: an adapter keeps a short distance from the present.
-	CatchUp time.Duration
-	// CatchUpAlert is how long a removal may spend catching up on the charge records before it sends an alert. The read
-	// has no bound of its own and a large backlog is read window by window, so without this a removal would wait quietly.
-	// It is measured from RemovalAt, so a removal that waits for attempts in flight first includes that wait (DrainLimit).
-	CatchUpAlert time.Duration
+	// LowBalance is the balance under which BalanceLow is sent.
+	LowBalance adapter.Amount
 }
 
 // Defaults are the design's values.
@@ -56,8 +48,7 @@ func Defaults() Settings {
 		Interval:    [numTasks]time.Duration{time.Minute, 5 * time.Minute, 5 * time.Minute, 2 * time.Minute},
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
 		MaxPages:   50,
-		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute, CatchUp: 2 * time.Minute,
-		CatchUpAlert: 30 * time.Minute,
+		LowBalance: "5",
 	}
 }
 
@@ -214,7 +205,7 @@ func (e *Engine) balance(ctx context.Context, c *Commit) error {
 		if s.Funding != acc.Funding {
 			c.Events = append(c.Events, Event{Kind: FundingChanged, Old: fundingName(s.Funding), New: fundingName(acc.Funding)})
 		}
-		if was, now := rat(s.Balance).Cmp(rat(e.set.Reserve)) > 0, rat(acc.Balance).Cmp(rat(e.set.Reserve)) > 0; was != now {
+		if was, now := rat(s.Balance).Sign() > 0, rat(acc.Balance).Sign() > 0; was != now {
 			c.Events = append(c.Events, Event{Kind: BalanceCrossed, Old: string(s.Balance), New: string(acc.Balance), Why: map[bool]string{true: "above", false: "below"}[now]})
 		}
 	}

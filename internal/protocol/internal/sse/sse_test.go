@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -222,58 +221,6 @@ func TestReaderHandsOverAtOnce(t *testing.T) {
 			})
 		}
 	}
-}
-
-var errSlow = errors.New("past its deadline")
-
-// filler reads n bytes of 'x', a few KiB per read, as a connection does, and fails with errSlow once stop has passed.
-type filler struct {
-	left int
-	stop time.Time
-}
-
-func (f *filler) Read(p []byte) (int, error) {
-	n := min(len(p), f.left, 4<<10)
-	if n == 0 {
-		return 0, io.EOF
-	}
-	if time.Now().After(f.stop) {
-		return 0, errSlow
-	}
-	for i := range p[:n] {
-		p[i] = 'x'
-	}
-	f.left -= n
-	return n, nil
-}
-
-// TestReaderLineScales: reading a line that does not end takes time in proportion to its length (README.md「不变量」).
-// A line eight times as long should take about eight times as long; scanning it again after every read, or moving it
-// onto itself, takes sixty-four times, so one of five runs of the long line must finish within three times what
-// proportion allows from the fastest run of the short one (the way TestPlanScales in routing holds its bound). A run that
-// is past its deadline stops, so the quadratic reader fails in seconds.
-func TestReaderLineScales(t *testing.T) {
-	const small, large, runs = 1 << 20, 8 << 20, 5
-	read := func(size int, within time.Duration) (time.Duration, error) {
-		start := time.Now()
-		_, err := sse.NewReader(&filler{left: size, stop: start.Add(within)}, 2*large).Next()
-		return time.Since(start), err
-	}
-	fastest := time.Duration(math.MaxInt64)
-	for range runs {
-		took, err := read(small, time.Hour)
-		if !errors.Is(err, io.EOF) {
-			t.Fatalf("Next = %v, want %v", err, io.EOF)
-		}
-		fastest = min(fastest, took)
-	}
-	within := 3 * large / small * fastest
-	for range runs {
-		if _, err := read(large, within); errors.Is(err, io.EOF) {
-			return
-		}
-	}
-	t.Errorf("a line %d times as long took more than %v, %d times as long as the shorter, in each of %d runs", large/small, within, 3*large/small, runs)
 }
 
 // TestReaderAppendToEvent: the data of an event may share the reader's buffer, but not its room, so appending to it

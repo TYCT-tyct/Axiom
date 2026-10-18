@@ -98,7 +98,7 @@ func withDatabase(ctx context.Context, environ []string, use func(*pg.DB) error)
 	env := config.New(environ)
 	databaseURL := env.Required("AXIOM_DATABASE_URL")
 	startupTimeout := env.Duration("AXIOM_STARTUP_TIMEOUT", defaultStartupTimeout)
-	if err := env.Err(); err != nil {
+	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
 	db, err := openDatabase(ctx, databaseURL, startupTimeout)

@@ -107,7 +107,7 @@ func TestListKeys(t *testing.T) {
 		ids = append(ids, x.makeKey(t, p, accounts.KeySettings{Name: name}))
 	}
 	x.inAccount(t, p, func(tx pg.Tx) error {
-		if err := x.s.DisableKey(t.Context(), tx, system, ids[0]); err != nil {
+		if err := disableKey(t.Context(), tx, x.s, ids[0]); err != nil {
 			return err
 		}
 		return x.s.DeleteKey(t.Context(), tx, system, ids[1])

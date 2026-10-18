@@ -53,3 +53,18 @@ func TestBillingCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestBillingCommandInANodeEnvironment: the command runs in a node's own environment (docker compose exec), where the
+// node's variables are set too: only an invalid variable it reads is a fault.
+func TestBillingCommandInANodeEnvironment(t *testing.T) {
+	database := "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App
+	run := func(extra ...string) error {
+		return billingCommand(t.Context(), append([]string{database}, extra...), []string{"unknown-items"}, &bytes.Buffer{})
+	}
+	if err := run("AXIOM_ADMIN_ADDR=127.0.0.1:8082", "AXIOM_PUBLIC_ADDR=:8080"); err != nil {
+		t.Errorf("a node's environment: %v", err)
+	}
+	if err := run("AXIOM_STARTUP_TIMEOUT=soon"); err == nil || !strings.Contains(err.Error(), "AXIOM_STARTUP_TIMEOUT") {
+		t.Errorf("an invalid variable it reads: %v, want it named", err)
+	}
+}

@@ -117,24 +117,36 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 	return ErrOverloaded, false
 }
 
+// toolNames are what a client calls a server tool in each format, which is not the catalog's name for its item: the
+// refusal is read by the client, who looks for that word in its request. Chat has no code tool, and its search is the
+// web_search_options field.
+var toolNames = map[protocol.Format]map[catalog.Item]string{
+	protocol.Messages:  {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_execution tool"},
+	protocol.Responses: {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_interpreter tool"},
+	protocol.Chat:      {catalog.ItemWebSearch: "the web_search_options setting"},
+}
+
 // unbounded tells a client what to do about a server tool it enabled without a limit on its uses: write the limit where
 // the format has a field for it (Messages' web_search has max_uses, Responses has max_tool_calls), and where it has none
-// (Chat's tools, Messages' code_execution) say the tool is not supported yet in that format: no request there can be
-// served, so asking for a limit would send the client looking for a field that does not exist.
+// (Chat's search, Messages' code_execution) say the tool is not supported yet in that format: no request there can be
+// served, so asking for a limit would send the client looking for a field that does not exist. A tool this cannot name
+// is "a server tool".
 func unbounded(f protocol.Format, err error) *Refusal {
-	var tool string
+	var item catalog.Item
+	name := "a server tool"
 	if u, ok := errors.AsType[*billing.UnboundedError](err); ok {
-		tool = u.Item.String()
+		item = u.Item
+		if n, ok := toolNames[f][item]; ok {
+			name = n
+		}
 	}
 	switch {
 	case f == protocol.Responses:
-		return invalid("the " + tool + " tool is enabled without a limit on its uses, and this model has no default one: " +
-			"set max_tool_calls")
-	case f == protocol.Messages && tool == catalog.ItemWebSearch.String():
-		return invalid("the web_search tool is enabled without a limit on its uses, and this model has no default one: " +
-			"set max_uses on the tool")
+		return invalid(name + " is enabled without a limit on its uses, and this model has no default one: set max_tool_calls")
+	case f == protocol.Messages && item == catalog.ItemWebSearch:
+		return invalid(name + " is enabled without a limit on its uses, and this model has no default one: set max_uses on the tool")
 	}
-	return invalid("the " + tool + " tool is not supported yet in this format for this model, which has no default limit on its uses")
+	return invalid(name + " is not supported yet in this format for this model, which has no default limit on its uses")
 }
 
 var limitSources = map[billing.Source]string{
