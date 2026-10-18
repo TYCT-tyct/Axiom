@@ -37,7 +37,7 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 | `Admission` | accounts 的 `Admission` | 只取账户、站点、预设 ID、key 可用的模型 |
 | `Endpoint` | suppliers（分组 × 模型、凭证余额、出口数）、quality（熔断、健康度、质量、置信度、吞吐、延迟、工具错误率、实测取消）、catalog（最快输出速度 `OutputSpeed`、可上报的计费项 `Reports`）、billing（价格版本；`UnknownItem` 来自 `billing.UnknownItems`） | 快照重建时从各处合并成一份 |
 | `Failure`、`Scope` | suppliers 的 `Failure`、`Scope`（在 `suppliers/internal/adapter`，顺序相同） | 调用处转换 |
-| `Endpoint.Target` | suppliers 的端点（`upstream_name`、可用格式）加 catalog 的模型规格（推理的写法、系统消息的位置等） | 还没有谁组装：suppliers 的 `ListRoutable` 没有取 `upstream_name`，模型规格的这些字段 catalog 还没有；空的 `Target.Model` 会让尝试发出 `"model":""`，所以组装快照的代码必须填。`Target.Streams` 由 `Plan` 按 `Endpoint.Streams` 填，所以快照也要给对 |
+| `Endpoint.Target` | suppliers 的 `Routable`（`Upstream` 是发给上游的模型名，`Formats` 是这个端点能用的调用格式，`Schedule` 是成本计划）、catalog 的 `Model.Serving()`（`Context`、`MaxOutput`、`Streams`、`Abilities`）加模型规格里的其余字段（推理的写法、系统消息的位置等） | 前半已能组装：`Service.Routable()` 给出上游名字、模型、格式、成本计划和这家供应商的 `Streams`/`Cancels`（suppliers README 的「调用面」），`Model.Serving()` 给出上下文、输出上限、流式和能力名（catalog README 的 `spec` 一条；能力名换成 `protocol.Capabilities` 的位在这一侧做）。**还没组装**：其余 `Target` 字段（`Thinking`、`MidSystem`、`EncryptedReasoning` 等）catalog 的 spec 还没有，随组装快照的代码一起加；空的 `Target.Model` 会让尝试发出 `"model":""`，所以组装时必须填 |
 | `PriceRef` | billing 的价格版本 | 版本号加锁定的 `catalog.Schedule`，正是 `billing.Quotable.Price` 要的 |
 
 ## 决策与理由

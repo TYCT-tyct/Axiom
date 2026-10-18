@@ -11,6 +11,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -21,6 +22,14 @@ import (
 // ErrLeaseHeld is Acquire's error when another node holds the supplier's lease. It is not a failure: that node is
 // syncing the supplier.
 var ErrLeaseHeld = errors.New("persist: another node holds the supplier's lease")
+
+// Catalog is the catalog the projection maps an upstream name by: *catalog.Catalog is one. A node asks it for the
+// snapshot before every commit, and it loads a new one when the copy it holds has gone stale, so that a model taken down
+// in the catalog is mapped, and taken out of routing, by the next round.
+type Catalog interface {
+	Current() (*catalog.Snapshot, error)
+	Refresh(ctx context.Context) error
+}
 
 // Config is what a node needs to take leases.
 type Config struct {
@@ -34,6 +43,9 @@ type Config struct {
 	// committing loses it after this long. Now is the clock; a lease runs out by the clock of the node that looks.
 	LeaseTTL time.Duration
 	Now      func() time.Time
+	// Catalog says what an upstream name is. It is required: without it every model would wait in the queue of names to
+	// map and every endpoint would be taken out of routing.
+	Catalog Catalog
 }
 
 // Node takes leases for one process.
@@ -48,6 +60,8 @@ func New(cfg Config) (*Node, error) {
 		return nil, errors.New("persist: the node needs a name")
 	case cfg.LeaseTTL <= 0:
 		return nil, errors.New("persist: the lease needs a positive duration")
+	case cfg.Catalog == nil:
+		return nil, errors.New("persist: the catalog that maps upstream names is required")
 	}
 	return &Node{cfg}, nil
 }

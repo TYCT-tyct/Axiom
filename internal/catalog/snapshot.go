@@ -70,6 +70,8 @@ type Model struct {
 	Rev          int64
 	spec         string // the baseline's JSON, kept as a string so no caller can change what a snapshot holds
 	reportable   Reportable
+	serving      Serving
+	serves       bool // the spec declares everything Serving reads
 }
 
 // Spec is a copy of the baseline's JSON.
@@ -77,6 +79,59 @@ func (m Model) Spec() []byte { return []byte(m.spec) }
 
 // Reportable is what the upstream may report for the model, from its spec, for the listing gate.
 func (m Model) Reportable() Reportable { return m.reportable }
+
+// Ability is a feature a model has that a request may need: what protocol's Capabilities are the bits of. The names are
+// the spec's, and protocol turns them into its bits when a routing snapshot is built (README.md「规格」).
+type Ability uint8
+
+// The abilities, in the order stored spec lists name them.
+const (
+	AbilityTools Ability = iota
+	AbilityImages
+	AbilityDocuments
+	AbilityReasoning
+	AbilityPromptCache
+	AbilityStructuredOutput
+	AbilityWebSearch
+	AbilityCodeExecution
+	NumAbilities
+)
+
+// abilityNames are the abilities' names in a spec, so they never change.
+var abilityNames = [NumAbilities]string{
+	"tools", "images", "documents", "reasoning", "prompt_cache", "structured_output", "web_search", "code_execution",
+}
+
+func (a Ability) String() string { return abilityNames[a] }
+
+// ParseAbility returns the ability a spec's name denotes: the inverse of Ability.String.
+func ParseAbility(name string) (Ability, error) { return lookup[Ability](abilityNames[:], name) }
+
+// AbilitySet is a set of abilities.
+type AbilitySet = set[Ability]
+
+// A seventeenth ability would have no bit, as with the items.
+var _ [16 - NumAbilities]struct{}
+
+// Serving is what an endpoint of a model must offer before routing sends requests to it (docs/domains/routing.md
+// 「一个请求的路由步骤」). It is read from the model's spec, never guessed: a spec that does not declare these says
+// nothing about them, which is not the same as saying they are zero.
+type Serving struct {
+	Context   int64 // the most tokens a request may take, input plus output
+	MaxOutput int64 // the model's output limit, also its default
+	Streams   bool  // the vendor streams the model's replies
+	Abilities AbilitySet
+}
+
+// Serving reads the spec keys an endpoint needs. ok is false unless the spec declares all of them: an endpoint whose
+// model does not say how much it takes must not be routed to, and a plausible default would make it routable with the
+// wrong limit. It is all of them or none, so a caller that ignores ok cannot act on half a reading.
+func (m Model) Serving() (Serving, bool) {
+	if !m.serves {
+		return Serving{}, false
+	}
+	return m.serving, true
+}
 
 // ReferencePrice is the current reference price of a model in one currency.
 type ReferencePrice struct {
