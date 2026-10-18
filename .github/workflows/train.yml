@@ -1,0 +1,93 @@
+# The merge train: lands PRs labelled `queue` in batches that were built together (CONTRIBUTING.md「合并队列」). The logic
+# is scripts/train.py; this file only says when it runs and what it may touch. Not a required check: it posts the
+# required `train` status itself.
+#
+# pull_request_target runs this file and the scripts as they are on the PR's base branch, with a write token, so no job
+# here checks out or runs the PR's code. Assembly only merges the PRs' commits; each train's build is a separate ci.yml
+# run on the train branch with ci.yml's read-only token, the same code-running model as a PR's own build. Only people
+# who can label PRs (triage access or more) can queue one, and PRs from forks are never taken.
+name: train
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # picks up PRs whose checks went green after they were labelled, and resumes a stopped landing
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: assemble, build, bisect and eject, but post no statuses and merge nothing
+        type: boolean
+        default: false
+      base:
+        description: the branch trains land on
+        type: string
+        default: main
+      prs:
+        description: dry run only, the PR numbers to consider (comma-separated); their own checks are reported, not required
+        type: string
+        default: ""
+      precheck:
+        description: run the queue-time check for this PR number instead of a train
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  # When a PR is queued, try it against main and the PRs ahead of it at once, so a conflict reaches its author before
+  # a train is assembled; it has its own group because trains run up to an hour
+  precheck:
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.label.name == 'queue') ||
+      (github.event_name == 'workflow_dispatch' && inputs.precheck != '')
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    concurrency: train-precheck-${{ github.event.pull_request.number || inputs.precheck }}
+    permissions:
+      contents: read
+      issues: write # labels
+      pull-requests: write # comments
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; the base branch, never the PR's code
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/train.py --base "$BASE" precheck "$NUMBER"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.ref || inputs.base }}
+          NUMBER: ${{ github.event.pull_request.number || inputs.precheck }}
+
+  train:
+    # Trains start by themselves only for the default branch; a dispatch names any base (rehearsals use a scratch one)
+    if: >-
+      (github.event_name == 'schedule') ||
+      (github.event_name == 'workflow_dispatch' && inputs.precheck == '') ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       (github.event.label.name == 'queue' || github.event.label.name == 'hotfix'))
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    # Waiting on builds: a passing train takes one build (20-25 minutes), a failing one about log3(N) more rounds
+    timeout-minutes: 300
+    # One train per base at a time; a run that waits replaces an older waiting one, which is fine: every run reads the
+    # whole queue, and the landing state lives in the repository (train/<base>/land), not in the run
+    concurrency:
+      group: train-${{ inputs.base || 'main' }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # push train branches; merge
+      pull-requests: write # merge, comment
+      issues: write # labels; the alarm issue
+      statuses: write # the train status on PR heads, train/verified on the train
+      actions: write # dispatch ci.yml, rerun a flaky build, read its log, cancel a stale one
+      checks: read # the PRs' own checks
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/train.py --base "$BASE" run $DRY_RUN --prs "$PRS"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ inputs.base || 'main' }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          PRS: ${{ inputs.prs }}
+          LANE_SIZE: 2 # builds the lane runs at once: axiom-t1 and axiom-t2 carry the axiom-train label (RUNS_ON_TRAIN)

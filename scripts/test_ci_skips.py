@@ -47,7 +47,7 @@ class NeedsDeployCheck(unittest.TestCase):
     def test_only_clearly_irrelevant_files_skip_it(self):
         for paths in (["docs/a.md"], ["README.md", "AGENTS.md"], ["internal/x/x_test.go"], ["cmd/axiom/admin_test.go"],
                       ["internal/x/testdata/sample.sse"], [".github/workflows/ci.yml"],
-                      ["scripts/test_ci_skips.py", "scripts/ci_skips.py", "scripts/check_scope.py",
+                      ["scripts/test_ci_skips.py", "scripts/ci_skips.py", "scripts/train.py", "scripts/check_scope.py",
                        "scripts/workflow/check_docs.py", "scripts/ci/runner-host.sh"],
                       ["web/e2e/admin-access.spec.ts", "web/playwright.config.ts"]):
             with self.subTest(paths=paths):
