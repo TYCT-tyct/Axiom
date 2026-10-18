@@ -1384,7 +1384,7 @@ export interface components {
             tier_id?: components["schemas"]["TierId"];
             /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
             account_id?: components["schemas"]["AccountId"];
-            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. One whose target and audience are those of a rule the site keeps, and which replaces nothing, is refused: the site holds one rule for each, and the stored one would price the models (422, pointing at `replaces_rule_id`). */
+            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };
@@ -2755,6 +2755,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };

@@ -1357,6 +1357,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
 components:
@@ -2340,9 +2341,11 @@ components:
           allOf: [{$ref: "#/components/schemas/AccountId"}]
         rule:
           description: >-
-            A rule to add, or to put in place of `replaces_rule_id`, for this preview only. One whose target and
-            audience are those of a rule the site keeps, and which replaces nothing, is refused: the site holds one rule
-            for each, and the stored one would price the models (422, pointing at `replaces_rule_id`).
+            A rule to add, or to put in place of `replaces_rule_id`, for this preview only. The site holds one rule
+            for each target and audience, and the stored one would price the models, so a rule that would sit beside
+            another stored rule with the same target and audience is refused: a rule to add, because it would be a second
+            rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule
+            other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`).
           allOf: [{$ref: "#/components/schemas/PricingRuleInput"}]
         replaces_rule_id: {$ref: "#/components/schemas/Uuid"}
     PricingPreviewRow:
