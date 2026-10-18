@@ -322,10 +322,14 @@ func (x *Executor) log(t trail, o billing.Outcome, f billing.Final, end time.Tim
 	}
 }
 
+// noConsent is the agreement version of a record made before any user agreement exists to name: the call log refuses a
+// record without one, and "none" says so instead of naming a version nobody agreed to. Training is not allowed then.
+const noConsent = "none"
+
 // recordOf is the call log's record of one call: the request, the route it took, its attempts, and what the ledger
 // charged it. What the gateway does not know is left empty rather than guessed: the client's own session and subagent
-// identifiers, the language of the request, the consent it was made under, and the end user, which is the site's to
-// hash. The first token is not measured yet, so every attempt records none.
+// identifiers, the language of the request, and the end user, which is the site's to hash. The first token is not
+// measured yet, so every attempt records none.
 func recordOf(t trail, o billing.Outcome, f billing.Final, end time.Time) observability.CallRecord {
 	c := t.call
 	rec := observability.CallRecord{
@@ -334,6 +338,7 @@ func recordOf(t trail, o billing.Outcome, f billing.Final, end time.Time) observ
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
 		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,
 		Model: c.Request.Model, SessionID: "", SubagentID: "", ClientApp: "", Language: "",
+		Class: "chat", ConsentVersion: noConsent,
 		Usage:       usageOf(f),
 		ServiceTier: tierOf(f),
 		// The charge is what the floor let the user pay, and zero is a call that was waived; the cost is what the
