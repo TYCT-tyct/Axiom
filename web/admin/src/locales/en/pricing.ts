@@ -25,7 +25,7 @@ export default {
     endpoint: "One endpoint",
     source_type: "One source type",
   },
-  audience: { all: "Everyone", tier: "One tier", account: "One account" },
+  audience: { all: "Everyone", tier: "One tier (not yet available)", account: "One account (not yet available)" },
   describe: {
     markup: "Cost plus {{percent}}%",
     margin: "{{percent}}% margin",

@@ -96,12 +96,9 @@ func (a adminAPI) ListPricingRules(ctx context.Context, _ adminapi.ListPricingRu
 	return adminapi.ListPricingRules200JSONResponse(list), nil
 }
 
-// checkSubjects refuses a rule for a tier or an account the main site lacks, or a model or an author the catalog lacks:
-// an ID with a typo would price nothing, and quietly.
-func (a adminAPI) checkSubjects(ctx context.Context, site accounts.Site, in billing.RuleInput) error {
-	if err := a.checkAudience(ctx, site, in.Audience); err != nil {
-		return err
-	}
+// checkSubjects refuses a rule for a model or an author the catalog lacks: an ID with a typo would price nothing, and
+// quietly. (Rules for a tier or an account, which would be checked against the site, are refused by billing for now.)
+func (a adminAPI) checkSubjects(ctx context.Context, in billing.RuleInput) error {
 	switch in.Target.Kind {
 	case "model":
 		id, err := modelIDOf(in.Target.ID)
@@ -122,35 +119,11 @@ func (a adminAPI) checkSubjects(ctx context.Context, site accounts.Site, in bill
 	return nil
 }
 
-// checkAudience refuses a rule for a tier or an account the site lacks.
-func (a adminAPI) checkAudience(ctx context.Context, site accounts.Site, audience billing.Selector) error {
-	return a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
-		switch audience.Kind {
-		case "tier":
-			return a.checkTier(ctx, tx, site, audience.ID)
-		case "account":
-			return a.checkAccount(ctx, tx, site, audience.ID)
-		}
-		return nil
-	})
-}
-
+// checkTier refuses a tier the site lacks, for a preview of what that tier pays.
 func (a adminAPI) checkTier(ctx context.Context, tx pg.Tx, site accounts.Site, id string) error {
 	tiers, err := a.accounts.Tiers(ctx, tx, site.ID)
 	if err == nil && !slices.ContainsFunc(tiers, func(t accounts.Tier) bool { return t.ID.TypeID() == id }) {
-		return unprocessable("the rule names a tier the site lacks")
-	}
-	return err
-}
-
-func (a adminAPI) checkAccount(ctx context.Context, tx pg.Tx, site accounts.Site, id string) error {
-	parsed, err := accounts.ParseAccountID(id)
-	if err != nil {
-		return unprocessable("the rule names an account the site lacks")
-	}
-	account, err := a.accounts.Account(ctx, tx, parsed)
-	if errors.Is(err, accounts.ErrNotFound) || err == nil && account.Site != site.ID {
-		return unprocessable("the rule names an account the site lacks")
+		return unprocessable("the preview names a tier the site lacks")
 	}
 	return err
 }
@@ -341,7 +314,7 @@ func (a adminAPI) checkedRuleInput(ctx context.Context, site accounts.Site, rule
 	if err := in.Check(site.Currency); err != nil {
 		return in, ruleProblem(err)
 	}
-	return in, a.checkSubjects(ctx, site, in)
+	return in, a.checkSubjects(ctx, in)
 }
 
 // withoutReplaced is rules less the one replaces names, or rules when it names none.
@@ -382,7 +355,7 @@ func (a adminAPI) CreatePricingRule(ctx context.Context, request adminapi.Create
 	if err := in.Check(site.Currency); err != nil {
 		return nil, ruleProblem(err)
 	}
-	if err := a.checkSubjects(ctx, site, in); err != nil {
+	if err := a.checkSubjects(ctx, in); err != nil {
 		return nil, err
 	}
 	rule, replayed, err := idempotently(ctx, a.db, "createPricingRule", request.Params.IdempotencyKey, request.Body,
@@ -416,7 +389,7 @@ func (a adminAPI) UpdatePricingRule(ctx context.Context, request adminapi.Update
 	if err := in.Check(site.Currency); err != nil {
 		return nil, ruleProblem(err)
 	}
-	if err := a.checkSubjects(ctx, site, in); err != nil {
+	if err := a.checkSubjects(ctx, in); err != nil {
 		return nil, err
 	}
 	rule, replayed, err := idempotently(ctx, a.db, "updatePricingRule", request.Params.IdempotencyKey, []any{request.RuleId, request.Body},

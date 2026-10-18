@@ -62,10 +62,9 @@ func (f pricingFixture) list() []adminapi.PricingRule {
 // and audited with the reason.
 func TestCreatePricingRule(t *testing.T) {
 	f := newPricingFixture(t)
-	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"tier","id":"` + f.tier +
-		`"},"method":{"kind":"cost_plus","margin_ratio":"0.2","fixed_markup":{"output":"0.000001"}},"constraints":{"min_margin_ratio":"0.1"}}`
+	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"cost_plus","margin_ratio":"0.2","fixed_markup":{"output":"0.000001"}},"constraints":{"min_margin_ratio":"0.1"}}`
 	made := f.create(body)
-	if made.Rev != 0 || !made.Enabled || made.Target.Kind != "model" || *made.Target.Id != f.model || *made.Audience.Id != f.tier ||
+	if made.Rev != 0 || !made.Enabled || made.Target.Kind != "model" || *made.Target.Id != f.model || made.Audience.Id != nil ||
 		*made.Method.MarginRatio != "0.2" || *made.Method.FixedMarkup.Output != "0.000001" || *made.Constraints.MinMarginRatio != "0.1" ||
 		time.Since(made.UpdatedAt) > time.Minute {
 		t.Errorf("the rule: %+v", made)
@@ -79,6 +78,15 @@ func TestCreatePricingRule(t *testing.T) {
 	}
 }
 
+// store writes a rule for a target and an audience the way a later release will let an administrator make it, straight
+// into the table, as the superuser: this release refuses to make one.
+func (f pricingFixture) store(targetKind, targetID, audienceKind, audienceID, method string) {
+	f.t.Helper()
+	f.run(`INSERT INTO billing.pricing_rules (id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints)
+		SELECT uuidv7(), id, true, '` + targetKind + `', '` + targetID + `', '` + audienceKind + `', '` + audienceID + `', '` + method + `'::jsonb, '{}'::jsonb
+		FROM accounts.sites WHERE is_main`)
+}
+
 // TestPricingRulesAreListedInTheOrderTheyAreTried: the most specific target first, then the most specific audience.
 func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 	f := newPricingFixture(t)
@@ -87,11 +95,13 @@ func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 		ruleJSON(everything, everything, plus25),
 		ruleJSON(`{"kind":"author","id":"acme"}`, everything, plus25),
 		ruleJSON(model, everything, plus25),
-		ruleJSON(model, `{"kind":"account","id":"`+f.account+`"}`, plus25),
-		ruleJSON(model, `{"kind":"tier","id":"`+f.tier+`"}`, plus25),
 	} {
 		f.create(rule)
 	}
+	// Rules for an account or a tier cannot be made yet (TestPricingRulesForOneAudienceWait), but the order they will be
+	// tried in is already the stored form's, so they are written as a later release will.
+	f.store("model", f.model, "account", f.account, plus25)
+	f.store("model", f.model, "tier", f.tier, plus25)
 	var order []string
 	for _, r := range f.list() {
 		order = append(order, string(r.Target.Kind)+"/"+string(r.Audience.Kind))
@@ -149,14 +159,14 @@ func TestPricingRuleRefusals(t *testing.T) {
 	f := newPricingFixture(t)
 	f.create(ruleJSON(everything, everything, plus25))
 	for _, c := range []struct{ name, rule, pointer string }{
-		{"both ratios", ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`, `{"kind":"cost_plus","markup_ratio":"1","margin_ratio":"0.5"}`), "/rule/method"},
+		{"both ratios", ruleJSON(everything, everything, `{"kind":"cost_plus","markup_ratio":"1","margin_ratio":"0.5"}`), "/rule/method"},
 		{"a negative markup", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"cost_plus","markup_ratio":"-1"}`), "/rule/method/markup_ratio"},
 		{"a multiplier of nothing", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"reference_multiplier","multiplier":"0"}`), "/rule/method/multiplier"},
 		{"a fixed price in another currency", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
 			`{"kind":"fixed","schedule":{"v":1,"currency":"CNY","rates":{"input":"1"}}}`), "/rule/method/schedule/currency"},
 		{"a model ID that is no model's", ruleJSON(`{"kind":"model","id":"nonsense"}`, everything, plus25), "/rule/target/id"},
-		{"a tier the site lacks", ruleJSON(everything, `{"kind":"tier","id":"tier_00000000000000000000000000"}`, plus25), ""},
-		{"an account the site lacks", ruleJSON(everything, `{"kind":"account","id":"acct_00000000000000000000000000"}`, plus25), ""},
+		{"a tier", ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`, plus25), "/rule/audience/kind"},
+		{"an account", ruleJSON(everything, `{"kind":"account","id":"`+f.account+`"}`, plus25), "/rule/audience/kind"},
 		{"a model the catalog lacks", ruleJSON(`{"kind":"model","id":"0198c0a8-0000-7000-8000-000000000009"}`, everything, plus25), ""},
 		{"an author the catalog lacks", ruleJSON(`{"kind":"author","id":"nobody"}`, everything, plus25), ""},
 	} {

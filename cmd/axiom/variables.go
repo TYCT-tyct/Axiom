@@ -11,6 +11,7 @@ const (
 	shutdownTimeoutVar       = "AXIOM_SHUTDOWN_TIMEOUT"
 	masterKeyFileVar         = "AXIOM_MASTER_KEY_FILE"
 	keyHashFileVar           = "AXIOM_KEY_HASH_FILE"
+	identityKeyFileVar       = "AXIOM_IDENTITY_KEY_FILE"
 	hashConcurrencyVar       = "AXIOM_HASH_CONCURRENCY"
 	hashWaitVar              = "AXIOM_HASH_WAIT"
 	trustedProxiesVar        = "AXIOM_TRUSTED_PROXIES"

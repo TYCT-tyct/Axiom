@@ -94,6 +94,7 @@ func TestRefusalOfAnError(t *testing.T) {
 		"a reaped holder":                        {billing.ErrTerminated, 503, "overloaded", false},
 		"a deadline":                             {wrapped(errors.Join(errors.New("x"), context.DeadlineExceeded)), 503, "overloaded", false},
 		"a body Inspect cannot read":             {fmt.Errorf("%w: model is missing", protocol.ErrInvalid), 400, "invalid_request", false},
+		"a server tool with no limit":            {wrapped(fmt.Errorf("%w: web_search", billing.ErrUnbounded)), 400, "invalid_request", false},
 		"a permanent lack of endpoints":          {&routing.NoEndpoint{Reasons: []routing.Excluded{{Reason: routing.NoCandidates}}, Permanent: true}, 404, "no_endpoint", false},
 		"a key not allowed the only model asked": {&routing.NoEndpoint{Reasons: []routing.Excluded{{Reason: routing.NotAllowed}}, Permanent: true}, 404, "model_not_found", false},
 		"an error nobody expected":               {errors.New("boom"), 503, "overloaded", true},

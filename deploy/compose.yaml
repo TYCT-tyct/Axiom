@@ -48,10 +48,13 @@ services:
       postgres: {condition: service_healthy}
     <<: *hardened
 
-  # Makes the two key files the program reads at start (internal/platform/README.md「凭证加密」, internal/accounts/README.md
+  # Makes the three key files the program reads at start (internal/platform/README.md「凭证加密」, internal/accounts/README.md
   # 「格式与哈希」) once, in a volume that lives as long as the database does: the master key seals users' TOTP secrets
-  # and the hashing key makes API key hashes, so losing either with the database kept would lock users out of their
-  # factors and keys. Each file is owned by the program's user and readable by it alone, which the program requires.
+  # and suppliers' credentials, the hashing key makes API key hashes, and the identity key makes the identifiers sent
+  # upstream in place of a client's session and end-user ones. Losing the first two with the database kept would lock
+  # users out of their factors and keys and suppliers out of their credentials; losing the third would cost the
+  # upstream's prompt caches. Each file is owned by the program's user and readable by it alone, which the program
+  # requires.
   keys:
     image: postgres:18.6-alpine # any image with a shell; this one is pulled for the database anyway
     user: root # only to make the files and hand them over
@@ -59,10 +62,10 @@ services:
     command:
       - |
         umask 277
-        for name in master hash; do
+        for name in master hash identity; do
           [ -f /keys/$$name ] || echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
         done
-        chown 65532:65532 /keys/master /keys/hash
+        chown 65532:65532 /keys/master /keys/hash /keys/identity
     volumes:
       - keys:/keys
     <<: *hardened
@@ -72,12 +75,13 @@ services:
     build: .
     image: ${DEPLOY_IMAGE:-axiom:local}
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 45s # longer than AXIOM_SHUTDOWN_TIMEOUT (30s by default), so a graceful shutdown is not cut off
+    stop_grace_period: 75s # AXIOM_SHUTDOWN_TIMEOUT (30s by default), then the drain of calls and settlements (15s + 5s), the queue and the recorder, with a margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
+      AXIOM_IDENTITY_KEY_FILE: /keys/identity
     volumes:
       - keys:/keys:ro
     ports:

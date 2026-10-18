@@ -14,6 +14,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -76,6 +77,9 @@ type ExecDeps struct {
 	// IdentitySecret derives the identifiers sent upstream in place of the client's session and end-user ones; it is
 	// the same for every node, or a session's cache would not follow it from one to another.
 	IdentitySecret []byte
+	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
+	// observation and a call never depends on it; a node always gives it.
+	Records *observability.Recorder
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -171,6 +175,7 @@ type session struct {
 	logger   *slog.Logger
 
 	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
+	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency platform.Currency       // of the last attempt's price
 	skips    skips
 	last     *attempt // the attempt in progress, or the last one made
@@ -231,7 +236,10 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	default:
 		s.finish(e.relay.Fail(e.err, fin))
 	}
-	s.handedOff = s.x.settled(ctx, s.c, o, err)
+	s.handedOff = s.x.settled(ctx, s, o, err)
+	if err == nil {
+		s.x.log(ctx, s.trail(), o, f, time.Now())
+	}
 }
 
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
@@ -289,8 +297,11 @@ func (s *session) settleOnPanic(ctx context.Context) {
 	}
 	if !s.concluded {
 		o := billing.Outcome{Attempts: s.ends}
-		_, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
-		s.handedOff = s.x.settled(ctx, s.c, o, err)
+		f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
+		s.handedOff = s.x.settled(ctx, s, o, err)
+		if err == nil {
+			s.x.log(ctx, s.trail(), o, f, time.Now())
+		}
 	}
 	panic(p)
 }

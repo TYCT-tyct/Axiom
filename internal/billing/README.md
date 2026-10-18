@@ -177,8 +177,8 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 **持有者**是进程每次启动生成的 UUID，一行 `(holder, expires_at, reaped_at)`；时间比较一律用取锁之后的 `clock_timestamp()`，不用事务开始时的 `now()`。默认值和它们之间的关系见 [gateway 的「超时与限额」](../gateway/README.md#超时与限额)。
 
 - **写入栅栏**：准入、追加在锁余额行之后，以 `FOR KEY SHARE` 读自己的持有者行，要求 `reaped_at IS NULL AND expires_at > clock_timestamp()`。
-- **实现**：`Start` 登记持有者，`Heartbeat`、`Reap` 在平台范围的事务里执行；心跳"用连接池外的专用连接"还没有，`pg` 不交出连接，随 `Run` 一起做。
-- **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：进程改为未就绪、换新持有者。心跳和回收用连接池外的一条专用连接。
+- **实现**：`Start` 登记持有者，`Heartbeat`、`Reap` 在平台范围的事务里执行；`Run` 把心跳和清理放在各自的 goroutine 里，每次心跳有以心跳周期为限的期限；心跳"用连接池外的专用连接"还没有，`pg` 不交出连接，见 [Issue #217](https://github.com/TYCT-tyct/Axiom/issues/217)。
+- **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：`Run` 返回 `ErrReaped`，节点退出重启、换新持有者。心跳和回收将来用连接池外的一条专用连接（#217），现在与调用共用连接池。
 - **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。
 - **截止时间**：每笔预留带 `deadline`（准入 + 单次调用最长 + 结算宽限）。过了截止时间仍挂起的，不论持有者是否活着都由清理处理（漏 `Settle`、永久性错误、panic）。节点身份只作诊断。
 

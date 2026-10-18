@@ -3,6 +3,7 @@ package main
 import (
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -157,9 +158,8 @@ func TestPreviewPricingAudience(t *testing.T) {
 	if other == "" {
 		t.Fatalf("the tiers: %+v; want one besides %s", tiers.Data, f.tier)
 	}
-	f.create(ruleJSON(everything, `{"kind":"tier","id":"`+other+`"}`, timesTwo))
-	f.create(ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`,
-		`{"kind":"reference_multiplier","multiplier":"5","currency_conversion":"face"}`))
+	f.store("all", "", "tier", other, timesTwo)
+	f.store("all", "", "tier", f.tier, `{"kind":"reference_multiplier","multiplier":"5","currency_conversion":"face"}`)
 	f.create(ruleJSON(everything, everything, `{"kind":"reference_multiplier","multiplier":"4","currency_conversion":"face"}`))
 	in := func(audience string) string {
 		rows := f.preview(`{"model_ids":["` + f.model + `"]` + audience + `}`)
@@ -230,4 +230,32 @@ func saleOf(row adminapi.PricingPreviewRow) string {
 		return ""
 	}
 	return *row.Sale.Rates.Input
+}
+
+// TestPricingRulesForOneAudienceWait: this release sells one price list, so saving a rule for one account or one tier,
+// by creating it or by changing a rule into it, and previewing one, are refused as 422 pointing at the audience, and
+// nothing is stored. Rules there already (a later release's, written straight into the table) still list and still price
+// a preview's audience.
+func TestPricingRulesForOneAudienceWait(t *testing.T) {
+	f := newPreview(t)
+	made := f.create(ruleJSON(everything, everything, timesTwo))
+	for name, audience := range map[string]string{
+		"a tier":     `{"kind":"tier","id":"` + f.tier + `"}`,
+		"an account": `{"kind":"account","id":"` + f.account + `"}`,
+	} {
+		rule := ruleJSON(`{"kind":"author","id":"acme"}`, audience, timesThree)
+		for what, rec := range map[string]*httptest.ResponseRecorder{
+			"creating":   f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+rule+`,"reason":"r"}`, newKey()),
+			"changing":   f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+rule+`,"reason":"r"}`, newKey()),
+			"previewing": f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+rule+`}`, as(f.s)),
+		} {
+			expectAdmin(t, what+" a rule for "+name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+			if fields := errorDetailOf(t, rec).Fields; fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/rule/audience/kind" {
+				t.Errorf("%s a rule for %s: fields %v, want /rule/audience/kind", what, name, fields)
+			}
+		}
+	}
+	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "1" {
+		t.Errorf("%s rules after the refusals, want the one for everyone", got)
+	}
 }

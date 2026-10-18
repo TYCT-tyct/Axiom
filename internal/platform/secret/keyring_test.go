@@ -94,3 +94,19 @@ func TestKeyFileLineEndings(t *testing.T) {
 		loadKeys(t, content)
 	}
 }
+
+// TestLoadSecretIsTheNewestKey: the secret a node derives identifiers from is the newest key of its file, whatever order
+// the lines are in, and a file that is no key file names the variable that chose it.
+func TestLoadSecretIsTheNewestKey(t *testing.T) {
+	got, err := secret.LoadSecret("AXIOM_IDENTITY_KEY_FILE", keyFile(t, keyLine(3, 3)+keyLine(7, 7)+keyLine(5, 5)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("\a", 32); string(got) != want {
+		t.Errorf("the secret is %q, want version 7's key %q", got, want)
+	}
+	if _, err := secret.LoadSecret("AXIOM_IDENTITY_KEY_FILE", filepath.Join(t.TempDir(), "planted-value")); err == nil ||
+		!strings.Contains(err.Error(), "AXIOM_IDENTITY_KEY_FILE") || strings.Contains(err.Error(), "planted-value") {
+		t.Errorf("a missing file gave %v, want an error naming the variable and not the path", err)
+	}
+}

@@ -25,6 +25,7 @@ func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -191,6 +192,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
 		environ := append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		}, c.environ...)
 		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
@@ -333,6 +335,7 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
 		"AXIOM_DATABASE_URL=" + database.App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	served := make(chan error, 1)
 	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
@@ -360,7 +363,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
-		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
 	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("the node started on a taken address")

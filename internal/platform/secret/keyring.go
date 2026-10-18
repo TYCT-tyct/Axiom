@@ -34,6 +34,19 @@ func Load(path string) (*Keyring, error) {
 	return ring, nil
 }
 
+// LoadSecret reads the file variable names, in the keyring's format and with its protection, and returns the newest
+// key: the one a secret a node derives everything from is made of, where the derivation must not change with a stored
+// version (the gateway's identity secret). Rotating it changes every value derived from it, which is why it is a file
+// of its own rather than one of the keyring's.
+func LoadSecret(variable, path string) ([]byte, error) {
+	keys, latest, err := readKeyFile(variable, path)
+	if err != nil {
+		return nil, err
+	}
+	key := keys[latest]
+	return key[:], nil
+}
+
 // readKeyFile reads a protected file of version:base64 lines, each a 32-byte key, and returns the keys by version
 // and the highest version. Errors name variable, the setting that chose the file, and never its path or contents.
 func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {

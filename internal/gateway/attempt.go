@@ -206,6 +206,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
+	s.tries = append(s.tries, try{entry: entry, started: time.Now()})
 	s.currency = entry.Price.Schedule.Currency()
 	s.last = a
 	policy := conn.Policy()

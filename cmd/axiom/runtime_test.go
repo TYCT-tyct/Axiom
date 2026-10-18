@@ -48,7 +48,7 @@ func TestServeChecksTheDatabaseBeforeListening(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		err := serve(ctx, []string{
 			"AXIOM_PUBLIC_ADDR=" + addrs[0], "AXIOM_PROBES_ADDR=" + ops, "AXIOM_DATABASE_URL=" + database.Superuser,
-			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		},
 			slog.New(slog.DiscardHandler))
 		cancel()
