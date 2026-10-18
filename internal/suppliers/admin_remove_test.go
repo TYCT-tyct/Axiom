@@ -94,7 +94,7 @@ func TestRemoveErasesWhatItHolds(t *testing.T) {
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		return tx.QueryRow(ctx, "SELECT detail::text FROM platform.audit_log WHERE action = 'supplier.remove'").Scan(&detail)
 	})
-	if !strings.Contains(detail, `"keys_to_revoke_count":3`) {
+	if !strings.Contains(detail, `"keys_to_revoke_count": 3`) {
 		t.Errorf("the audit entry %s does not count the 3 keys to revoke", detail)
 	}
 	same(t, "the keys to revoke stay on the erased credentials", 3,
