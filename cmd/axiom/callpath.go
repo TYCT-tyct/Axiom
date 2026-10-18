@@ -17,7 +17,6 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
-	"axiom/internal/platform/telemetry"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -70,7 +69,6 @@ type callDeps struct {
 	egress   *egress.Client          //
 	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records  *observability.Recorder // the call log, which the settlements write to
-	tel      *telemetry.Telemetry    //
 	logger   *slog.Logger            //
 }
 
@@ -89,44 +87,22 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
-	gate := gateway.DefaultConfig()
-	limits := d.limits
 	router, err := routing.New(routing.Config{})
 	if err != nil {
 		return callNode{}, err
 	}
-	upstreams, err := suppliers.New(suppliers.Config{
-		DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress,
-	})
+	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress})
 	if err != nil {
 		return callNode{}, err
 	}
-	memory := protocol.NewMemory(nodeMemory)
-	ledger, err := billing.Start(ctx, d.db, pg.PlatformScope(), billing.Config{
-		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
-		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
-		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: d.logger,
-	}, callPath{})
+	ledger, err := startLedger(ctx, d.db, d.logger)
 	if err != nil {
 		return callNode{}, err
 	}
-	executor, err := gateway.NewExecutor(gateway.ExecDeps{
-		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: limits, Memory: memory,
-		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records,
-	})
+	n, err := newCallNode(d, router, upstreams, ledger)
 	if err != nil {
 		return callNode{}, err
 	}
-	handler, err := gateway.NewHandler(gateway.Deps{
-		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger,
-	})
-	if err != nil {
-		return callNode{}, err
-	}
-
 	// What the snapshot is built from, read once before the node is ready: a failure here is a startup failure.
 	if err := upstreams.Reload(ctx); err != nil {
 		return callNode{}, err
@@ -134,9 +110,55 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err := d.catalog.Refresh(ctx); err != nil {
 		return callNode{}, err
 	}
-	var ready = make(chan struct{})
+	ready := make(chan struct{})
+	routes := routeDeps(d, router, upstreams, ready)
+	snap, count, err := routes.Build(ctx)
+	if err != nil {
+		return callNode{}, err
+	}
+	routes.Publish(snap, count)
+	if !count.Routable() {
+		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
+			"answers 404 no_endpoint until each model has a spec and a sale price",
+			"offered", count.Offered, "in_snapshot", count.Endpoints)
+	}
+	n.ready, n.reaped = ready, startLoops(ctx, d, ledger, upstreams, routes)
+	return n, nil
+}
+
+// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
+func startLedger(ctx context.Context, db *pg.DB, logger *slog.Logger) (*billing.Billing, error) {
+	gate := gateway.DefaultConfig()
+	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
+		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
+		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
+		// what no settlement will only once the call cannot still be running.
+		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger,
+	}, callPath{})
+}
+
+// newCallNode makes the executor that runs admitted calls and the handler that admits them.
+func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing) (callNode, error) {
+	memory := protocol.NewMemory(nodeMemory)
+	executor, err := gateway.NewExecutor(gateway.ExecDeps{
+		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
+		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
+		Records: d.records,
+	})
+	if err != nil {
+		return callNode{}, err
+	}
+	handler, err := gateway.NewHandler(gateway.Deps{
+		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
+		Memory: memory, Run: executor.Run, Logger: d.logger,
+	})
+	return callNode{handler: handler, executor: executor}, err
+}
+
+// routeDeps are the sources of the routing snapshot. ready is closed by the first published snapshot that can route.
+func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) gateway.RouteDeps {
 	var once sync.Once
-	routes := gateway.RouteDeps{
+	return gateway.RouteDeps{
 		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable(), nil },
 		Catalog:      d.catalog,
 		Prices:       salePrices(d.db, d.accounts, d.catalog),
@@ -153,19 +175,12 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 			}
 		},
 	}
-	snap, count, err := routes.Build(ctx)
-	if err != nil {
-		return callNode{}, err
-	}
-	routes.Publish(snap, count)
-	if !count.Routable() {
-		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
-			"answers 404 no_endpoint until each model has a spec and a sale price",
-			"offered", count.Offered, "in_snapshot", count.Endpoints)
-	}
+}
 
-	// The loops. The holder's is the only one that can end the node: once it has been reaped nothing this process
-	// writes is fenced in, so it must be restarted with a new one (#205).
+// startLoops starts the loops that keep the call path's inputs fresh. The holder's is the only one that can end the
+// node: once it has been reaped nothing this process writes is fenced in, so it must be restarted with a new one
+// (#205). Its end is what the channel carries.
+func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstreams *suppliers.Service, routes gateway.RouteDeps) <-chan error {
 	reaped := make(chan error, 1)
 	go func() {
 		if err := ledger.Run(ctx); err != nil {
@@ -173,11 +188,13 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		}
 	}()
 	go func() {
-		_ = d.catalog.Run(ctx) // returns only when ctx ends; a failed refresh is logged there and keeps the snapshot
+		if err := d.catalog.Run(ctx); err != nil { // returns only when ctx ends; a failed refresh is logged there
+			d.logger.Error("the catalog's refresh loop ended", "err", err)
+		}
 	}()
 	go reloadEndpoints(ctx, upstreams, d.logger)
 	go routes.Run(ctx)
-	return callNode{handler: handler, executor: executor, ready: ready, reaped: reaped}, nil
+	return reaped
 }
 
 // announceReady reports the node ready once its routing snapshot can route, and stops listening when the node ends.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -51,7 +50,6 @@ type routeFixture struct {
 	prices map[catalog.ModelID]billing.Sold
 	items  []billing.UnknownItem
 
-	mu    sync.Mutex
 	logs  *strings.Builder
 	deps  RouteDeps
 	count Count
@@ -241,10 +239,18 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := plan.Entries[0]
-	// What the snapshot holds of the endpoint is read back through the router's own view: Plan carries only what a
-	// reservation and an attempt need, so the rest is checked where it is written, in endpointOf, by the fields that
-	// reach the plan and by the snapshot's own copy (f.snapshot).
+	f.checkEntry(r, plan.Entries[0])
+	if snap == nil {
+		t.Error("no snapshot")
+	}
+}
+
+// checkEntry: what the snapshot holds of the endpoint is read back through the router's own view: Plan carries only
+// what a reservation and an attempt need, so the rest is checked where it is written, in endpointOf, by the fields that
+// reach the plan.
+func (f *routeFixture) checkEntry(r suppliers.Routable, built routing.Entry) {
+	f.t.Helper()
+	t := f.t
 	if built.Limits.ContextLength != 200000 || built.MaxOutput != 8192 {
 		t.Errorf("context %d, max output %d; want the spec's 200000 and 8192", built.Limits.ContextLength, built.MaxOutput)
 	}
@@ -259,9 +265,6 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	}
 	if built.Target.Model != "upstream-name" || !built.Target.Streams {
 		t.Errorf("target %+v, want the supplier's upstream name and streams", built.Target)
-	}
-	if snap == nil {
-		t.Error("no snapshot")
 	}
 }
 
@@ -394,9 +397,11 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 		},
 	} {
 		d := RouteDeps{
-			Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return nil, nil },
-			Catalog:      f.cat,
-			Prices:       func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return nil, nil },
+			Endpoints: func(context.Context) ([]suppliers.Routable, error) { return nil, nil },
+			Catalog:   f.cat,
+			Prices: func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
+				return map[catalog.ModelID]billing.Sold{}, nil
+			},
 			UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return nil, nil },
 			Router:       f.router, Logger: slog.New(slog.DiscardHandler),
 		}

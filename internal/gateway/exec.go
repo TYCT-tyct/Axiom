@@ -396,7 +396,8 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 		}
 		t := tries[i]
 		out = append(out, observability.AttemptRecord{
-			Seq: platform.AttemptSeq(a.Seq), Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
+			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttempts
+			Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
 			Egress: directEgress, Outcome: outcomeOf(a), StartedAt: t.started, FinishedAt: a.FinishedAt,
 		})
 	}

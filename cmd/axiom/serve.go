@@ -115,10 +115,6 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
 
-	limits, err := nodeLimits()
-	if err != nil {
-		return err
-	}
 	recorder := startRecorder(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
@@ -135,7 +131,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger, limits, recorder)
+	routes, err := console.routes(ctx, db, tel, logger, recorder)
 	if err != nil {
 		return err
 	}
@@ -149,14 +145,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	// rebuild.
 	go announceReady(ctx, routes.calls.ready, &health, logger)
 
-	var stopped error
-	select {
-	case err := <-served:
-		stopped = fmt.Errorf("a listener stopped: %w", err)
-	case err := <-routes.calls.reaped:
-		stopped = fmt.Errorf("this node's holder is gone: %w", err)
-	case <-ctx.Done():
-	}
+	stopped := awaitEnd(ctx, served, routes.calls.reaped)
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
 	// One deadline for the whole shutdown: the calls and their settlements drain after the listeners stop, when no new
 	// one can start, and the recorder drains last.
@@ -165,6 +154,19 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	err = shutdown(ctx, cfg.shutdownTimeout, &health, servers)
 	routes.calls.Drain(ctx)
 	return errors.Join(stopped, err, queue.Stop(ctx), recorder.Close(ctx))
+}
+
+// awaitEnd waits until the node is asked to stop (nil), a listener stops, or the billing loop ends because this node's
+// holder was reaped, and says which of the last two it was.
+func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error) error {
+	select {
+	case err := <-served:
+		return fmt.Errorf("a listener stopped: %w", err)
+	case err := <-reaped:
+		return fmt.Errorf("this node's holder is gone: %w", err)
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 // consoleParts are what the node builds from its configuration before it touches the database: the secrets read from
@@ -221,7 +223,12 @@ func nodeLimits() (*gateway.Backpressure, error) { return gateway.New(gateway.De
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
-	limits *gateway.Backpressure, recorder *observability.Recorder) (nodeRoutes, error) {
+	recorder *observability.Recorder,
+) (nodeRoutes, error) {
+	limits, err := nodeLimits()
+	if err != nil {
+		return nodeRoutes{}, err
+	}
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
@@ -245,7 +252,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// suppliers and the suppliers' sync uses them too (startSync gets its own, in the queue's goroutine).
 	calls, err := startCallPath(ctx, callDeps{
 		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, limits: limits,
-		records: recorder, tel: tel, logger: logger,
+		records: recorder, logger: logger,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
