@@ -294,7 +294,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with the syncing of the suppliers and the ledger's daily check on it. It reaches the
+// startSync starts the queue with supplier syncing, charge reconciliation and the ledger's daily check. It reaches the
 // suppliers through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
@@ -307,6 +307,11 @@ func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egres
 	// is registered here and not with the call path, which starts after the queue).
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return nil, err
+	}
+	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
 		return nil, err
 	}
