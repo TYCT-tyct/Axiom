@@ -7,7 +7,8 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// TestRoutingScopeMatchesByName: each scope an adapter classifies a failure with becomes routing's scope of the same
+// TestRoutingScopeMatchesByName: guards against two cases of routingScope written the wrong way round; a scope left out
+// is stopped by the exhaustive lint and the panic. Each scope an adapter classifies a failure with becomes routing's scope of the same
 // name. The two types are numbered in their own order, so a match by number would send a failure the wrong way.
 func TestRoutingScopeMatchesByName(t *testing.T) {
 	t.Parallel()

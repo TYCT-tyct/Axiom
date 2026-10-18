@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -203,13 +204,19 @@ func BenchmarkPlan(b *testing.B) {
 	}
 }
 
-// TestPlanScales: planning over thirty-two times the candidates does thirty-two times the work, not a thousand, so a
-// change that makes Plan quadratic fails here whatever the machine's load. The work is counted, not timed: the Balanced
-// strategy draws one random number for each candidate it scores, so every candidate must be either left out of the
-// record or drawn for exactly once, at both sizes, and what Plan allocates grows with the candidates by no more than
-// they do. Allocations must not grow beyond a few: Plan's slices are sized once.
+// TestPlanScales: planning over a hundred and twenty-eight times the candidates costs about that many times as much, not
+// sixteen thousand, so a change that makes Plan quadratic fails here whatever the machine's load. Time is the only
+// measure that sees a quadratic pass as cheap as comparing IDs (the mutation in the PR for #107), which neither draws
+// numbers nor allocates, so it is read with a wide margin: linear Plan with its n log n sort measures about 130 to 160,
+// the bar is 1000 and a quadratic pass measures over 10000. Each size is timed over the same number of plans, enough to
+// be at least 2ms at the small size, as some clocks tick too coarsely to time one plan; the fastest of several samples
+// counts, interleaved between the sizes: load only ever adds time, so the minimum is the closest to the true cost.
+// Besides, the scoring is counted: the Balanced strategy draws one random number for each candidate it scores, so every
+// candidate must be either left out of the record or drawn for exactly once, at both sizes. What Plan allocates grows
+// with the candidates by no more than they do, and not beyond a few allocations: Plan's slices are sized once.
 func TestPlanScales(t *testing.T) {
-	const small, large = 25, 800
+	const small, large = 25, 3200
+	t.Run("time", func(t *testing.T) { planTimeRatio(t, small, large) })
 	t.Run("scoring", func(t *testing.T) {
 		for _, n := range []int{small, large} {
 			draws := 0
@@ -237,4 +244,34 @@ func TestPlanScales(t *testing.T) {
 				large, got["large"].Bytes, small, got["small"].Bytes, large/small)
 		}
 	})
+}
+
+// timed is how long reps plans take.
+func timed(h *harness, in routing.Input, reps int) time.Duration {
+	start := time.Now()
+	for range reps {
+		h.plan(in)
+	}
+	return time.Since(start)
+}
+
+// planTimeRatio fails when planning over large candidates takes more than a thousand times as long as over small.
+func planTimeRatio(t *testing.T, small, large int) {
+	const samples = 3
+	hs, ins := candidates(t, small, routing.Config{})
+	hl, inl := candidates(t, large, routing.Config{})
+	reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
+	// also warm both sizes up
+	for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 2*time.Millisecond {
+		timed(hl, inl, 1)
+		reps *= 2
+	}
+	bestSmall, bestLarge := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
+	for range samples {
+		bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
+	}
+	if ratio := float64(bestLarge) / float64(bestSmall); ratio > 1000 {
+		t.Errorf("planning %d candidates takes %.0f times as long as %d (%v against %v for %d plans), want about %d",
+			large, ratio, small, bestLarge, bestSmall, reps, large/small)
+	}
 }

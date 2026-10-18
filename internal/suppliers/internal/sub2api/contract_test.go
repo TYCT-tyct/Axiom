@@ -60,7 +60,7 @@ func TestSuccessWithoutItsMembersIsNotAnEmptyResult(t *testing.T) {
 		"offer":   func(m adapter.Manager) error { _, err := m.Offer(t.Context()); return err },
 		"key":     func(m adapter.Manager) error { _, err := m.KeySecret(t.Context(), "2"); return err },
 		"scan": func(m adapter.Manager) error {
-			_, _, err := m.Charges(t.Context(), m.(adapter.Rescanner).Rescan(epoch.Add(-time.Hour)))
+			_, _, err := m.Charges(t.Context(), lateScan(t))
 			return err
 		},
 	}
@@ -300,4 +300,18 @@ func mustTime(t *testing.T, s string) time.Time {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// lateScan is the position of a pass under way over the hour before epoch, which makes the next Charges ask the supplier.
+func lateScan(t testing.TB) adapter.ScanState {
+	t.Helper()
+	s := scanState{
+		V: 1, Watermark: epoch.Unix(), LastLate: epoch.Unix(), LateEnd: epoch.Unix(),
+		Pass: &pass{Late: true, Start: epoch.Add(-time.Hour).Unix(), End: epoch.Add(-lag).Unix(), Page: 1},
+	}
+	b, err := s.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

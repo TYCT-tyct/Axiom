@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"uuid"
@@ -68,7 +69,7 @@ func (w *world) removeAs(admin *Admin) Supplier {
 
 // TestRemoveErasesWhatItHolds: removing a supplier ends it in one transaction. The sealed login is deleted, every key of
 // its credentials is cleared (a bound one and one still being bound alike) and the credentials are `erased` but still
-// there, the generation rises, and the audit entry lists the keys to revoke without a secret. Removing again changes
+// there, the generation rises, and the audit entry counts the keys to revoke without a secret, and their ids stay on the credential rows. Removing again changes
 // nothing.
 func TestRemoveErasesWhatItHolds(t *testing.T) {
 	t.Parallel()
@@ -93,11 +94,11 @@ func TestRemoveErasesWhatItHolds(t *testing.T) {
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		return tx.QueryRow(ctx, "SELECT detail::text FROM platform.audit_log WHERE action = 'supplier.remove'").Scan(&detail)
 	})
-	for _, ref := range []string{`"7"`, `"8"`, `"9"`} {
-		if !strings.Contains(detail, ref) {
-			t.Errorf("the audit entry %s does not list the key %s to revoke", detail, ref)
-		}
+	if !strings.Contains(detail, `"keys_to_revoke_count":3`) {
+		t.Errorf("the audit entry %s does not count the 3 keys to revoke", detail)
 	}
+	same(t, "the keys to revoke stay on the erased credentials", 3,
+		w.count("SELECT count(*) FROM suppliers.credentials WHERE status = 'erased' AND upstream_key_ref IN ('7', '8', '9')"))
 	if strings.Contains(detail, "login-secret") || strings.Contains(detail, "sk-") {
 		t.Errorf("the audit entry holds a secret: %s", detail)
 	}
@@ -136,4 +137,26 @@ func TestAnErasedCredentialHoldsNothing(t *testing.T) {
 	if pg.SQLState(err) != "23514" {
 		t.Errorf("erasing a credential and keeping its key: %v, want a check violation", err)
 	}
+}
+
+// TestARemovalDoesNotDependOnHowManyKeysItErases: a supplier with a hundred keys of the longest id the contract allows
+// is removed, though their ids together would not fit the audit entry's 8192 bytes.
+func TestARemovalDoesNotDependOnHowManyKeysItErases(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		for i := range 100 {
+			ref := strings.Repeat("k", 190) + fmt.Sprintf("%010d", i)
+			if err := store.New().InsertBindingCredential(ctx, tx, store.InsertBindingCredentialParams{
+				ID: uuid.NewV7(), SupplierID: w.supplier, SupplierGroupID: w.group, UpstreamKeyRef: ref, MaxConcurrency: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if s := w.removeAs(w.adminOf()); s.Status != Removed {
+		t.Fatalf("the status after removing is %s", s.Status)
+	}
+	same(t, "credentials erased", 101, w.count("SELECT count(*) FROM suppliers.credentials WHERE status = 'erased'"))
 }

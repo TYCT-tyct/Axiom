@@ -317,8 +317,8 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 // is raised, so it leaves the routing snapshot at the next reload and a round of the sync that began before is
 // discarded; its sealed login is deleted; and the sealed key of each credential is cleared and the credential marked
 // `erased`. The credentials stay as rows, because attempts made with them point at the row. Calls in flight go on with
-// the key they hold in memory. M1 never writes at the supplier, so the keys a person has to revoke there are listed in
-// the audit entry. A supplier removed already is returned as it is; a supplier a former version left in `removing` is
+// the key they hold in memory. M1 never writes at the supplier, so the keys a person has to revoke there stay listed on
+// the erased credential rows (their upstream_key_ref), and the audit entry says how many. A supplier removed already is returned as it is; a supplier a former version left in `removing` is
 // removed now.
 func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Supplier, error) {
 	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing, Removed)
@@ -333,10 +333,6 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 	if err != nil {
 		return Supplier{}, fmt.Errorf("read the credentials: %w", err)
 	}
-	refs := make([]string, len(creds))
-	for i, c := range creds {
-		refs[i] = c.UpstreamKeyRef
-	}
 	if err := q.SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Removed)}); err != nil {
 		return Supplier{}, fmt.Errorf("set the status: %w", err)
 	}
@@ -346,7 +342,7 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 	if err := q.EraseCredentialsOf(ctx, tx, id); err != nil {
 		return Supplier{}, fmt.Errorf("erase the keys: %w", err)
 	}
-	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status, "keys_to_revoke": refs}); err != nil {
+	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status, "keys_to_revoke_count": len(creds)}); err != nil {
 		return Supplier{}, err
 	}
 	return a.view(ctx, tx, id)

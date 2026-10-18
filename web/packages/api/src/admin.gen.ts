@@ -374,7 +374,7 @@ export interface paths {
         put?: never;
         /**
          * Remove a supplier
-         * @description Takes the supplier out of routing at once and ends it `removed`, in one transaction: its login is deleted, the sealed key of each credential is cleared and the credential becomes `erased` (the row stays, because calls made with it point at it). Calls in flight end with the key they hold. Axiom does not write to the supplier in M1, so the keys it used there are not revoked: the audit entry lists them (`keys_to_revoke`) for a person to revoke. Sending it again returns the supplier as it is.
+         * @description Takes the supplier out of routing at once and ends it `removed`, in one transaction: its login is deleted, the sealed key of each credential is cleared and the credential becomes `erased` (the row stays, because calls made with it point at it). Calls in flight end with the key they hold. Axiom does not write to the supplier in M1, so the keys it used there are not revoked: the credentials stay listed as `erased` with their `upstream_key_ref`, for a person to revoke at the supplier, and the audit entry records how many (`keys_to_revoke_count`). Sending it again returns the supplier as it is.
          */
         post: operations["removeSupplier"];
         delete?: never;

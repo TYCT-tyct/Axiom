@@ -26,7 +26,8 @@ func (c *chunks) Read(p []byte) (int, error) {
 // 「不变量」), counted rather than timed, so a loaded machine cannot fail it. The search for the line ending resumes
 // after the bytes already searched, so every byte is searched once: a reader that searched the whole pending line after
 // every read would search it quadratically often. And the buffer grows by doubling, so it is allocated a number of
-// times that grows with the logarithm of the line, not once per read.
+// times that grows with the logarithm of the line, not once per read. The count of searched bytes is worked out from the
+// reader's own record of where the search resumes (scan), so it proves that record is kept, not what the search reads.
 func TestReaderLineWorkIsLinear(t *testing.T) {
 	const size = 8 << 20
 	r := NewReader(&chunks{left: size}, 2*size)
