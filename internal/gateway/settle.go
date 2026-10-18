@@ -137,15 +137,15 @@ func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.C
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the
-// first sampling's bound over the request's text at inputBytesPerToken, unless any input-side item was reported; the
+// first sampling's estimate (billing.InputEstimate: the text at 4 bytes a token, an image at 1600 tokens, a file at
+// 4096, each held to its bound), unless any input-side item was reported; the
 // output by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far and
 // never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
 // to); the web searches by the events seen. The ratios stand in for the estimates by model the docs want, which have no
 // data yet; the bounds and the cap keep an estimate within what the reservation covers. Nothing corrects an estimate
 // after the charge in M1: the supplier's record is the platform's cost, not the user's bill.
 func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64) []billing.Segment {
-	d.TextBytes = tokensOf(d.TextBytes, inputBytesPerToken)
-	input, _ := billing.InputBound(d, m)
+	input := billing.InputEstimate(d, m)
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
 	for i, seg := range u.Segments {
 		segments[i] = billing.Segment{Usage: seg.Usage, Reported: seg.Reported}
@@ -176,12 +176,10 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	return segments
 }
 
-// The bytes per token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4 bytes a
-// token, and output is taken at 3 to lean the guess up, since no record may come to correct it.
-const (
-	inputBytesPerToken  = 4
-	outputBytesPerToken = 3
-)
+// The bytes per output token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4
+// bytes a token, and output is taken at 3 to lean the guess up, since no record may come to correct it. The input's is
+// billing.InputBytesPerToken.
+const outputBytesPerToken = 3
 
 // tokensOf is bytes at perToken bytes a token, rounded up: a token begun is charged.
 func tokensOf(bytes, perToken int64) int64 {

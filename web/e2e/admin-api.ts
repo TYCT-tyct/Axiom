@@ -34,8 +34,8 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
     return fail(404, "not_found");
   }
   const amount = BigInt(body.amount.amount);
-  const past = body.expires_at !== undefined && new Date(body.expires_at).getTime() <= Date.now();
-  if (amount <= 0n || amount > grantLimit || body.amount.currency !== account.balance.balance.currency || past) {
+  const expires = body.expires_at !== undefined; // refused: nothing writes off an expired batch yet
+  if (amount <= 0n || amount > grantLimit || body.amount.currency !== account.balance.balance.currency || expires) {
     return fail(422, "unprocessable");
   }
   const balance = BigInt(account.balance.balance.amount) + amount;
@@ -52,7 +52,6 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
       id: `00000000-0000-4000-8000-${String(state.stored.size).padStart(12, "0")}`,
       account_id: account.id,
       amount: body.amount,
-      expires_at: body.expires_at,
       created_at: new Date().toISOString(),
       balance_after: account.balance,
     },

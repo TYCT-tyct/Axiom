@@ -119,9 +119,9 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 		c.e.Model.Reports.Add(catalog.ItemCacheRead)
 	}
 	drawTiers(&c, r)
-	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5 * time.Second)))}
+	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5*time.Second)) + 1)} // both above 0, or the entry is refused
 	if limit == math.MaxInt64 {
-		c.s.Overshoot = time.Duration(n()) // so overshoot × speed can pass math.MaxInt64
+		c.s.Overshoot = time.Duration(max(n(), 1)) // so overshoot × speed can pass math.MaxInt64
 	}
 	return c
 }
@@ -251,7 +251,11 @@ func (c quoteCase) prompts(samplings int64, upTo func(int64) int64) []map[catalo
 	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
 		file = c.e.Model.FilePages * c.e.Model.PageTokens
 	}
-	first := min(window, c.d.TextBytes+c.d.Images*c.e.Model.ImageTokens+c.d.Documents*file)
+	image := window // an image of unknown size may fill the context
+	if c.e.Model.ImageTokens > 0 {
+		image = c.e.Model.ImageTokens
+	}
+	first := min(window, c.d.TextBytes+c.d.Images*image+c.d.Documents*file)
 	counts := make([]map[catalog.Item]int64, samplings)
 	for j := range counts {
 		counts[j] = map[catalog.Item]int64{}
@@ -269,6 +273,14 @@ func (c quoteCase) prompts(samplings int64, upTo func(int64) int64) []map[catalo
 	return counts
 }
 
+// imageBound is what one image may take: the model's bound, or the whole context when it has none.
+func (c quoteCase) imageBound() *big.Int {
+	if c.e.Model.ImageTokens > 0 {
+		return big.NewInt(c.e.Model.ImageTokens)
+	}
+	return big.NewInt(c.e.Model.ContextLength)
+}
+
 // reference is the quote computed in math/big from the prices Ceiling gives, and whether every count is below
 // math.MaxInt64.
 func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
@@ -279,7 +291,7 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
 		file = new(big.Int).Mul(b(c.e.Model.FilePages), b(c.e.Model.PageTokens))
 	}
-	first := new(big.Int).Add(b(c.d.TextBytes), new(big.Int).Mul(b(c.d.Images), b(c.e.Model.ImageTokens)))
+	first := new(big.Int).Add(b(c.d.TextBytes), new(big.Int).Mul(b(c.d.Images), c.imageBound()))
 	first.Add(first, new(big.Int).Mul(b(c.d.Documents), file))
 	if first.Cmp(window) > 0 {
 		first = window

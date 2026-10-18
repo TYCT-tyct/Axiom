@@ -221,10 +221,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Caps:      capabilities(serving.Abilities),
 		Context:   serving.Context,
 		MaxOutput: serving.MaxOutput,
-		// The spec records no image size, so one image is taken to take the whole window at most: the bound billing
-		// reserves on must never be below what a request spends, and a file whose page count it does not know is
-		// bounded the same way (billing's fileTokens).
-		ImageTokens: serving.Context,
+		// The spec records no image size and no page limit, so ImageTokens, PageTokens and FilePages stay 0: billing
+		// takes an image or a file of unknown size to fill the whole window when it reserves, which must never be below
+		// what a request spends, and charges an estimate when the upstream reports no input (billing.InputEstimate).
 		Streams:     streams,
 		Cancels:     r.Cancels,
 		Reports:     reportable.Items,
