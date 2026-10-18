@@ -40,7 +40,8 @@ func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
 	var attempts int
 	if err := f.app.Tx(ctx, f.platformScope, func(tx pg.Tx) error {
 		return tx.QueryRow(ctx, `SELECT r.state, r.endpoints = ARRAY[$2, $3]::uuid[],
-			(SELECT route_endpoint_ids = ARRAY[$2, $3]::uuid[] FROM suppliers.lost_requests WHERE request_id = $1),
+			(SELECT coalesce(route_endpoint_ids = ARRAY[$2, $3]::uuid[], false)
+				FROM suppliers.lost_requests WHERE request_id = $1),
 			EXISTS (SELECT 1 FROM suppliers.ended_requests WHERE request_id = $1),
 			(SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1)
 			FROM billing.reservations r WHERE r.request_id = $1`, request, first, second).
