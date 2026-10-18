@@ -200,6 +200,7 @@ func (w *callWorld) checkChat(n runningNode) {
 		{"to Messages", "claude-opus-5-5", "/v1/messages", false, "Hello!", claude},
 		{"to Responses", "gpt-6-astra", "/v1/responses", false, "Hi there! How can I assist you today?", gpt},
 		{"streamed to Messages", "claude-opus-5-5", "/v1/messages", true, "Hello!", claude},
+		{"streamed to Responses", "gpt-6-astra", "/v1/responses", true, "Hi there! How can I assist you today?", gpt},
 	} {
 		w.checkChatCall(n, tc)
 	}
@@ -290,15 +291,8 @@ func (w *callWorld) checkPriority(n runningNode) {
 // made is what is charged, on top of its tokens. A limit that no balance can cover is refused before the supplier hears
 // of it, so the limit is what decides, not what the model would make.
 func (w *callWorld) checkBoundedSearch(n runningNode) {
-	t := w.t
-	t.Helper()
-	for _, tc := range []struct {
-		name, path, agent string
-		call              func(limit int) string
-		blocks            string // what the client reads of the search
-		reread            int64  // what a token of input is quoted at, priority tier, in billionths
-		booked            booking
-	}{
+	w.t.Helper()
+	for _, tc := range []searchCase{
 		{"Messages max_uses", "/v1/messages", "claude-cli/2.0.5 (external, cli)", func(limit int) string {
 			return fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":256,"messages":[{"role":"user","content":"Hello"}],`+
 				`"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":%d}]}`, limit)
@@ -312,31 +306,46 @@ func (w *callWorld) checkBoundedSearch(n runningNode) {
 			estimated: true, // Responses does not report the searches in its usage: they are counted from the events
 		}},
 	} {
-		w.supplier.answerSearching(t, tc.path)
-		reserved := map[int]int64{}
-		for _, limit := range []int{1, 3} {
-			r := w.call(n, tc.path, w.richKey, tc.call(limit), "User-Agent", tc.agent)
-			w.served(r, fmt.Sprintf("%s: %d", tc.name, limit))
-			if !strings.Contains(string(r.body), tc.blocks) {
-				t.Errorf("%s: the answer does not show the search (%s): %s", tc.name, tc.blocks, r.body)
-			}
-			tc.booked.ref = w.lastRef()
-			w.checkBooked(r, tc.booked)
-			reserved[limit] = w.reserved(r)
-		}
-		if got, want := reserved[3]-reserved[1], 2*(contextLength*tc.reread+searchCharge); got != want {
-			t.Errorf("%s: three searches were reserved %d more than one, want %d: each further one may reread the window and costs its fee", tc.name, got, want)
-		}
-
-		transactions, called := w.query("SELECT count(*)::text FROM billing.transactions"), len(w.supplier.sent())
-		r := w.call(n, tc.path, w.richKey, tc.call(10))
-		if r.status != http.StatusPaymentRequired || !strings.Contains(string(r.body), "credits_insufficient") {
-			t.Errorf("%s: a limit of ten searches got %d %s, want 402 credits_insufficient: the account cannot cover the limit", tc.name, r.status, r.body)
-		}
-		if got := w.query("SELECT count(*)::text FROM billing.transactions"); got != transactions || len(w.supplier.sent()) != called {
-			t.Errorf("%s: a refused search moved the ledger (%s transactions, then %s) or reached the supplier", tc.name, transactions, got)
-		}
-		w.checkBalanced()
-		w.supplier.answer(tc.path, "")
+		w.checkSearchLimits(n, tc)
 	}
+}
+
+type searchCase struct {
+	name, path, agent string
+	call              func(limit int) string
+	blocks            string // what the client reads of the search
+	reread            int64  // what a token of input is quoted at, priority tier, in billionths
+	booked            booking
+}
+
+// checkSearchLimits serves the case with limits of one and three, and asks for ten.
+func (w *callWorld) checkSearchLimits(n runningNode, tc searchCase) {
+	t := w.t
+	t.Helper()
+	w.supplier.answerSearching(t, tc.path)
+	defer w.supplier.answer(tc.path, "")
+	reserved := map[int]int64{}
+	for _, limit := range []int{1, 3} {
+		r := w.call(n, tc.path, w.richKey, tc.call(limit), "User-Agent", tc.agent)
+		w.served(r, fmt.Sprintf("%s: %d", tc.name, limit))
+		if !strings.Contains(string(r.body), tc.blocks) {
+			t.Errorf("%s: the answer does not show the search (%s): %s", tc.name, tc.blocks, r.body)
+		}
+		tc.booked.ref = w.lastRef()
+		w.checkBooked(r, tc.booked)
+		reserved[limit] = w.reserved(r)
+	}
+	if got, want := reserved[3]-reserved[1], 2*(contextLength*tc.reread+searchCharge); got != want {
+		t.Errorf("%s: three searches were reserved %d more than one, want %d: each further one may reread the window and costs its fee", tc.name, got, want)
+	}
+
+	transactions, called := w.query("SELECT count(*)::text FROM billing.transactions"), len(w.supplier.sent())
+	r := w.call(n, tc.path, w.richKey, tc.call(10))
+	if r.status != http.StatusPaymentRequired || !strings.Contains(string(r.body), "credits_insufficient") {
+		t.Errorf("%s: a limit of ten searches got %d %s, want 402 credits_insufficient: the account cannot cover the limit", tc.name, r.status, r.body)
+	}
+	if got := w.query("SELECT count(*)::text FROM billing.transactions"); got != transactions || len(w.supplier.sent()) != called {
+		t.Errorf("%s: a refused search moved the ledger (%s transactions, then %s) or reached the supplier", tc.name, transactions, got)
+	}
+	w.checkBalanced()
 }
