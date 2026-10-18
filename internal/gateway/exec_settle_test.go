@@ -323,6 +323,41 @@ func TestEstimated(t *testing.T) {
 	}
 }
 
+// TestAnEstimateOfImagesAndFiles: an input the upstream did not report is charged for an image at 1600 tokens and a file
+// at 4096 beside the text at 4 bytes a token, not at the whole context the reservation had to allow for them; a bound the
+// model's data gives that is below those holds, so does the window, and a report of the input, in whole or by its cache
+// part, is not estimated over.
+func TestAnEstimateOfImagesAndFiles(t *testing.T) {
+	t.Parallel()
+	const in, cached = catalog.ItemInput, catalog.ItemCacheRead
+	reported := func(it catalog.Item, n int64) protocol.Usage {
+		u, err := catalog.NewUsage(map[catalog.Item]int64{it: n}, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << it}}}
+	}
+	demand := billing.Demand{TextBytes: 4001, Images: 1, Documents: 1} // 1001 tokens of text
+	for _, tc := range []struct {
+		name  string
+		usage protocol.Usage
+		model billing.Model
+		want  int64
+	}{
+		{"a model whose images and files have no known size", protocol.Usage{}, billing.Model{ContextLength: 200000}, 1001 + 1600 + 4096},
+		{"an image bound below the estimate", protocol.Usage{}, billing.Model{ContextLength: 200000, ImageTokens: 500}, 1001 + 500 + 4096},
+		{"a file bound below the estimate", protocol.Usage{}, billing.Model{ContextLength: 200000, PageTokens: 100, FilePages: 2}, 1001 + 1600 + 200},
+		{"a small window", protocol.Usage{}, billing.Model{ContextLength: 4000}, 4000},
+		{"the input reported", reported(in, 12), billing.Model{ContextLength: 200000}, 12},
+		{"the cached part of the input reported", reported(cached, 12), billing.Model{ContextLength: 200000}, 0},
+	} {
+		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64)
+		if n := got[0].Usage.Count(in); n != tc.want {
+			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
+		}
+	}
+}
+
 // TestAnEstimateStaysWithinTheOutputLimit: the bytes of a stream are read at 3 bytes a token, rounded up, and what they
 // say is held to the output limit the attempt was quoted at, the one metering holds it to, so a stream that never
 // reported its usage is not charged for more than the reservation covers; a count the upstream did report stays

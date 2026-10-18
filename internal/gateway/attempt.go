@@ -271,6 +271,9 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 // next entry, or give the client the error.
 func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	s.ends[a.i].Result = billing.Unknown
+	if s.isGone() { // the client left while the request was out: the failure is the cancel's, and cancelling is never free
+		s.ends[a.i].Finish = billing.FinishCancelled
+	}
 	if f.Executed == suppliers.NotExecuted {
 		s.ends[a.i].Result = billing.NotExecuted
 	}

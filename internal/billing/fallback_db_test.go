@@ -109,7 +109,7 @@ func fallbackDefault(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
 	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1, catalog.ItemCodeExecution: 2})
-	if f := b.settleWith(h, outcome(Committed, FinishStop, false, s)); f.Estimated || f.Charged != platform.AmountExact(70+10+100) {
+	if f := b.settleWith(h, outcome(Committed, FinishStop, s)); f.Estimated || f.Charged != platform.AmountExact(70+10+100) {
 		t.Errorf("Settle = %+v, want 180 exact: the search at the model's 10, the executions at the default 50", f)
 	}
 	b.expect("settled", 180)
@@ -118,7 +118,7 @@ func fallbackDefault(t *testing.T) {
 func fallbackEstimated(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
-	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
+	if f := b.settleWith(h, outcome(Committed, FinishStop, fetches(t, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
 		t.Errorf("Settle = %+v, want 170 estimated", f)
 	}
 	b.expect("settled", 170)
@@ -136,7 +136,7 @@ func fallbackFloor(t *testing.T) {
 	h := b.hold(800)     // 900 reserved
 	// 1000 input tokens and 1000 unknown uses at the dearest default price 50: 51000 priced, against the balance
 	// above the floor and what the other call holds, which leaves 1000; the platform bears the rest.
-	b.settleWith(h, outcome(Committed, FinishStop, false,
+	b.settleWith(h, outcome(Committed, FinishStop,
 		segment(t, map[catalog.Item]int64{in: 1000, catalog.ItemOutput: 0}, catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "1000"})))
 	if n := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); n != 1000 {
 		t.Errorf("charged %d, want 1000: what was above the floor and the other reservation", n)
@@ -145,7 +145,7 @@ func fallbackFloor(t *testing.T) {
 		t.Errorf("the platform bore %d, want the amount past the floor", n)
 	}
 	b.balanced()
-	b.settleWith(other, outcome(Committed, FinishStop, false, used(t, 100, 100, 0)))
+	b.settleWith(other, outcome(Committed, FinishStop, used(t, 100, 100, 0)))
 	if n := b.count("SELECT balance FROM billing.balances"); n != 0 {
 		t.Errorf("balance %d, want 0: the other reservation was still covered", n)
 	}
@@ -155,7 +155,7 @@ func fallbackFloor(t *testing.T) {
 // fetchesOnly is three web fetches and nothing else: 150 at the fallback price.
 func fetchesOnly(t *testing.T) Outcome {
 	t.Helper()
-	return outcome(Committed, FinishStop, false, segment(t, nil, catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "3"}))
+	return outcome(Committed, FinishStop, segment(t, nil, catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "3"}))
 }
 
 func fallbackLate(t *testing.T) {
@@ -190,7 +190,7 @@ func fallbackWaiver(t *testing.T) {
 	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
 		catalog.UnknownUsage{Field: "usage.new_thing_tokens", Value: "30"},
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "2"})
-	if f := b.settleWith(h, outcome(Unknown, FinishNone, false, s)); f.Charged != platform.AmountExact(100) {
+	if f := b.settleWith(h, outcome(Unknown, FinishNone, s)); f.Charged != platform.AmountExact(100) {
 		t.Errorf("Settle = %+v, want the two uses alone, 100", f)
 	}
 	b.expect("settled", 100)
@@ -207,7 +207,7 @@ func fallbackHuge(t *testing.T) {
 	huge := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "10000000000"},
 		catalog.UnknownUsage{Field: "usage.server_tool_use.map_requests", Value: "10000000000"})
-	if f := b.settleWith(h, outcome(Committed, FinishStop, false, huge)); f.Charged != platform.AmountExact(10_000) || !f.Estimated {
+	if f := b.settleWith(h, outcome(Committed, FinishStop, huge)); f.Charged != platform.AmountExact(10_000) || !f.Estimated {
 		t.Errorf("Settle = %+v, want the whole balance, 10000, estimated", f)
 	}
 	b.expect("settled", 10_000)
@@ -260,11 +260,11 @@ func TestUnknownItems(t *testing.T) {
 	q.Model.ID = model
 	const fetch = "usage.server_tool_use.web_fetch_requests"
 	first := b.holdOn(q, 100)
-	b.settleWith(first, outcome(Committed, FinishStop, false, fetches(t, "1")))
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "2")))
-	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, "1"))) // the row is the first tenant's
+	b.settleWith(first, outcome(Committed, FinishStop, fetches(t, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, fetches(t, "2")))
+	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, fetches(t, "1"))) // the row is the first tenant's
 	estimate := b.holdOn(q, 100)
-	b.settleWith(estimate, outcome(Committed, FinishStop, true, unknown(t, 50, "usage.new_thing_tokens", "5")))
+	b.settleWith(estimate, outcome(Committed, FinishStop, unknown(t, 50, "usage.new_thing_tokens", "5")))
 	items := b.unknownItems()
 	for i := range items {
 		items[i].Seen = time.Time{}
@@ -276,7 +276,7 @@ func TestUnknownItems(t *testing.T) {
 		t.Errorf("%d alerts, want one per field:\n%s", n, logs.String())
 	}
 	b.checkClearing(model, fetch)
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, fetches(t, "1")))
 	if n := strings.Count(logs.String(), "an unknown billing item appeared"); n != 2 || len(b.unknownItems()) != 1 {
 		t.Errorf("a cleared field came back: %d alerts, %+v", n, b.unknownItems())
 	}
@@ -402,7 +402,7 @@ func TestFallbackSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, catalog.ItemCodeExecution: 1})
-	b.settleWith(h, outcome(Committed, FinishStop, false, s))
+	b.settleWith(h, outcome(Committed, FinishStop, s))
 	if n := b.count("SELECT price FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); n != 70+5e7 {
 		t.Errorf("priced %d, want the code execution at the locked 0.05", n)
 	}

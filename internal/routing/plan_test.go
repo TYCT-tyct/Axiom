@@ -319,6 +319,12 @@ func TestSegmentable(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
+	// With no segment size configured, which is M1's, every entry is reserved whole: a segment of 0 tokens would
+	// reserve no output at all.
+	h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1, func(*routing.Endpoint) {}))
+	if h.plan(input()).Entries[0].Segmentable {
+		t.Error("an entry is segmentable though no segment size is configured")
+	}
 }
 
 // TestWait: when every endpoint that passed is full the answer is a wait, not a refusal; a full endpoint beside one

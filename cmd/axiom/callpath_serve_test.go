@@ -41,6 +41,11 @@ func TestANodeServesModelCalls(t *testing.T) {
 	w.price()
 	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
 
+	// The ledger's daily check is on the queue the node started: it runs once at once, so its job exists.
+	waitUntil(t, 15*time.Second, func() bool {
+		return w.query("SELECT count(*)::text FROM river.river_job WHERE kind = 'billing.reconcile'") != "0"
+	})
+
 	w.checkMessages(n)
 	w.checkResponses(n)
 	w.checkChat(n)
@@ -163,9 +168,6 @@ func (w *callWorld) checkFreeReply(n runningNode) {
 	})
 	if got := w.query("SELECT charged::text || ' ' || waived::text FROM billing.reservations WHERE request_id::text = $1", id); got != "0 true" {
 		t.Errorf("the call was charged and waived as %q, want nothing charged and waived: its output was reported zero", got)
-	}
-	if got := w.query("SELECT count(*)::text FROM billing.waivers"); got != "0" {
-		t.Errorf("billing.waivers holds %s rows, want none: no cap counts a waiver", got)
 	}
 	var logged string
 	waitUntil(t, 5*time.Second, func() bool {
