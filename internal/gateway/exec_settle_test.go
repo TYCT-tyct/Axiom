@@ -177,6 +177,18 @@ func TestWhatIsCharged(t *testing.T) {
 	})
 }
 
+// checkNotExecuted: an attempt known not to have run used nothing and cost nothing, and its supplier row says so as a
+// complete estimate of nothing.
+func checkNotExecuted(t *testing.T, a billing.AttemptResult) {
+	t.Helper()
+	if a.Result != billing.NotExecuted || a.Segments != nil || a.Cost != 0 {
+		t.Errorf("not executed: %+v", a)
+	}
+	if a.Estimate.Flag != suppliers.CostComplete || a.Estimate.Native != (platform.Exact{}) {
+		t.Errorf("not executed: the supplier's row is %+v, want complete and nothing: it is known to have cost nothing", a.Estimate)
+	}
+}
+
 func checkCharged(t *testing.T, h *harness) {
 	t.Helper()
 	a := h.ended().outcome.Attempts
@@ -184,12 +196,7 @@ func checkCharged(t *testing.T, h *harness) {
 		t.Fatalf("attempts %+v", a)
 	}
 	input := estimatedInput(t, h, 1)
-	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
-		t.Errorf("not executed: %+v", a[0])
-	}
-	if a[0].Estimate.Flag != suppliers.CostComplete || a[0].Estimate.Native != (platform.Exact{}) {
-		t.Errorf("not executed: the supplier's row is %+v, want complete and nothing: it is known to have cost nothing", a[0].Estimate)
-	}
+	checkNotExecuted(t, a[0])
 	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
 		t.Errorf("unknown: %+v", a[1])
 	}
