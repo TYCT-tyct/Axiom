@@ -35,26 +35,41 @@ import (
 
 const (
 	// spec declares everything an endpoint needs of a model, and the tools Claude Code and Codex send.
-	servedSpec = `{"items":["input","output","cache_read","cache_write","web_search"],"tiers":["standard"],` +
+	servedSpec = `{"items":["input","output","cache_read","cache_write","web_search"],"tiers":["standard","priority"],` +
 		`"context_length":200000,"max_output_tokens":8192,"streams":true,"abilities":["tools","web_search"]}`
-	// referencePrice is a dollar a million tokens of input and five of output, as the catalog publishes it.
-	servedReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375","web_search":"0.01"}}`
+	// servedReference is three dollars a million tokens of input and fifteen of output, and twice that at the priority
+	// tier, which prices every item the spec reports since a tier inherits nothing from the standard one.
+	servedReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375","web_search":"0.01"},` +
+		`"service_tiers":{"priority":{"rates":{"input":"0.000006","output":"0.00003","cache_read":"0.0000006","cache_write":"0.0000075","web_search":"0.01"}}}}`
 	// servedRule sells every model at one and a half times its reference price.
 	servedRule = `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`
 	// The sale prices of the recorded samples: 25 input and 15 output tokens of the Messages one, 37 and 11 of the
-	// Responses one, at 4.5 and 22.5 millionths of a dollar a token, in billionths.
+	// Responses one, at 4.5 and 22.5 millionths of a dollar a token, in billionths; at the priority tier, twice that.
 	messagesCharge  = 25*4_500 + 15*22_500
 	responsesCharge = 37*4_500 + 11*22_500
-	supplierKey     = "sk-supplier-secret"
+	// What the same tokens cost the supplier, from servedCost: ten and forty billionths of a dollar a token of input and
+	// output, twice that at the priority tier.
+	messagesCost  = 25*10 + 15*40
+	responsesCost = 37*10 + 11*40
+	// A web search is sold at one and a half times its reference price of a cent, and costs the supplier five millionths
+	// of a dollar.
+	searchCharge = 15_000_000
+	searchCost   = 5_000
+	supplierKey  = "sk-supplier-secret"
+	// servedCost is what the supplier charges, in its native quota: a model's tokens and searches, at twice the price at
+	// the priority tier. The supplier's unit value is 0.001, which makes a standard token ten and forty billionths.
+	servedCost = `{"v":1,"currency":"XXX","rates":{"input":"0.00001","output":"0.00004","web_search":"0.005"},` +
+		`"service_tiers":{"priority":{"rates":{"input":"0.00002","output":"0.00008","web_search":"0.01"}}}}`
 )
 
 // fakeSupplier is a new-api relay: it answers /v1/messages and /v1/responses with the recorded upstream streams, with
 // the request id header a new-api relay sends, and remembers what it was sent.
 type fakeSupplier struct {
-	server *httptest.Server
-	mu     sync.Mutex
-	zero   bool // answers Messages with a stream that reports no output and no end
-	seen   []supplied
+	server  *httptest.Server
+	streams map[string]string // the recorded upstream stream each path answers with
+	mu      sync.Mutex
+	replies map[string]string // what a path answers with instead, until answer clears it
+	seen    []supplied
 }
 
 type supplied struct{ path, auth, body string }
@@ -65,38 +80,29 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var streams [2]string // what the supplier answers Messages and Responses with: the samples' recorded upstream streams
-	for i, dir := range []string{"messages/text", "responses/text"} {
+	f := &fakeSupplier{streams: map[string]string{}, replies: map[string]string{}}
+	for path, dir := range map[string]string{"/v1/messages": "messages/text", "/v1/responses": "responses/text"} {
 		b, err := samples.ReadFile(dir + "/upstream.sse")
 		if err != nil {
 			t.Fatal(err)
 		}
-		streams[i] = string(b)
+		f.streams[path] = string(b)
 	}
 	if err := samples.Close(); err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeSupplier{}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("the fake supplier could not read a request: %v", err)
 		}
-		n, zero := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
-		var reply string
-		switch {
-		case r.URL.Path == "/v1/responses":
-			reply = streams[1]
-		case r.URL.Path != "/v1/messages":
+		n, reply := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
+		if reply == "" {
 			http.NotFound(w, r)
 			return
-		case zero:
-			reply = zeroOutput
-		default:
-			reply = streams[0]
 		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
 		if _, err := io.WriteString(w, reply); err != nil {
 			t.Errorf("the fake supplier could not answer: %v", err)
 		}
@@ -105,18 +111,23 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 	return f
 }
 
-// record remembers a call and says how many there have been, and whether Messages is to be answered with no output.
-func (f *fakeSupplier) record(s supplied) (n int, zero bool) {
+// record remembers a call and says how many there have been, and what it is to be answered with: nothing for a path the
+// supplier does not serve.
+func (f *fakeSupplier) record(s supplied) (n int, reply string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen = append(f.seen, s)
-	return len(f.seen), f.zero
+	if reply = f.replies[s.path]; reply == "" {
+		reply = f.streams[s.path]
+	}
+	return len(f.seen), reply
 }
 
-func (f *fakeSupplier) setZero(zero bool) {
+// answer makes the path reply with the stream from now on, or with its recorded one again when the stream is empty.
+func (f *fakeSupplier) answer(path, stream string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.zero = zero
+	f.replies[path] = stream
 }
 
 // zeroOutput reports the input, sends a word, reports the output as zero and breaks off without a message_stop: a call
@@ -266,7 +277,7 @@ func (w *callWorld) seedSupplier() {
 			{
 				`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
 				VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`,
-				[]any{schedule, supplier, endpoint, `{"v":1,"currency":"XXX","rates":{"input":"0.00001","output":"0.00004"}}`},
+				[]any{schedule, supplier, endpoint, servedCost},
 			},
 			{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
 		}...)
