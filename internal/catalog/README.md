@@ -43,7 +43,7 @@
 - `spec` 里另外四个键是端点接请求的规格：`context_length`（一次请求最多的 token，输入加输出）、`max_output_tokens`（模型的输出上限，也是默认输出上限）、`streams`（厂商是否流式）、`abilities`（能力名字的列表：`tools`、`images`、`documents`、`reasoning`、`prompt_cache`、`structured_output`、`web_search`、`code_execution`）。`Model.Serving()`（`snapshot.go`）把它们读成 `Serving{Context, MaxOutput, Streams, Abilities}`；**四个键缺一个就返回 false，绝不补默认值**——没写清能吃多少上下文的端点不能进路由，猜一个 128000 会让它带着错的上限接流量。组装路由快照的代码对 `Serving()` 为假的端点不放进快照；万一漏了，`routing` 的 `candidate`（`internal/routing/snapshot.go:273`）也会因为上下文长度不是正数拒绝它，而不是让它接流量。`context_length` 或 `max_output_tokens` 不是正数、`abilities` 里有不认识的名字、同一项写两遍，都在解析时拒绝，不忽略。`Serving.Abilities` 是 `catalog.AbilitySet`（spec 里的名字），不是 `protocol.Capabilities`：依赖上 `catalog` 在 `protocol` 之下，能力名字换成能力位由 `protocol` 在建路由快照时做。
 - `model.rev` 是改模型时的乐观并发令牌：`ListModel`、`Retire`、`UpdateSpec`、`SelectPriceSource` 带上审核时看到的 `rev`，锁模型行后比较，不同就拒绝，成功后加一。没有它，两个基于同一份规格的修改，后提交的会悄悄覆盖先提交的。测试：基于同一 `rev` 的两个 `UpdateSpec` 只成功一个。
 - `subject_key` 非空且稳定：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
-- `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:watch`、`system:sync`），#23 定义操作者类型后替换。
+- `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:catalog.sync`），#23 定义操作者类型后替换。
 
 ### 行级安全与权限
 
@@ -88,7 +88,7 @@
 
 ### 条件
 
-价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`，计法是整单按档：`TierBasis` 里各项用量之和严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
+价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`（概念名；代码里是价目表的字段 `basis`、`above` 和每档的价格），计法是整单按档：`TierBasis` 里各项用量之和严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
 
 - Anthropic Haiku 5.5：超过 100,000 token，"prompt length counts all of its input tokens, including cache reads and cache writes"，`TierBasis` = {`input`, `cache_read`, `cache_write`, `cache_write_1h`}；Claude 4.6 及以后的其他模型 1M 内统一价（Anthropic Pricing 页，2026-10-14）。
 - Gemini：提示词超过 200k，`TierBasis` = {`input`, `cache_read`, `audio_in`, `image_in`}，输出和缓存价同时换档（Gemini 定价页，2026-10-14）。
@@ -145,13 +145,13 @@
 - **发布**：比较后替换，只接受更大的 `revision`。
 - **传播**：写入的节点立即重建；其他节点每 5 秒读一次 `revision`，变了才全量加载。以后有 LISTEN/NOTIFY 时加一个触发源，接口不变。
 - **陈旧上限**：快照记下 `confirmed_at`，即最后一次确认"数据库的 `revision` 就是本快照的版本"的时刻，取那次读取开始的时间。读到相同的 revision 才续期；读到更高的版本不续期，必须成功加载并发布它，新快照以加载事务开始的时刻作为 `confirmed_at`；加载失败不续期旧快照。超过最大陈旧时间（默认 30 秒，启动配置，必须大于轮询周期）后 `Current()` 返回 `ErrStale`，gateway 对需要解析模型的新请求返回 503，节点不就绪，直到确认或发布了当前版本。首次加载成功前同样不就绪。
-- **影响有界**：快照里的参考价只用于展示和路由提示；售价由 billing 的价格版本决定并在请求开始时锁定，不读快照。下线的模型最多在陈旧上限内还能被新请求调用。
+- **影响有界**：快照里的参考价用于展示，也是售价的输入：路由快照每次重建时，按站点的定价规则对它现算售价（见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)），所以参考价的改动在两个 5 秒的周期内进入售价。下线的模型最多在陈旧上限内还能被新请求调用。
 - **解析**：`ResolvePublic` 遇到含 `:` 的名字一律返回"模型不存在"，不切后缀，所以带后缀的写法永远落不到基础模型；M1 没有任何变体，`:free`、`:batch` 是供应商别名，路由变体随路由支持它时再加。其余名字 `Normalize` 后查预建的 map。`Recognize` 公开和内部名字都查，带日期的名字和移动名字的模型的名字返回 `Exact=true`，绑定到固定版本模型的不带日期名字返回 `Exact=false`。
-- **billing 跟上改价**：billing 的价格版本记下所用参考价的版本号（`reference_price.id`），后台任务定期用 `CurrentPrices` 按站点币种重新选出该用的参考价，版本号不同就重算（选用规则见[计费的「定价」](../../docs/domains/billing.md#定价)）。
+- **billing 跟上改价**：售价在路由快照重建时现算，版本号里含所用参考价的行（`reference_price.id`），所以参考价变了售价随之变，不需要通知。按站点币种重新选参考价的后台任务（`CurrentPrices`）和发布动作随 M2（选用规则见[计费的「定价」](../../docs/domains/billing.md#定价)）。
 
 ## 参考价的录入
 
-> 已实现：LiteLLM 与 OpenRouter 的取数、解析、自动发布、改选到数据集（`Fetcher`、`SyncDataset`、`SyncAll`、`SelectDatasetSource`，命令 `axiom catalog sync`、`check`、`select-dataset-source`），各条的标注写明与设计的差别。设计，尚未实现：页面监测、官方价格页的证据核对、审核项、其余数据集（models.dev）的核对、定时调度（River 随 #25 合并后接入，现在由 `axiom catalog sync` 手动运行；`SyncAll` 是调度要调用的函数）。选价格来源和发布见「管理操作」。
+> 已实现：LiteLLM 与 OpenRouter 的取数、解析、自动发布、改选到数据集（`Fetcher`、`SyncDataset`、`SyncAll`、`SelectDatasetSource`，命令 `axiom catalog sync`、`check`、`select-dataset-source`），各条的标注写明与设计的差别。设计，尚未实现：页面监测、官方价格页的证据核对、审核项、其余数据集（models.dev）的核对、定时调度（River 已有，但目录的同步没有登记到队列，现在由 `axiom catalog sync` 手动运行；`SyncAll` 是登记时要调用的函数）。选价格来源和发布见「管理操作」。
 
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。已实现：`Fetcher` 只读两个固定地址（`raw.githubusercontent.com` 上 LiteLLM 的 `model_prices_and_context_window.json`、`openrouter.ai/api/v1/models`），只收 200，重定向不跟随；超时 60 秒、正文上限 32MB。取数或解析失败时这一数据集整轮不发布，模型保持最后的价格，日志记 error。
@@ -168,7 +168,7 @@
 
 ## 管理操作
 
-> 已实现，平台范围。`axiom catalog` 命令是现在的入口；管理接口落地后经 operations 的审批中间层调用同样的方法。
+> 已实现，平台范围。管理接口（`cmd/axiom/admin_catalog.go`）和 `axiom catalog` 命令调用同样的方法；operations 的审批中间层随 operations。
 
 每个操作是 `Catalog` 的一个方法，带 `Op{Actor, Key, Reason}`，在一个事务里依次：
 
@@ -222,8 +222,8 @@
 | 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序，经 `lock_models`）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
 | 单价精确、非负，计算不溢出 | 见「数值域」；性质测试对照 `math/big`，覆盖最小单价、最大乘积、负用量、门槛求和、转分数后取整 |
 | 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output` 是唯一的例外；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于参考计算的结果，参考计算用完整的用量选档、只对有价格的项求和（去掉缺价项的用量会改变档位）；用例：缺价的 `cache_read` 200,000 加有价的输入 1，输出按高档计 |
-| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。protocol 从 Anthropic Messages 的流里识别：`TestRelayUsage` 加虚构的用量字段、`server_tool_use` 计数和等级，都出现在 `Unknown()` 里。尚未实现：OpenAI 两种格式的识别和测试 |
-| 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文和 `fetch_id`；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
+| 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。protocol 从 Anthropic Messages 的流里识别：`TestRelayUsage` 加虚构的用量字段、`server_tool_use` 计数和等级，都出现在 `Unknown()` 里。protocol 也从 OpenAI 两种格式里识别：`TestRelayOpenAIUsage` 含未知用量和未知等级的用例 |
+| 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文（`fetch_id` 是设计，尚未实现）；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
 | 公开表里没有操作者、理由、证据 | 它们只在平台数据的 `change` 里；测试：查 `information_schema`，公开表没有 `actor`、`reason`、`evidence` 列；非平台范围读不到平台数据，读不到草稿模型和它的名字、参考价 |
 
 ## 公开接口
@@ -260,7 +260,6 @@ func (s Schedule) Missing(r Reportable) Reportable                    // 上架�
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；两边都有分档而口径不同时 ErrTierBasisChanged
 func (s Schedule) Fill(prices map[Item]platform.UnitPrice) Schedule   // 给每个服务等级缺基础价的这些项补上价格，已有的不动
 func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedule, error) // 每个单价乘倍率、改记币种，向上取整一次；没定价的项仍没有价
-func (s Schedule) Currency() platform.Currency
 func Normalize(name string) string
 
 type Snapshot struct{ /* 不可变 */ }
@@ -274,13 +273,13 @@ func (s *Snapshot) Models() iter.Seq[Model]                       // 只有 list
 type Resolution struct{ Model ModelID; Floating bool }
 type Recognition struct{ Model ModelID; Exact bool } // Exact：名字本身就是版本证据
 
-type Config struct{ MaxStale, PollEvery time.Duration; Logger *slog.Logger } // 默认 30 秒、5 秒、slog.Default()；MaxStale 必须大于 PollEvery
+type Config struct{ MaxStale, PollEvery time.Duration; Logger *slog.Logger; PriceChangeLimit int } // 默认 30 秒、5 秒、slog.Default()、25（百分比）；MaxStale 必须大于 PollEvery
 type Catalog struct{ /* db、当前快照 */ }
 func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) // 平台范围由 cmd/axiom 注入
 func (c *Catalog) Current() (*Snapshot, error)              // 超过陈旧上限返回 ErrStale；一个请求从头到尾用同一个快照
 func (c *Catalog) Ready() bool
 func (c *Catalog) Refresh(ctx context.Context) error        // 读 revision，变了才全量加载
-func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 SyncAll 提供、调度随 River，页面监测与核对随它们的 PR（设计，尚未实现）
+func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 SyncAll 提供、尚未登记到 River 队列，页面监测与核对随它们的 PR（设计，尚未实现）
 func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对；设计，尚未实现
 // 读取（「管理操作」一节），平台范围：Authors、GetAuthor、Models(ModelQuery)、Model(ModelID)，返回 Author、ModelSummary、ModelView。
 // 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、UpdateSpec、ListModel、Retire、PublishPrice、
@@ -296,7 +295,7 @@ func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]Sync
 func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDatasetSourceRequest) (Result, error)
 func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, error)           // 只读
 func (c *Catalog) Unrecognized(entries []Entry, authors []string) ([]string, error)           // OpenRouter 列出而目录不认识的纯文本模型
-type SyncResult struct{ Model ModelID; Slug, Entry string; Outcome Outcome; Reason string; Candidate jsonx.Raw } // published / unchanged / differs（演习） / held
+type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outcome Outcome; Reason string; Candidate jsonx.Raw } // published / unchanged / differs（演习） / held
 ```
 
 ## 测试
@@ -324,7 +323,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Outcome Outcome; Reas
 | 价格来源是模型上的一列，发布时在锁住的模型行上核对来源 | "手填不被覆盖""不自动换来源"变成一个比较，和发布同一个事务，没有竞态 | 每次同步时查一张来源配置表：同步与改选并发时可能写进旧来源的价格 |
 | 快照用只读 Repeatable Read 加载，只接受更大的 revision | Read Committed 下同一事务的两次查询可能看到不同的提交（PostgreSQL 文档《Transaction Isolation》） | 多表分别查询 |
 | 快照陈旧超限就拒绝新请求 | 刷新持续失败时，其他节点已下线的模型不能无限期地继续被调用 | 一直用旧快照 |
-| billing 定期比对当前参考价跟上改价 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
+| 售价在路由快照重建时按当前参考价现算，不通知 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
 | 改动历史写本模块的 `change` 表，管理操作同时调 `audit.Record` | 改前改后的值、证据和 `op_key` 是目录自己要读回的领域数据：发布核对证据，重试靠 `op_key` 返回第一次的结果；操作者、理由、证据是平台数据，不能让租户范围读到。审计日志是所有模块共用、运营检索与回放的一条线，改参考价和模型状态是它要求留审计的后台数据改动；两个写入在同一个事务里，审计写不进操作就不成立，`detail` 只放 `change_id`，不受 8 KiB 限制（2026-10-15 定） | 公开表里带 `actor` 列；只写平台的审计日志：它不存证据、不管幂等，补充信息最多 8 KiB；只写 `change`：运营看不到目录的改动 |
 | 构造函数叫 `Open`，不叫 `New` | sqlc 生成的 `Queries` 构造函数在同一个包里叫 `New`，无法改名 | 把生成物放进子包：多一层包，类型要加前缀才能和目录自己的 `Model` 区分 |
 | 现在直接 `SELECT … FOR UPDATE` 锁模型行，`lock_models` 随后台任务角色 | `axiom_app` 有 `model` 四列的 UPDATE 权限，已能加锁；`lock_models` 要求 `SECURITY DEFINER` 函数属 `axiom_owner`，与[平台的启动检查](../platform/README.md#迁移)（只许 `axiom_lookup` 拥有）冲突，先有需要的是任务角色，到那时一并改检查 | 现在就建 `lock_models`：要改平台的检查，却没有调用方 |
