@@ -35,10 +35,10 @@ import (
 
 const (
 	// spec declares everything an endpoint needs of a model, and the tools Claude Code and Codex send.
-	servedSpec = `{"items":["input","output","cache_read","cache_write"],"tiers":["standard"],` +
-		`"context_length":200000,"max_output_tokens":8192,"streams":true,"abilities":["tools"]}`
+	servedSpec = `{"items":["input","output","cache_read","cache_write","web_search"],"tiers":["standard"],` +
+		`"context_length":200000,"max_output_tokens":8192,"streams":true,"abilities":["tools","web_search"]}`
 	// referencePrice is a dollar a million tokens of input and five of output, as the catalog publishes it.
-	servedReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375"}}`
+	servedReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375","web_search":"0.01"}}`
 	// servedRule sells every model at one and a half times its reference price.
 	servedRule = `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`
 	// The sale prices of the recorded samples: 25 input and 15 output tokens of the Messages one, 37 and 11 of the
@@ -163,12 +163,6 @@ func newCallWorld(t *testing.T) *callWorld {
 		}
 	}
 	w := &callWorld{commandLine: c, supplier: newFakeSupplier(t), models: map[string]uuid.UUID{}}
-	// The node reaches the supplier, which listens on loopback, through a client that is allowed to.
-	original := outbound
-	outbound = func(tel *telemetry.Telemetry) (*egress.Client, error) {
-		return egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tel.Traces)), nil
-	}
-	t.Cleanup(func() { outbound = original })
 	w.site = uuid.MustParse(c.text("SELECT id::text FROM accounts.sites"))
 	w.seedCatalog()
 	w.seedSupplier()
@@ -342,7 +336,9 @@ func (w *callWorld) price() {
 // runningNode is a running `serve`.
 type runningNode struct {
 	addresses
-	stop func() error
+	stop     func() error  // asks the node to stop, waits for it and says how it ended
+	finished chan struct{} // closed when serve has returned, whoever made it
+	ended    func() error  // how serve ended; only after finished
 }
 
 // start runs a node of the program over the world's database, whose suppliers it reaches on loopback.
@@ -354,22 +350,32 @@ func (w *callWorld) start() runningNode {
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(w.t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil))) }()
-	n := runningNode{addresses: servingAddrs(w.t, logs, done)}
-	var once sync.Once
+	// The node reaches the supplier, which listens on loopback, through a client that is allowed to.
+	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) { //nolint:unparam // the signature serveVia asks for; the production client can fail
+		return egress.NewForTesting(egresstest.Loopback(w.t), egress.WithTracerProvider(tel.Traces)), nil
+	}
+	go func() {
+		done <- serveVia(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback)
+	}()
+	n := runningNode{addresses: servingAddrs(w.t, logs, done), finished: make(chan struct{})}
 	var result error
+	go func() { result = <-done; close(n.finished) }()
+	n.ended = func() error { return result }
 	n.stop = func() error {
-		once.Do(func() {
-			cancel()
-			select {
-			case result = <-done:
-			case <-time.After(15 * time.Second):
-				w.t.Error("the node did not shut down")
-			}
-		})
+		cancel()
+		select {
+		case <-n.finished:
+		case <-time.After(15 * time.Second):
+			w.t.Error("the node did not shut down")
+		}
 		return result
 	}
 	w.t.Cleanup(func() {
+		select {
+		case <-n.finished: // it ended already, and whoever ended it has said how it should have
+			return
+		default:
+		}
 		if err := n.stop(); err != nil {
 			w.t.Errorf("stopping a node: %v", err)
 		}

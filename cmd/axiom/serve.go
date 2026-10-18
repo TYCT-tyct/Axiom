@@ -96,6 +96,14 @@ func readSettings(environ []string) (nodeSettings, error) {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
+	return serveVia(ctx, environ, logger, func(tel *telemetry.Telemetry) (*egress.Client, error) {
+		return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	})
+}
+
+// serveVia is serve with the client the node reaches its suppliers through: one pool of connections for the call path,
+// the console's admin and the suppliers' sync. A test gives one that may reach a supplier on loopback.
+func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error)) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
 		return err
@@ -115,12 +123,16 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
 
+	exit, err := outbound(tel)
+	if err != nil {
+		return err
+	}
 	recorder := startRecorder(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
-	queue, err := startSync(ctx, db, console.master, tel, logger)
+	queue, err := startSync(ctx, db, console.master, exit, tel, logger)
 	if err != nil {
 		return err
 	}
@@ -131,10 +143,11 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger, recorder)
+	routes, err := console.routes(ctx, db, tel, logger, recorder, exit)
 	if err != nil {
 		return err
 	}
+	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
 	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
@@ -143,17 +156,30 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	served := startServing(servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
-	go announceReady(ctx, routes.calls.ready, &health, logger)
-
+	stopAnnouncing := announceReady(ctx, routes.calls.ready, &health, logger)
 	stopped := awaitEnd(ctx, served, routes.calls.reaped)
+	stopAnnouncing()
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	// One deadline for the whole shutdown: the calls and their settlements drain after the listeners stop, when no new
-	// one can start, and the recorder drains last.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
-	defer cancel()
-	err = shutdown(ctx, cfg.shutdownTimeout, &health, servers)
-	routes.calls.Drain(ctx)
-	return errors.Join(stopped, err, queue.Stop(ctx), recorder.Close(ctx))
+	return errors.Join(stopped, stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder))
+}
+
+// stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
+// answering, not ready), then the calls and their settlements, then the loops that keep the holder alive for them, then
+// the queue and the recorder, which the calls may still have fed. Each stage has a deadline of its own, so a long stream
+// that uses the listeners' up does not take the recorder's with it (deploy/compose.yaml's stop_grace_period covers them
+// all).
+func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening,
+	calls callNode, queue *pg.Queue, recorder *observability.Recorder,
+) error {
+	err := shutdown(ctx, timeout, health, servers)
+	calls.Drain(ctx)
+	calls.stop()
+	within := func(stop func(context.Context) error) error {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return stop(ctx)
+	}
+	return errors.Join(err, within(queue.Stop), within(recorder.Close))
 }
 
 // awaitEnd waits until the node is asked to stop (nil), a listener stops, or the billing loop ends because this node's
@@ -213,19 +239,16 @@ type nodeRoutes struct {
 	calls         callNode
 }
 
-// nodeLimits is the node's in-process limits, built from the gateway's defaults: the one value both the accounts module
-// and the call path take their limits from. A key lookup that misses the cache uses a database connection like an
-// admission does, so the two must share the counting, or a flood of unknown keys would be bounded by nothing
-// (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
-func nodeLimits() (*gateway.Backpressure, error) { return gateway.New(gateway.DefaultConfig()) }
-
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
-	recorder *observability.Recorder,
+	recorder *observability.Recorder, exit *egress.Client,
 ) (nodeRoutes, error) {
-	limits, err := nodeLimits()
+	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
+	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
+	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
+	limits, err := gateway.New(gateway.DefaultConfig())
 	if err != nil {
 		return nodeRoutes{}, err
 	}
@@ -244,20 +267,14 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	exit, err := outbound(tel)
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	// The console's admin and the calls share one outbound client, so the node keeps one set of connections to its
-	// suppliers and the suppliers' sync uses them too (startSync gets its own, in the queue's goroutine).
 	calls, err := startCallPath(ctx, callDeps{
 		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, limits: limits,
 		records: recorder, logger: logger,
 	})
-	if err != nil {
-		return nodeRoutes{}, err
-	}
-	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
 	if err != nil {
 		return nodeRoutes{}, err
 	}
@@ -270,19 +287,9 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// outbound is the client a node reaches its suppliers through: one pool of connections from the node's own address
-// (egress.Direct), shared by the call path and the sync. A test replaces it to let a node call a supplier on loopback.
-var outbound = func(tel *telemetry.Telemetry) (*egress.Client, error) {
-	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
-}
-
-// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
-// address (egress.Direct).
-func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
-	exit, err := outbound(tel)
-	if err != nil {
-		return nil, err
-	}
+// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers through exit, the
+// client the whole node shares.
+func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,

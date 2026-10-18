@@ -29,23 +29,25 @@ const (
 	// reloadEvery is how often the suppliers' snapshot is rebuilt, which is the catalog's polling period: routing
 	// merges the two every 5 seconds, so a faster reload would only be read later.
 	reloadEvery = 5 * time.Second
-	// settleGrace is how long the settlements of finished calls may keep retrying after the listeners stop
-	// (internal/gateway/README.md「优雅退出」). What is still unsettled then is the cleanup's.
-	settleGrace = 30 * time.Second
+	// drainWait is how long the calls and the settlements they left in the background may take to end after the
+	// listeners stop, and abortGrace how long what is left has after its attempts are cancelled
+	// (internal/gateway/README.md「优雅退出」). What is still unsettled then is the cleanup's. deploy/compose.yaml's
+	// stop_grace_period covers AXIOM_SHUTDOWN_TIMEOUT, these two and the queue's and the recorder's own deadlines.
+	drainWait, abortGrace = 15 * time.Second, 5 * time.Second
 )
 
 // callDeps is what a node's call path is built from: the modules it orchestrates and the secret it derives the
 // identifiers sent upstream from.
 type callDeps struct {
 	db       *pg.DB
-	keys     *secret.Keyring         // unseals suppliers' credentials
-	identity []byte                  // the identity key file's newest key
-	accounts *accounts.Service       // the module the calls are admitted through, which took its lookups' slots from limits
-	catalog  *catalog.Catalog        //
-	egress   *egress.Client          //
+	keys     *secret.Keyring   // unseals suppliers' credentials
+	identity []byte            // the identity key file's newest key
+	accounts *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
+	catalog  *catalog.Catalog
+	egress   *egress.Client
 	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records  *observability.Recorder // the call log, which the settlements write to
-	logger   *slog.Logger            //
+	logger   *slog.Logger
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -53,8 +55,9 @@ type callDeps struct {
 type callNode struct {
 	handler  *gateway.Handler
 	executor *gateway.Executor
-	ready    <-chan struct{} // closed once a published snapshot can route
-	reaped   <-chan error    // carries what billing.Run ended with, when it is not a shutdown
+	stop     context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
+	ready    <-chan struct{}    // closed once a published snapshot can route
+	reaped   <-chan error       // carries what billing.Run ended with, when it is not a shutdown
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -98,7 +101,9 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 			"answers 404 no_endpoint until each model has a spec and a sale price",
 			"offered", count.Offered, "in_snapshot", count.Endpoints)
 	}
-	n.ready, n.reaped = ready, startLoops(ctx, d, ledger, upstreams, routes)
+	// The loops outlive the signal that stops the node: the holder must keep beating until the settlements are written.
+	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
+	n.ready, n.reaped, n.stop = ready, startLoops(loops, d, ledger, upstreams, routes), stop
 	return n, nil
 }
 
@@ -132,9 +137,9 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 }
 
 // routeDeps are the sources of the routing snapshot. ready is closed by the first published snapshot that can route.
-func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) gateway.RouteDeps {
+func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) *gateway.RouteDeps {
 	var once sync.Once
-	return gateway.RouteDeps{
+	return &gateway.RouteDeps{
 		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable(), nil },
 		Catalog:      d.catalog,
 		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
@@ -156,7 +161,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 // startLoops starts the loops that keep the call path's inputs fresh. The holder's is the only one that can end the
 // node: once it has been reaped nothing this process writes is fenced in, so it must be restarted with a new one
 // (#205). Its end is what the channel carries.
-func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstreams *suppliers.Service, routes gateway.RouteDeps) <-chan error {
+func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstreams *suppliers.Service, routes *gateway.RouteDeps) <-chan error {
 	reaped := make(chan error, 1)
 	go func() {
 		if err := ledger.Run(ctx); err != nil {
@@ -173,23 +178,32 @@ func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstre
 	return reaped
 }
 
-// announceReady reports the node ready once its routing snapshot can route, and stops listening when the node ends.
-// Readiness is a promise about routing, so it is made only after a snapshot is published, never at the moment the
-// listeners open: the mutation that moves it before the first snapshot is what this waits out.
-func announceReady(ctx context.Context, ready <-chan struct{}, health *httpserver.Health, logger *slog.Logger) {
-	select {
-	case <-ready:
-		health.SetReady(true)
-		logger.Info("ready", "routing", "the snapshot has an endpoint")
-	case <-ctx.Done():
-	}
+// announceReady reports the node ready once its routing snapshot can route. Readiness is a promise about routing, so it
+// is made only after a snapshot is published, never at the moment the listeners open. The returned function ends the
+// wait and returns once it has: after it, the node can no longer be reported ready, so a shutdown's not-ready stays.
+func announceReady(ctx context.Context, ready <-chan struct{}, health *httpserver.Health, logger *slog.Logger) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ready:
+			health.SetReady(true)
+			logger.Info("ready", "routing", "the snapshot has an endpoint")
+		case <-ctx.Done():
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
-// Drain gives the calls in flight and the settlements they left in the background up to settleGrace to end, after the
-// listeners have stopped admitting: what still has not is the cleanup's (internal/gateway/README.md「故障矩阵」).
+// Drain gives the calls in flight and the settlements they left in the background up to drainWait to end, after the
+// listeners have stopped admitting, and abortGrace more once their attempts are cancelled: what still has not ended is
+// the cleanup's (internal/gateway/README.md「故障矩阵」).
 func (c callNode) Drain(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, drainWait)
+	defer cancel()
 	c.handler.Drain(ctx) // the reservations of admissions that were lost
-	c.executor.Drain(ctx, settleGrace)
+	c.executor.Drain(ctx, abortGrace)
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin

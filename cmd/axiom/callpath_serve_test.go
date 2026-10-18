@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/pgtest"
 )
 
 const (
@@ -40,6 +41,7 @@ func TestANodeServesModelCalls(t *testing.T) {
 
 	w.checkMessages(n)
 	w.checkResponses(n)
+	w.checkToolWithoutLimit(n)
 	w.checkFreeReply(n)
 	w.checkRefusedForCredit(n)
 	w.checkUnservedModel(n)
@@ -58,7 +60,7 @@ func TestANodeServesModelCalls(t *testing.T) {
 func (w *callWorld) checkMessages(n runningNode) {
 	t := w.t
 	t.Helper()
-	r := w.call(n, "/v1/messages", w.richKey, messagesCall, "Accept-Encoding", "gzip")
+	r := w.call(n, "/v1/messages", w.richKey, messagesCall, "Accept-Encoding", "gzip", "User-Agent", "claude-cli/2.0.5 (external, cli)")
 	if r.status != http.StatusOK {
 		t.Fatalf("Messages: status %d: %s", r.status, r.body)
 	}
@@ -78,7 +80,7 @@ func (w *callWorld) checkMessages(n runningNode) {
 	if message.Role != "assistant" || message.StopReason != "end_turn" || len(message.Content) != 1 || message.Content[0].Text != "Hello!" {
 		t.Errorf("the Messages answer is %+v, want the recorded sample's Hello! ending the turn", message)
 	}
-	w.checkBooked(r, booking{charge: messagesCharge, ref: "relay-1", upstream: "up-claude", input: 25, output: 15})
+	w.checkBooked(r, booking{charge: messagesCharge, ref: "relay-1", upstream: "up-claude", input: 25, output: 15, app: "claude-code"})
 	w.checkSent()
 }
 
@@ -97,7 +99,7 @@ func (w *callWorld) checkSent() {
 func (w *callWorld) checkResponses(n runningNode) {
 	t := w.t
 	t.Helper()
-	r := w.call(n, "/api/v1/responses", w.richKey, responsesCall)
+	r := w.call(n, "/api/v1/responses", w.richKey, responsesCall, "User-Agent", "codex_cli_rs/0.50.0")
 	if r.status != http.StatusOK {
 		t.Fatalf("Responses: status %d: %s", r.status, r.body)
 	}
@@ -116,7 +118,29 @@ func (w *callWorld) checkResponses(n runningNode) {
 		response.Output[0].Content[0].Text != "Hi there! How can I assist you today?" {
 		t.Errorf("the Responses answer is %+v, want the recorded sample's text, completed", response)
 	}
-	w.checkBooked(r, booking{charge: responsesCharge, ref: "relay-2", upstream: "up-gpt", input: 37, output: 11})
+	w.checkBooked(r, booking{charge: responsesCharge, ref: "relay-2", upstream: "up-gpt", input: 37, output: 11, app: "codex"})
+}
+
+// checkToolWithoutLimit: a web search with no limit on its uses, on a model that has no default maximum, is refused
+// as an invalid request before the supplier hears of it, and the ledger does not move; the same search with a limit is
+// served.
+func (w *callWorld) checkToolWithoutLimit(n runningNode) {
+	t := w.t
+	t.Helper()
+	transactions, called := w.query("SELECT count(*)::text FROM billing.transactions"), len(w.supplier.sent())
+	search := `{"model":"gpt-6-astra","input":"Hello!","tools":[{"type":"web_search"}]}`
+	r := w.call(n, "/v1/responses", w.richKey, search)
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "invalid_request") || !strings.Contains(string(r.body), "max_tool_calls") {
+		t.Errorf("a search with no limit got %d %s, want 400 invalid_request naming max_tool_calls", r.status, r.body)
+	}
+	if got := w.query("SELECT count(*)::text FROM billing.transactions"); got != transactions || len(w.supplier.sent()) != called {
+		t.Errorf("a refused search moved the ledger (%s transactions, then %s) or reached the supplier", transactions, got)
+	}
+	r = w.call(n, "/v1/responses", w.richKey, strings.Replace(search, `"tools"`, `"max_tool_calls":2,"tools"`, 1))
+	if r.status != http.StatusOK {
+		t.Errorf("a search with a limit got %d %s, want it served", r.status, r.body)
+	}
+	w.checkBalanced()
 }
 
 // checkFreeReply: a reply that reports no output and never ends is free, and no waiver is counted.
@@ -147,6 +171,7 @@ func (w *callWorld) checkFreeReply(n runningNode) {
 		t.Errorf("the call log holds %q for the free call, want it free, charged nothing and ended in error", logged)
 	}
 	w.checkBalanced()
+	w.supplier.setZero(false)
 }
 
 // checkRefusedForCredit: an account with nothing to spend is refused before the supplier hears of it, and the ledger
@@ -184,9 +209,11 @@ func (w *callWorld) checkSecondNode(n runningNode) {
 	if got := w.query("SELECT count(*)::text FROM billing.holders WHERE reaped_at IS NULL"); got != "2" {
 		t.Errorf("%s holders alive, want one for each node: the second node's start reaped the first's", got)
 	}
-	if r := w.call(n, "/v1/responses", w.richKey, responsesCall); r.status != http.StatusOK {
-		t.Errorf("the first node answers %d %s after the second started", r.status, r.body)
+	r := w.call(n, "/v1/responses", w.richKey, responsesCall)
+	if r.status != http.StatusOK {
+		t.Fatalf("the first node answers %d %s after the second started", r.status, r.body)
 	}
+	w.checkSettled(r, responsesCharge)
 	if err := second.stop(); err != nil {
 		t.Errorf("the second node's shutdown: %v", err)
 	}
@@ -198,6 +225,16 @@ type booking struct {
 	charge        int64
 	ref, upstream string
 	input, output int
+	app           string // the client application the call log names
+}
+
+// checkSettled: the call's reservation is settled for the charge.
+func (w *callWorld) checkSettled(r reply, charge int64) {
+	w.t.Helper()
+	id := r.header.Get("X-Generation-Id")
+	if got := w.query("SELECT state || ' ' || charged FROM billing.reservations WHERE request_id::text = $1", id); got != "settled "+strconv.FormatInt(charge, 10) {
+		w.t.Errorf("the reservation is %q, want settled for %d", got, charge)
+	}
 }
 
 // checkBooked: the call has an id, its reservation is settled for the charge, the books balance, the supplier's side
@@ -209,9 +246,7 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	if id == "" {
 		w.t.Fatal("the answer has no X-Generation-Id")
 	}
-	if got := w.query("SELECT state || ' ' || charged FROM billing.reservations WHERE request_id::text = $1", id); got != "settled "+strconv.FormatInt(want.charge, 10) {
-		w.t.Errorf("the reservation is %q, want settled for %d", got, want.charge)
-	}
+	w.checkSettled(r, want.charge)
 	w.checkBalanced()
 	if got := w.query(`SELECT count(*)::text || ' ' || coalesce(max(c.charge_ref), '') || ' ' || coalesce(max(e.upstream_name), '')
 		FROM suppliers.attempt_costs c JOIN suppliers.endpoints e ON e.id = c.endpoint_id WHERE c.request_id::text = $1`, id); got != "1 "+want.ref+" "+want.upstream {
@@ -220,11 +255,11 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	var logged string
 	waitUntil(w.t, 5*time.Second, func() bool {
 		logged = w.query(`SELECT coalesce(count(*)::text || ' ' || max(price_nano)::text || ' ' || bool_or(free_of_charge)::text || ' ' ||
-			max(usage->>'input') || ' ' || max(usage->>'output'), '') FROM observability.call_log WHERE id::text = $1`, id)
+			max(usage->>'input') || ' ' || max(usage->>'output') || ' ' || max(client_app) || ' ' || max(source_class), '') FROM observability.call_log WHERE id::text = $1`, id)
 		return logged != ""
 	})
-	if wanted := "1 " + strconv.FormatInt(want.charge, 10) + " false " + strconv.Itoa(want.input) + " " + strconv.Itoa(want.output); logged != wanted {
-		w.t.Errorf("the call log holds %q, want %q: one record with the ledger's charge and the usage the relay reported", logged, wanted)
+	if wanted := "1 " + strconv.FormatInt(want.charge, 10) + " false " + strconv.Itoa(want.input) + " " + strconv.Itoa(want.output) + " " + want.app + " relay"; logged != wanted {
+		w.t.Errorf("the call log holds %q, want %q: one record with the ledger's charge, the usage the relay reported, the client application and the source class", logged, wanted)
 	}
 }
 
@@ -273,5 +308,24 @@ func TestModelCallsAreMountedBesideTheConsole(t *testing.T) {
 		if got := rec.Header().Get("X-Answered-By"); got != want || encoded != (want == "console") {
 			t.Errorf("%s was answered by %q, encoded %v; want %q, encoded %v", path, got, encoded, want, want == "console")
 		}
+	}
+}
+
+// TestANodeExitsWhenItsHolderIsReaped: once another node has reaped this one's holder, nothing it writes is fenced in
+// any more, so its next heartbeat ends the node (with an error that says why) instead of leaving it to answer every
+// call with a failure. The process manager starts it again with a holder of its own.
+func TestANodeExitsWhenItsHolderIsReaped(t *testing.T) {
+	w := newCallWorld(t)
+	n := w.start()
+	if err := pgtest.Run(t.Context(), w.database.Superuser, "UPDATE billing.holders SET reaped_at = clock_timestamp() WHERE reaped_at IS NULL"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-n.finished:
+		if err := n.ended(); err == nil || !strings.Contains(err.Error(), "holder is gone") {
+			t.Errorf("the node ended with %v, want it to say its holder is gone", err)
+		}
+	case <-time.After(40 * time.Second):
+		t.Fatal("the node kept running with a reaped holder")
 	}
 }
