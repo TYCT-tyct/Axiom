@@ -154,6 +154,9 @@ type fakeEndpoint struct {
 	script []scripted
 	policy suppliers.CallPolicy
 	noSlot bool
+	// receipt is what the attempts of this endpoint leave, as a real one from suppliers does; the zero value is a
+	// receipt with nothing known, which prices every attempt at nothing.
+	receipt suppliers.AttemptReceipt
 
 	acquired, sends, done int
 	calls                 []suppliers.Call
@@ -222,15 +225,15 @@ func (c *fakeConn) Send(ctx context.Context, call suppliers.Call) (*http.Respons
 	c.u.mu.Unlock()
 	return next(ctx)
 }
-func (c *fakeConn) Policy() suppliers.CallPolicy    { return c.e.policy }
-func (*fakeConn) Receipt() suppliers.AttemptReceipt { return suppliers.AttemptReceipt{} }
+func (c *fakeConn) Policy() suppliers.CallPolicy      { return c.e.policy }
+func (c *fakeConn) Receipt() suppliers.AttemptReceipt { return c.e.receipt }
 func (c *fakeConn) Done() suppliers.AttemptReceipt {
 	c.once.Do(func() {
 		c.u.mu.Lock()
 		c.e.done++
 		c.u.mu.Unlock()
 	})
-	return suppliers.AttemptReceipt{}
+	return c.e.receipt
 }
 
 // clientWriter is the client of a call: it keeps what it is given with the time each write was made, and can be made
