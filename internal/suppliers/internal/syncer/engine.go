@@ -336,7 +336,7 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 // the supplier published, else a person's confirmed base scaled by the group's ratio, else nothing. kept is the
 // fingerprint to keep when nothing new can be worked out (a model that was not read this time).
 func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[string]string) (string, error) {
-	key := g.Ref + "/" + m.UpstreamName
+	key := PlanKey(g.Ref, m.UpstreamName)
 	var schedule catalog.Schedule
 	var basis string
 	switch base, confirmed := c.State.Confirmed[m.UpstreamName]; {

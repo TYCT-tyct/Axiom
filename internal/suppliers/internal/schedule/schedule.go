@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -103,14 +104,17 @@ type Schedule struct {
 
 // New adds the workers and the periodic sweep to the queue, before it starts.
 func New(cfg Config) (*Schedule, error) {
-	if cfg.DB == nil || cfg.Keys == nil || cfg.Egress == nil || cfg.Queue == nil || cfg.Registry == nil || cfg.Now == nil || cfg.Logger == nil {
-		return nil, errors.New("schedule: a database, keys, an egress client, a queue, adapters, a clock and a logger are required")
+	if err := cfg.check(); err != nil {
+		return nil, err
 	}
-	if cfg.SweepEvery <= 0 {
-		return nil, errors.New("schedule: the sweep needs a positive interval")
+	// The projection maps a supplier's upstream names by the catalog, and the snapshot it holds is refreshed when it has
+	// gone stale, so no poller of its own is started here.
+	cat, err := catalog.Open(cfg.DB, cfg.Scope, catalog.Config{Logger: cfg.Logger})
+	if err != nil {
+		return nil, err
 	}
 	node, err := persist.New(persist.Config{
-		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now,
+		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now, Catalog: cat,
 	})
 	if err != nil {
 		return nil, err
@@ -124,6 +128,17 @@ func New(cfg Config) (*Schedule, error) {
 	}
 	cfg.Queue.Every(cfg.SweepEvery, func() river.JobArgs { return SweepArgs{} })
 	return s, nil
+}
+
+// check reports what a node must be given to sync at all, before anything is opened.
+func (cfg Config) check() error {
+	if cfg.DB == nil || cfg.Keys == nil || cfg.Egress == nil || cfg.Queue == nil || cfg.Registry == nil || cfg.Now == nil || cfg.Logger == nil {
+		return errors.New("schedule: a database, keys, an egress client, a queue, adapters, a clock and a logger are required")
+	}
+	if cfg.SweepEvery <= 0 {
+		return errors.New("schedule: the sweep needs a positive interval")
+	}
+	return nil
 }
 
 // settings are the engine's defaults, with the backoff spread by a tenth so that suppliers that failed together do not
