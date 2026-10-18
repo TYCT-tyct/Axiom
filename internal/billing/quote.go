@@ -43,6 +43,10 @@ type Model struct {
 	OutputSpeed             int64                  // the fastest output, in tokens per second
 	MaxUses                 map[catalog.Item]int64 // each server tool's default most uses
 	Reports                 catalog.ItemSet        // the items the upstream may report (catalog.Reportable)
+	// ServiceTiers are the tiers the endpoint is offered at. A request that names no tier may be served at any the
+	// endpoint offers, but only at those, so the quote needs the schedule to price only those. Empty means unknown, and
+	// the request's own tiers all count.
+	ServiceTiers catalog.ServiceTierSet
 }
 
 // Quotable is one route entry as billing quotes it: its locked price schedule, its model, the output limit that
@@ -165,6 +169,9 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 		return q, errors.New("billing: the model has no context length")
 	}
 	tiers := d.ServiceTiers
+	if e.Model.ServiceTiers != 0 {
+		tiers &= e.Model.ServiceTiers
+	}
 	tiers.Add(catalog.ServiceTierStandard)
 	uses, samplings := serverToolUses(d, e.Model)
 	first, longest := inputBound(d, e.Model, samplings)

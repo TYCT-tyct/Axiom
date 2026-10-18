@@ -279,7 +279,7 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	}
 	c := &candidate{Endpoint: e, state: r.state.of(e.ID), model: billing.Model{
 		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
-		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports,
+		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
 	if e.Price.Version == (uuid.UUID{}) {
 		return c, nil

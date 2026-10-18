@@ -111,12 +111,18 @@ func TestQuoteEntryModel(t *testing.T) {
 		Model:     Model{ContextLength: 1000, Reports: 1<<in | 1<<catalog.ItemCacheRead | 1<<catalog.ItemOutput},
 		MaxOutput: 1,
 	}
+	standardOnly := entry(t, false, 3)
+	standardOnly.Model.ServiceTiers = 1 << catalog.ServiceTierStandard
 	for _, tc := range []struct {
 		name string
 		d    Demand
 		e    Quotable
 		want string
 	}{
+		{
+			"a request that may be served at priority, to an endpoint that offers standard only: 80 at 1 + 500 at 10",
+			Demand{TextBytes: 80, ServiceTiers: 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority}, standardOnly, "5080",
+		},
 		{"a file without a page limit: 1000 at 4 + 500 at 20", Demand{Documents: 1}, noPageLimit, "14000"},
 		{"cache reads dearer than input: 80 at 2 + 1", Demand{TextBytes: 80}, dearCache, "161"},
 		{
