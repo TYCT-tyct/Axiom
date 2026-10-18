@@ -32,6 +32,7 @@ func TestServe(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
 	addrs := servingAddrs(t, logs, done)
+	awaitRecord(t, logs, done, "ready") // /readyz turns 200 on a goroutine of its own, after "serving"
 
 	for _, path := range []string{"/livez", "/readyz"} {
 		if resp, err := get(t, "http://"+addrs.Ops+path); err != nil || resp.StatusCode != http.StatusOK {
@@ -212,7 +213,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 }
 
 // records receives log records: the JSON handler writes each record with a single Write. Once the buffer is full,
-// records are dropped rather than blocking the node: the test reads only up to "serving", the first record.
+// records are dropped rather than blocking the node: the tests read only up to "serving" and "ready", the first records.
 type records chan []byte
 
 func (r records) Write(p []byte) (int, error) {
@@ -262,6 +263,14 @@ type addresses struct {
 // servingAddrs reads log records until the node reports the addresses it listens on.
 func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 	t.Helper()
+	return awaitRecord(t, logs, done, "serving")
+}
+
+// awaitRecord reads log records until the node logs msg. The node logs "ready" after it has set the probes' readiness.
+func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addresses {
+	t.Helper()
+	timeout := time.NewTimer(10 * time.Second) // one deadline: other records must not extend it
+	defer timeout.Stop()
 	for {
 		select {
 		case line := <-logs:
@@ -269,13 +278,13 @@ func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 			if err := json.Unmarshal(line, &record); err != nil {
 				t.Fatalf("log record %q: %v", line, err)
 			}
-			if record.Msg == "serving" {
+			if record.Msg == msg {
 				return record
 			}
 		case err := <-done:
-			t.Fatalf("the node stopped before serving: %v", err)
-		case <-time.After(10 * time.Second):
-			t.Fatal("the node did not start")
+			t.Fatalf("the node stopped before logging %q: %v", msg, err)
+		case <-timeout.C:
+			t.Fatalf("the node did not log %q", msg)
 		}
 	}
 }
