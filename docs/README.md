@@ -14,7 +14,7 @@
 | 安全：威胁模型、安全基线、租户隔离、防滥用、账户安全、密钥管理、安全开发流程 | [security.md](security.md) | 改动鉴权、计费、出站请求或任何安全相关的代码之前 |
 | 前端与设计：页面清单、验收门槛、可用性任务、前端性能指标、设计原则、主题与自由度、视觉方向 | [frontend.md](frontend.md) | 做任何页面、组件、主题或站点外观配置之前；调整前端性能预算之前 |
 | 账户与租户：登录、账户、工作区、授权、API key、等级、站点配置、给用户的邮件、配置链 | [domains/accounts.md](domains/accounts.md) | 改动 `accounts` 模块或涉及登录、权限、key 之前 |
-| 计费：钱的表示、汇率、资金来源、额度批次、供应商成本、定价、预留与结算、用量来源与暂估、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
+| 计费：钱的表示、汇率、资金来源、额度批次、供应商成本、定价与售价、预留与结算、用量来源与暂估、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
 | 计费在调用路径上的代码接口：预留、计量、追加、结算、持有者与截止时间、预留的状态、写入的数据 | [internal/billing/README.md](../internal/billing/README.md) | 实现或调用 `billing` 的预留与结算之前 |
 | 模型目录：标准 ID、公开与内部名字、名字解析、生命周期、规格与参考价的来源、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
 | 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |

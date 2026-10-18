@@ -154,6 +154,157 @@ func (a adminAPI) checkAccount(ctx context.Context, tx pg.Tx, site accounts.Site
 	return err
 }
 
+// PreviewPricing shows what models would sell for, with the main site's rules or with one added or replaced for the
+// preview alone. Nothing is stored.
+//
+// M1 prices from the reference price, so a row carries the sale price and no cost: what an endpoint's cost is comes with
+// routing's endpoints in M2 (m1-plan.md §4.2), and until then `cost_unknown` and `below_floor` are statuses nothing
+// produces. A model no rule prices is `unpriced`, never sold at its reference price
+// (docs/domains/billing.md「定价」).
+func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPricingRequestObject) (adminapi.PreviewPricingResponseObject, error) {
+	site, ok := a.accounts.MainSite()
+	if !ok {
+		return nil, accounts.ErrNotFound
+	}
+	audience, err := a.previewAudience(ctx, site, *request.Body)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := a.previewRules(ctx, site, *request.Body)
+	if err != nil {
+		return nil, err
+	}
+	rules = slices.DeleteFunc(rules, func(r billing.Rule) bool {
+		return !r.Audience.Prices(audience.account, audience.tier)
+	})
+	snap, err := a.catalog.Current()
+	if err != nil {
+		return nil, err
+	}
+	sold, err := billing.SalePrices(rules, snap, site.Currency)
+	if err != nil {
+		return nil, err
+	}
+	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(request.Body.ModelIds))}
+	for _, id := range request.Body.ModelIds {
+		model, err := modelIDOf(id)
+		if err != nil {
+			return nil, err
+		}
+		m, ok := snap.Model(model)
+		if !ok {
+			return nil, catalog.ErrModelNotFound
+		}
+		row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.Unpriced}
+		if s, ok := sold[model]; ok {
+			row.Status, row.Sale = adminapi.Priced, scheduleBody(s.Schedule)
+		}
+		rows.Data = append(rows.Data, row)
+	}
+	return adminapi.PreviewPricing200JSONResponse(rows), nil
+}
+
+// previewAudience is whom the preview prices for: the account and its tier when the request names an account, else the
+// tier it names, else the site's default tier, the tier a new account is put in (api/admin.yaml「PricingPreviewRequest」).
+func (a adminAPI) previewAudience(ctx context.Context, site accounts.Site, body adminapi.PricingPreviewRequest) (audience, error) {
+	var out audience
+	if body.AccountId != nil && body.TierId != nil {
+		return out, invalidField("/tier_id", "is not with account_id")
+	}
+	var tier accounts.TierID
+	switch {
+	case body.AccountId != nil:
+		account, err := accounts.ParseAccountID(*body.AccountId)
+		if err != nil {
+			return out, invalidField("/account_id", "not an account's ID")
+		}
+		var detail accounts.AccountDetail
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+			detail, err = a.accounts.Account(ctx, tx, account)
+			return err
+		}); err != nil {
+			return out, err
+		}
+		if detail.Site != site.ID {
+			return out, invalidField("/account_id", "is not an account of this site")
+		}
+		out.account, tier = account, detail.Tier.ID
+	case body.TierId != nil:
+		parsed, err := accounts.ParseTierID(*body.TierId)
+		if err != nil {
+			return out, invalidField("/tier_id", "not a tier's ID")
+		}
+		tier = parsed
+	default:
+		tier = site.DefaultTier
+	}
+	if tier != (accounts.TierID{}) {
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkTier(ctx, tx, site, tier.TypeID()) }); err != nil {
+			return out, err
+		}
+	}
+	out.tier = tier
+	return out, nil
+}
+
+// audience is whom a preview prices for: one account and its tier, a tier alone, or the site's default tier alone.
+type audience struct {
+	account accounts.AccountID
+	tier    accounts.TierID
+}
+
+// previewRules is the site's rules, with the request's rule added or put in place of replaces_rule_id.
+func (a adminAPI) previewRules(ctx context.Context, site accounts.Site, body adminapi.PricingPreviewRequest) ([]billing.Rule, error) {
+	var rules []billing.Rule
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		rules, err = billing.Rules(ctx, tx, uuid.UUID(site.ID))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if body.Rule == nil {
+		if body.ReplacesRuleId != nil {
+			return nil, invalidField("/replaces_rule_id", "is not without rule")
+		}
+		return rules, nil
+	}
+	in, err := ruleInputOf(*body.Rule)
+	if err != nil {
+		return nil, err
+	}
+	if err := in.Check(site.Currency); err != nil {
+		return nil, ruleProblem(err)
+	}
+	if err := a.checkSubjects(ctx, site, in); err != nil {
+		return nil, err
+	}
+	// The preview's rule is as specific as its target and audience make it, and has no ID of its own to sort by: it
+	// goes after the rules it ties with, so that it never displaces one it is no more specific than.
+	preview := billing.Rule{RuleInput: in}
+	if body.ReplacesRuleId != nil {
+		id, err := uuid.Parse(*body.ReplacesRuleId)
+		if err != nil || id.String() != *body.ReplacesRuleId {
+			return nil, invalidField("/replaces_rule_id", "not a rule's ID")
+		}
+		i := slices.IndexFunc(rules, func(r billing.Rule) bool { return r.ID == id })
+		if i < 0 {
+			return nil, billing.ErrRuleNotFound
+		}
+		rules[i] = preview
+		return rules, nil
+	}
+	return billing.Place(preview, rules), nil
+}
+
+// scheduleBody is a schedule as the contract gives it, through the canonical form both sides read.
+func scheduleBody(s catalog.Schedule) *adminapi.PriceSchedule {
+	body, err := converted[adminapi.PriceSchedule](s)
+	if err != nil {
+		return nil // a schedule the contract's form cannot hold, which the catalog never makes one of
+	}
+	return &body
+}
+
 // CreatePricingRule adds a rule to the main site.
 func (a adminAPI) CreatePricingRule(ctx context.Context, request adminapi.CreatePricingRuleRequestObject) (adminapi.CreatePricingRuleResponseObject, error) {
 	site, ok := a.accounts.MainSite()

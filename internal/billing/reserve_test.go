@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -53,7 +52,6 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	if config == (Config{}) {
 		config = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour}
 	}
-	config.CorrectionWindow = cmp.Or(config.CorrectionWindow, time.Hour)
 	b.supplies = newSupplies()
 	if b.billing, err = Start(t.Context(), app, b.platform, config, b.supplies); err != nil {
 		t.Fatal(err)

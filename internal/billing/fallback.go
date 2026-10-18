@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,8 +22,11 @@ import (
 )
 
 // fallbacks are a credit currency's prices for what a schedule cannot price (docs/domains/billing.md「价目表缺项」):
-// each known per-use item's default unit price, and the markup on a supplier's actual cost that a correction charges
-// when the usage holds an item nothing prices. Admission locks them on the reservation, as it locks the schedules.
+// each known per-use item's default unit price. Admission locks them on the reservation, as it locks the schedules.
+//
+// The stored row also carries a markup on a supplier's actual cost, which priced a correction of the charge. M1 has no
+// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applies it, and it stays in the row until a
+// migration removes it from the rows written before: a row with a member this type does not know is refused.
 type fallbacks struct {
 	currency platform.Currency
 	perUse   map[catalog.Item]platform.UnitPrice
@@ -112,20 +114,6 @@ func (f fallbacks) highest() (p platform.UnitPrice) {
 	return p
 }
 
-// byCost is cost × markup in billionths, rounded up once (「钱的表示」), at most what an amount holds: it is capped by
-// what the account can pay anyway.
-func (f fallbacks) byCost(cost int64) int64 {
-	r := new(big.Rat).Mul(f.markup.Mul(1).Rat(), new(big.Rat).SetInt64(cost))
-	q, m := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
-	if m.Sign() > 0 {
-		q.Add(q, big.NewInt(1))
-	}
-	if !q.IsInt64() {
-		return math.MaxInt64
-	}
-	return q.Int64()
-}
-
 // CheckFallbacks is the startup check (「价目表缺项」): every stored row valid and under its own currency, and the
 // main site's, USD, present.
 func CheckFallbacks(ctx context.Context, tx pg.Tx) error {
@@ -177,7 +165,7 @@ func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []s
 		c := e.Price.Currency().String()
 		f, ok := found[c]
 		if !ok {
-			return nil, nil, fmt.Errorf("%w: no fallback prices in %s", errUnpriced, c)
+			return nil, nil, fmt.Errorf("%w: no fallback prices in %s", ErrUnpriced, c)
 		}
 		filled[i].Price, locked[i] = e.Price.Fill(f.perUse), bodies[c]
 	}
@@ -293,8 +281,8 @@ func (r *ClearUnknownItemRequest) SetActor(a audit.Actor) { r.actor = a }
 var ErrNotFound = errors.New("billing: not found")
 
 // ClearUnknownItem lets the model take requests again, with its audit entry, in tx in the platform scope. The field
-// is not blocked again when it next appears: the administrator has priced it, and calls that still report it are
-// charged at its fallback price and corrected by cost.
+// is not blocked again when it next appears: the administrator has priced it, so calls that still report it are
+// charged at its fallback price.
 func ClearUnknownItem(ctx context.Context, tx pg.Tx, r ClearUnknownItemRequest) error {
 	if strings.TrimSpace(r.Reason) == "" {
 		return errors.New("billing: clearing an unknown item needs a reason")
@@ -312,8 +300,7 @@ func ClearUnknownItem(ctx context.Context, tx pg.Tx, r ClearUnknownItemRequest) 
 	})
 }
 
-// FallbackHold is an estimate that holds part of its reservation and rests on usage only a fallback price covers,
-// until its correction window ends at By.
+// FallbackHold is an estimate that holds part of its reservation and rests on usage only a fallback price covers.
 type FallbackHold struct {
 	Request, Site, Account uuid.UUID
 	Held                   int64 // billionths of a credit
@@ -341,42 +328,6 @@ func FallbackHolds(ctx context.Context, tx pg.Tx, after *FallbackHold, limit int
 		holds[i] = FallbackHold{Request: r.RequestID, Site: r.SiteID, Account: r.AccountID, Held: r.Held, By: r.CorrectBy}
 	}
 	return holds, nil
-}
-
-// CloseHoldRequest is an operator's decision that an estimate stands as charged: no supplier record is coming.
-type CloseHoldRequest struct {
-	Request uuid.UUID `json:"request"`
-	Reason  string    `json:"reason"`
-	actor   audit.Actor
-}
-
-// SetActor records who asks.
-func (r *CloseHoldRequest) SetActor(a audit.Actor) { r.actor = a }
-
-// CloseHold ends an estimate's correction window now, with its audit entry, in tx in the platform scope: the next
-// Cleanup releases what it holds and settles it at its current charge, as it would at the end of the hour, and later
-// supplier records adjust only the cost. It is the manual way out for a hold the operator knows no record will end.
-func CloseHold(ctx context.Context, tx pg.Tx, r CloseHoldRequest) error {
-	if strings.TrimSpace(r.Reason) == "" {
-		return errors.New("billing: closing a hold needs a reason")
-	}
-	account, err := queries.ReservationAccount(ctx, tx, r.Request)
-	if err == nil {
-		_, err = lockAccount(ctx, tx, account)
-	}
-	var row CloseHoldRow
-	if err == nil {
-		row, err = queries.CloseHold(ctx, tx, r.Request)
-	}
-	if errors.Is(err, pg.ErrNoRows) {
-		return fmt.Errorf("%w: no estimate of %s holds a reservation in its window", ErrNotFound, r.Request)
-	} else if err != nil {
-		return fmt.Errorf("billing: close the hold: %w", err)
-	}
-	return audit.Record(ctx, tx, audit.Event{
-		Actor: r.actor, Action: "hold.close", Target: audit.Target{Module: "billing", Kind: "account", ID: row.AccountID.String()},
-		Reason: r.Reason, Detail: map[string]any{"request": r.Request.String(), "held": row.Held},
-	})
 }
 
 // RegisterMetrics reports the fallback holds on m as two gauges, their number and what they hold in billionths, read

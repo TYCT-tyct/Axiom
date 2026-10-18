@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"net/http"
 
 	"axiom/internal/billing"
@@ -10,13 +9,9 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// errNotImplemented is the answer of an operation of the admin's contract that has no handler yet (tools/pendingapi).
-var errNotImplemented = errors.New("not implemented")
-
 // adminRefusals are the refusals the admin API's modules make beyond those the console's do (refusals), tried after
 // them. A message is English for logs and developers and never repeats what the client sent.
 var adminRefusals = []refusal{
-	{errNotImplemented, http.StatusNotImplemented, codeNotImplemented, "this operation is not implemented yet"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
 
 	{catalog.ErrOpKeyReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another change"},

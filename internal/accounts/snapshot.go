@@ -34,6 +34,8 @@ type Site struct {
 	Registration string // invite or closed
 	// Currency is the site's accounting currency, which the amounts its API shows are in.
 	Currency platform.Currency
+	// DefaultTier is the tier the site puts a new account in, its first unless an operator changed it.
+	DefaultTier TierID
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit int64
 	sessions         map[Surface]lifetime
@@ -141,6 +143,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	for _, r := range sites {
 		site := Site{
 			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
+			DefaultTier:      TierID(r.DefaultTierID),
 			NewKeyDailyLimit: defaultNewKeyDailyLimit,
 			sessions: map[Surface]lifetime{
 				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},

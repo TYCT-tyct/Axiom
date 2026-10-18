@@ -12,64 +12,6 @@ import (
 	"uuid"
 )
 
-const addWaiver = `-- name: AddWaiver :one
-INSERT INTO billing.waivers AS w (account_id, day, site_id, cost)
-SELECT $1, (clock_timestamp() AT TIME ZONE 'UTC')::date, $2, $3
-WHERE $3::bigint <= $4::bigint
-ON CONFLICT (account_id, day) DO UPDATE SET cost = w.cost + excluded.cost WHERE w.cost + excluded.cost <= $4::bigint
-RETURNING true
-`
-
-type AddWaiverParams struct {
-	AccountID uuid.UUID
-	SiteID    uuid.UUID
-	Cost      int64
-	Cap       int64
-}
-
-// Adds a waived call's cost to the account's day if the cap allows it, and reports whether it did.
-func (q *Queries) AddWaiver(ctx context.Context, db DBTX, arg AddWaiverParams) (bool, error) {
-	row := db.QueryRow(ctx, addWaiver,
-		arg.AccountID,
-		arg.SiteID,
-		arg.Cost,
-		arg.Cap,
-	)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const applyRevision = `-- name: ApplyRevision :execrows
-INSERT INTO billing.corrections AS c (request_id, attempt_seq, site_id, account_id, revision)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (request_id, attempt_seq) DO UPDATE SET revision = excluded.revision WHERE c.revision < excluded.revision
-`
-
-type ApplyRevisionParams struct {
-	RequestID  uuid.UUID
-	AttemptSeq int32
-	SiteID     uuid.UUID
-	AccountID  uuid.UUID
-	Revision   int64
-}
-
-// A supplier record applies once to its attempt, and never after a newer one (River delivers at least once, in any
-// order): 0 rows is a revision already applied or older.
-func (q *Queries) ApplyRevision(ctx context.Context, db DBTX, arg ApplyRevisionParams) (int64, error) {
-	result, err := db.Exec(ctx, applyRevision,
-		arg.RequestID,
-		arg.AttemptSeq,
-		arg.SiteID,
-		arg.AccountID,
-		arg.Revision,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const attemptCost = `-- name: AttemptCost :one
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
 WHERE t.request_id = $1 AND t.attempt_seq = $2 AND e.book = 'supplier_cost'
@@ -87,27 +29,9 @@ func (q *Queries) AttemptCost(ctx context.Context, db DBTX, arg AttemptCostParam
 	return column_1, err
 }
 
-const corrected = `-- name: Corrected :one
-SELECT EXISTS (SELECT FROM billing.corrections WHERE request_id = $1 AND attempt_seq = $2)::boolean
-`
-
-type CorrectedParams struct {
-	RequestID  uuid.UUID
-	AttemptSeq int32
-}
-
-// Whether a supplier record has set this attempt's cost already, so a later Settle leaves it to the record.
-func (q *Queries) Corrected(ctx context.Context, db DBTX, arg CorrectedParams) (bool, error) {
-	row := db.QueryRow(ctx, corrected, arg.RequestID, arg.AttemptSeq)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const dueReservations = `-- name: DueReservations :many
 SELECT r.request_id, r.account_id, r.state FROM billing.reservations r JOIN billing.holders h ON h.id = r.holder_id
 WHERE r.state = 'pending' AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
-    OR r.state IN ('estimated', 'cleanup_pending') AND r.correct_by < clock_timestamp()
 ORDER BY r.request_id
 LIMIT $1
 `
@@ -118,7 +42,7 @@ type DueReservationsRow struct {
 	State     string
 }
 
-// What cleanup must take over: pending past the deadline or under a reaped holder, and held states past correct_by.
+// What cleanup must take over: pending past the deadline or under a reaped holder.
 func (q *Queries) DueReservations(ctx context.Context, db DBTX, max int32) ([]DueReservationsRow, error) {
 	rows, err := db.Query(ctx, dueReservations, max)
 	if err != nil {
@@ -143,10 +67,8 @@ const endReservation = `-- name: EndReservation :one
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
     charged = $4, price = $5, waived = $6, estimated = $7,
-    final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries),
-    correct_by = CASE WHEN $10::float8 > 0
-        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8) ELSE correct_by END
-WHERE request_id = $11
+    final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries)
+WHERE request_id = $10
 RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
@@ -160,13 +82,12 @@ type EndReservationParams struct {
 	Estimated      bool
 	FinalUsage     []byte
 	AttemptEntries []int32
-	HoldSeconds    float64
 	RequestID      uuid.UUID
 }
 
-// Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state. The charged
-// attempt and entry, and the attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's
-// EndRequest records, so every clock the request's end is judged by is the database's.
+// Writes a charge's outcome. The charged attempt and entry, and the attempts' entries, stay as they were when none is
+// given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
+// is judged by is the database's.
 func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) (time.Time, error) {
 	row := db.QueryRow(ctx, endReservation,
 		arg.State,
@@ -178,7 +99,6 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.Estimated,
 		arg.FinalUsage,
 		arg.AttemptEntries,
-		arg.HoldSeconds,
 		arg.RequestID,
 	)
 	var ended_at time.Time
@@ -278,32 +198,31 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
+    r.fallbacks, r.models, r.attempt_entries
 FROM billing.reservations r
 WHERE r.request_id = $1
 `
 
 type LockReservationRow struct {
-	SiteID           uuid.UUID
-	AccountID        uuid.UUID
-	WorkspaceID      uuid.UUID
-	KeyID            uuid.UUID
-	WorkspaceWindow  time.Time
-	KeyWindow        time.Time
-	Amount           int64
-	State            string
-	Prices           []string
-	ChargedSeq       *int32
-	Entry            *int32
-	Charged          int64
-	Price            int64
-	Waived           bool
-	Estimated        bool
-	FinalUsage       []byte
-	Fallbacks        []string
-	Models           []uuid.UUID
-	AttemptEntries   []int32
-	CorrectionClosed bool
+	SiteID          uuid.UUID
+	AccountID       uuid.UUID
+	WorkspaceID     uuid.UUID
+	KeyID           uuid.UUID
+	WorkspaceWindow time.Time
+	KeyWindow       time.Time
+	Amount          int64
+	State           string
+	Prices          []string
+	ChargedSeq      *int32
+	Entry           *int32
+	Charged         int64
+	Price           int64
+	Waived          bool
+	Estimated       bool
+	FinalUsage      []byte
+	Fallbacks       []string
+	Models          []uuid.UUID
+	AttemptEntries  []int32
 }
 
 // Run after the account's balance row is locked: every change to a reservation happens under that lock.
@@ -330,7 +249,6 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.Fallbacks,
 		&i.Models,
 		&i.AttemptEntries,
-		&i.CorrectionClosed,
 	)
 	return i, err
 }

@@ -43,6 +43,19 @@ type Selector struct {
 	ID   string `json:"id,omitempty"`
 }
 
+// Prices reports whether the rule prices for an account of a tier: a rule for an account prices that account alone, one
+// for a tier accounts of that tier, and one for all, everyone. A zero account or tier stands for an audience that has
+// none, so only a rule for all prices it. It is what a pricing preview asks to keep the rules of the audience it shows.
+func (s Selector) Prices(account accounts.AccountID, tier accounts.TierID) bool {
+	switch s.Kind {
+	case "account":
+		return account != accounts.AccountID{} && s.ID == account.TypeID()
+	case "tier":
+		return tier != accounts.TierID{} && s.ID == tier.TypeID()
+	}
+	return true
+}
+
 // Method is how a rule sets the price. Which members a kind uses is checked by Check; the others are absent.
 type Method struct {
 	Kind               string    `json:"kind"`
@@ -292,13 +305,41 @@ func Rules(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Rule, error) {
 		}
 	}
 	slices.SortFunc(rules, func(a, b Rule) int {
-		sa, sb := a.specificity(), b.specificity()
-		if c := slices.Compare(sa[:], sb[:]); c != 0 {
-			return c
+		if less(a, b) {
+			return -1
+		} else if less(b, a) {
+			return 1
 		}
-		return slices.Compare(a.ID[:], b.ID[:])
+		return 0
 	})
 	return rules, nil
+}
+
+// Place is rules with r among them, in the order they are tried: a rule not stored yet, which a pricing preview asks
+// about. It goes after the rules it ties with, so a rule that is no more specific than those there never displaces one;
+// an ID of its own, which only a stored rule has, does not decide where it goes.
+func Place(r Rule, rules []Rule) []Rule {
+	s := r.specificity()
+	i := slices.IndexFunc(rules, func(o Rule) bool {
+		at := o.specificity()
+		return slices.Compare(at[:], s[:]) > 0
+	})
+	if i < 0 {
+		i = len(rules)
+	}
+	out := make([]Rule, 0, len(rules)+1)
+	out = append(out, rules[:i]...)
+	out = append(append(out, r), rules[i:]...)
+	return out
+}
+
+// less orders two rules as Rules does: by target, then audience, then ID.
+func less(a, b Rule) bool {
+	sa, sb := a.specificity(), b.specificity()
+	if c := slices.Compare(sa[:], sb[:]); c != 0 {
+		return c < 0
+	}
+	return slices.Compare(a.ID[:], b.ID[:]) < 0
 }
 
 // CreateRule adds a rule to the site. The change is recorded as the rule's first version and in the audit log.

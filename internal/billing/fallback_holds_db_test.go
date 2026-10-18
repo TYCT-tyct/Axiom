@@ -2,7 +2,6 @@ package billing
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -14,12 +13,13 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
 
 // TestFallbackHoldsPages: pages of the listing, with windows that end at the same moment across a page's edge, give
-// every hold once, in (window, request) order.
+// every hold once, in (window, request) order. A charge holds nothing once it is settled
+// (docs/domains/billing.md「用量来源与暂估」), so the rows are put back the way a database written before the correction
+// window was removed has them.
 func TestFallbackHoldsPages(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, Config{})
 	want := make([]uuid.UUID, 5)
@@ -28,7 +28,7 @@ func TestFallbackHoldsPages(t *testing.T) {
 		b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
 		want[i] = h.id
 	}
-	b.sql("UPDATE billing.reservations SET correct_by = '2030-01-01T00:00:00Z'")
+	b.sql("UPDATE billing.reservations SET state = 'estimated', correct_by = '2030-01-01T00:00:00Z'")
 	slices.SortFunc(want, func(x, y uuid.UUID) int { return bytes.Compare(x[:], y[:]) })
 	var got []uuid.UUID
 	var after *FallbackHold
@@ -47,75 +47,35 @@ func TestFallbackHoldsPages(t *testing.T) {
 	}
 }
 
-// TestUnknownItemsOnEveryAttempt: an attempt that reported a field nothing prices and then failed takes its own model
-// out of routing, though the fallback's model is charged, and so does a supplier record of it; the charge follows the
-// charged attempt alone.
+// TestUnknownItemsOnEveryAttempt: an attempt that reported fields nothing prices and then failed takes its own model
+// out of routing, though the other entry's attempt is the one charged, and the charge follows the charged attempt
+// alone.
 func TestUnknownItemsOnEveryAttempt(t *testing.T) {
+	const newThing = "usage.new_thing_tokens"
 	b := fallbackBank(t, 10_000, 0, Config{})
 	h, first := b.holdOnTwoModels()
+	failed := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
+		catalog.UnknownUsage{Field: newThing, Value: "5"},
+		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "2"})
 	o := Outcome{Attempts: []AttemptResult{
-		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{fetches(t, 50, "2")}, Result: FailedBeforeCommit, Finish: FinishError},
+		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{failed}, Result: FailedBeforeCommit, Finish: FinishError},
 		{Seq: 2, Entry: 1, Cost: 7, Segments: []Segment{used(t, 50, 20, 0)}, Result: Committed, Finish: FinishStop},
 	}}
 	if f := b.settleWith(h, o); f.Charged != platform.AmountExact(70) || f.Estimated {
 		t.Errorf("Settle = %+v, want the fallback's 70, exact", f)
 	}
-	b.correct(h, 1, 1, 9, unknown(t, 50, "usage.new_thing_tokens", "5"))
 	b.expect("settled", 70)
 	items := b.unknownItems()
 	for i := range items {
 		items[i].Seen = time.Time{}
 	}
 	want := []UnknownItem{
-		{first.Model.ID, "usage.new_thing_tokens", h.id, time.Time{}},
+		{first.Model.ID, newThing, h.id, time.Time{}},
 		{first.Model.ID, "usage.server_tool_use.web_fetch_requests", h.id, time.Time{}},
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Errorf("unknown items %+v, want %+v", items, want)
 	}
-}
-
-// TestRecordBeforeItsAttempt: a supplier record with a field nothing prices, of an attempt no Settle or cleanup has
-// recorded yet, applies nothing; the redelivery of the same revision, after Settle or cleanup, notes the field against
-// the attempt's own model and applies the record. The gateway's usage of the attempt does not have the field.
-func TestRecordBeforeItsAttempt(t *testing.T) {
-	t.Run("then Settle", recordThenSettle)
-	t.Run("then cleanup", recordThenCleanup)
-}
-
-const newThing = "usage.new_thing_tokens"
-
-func recordThenSettle(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, Config{})
-	h, first := b.holdOnTwoModels()
-	record := Correction{Request: h.id, Seq: 1, Revision: 1, Usage: usages([]Segment{unknown(t, 50, newThing, "5")}), Cost: 9}
-	b.correctEarly(record)
-	o := Outcome{Attempts: []AttemptResult{
-		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{used(t, 50, 0, 0)}, Result: FailedBeforeCommit, Finish: FinishError},
-		{Seq: 2, Entry: 1, Cost: 7, Segments: []Segment{used(t, 50, 20, 0)}, Result: Committed, Finish: FinishStop},
-	}}
-	if f := b.settleWith(h, o); f.Charged != platform.AmountExact(70) || f.Estimated {
-		t.Errorf("Settle = %+v, want 70, exact", f)
-	}
-	b.redeliver(record, first.Model.ID)
-	if cost := b.cost(h, 1); cost != 9 {
-		t.Errorf("attempt 1 cost %d, want the record's 9", cost)
-	}
-	b.expect("settled", 70)
-}
-
-func recordThenCleanup(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, lapsedWindow)
-	q := metered(t)
-	q.Model.ID = catalog.ModelID(uuid.NewV7())
-	h := b.holdOn(q, 1000)
-	b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
-	record := Correction{Request: h.id, Seq: 1, Revision: 1, Usage: usages([]Segment{unknown(t, 400, newThing, "40")}), Cost: 100}
-	b.correctEarly(record)
-	b.cleanup()
-	b.expect("cleanup_pending", 0)
-	b.redeliver(record, q.Model.ID)
-	b.expect("cleanup_settled", 150) // ⌈1.5 × 100⌉
 }
 
 // holdOnTwoModels reserves 100 text bytes on two metered entries of their own models, and returns the first.
@@ -133,31 +93,9 @@ func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
 	return h, first
 }
 
-// correctEarly: c, of an attempt not recorded yet, applies nothing and notes nothing.
-func (b *bank) correctEarly(c Correction) {
-	b.t.Helper()
-	if err := b.billing.Correct(b.t.Context(), c); !errors.Is(err, ErrNotRecorded) {
-		b.t.Fatalf("Correct before the attempt is recorded = %v, want ErrNotRecorded", err)
-	}
-	if items := b.unknownItems(); len(items) != 0 {
-		b.t.Fatalf("unknown items %+v before the attempt is recorded", items)
-	}
-}
-
-// redeliver applies c again and finds newThing noted against model, for c's request.
-func (b *bank) redeliver(c Correction, model catalog.ModelID) {
-	b.t.Helper()
-	if err := b.billing.Correct(b.t.Context(), c); err != nil {
-		b.t.Fatal(err)
-	}
-	if items := b.unknownItems(); len(items) != 1 || items[0].Model != model || items[0].Field != newThing || items[0].Request != c.Request {
-		b.t.Errorf("unknown items %+v, want %s on the attempt's model", items, newThing)
-	}
-}
-
-// TestCloseHold: the fallback holds are listed and counted on the gauges, an estimate on unreported usage is not; an
-// operator closes one, audited, and cleanup settles it at its charge and releases the rest.
-func TestCloseHold(t *testing.T) {
+// TestSettledCallsHoldNothing: an estimate resting on usage only a fallback price covers is charged for good when it is
+// settled, so the listing of holds and its gauges stay empty and the rest of the reservation goes back at once.
+func TestSettledCallsHoldNothing(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, Config{})
 	reader := sdkmetric.NewManualReader()
 	if err := RegisterMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("billing"), b.app, b.platform); err != nil {
@@ -166,29 +104,18 @@ func TestCloseHold(t *testing.T) {
 	fallback, guessed := b.hold(1000), b.hold(1000)
 	b.settleWith(fallback, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
 	b.settleWith(guessed, outcome(Committed, FinishStop, false, used(t, 300, 20, 0, in)))
-	if holds := b.fallbackHolds(); len(holds) != 1 || holds[0].Request != fallback.id || holds[0].Held != 1100-170 || holds[0].By.IsZero() {
-		t.Fatalf("FallbackHolds = %+v; want the fallback estimate holding 930", holds)
-	}
-	wantGauges(t, reader, 1, 930)
-	if err := b.closeHold(fallback.id, " "); err == nil {
-		t.Error("a close without a reason went through")
-	}
-	if err := b.closeHold(fallback.id, "no record is coming"); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.closeHold(fallback.id, "again"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("closing again = %v, want ErrNotFound", err)
-	}
-	b.cleanup()
-	if s := b.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND charged = 170 AND request_id = '" + fallback.id.String() + "'"); s != 1 {
-		t.Error("the closed hold did not settle at 170")
-	}
-	if n := b.count("SELECT reserved FROM billing.balances"); n != 1100-320 {
-		t.Errorf("%d reserved, want the other estimate's 780 alone", n)
+	if holds := b.fallbackHolds(); len(holds) != 0 {
+		t.Errorf("FallbackHolds = %+v, want none", holds)
 	}
 	wantGauges(t, reader, 0, 0)
-	if n := b.count("SELECT count(*) FROM platform.audit_log WHERE action = 'hold.close'"); n != 1 {
-		t.Errorf("%d audit entries, want 1", n)
+	if n := b.count("SELECT reserved FROM billing.balances"); n != 0 {
+		t.Errorf("%d reserved, want 0: a settled call holds nothing", n)
+	}
+	if n := b.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND charged > 0"); n != 2 {
+		t.Errorf("%d settled charges, want 2", n)
+	}
+	if n := b.count("SELECT count(*) FROM platform.audit_log WHERE action = 'hold.close'"); n != 0 {
+		t.Errorf("%d audits of a hold closed, want none: no hold can be closed any more", n)
 	}
 	b.balanced()
 }
@@ -204,12 +131,6 @@ func (b *bank) fallbackHoldsPage(after *FallbackHold, limit int) (holds []Fallba
 		b.t.Fatal(err)
 	}
 	return holds
-}
-
-func (b *bank) closeHold(request uuid.UUID, reason string) error {
-	r := CloseHoldRequest{Request: request, Reason: reason}
-	r.SetActor(audit.System("billing.test"))
-	return b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error { return CloseHold(b.t.Context(), tx, r) })
 }
 
 func wantGauges(t *testing.T, reader *sdkmetric.ManualReader, holds, held int64) {

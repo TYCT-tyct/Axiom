@@ -83,8 +83,7 @@ type rigOptions struct {
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 	segments  billing.Segments
-	suppliers bool  // the suppliers tables too, for a real suppliers service to price attempts
-	waiverCap int64 // what the account's waived calls may cost a day; billing's default when zero
+	suppliers bool // the suppliers tables too, for a real suppliers service to price attempts
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -137,7 +136,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedRouting(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
-		Segments: o.segments, WaiverCap: o.waiverCap,
+		Segments: o.segments,
 	}, noSuppliers{}); err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,6 @@ import (
 	"math"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -79,44 +78,35 @@ func (b *bank) borne() int64 {
 	return b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'platform_borne'")
 }
 
-// fallbackWindow has a correction window short enough to wait out; lapsedWindow also lets every reservation lapse.
+// fallbackBank has reservations that stay pending long enough to settle; lapsedBank lets every reservation lapse, so
+// cleanup takes it over.
 var (
-	fallbackWindow = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: 300 * time.Millisecond}
-	lapsedWindow   = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: 300 * time.Millisecond}
+	fallbackBankConfig = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour}
+	lapsedBankConfig   = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond}
 )
 
-func (b *bank) expire() {
-	b.t.Helper()
-	time.Sleep(400 * time.Millisecond)
-	b.cleanup()
-}
-
 // TestFallbackPrices pins the amounts of docs/domains/billing.md「价目表缺项」 on the metered entry (input and output 1
-// a token, a search 10; 1000 bytes reserve 1100) with testFallbacks: the first charge, the corrections by cost, the
-// end of the window and a late Settle, none of them free.
+// a token, a search 10; 1000 bytes reserve 1100) with testFallbacks: the charge, cleanup's release, a late Settle and
+// the floor, none of them free.
 func TestFallbackPrices(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		run  func(*testing.T)
 	}{
 		{"a known per-use item without a price takes the default", fallbackDefault},
-		{"unknown uses: first, corrected by cost, back to the record, window ends", fallbackCorrected},
-		{"unknown tokens corrected by cost", fallbackTokens},
-		{"the window ends at the fallback price", fallbackWindowEnds},
-		{"corrected by cost down to the floor, another reservation covered", fallbackFloor},
-		{"a cleaned-up call's record with unknown uses", fallbackCleanedUp},
+		{"unknown uses are priced by the fallback", fallbackEstimated},
+		{"unknown uses down to the floor, another reservation covered", fallbackFloor},
 		{"a late Settle after cleanup released charges the uses", fallbackLate},
 		{"a late Settle past the floor", fallbackLateFloor},
-		{"a waiver keeps the uses, also when corrected", fallbackWaiver},
-		{"the dearest fallbacks at the most uses: capped, then corrected by cost", fallbackHuge},
-		{"a correction past the hold holds nothing", fallbackPastTheHold},
+		{"a waiver keeps the uses", fallbackWaiver},
+		{"the dearest fallbacks at the most uses: capped at the balance", fallbackHuge},
 	} {
 		t.Run(tc.name, tc.run)
 	}
 }
 
 func fallbackDefault(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
+	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
 	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1, catalog.ItemCodeExecution: 2})
 	if f := b.settleWith(h, outcome(Committed, FinishStop, false, s)); f.Estimated || f.Charged != platform.AmountExact(70+10+100) {
@@ -125,59 +115,34 @@ func fallbackDefault(t *testing.T) {
 	b.expect("settled", 180)
 }
 
-func fallbackCorrected(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
+func fallbackEstimated(t *testing.T) {
+	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
 	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
 		t.Errorf("Settle = %+v, want 170 estimated", f)
 	}
-	b.expect("estimated", 170)
-	b.correct(h, 1, 1, 300, fetches(t, 400, "2")) // 1.5 × 300
-	b.expect("estimated", 450)
-	b.correct(h, 1, 2, 1000, fetches(t, 400, "2")) // 1500, past the hold of 1100: the free balance pays
-	b.expect("estimated", 1500)
-	if n := b.borne(); n != 0 {
-		t.Errorf("the platform bore %d, want 0", n)
-	}
-	b.correct(h, 1, 3, 1000, used(t, 400, 20, 0)) // a record that maps everything prices at the locked schedule
-	b.expect("estimated", 420)
-	b.expire()
-	b.expect("settled", 420)
-	if n := b.count("SELECT balance FROM billing.balances"); n != 10_000-420 {
-		t.Errorf("balance %d, want %d", n, 10_000-420)
-	}
-}
-
-func fallbackTokens(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
-	h := b.hold(1000)
-	b.settleWith(h, outcome(Committed, FinishStop, false, unknown(t, 50, "usage.new_thing_tokens", "30")))
-	b.expect("estimated", 100)
-	b.correct(h, 1, 1, 9, unknown(t, 400, "usage.new_thing_tokens", "40"))
-	b.expect("estimated", 14) // ⌈1.5 × 9⌉
-}
-
-func fallbackWindowEnds(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
-	b.settleWith(b.hold(1000), outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.expire()
 	b.expect("settled", 170)
 	if n := b.count("SELECT reserved FROM billing.balances"); n != 0 {
-		t.Errorf("%d still reserved", n)
+		t.Errorf("%d still reserved, want 0: an estimate holds nothing once it is settled", n)
+	}
+	if n := b.count("SELECT balance FROM billing.balances"); n != 10_000-170 {
+		t.Errorf("balance %d, want %d", n, 10_000-170)
 	}
 }
 
 func fallbackFloor(t *testing.T) {
-	b := fallbackBank(t, 1200, 0, fallbackWindow)
+	b := fallbackBank(t, 1200, 0, fallbackBankConfig)
 	other := b.hold(100) // 200 reserved
 	h := b.hold(800)     // 900 reserved
-	b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.correct(h, 1, 1, 2000, fetches(t, 400, "2")) // 3000 asked: 1200 - 170 - 200 left above the floor
+	// 1000 input tokens and 1000 unknown uses at the dearest default price 50: 51000 priced, against the balance
+	// above the floor and what the other call holds, which leaves 1000; the platform bears the rest.
+	b.settleWith(h, outcome(Committed, FinishStop, false,
+		segment(t, map[catalog.Item]int64{in: 1000, catalog.ItemOutput: 0}, catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "1000"})))
 	if n := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); n != 1000 {
-		t.Errorf("charged %d, want 170 + 830 = 1000", n)
+		t.Errorf("charged %d, want 1000: what was above the floor and the other reservation", n)
 	}
-	if n := b.borne(); n != 2000 {
-		t.Errorf("the platform bore %d, want 2000", n)
+	if n := b.borne(); n <= 0 {
+		t.Errorf("the platform bore %d, want the amount past the floor", n)
 	}
 	b.balanced()
 	b.settleWith(other, outcome(Committed, FinishStop, false, used(t, 100, 100, 0)))
@@ -187,15 +152,6 @@ func fallbackFloor(t *testing.T) {
 	b.balanced()
 }
 
-func fallbackCleanedUp(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, lapsedWindow)
-	h := b.hold(1000)
-	b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
-	b.cleanup()
-	b.correct(h, 1, 1, 100, fetches(t, 400, "2"))
-	b.expect("cleanup_settled", 150)
-}
-
 // fetchesOnly is three web fetches and nothing else: 150 at the fallback price.
 func fetchesOnly(t *testing.T) Outcome {
 	t.Helper()
@@ -203,7 +159,7 @@ func fetchesOnly(t *testing.T) Outcome {
 }
 
 func fallbackLate(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, lapsedWindow)
+	b := fallbackBank(t, 10_000, 0, lapsedBankConfig)
 	h := b.hold(1000)
 	b.cleanup()
 	b.expect("cleanup_released", 0)
@@ -218,7 +174,7 @@ func fallbackLate(t *testing.T) {
 }
 
 func fallbackLateFloor(t *testing.T) {
-	b := fallbackBank(t, 100, 0, lapsedWindow)
+	b := fallbackBank(t, 100, 0, lapsedBankConfig)
 	h := b.hold(0) // the 100 output tokens
 	b.cleanup()
 	b.settleWith(h, fetchesOnly(t))
@@ -229,9 +185,7 @@ func fallbackLateFloor(t *testing.T) {
 }
 
 func fallbackWaiver(t *testing.T) {
-	waiving := fallbackWindow
-	waiving.WaiverCap = 1000
-	b := fallbackBank(t, 10_000, 0, waiving)
+	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
 	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
 		catalog.UnknownUsage{Field: "usage.new_thing_tokens", Value: "30"},
@@ -239,15 +193,13 @@ func fallbackWaiver(t *testing.T) {
 	if f := b.settleWith(h, outcome(Unknown, FinishNone, false, s)); f.Charged != platform.AmountExact(100) {
 		t.Errorf("Settle = %+v, want the two uses alone, 100", f)
 	}
-	b.correct(h, 1, 1, 1000, fetches(t, 400, "3")) // waived: by the record's uses, not by cost
-	b.expect("estimated", 150)
+	b.expect("settled", 100)
 }
 
 // fallbackHuge: valid settings price two unknown fields of 10¹⁰ uses at a default of one credit each past what an
-// amount holds; the charge saturates instead of failing, the account pays what it has above the floor, and a
-// correction by cost replaces it without pricing the fallbacks again.
+// amount holds; the charge saturates instead of failing and the account pays what it has above the floor.
 func fallbackHuge(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
+	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	if err := b.saveFallbacks(`{"currency":"USD","markup":"1.2","per_use":{"code_execution":"1","web_search":"1"}}`); err != nil {
 		t.Fatal(err)
 	}
@@ -258,66 +210,9 @@ func fallbackHuge(t *testing.T) {
 	if f := b.settleWith(h, outcome(Committed, FinishStop, false, huge)); f.Charged != platform.AmountExact(10_000) || !f.Estimated {
 		t.Errorf("Settle = %+v, want the whole balance, 10000, estimated", f)
 	}
-	b.expect("estimated", 10_000)
+	b.expect("settled", 10_000)
 	if n := b.borne(); n != math.MaxInt64-10_000 {
 		t.Errorf("the platform bore %d, want the saturated price less the balance", n)
-	}
-	b.correct(h, 1, 1, 100, huge) // ⌈1.2 × 100⌉
-	b.expect("estimated", 120)
-	if n := b.borne(); n != 0 {
-		t.Errorf("the platform bore %d after the correction, want 0", n)
-	}
-}
-
-// fallbackPastTheHold: a correction by cost charged past the reservation (1500 of 1100) leaves nothing held, so the
-// listing, the gauges' totals and a close's audit entry show none, not a negative hold.
-func fallbackPastTheHold(t *testing.T) {
-	b := fallbackBank(t, 10_000, 0, fallbackWindow)
-	h := b.hold(1000)
-	b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.correct(h, 1, 1, 1000, fetches(t, 400, "2"))
-	b.expect("estimated", 1500)
-	if holds := b.fallbackHolds(); len(holds) != 0 {
-		t.Errorf("FallbackHolds = %+v, want none", holds)
-	}
-	var totals FallbackHoldTotalsRow
-	if err := b.app.ReadTx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		totals, err = queries.FallbackHoldTotals(t.Context(), tx)
-		return err
-	}); err != nil || totals.Holds != 0 || totals.Held != 0 {
-		t.Errorf("totals %+v, %v; want 0 and 0", totals, err)
-	}
-	if err := b.closeHold(h.id, "no record is coming"); err != nil {
-		t.Fatal(err)
-	}
-	if n := b.count("SELECT (detail->>'held')::bigint FROM platform.audit_log WHERE action = 'hold.close'"); n != 0 {
-		t.Errorf("the close audited a hold of %d, want 0", n)
-	}
-	if n := b.count("SELECT reserved FROM billing.balances"); n != 0 {
-		t.Errorf("%d reserved, want 0", n)
-	}
-}
-
-// TestConcurrentCorrections: revisions delivered at once in any order leave the newest one's charge by cost, once.
-func TestConcurrentCorrections(t *testing.T) {
-	for range 3 {
-		b := fallbackBank(t, 10_000, 0, Config{})
-		h := b.hold(1000)
-		b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-		var wg sync.WaitGroup
-		for revision := range int64(4) {
-			wg.Go(func() {
-				c := Correction{Request: h.id, Seq: 1, Revision: revision + 1, Usage: usages([]Segment{fetches(t, 400, "2")}), Cost: (revision + 1) * 100}
-				if err := b.billing.Correct(t.Context(), c); err != nil {
-					t.Error(err)
-				}
-			})
-		}
-		wg.Wait()
-		b.expect("estimated", 600) // 1.5 × 400
-		if c := b.cost(h, 1); c != 400 {
-			t.Errorf("cost %d, want the newest record's 400", c)
-		}
 	}
 }
 
@@ -349,8 +244,8 @@ func (b *bank) unknownItems() []UnknownItem {
 	return items
 }
 
-// TestUnknownItems: the first appearance of a field nothing prices, in a Settle or a correction, takes its model out
-// of routing and alerts once, whichever tenant sees it again; an administrator's clearing, audited, lets it back.
+// TestUnknownItems: the first appearance of a field nothing prices, in a Settle, takes its model out of routing and
+// alerts once, whichever tenant sees it again; an administrator's clearing, audited, lets it back.
 func TestUnknownItems(t *testing.T) {
 	var logs bytes.Buffer
 	b := newBank(t, 10_000, 0, Config{
@@ -369,8 +264,7 @@ func TestUnknownItems(t *testing.T) {
 	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
 	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "1"))) // the row is the first tenant's
 	estimate := b.holdOn(q, 100)
-	b.settleWith(estimate, outcome(Committed, FinishStop, true, used(t, 50, 20, 0, in)))
-	b.correct(estimate, 1, 1, 9, unknown(t, 50, "usage.new_thing_tokens", "5"))
+	b.settleWith(estimate, outcome(Committed, FinishStop, true, unknown(t, 50, "usage.new_thing_tokens", "5")))
 	items := b.unknownItems()
 	for i := range items {
 		items[i].Seen = time.Time{}
@@ -448,8 +342,8 @@ func TestFallbackSettings(t *testing.T) {
 	}
 	cny := metered(t)
 	cny.Price = mustSchedule(t, `{"v":1,"currency":"CNY","rates":{"input":"0.000000001","output":"0.000000001"}}`)
-	if _, err := b.tryHoldOn(cny, 100); !errors.Is(err, errUnpriced) {
-		t.Errorf("a CNY entry without CNY fallbacks = %v, want errUnpriced", err)
+	if _, err := b.tryHoldOn(cny, 100); !errors.Is(err, ErrUnpriced) {
+		t.Errorf("a CNY entry without CNY fallbacks = %v, want ErrUnpriced", err)
 	}
 	if err := b.saveFallbacks(strings.ReplaceAll(testFallbacks, "USD", "CNY")); err != nil {
 		t.Fatal(err)

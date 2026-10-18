@@ -33,11 +33,7 @@ type Config struct {
 	ReapGrace time.Duration // how long past its expiry a holder is reaped
 	Lifetime  time.Duration // a reservation's deadline after admission: the longest call plus the settlement grace
 	Segments  Segments
-	// CorrectionWindow is how long an estimated or cleaned-up charge may be corrected, holding the rest of its
-	// reservation until then (an hour, docs/domains/billing.md「用量来源与暂估」).
-	CorrectionWindow time.Duration
-	WaiverCap        int64        // what an account's waived calls may cost the platform in a UTC day, in billionths
-	Logger           *slog.Logger // where alerts go; default slog.Default()
+	Logger    *slog.Logger // where alerts go; default slog.Default()
 }
 
 // Billing writes reservations under one holder, this start of the process.

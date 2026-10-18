@@ -25,8 +25,9 @@ WHERE model_id = @model_id AND field = @field AND cleared_at IS NULL;
 -- name: FallbackHolds :many
 -- A page of the estimates that still hold part of their reservation and rest on usage only a fallback price covers,
 -- after the given one in (correct_by, request_id) order, which the partial index walks and which pages stably while
--- windows open and close. An estimate a correction by cost charged past its reservation holds nothing and is left out.
--- An estimate always has its window, so correct_by is never null here.
+-- rows move. Nothing holds a reservation past its settlement in M1, so this is empty until a charge may rest on a
+-- supplier record again (docs/domains/billing.md「用量来源与暂估」); the listing stays for that, and for a database
+-- written before the correction window was removed.
 SELECT r.request_id, r.site_id, r.account_id, (r.amount - r.charged)::bigint AS held, r.correct_by::timestamptz AS correct_by
 FROM billing.reservations r
 WHERE r.state = 'estimated' AND r.amount > r.charged AND jsonb_path_exists(r.final_usage, '$[*].unknown')
@@ -38,11 +39,3 @@ LIMIT @page_size;
 SELECT count(*)::bigint AS holds, coalesce(sum(r.amount - r.charged), 0)::bigint AS held
 FROM billing.reservations r
 WHERE r.state = 'estimated' AND r.amount > r.charged AND jsonb_path_exists(r.final_usage, '$[*].unknown');
-
--- name: CloseHold :one
--- Run under the account's balance row lock, as every change to a reservation is: the window ends now, by the
--- database's clock, so cleanup settles the estimate and corrections leave the user's charge alone. It may hold
--- nothing, when a correction by cost charged past the reservation.
-UPDATE billing.reservations SET correct_by = clock_timestamp()
-WHERE request_id = @request_id AND state = 'estimated' AND correct_by > clock_timestamp()
-RETURNING account_id, greatest(amount - charged, 0)::bigint AS held;

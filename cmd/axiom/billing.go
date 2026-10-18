@@ -38,7 +38,6 @@ func runBilling[R any, P interface {
 var billingOperations = map[string]billingOperation{
 	"save-fallbacks":     runBilling(billing.SaveFallbacks),
 	"clear-unknown-item": runBilling(billing.ClearUnknownItem),
-	"close-hold":         runBilling(billing.CloseHold),
 }
 
 // billingLists are the read-only listings, each writing a line per row.

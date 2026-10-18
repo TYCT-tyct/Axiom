@@ -2,7 +2,7 @@
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, coalesce(r.correct_by < clock_timestamp(), false)::boolean AS correction_closed
+    r.fallbacks, r.models, r.attempt_entries
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
 
@@ -10,28 +10,15 @@ WHERE r.request_id = @request_id;
 SELECT account_id FROM billing.reservations WHERE request_id = @request_id;
 
 -- name: EndReservation :one
--- Writes a charge's outcome; hold_seconds, when positive, opens the correction window of a held state. The charged
--- attempt and entry, and the attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's
--- EndRequest records, so every clock the request's end is judged by is the database's.
+-- Writes a charge's outcome. The charged attempt and entry, and the attempts' entries, stay as they were when none is
+-- given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
+-- is judged by is the database's.
 UPDATE billing.reservations
 SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq), entry = coalesce(sqlc.narg(entry), entry),
     charged = @charged, price = @price, waived = @waived, estimated = @estimated,
-    final_usage = @final_usage, attempt_entries = coalesce(sqlc.narg(attempt_entries)::integer[], attempt_entries),
-    correct_by = CASE WHEN @hold_seconds::float8 > 0
-        THEN clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @hold_seconds::float8) ELSE correct_by END
+    final_usage = @final_usage, attempt_entries = coalesce(sqlc.narg(attempt_entries)::integer[], attempt_entries)
 WHERE request_id = @request_id
 RETURNING clock_timestamp()::timestamptz AS ended_at;
-
--- name: ApplyRevision :execrows
--- A supplier record applies once to its attempt, and never after a newer one (River delivers at least once, in any
--- order): 0 rows is a revision already applied or older.
-INSERT INTO billing.corrections AS c (request_id, attempt_seq, site_id, account_id, revision)
-VALUES (@request_id, @attempt_seq, @site_id, @account_id, @revision)
-ON CONFLICT (request_id, attempt_seq) DO UPDATE SET revision = excluded.revision WHERE c.revision < excluded.revision;
-
--- name: Corrected :one
--- Whether a supplier record has set this attempt's cost already, so a later Settle leaves it to the record.
-SELECT EXISTS (SELECT FROM billing.corrections WHERE request_id = @request_id AND attempt_seq = @attempt_seq)::boolean;
 
 -- name: MoveCounters :exec
 -- Moves a reservation's counters: reserved by reserved, spent by spent, in the windows admission locked.
@@ -62,23 +49,14 @@ WHERE b.account_id = @account_id AND @user_debit::bigint <> 0;
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
 WHERE t.request_id = @request_id AND t.attempt_seq = @attempt_seq AND e.book = 'supplier_cost';
 
--- name: AddWaiver :one
--- Adds a waived call's cost to the account's day if the cap allows it, and reports whether it did.
-INSERT INTO billing.waivers AS w (account_id, day, site_id, cost)
-SELECT @account_id, (clock_timestamp() AT TIME ZONE 'UTC')::date, @site_id, @cost
-WHERE @cost::bigint <= @cap::bigint
-ON CONFLICT (account_id, day) DO UPDATE SET cost = w.cost + excluded.cost WHERE w.cost + excluded.cost <= @cap::bigint
-RETURNING true;
-
 -- name: InsertCreditBatch :exec
 INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at)
 VALUES (@id, @site_id, @account_id, 'gift', @amount, sqlc.narg(expires_at));
 
 -- name: DueReservations :many
--- What cleanup must take over: pending past the deadline or under a reaped holder, and held states past correct_by.
+-- What cleanup must take over: pending past the deadline or under a reaped holder.
 SELECT r.request_id, r.account_id, r.state FROM billing.reservations r JOIN billing.holders h ON h.id = r.holder_id
 WHERE r.state = 'pending' AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
-    OR r.state IN ('estimated', 'cleanup_pending') AND r.correct_by < clock_timestamp()
 ORDER BY r.request_id
 LIMIT @max;
 
