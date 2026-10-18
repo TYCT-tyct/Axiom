@@ -3,7 +3,7 @@ import type { AuthApi } from "@axiom/api/auth";
 import { DataState } from "@axiom/ui";
 import { type QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState, useSearch } from "@tanstack/react-router";
-import { createContext, type ReactNode, use, useEffect } from "react";
+import { createContext, type ReactNode, use, useEffect, useState } from "react";
 
 export type Session = Schemas["Session"];
 
@@ -173,13 +173,16 @@ function Replace({ path }: { path: string }) {
 const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll" } as const;
 
 // A visitor in the wrong stage goes to the page of the stage they are in, remembering where they were going; a member
-// who arrived on a guest page goes on to where they were going.
+// who arrived on a guest page goes on to where they were going. Where they were going is the page the gate turned them
+// away from, taken once: until the router has shown its first page, `here` is the address it is moving to, which this
+// redirect itself changes, so reading it again would put that address in `next`, redirect again, and never stop.
 function Redirect({ stage, here }: { stage: Stage; here: string }) {
   const next = useSearch({ strict: false }).next;
+  const [from] = useState(here);
   if (stage === "member") {
     return <Replace path={next ?? "/"} />;
   }
-  return <Replace path={`${guestPages[stage]}?next=${encodeURIComponent(next ?? here)}`} />;
+  return <Replace path={`${guestPages[stage]}?next=${encodeURIComponent(next ?? from)}`} />;
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member
