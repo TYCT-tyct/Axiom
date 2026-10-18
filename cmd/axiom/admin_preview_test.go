@@ -78,8 +78,8 @@ func TestPreviewPricingTriesARule(t *testing.T) {
 	}
 }
 
-// TestPreviewPricingLeavesAKeyModelUnpriced: a model no rule prices has no price at all, never its reference price.
-func TestPreviewPricingLeavesAKeyModelUnpriced(t *testing.T) {
+// TestPreviewPricingLeavesAModelUnpriced: a model no rule prices has no price at all, never its reference price.
+func TestPreviewPricingLeavesAModelUnpriced(t *testing.T) {
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	other := f.listed("acme/beta")
