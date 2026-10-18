@@ -702,7 +702,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically; the break-even floor always applies and raises a price a rule would set below it. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically; the break-even floor always applies and raises a price a rule would set below it. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -721,7 +721,7 @@ export interface paths {
         get?: never;
         /**
          * Change a pricing rule
-         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
+         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. The audience can only be `all` in this release (422, as for creating a rule). Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
          */
         put: operations["updatePricingRule"];
         post?: never;
@@ -1322,7 +1322,7 @@ export interface components {
             kind: "endpoint" | "group" | "supplier" | "model" | "author" | "source_type" | "all";
             id?: string;
         };
-        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. */
+        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote. */
         PricingAudience: {
             /** @enum {string} */
             kind: "account" | "tier" | "all";
@@ -1384,7 +1384,7 @@ export interface components {
             tier_id?: components["schemas"]["TierId"];
             /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
             account_id?: components["schemas"]["AccountId"];
-            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
+            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only; its audience can only be `all` in this release (422, pointing at `/rule/audience/kind`). The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };

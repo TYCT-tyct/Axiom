@@ -139,24 +139,21 @@ func checkTarget(t Selector) error {
 	return nil
 }
 
+// checkAudience: M1 sells every model at one price list, because a routing snapshot is one per node and so is the
+// price it locks, so a rule for one account or one tier is refused rather than accepted and then not applied
+// (docs/domains/billing.md「定价」). The selector stays in the stored form and the ordering of Rules, which is what
+// those rules will use when a snapshot can be per audience.
 func checkAudience(a Selector) error {
-	var err error
 	switch a.Kind {
 	case "all":
 		if a.ID != "" {
-			err = errors.New("all has no ID")
+			return &RuleError{"audience/id", "is absent for all"}
 		}
-	case "account":
-		_, err = accounts.ParseAccountID(a.ID)
-	case "tier":
-		_, err = accounts.ParseTierID(a.ID)
-	default:
-		return &RuleError{"audience/kind", "is not an audience a rule prices for"}
+		return nil
+	case "account", "tier":
+		return &RuleError{"audience/kind", "can only be all in this release: a rule for one account or one tier comes later"}
 	}
-	if err != nil {
-		return &RuleError{"audience/id", "is not the ID of a " + a.Kind + ", and is absent only for all"}
-	}
-	return nil
+	return &RuleError{"audience/kind", "is not an audience a rule prices for"}
 }
 
 // ratio reads a decimal member; ok is false for an absent one.

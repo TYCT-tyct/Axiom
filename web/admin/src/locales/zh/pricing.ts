@@ -21,7 +21,7 @@ export default {
     endpoint: "某个端点",
     source_type: "某类来源",
   },
-  audience: { all: "所有人", tier: "某个等级", account: "某个账户" },
+  audience: { all: "所有人", tier: "某个等级（暂不可用）", account: "某个账户（暂不可用）" },
   describe: {
     markup: "成本加价 {{percent}}%",
     margin: "毛利率 {{percent}}%",
