@@ -198,3 +198,7 @@ web: web-embed
     {{ web }} test
     {{ web }} budget
     version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e
+
+# The suppliers module's tests only, for a change that touches it (throwaway, never pushed).
+test-suppliers:
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 ./internal/suppliers/...
