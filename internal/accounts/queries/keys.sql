@@ -47,9 +47,6 @@ UPDATE accounts.api_keys SET name = @name, status = @status, spend_limit = @spen
 WHERE id = @id AND kind = 'call'
 RETURNING site_id, account_id;
 
--- name: DisableKey :many
-UPDATE accounts.api_keys SET status = 'disabled' WHERE id = @id AND status = 'active' RETURNING site_id, account_id;
-
 -- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.
 UPDATE accounts.api_keys SET deleted_at = now() WHERE id = @id RETURNING site_id, account_id;

@@ -49,6 +49,28 @@ func TestRoutableIsWhatListRoutableHolds(t *testing.T) {
 	}
 }
 
+// TestOnlyAFundedSupplierIsRoutable: a supplier whose balance was never read, or is zero or overdrawn, is out of the
+// routing snapshot; one above zero is in.
+func TestOnlyAFundedSupplierIsRoutable(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	for _, c := range []struct {
+		balance string
+		routes  bool
+	}{{"NULL", false}, {"0", false}, {"-13.5", false}, {"0.000001", true}, {"100", true}} {
+		w.tx(func(ctx context.Context, tx pg.Tx) error {
+			_, err := tx.Exec(ctx, "UPDATE suppliers.suppliers SET balance_native = "+c.balance+" WHERE id = $1", w.supplier)
+			return err
+		})
+		if err := w.svc.Reload(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if routes := len(w.svc.Routable()) == 1; routes != c.routes {
+			t.Errorf("balance %s: routable %v, want %v", c.balance, routes, c.routes)
+		}
+	}
+}
+
 // sameRoutable compares what the service hands a routing snapshot with the row the call side reads, field by field: the
 // two are one endpoint or the snapshot would route to something the call side cannot send.
 func sameRoutable(t *testing.T, r Routable, row store.ListRoutableRow, endpoint uuid.UUID) {

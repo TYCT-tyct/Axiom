@@ -1,10 +1,8 @@
 package gateway
 
 import (
-	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -214,61 +212,6 @@ func TestIPKey(t *testing.T) {
 
 // quietly closes what a test is done with; there is nobody to tell about a failure.
 func quietly(c io.Closer) { c.Close() } //nolint:errcheck,gosec // the test is over with it
-
-// TestConnectionLimit: a client address that holds its share of connections has the next one closed as it is
-// accepted; closing one makes room.
-func TestConnectionLimit(t *testing.T) {
-	t.Parallel()
-	cfg := DefaultConfig()
-	cfg.IPConnections = 2
-	bp, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	limited := bp.LimitConnections(ln)
-	t.Cleanup(func() { quietly(limited) })
-	accepted := make(chan net.Conn, 4)
-	go func() {
-		for {
-			c, err := limited.Accept()
-			if err != nil {
-				return
-			}
-			accepted <- c
-		}
-	}()
-	dial := func() net.Conn {
-		c, err := new(net.Dialer).DialContext(t.Context(), "tcp", ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { quietly(c) })
-		return c
-	}
-	dial()
-	dial()
-	third := dial()
-	one := <-accepted
-	<-accepted
-	if err := third.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := third.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("the third connection was not closed: %v", err)
-	}
-	quietly(one)
-	dial()
-	select {
-	case c := <-accepted:
-		quietly(c)
-	case <-time.After(5 * time.Second):
-		t.Error("a connection was not accepted after one closed")
-	}
-}
 
 // TestBodyLimits: a body over the limit is 413 by its announced length or as it comes, one that is cut short is 400
 // and one too slow 408, a body the node has no memory for is 503, and every byte charged is given back.

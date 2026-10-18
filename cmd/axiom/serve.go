@@ -375,8 +375,8 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 }
 
 // node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer. The admin listener serves the admin app alone (docs/architecture.md
-// 「前端交付」); its API and the limits to the admin domain and to restricted sources come with the admin API.
+// it drains while the probes still answer. The admin listener serves the admin app and the admin API (docs/architecture.md
+// 「前端交付」); the limit to restricted sources is not built (#171).
 func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	return []*listening{
 		{publicAddrVar, publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},

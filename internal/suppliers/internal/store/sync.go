@@ -29,16 +29,6 @@ func InsertSyncEvents(ctx context.Context, db DBTX, supplier uuid.UUID, version 
 	return err
 }
 
-const syncEventExists = `SELECT EXISTS (SELECT 1 FROM suppliers.sync_events WHERE supplier_id = $1 AND kind = $2)`
-
-// HasSyncEvent reports whether a step of this supplier's sync wrote an event of this kind. An event is never changed or
-// removed, so this is how a supplier's past is read back when the state does not store it.
-func HasSyncEvent(ctx context.Context, db DBTX, supplier uuid.UUID, kind string) (bool, error) {
-	var exists bool
-	err := db.QueryRow(ctx, syncEventExists, supplier, kind).Scan(&exists)
-	return exists, err
-}
-
 // SyncPlanRow is a version of a cost plan.
 type SyncPlanRow struct{ Endpoint, Fingerprint, Schedule, Basis string }
 

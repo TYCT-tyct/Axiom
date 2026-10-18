@@ -78,6 +78,32 @@ func TestAggregateBudget(t *testing.T) {
 	}
 }
 
+// TestAggregateHoldsItsBudgetUntilReleased: the body Finish or Fail returns is the relay's buffers, so the budget they
+// were charged against stays drawn after the ending, and Release, which the gateway calls once the body is written,
+// gives it back whole, once.
+func TestAggregateHoldsItsBudgetUntilReleased(t *testing.T) {
+	const node, size = 128 << 20, 2 << 20
+	for _, p := range aggregatePaths {
+		stream := string(aggregateDeltas(p.upstream, 4, size/4))
+		for name, stream := range map[string]string{"finished": stream, "failed": stream[:len(stream)-20]} {
+			t.Run(p.name+" "+name, func(t *testing.T) {
+				mem := protocol.NewMemory(node)
+				got := aggregate(t, p.client, p.upstream, strings.NewReader(stream), mem, unsettled)
+				if (got.err != nil) != (name == "failed") {
+					t.Fatalf("error %v", got.err)
+				}
+				// A Messages client's failure body has no content, so the relay holds nothing for it.
+				if held := node - got.left; held < int64(len(got.body))-64<<10 {
+					t.Errorf("%d bytes of the budget were held with a body of %d", held, len(got.body))
+				}
+				if mem.Left() != node {
+					t.Errorf("the budget is %d after Release, was %d", mem.Left(), node)
+				}
+			})
+		}
+	}
+}
+
 // drainAggregated is drain for a reply that is aggregated.
 func drainAggregated(tb testing.TB, f protocol.Format, stream []byte) {
 	o := protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30), Aggregate: true}

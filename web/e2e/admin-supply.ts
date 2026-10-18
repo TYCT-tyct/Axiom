@@ -29,8 +29,6 @@ function settle(state: AdminState, detail: Schemas["SupplierDetail"]) {
       { id: uuid(3, reads + 1), upstream_ref: "vip", name: "vip", ratio: "1.5", selected: false, present: true },
     ];
     detail.unbound_keys = [{ ref: "key-new", group_ref: "default", status: "active" }];
-  } else if (detail.supplier.status === "removing") {
-    detail.supplier.status = "removed";
   }
 }
 
@@ -39,7 +37,7 @@ function getSupplier({ params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_i
   if (!detail) {
     return fail(404, "not_found");
   }
-  if (detail.supplier.status === "connecting" || detail.supplier.status === "removing") {
+  if (detail.supplier.status === "connecting") {
     settle(state, detail);
   }
   return ok(detail);
@@ -110,11 +108,11 @@ function remove({ params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_id}/re
   if (!detail) {
     return fail(404, "not_found");
   }
-  if (detail.supplier.status !== "removing" && detail.supplier.status !== "removed") {
-    detail.supplier.status = "removing";
-    state.reads.set(detail.supplier.id, 0);
+  detail.supplier.status = "removed";
+  for (const credential of detail.credentials) {
+    credential.status = "erased";
   }
-  return { status: 202, json: detail.supplier } as const;
+  return { status: 200, json: detail.supplier } as const;
 }
 
 function replaceLogin({ params, state }: Ctx<"/api/admin/v1/suppliers/{supplier_id}/login", "put">) {
