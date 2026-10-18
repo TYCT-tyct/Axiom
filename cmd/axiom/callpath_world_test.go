@@ -263,8 +263,8 @@ func (w *callWorld) seedSupplier() {
 		args []any
 	}{
 		{`INSERT INTO suppliers.suppliers (id, owner_scope, name, kind, origin, upstream_account, native_unit,
-			settlement_currency, mgmt_egress_id, status)
-			VALUES ($1, 'platform', 'Relay', 'newapi', $2, 'account', 'quota', 'USD', 'direct', 'active')`, []any{supplier, w.supplier.server.URL}},
+			settlement_currency, mgmt_egress_id, status, balance_native)
+			VALUES ($1, 'platform', 'Relay', 'newapi', $2, 'account', 'quota', 'USD', 'direct', 'active', 100)`, []any{supplier, w.supplier.server.URL}},
 		{`INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, selected, present, codename)
 			VALUES ($1, $2, 'default', 'default', 1, true, true, 'maple')`, []any{group, supplier}},
 		{

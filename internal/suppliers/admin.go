@@ -313,20 +313,37 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 	return a.view(ctx, tx, id)
 }
 
-// Remove starts removing a supplier: out of the snapshot, then the sync's steps to the end. A supplier already being
-// removed is left as it is; one removed is ErrStatusLocked.
+// Remove takes a supplier out for good, in the one transaction: its status is `removed` and its configuration generation
+// is raised, so it leaves the routing snapshot at the next reload and a round of the sync that began before is
+// discarded; its sealed login is deleted; and the sealed key of each credential is cleared and the credential marked
+// `erased`. The credentials stay as rows, because attempts made with them point at the row. Calls in flight go on with
+// the key they hold in memory. M1 never writes at the supplier, so the keys a person has to revoke there stay listed on
+// the erased credential rows (their upstream_key_ref), and the audit entry says how many. A supplier removed already is returned as it is; a supplier a former version left in `removing` is
+// removed now.
 func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Supplier, error) {
-	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing)
+	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing, Removed)
 	if err != nil {
 		return Supplier{}, err
 	}
-	if Status(row.Status) != Removing {
-		if err := store.New().SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Removing)}); err != nil {
-			return Supplier{}, fmt.Errorf("start removing: %w", err)
-		}
-		if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status}); err != nil {
-			return Supplier{}, err
-		}
+	if Status(row.Status) == Removed {
+		return a.view(ctx, tx, id)
+	}
+	q := store.New()
+	creds, err := q.ListCredentialsOf(ctx, tx, id)
+	if err != nil {
+		return Supplier{}, fmt.Errorf("read the credentials: %w", err)
+	}
+	if err := q.SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Removed)}); err != nil {
+		return Supplier{}, fmt.Errorf("set the status: %w", err)
+	}
+	if err := q.DeleteSupplierLogin(ctx, tx, id); err != nil {
+		return Supplier{}, fmt.Errorf("delete the login: %w", err)
+	}
+	if err := q.EraseCredentialsOf(ctx, tx, id); err != nil {
+		return Supplier{}, fmt.Errorf("erase the keys: %w", err)
+	}
+	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status, "keys_to_revoke_count": len(creds)}); err != nil {
+		return Supplier{}, err
 	}
 	return a.view(ctx, tx, id)
 }

@@ -21,6 +21,27 @@ func (q *Queries) BumpConfigGen(ctx context.Context, db DBTX, id uuid.UUID) erro
 	return err
 }
 
+const deleteSupplierLogin = `-- name: DeleteSupplierLogin :exec
+DELETE FROM suppliers.supplier_logins WHERE supplier_id = $1
+`
+
+// Removing a supplier: the sealed login goes. Nothing refers to the row.
+func (q *Queries) DeleteSupplierLogin(ctx context.Context, db DBTX, supplierID uuid.UUID) error {
+	_, err := db.Exec(ctx, deleteSupplierLogin, supplierID)
+	return err
+}
+
+const eraseCredentialsOf = `-- name: EraseCredentialsOf :exec
+UPDATE suppliers.credentials SET ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL, status = 'erased'
+WHERE supplier_id = $1
+`
+
+// Removing a supplier: the sealed keys go, and the rows stay, because attempts that were made with them point at the row.
+func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) error {
+	_, err := db.Exec(ctx, eraseCredentialsOf, supplierID)
+	return err
+}
+
 const getGroupOf = `-- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
 FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2

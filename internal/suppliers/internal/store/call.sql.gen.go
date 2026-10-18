@@ -265,7 +265,7 @@ JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
-WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance')
+WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance') AND s.balance_native > 0
 ORDER BY e.id, c.id
 `
 
@@ -292,8 +292,9 @@ type ListRoutableRow struct {
 	Schedule           []byte
 }
 
-// Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
-// endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
+// Every credential that can serve an endpoint: the supplier in use with a balance above zero and a unit value
+// confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
+// was never read is out, as one without a confirmed unit value is. The unit value is the latest the person gave. Expiry and
 // cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
 // call must send it; model_id is the catalog model the snapshot of routing names it by.
 func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow, error) {

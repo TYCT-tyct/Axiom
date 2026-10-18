@@ -1,7 +1,7 @@
 package routing
 
-// Scope is what a failed attempt says is at fault. It mirrors the scopes of suppliers' Failure, in the same order, until
-// suppliers exports that type: the call site converts one to the other.
+// Scope is what a failed attempt says is at fault. It lists the scopes of suppliers' Failure; gateway maps one to the
+// other by name.
 type Scope uint8
 
 // The scopes.

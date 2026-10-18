@@ -104,10 +104,10 @@ export default {
   remove: {
     open: "Remove",
     title: "Remove {{name}}",
-    body: "Removing can’t be undone. It leaves routing, waits for its calls in flight, reads its charge records to the end, then deletes its login.",
+    body: "Removing can’t be undone. It leaves routing at once and erases the login and the sealed text of every key; calls in flight end with the key they hold.",
     action: "Remove",
-    started: "Removal has started. The state is “Removing” and becomes “Removed” when it’s done.",
-    keys: "In M1 Axiom doesn’t write to the supplier, so the keys it made there have to be revoked by a person.",
+    started: "Removed. The login and the sealed keys are erased.",
+    keys: "In M1 Axiom doesn’t write to the supplier, so the keys it used there have to be revoked by a person; the audit entry lists them.",
   },
   unit: {
     open: "Confirm unit value",
@@ -159,6 +159,7 @@ export default {
       quota_exhausted: "Quota used up",
       expired: "Expired",
       disabled: "Disabled",
+      erased: "Erased",
     },
     empty: { title: "No keys bound yet", body: "Bind a key the supplier already has to each chosen group." },
   },

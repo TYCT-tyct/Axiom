@@ -280,7 +280,7 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	if _, ok := f.Cause.(suppliers.RateLimited); ok {
 		s.x.Router.Throttled(a.entry.Endpoint)
 	}
-	scope := routing.Scope(f.Scope)
+	scope := routingScope(f.Scope)
 	next := routing.Decide(routing.Failure{Scope: scope})
 	s.record(a, true, scope, next)
 	switch next {
@@ -291,4 +291,24 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	case routing.NextEntry:
 	}
 	return nextEntry, ended{}
+}
+
+// routingScope is the scope routing decides by for the scope an adapter classified a failure with. The two types list
+// the same scopes, but each in its own module's order, so they are matched by name rather than by number.
+func routingScope(s suppliers.Scope) routing.Scope {
+	switch s {
+	case suppliers.ScopeRequest:
+		return routing.ScopeRequest
+	case suppliers.ScopeEgress:
+		return routing.ScopeEgress
+	case suppliers.ScopeEndpoint:
+		return routing.ScopeEndpoint
+	case suppliers.ScopeCredential:
+		return routing.ScopeCredential
+	case suppliers.ScopeGroup:
+		return routing.ScopeGroup
+	case suppliers.ScopeSupplier:
+		return routing.ScopeSupplier
+	}
+	panic("gateway: a failure scope routing does not have")
 }

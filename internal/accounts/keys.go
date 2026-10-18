@@ -14,7 +14,7 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// ErrKeyNotFound is a key the transaction cannot see, already deleted, or, for DisableKey, already disabled.
+// ErrKeyNotFound is a key the transaction cannot see, or already deleted.
 var ErrKeyNotFound = errors.New("accounts: no such API key")
 
 // The reset windows of a spend limit.
@@ -199,18 +199,6 @@ func createdAt(id uuid.UUID) time.Time {
 	var ms [8]byte
 	copy(ms[2:], id[:6])
 	return time.UnixMilli(int64(binary.BigEndian.Uint64(ms[:]))).UTC() // #nosec G115 -- 48 bits fit
-}
-
-// DisableKey stops the key in tx and records it; the next call with it is refused on every node.
-func (s *Service) DisableKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error {
-	rows, err := s.queries.DisableKey(ctx, tx, uuid.UUID(key))
-	if err != nil {
-		return fmt.Errorf("disable an API key: %w", err)
-	}
-	if len(rows) == 0 {
-		return ErrKeyNotFound
-	}
-	return recordKey(ctx, tx, actor, "api_key.disable", key, rows[0].SiteID, rows[0].AccountID)
 }
 
 // DeleteKey deletes the key for good in tx and records it.
