@@ -292,8 +292,14 @@ class Train:
                 listed = ", ".join(f"`{directory}` {version:05d}" for directory, version in sorted(clash))
                 self.eject(entry, CONFLICT, f"It adds a migration version that main or a PR ahead of it already uses: {listed}. Renumber it.")
                 continue
+            before = git("rev-parse", "HEAD")
             if conflicts := self.try_merge(entry.sha, f"train: #{entry.number} {entry.sha}\n\n{entry.title}"):
                 self.eject(entry, CONFLICT, "It conflicts with main or a PR ahead of it in the train:\n\n" + "\n".join(f"- `{f}`" for f in conflicts))
+                continue
+            if git("rev-parse", "HEAD^{tree}") == git("rev-parse", f"{before}^{{tree}}"):
+                # already in the base: GitHub can list a PR as open and queued for seconds after the train merged it
+                git("reset", "-q", "--hard", before)
+                log(f"#{entry.number} changes nothing on {base[:7]}; left out")
                 continue
             if blobs := self.new_workflow_blobs(entry.sha):
                 git("reset", "-q", "--hard", "HEAD^1")
