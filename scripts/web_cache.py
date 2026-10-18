@@ -122,12 +122,13 @@ def build_key(root: Path, version: str, tools: str) -> str:
     return h.hexdigest()
 
 
-def e2e_key(root: Path, tools: str) -> str:
+def e2e_key(root: Path, tools: str, command: list[str]) -> str:
     # The version stamp is not an input: the tests compare the console's stamp with the same AXIOM_VERSION they are
     # given, so their pass does not depend on its value. Everything that changes what they check is in web/, api/ or
-    # the Go code.
+    # the Go code, and the command: a pass of one spec file must not stand for the whole suite.
     h = hashlib.sha256()
     extra(h, "format", CACHE_FORMAT)
+    extra(h, "command", "\0".join(command))
     extra(h, "script", script_hash())
     extra(h, "inputs", e2e_inputs_hash(root))
     extra(h, "toolchain", tools)
@@ -201,7 +202,7 @@ def build(root: Path, cache: Path, version: str, command: list[str], tools: str)
 
 
 def e2e(root: Path, cache: Path, version: str, command: list[str], tools: str) -> int:
-    key = e2e_key(root, tools)
+    key = e2e_key(root, tools, command)
     marker = cache / "e2e" / key
     if marker.is_file():
         print(f"e2e cache hit {key[:12]}: skipped {command}, passed before at {marker}")
