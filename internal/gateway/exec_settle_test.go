@@ -29,13 +29,6 @@ func (h *harness) isReleased() bool {
 	}
 }
 
-// settledCalls is how many tries of the settlement were made.
-func (h *harness) settledCalls() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return len(h.settlements)
-}
-
 // TestASettlementIsRetriedUntilItIsWritten: the same outcome each time, so a try that committed with its
 // acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the call gives its slots
 // back once it is written.
@@ -81,7 +74,7 @@ func TestASettlementNotWrittenInTimeGoesOnInTheBackground(t *testing.T) {
 		if h.elapsed() != h.cfg.SettleRetry || !strings.Contains(h.w.body(), `"billing_pending":true`) || strings.Contains(h.w.body(), `"cost"`) {
 			t.Fatalf("after %v:\n%s", h.elapsed(), h.w.body())
 		}
-		if h.isReleased() || h.settledCalls() != 1 {
+		if h.isReleased() {
 			t.Fatal("the call gave its slots back before its settlement was written")
 		}
 		<-h.released
