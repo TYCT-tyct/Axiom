@@ -38,7 +38,7 @@ type ServerTool struct {
 type Model struct {
 	ID                      catalog.ModelID
 	ContextLength           int64
-	ImageTokens, PageTokens int64                  // the most input tokens one image or one document page can take
+	ImageTokens, PageTokens int64                  // the most input tokens one image or one document page can take; 0 when not known
 	FilePages               int64                  // the most pages one file can have; 0 when no limit is known
 	OutputSpeed             int64                  // the fastest output, in tokens per second
 	MaxUses                 map[catalog.Item]int64 // each server tool's default most uses
@@ -118,6 +118,12 @@ type quote struct {
 
 var errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
 
+// errNoSegments is a segmentable entry quoted with no segment size or no overshoot allowance configured: a segment of
+// 0 tokens reserves no output at all and the meter reads it as a whole reservation, so the output would have no bound.
+// Routing makes no entry segmentable while it has no segment size (routing.Config.FirstSegment); this keeps a
+// configuration that gives one to routing and none to billing from quoting an entry short.
+var errNoSegments = errors.New("billing: an entry is segmentable but the segment size or the overshoot is not configured")
+
 // ErrUnpriced is a price schedule that leaves something unpriced: what Quote refuses a request for when the locked
 // schedule does not price an item the request may use, and what Sell returns for a rule M1 cannot turn into a sale
 // price. A model without one has no sale price at all rather than its reference price (docs/domains/billing.md「定价」).
@@ -174,10 +180,10 @@ func shortSource(amount platform.Exact, avail []Available) int {
 // at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
 // the dearest price it can have.
 func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
-	window := e.Model.ContextLength
-	if window <= 0 {
-		return q, errors.New("billing: the model has no context length")
+	if err := checkEntry(e, s); err != nil {
+		return q, err
 	}
+	window := e.Model.ContextLength
 	tiers := d.ServiceTiers
 	if e.Model.ServiceTiers != 0 {
 		tiers &= e.Model.ServiceTiers
@@ -221,6 +227,18 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	return q, nil
 }
 
+// checkEntry refuses an entry that data, not the request, makes impossible to quote: a model with no context length, and
+// a segmentable entry with no segment size or overshoot to reserve it by.
+func checkEntry(e Quotable, s Segments) error {
+	if e.Model.ContextLength <= 0 {
+		return errors.New("billing: the model has no context length")
+	}
+	if e.Segmentable && (s.Output <= 0 || s.Overshoot <= 0) {
+		return errNoSegments
+	}
+	return nil
+}
+
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
 // search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
 // context at the input price of the later samplings, twice with compaction.
@@ -260,14 +278,43 @@ func InputBound(d Demand, m Model) (first, longest int64) {
 	return inputBound(d, m, samplings)
 }
 
+// The interim estimate of the input a charge takes when the upstream reported none (docs/domains/billing.md「用量来源与
+// 暂估」): text runs about 4 bytes a token, an image is taken at 1600 tokens and a file at 4096, unless the model's bound
+// is smaller.
+const (
+	InputBytesPerToken   = 4
+	estimatedImageTokens = 1600
+	estimatedFileTokens  = 4096
+)
+
+// InputEstimate is the input tokens of the request's first sampling as a charge takes them when the upstream reported
+// none: the text at InputBytesPerToken, each image and file at the lesser of its bound and the estimate, held to the
+// context. It never exceeds InputBound's first, which the reservation covers: every part is the lesser of the part's
+// bound and something. d.TextBytes is bytes.
+func InputEstimate(d Demand, m Model) int64 {
+	text := ceilDiv(d.TextBytes, InputBytesPerToken) // a token begun is charged
+	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
+	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
+	return min(m.ContextLength, add(text, add(images, files)))
+}
+
 func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	window := m.ContextLength
-	first = min(window, add(d.TextBytes, add(mul(d.Images, m.ImageTokens), mul(d.Documents, fileTokens(m)))))
+	first = min(window, add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m)))))
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	if samplings > 1 || searchable {
 		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
 	}
 	return first, first
+}
+
+// imageTokens bounds one image: the model's most per image, or the whole context when the catalog has none (the model
+// spec records no image size yet), the same convention as fileTokens.
+func imageTokens(m Model) int64 {
+	if m.ImageTokens <= 0 {
+		return m.ContextLength
+	}
+	return m.ImageTokens
 }
 
 // fileTokens bounds one file: Documents counts files, not pages (protocol does not parse PDFs), so a file takes its

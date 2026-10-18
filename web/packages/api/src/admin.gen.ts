@@ -266,7 +266,7 @@ export interface paths {
         put?: never;
         /**
          * Give an account credit
-         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
+         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A grant does not expire: `expires_at` is refused (422, pointing at `/expires_at`) until credit batches are written off at their expiry. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
          */
         post: operations["grantCredit"];
         delete?: never;
@@ -702,7 +702,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically; the break-even floor always applies and raises a price a rule would set below it. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, a `cost_plus` method, or an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically; the break-even floor always applies and raises a price a rule would set below it. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -721,7 +721,7 @@ export interface paths {
         get?: never;
         /**
          * Change a pricing rule
-         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. The audience can only be `all` in this release (422, as for creating a rule). Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
+         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. The audience can only be `all` in this release, and the target and method only what a rule can price (422, as for creating a rule). Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
          */
         put: operations["updatePricingRule"];
         post?: never;
@@ -944,7 +944,7 @@ export interface components {
             amount: components["schemas"]["Money"];
             /**
              * Format: date-time
-             * @description UTC, in the future. Absent: the credit does not expire.
+             * @description Refused in this release (422): nothing writes off an expired batch yet. Leave it out; the credit does not expire.
              */
             expires_at?: string;
             reason: components["schemas"]["Reason"];
@@ -953,7 +953,10 @@ export interface components {
             id: components["schemas"]["Uuid"];
             account_id: components["schemas"]["AccountId"];
             amount: components["schemas"]["Money"];
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Absent in this release: a grant does not expire.
+             */
             expires_at?: string;
             /** Format: date-time */
             created_at: string;

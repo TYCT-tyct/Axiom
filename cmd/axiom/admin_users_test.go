@@ -182,16 +182,14 @@ func (g grantee) balanceOf() string {
 // reason, all of one transaction, answered with the balance after it.
 func TestGrantCredit(t *testing.T) {
 	g := newGrantee(t)
-	expires := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
-	rec := g.change(g.s, http.MethodPost, g.path, grantBody("5000000000", `"expires_at":"`+expires.Format(time.RFC3339)+`",`), newKey())
+	rec := g.change(g.s, http.MethodPost, g.path, grantBody("5000000000", ""), newKey())
 	expectAdmin(t, "grantCredit", rec, http.StatusCreated, "")
 	var grant adminapi.CreditGrant
 	decode(t, rec, &grant)
 	five := adminapi.Money{Amount: "5000000000", Currency: "USD"}
 	zero := adminapi.Money{Amount: "0", Currency: "USD"}
 	wantAfter := adminapi.Balance{Balance: five, Reserved: zero, Floor: zero, Available: five, SpentThisMonth: zero}
-	if _, err := uuid.Parse(grant.Id); err != nil || grant.AccountId != g.account || grant.Amount != five || grant.ExpiresAt == nil ||
-		!grant.ExpiresAt.Equal(expires) || time.Since(grant.CreatedAt) > time.Minute || rec.Header().Get("Idempotency-Replayed") != "" {
+	if _, err := uuid.Parse(grant.Id); err != nil || grant.AccountId != g.account || grant.Amount != five || grant.ExpiresAt != nil || time.Since(grant.CreatedAt) > time.Minute || rec.Header().Get("Idempotency-Replayed") != "" {
 		t.Errorf("the grant: %+v replayed=%q", grant, rec.Header().Get("Idempotency-Replayed"))
 	}
 	if diff := cmp.Diff(wantAfter, grant.BalanceAfter); diff != "" {
@@ -209,9 +207,9 @@ func TestGrantCredit(t *testing.T) {
 func (g grantee) expectGranted(batch string) {
 	g.t.Helper()
 	for query, want := range map[string]string{
-		"SELECT count(*)::text FROM billing.credit_batches WHERE id = '" + batch + "' AND amount = 5000000000 AND source = 'gift' AND expires_at IS NOT NULL": "1",
-		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries WHERE book = 'gift_expense'":                                                              "5000000000",
-		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries":                                                                                          "0",
+		"SELECT count(*)::text FROM billing.credit_batches WHERE id = '" + batch + "' AND amount = 5000000000 AND source = 'gift' AND expires_at IS NULL": "1",
+		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries WHERE book = 'gift_expense'":                                                          "5000000000",
+		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries":                                                                                      "0",
 	} {
 		if got := g.text(query); got != want {
 			g.t.Errorf("%s = %s, want %s", query, got, want)
@@ -271,6 +269,7 @@ func TestGrantCreditRefusals(t *testing.T) {
 	g := newGrantee(t)
 	key := newKey()
 	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	future := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
 	for _, c := range []struct {
 		name, body string
 		status     int
@@ -286,7 +285,9 @@ func TestGrantCreditRefusals(t *testing.T) {
 		{"nothing", grantBody("0", ""), http.StatusUnprocessableEntity, codeUnprocessable, ""},
 		{"a negative amount", grantBody("-1", ""), http.StatusUnprocessableEntity, codeUnprocessable, ""},
 		{"more than a grant may give", grantBody("10000000000001", ""), http.StatusUnprocessableEntity, codeUnprocessable, ""},
-		{"an expiry that has passed", grantBody("1", `"expires_at":"`+past+`",`), http.StatusUnprocessableEntity, codeUnprocessable, ""},
+		// Nothing would honour an expiry, so none is taken: not one in the future, which would never expire, nor a past one.
+		{"an expiry in the future", grantBody("1", `"expires_at":"`+future+`",`), http.StatusUnprocessableEntity, codeUnprocessable, "/expires_at"},
+		{"an expiry that has passed", grantBody("1", `"expires_at":"`+past+`",`), http.StatusUnprocessableEntity, codeUnprocessable, "/expires_at"},
 	} {
 		rec := g.change(g.s, http.MethodPost, g.path, c.body, key)
 		expectAdmin(t, c.name, rec, c.status, c.code)

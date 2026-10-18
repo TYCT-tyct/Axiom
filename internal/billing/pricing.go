@@ -103,6 +103,10 @@ var (
 	audienceKinds = []string{"account", "tier", "all"}
 )
 
+// honouredTargets are the targets a rule prices in M1 (sale.go pricesModel): the others are chosen per endpoint, which
+// the routing snapshot does not have yet.
+var honouredTargets = []string{"model", "author", "all"}
+
 // Check reports the first part of the rule that breaks a rule of rules. currency is the site's: a fixed price is in it.
 func (in RuleInput) Check(currency platform.Currency) error {
 	if err := checkTarget(in.Target); err != nil {
@@ -136,6 +140,9 @@ func checkTarget(t Selector) error {
 	if !valid {
 		return &RuleError{"target/id", "is not the ID of a " + t.Kind + ", and is absent only for all"}
 	}
+	if !slices.Contains(honouredTargets, t.Kind) {
+		return &RuleError{"target/kind", "can only be a model, an author or all in this release: a rule for an endpoint, group, supplier or source type would be accepted and then not applied"}
+	}
 	return nil
 }
 
@@ -168,12 +175,24 @@ func ratio(field string, v *string) (r *big.Rat, ok bool, err error) {
 	return r, true, nil
 }
 
+// check refuses what is not a price, and, for M1, a way that sets none: the sale price of cost_plus needs a supplier's
+// cost, and a multiplier read through an exchange rate needs one, neither of which this release has (sale.go Sell), so
+// they are refused, like a rule for one account, rather than accepted and then left to the next rule.
 func (m Method) check(currency platform.Currency) error {
 	switch m.Kind {
 	case "cost_plus":
-		return m.checkCostPlus()
+		if err := m.checkCostPlus(); err != nil {
+			return err
+		}
+		return &RuleError{"method/kind", "cannot be cost_plus in this release: it needs the supplier's cost to price from"}
 	case "reference_multiplier":
-		return m.checkMultiplier()
+		if err := m.checkMultiplier(); err != nil {
+			return err
+		}
+		if m.CurrencyConversion != "face" {
+			return &RuleError{"method/currency_conversion", "can only be face in this release: there are no exchange rates"}
+		}
+		return nil
 	case "fixed":
 		return m.checkFixed(currency)
 	}

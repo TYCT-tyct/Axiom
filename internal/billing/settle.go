@@ -28,10 +28,11 @@ type Suppliers interface {
 	EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error
 }
 
-// Outcome is how a call ended: its attempts in order, of which the last is charged, and whether the client cancelled.
+// Outcome is how a call ended: its attempts in order, of which the last is charged. A call whose client left has the
+// leaving in the charged attempt's Finish (FinishCancelled), not here: an attempt that failed before the client left is
+// judged by how it failed. A call with no attempt is one that never reached an upstream.
 type Outcome struct {
-	Attempts  []AttemptResult
-	Cancelled bool
+	Attempts []AttemptResult
 }
 
 // AttemptResult is one attempt: the route entry it bound, its cost to the platform in billionths of a credit
@@ -106,17 +107,19 @@ var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept e
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
 	var seen []UnknownItem
+	var owed, charged int64
 	err = b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
 		c, err := b.lock(ctx, tx, h.id, a.Account)
 		if err != nil {
 			return err
 		}
 		f, err = c.settle(ctx, tx, o)
-		seen = c.seen
+		seen, owed, charged = c.seen, c.owed, c.charged
 		return err
 	})
 	if err == nil {
 		b.alert(seen)
+		b.bear(ctx, h.id, owed, charged)
 	}
 	return f, err
 }
@@ -130,8 +133,15 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 		return c.stored()
 	}
 	if len(o.Attempts) == 0 {
-		if c.row.State == "pending" {
+		switch c.row.State {
+		case "pending":
 			return Final{}, c.release(ctx, tx, "released", c.row.Amount)
+		case "cleanup_released":
+			// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
+			// lost is answered, and no charge a supplier reports later is looked for in it.
+			if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
+				return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
+			}
 		}
 		return c.stored() // cleanup has it, and a Settle with nothing to price has nothing to add
 	}
@@ -144,7 +154,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 			return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
 		}
 	}
-	p, err := c.price(o, last)
+	p, err := c.price(last)
 	if err == nil {
 		err = c.noteAttempts(ctx, tx, o)
 	}
@@ -205,7 +215,7 @@ type priced struct {
 
 // price applies 免单规则 to the outcome at the locked price of the last attempt's entry. A waivable call is waived, with
 // no limit on how many an account may have: the rules are what decides, and nothing else.
-func (c *locked) price(o Outcome, last AttemptResult) (priced, error) {
+func (c *locked) price(last AttemptResult) (priced, error) {
 	if last.Result == NotExecuted {
 		return priced{}, nil
 	}
@@ -213,18 +223,19 @@ func (c *locked) price(o Outcome, last AttemptResult) (priced, error) {
 	if err != nil {
 		return priced{}, err
 	}
-	waived := waivable(o, last)
+	waived := waivable(last)
 	p, err := priceSegments(s, f, last.Segments, waived)
 	p.waived = waived
 	return p, err
 }
 
-// waivable: a call the platform may not charge for its model usage. A cancelled call never is; one whose content
-// never reached the client is; one that did is only when the upstream reported no output and an empty or error
-// finish (the zero-output waiver).
-func waivable(o Outcome, last AttemptResult) bool {
+// waivable: an attempt the platform may not charge for its model usage. One that ended because the client left never
+// is, whether or not anything was delivered; the judgement is of the charged attempt, so an attempt that failed first
+// and was followed by the client leaving is judged by its failure. One whose content never reached the client is; one
+// that did is only when the upstream reported no output and an empty or error finish (the zero-output waiver).
+func waivable(last AttemptResult) bool {
 	delivered := last.Result == Committed || last.Result == Aggregated
-	return !o.Cancelled && (!delivered || zeroOutput(last))
+	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
 // zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning
@@ -453,6 +464,7 @@ type locked struct {
 	row     LockReservationRow
 	balance LockBalanceRow
 	charged int64
+	owed    int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
 	seen    []UnknownItem // unknown items first seen in this transaction
 	entries []int32       // the attempts' entries to write, nil to keep the recorded ones
 }
@@ -495,7 +507,7 @@ func (c *locked) event(kind string, revision int64) event {
 // holding part of the reservation for a record that will not come would only shrink what the account may spend.
 func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
 	held := c.row.Amount - c.row.Charged
-	c.charged = min(p.price, c.cap(held))
+	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	if _, err := post(ctx, tx, c.event("settle", 0), charge(p.price, c.charged)...); err != nil {
 		return err
 	}
@@ -511,7 +523,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
 func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
-	c.charged = min(p.price, add(c.row.Charged, c.cap(0)))
+	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
 	}

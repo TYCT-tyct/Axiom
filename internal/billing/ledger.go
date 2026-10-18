@@ -123,16 +123,3 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"},
 	})
 }
-
-// Reconcile lists what the daily reconciliation refuses: a transaction whose entries do not balance, a balance that
-// differs from its book. It reads every tenant, so it runs in the platform scope.
-func (b *Billing) Reconcile(ctx context.Context) (problems []string, err error) {
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
-		problems, err = queries.Unbalanced(ctx, tx)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("billing: reconcile: %w", err)
-	}
-	return problems, nil
-}
