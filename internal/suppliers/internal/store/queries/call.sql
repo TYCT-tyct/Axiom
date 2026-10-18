@@ -25,19 +25,6 @@ JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
 WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance')
 ORDER BY e.id, c.id;
 
--- name: ListJournal :many
-SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id, cost_schedule_id, priced_at,
-    charge_ref, committed
-FROM suppliers.attempt_journal WHERE request_id = @request_id ORDER BY attempt_seq;
-
--- name: PurgeJournal :execrows
--- The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
--- end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
--- its rows however old, since they are what cleanup recovers it from.
-DELETE FROM suppliers.attempt_journal j
-USING suppliers.ended_requests e
-WHERE e.request_id = j.request_id AND e.ended_at < @before;
-
 -- name: InsertEndedRequest :exec
 INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
 VALUES (@request_id, @site_id, @account_id, @ended_at)
@@ -48,10 +35,18 @@ INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endp
 VALUES (@request_id, @site_id, @account_id, @route_endpoint_ids)
 ON CONFLICT (request_id) DO NOTHING;
 
--- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-VALUES (@request_id, @site_id, @account_id)
-ON CONFLICT (request_id) DO NOTHING;
+-- The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
+-- Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+-- lost, which has nothing to resolve and writes no row, is told from one resolved already.
+-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost;
 
 -- name: MatchCharges :many
 -- Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:

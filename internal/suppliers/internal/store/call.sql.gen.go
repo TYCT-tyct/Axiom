@@ -233,73 +233,25 @@ func (q *Queries) InsertLostRequest(ctx context.Context, db DBTX, arg InsertLost
 	return err
 }
 
-const insertLostRequestResolution = `-- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (request_id) DO NOTHING
+const insertLostRequestResolution = `-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost
 `
 
-type InsertLostRequestResolutionParams struct {
-	RequestID uuid.UUID
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-}
-
-func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, arg InsertLostRequestResolutionParams) error {
-	_, err := db.Exec(ctx, insertLostRequestResolution, arg.RequestID, arg.SiteID, arg.AccountID)
-	return err
-}
-
-const listJournal = `-- name: ListJournal :many
-SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id, cost_schedule_id, priced_at,
-    charge_ref, committed
-FROM suppliers.attempt_journal WHERE request_id = $1 ORDER BY attempt_seq
-`
-
-type ListJournalRow struct {
-	RequestID      uuid.UUID
-	AttemptSeq     int16
-	SiteID         *uuid.UUID
-	AccountID      *uuid.UUID
-	SupplierID     uuid.UUID
-	CredentialID   uuid.UUID
-	EndpointID     uuid.UUID
-	CostScheduleID uuid.UUID
-	PricedAt       time.Time
-	ChargeRef      *string
-	Committed      bool
-}
-
-func (q *Queries) ListJournal(ctx context.Context, db DBTX, requestID uuid.UUID) ([]ListJournalRow, error) {
-	rows, err := db.Query(ctx, listJournal, requestID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListJournalRow
-	for rows.Next() {
-		var i ListJournalRow
-		if err := rows.Scan(
-			&i.RequestID,
-			&i.AttemptSeq,
-			&i.SiteID,
-			&i.AccountID,
-			&i.SupplierID,
-			&i.CredentialID,
-			&i.EndpointID,
-			&i.CostScheduleID,
-			&i.PricedAt,
-			&i.ChargeRef,
-			&i.Committed,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
+// Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+// lost, which has nothing to resolve and writes no row, is told from one resolved already.
+func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) (int32, error) {
+	row := db.QueryRow(ctx, insertLostRequestResolution, requestID)
+	var named int32
+	err := row.Scan(&named)
+	return named, err
 }
 
 const listRoutable = `-- name: ListRoutable :many
@@ -520,23 +472,6 @@ WHERE id = $1 AND status IN ('connecting', 'active', 'low_balance')
 // routed to until a person looks at it.
 func (q *Queries) PauseSupplierForFunding(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
 	result, err := db.Exec(ctx, pauseSupplierForFunding, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const purgeJournal = `-- name: PurgeJournal :execrows
-DELETE FROM suppliers.attempt_journal j
-USING suppliers.ended_requests e
-WHERE e.request_id = j.request_id AND e.ended_at < $1
-`
-
-// The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
-// end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
-// its rows however old, since they are what cleanup recovers it from.
-func (q *Queries) PurgeJournal(ctx context.Context, db DBTX, before time.Time) (int64, error) {
-	result, err := db.Exec(ctx, purgeJournal, before)
 	if err != nil {
 		return 0, err
 	}

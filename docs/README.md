@@ -18,7 +18,7 @@
 | 计费在调用路径上的代码接口：预留、计量、追加、结算、持有者与截止时间、预留的状态、写入的数据 | [internal/billing/README.md](../internal/billing/README.md) | 实现或调用 `billing` 的预留与结算之前 |
 | 模型目录：标准 ID、公开与内部名字、名字解析、生命周期、规格与参考价的来源、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
 | 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
-| 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试、对账日志 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
+| 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 路由在调用路径上的代码接口：会话标识、回退路线、换不换端点 | [internal/routing/README.md](../internal/routing/README.md) | 实现或调用 `routing` 的路由接口之前 |

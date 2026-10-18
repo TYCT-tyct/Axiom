@@ -24,19 +24,13 @@ import (
 type Conn interface {
 	Send(ctx context.Context, call suppliers.Call) (*http.Response, *suppliers.Failure)
 	Policy() suppliers.CallPolicy
-	Receipt() suppliers.AttemptReceipt
 	Done() suppliers.AttemptReceipt
 }
 
 // Upstreams is the call side of suppliers as the attempts use it. Acquire returns suppliers.ErrNoEndpoint or
-// suppliers.ErrNoSlot when it has no credential to give; neither is an attempt. Settled lets the journal drop what it
-// still holds of a request whose settlement committed; JournalFlushed closes once all a request journalled is written,
-// which is what a call handed to the cleanup waits for before its slots go (README.md「并发、背压与共享状态」).
+// suppliers.ErrNoSlot when it has no credential to give; neither is an attempt.
 type Upstreams interface {
 	Acquire(id suppliers.EndpointID) (Conn, error)
-	Journal(suppliers.JournalEntry)
-	Settled(platform.RequestID)
-	JournalFlushed(platform.RequestID) <-chan struct{}
 }
 
 type serviceUpstreams struct{ *suppliers.Service }
@@ -62,9 +56,10 @@ type Ledger interface {
 // Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the
 // attempt's price is in; *suppliers.Service is one. known is false when that leaves part of the cost out or none of it
 // is known: the attempt is then booked at whatever came back, which is the platform's cost and never the user's charge
-// (docs/domains/billing.md「供应商成本」).
+// (docs/domains/billing.md「供应商成本」). The AttemptCost is the same pricing in the supplier's own unit, which is what
+// suppliers stores of the attempt for reconciliation.
 type Costs interface {
-	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (cost int64, known bool, err error)
+	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c suppliers.AttemptCost, cost int64, known bool, err error)
 }
 
 // ExecDeps are what an Executor needs. Every one is required.
@@ -258,9 +253,6 @@ func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 		body = e.relay.Fail(e.err, fin)
 	}
 	status := e.relay.Status()
-	if status == http.StatusOK {
-		s.journalLast()
-	}
 	s.respond(status, body)
 }
 
@@ -268,16 +260,7 @@ func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 // (docs/domains/gateway.md「转发规则」), after the settlement, which nothing in it reports.
 func (s *session) answerReply(e ended) {
 	defer s.x.Memory.Refund(e.held)
-	s.journalLast()
 	s.respond(e.status, e.reply)
-}
-
-// journalLast tells the journal that the last attempt's content reached the client, before it does, as a stream's
-// commit point does: a crash after the write must leave the cleanup that attempt.
-func (s *session) journalLast() {
-	if s.last != nil && !s.isGone() {
-		s.journal(s.last, true)
-	}
 }
 
 // let drops the aggregate reply kept for the answer, if there is one: the call is over, or another attempt replaced it.

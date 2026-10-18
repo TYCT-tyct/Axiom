@@ -47,10 +47,6 @@ type AttemptReceipt struct {
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 }
 
-// Key is the supplier's own id of the request, which reconciliation matches its charge records by; empty when no
-// response gave one.
-func (r AttemptReceipt) Key() string { return r.ref }
-
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in
 // Authorization: Bearer, which new-api and sub2api both accept on all three.
 var wire = map[protocol.Format]struct {
@@ -133,9 +129,8 @@ type RateLimited = adapter.RateLimited
 // cancellation stands.
 func (a *Attempt) Policy() CallPolicy { return a.s.policy(a.ep) }
 
-// Receipt is what the attempt has so far. Done gives the final one; this is for the journal, which records an attempt
-// while it runs.
-func (a *Attempt) Receipt() AttemptReceipt {
+// receipt is what the attempt has so far; Done gives it out once the attempt is over.
+func (a *Attempt) receipt() AttemptReceipt {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return AttemptReceipt{
@@ -149,7 +144,7 @@ func (a *Attempt) Receipt() AttemptReceipt {
 // request and finishing it can both call it.
 func (a *Attempt) Done() AttemptReceipt {
 	a.once.Do(func() { a.cred.rt.inflight.Add(-1) })
-	return a.Receipt()
+	return a.receipt()
 }
 
 // Send posts the call to the supplier. A response in the 2xx range is returned for the caller to read and close.

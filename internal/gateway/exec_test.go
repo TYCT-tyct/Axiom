@@ -273,53 +273,6 @@ func TestRetriesSpendTheSuppliersBudget(t *testing.T) {
 	}
 }
 
-// TestEveryAttemptIsJournalledWhenBoundAndAnswered: the journal learns of an attempt when it is bound and when the
-// response headers arrive, and once more when its content is first handed to the client; a failed attempt never says
-// committed.
-func TestEveryAttemptIsJournalledWhenBoundAndAnswered(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{failure(routing.ScopeEndpoint, false)}
-		h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
-		h.run()
-		type row struct {
-			seq       platform.AttemptSeq
-			committed bool
-		}
-		var got []row
-		for _, e := range h.up.journal {
-			if e.Request != platform.RequestID(h.call.ID) || e.Site == nil || e.Account == nil {
-				t.Fatalf("an entry without the request or the tenant: %+v", e)
-			}
-			got = append(got, row{e.Seq, e.Committed})
-		}
-		want := []row{{1, false}, {1, false}, {2, false}, {2, false}, {2, true}}
-		if len(got) != len(want) {
-			t.Fatalf("journal %v, want %v", got, want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("journal %v, want %v", got, want)
-			}
-		}
-	})
-}
-
-// TestJournalLearnsOfTheCommitBeforeTheClientDoes: a crash after the first write must leave the cleanup the attempt that
-// was committed, so the journal entry comes first.
-func TestJournalLearnsOfTheCommitBeforeTheClientDoes(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
-		h.run()
-		for i, e := range h.up.journal {
-			if e.Committed && h.up.writes[i] != 0 {
-				t.Errorf("the commit was journalled after %d writes", h.up.writes[i])
-			}
-		}
-	})
-}
-
 // TestAttemptsAreBoundToTheEntriesTheReservationKept: the route is cut to the entries the reservation covers, and an
 // attempt is bound to the position its entry had in the route that was quoted.
 func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
@@ -387,7 +340,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 }
 
 // TestTheSuppliersServiceIsUpstreams: what the service does not give comes back as an error and no connection, not as a
-// connection that is nil inside, and the journal is the service's.
+// connection that is nil inside.
 func TestTheSuppliersServiceIsUpstreams(t *testing.T) {
 	t.Parallel()
 	svc, err := suppliers.New(suppliers.Config{})
@@ -397,9 +350,5 @@ func TestTheSuppliersServiceIsUpstreams(t *testing.T) {
 	up := NewUpstreams(svc)
 	if conn, err := up.Acquire(uuid.New()); conn != nil || !errors.Is(err, suppliers.ErrNoEndpoint) {
 		t.Errorf("an endpoint it does not have: %v, %v", conn, err)
-	}
-	up.Journal(suppliers.JournalEntry{Request: platform.RequestID(uuid.New()), Seq: 1})
-	if svc.JournalBuffered() != 1 {
-		t.Error("the entry did not reach the service's journal")
 	}
 }

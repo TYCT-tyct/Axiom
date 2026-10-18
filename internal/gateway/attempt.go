@@ -215,7 +215,6 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a.unhook = context.AfterFunc(s.x.shutdown, func() { a.cancel(errShutdown) })
 	s.x.Router.Begin(entry.Endpoint)
 	s.setCancel(a.cancel, policy.Cancels)
-	s.journal(a, false)
 	return a, ctx
 }
 
@@ -229,17 +228,6 @@ func (a *attempt) close() {
 	a.release()
 	a.result(a.conn.Done())
 	a.s.x.Router.End(a.entry.Endpoint)
-}
-
-// journal appends the attempt to the reconciliation journal: when it is bound, when the supplier's request id came,
-// and when its content was first handed to the client.
-func (s *session) journal(a *attempt, committed bool) {
-	site, account := uuid.UUID(s.c.site.ID), uuid.UUID(s.c.caller.AccountID())
-	s.x.Upstreams.Journal(suppliers.JournalEntry{
-		Request: platform.RequestID(s.c.ID), Seq: platform.AttemptSeq(s.ends[a.i].Seq), //nolint:gosec // at most platform.MaxAttempts
-		Site: &site, Account: &account,
-		Receipt: a.conn.Receipt(), Committed: committed,
-	})
 }
 
 // attempt runs one try: send, and either a failure to decide on or an answer to read, a stream for a client relayed, a
@@ -259,10 +247,10 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	return a.stream(ctx, resp.Body, up.Usage)
 }
 
-// send posts the request, within the wait for the response headers, and journals the attempt again when they come: that
-// is when the supplier's request id is known. The prepared body, held in the node's budget, is given back as soon as it
-// has been sent. The compact endpoint is the one whose reply is not a stream: it gets a longer wait for its headers, and
-// its own path (docs/domains/gateway.md「路径与格式」).
+// send posts the request, within the wait for the response headers, which is when the supplier's request id comes. The
+// prepared body, held in the node's budget, is given back as soon as it has been sent. The compact endpoint is the one
+// whose reply is not a stream: it gets a longer wait for its headers, and its own path (docs/domains/gateway.md
+// 「路径与格式」).
 func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*http.Response, *suppliers.Failure) {
 	s := a.s
 	defer s.x.Memory.Refund(held)
@@ -274,7 +262,6 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, call)
 	wait.Stop() // at once: a late firing would cancel the stream the headers began
-	s.journal(a, false)
 	return resp, fail
 }
 

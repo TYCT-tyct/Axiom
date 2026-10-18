@@ -82,8 +82,7 @@ func checkReply(t *testing.T, h *harness, name string, shape []string) {
 	checkAggregateSettlement(t, h, name)
 }
 
-// checkAggregateSettlement: one attempt whose content reached the client (billing.Aggregated), settled before the write
-// and journalled before it.
+// checkAggregateSettlement: one attempt whose content reached the client (billing.Aggregated), settled before the write.
 func checkAggregateSettlement(t *testing.T, h *harness, name string) {
 	t.Helper()
 	s := h.ended()
@@ -92,11 +91,6 @@ func checkAggregateSettlement(t *testing.T, h *harness, name string) {
 	}
 	if a := s.outcome.Attempts; len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
 		t.Errorf("%s: ending %+v", name, s.outcome)
-	}
-	for i, e := range h.up.journal {
-		if e.Committed && h.up.writes[i] != 0 {
-			t.Errorf("%s: the commit was journalled after %d writes", name, h.up.writes[i])
-		}
 	}
 }
 

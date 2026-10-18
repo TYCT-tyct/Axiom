@@ -18,20 +18,20 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
-// silentSuppliers is billing's Suppliers for this test: the settlement's writes to suppliers go nowhere.
+// silentSuppliers is billing's Suppliers for the chain test: it settles the supplier's side nowhere, so that a
+// settlement here writes the ledger and the call record alone (callpath_test.go exercises the real adapter).
 type silentSuppliers struct{}
 
-func (silentSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
+func (silentSuppliers) RecordAttempts(context.Context, pg.Tx, []suppliers.AttemptRecord) error {
 	return nil
 }
 
-func (silentSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
-	return billing.JournalAttempt{}, false, nil
+func (silentSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) error {
+	return nil
 }
-
-func (silentSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
 
 func (silentSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
 
@@ -55,6 +55,14 @@ type chainFixture struct {
 
 func newChainFixture(t *testing.T) chainFixture {
 	t.Helper()
+	return newChainFixtureWith(t, billing.Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour},
+		silentSuppliers{})
+}
+
+// newChainFixtureWith is newChainFixture over a given billing configuration and Suppliers: the supplier's side of a
+// settlement goes to the adapter in callpath_test.go, and nowhere in the chain test.
+func newChainFixtureWith(t *testing.T, cfg billing.Config, suppliers billing.Suppliers) chainFixture {
+	t.Helper()
 	database := pgtest.New(t, modules()...)
 	app, err := pg.Open(t.Context(), database.App)
 	if err != nil {
@@ -73,10 +81,8 @@ func newChainFixture(t *testing.T) chainFixture {
 	if f.schedule, err = catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if f.billing, err = billing.Start(ctx, app, f.platformScope, billing.Config{
-		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour,
-		Logger: slog.New(slog.DiscardHandler),
-	}, silentSuppliers{}); err != nil {
+	cfg.Logger = slog.New(slog.DiscardHandler)
+	if f.billing, err = billing.Start(ctx, app, f.platformScope, cfg, suppliers); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.Tx(ctx, f.scope, func(tx pg.Tx) error {

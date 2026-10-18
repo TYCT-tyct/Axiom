@@ -12,32 +12,20 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
-// Suppliers is what billing needs of suppliers, written in billing's transaction: a request's attempts, lost requests
-// and the end of a request, after which suppliers may purge its reconciliation journal; and reading that journal.
-// cmd/ adapts suppliers' functions to it; tests use a double.
+// Suppliers is what billing needs of suppliers, written in billing's transaction: a request's attempts with what each
+// cost and the key its charge reconciles by, a lost request with the route it was frozen with, the resolution of one,
+// and the end of a request. cmd/ adapts suppliers' functions to it; tests use a double.
 type Suppliers interface {
-	RecordAttempts(ctx context.Context, tx pg.Tx, request uuid.UUID, attempts []AttemptRecord) error
-	// CommittedAttempt is the attempt the journal marks committed, with its reconciliation key, if any.
-	CommittedAttempt(ctx context.Context, tx pg.Tx, request uuid.UUID) (JournalAttempt, bool, error)
-	RecordLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
+	RecordAttempts(ctx context.Context, tx pg.Tx, attempts []suppliers.AttemptRecord) error
+	// RecordLostRequest notes a request whose node was lost, with the route it was frozen with: the endpoints a charge
+	// of it would be from, in route order.
+	RecordLostRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, route []uuid.UUID) error
 	ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
 	// EndRequest records that the request reached a terminal state at the database's time at.
 	EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error
-}
-
-// AttemptRecord is one attempt as suppliers stores it; Usage is nil when cleanup wrote it from the journal.
-type AttemptRecord struct {
-	Seq, Entry int
-	Key        string
-	Usage      []catalog.Usage
-}
-
-// JournalAttempt is a committed attempt as the journal recorded it.
-type JournalAttempt struct {
-	Seq, Entry int
-	Key        string
 }
 
 // Outcome is how a call ended: its attempts in order, of which the last is charged, and whether the client cancelled.
@@ -46,15 +34,20 @@ type Outcome struct {
 	Cancelled bool
 }
 
-// AttemptResult is one attempt: the route entry it bound, its reconciliation key, its cost to the platform in
-// billionths of a credit (suppliers' Cost estimates it), its usage by sampling, and how it ended.
+// AttemptResult is one attempt: the route entry it bound, its cost to the platform in billionths of a credit
+// (suppliers' Cost estimates it), its usage by sampling, how it ended, and the supplier's side of it, which billing
+// writes with the cost.
 type AttemptResult struct {
 	Seq, Entry int
-	Key        string
 	Cost       int64
 	Segments   []Segment
 	Result     Result
 	Finish     FinishReason
+	// Receipt, Estimate and FinishedAt are what suppliers stores of the attempt: the schedule, endpoint and credential
+	// that priced it with the supplier's own charge reference, its cost in the supplier's unit, and when it ended.
+	Receipt    suppliers.AttemptReceipt
+	Estimate   suppliers.AttemptCost
+	FinishedAt time.Time
 }
 
 // Segment is the usage of one sampling and which of its items the upstream reported; the rest were estimated.
@@ -165,34 +158,39 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated}, err
 }
 
-// recordAttempts books each attempt's cost, writes the attempts to suppliers and keeps their entries for the
-// reservation.
+// recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
+// attempt and the ledger's cost of it are both there or neither. The entries the attempts bound are kept on the
+// reservation, for the next settlement to restore.
 func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
-	records := make([]AttemptRecord, len(o.Attempts))
+	records := make([]suppliers.AttemptRecord, len(o.Attempts))
 	for i, at := range o.Attempts {
-		records[i] = AttemptRecord{Seq: at.Seq, Entry: at.Entry, Key: at.Key, Usage: usages(at.Segments)}
+		records[i] = suppliers.AttemptRecord{
+			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
+			Site: &c.row.SiteID, Account: &c.row.AccountID,
+			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
+		}
 		e := c.event("attempt_cost", 0)
 		e.seq = *int32p(at.Seq)
 		if _, err := post(ctx, tx, e, line{bookSupplierCost, at.Cost}, line{bookSupplierPrepaid, -at.Cost}); err != nil {
 			return err
 		}
 	}
-	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
+	if err := c.b.suppliers.RecordAttempts(ctx, tx, records); err != nil {
 		return fmt.Errorf("billing: record the attempts: %w", err)
 	}
-	c.entries = attemptEntries(records)
+	c.entries = attemptEntries(o.Attempts)
 	return nil
 }
 
-// attemptEntries is attempt_entries: the entry each attempt bound, by attempt number from 1, -1 for a number not
-// among records.
-func attemptEntries(records []AttemptRecord) []int32 {
+// attemptEntries is attempt_entries: the entry each attempt bound, by attempt number from 1, -1 for a number not among
+// attempts.
+func attemptEntries(attempts []AttemptResult) []int32 {
 	var entries []int32
-	for _, r := range records {
-		for len(entries) < r.Seq {
+	for _, at := range attempts {
+		for len(entries) < at.Seq {
 			entries = append(entries, -1)
 		}
-		entries[r.Seq-1] = *int32p(r.Entry)
+		entries[at.Seq-1] = *int32p(at.Entry)
 	}
 	return entries
 }
@@ -573,7 +571,7 @@ func (c *locked) kept(state string) written {
 	}
 }
 
-// terminal are the states nothing but a late Settle moves on from: suppliers may let the journal go.
+// terminal are the states nothing but a late Settle moves on from: suppliers may let the request's records go.
 var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settled": true, "cleanup_released": true}
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of

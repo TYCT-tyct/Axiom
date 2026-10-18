@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"slices"
 	"sync"
@@ -40,7 +39,7 @@ type Routable struct {
 // Config is what a node needs to call suppliers.
 type Config struct {
 	DB *pg.DB
-	// Scope sees every supplier and the journal: the platform scope, which only cmd/ may build.
+	// Scope sees every supplier: the platform scope, which only cmd/ may build.
 	Scope  pg.Scope
 	Keys   *secret.Keyring
 	Egress *egress.Client
@@ -48,20 +47,14 @@ type Config struct {
 	Registry *registry.Registry
 	// Clock is the time; nil is time.Now. Credentials expire and cool down by it, not by a change in the database.
 	Clock func() time.Time
-	// FlushEvery is how often the journal is written; nil is a second.
-	FlushEvery time.Duration
-	// FlushTimeout is how long one write of the journal may take before it is given up and tried again; nil is 10 seconds.
-	FlushTimeout time.Duration
-	// Logger gets the failures of the journal's writes; nil is slog.Default.
-	Logger *slog.Logger
 	// CredentialCooldown is how long a credential the supplier refused rests; QuotaCooldown is how long one whose
 	// allowance is used up rests when the supplier does not say when it returns.
 	CredentialCooldown, QuotaCooldown time.Duration
 }
 
 // Service is the call side of the suppliers module in one node: the endpoints it can call, the state of their
-// credentials, the journal of attempts, and the schedules costs are read from. It does not read the database to pick a
-// credential or to price an attempt.
+// credentials, and the schedules costs are read from. It does not read the database to pick a credential or to price an
+// attempt.
 type Service struct {
 	cfg      Config
 	registry *registry.Registry
@@ -78,9 +71,6 @@ type Service struct {
 	runtime   map[uuid.UUID]*credRuntime
 	cancelsMu sync.RWMutex
 	cancels   map[EndpointID]bool // measured by quality: whether the supplier stops when the client does
-
-	journal   *journal
-	writeRows func(context.Context, []store.JournalRow) error // set by tests to make a write fail
 }
 
 // New makes a service with no endpoints; Reload fills it.
@@ -95,24 +85,14 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
-	if cfg.FlushEvery <= 0 {
-		cfg.FlushEvery = time.Second
-	}
 	if cfg.CredentialCooldown <= 0 {
 		cfg.CredentialCooldown = 5 * time.Minute
 	}
 	if cfg.QuotaCooldown <= 0 {
 		cfg.QuotaCooldown = 15 * time.Minute
 	}
-	if cfg.FlushTimeout <= 0 {
-		cfg.FlushTimeout = 10 * time.Second
-	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
-	}
 	s := &Service{
-		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{},
-		cancels: map[EndpointID]bool{}, journal: newJournal(),
+		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})

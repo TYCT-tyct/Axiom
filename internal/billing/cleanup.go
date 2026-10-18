@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"slices"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -10,8 +11,8 @@ import (
 
 // Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), up to max reservations,
 // each in a transaction of its own under its balance row lock, and returns how many it changed. A pending reservation
-// past its deadline or under a reaped holder is ended uncharged — released, or settled when the journal shows a
-// committed attempt — since the node that would have settled it is gone (takeOver).
+// past its deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged,
+// and the request is left with suppliers as a lost one, with its route.
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
 	var due []DueReservationsRow
 	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
@@ -54,28 +55,14 @@ func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (
 	return &locked{b: b, id: id, row: r, balance: balance, charged: r.Charged}, nil
 }
 
-// takeOver ends a pending reservation no Settle will, charging nothing: the journal's committed attempt is recorded
-// with its reconciliation key, so the supplier's charge matches it, and every other request is recorded as lost.
-// Nothing can bring the call's usage afterwards, so the whole reservation goes back.
-//
-// The two cases end in different states, though neither charges: a request no journal knows is released, and one with a
-// committed attempt is settled, because only a lost request may be resolved when its usage arrives after all
-// (settle.go's late settlement). Neither records a lost request for a committed attempt: there would be none to resolve.
+// takeOver ends a pending reservation no Settle will: the request is recorded as lost, with the route it was frozen
+// with, so that a charge the supplier reports later can be matched to it. Nothing can bring the call's usage
+// afterwards, so the whole reservation goes back and nothing is charged.
 func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
-	j, committed, err := c.b.suppliers.CommittedAttempt(ctx, tx, c.id)
-	if err != nil {
-		return fmt.Errorf("billing: read the journal: %w", err)
-	}
-	if !committed || j.Key == "" {
-		if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id); err != nil {
-			return err
-		}
-		return c.release(ctx, tx, "cleanup_released", c.row.Amount)
-	}
-	records := []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}
-	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
+	// The reservation marks an entry that was dropped at admission with the zero id; no charge can come from it.
+	route := slices.DeleteFunc(slices.Clone(c.row.Endpoints), func(id uuid.UUID) bool { return id == uuid.UUID{} })
+	if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, route); err != nil {
 		return err
 	}
-	c.entries = attemptEntries(records)
-	return c.release(ctx, tx, "cleanup_settled", c.row.Amount)
+	return c.release(ctx, tx, "cleanup_released", c.row.Amount)
 }

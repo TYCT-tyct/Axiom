@@ -78,8 +78,7 @@ func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 // withCosts is withExecutor with the executor's Costs given: a fixed answer, or the production suppliers service.
 func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	r.t.Helper()
-	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: newClientWriter(), flushed: make(chan struct{})}
-	close(up.flushed)
+	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: newClientWriter()}
 	for _, e := range r.endpoints {
 		up.eps[uuid.UUID(e.ID)] = &fakeEndpoint{policy: suppliers.CallPolicy{Streams: true, Cancels: true}}
 	}

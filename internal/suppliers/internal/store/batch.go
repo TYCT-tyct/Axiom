@@ -9,50 +9,6 @@ import (
 // The statements below write many rows in one round trip with unnest. sqlc cannot type a call of unnest over eleven
 // arrays, so they are written by hand; each is tested against the real tables.
 
-// JournalRow is one attempt in the journal.
-type JournalRow struct {
-	RequestID                                        uuid.UUID
-	AttemptSeq                                       int16
-	SiteID, AccountID                                *uuid.UUID
-	SupplierID, CredentialID, EndpointID, ScheduleID uuid.UUID
-	PricedAt                                         time.Time
-	ChargeRef                                        *string
-	Committed                                        bool
-}
-
-const upsertJournal = `
-INSERT INTO suppliers.attempt_journal (request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id,
-    cost_schedule_id, priced_at, charge_ref, committed)
-SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[],
-    $9::timestamptz[], $10::text[], $11::boolean[])
-ON CONFLICT (request_id, attempt_seq) DO UPDATE SET
-    charge_ref = coalesce(attempt_journal.charge_ref, excluded.charge_ref),
-    committed = attempt_journal.committed OR excluded.committed,
-    written_at = now()`
-
-// UpsertJournal writes a node's journal rows. A row is only added to: the key arrives once and a commit is not undone,
-// so rows written twice, or out of order, end in the same state.
-func UpsertJournal(ctx context.Context, db DBTX, rows []JournalRow) error {
-	var a struct {
-		req, supplier, credential, endpoint, schedule []uuid.UUID
-		seq                                           []int16
-		site, account                                 []*uuid.UUID
-		priced                                        []time.Time
-		ref                                           []*string
-		committed                                     []bool
-	}
-	for _, r := range rows {
-		a.req, a.seq = append(a.req, r.RequestID), append(a.seq, r.AttemptSeq)
-		a.site, a.account = append(a.site, r.SiteID), append(a.account, r.AccountID)
-		a.supplier, a.credential = append(a.supplier, r.SupplierID), append(a.credential, r.CredentialID)
-		a.endpoint, a.schedule = append(a.endpoint, r.EndpointID), append(a.schedule, r.ScheduleID)
-		a.priced, a.ref, a.committed = append(a.priced, r.PricedAt), append(a.ref, r.ChargeRef), append(a.committed, r.Committed)
-	}
-	_, err := db.Exec(ctx, upsertJournal, a.req, a.seq, a.site, a.account, a.supplier, a.credential, a.endpoint, a.schedule,
-		a.priced, a.ref, a.committed)
-	return err
-}
-
 // AttemptCostRow is the cost and reconciliation key of one finished attempt.
 type AttemptCostRow struct {
 	RequestID                                        uuid.UUID

@@ -97,8 +97,8 @@ func checkCompactRequest(t *testing.T, h *harness) {
 	}
 }
 
-// checkCompactSettlement: one attempt whose reply reached the client, settled before the write and journalled before it,
-// charged for the usage the reply reported.
+// checkCompactSettlement: one attempt whose reply reached the client, settled before the write, charged for the usage
+// the reply reported.
 func checkCompactSettlement(t *testing.T, h *harness) {
 	t.Helper()
 	s := h.ended()
@@ -122,9 +122,6 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 		if got := u.Usage.Count(it.item); got != it.want || !u.Reported.Has(it.item) {
 			t.Errorf("%s is %d (reported %t), want %d", it.item, got, u.Reported.Has(it.item), it.want)
 		}
-	}
-	if n := len(h.up.journal); n == 0 || !h.up.journal[n-1].Committed {
-		t.Errorf("the journal does not say the reply reached the client: %+v", h.up.journal)
 	}
 }
 

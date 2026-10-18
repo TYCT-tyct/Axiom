@@ -74,7 +74,6 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 func TestEndRequest(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	settled, pending := b.hold(100), b.hold(100)
-	b.supplies.journal[pending.id] = JournalAttempt{Seq: 1, Key: "client:k"}
 	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
 	}

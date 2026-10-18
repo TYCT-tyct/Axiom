@@ -66,6 +66,7 @@ type rig struct {
 	beta      catalog.ModelID             // acme/beta, served by one
 	bare      catalog.ModelID             // anthropic/claude-test, listed with its maker's name too, and no endpoint
 	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta
+	suppliers *suppliers.Service          // the real module, in a rig that has its tables
 
 	mu      sync.Mutex
 	admits  []*Call
@@ -83,7 +84,8 @@ type rigOptions struct {
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 	segments  billing.Segments
-	suppliers bool // the suppliers tables too, for a real suppliers service to price attempts
+	suppliers bool          // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime  time.Duration // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -134,10 +136,11 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedSite()
 	r.seedCatalog()
 	r.seedRouting(o)
+	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
-		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
+		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: cmp.Or(o.lifetime, time.Hour), // nothing renews the holder while a test runs
 		Segments: o.segments,
-	}, noSuppliers{}); err != nil {
+	}, sup); err != nil {
 		t.Fatal(err)
 	}
 	r.memory = protocol.NewMemory(o.memory)
@@ -151,6 +154,20 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Cleanup(r.server.Close)
 	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
 	return r
+}
+
+// settlementSuppliers is the supplier's side of a settlement. A rig without the suppliers tables settles it nowhere:
+// nothing it runs reaches an upstream. One with them writes through the module's own functions, so a settlement's
+// attempt rows are real (costs_test.go).
+func (r *rig) settlementSuppliers(o rigOptions) billing.Suppliers {
+	if !o.suppliers {
+		return noSuppliers{}
+	}
+	var err error
+	if r.suppliers, err = r.newSuppliers(); err != nil {
+		r.t.Fatal(err)
+	}
+	return suppliers.CallWrites{}
 }
 
 // warmConnections opens n connections to the database at once, so the requests of a test do not wait for new ones to
@@ -368,18 +385,18 @@ func (r *rig) newKey(a account) (string, accounts.KeyID) {
 	return created.Text.Reveal(), created.ID
 }
 
-// noSuppliers stands in for suppliers' side of settlement, which admission never reaches: the rig's Run only releases
-// the reservation.
+// noSuppliers stands in for suppliers' side of settlement in a rig that has no suppliers tables: admission never reaches
+// an upstream there, so nothing is ever recorded.
 type noSuppliers struct{}
 
-func (noSuppliers) RecordAttempts(context.Context, pg.Tx, uuid.UUID, []billing.AttemptRecord) error {
+func (noSuppliers) RecordAttempts(context.Context, pg.Tx, []suppliers.AttemptRecord) error {
 	return nil
 }
 
-func (noSuppliers) CommittedAttempt(context.Context, pg.Tx, uuid.UUID) (billing.JournalAttempt, bool, error) {
-	return billing.JournalAttempt{}, false, nil
+func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) error {
+	return nil
 }
-func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID) error  { return nil }
+
 func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
 func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
 	return nil

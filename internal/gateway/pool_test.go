@@ -45,7 +45,7 @@ func TestPoolKeepsTheLastConnectionsForCompletion(t *testing.T) {
 	})
 }
 
-// A batch writer holds at most BatchConnections, each writer on its own.
+// A batch writer holds at most BatchConnections.
 func TestPoolBatchWritersHaveTheirOwnLimit(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		bp, err := New(DefaultConfig())
@@ -56,8 +56,6 @@ func TestPoolBatchWritersHaveTheirOwnLimit(t *testing.T) {
 		records := []func(){mustAcquire(t, acquire(ctx, pool, CallRecords)), mustAcquire(t, acquire(ctx, pool, CallRecords))}
 		third := start(acquire(ctx, pool, CallRecords))
 		third.mustWait(t)
-		mustAcquire(t, acquire(ctx, pool, Journal))
-		mustAcquire(t, acquire(ctx, pool, Journal))
 		records[0]()
 		third.mustGranted(t)
 	})

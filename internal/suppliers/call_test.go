@@ -424,7 +424,7 @@ func TestCallsDoNotWaitForAReload(t *testing.T) {
 			return
 		}
 		_ = a.Policy()
-		if _, err := w.svc.Cost(a.Receipt(), nil); err != nil {
+		if _, err := w.svc.Cost(a.receipt(), nil); err != nil {
 			t.Error(err)
 		}
 		w.svc.SetMeasuredCancels(w.endpoint, true)
@@ -454,7 +454,7 @@ func TestReloadingWhileCallsRunIsSafe(t *testing.T) {
 				}
 				if a, err := w.svc.Acquire(w.endpoint); err == nil {
 					_ = a.Policy()
-					_, _ = w.svc.Cost(a.Receipt(), nil) //nolint:errcheck // the point is that it runs
+					_, _ = w.svc.Cost(a.receipt(), nil) //nolint:errcheck // the point is that it runs
 					a.Done()
 				}
 			}

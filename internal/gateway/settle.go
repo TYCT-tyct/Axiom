@@ -7,7 +7,6 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
-	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -42,35 +41,24 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 	return write(ctx)
 }
 
-// settled follows the settlement up, and reports whether the call's slots are now the background's to give back.
-// A settlement written lets the journal drop the request. One that may still be written is retried in the background
-// with the same outcome, until SettleBackground. One that never will be, or is given up on, is the cleanup's: its
-// slots go once the journal has written all the request journalled, which the cleanup settles by.
+// settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One
+// that may still be written is retried in the background with the same outcome, until SettleBackground; one that never
+// will be, or is given up on, is the cleanup's, which records the request as lost when its reservation runs out. The
+// supplier's side of the attempts is written in the settlement's own transaction, so there is nothing else to wait for.
 func (x *Executor) settled(ctx context.Context, c *Call, o billing.Outcome, err error) bool {
-	id := platform.RequestID(c.ID)
 	if err == nil {
-		x.Upstreams.Settled(id)
 		return false
 	}
 	logger := x.Logger.With("request_id", c.ID.String())
 	if permanent(err) {
 		logger.Error("a settlement cannot be written; the cleanup takes it", "err", err)
-	} else {
-		logger.Warn("a settlement was not written; retrying in the background", "err", err)
+		return false
 	}
+	logger.Warn("a settlement was not written; retrying in the background", "err", err)
 	x.bg.Go(func() {
 		defer c.Done()
-		if !permanent(err) {
-			_, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground))
-			if err == nil {
-				x.Upstreams.Settled(id)
-				return
-			}
+		if _, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground)); err != nil {
 			logger.Error("a settlement was not written in time; the cleanup takes it", "err", err)
-		}
-		select {
-		case <-x.Upstreams.JournalFlushed(id):
-		case <-x.bg.stopped: // the node is going away: its slots go with it
 		}
 	})
 	return true
@@ -93,12 +81,13 @@ func permanent(err error) bool {
 }
 
 // result is what billing takes of an attempt once it is over. The usage is the upstream's report with every item it did
-// not report estimated, and the cost is ours of that usage. An attempt known not to have run used nothing and cost
-// nothing.
+// not report estimated, and the cost is ours of that usage in credits and in the supplier's own unit; the receipt ties
+// the two to the endpoint the attempt called, and billing writes them to suppliers with the ledger's cost. An attempt
+// known not to have run used nothing and cost nothing.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
-	rec.Key = receipt.Key()
+	rec.Receipt, rec.FinishedAt = receipt, time.Now()
 	if rec.Result == billing.NotExecuted {
 		return
 	}
@@ -107,14 +96,39 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	cost, _, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+	c, credits, _, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
 		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that
 		// can be priced to the cleanup.
 		s.logger.Error("an attempt's cost could not be priced; it is booked at what came back", "err", err)
+		c.Flag = suppliers.CostUnpriced // zero for a failure is not a cost known to be zero
 	}
-	rec.Cost = cost
+	c.Flag = costFlag(rec.Segments, c.Flag)
+	rec.Cost, rec.Estimate = credits, c
+}
+
+// costFlag is what the supplier's row says of how far its estimate can be trusted, decided here, where the source of the
+// usage is known (suppliers' Cost sees counts only): reconciliation judges a price only against a complete estimate. An
+// attempt whose upstream reported no usage at all has none, whatever the estimates put in its place; one with some
+// counts the upstream did not report, or that the schedule did not price, is unpriced; priced is the flag suppliers gave.
+func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.CostFlag {
+	reported, guessed := false, false
+	for _, seg := range segments {
+		reported = reported || seg.Reported != 0
+		for it := range catalog.NumItems {
+			guessed = guessed || (seg.Usage.Count(it) > 0 && !seg.Reported.Has(it))
+		}
+	}
+	switch {
+	case !reported:
+		return suppliers.CostNoUsage
+	case priced != suppliers.CostComplete:
+		return priced
+	case guessed:
+		return suppliers.CostUnpriced
+	}
+	return suppliers.CostComplete
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
