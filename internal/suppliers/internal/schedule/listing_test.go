@@ -47,7 +47,7 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 		t.Errorf("the listing of keys ended %d times, want once", s.keysFinished.Load())
 	}
 	var ended bool
-	c.row("SELECT coalesce(listing -> 'keys', 'null'::jsonb) = 'null'::jsonb FROM suppliers.sync_states WHERE supplier_id = $1", &ended)
+	c.row("SELECT NOT (coalesce(listing, '{}'::jsonb) ? 'keys') FROM suppliers.sync_states WHERE supplier_id = $1", &ended)
 	if !ended {
 		t.Error("a listing that ended kept its page")
 	}
