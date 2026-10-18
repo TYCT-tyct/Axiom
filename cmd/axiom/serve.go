@@ -254,7 +254,8 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
 	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
-	limits, err := gateway.New(gateway.DefaultConfig())
+	gate := gateway.DefaultConfig()
+	limits, err := gateway.New(gate)
 	if err != nil {
 		return nodeRoutes{}, err
 	}
@@ -278,7 +279,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, limits: limits,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger,
 	})
 	if err != nil {

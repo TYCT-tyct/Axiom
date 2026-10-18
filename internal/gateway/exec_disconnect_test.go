@@ -66,6 +66,25 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 	})
 }
 
+// TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure: the request is written and the response headers are awaited
+// when the client leaves, so the attempt's context is cancelled and the transport fails. That failure is the leaving's: the
+// attempt ends as cancelled, which is never waived, not as a failure with nothing delivered, which is.
+func TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{late(time.Hour, whole(h))}
+		done := h.start()
+		time.Sleep(time.Second)
+		h.client()
+		<-done
+		h.check()
+		a := h.ended().outcome.Attempts
+		if len(a) != 1 || a[0].Result != billing.Unknown || a[0].Finish != billing.FinishCancelled {
+			t.Errorf("attempts %+v, want one whose result is unknown and whose finish is cancelled", a)
+		}
+	})
+}
+
 // TestACancelledStreamThatReportedNoInputIsEstimatedBySizeNotWindow: a Responses stream reports its input only in the
 // completed event, so one cancelled before it has none, and an image or a file in the request must not make that input the
 // whole context the reservation allowed for them: the settlement carries the text, 1600 tokens an image and 4096 a file.

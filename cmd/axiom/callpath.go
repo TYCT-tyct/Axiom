@@ -47,6 +47,7 @@ type callDeps struct {
 	accounts *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
 	catalog  *catalog.Catalog
 	egress   *egress.Client
+	gate     gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records  *observability.Recorder // the call log, which the settlements write to
 	meter    metric.Meter            // where the ledger's counters go
@@ -71,7 +72,7 @@ type callNode struct {
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
 	// stamps it on every plan and the executor reads it from there, not from the configuration.
-	router, err := routing.New(routing.Config{AttemptWindow: gateway.DefaultConfig().StartBy})
+	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy})
 	if err != nil {
 		return callNode{}, err
 	}
@@ -79,7 +80,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	ledger, err := startLedger(ctx, d.db, d.meter, d.logger)
+	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -113,8 +114,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 }
 
 // startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
-func startLedger(ctx context.Context, db *pg.DB, meter metric.Meter, logger *slog.Logger) (*billing.Billing, error) {
-	gate := gateway.DefaultConfig()
+func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger) (*billing.Billing, error) {
 	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over

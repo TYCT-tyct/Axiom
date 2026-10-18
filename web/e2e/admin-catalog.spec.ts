@@ -200,7 +200,7 @@ test.describe("pricing", () => {
     await press(page, "pricing.rule.new").click();
     await dialog(page).getByLabel(words("pricing.rule.target")).selectOption("author");
     await dialog(page).getByLabel(words("pricing.rule.targetId")).selectOption("openai");
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("0.5");
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("1.5");
     await dialog(page)
       .getByRole("button", { name: zhText("pricing.rule.previewRun") })
       .click();
@@ -209,11 +209,11 @@ test.describe("pricing", () => {
         .getByRole("cell", { name: /33\.33%/ })
         .first(),
     ).toBeVisible();
-    await send(page, "openai at cost plus 50%");
+    await send(page, "openai at 1.5 times the reference price");
     await expect(done(page)).toBeVisible();
     expect(state.rules.at(-1)).toMatchObject({
       target: { kind: "author", id: "openai" },
-      method: { kind: "cost_plus", markup_ratio: "0.5" },
+      method: { kind: "reference_multiplier", multiplier: "1.5", currency_conversion: "face" },
     });
     await close(page);
     await expect(page.getByRole("row")).toHaveCount(5);
@@ -222,10 +222,10 @@ test.describe("pricing", () => {
   test("a rule for a target and audience that has one is refused, and a bad ratio is told", async ({ page }) => {
     await open(page, "/pricing");
     await press(page, "pricing.rule.new").click();
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("twenty");
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("twenty");
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("pricing.rule.invalid.ratio"));
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("0.2");
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("pricing.rule.invalid.multiplier"));
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("1.2");
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByRole("alert")).toHaveText(/和现有的冲突/);
   });

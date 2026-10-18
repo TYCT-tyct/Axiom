@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"fmt"
-	"time"
 	"uuid"
 
 	"axiom/internal/platform/audit"
@@ -94,7 +93,6 @@ type Credit struct {
 	ID            uuid.UUID
 	Site, Account uuid.UUID
 	Amount        int64 // billionths of a credit, positive
-	ExpiresAt     *time.Time
 	Actor         audit.Actor
 	Reason        string
 }
@@ -114,7 +112,7 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		return err
 	}
 	if err := queries.InsertCreditBatch(ctx, tx, InsertCreditBatchParams{
-		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount, ExpiresAt: c.ExpiresAt,
+		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount,
 	}); err != nil {
 		return fmt.Errorf("billing: write the credit batch: %w", err)
 	}

@@ -10,11 +10,26 @@ import { fail, type Handler, ok } from "./mock.ts";
 
 type Rule = Schemas["PricingRule"];
 
+// What the server refuses of a rule in M1 (billing's RuleInput.Check): a target that is not a model, an author or all,
+// cost plus, and a multiplier that is not at face value, since each would be stored and never applied.
+const honoured = new Set<string>(["model", "author", "all"]);
+function refused(rule: Schemas["PricingRuleInput"]) {
+  const { method } = rule;
+  return (
+    !honoured.has(rule.target.kind) ||
+    method.kind === "cost_plus" ||
+    (method.kind === "reference_multiplier" && method.currency_conversion !== "face")
+  );
+}
+
 const same = (a: Rule, b: Rule["target"], c: Rule["audience"]) =>
   a.target.kind === b.kind && a.target.id === b.id && a.audience.kind === c.kind && a.audience.id === c.id;
 
 function createRule({ body, state }: Ctx<"/api/admin/v1/pricing/rules", "post">) {
   const { rule } = body;
+  if (refused(rule)) {
+    return fail(422, "unprocessable");
+  }
   if (state.rules.some((r) => same(r, rule.target, rule.audience))) {
     return fail(409, "conflict");
   }
@@ -31,6 +46,9 @@ function updateRule({ body, params, state }: Ctx<"/api/admin/v1/pricing/rules/{r
   }
   if (current.rev !== body.rev) {
     return fail(409, "stale_revision");
+  }
+  if (refused(body.rule)) {
+    return fail(422, "unprocessable");
   }
   const changed: Rule = { ...current, ...body.rule, rev: current.rev + 1, updated_at: new Date().toISOString() };
   state.rules[index] = changed;
@@ -70,7 +88,8 @@ function priced(model: Schemas["Model"], markup: string) {
 // The markup the preview applies: the added or replacing rule's when given, else the first enabled rule's.
 function markupOf(state: AdminState, rule: Schemas["PricingRuleInput"] | undefined) {
   const method = (rule ?? state.rules.find((r) => r.enabled))?.method;
-  return method?.markup_ratio ?? method?.margin_ratio ?? "0.25";
+  const multiplier = method?.multiplier ? String(Number(method.multiplier) - 1) : undefined;
+  return method?.markup_ratio ?? method?.margin_ratio ?? multiplier ?? "0.25";
 }
 
 function preview({ body, state }: Ctx<"/api/admin/v1/pricing/previews", "post">) {

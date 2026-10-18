@@ -289,7 +289,14 @@ func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing
 			leave()
 			// The server learns the client is gone from its connection, a moment after the client closes it: the call
 			// must have heard before it concludes, or this tests nothing.
-			time.Sleep(time.Second)
+			r.mu.Lock()
+			served := r.clientGone
+			r.mu.Unlock()
+			select {
+			case <-served:
+			case <-time.After(30 * time.Second):
+				t.Error("the server never saw the client leave")
+			}
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.server.URL+"/v1/messages", strings.NewReader(messageBody("acme/alpha")))
