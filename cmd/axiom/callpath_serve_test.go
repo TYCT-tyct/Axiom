@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json/v2" //nolint:depguard // decodes the node's own responses; jsonx guards input from outside
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -25,7 +26,8 @@ const (
 // TestANodeServesModelCalls: a node started on a database that holds a site, a supplier and models answers the model
 // API on its public listener and books the call, from the HTTP request to the ledger, the supplier's cost row and the
 // call log. One node serves the whole story, since it is the story: not ready until something can be sold, then a Messages
-// call and a Responses call that are charged and recorded, one whose reply is free, one refused for credit and one for
+// call and a Responses call that are charged and recorded, Chat calls converted to both, calls the upstream served at
+// the priority tier, web searches reserved up to their limit, one whose reply is free, one refused for credit and one for
 // a model nothing serves, and a second node that leaves the first one's holder alone.
 func TestANodeServesModelCalls(t *testing.T) {
 	w := newCallWorld(t)
@@ -41,6 +43,9 @@ func TestANodeServesModelCalls(t *testing.T) {
 
 	w.checkMessages(n)
 	w.checkResponses(n)
+	w.checkChat(n)
+	w.checkPriority(n)
+	w.checkBoundedSearch(n)
 	w.checkToolWithoutLimit(n)
 	w.checkFreeReply(n)
 	w.checkRefusedForCredit(n)
@@ -80,7 +85,7 @@ func (w *callWorld) checkMessages(n runningNode) {
 	if message.Role != "assistant" || message.StopReason != "end_turn" || len(message.Content) != 1 || message.Content[0].Text != "Hello!" {
 		t.Errorf("the Messages answer is %+v, want the recorded sample's Hello! ending the turn", message)
 	}
-	w.checkBooked(r, booking{charge: messagesCharge, ref: "relay-1", upstream: "up-claude", input: 25, output: 15, app: "claude-code"})
+	w.checkBooked(r, booking{charge: messagesCharge, cost: messagesCost, ref: "relay-1", upstream: "up-claude", input: 25, output: 15, app: "claude-code"})
 	w.checkSent()
 }
 
@@ -118,7 +123,7 @@ func (w *callWorld) checkResponses(n runningNode) {
 		response.Output[0].Content[0].Text != "Hi there! How can I assist you today?" {
 		t.Errorf("the Responses answer is %+v, want the recorded sample's text, completed", response)
 	}
-	w.checkBooked(r, booking{charge: responsesCharge, ref: "relay-2", upstream: "up-gpt", input: 37, output: 11, app: "codex"})
+	w.checkBooked(r, booking{charge: responsesCharge, cost: responsesCost, ref: "relay-2", upstream: "up-gpt", input: 37, output: 11, app: "codex"})
 }
 
 // checkToolWithoutLimit: a web search with no limit on its uses, on a model that has no default maximum, is refused
@@ -147,7 +152,7 @@ func (w *callWorld) checkToolWithoutLimit(n runningNode) {
 func (w *callWorld) checkFreeReply(n runningNode) {
 	t := w.t
 	t.Helper()
-	w.supplier.setZero(true)
+	w.supplier.answer("/v1/messages", zeroOutput)
 	r := w.call(n, "/v1/messages", w.richKey, strings.Replace(messagesCall, `"max_tokens"`, `"stream":true,"max_tokens"`, 1))
 	if r.status != http.StatusOK {
 		t.Fatalf("the empty reply: status %d: %s", r.status, r.body)
@@ -171,7 +176,7 @@ func (w *callWorld) checkFreeReply(n runningNode) {
 		t.Errorf("the call log holds %q for the free call, want it free, charged nothing and ended in error", logged)
 	}
 	w.checkBalanced()
-	w.supplier.setZero(false)
+	w.supplier.answer("/v1/messages", "")
 }
 
 // checkRefusedForCredit: an account with nothing to spend is refused before the supplier hears of it, and the ledger
@@ -222,10 +227,13 @@ func (w *callWorld) checkSecondNode(n runningNode) {
 // booking is what a settled call is expected to have left: the ledger's charge, the relay's request id on the supplier's
 // cost row with the endpoint that was called, and the usage the call log records.
 type booking struct {
-	charge        int64
+	charge, cost  int64 // what the user was charged and what the call cost the supplier, in billionths
 	ref, upstream string
 	input, output int
+	searches      int    // the web searches the call used
 	app           string // the client application the call log names
+	tier          string // the service tier it was served at; standard when empty
+	estimated     bool   // some of the usage was not reported by the upstream, and the supplier's cost with it
 }
 
 // checkSettled: the call's reservation is settled for the charge.
@@ -248,18 +256,30 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	}
 	w.checkSettled(r, want.charge)
 	w.checkBalanced()
-	if got := w.query(`SELECT count(*)::text || ' ' || coalesce(max(c.charge_ref), '') || ' ' || coalesce(max(e.upstream_name), '')
-		FROM suppliers.attempt_costs c JOIN suppliers.endpoints e ON e.id = c.endpoint_id WHERE c.request_id::text = $1`, id); got != "1 "+want.ref+" "+want.upstream {
-		w.t.Errorf("the supplier's rows are %q, want one with charge ref %q on the endpoint %q", got, want.ref, want.upstream)
+	if want.tier == "" {
+		want.tier = "standard"
+	}
+	flag := "complete" // an estimated call is not: the supplier's row says its cost rests on usage nobody reported
+	if want.estimated {
+		flag = "unpriced"
+	}
+	if got := w.query(`SELECT count(*)::text || ' ' || coalesce(max(c.charge_ref), '') || ' ' || coalesce(max(e.upstream_name), '') || ' ' ||
+		coalesce(max(c.usage->>'tier'), '') || ' ' || coalesce(max(c.cost_flag), '')
+		FROM suppliers.attempt_costs c JOIN suppliers.endpoints e ON e.id = c.endpoint_id WHERE c.request_id::text = $1`, id); got != "1 "+want.ref+" "+want.upstream+" "+want.tier+" "+flag {
+		w.t.Errorf("the supplier's rows are %q, want one with charge ref %q on the endpoint %q, served at %s, its cost %s", got, want.ref, want.upstream, want.tier, flag)
+	}
+	if got := w.query("SELECT estimated::text FROM billing.reservations WHERE request_id::text = $1", id); got != strconv.FormatBool(want.estimated) {
+		w.t.Errorf("the reservation's estimated is %s, want %v", got, want.estimated)
 	}
 	var logged string
 	waitUntil(w.t, 5*time.Second, func() bool {
-		logged = w.query(`SELECT coalesce(count(*)::text || ' ' || max(price_nano)::text || ' ' || bool_or(free_of_charge)::text || ' ' ||
-			max(usage->>'input') || ' ' || max(usage->>'output') || ' ' || max(client_app) || ' ' || max(source_class), '') FROM observability.call_log WHERE id::text = $1`, id)
+		logged = w.query(`SELECT coalesce(count(*)::text || ' ' || max(price_nano)::text || ' ' || max(cost_nano)::text || ' ' || bool_or(free_of_charge)::text || ' ' ||
+			max(service_tier) || ' ' || max(usage->>'input') || ' ' || max(usage->>'output') || ' ' || coalesce(max(usage->>'web_search'), '0') || ' ' ||
+			max(client_app) || ' ' || max(source_class), '') FROM observability.call_log WHERE id::text = $1`, id)
 		return logged != ""
 	})
-	if wanted := "1 " + strconv.FormatInt(want.charge, 10) + " false " + strconv.Itoa(want.input) + " " + strconv.Itoa(want.output) + " " + want.app + " relay"; logged != wanted {
-		w.t.Errorf("the call log holds %q, want %q: one record with the ledger's charge, the usage the relay reported, the client application and the source class", logged, wanted)
+	if wanted := fmt.Sprintf("1 %d %d false %s %d %d %d %s relay", want.charge, want.cost, want.tier, want.input, want.output, want.searches, want.app); logged != wanted {
+		w.t.Errorf("the call log holds %q, want %q: one record with the ledger's charge, the supplier's cost, the service tier, the usage the relay reported, the client application and the source class", logged, wanted)
 	}
 }
 
