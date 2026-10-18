@@ -12,8 +12,6 @@ import (
 	"time"
 	"uuid"
 
-	"go.opentelemetry.io/otel/metric"
-
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
@@ -25,8 +23,8 @@ import (
 // each known per-use item's default unit price. Admission locks them on the reservation, as it locks the schedules.
 //
 // The stored row also carries a markup on a supplier's actual cost, which priced a correction of the charge. M1 has no
-// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applies it, and it stays in the row until a
-// migration removes it from the rows written before: a row with a member this type does not know is refused.
+// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applies it; it stays in the rows written before
+// because a row with a member this type does not know is refused, and dropping it takes a migration of its own.
 type fallbacks struct {
 	currency platform.Currency
 	perUse   map[catalog.Item]platform.UnitPrice
@@ -298,62 +296,4 @@ func ClearUnknownItem(ctx context.Context, tx pg.Tx, r ClearUnknownItemRequest) 
 		Actor: r.actor, Action: "unknown_item.clear", Target: audit.Target{Module: "billing", Kind: "model", ID: r.Model.String()},
 		Reason: r.Reason, Detail: map[string]any{"field": r.Field},
 	})
-}
-
-// FallbackHold is an estimate that holds part of its reservation and rests on usage only a fallback price covers.
-type FallbackHold struct {
-	Request, Site, Account uuid.UUID
-	Held                   int64 // billionths of a credit
-	By                     time.Time
-}
-
-// FallbackHoldsPage is the most holds FallbackHolds returns at once (docs/performance.md「后台与数据」: every list
-// pages by cursor, with a bound on the page).
-const FallbackHoldsPage = 500
-
-// FallbackHolds lists them by window, oldest first, a page of at most limit (1 to FallbackHoldsPage) after the hold
-// after, or from the first when after is nil; a page shorter than limit is the last. tx must be in the platform scope
-// to see every tenant's.
-func FallbackHolds(ctx context.Context, tx pg.Tx, after *FallbackHold, limit int) ([]FallbackHold, error) {
-	params := FallbackHoldsParams{PageSize: int32(min(max(limit, 1), FallbackHoldsPage))}
-	if after != nil {
-		params.AfterBy, params.AfterID = after.By, after.Request
-	}
-	rows, err := queries.FallbackHolds(ctx, tx, params)
-	if err != nil {
-		return nil, fmt.Errorf("billing: list the fallback holds: %w", err)
-	}
-	holds := make([]FallbackHold, len(rows))
-	for i, r := range rows {
-		holds[i] = FallbackHold{Request: r.RequestID, Site: r.SiteID, Account: r.AccountID, Held: r.Held, By: r.CorrectBy}
-	}
-	return holds, nil
-}
-
-// RegisterMetrics reports the fallback holds on m as two gauges, their number and what they hold in billionths, read
-// from db in the platform scope at each collection. cmd/axiom calls it once per process.
-func RegisterMetrics(m metric.Meter, db *pg.DB, scope pg.Scope) error {
-	count, err := m.Int64ObservableGauge("axiom.billing.fallback_holds",
-		metric.WithDescription("Estimates holding part of their reservation on usage only a fallback price covers."))
-	if err != nil {
-		return err
-	}
-	held, err := m.Int64ObservableGauge("axiom.billing.fallback_holds.held",
-		metric.WithDescription("What those estimates hold, in billionths of a credit."))
-	if err != nil {
-		return err
-	}
-	_, err = m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
-		var totals FallbackHoldTotalsRow
-		if err := db.ReadTx(ctx, scope, func(tx pg.Tx) (err error) {
-			totals, err = queries.FallbackHoldTotals(ctx, tx)
-			return err
-		}); err != nil {
-			return fmt.Errorf("billing: count the fallback holds: %w", err)
-		}
-		o.ObserveInt64(count, totals.Holds)
-		o.ObserveInt64(held, totals.Held)
-		return nil
-	}, count, held)
-	return err
 }

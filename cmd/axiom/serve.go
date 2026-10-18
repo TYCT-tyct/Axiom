@@ -246,9 +246,9 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 }
 
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
-// (docs/domains/billing.md「价目表缺项」); billing reports its gauges from it. One deadline covers the connection and
-// every check, so a database that stops answering, or a lock held on the fallbacks, fails the start instead of holding
-// it. The other commands open the database without the check: save-fallbacks is how a refused row is repaired.
+// (docs/domains/billing.md「价目表缺项」). One deadline covers the connection and the check, so a database that stops
+// answering, or a lock held on the fallbacks, fails the start instead of holding it. The other commands open the
+// database without the check: save-fallbacks is how a refused row is repaired.
 func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry) (*pg.DB, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()
@@ -259,9 +259,6 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return billing.CheckFallbacks(ctx, tx) })
 	if err != nil && errors.Is(context.Cause(ctx), errNoAnswer) {
 		err = errNoAnswer
-	}
-	if err == nil {
-		err = billing.RegisterMetrics(tel.Metrics.Meter("axiom/billing"), db, pg.PlatformScope())
 	}
 	if err != nil {
 		db.Close()

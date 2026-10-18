@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"uuid"
@@ -159,8 +160,7 @@ func (a adminAPI) checkAccount(ctx context.Context, tx pg.Tx, site accounts.Site
 //
 // M1 prices from the reference price, so a row carries the sale price and no cost: what an endpoint's cost is comes with
 // routing's endpoints in M2 (m1-plan.md §4.2), and until then `cost_unknown` and `below_floor` are statuses nothing
-// produces. A model no rule prices is `unpriced`, never sold at its reference price
-// (docs/domains/billing.md「定价」).
+// produces. A model no rule prices is `unpriced`, never sold at its reference price (docs/domains/billing.md「定价」).
 func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPricingRequestObject) (adminapi.PreviewPricingResponseObject, error) {
 	site, ok := a.accounts.MainSite()
 	if !ok {
@@ -181,23 +181,30 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	if err != nil {
 		return nil, err
 	}
-	sold, err := billing.SalePrices(rules, snap, site.Currency)
-	if err != nil {
-		return nil, err
-	}
-	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(request.Body.ModelIds))}
-	for _, id := range request.Body.ModelIds {
-		model, err := modelIDOf(id)
-		if err != nil {
+	models := make([]catalog.ModelID, len(request.Body.ModelIds))
+	for i, id := range request.Body.ModelIds {
+		if models[i], err = modelIDOf(id); err != nil {
 			return nil, err
 		}
-		m, ok := snap.Model(model)
+	}
+	sold, unpriced := billing.SalePrices(rules, snap, models, site.Currency)
+	for _, err := range unpriced {
+		// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices;
+		// an administrator is told, since the rule has to change.
+		a.logger.Warn("a sale price the catalog cannot hold; the model is not sold", "err", err)
+	}
+	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
+	for i, id := range request.Body.ModelIds {
+		m, ok := snap.Model(models[i])
 		if !ok {
 			return nil, catalog.ErrModelNotFound
 		}
 		row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.Unpriced}
-		if s, ok := sold[model]; ok {
-			row.Status, row.Sale = adminapi.Priced, scheduleBody(s.Schedule)
+		if s, ok := sold[models[i]]; ok {
+			row.Status = adminapi.Priced
+			if row.Sale, err = scheduleBody(s.Schedule); err != nil {
+				return nil, err
+			}
 		}
 		rows.Data = append(rows.Data, row)
 	}
@@ -255,15 +262,32 @@ type audience struct {
 
 // previewRules is the site's rules, with the request's rule added or put in place of replaces_rule_id.
 func (a adminAPI) previewRules(ctx context.Context, site accounts.Site, body adminapi.PricingPreviewRequest) ([]billing.Rule, error) {
-	var rules []billing.Rule
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		rules, err = billing.Rules(ctx, tx, uuid.UUID(site.ID))
-		return err
-	}); err != nil {
+	rules, err := storedRules(ctx, a.db, site)
+	if err != nil {
 		return nil, err
 	}
+	return previewedRules(ctx, &a, site, rules, body)
+}
+
+// storedRules are the site's rules in the order they are tried.
+func storedRules(ctx context.Context, db *pg.DB, site accounts.Site) ([]billing.Rule, error) {
+	var rules []billing.Rule
+	err := db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		rules, err = billing.Rules(ctx, tx, uuid.UUID(site.ID))
+		return err
+	})
+	return rules, err
+}
+
+// previewedRules is what storedRules read, with the request's rule among them, as a preview or as a rule about to be
+// created would try them. A rule the site keeps for the same target and audience is one a second rule could not beat:
+// it would shadow it, and the model would keep selling at the stored rule's price. So adding one is refused rather than
+// shown, and the refusal is the one creating the rule gives: 409, the same change again, where a preview says 422 and
+// names replaces_rule_id, the member that changes the stored rule instead.
+func previewedRules(ctx context.Context, a *adminAPI, site accounts.Site, rules []billing.Rule, body adminapi.PricingPreviewRequest) ([]billing.Rule, error) {
+	createsRule := body.ReplacesRuleId == nil
 	if body.Rule == nil {
-		if body.ReplacesRuleId != nil {
+		if !createsRule {
 			return nil, invalidField("/replaces_rule_id", "is not without rule")
 		}
 		return rules, nil
@@ -278,10 +302,8 @@ func (a adminAPI) previewRules(ctx context.Context, site accounts.Site, body adm
 	if err := a.checkSubjects(ctx, site, in); err != nil {
 		return nil, err
 	}
-	// The preview's rule is as specific as its target and audience make it, and has no ID of its own to sort by: it
-	// goes after the rules it ties with, so that it never displaces one it is no more specific than.
-	preview := billing.Rule{RuleInput: in}
-	if body.ReplacesRuleId != nil {
+	rest := rules
+	if !createsRule {
 		id, err := uuid.Parse(*body.ReplacesRuleId)
 		if err != nil || id.String() != *body.ReplacesRuleId {
 			return nil, invalidField("/replaces_rule_id", "not a rule's ID")
@@ -290,19 +312,28 @@ func (a adminAPI) previewRules(ctx context.Context, site accounts.Site, body adm
 		if i < 0 {
 			return nil, billing.ErrRuleNotFound
 		}
-		rules[i] = preview
-		return rules, nil
+		rest = slices.Delete(rules, i, i+1)
 	}
-	return billing.Place(preview, rules), nil
+	if slices.ContainsFunc(rest, func(r billing.Rule) bool { return r.Target == in.Target && r.Audience == in.Audience }) {
+		if createsRule {
+			return nil, billing.ErrRuleExists
+		}
+		return nil, unprocessableFields("/replaces_rule_id", "names the rule the site keeps for that target and audience")
+	}
+	// The preview's rule is as specific as its target and audience make it, and has no ID of its own to sort by: it
+	// goes after the rules it ties with, so that it never displaces one it is no more specific than. It takes the place
+	// of replaces_rule_id by its own target and audience, not by where that rule stood: a rule for a model put in place
+	// of the one for everything prices that model, rather than being tried after every rule the site has.
+	return billing.Place(billing.Rule{RuleInput: in}, rest), nil
 }
 
 // scheduleBody is a schedule as the contract gives it, through the canonical form both sides read.
-func scheduleBody(s catalog.Schedule) *adminapi.PriceSchedule {
+func scheduleBody(s catalog.Schedule) (*adminapi.PriceSchedule, error) {
 	body, err := converted[adminapi.PriceSchedule](s)
 	if err != nil {
-		return nil // a schedule the contract's form cannot hold, which the catalog never makes one of
+		return nil, fmt.Errorf("billing: a sale price the admin contract cannot hold: %w", err)
 	}
-	return &body
+	return &body, nil
 }
 
 // CreatePricingRule adds a rule to the main site.

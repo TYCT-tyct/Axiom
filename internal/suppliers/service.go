@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/registry"
 	"axiom/internal/suppliers/internal/store"
@@ -22,6 +24,17 @@ import (
 
 // EndpointID names an endpoint: a group's model at a supplier.
 type EndpointID = uuid.UUID
+
+// Routable is an endpoint as a routing snapshot needs it: the catalog model it serves, the name a call must send
+// upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
+// its supplier does with a stream (internal/suppliers/README.md「调用面」).
+type Routable struct {
+	ID, Supplier, Model uuid.UUID
+	Upstream            string
+	Formats             []protocol.Format
+	Schedule            catalog.Schedule
+	Streams, Cancels    bool
+}
 
 // Config is what a node needs to call suppliers.
 type Config struct {
@@ -96,6 +109,9 @@ type credRuntime struct {
 // balance is worth in the supplier's settlement currency, and the row that gave the value.
 type endpoint struct {
 	id, supplier, schedule uuid.UUID
+	model                  uuid.UUID
+	upstream               string
+	formats                []protocol.Format
 	unitValueID            uuid.UUID
 	origin                 string
 	quirks                 adapter.CallQuirks
@@ -147,6 +163,23 @@ func (s *Service) Reload(ctx context.Context) error {
 	return nil
 }
 
+// Routable returns the snapshot's endpoints in id order: those ListRoutable holds, which are the endpoints a call may be
+// routed to. A Reload replaces the set whole, so a caller that builds a routing snapshot from this sees one moment of
+// the database, never half of a reload.
+func (s *Service) Routable() []Routable {
+	snap, schedules := s.snap.Load(), *s.schedules.Load() // the snapshot first: it never names a schedule the map lacks
+	out := make([]Routable, 0, len(snap.endpoints))
+	for _, ep := range snap.endpoints {
+		policy := s.policy(ep)
+		out = append(out, Routable{
+			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
+			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
+		})
+	}
+	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
+	return out
+}
+
 func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) (*endpoint, error) {
 	if ep, ok := next.endpoints[r.EndpointID]; ok {
 		return ep, nil
@@ -162,6 +195,10 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		}
 		schedules[r.CostScheduleID] = &sched
 	}
+	formats, err := store.ParseFormats(r.Formats)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
+	}
 	currency, err := platform.ParseCurrency(r.SettlementCurrency)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: its supplier's settlement currency: %w", r.EndpointID, err)
@@ -171,8 +208,8 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		return nil, fmt.Errorf("endpoint %s: its supplier's unit value %q is not above 0 and at most 1000 with at most 15 decimals", r.EndpointID, r.UnitValue)
 	}
 	ep := &endpoint{
-		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls(),
-		currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
+		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil

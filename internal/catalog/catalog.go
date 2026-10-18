@@ -225,7 +225,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 	return Model{
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
-		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable,
+		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
 	}, nil
 }
 
@@ -240,36 +240,88 @@ func priceFromRow(row CatalogReferencePrice) (ReferencePrice, error) {
 	}, nil
 }
 
-// specJSON is the part of a model's spec the catalog reads itself: what the upstream may report. The rest of the
-// baseline is the spec's own business. Nil lists are left out, not empty.
+// specJSON is the part of a model's spec the catalog reads itself: what the upstream may report and what an endpoint of
+// the model offers. The rest of the baseline is the spec's own business. Nil members are left out, not zeroed: absent
+// and false or zero are different claims.
 type specJSON struct {
-	Items *[]string `json:"items"`
-	Tiers *[]string `json:"tiers"`
+	Items     *[]string `json:"items"`
+	Tiers     *[]string `json:"tiers"`
+	Context   *int64    `json:"context_length"`
+	MaxOutput *int64    `json:"max_output_tokens"`
+	Streams   *bool     `json:"streams"`
+	Abilities *[]string `json:"abilities"`
 }
 
 type spec struct {
 	reportable Reportable
 	declared   bool // both lists are present, possibly empty
+	serving    Serving
+	serves     bool // every key Serving reads is present
 }
 
-// parseSpec checks a spec is a JSON object whose items and tiers, if present, name billing items and service tiers.
+// parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
+// tiers and abilities, and whose lengths, if present, are positive.
 func parseSpec(raw []byte) (spec, error) {
 	var w specJSON
 	if err := jsonx.Unmarshal(raw, &w); err != nil {
 		return spec{}, fmt.Errorf("spec: %w", err)
 	}
-	var s spec
+	reportable, err := parseReportable(w)
+	if err != nil {
+		return spec{}, err
+	}
+	serving, err := parseServing(w)
+	if err != nil {
+		return spec{}, err
+	}
+	return spec{
+		reportable: reportable,
+		serving:    serving,
+		declared:   w.Items != nil && w.Tiers != nil,
+		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
+	}, nil
+}
+
+// parseReportable reads the billing items and service tiers the spec declares, if it declares them.
+func parseReportable(w specJSON) (Reportable, error) {
+	var r Reportable
 	var err error
 	if w.Items != nil {
-		if s.reportable.Items, err = parseSet[Item](itemNames[:], *w.Items); err != nil {
-			return spec{}, fmt.Errorf("spec items: %w", err)
+		if r.Items, err = parseSet[Item](itemNames[:], *w.Items); err != nil {
+			return Reportable{}, fmt.Errorf("spec items: %w", err)
 		}
 	}
 	if w.Tiers != nil {
-		if s.reportable.ServiceTiers, err = parseSet[ServiceTier](serviceTierNames[:], *w.Tiers); err != nil {
-			return spec{}, fmt.Errorf("spec tiers: %w", err)
+		if r.ServiceTiers, err = parseSet[ServiceTier](serviceTierNames[:], *w.Tiers); err != nil {
+			return Reportable{}, fmt.Errorf("spec tiers: %w", err)
 		}
 	}
-	s.declared = w.Items != nil && w.Tiers != nil
+	return r, nil
+}
+
+// parseServing reads what an endpoint of the model offers, refusing a length that is not positive and a name that is not
+// an ability.
+func parseServing(w specJSON) (Serving, error) {
+	var s Serving
+	if w.Context != nil {
+		if s.Context = *w.Context; s.Context <= 0 {
+			return Serving{}, fmt.Errorf("spec context_length must be above 0, not %d", s.Context)
+		}
+	}
+	if w.MaxOutput != nil {
+		if s.MaxOutput = *w.MaxOutput; s.MaxOutput <= 0 {
+			return Serving{}, fmt.Errorf("spec max_output_tokens must be above 0, not %d", s.MaxOutput)
+		}
+	}
+	if w.Streams != nil {
+		s.Streams = *w.Streams
+	}
+	if w.Abilities != nil {
+		abilities, err := parseSet[Ability](abilityNames[:], *w.Abilities)
+		if err != nil {
+			return Serving{}, fmt.Errorf("spec abilities: %w", err)
+		}
+		s.Abilities = abilities
+	}
 	return s, nil
 }

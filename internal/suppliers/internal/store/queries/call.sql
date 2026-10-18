@@ -10,9 +10,10 @@ WHERE id = @id;
 -- name: ListRoutable :many
 -- Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
 -- endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
--- cooldown are judged by the clock when a credential is picked.
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
-    v.id AS unit_value_id, v.value::text AS unit_value,
+-- cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+-- call must send it; model_id is the catalog model the snapshot of routing names it by.
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
@@ -35,11 +36,17 @@ VALUES (@request_id, @site_id, @account_id, @route_endpoint_ids)
 ON CONFLICT (request_id) DO NOTHING;
 
 -- The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
--- A request that was never recorded as lost has nothing to resolve, and no row is written.
--- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
-ON CONFLICT (request_id) DO NOTHING;
+-- Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+-- lost, which has nothing to resolve and writes no row, is told from one resolved already.
+-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost;
 
 -- name: MatchCharges :many
 -- Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:

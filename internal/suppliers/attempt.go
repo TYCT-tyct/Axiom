@@ -129,9 +129,8 @@ type RateLimited = adapter.RateLimited
 // cancellation stands.
 func (a *Attempt) Policy() CallPolicy { return a.s.policy(a.ep) }
 
-// Receipt is what the attempt has so far. Done gives the final one; this is for the journal, which records an attempt
-// while it runs.
-func (a *Attempt) Receipt() AttemptReceipt {
+// receipt is what the attempt has so far; Done gives it out once the attempt is over.
+func (a *Attempt) receipt() AttemptReceipt {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return AttemptReceipt{
@@ -145,7 +144,7 @@ func (a *Attempt) Receipt() AttemptReceipt {
 // request and finishing it can both call it.
 func (a *Attempt) Done() AttemptReceipt {
 	a.once.Do(func() { a.cred.rt.inflight.Add(-1) })
-	return a.Receipt()
+	return a.receipt()
 }
 
 // Send posts the call to the supplier. A response in the 2xx range is returned for the caller to read and close.

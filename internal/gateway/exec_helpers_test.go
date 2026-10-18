@@ -217,8 +217,7 @@ func (c *fakeConn) Send(ctx context.Context, call suppliers.Call) (*http.Respons
 	c.u.mu.Unlock()
 	return next(ctx)
 }
-func (c *fakeConn) Policy() suppliers.CallPolicy      { return c.e.policy }
-func (c *fakeConn) Receipt() suppliers.AttemptReceipt { return c.e.receiptOf(c.nth) }
+func (c *fakeConn) Policy() suppliers.CallPolicy { return c.e.policy }
 func (c *fakeConn) Done() suppliers.AttemptReceipt {
 	c.once.Do(func() {
 		c.u.mu.Lock()
@@ -336,11 +335,11 @@ type options struct {
 	settleErr    error               // every settlement fails with it
 	settle       func(try int) error // the error of each settlement, from 1, when settleErr is nil
 	extend       func(ctx context.Context, r billing.ExtendRequest) error
-	segmentable  bool          // the entries are reserved by segment of 40 output tokens
-	cost         int64         // of every attempt
-	costNotKnown bool          // whether Costs says the cost leaves something out
-	costErr      error         // the error Costs fails with
-	stream       *bool         // the request's stream member; true when nil
+	segmentable  bool  // the entries are reserved by segment of 40 output tokens
+	cost         int64 // of every attempt
+	costNotKnown bool  // whether Costs says the cost leaves something out
+	costErr      error // the error Costs fails with
+	stream       *bool // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
 	mutate       func(*Call)
@@ -526,12 +525,11 @@ type fakeCosts struct {
 	err   error
 }
 
-func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (int64, bool, error) {
-	return c.cost, c.known, c.err
-}
-
-func (c fakeCosts) Cost(suppliers.AttemptReceipt, []catalog.Usage) (suppliers.AttemptCost, error) {
-	return suppliers.AttemptCost{Native: platform.AmountExact(c.cost), Flag: suppliers.CostComplete}, c.err
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+	if c.err != nil {
+		return suppliers.AttemptCost{}, 0, false, c.err
+	}
+	return suppliers.AttemptCost{Native: platform.AmountExact(c.cost), Flag: suppliers.CostComplete}, c.cost, c.known, nil
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no

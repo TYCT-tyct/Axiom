@@ -7,21 +7,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/platform/pg"
 )
-
-// cost is what the books hold as the attempt's supplier cost.
-func (b *bank) cost(h *Hold, seq int32) int64 {
-	b.t.Helper()
-	var n int64
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		n, err = queries.AttemptCost(b.t.Context(), tx, AttemptCostParams{RequestID: h.id, AttemptSeq: seq})
-		return err
-	}); err != nil {
-		b.t.Fatal(err)
-	}
-	return n
-}
 
 // TestWaiverPricesPerUseItemsAtTheBand: a waived call's search is priced at the band its whole prompt falls in.
 func TestWaiverPricesPerUseItemsAtTheBand(t *testing.T) {

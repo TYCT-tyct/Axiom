@@ -24,7 +24,6 @@ import (
 type Conn interface {
 	Send(ctx context.Context, call suppliers.Call) (*http.Response, *suppliers.Failure)
 	Policy() suppliers.CallPolicy
-	Receipt() suppliers.AttemptReceipt
 	Done() suppliers.AttemptReceipt
 }
 
@@ -56,11 +55,11 @@ type Ledger interface {
 
 // Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the
 // attempt's price is in; *suppliers.Service is one. known is false when that leaves part of the cost out or none of it
-// is known, and Cost without a currency is the native amount the same schedule gives, which is what suppliers stores of
-// the attempt for reconciliation (docs/domains/billing.md「免单规则」「供应商成本」).
+// is known: the attempt is then booked at whatever came back, which is the platform's cost and never the user's charge
+// (docs/domains/billing.md「供应商成本」). The AttemptCost is the same pricing in the supplier's own unit, which is what
+// suppliers stores of the attempt for reconciliation.
 type Costs interface {
-	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (cost int64, known bool, err error)
-	Cost(r suppliers.AttemptReceipt, usage []catalog.Usage) (suppliers.AttemptCost, error)
+	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c suppliers.AttemptCost, cost int64, known bool, err error)
 }
 
 // ExecDeps are what an Executor needs. Every one is required.

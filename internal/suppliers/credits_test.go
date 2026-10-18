@@ -64,7 +64,7 @@ func TestCreditsPricesAtTheUnitValue(t *testing.T) {
 		{"no usage", receipt, nil, usd, 0, true},
 		{"a receipt with no settlement currency", AttemptReceipt{}, usage(map[catalog.Item]int64{in: 100}), usd, 0, false},
 	} {
-		got, known, err := w.svc.Credits(tc.receipt, tc.usage, tc.currency)
+		_, got, known, err := w.svc.Credits(tc.receipt, tc.usage, tc.currency)
 		if err != nil || got != tc.want || known != tc.known {
 			t.Errorf("%s: %d, %v, %v; want %d, %v", tc.name, got, known, err, tc.want, tc.known)
 		}

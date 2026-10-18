@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"slices"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -58,8 +59,10 @@ func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (
 // with, so that a charge the supplier reports later can be matched to it. Nothing can bring the call's usage
 // afterwards, so the whole reservation goes back and nothing is charged.
 func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
-	if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, c.row.Endpoints); err != nil {
-		return fmt.Errorf("billing: record the lost request: %w", err)
+	// The reservation marks an entry that was dropped at admission with the zero id; no charge can come from it.
+	route := slices.DeleteFunc(slices.Clone(c.row.Endpoints), func(id uuid.UUID) bool { return id == uuid.UUID{} })
+	if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, route); err != nil {
+		return err
 	}
 	return c.release(ctx, tx, "cleanup_released", c.row.Amount)
 }

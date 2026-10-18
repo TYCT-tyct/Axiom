@@ -53,7 +53,7 @@ func TestSell(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := Sell(Rule{RuleInput: RuleInput{Enabled: true, Method: tc.method}, ID: uuid.NewV7()}, ref, usd)
+			s, err := Sell(Rule{Enabled: true, Method: tc.method, ID: uuid.NewV7()}, ref, usd)
 			if tc.refusal != nil {
 				if !errors.Is(err, tc.refusal) {
 					t.Fatalf("Sell = %v, want %v", err, tc.refusal)
@@ -75,9 +75,9 @@ func TestSell(t *testing.T) {
 // reference price itself is left as it was.
 func TestSellIsPure(t *testing.T) {
 	t.Parallel()
-	const cny = `{"v":1,"currency":"USD","rates":{"input":"0.0000001","output":"0.0000005"}}`
-	ref := reference(t, uuid.NewV7(), cny)
-	r := Rule{RuleInput: RuleInput{Enabled: true, Method: multiplied("1.2")}, ID: uuid.NewV7(), Rev: 3}
+	const published = `{"v":1,"currency":"USD","rates":{"input":"0.0000001","output":"0.0000005"}}`
+	ref := reference(t, uuid.NewV7(), published)
+	r := Rule{Enabled: true, Method: multiplied("1.2"), ID: uuid.NewV7(), Rev: 3}
 	first, err := Sell(r, ref, usd)
 	if err != nil {
 		t.Fatal(err)
@@ -86,9 +86,18 @@ func TestSellIsPure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := first.MarshalJSON()
-	b, _ := second.MarshalJSON()
-	original, _ := ref.Schedule.MarshalJSON()
+	a, err := first.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := second.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := ref.Schedule.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(a) != string(b) {
 		t.Errorf("two sales differ:\n%s\n%s", a, b)
 	}
@@ -100,12 +109,32 @@ func TestSellIsPure(t *testing.T) {
 	}
 }
 
+// TestSellNeedsAReferencePrice: a rule that reads the reference price does not sell a model the catalog publishes none
+// for, nor one whose prices are not in the site's currency: face reads the same numbers as the site's, and there is no
+// exchange rate in M1 to turn another currency's into them.
+func TestSellNeedsAReferencePrice(t *testing.T) {
+	t.Parallel()
+	r := Rule{Enabled: true, Method: multiplied("1.5"), ID: uuid.NewV7()}
+	if _, err := Sell(r, catalog.ReferencePrice{}, usd); !errors.Is(err, ErrUnpriced) {
+		t.Errorf("Sell without a reference price = %v, want ErrUnpriced", err)
+	}
+	other := reference(t, uuid.NewV7(), `{"v":1,"currency":"CNY","rates":{"input":"0.0000007"}}`)
+	other.Currency = "CNY"
+	if _, err := Sell(r, other, usd); !errors.Is(err, ErrUnpriced) {
+		t.Errorf("Sell at face from a price in CNY = %v, want ErrUnpriced", err)
+	}
+	if _, err := Sell(Rule{Enabled: true, Method: fixed(fixedUS), ID: uuid.NewV7()}, catalog.ReferencePrice{}, usd); err != nil {
+		t.Errorf("a fixed price needs no reference price: %v", err)
+	}
+}
+
 // TestPriceVersion: a sale price's version changes with the rule's rev or the reference price's row, and never with
-// anything else, so a stored price is told from a new one by its version alone.
+// anything else, so a stored price is told from a new one by its version alone. A fixed price reads no reference price,
+// so a new row of it does not make a new version.
 func TestPriceVersion(t *testing.T) {
 	t.Parallel()
 	ref := reference(t, uuid.NewV7(), `{"v":1,"currency":"USD","rates":{"input":"1"}}`)
-	r := Rule{RuleInput: RuleInput{Enabled: true, Method: multiplied("1.2")}, ID: uuid.NewV7(), Rev: 1}
+	r := Rule{Enabled: true, Method: multiplied("1.2"), ID: uuid.NewV7(), Rev: 1}
 	base := priceVersion(r, ref)
 	if again := priceVersion(r, ref); again != base {
 		t.Errorf("the version is not stable: %s, %s", base, again)
@@ -122,17 +151,25 @@ func TestPriceVersion(t *testing.T) {
 	if v := base.String()[14]; v != '8' {
 		t.Errorf("the version is a version-%c UUID, want 8: %s", v, base)
 	}
+	priced := Rule{Enabled: true, Method: fixed(fixedUS), ID: uuid.NewV7(), Rev: 1}
+	if priceVersion(priced, ref) != priceVersion(priced, other) {
+		t.Error("a fixed price's version moved with the reference price's row")
+	}
+	priced.Rev++
+	if priceVersion(priced, ref) == priceVersion(Rule{Method: fixed(fixedUS), ID: priced.ID, Rev: 1}, ref) {
+		t.Error("a fixed price's new rev kept the version")
+	}
 }
 
 // TestPlace: a rule that is not stored yet is tried where its target and audience put it, after the rules it ties with,
 // so a preview never displaces a stored rule it is no more specific than.
 func TestPlace(t *testing.T) {
 	t.Parallel()
-	all := Rule{RuleInput: RuleInput{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}}, ID: uuid.MustParse(model)}
-	author := Rule{RuleInput: RuleInput{Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}}, ID: uuid.NewV7()}
-	modelRule := Rule{RuleInput: RuleInput{Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}}, ID: uuid.NewV7()}
+	all := Rule{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, ID: uuid.MustParse(model)}
+	author := Rule{Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, ID: uuid.NewV7()}
+	modelRule := Rule{Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}, ID: uuid.NewV7()}
 	stored := []Rule{modelRule, author, all}
-	placed := Place(Rule{RuleInput: RuleInput{Target: Selector{Kind: "author", ID: "other"}, Audience: Selector{Kind: "all"}}}, stored)
+	placed := Place(Rule{Target: Selector{Kind: "author", ID: "other"}, Audience: Selector{Kind: "all"}}, stored)
 	var order []string
 	for _, r := range placed {
 		order = append(order, r.Target.Kind+"/"+r.Target.ID)

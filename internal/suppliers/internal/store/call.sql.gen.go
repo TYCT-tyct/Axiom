@@ -233,22 +233,30 @@ func (q *Queries) InsertLostRequest(ctx context.Context, db DBTX, arg InsertLost
 	return err
 }
 
-const insertLostRequestResolution = `-- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
-ON CONFLICT (request_id) DO NOTHING
+const insertLostRequestResolution = `-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost
 `
 
 // The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
-// A request that was never recorded as lost has nothing to resolve, and no row is written.
-func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) error {
-	_, err := db.Exec(ctx, insertLostRequestResolution, requestID)
-	return err
+// Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+// lost, which has nothing to resolve and writes no row, is told from one resolved already.
+func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) (int32, error) {
+	row := db.QueryRow(ctx, insertLostRequestResolution, requestID)
+	var named int32
+	err := row.Scan(&named)
+	return named, err
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
-    v.id AS unit_value_id, v.value::text AS unit_value,
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
@@ -263,6 +271,8 @@ ORDER BY e.id, c.id
 
 type ListRoutableRow struct {
 	EndpointID         uuid.UUID
+	UpstreamName       string
+	ModelID            uuid.UUID
 	Formats            []string
 	SupplierID         uuid.UUID
 	Kind               string
@@ -284,7 +294,8 @@ type ListRoutableRow struct {
 
 // Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
 // endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
-// cooldown are judged by the clock when a credential is picked.
+// cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+// call must send it; model_id is the catalog model the snapshot of routing names it by.
 func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow, error) {
 	rows, err := db.Query(ctx, listRoutable)
 	if err != nil {
@@ -296,6 +307,8 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 		var i ListRoutableRow
 		if err := rows.Scan(
 			&i.EndpointID,
+			&i.UpstreamName,
+			&i.ModelID,
 			&i.Formats,
 			&i.SupplierID,
 			&i.Kind,

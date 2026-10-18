@@ -40,6 +40,7 @@
 - `name` 上的 CHECK 只是兜底，上架审核时逐个确认可见性。改 `Normalize` 的规则要随迁移重算 `norm` 并重新检查唯一性。
 - 参考价的历史以 `supersedes` 串起；当前价是没有被替代的那一行，它是撤下行（`schedule` 为空）时这个币种没有当前价。更正也是发布新的一行。`source` 记下这一行来自哪个价格来源，证据在对应的 `change` 里。
 - `spec` 原地更新，旧值在 `change` 里。它包括目录基线的全部规格和计费要用的模型数据，其中 `items`、`tiers` 是上游可能报告的计费项和服务等级（见「上架门槛与缺项」）。
+- `spec` 里另外四个键是端点接请求的规格：`context_length`（一次请求最多的 token，输入加输出）、`max_output_tokens`（模型的输出上限，也是默认输出上限）、`streams`（厂商是否流式）、`abilities`（能力名字的列表：`tools`、`images`、`documents`、`reasoning`、`prompt_cache`、`structured_output`、`web_search`、`code_execution`）。`Model.Serving()`（`snapshot.go`）把它们读成 `Serving{Context, MaxOutput, Streams, Abilities}`；**四个键缺一个就返回 false，绝不补默认值**——没写清能吃多少上下文的端点不能进路由，猜一个 128000 会让它带着错的上限接流量。组装路由快照的代码对 `Serving()` 为假的端点不放进快照；万一漏了，`routing` 的 `candidate`（`internal/routing/snapshot.go:273`）也会因为上下文长度不是正数拒绝它，而不是让它接流量。`context_length` 或 `max_output_tokens` 不是正数、`abilities` 里有不认识的名字、同一项写两遍，都在解析时拒绝，不忽略。`Serving.Abilities` 是 `catalog.AbilitySet`（spec 里的名字），不是 `protocol.Capabilities`：依赖上 `catalog` 在 `protocol` 之下，能力名字换成能力位由 `protocol` 在建路由快照时做。
 - `model.rev` 是改模型时的乐观并发令牌：`ListModel`、`Retire`、`UpdateSpec`、`SelectPriceSource` 带上审核时看到的 `rev`，锁模型行后比较，不同就拒绝，成功后加一。没有它，两个基于同一份规格的修改，后提交的会悄悄覆盖先提交的。测试：基于同一 `rev` 的两个 `UpdateSpec` 只成功一个。
 - `subject_key` 非空且稳定：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
 - `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:watch`、`system:sync`），#23 定义操作者类型后替换。
@@ -111,11 +112,11 @@
 - **`Fill`** 返回补过价的副本：对每个提供的服务等级，基础价里没有的项补上给定价格；分档只在基础价之上覆盖，所以补上的项在每一档都有价，价目表自己在任何位置写了的价格都保留。billing 用它把站点的按次默认单价补进锁定的售价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)）。
 - **`Cost` 不因缺价失败**：它给有价格的项计价，并返回用量不为零却没有价格的项。`Usage` 的服务等级 在价目表里没有价格时，用量不为零的各项都算缺价。billing 按「价目表缺项」给这些项兜底，所以红线"不会算不出钱"不靠本模块拒绝请求。
 - **`Ceiling` 给预留用的单价上界**：这些项在这些服务等级里、在基数合计不超过 `length` 的提示词可能落入的每一档中的最高单价，任一处缺价返回 false。档位只按基数里的项求和，提示词在基数内外怎么拆分都可能落到 `length` 以下的任一档，价格也不一定随档位上升，所以只看某一档或某一项都不是上界。
-- **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。
+- **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。本模块只把 `spec.abilities` 读成 `Serving.Abilities`（见「表」下 `spec` 一条），带不带能力位由 `protocol` 转，判断归路由。
 
 ### 数值域
 
-- `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（如成本计划里官方价乘分组倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
+- `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（`Schedule.Scaled`：成本计划里官方价乘分组倍率，售价里参考价乘站点倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
 - `Usage` 每项 0 … 10¹⁰，字段不导出，只能经 `NewUsage` 构造，负数或超限返回错误；零值是全零的合法用量。不变量由构造守住，`Cost` 不再校验。门槛求和最多 `NumItems` × 10¹⁰，int64 不会溢出。
 - 单项乘积 ≤ 10²⁸，`NumItems`（少于 16）项之和 < 1.6 × 10²⁹，在 128 位有符号整数（约 1.7 × 10³⁸）之内。这个域里不可能溢出，仍逐步检查，溢出返回错误而不是截断。
 - `Cost` 返回 `platform.Exact`：128 位整数，单位 10⁻¹⁵，币种随价目表。汇率和加价倍率由 billing 转成 `math/big.Rat` 再乘，只在记账时取整一次；本模块不做币种换算。
@@ -258,6 +259,7 @@ func (s Schedule) BaseRate(it Item) (platform.UnitPrice, bool) // 标准档、�
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；两边都有分档而口径不同时 ErrTierBasisChanged
 func (s Schedule) Fill(prices map[Item]platform.UnitPrice) Schedule   // 给每个服务等级缺基础价的这些项补上价格，已有的不动
+func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedule, error) // 每个单价乘倍率、改记币种，向上取整一次；没定价的项仍没有价
 func (s Schedule) Currency() platform.Currency
 func Normalize(name string) string
 

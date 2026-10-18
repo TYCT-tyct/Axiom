@@ -50,9 +50,9 @@ func segment(tb testing.TB, counts map[catalog.Item]int64, unknown ...catalog.Un
 }
 
 // fetches is 50 input, 20 output and n web fetches, which protocol cannot map: 70 and n uses at 50 each.
-func fetches(tb testing.TB, input int64, n string) Segment {
+func fetches(tb testing.TB, n string) Segment {
 	tb.Helper()
-	return segment(tb, map[catalog.Item]int64{in: input, catalog.ItemOutput: 20},
+	return segment(tb, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: n})
 }
 
@@ -118,7 +118,7 @@ func fallbackDefault(t *testing.T) {
 func fallbackEstimated(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
-	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
+	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
 		t.Errorf("Settle = %+v, want 170 estimated", f)
 	}
 	b.expect("settled", 170)
@@ -260,9 +260,9 @@ func TestUnknownItems(t *testing.T) {
 	q.Model.ID = model
 	const fetch = "usage.server_tool_use.web_fetch_requests"
 	first := b.holdOn(q, 100)
-	b.settleWith(first, outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "1"))) // the row is the first tenant's
+	b.settleWith(first, outcome(Committed, FinishStop, false, fetches(t, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "2")))
+	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, "1"))) // the row is the first tenant's
 	estimate := b.holdOn(q, 100)
 	b.settleWith(estimate, outcome(Committed, FinishStop, true, unknown(t, 50, "usage.new_thing_tokens", "5")))
 	items := b.unknownItems()
@@ -276,10 +276,56 @@ func TestUnknownItems(t *testing.T) {
 		t.Errorf("%d alerts, want one per field:\n%s", n, logs.String())
 	}
 	b.checkClearing(model, fetch)
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "1")))
 	if n := strings.Count(logs.String(), "an unknown billing item appeared"); n != 2 || len(b.unknownItems()) != 1 {
 		t.Errorf("a cleared field came back: %d alerts, %+v", n, b.unknownItems())
 	}
+}
+
+// TestUnknownItemsOnEveryAttempt: an attempt that reported fields nothing prices and then failed takes its own model
+// out of routing, though the other entry's attempt is the one charged, and the charge follows the charged attempt
+// alone.
+func TestUnknownItemsOnEveryAttempt(t *testing.T) {
+	const newThing = "usage.new_thing_tokens"
+	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
+	h, first := b.holdOnTwoModels()
+	failed := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
+		catalog.UnknownUsage{Field: newThing, Value: "5"},
+		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: "2"})
+	o := Outcome{Attempts: []AttemptResult{
+		{Seq: 1, Entry: 0, Cost: 5, Segments: []Segment{failed}, Result: FailedBeforeCommit, Finish: FinishError},
+		{Seq: 2, Entry: 1, Cost: 7, Segments: []Segment{used(t, 50, 20, 0)}, Result: Committed, Finish: FinishStop},
+	}}
+	if f := b.settleWith(h, o); f.Charged != platform.AmountExact(70) || f.Estimated {
+		t.Errorf("Settle = %+v, want the fallback's 70, exact", f)
+	}
+	b.expect("settled", 70)
+	items := b.unknownItems()
+	for i := range items {
+		items[i].Seen = time.Time{}
+	}
+	want := []UnknownItem{
+		{first.Model.ID, newThing, h.id, time.Time{}},
+		{first.Model.ID, "usage.server_tool_use.web_fetch_requests", h.id, time.Time{}},
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Errorf("unknown items %+v, want %+v", items, want)
+	}
+}
+
+// holdOnTwoModels reserves 100 text bytes on two metered entries of their own models, and returns the first.
+func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
+	b.t.Helper()
+	first, second := metered(b.t), metered(b.t)
+	first.Model.ID, second.Model.ID = catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
+	var h *Hold
+	if err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
+		return err
+	}); err != nil {
+		b.t.Fatal(err)
+	}
+	return h, first
 }
 
 // holdFor reserves text bytes on q for another tenant a.

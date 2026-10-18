@@ -14,6 +14,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -54,6 +55,7 @@ type cluster struct {
 	database pgtest.Database
 	keys     *secret.Keyring
 	clock    *clock
+	catalog  *catalog.Catalog
 	supplier uuid.UUID
 }
 
@@ -67,7 +69,15 @@ func newCluster(t *testing.T) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &cluster{t: t, database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}), keys: keys, clock: &clock{t: t0}}
+	c := &cluster{
+		t: t, keys: keys, clock: &clock{t: t0},
+		database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}, catalog.Migrations),
+	}
+	cat, err := catalog.Open(c.open(), platform, catalog.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.catalog = cat
 	db := c.open()
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		var err error
@@ -102,7 +112,9 @@ func (c *cluster) open() *pg.DB {
 
 func (c *cluster) node(holder string) *persist.Node {
 	c.t.Helper()
-	n, err := persist.New(persist.Config{DB: c.open(), Scope: platform, Keys: c.keys, Holder: holder, LeaseTTL: ttl, Now: c.clock.now})
+	n, err := persist.New(persist.Config{
+		DB: c.open(), Scope: platform, Keys: c.keys, Holder: holder, LeaseTTL: ttl, Now: c.clock.now, Catalog: c.catalog,
+	})
 	if err != nil {
 		c.t.Fatal(err)
 	}

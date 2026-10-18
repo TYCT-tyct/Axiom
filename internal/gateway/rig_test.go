@@ -21,7 +21,6 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
-	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -85,7 +84,8 @@ type rigOptions struct {
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 	segments  billing.Segments
-	suppliers bool // the suppliers tables too, for a real suppliers service to price attempts
+	suppliers bool          // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime  time.Duration // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -136,17 +136,9 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.seedSite()
 	r.seedCatalog()
 	r.seedRouting(o)
-	// A rig without the suppliers tables settles its supplier side nowhere: nothing it runs reaches an upstream. One with
-	// them writes through the module's own functions, so a settlement's attempt rows are real (costs_test.go).
-	var sup billing.Suppliers = noSuppliers{}
-	if o.suppliers {
-		if r.suppliers, err = r.newSuppliers(); err != nil {
-			t.Fatal(err)
-		}
-		sup = supplierWrites{r.suppliers}
-	}
+	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
-		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, // nothing renews the holder while a test runs
+		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: cmp.Or(o.lifetime, time.Hour), // nothing renews the holder while a test runs
 		Segments: o.segments,
 	}, sup); err != nil {
 		t.Fatal(err)
@@ -162,6 +154,20 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Cleanup(r.server.Close)
 	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
 	return r
+}
+
+// settlementSuppliers is the supplier's side of a settlement. A rig without the suppliers tables settles it nowhere:
+// nothing it runs reaches an upstream. One with them writes through the module's own functions, so a settlement's
+// attempt rows are real (costs_test.go).
+func (r *rig) settlementSuppliers(o rigOptions) billing.Suppliers {
+	if !o.suppliers {
+		return noSuppliers{}
+	}
+	var err error
+	if r.suppliers, err = r.newSuppliers(); err != nil {
+		r.t.Fatal(err)
+	}
+	return suppliers.CallWrites{}
 }
 
 // warmConnections opens n connections to the database at once, so the requests of a test do not wait for new ones to
@@ -383,7 +389,9 @@ func (r *rig) newKey(a account) (string, accounts.KeyID) {
 // an upstream there, so nothing is ever recorded.
 type noSuppliers struct{}
 
-func (noSuppliers) RecordAttempts(context.Context, pg.Tx, []suppliers.AttemptRecord) error { return nil }
+func (noSuppliers) RecordAttempts(context.Context, pg.Tx, []suppliers.AttemptRecord) error {
+	return nil
+}
 
 func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) error {
 	return nil
@@ -392,25 +400,4 @@ func (noSuppliers) RecordLostRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUI
 func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error { return nil }
 func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
 	return nil
-}
-
-// supplierWrites is billing.Suppliers as the suppliers module implements it, over the service the rig prices with: the
-// settlement's attempt rows and the cleanup's lost requests are the module's own writes, in billing's transaction. It is
-// the same adapter cmd/axiom/callpath.go is for the node, which a test cannot import.
-type supplierWrites struct{ *suppliers.Service }
-
-func (supplierWrites) RecordAttempts(ctx context.Context, tx pg.Tx, attempts []suppliers.AttemptRecord) error {
-	return suppliers.RecordAttempts(ctx, tx, attempts)
-}
-
-func (supplierWrites) RecordLostRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, route []uuid.UUID) error {
-	return suppliers.RecordLostRequest(ctx, tx, platform.RequestID(request), site, account, route)
-}
-
-func (supplierWrites) ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error {
-	return suppliers.ResolveLostRequest(ctx, tx, platform.RequestID(request))
-}
-
-func (supplierWrites) EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error {
-	return suppliers.EndRequest(ctx, tx, platform.RequestID(request), site, account, at)
 }
