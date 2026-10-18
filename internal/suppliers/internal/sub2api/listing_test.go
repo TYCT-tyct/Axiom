@@ -131,6 +131,31 @@ func TestThePositionOfAListingHoldsNoKeyText(t *testing.T) {
 	}
 }
 
+// TestAPositionThatHoldsANumberIsReadAgain: the ids of the groups a pass read go into its position and come back out of
+// it. A number kept as the text it was written in is written as a string, so reading it back has to take the quotes off:
+// otherwise every resumed pass finds groups whose ids differ from the ones it read, and begins the pass again.
+func TestAPositionThatHoldsANumberIsReadAgain(t *testing.T) {
+	t.Parallel()
+	read := func(r adapter.Request) adapter.Response { return manyGroups(3)(r) }
+	groups, err := open[[]groupDTO](read(adapter.Request{Path: "/api/v1/groups/available"}))
+	if err != nil || len(groups) != 3 {
+		t.Fatalf("%d groups, %v; want the three the supplier lists", len(groups), err)
+	}
+	p := offerProgress{V: 1, Groups: groups, Overrides: map[string]number{"1": "2"}, Page: 1, Keys: map[number]number{"1": "7"}}
+
+	back := decodeOffer(listing(p))
+	if back.V != 1 {
+		t.Fatalf("the position was not read again: %s", listing(p))
+	}
+	if !sameGroups(back.Groups, p.Groups) {
+		t.Errorf("the groups of the position are %v, want the ones it was written with %v: a resumed pass would begin again",
+			back.Groups, p.Groups)
+	}
+	if back.Keys["1"] != "7" || back.Overrides["1"] != "2" {
+		t.Errorf("the position's keys are %v and its multipliers %v, want the ones it was written with", back.Keys, back.Overrides)
+	}
+}
+
 // TestAnOfferWhoseGroupsChangedBeginsAgain: a group added to the supplier after a pass began is not one the pass read, so
 // the pass begins again over the groups it has now, its key page with them.
 func TestAnOfferWhoseGroupsChangedBeginsAgain(t *testing.T) {
