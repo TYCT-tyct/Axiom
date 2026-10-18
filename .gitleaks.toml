@@ -1,0 +1,12 @@
+# gitleaks reads this file from the directory it scans (`just secrets`, and the secrets job in workflow.yml).
+title = "Axiom"
+
+[extend]
+useDefault = true
+
+# The generated API packages embed their OpenAPI contract as base64 of the gzipped spec, split over lines of an array.
+# That text looks like a high-entropy key to the generic-api-key rule and holds only the compressed contract, which is
+# in api/*.yaml in the clear. Only these generated files are skipped; a secret anywhere else still fails.
+[[allowlists]]
+description = "embedded OpenAPI contract in generated code"
+paths = ['''internal/platform/(adminapi|consoleapi)/[^/]+\.gen\.go''']
