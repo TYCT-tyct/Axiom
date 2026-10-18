@@ -63,7 +63,7 @@ func (x *Executor) settled(ctx context.Context, s *session, o billing.Outcome, e
 			logger.Error("a settlement was not written in time; the cleanup takes it", "err", err)
 			return
 		}
-		x.log(trail, o, f, time.Now())
+		x.log(ctx, trail, o, f, time.Now())
 	})
 	return true
 }

@@ -86,11 +86,12 @@ const (
 )
 
 // Final is what the call ends with: the charged attempt's usage, what the user was charged (capped at the floor) and
-// whether any of it was estimated.
+// whether any of it was estimated or waived.
 type Final struct {
 	Segments  []Segment
 	Charged   platform.Exact
 	Estimated bool
+	Waived    bool // the waiver rules made the call free of its model usage; per-use items may still be charged
 }
 
 // ErrNoAttempt is an outcome whose last attempt names no kept entry: nothing can price it.
@@ -155,7 +156,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated}, err
+	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived}, err
 }
 
 // recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
@@ -459,7 +460,7 @@ type locked struct {
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated}, err
+	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived}, err
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less

@@ -417,3 +417,52 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 		}
 	}
 }
+
+// TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort: a sale price that does not price an item the model reports (a
+// fixed price list is not checked against the model when it is made) would answer every call 503 once a call reported
+// that item, so the model is left out with the reason in the log.
+func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
+	f := newRouteFixture(t)
+	short, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.prices[f.served] = billing.Sold{Version: uuid.NewV7(), Schedule: short}
+	f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
+	if want := (Count{Endpoints: 0, Offered: 1}); f.count != want {
+		t.Errorf("the build made %+v, want %+v", f.count, want)
+	}
+	if logs := f.logs.String(); !strings.Contains(logs, "its sale price lacks a price") {
+		t.Errorf("the log does not say why:\n%s", logs)
+	}
+}
+
+// TestRouteBuildTellsAStandingReasonOnce: the snapshot is rebuilt every few seconds, and a model left out for the same
+// reason at each build is one line in the log, not one every 5 seconds; a reason that changes, or comes back after the
+// model was routable, is told again.
+func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
+	f := newRouteFixture(t)
+	f.build([]suppliers.Routable{routable(f.unpriced, protocol.Messages)})
+	deps, offered := f.deps, []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
+	deps.Endpoints = func(context.Context) ([]suppliers.Routable, error) { return offered, nil }
+	for range 3 {
+		if _, _, err := deps.Build(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reason := "no pricing rule gives it a sale price"
+	if n := strings.Count(f.logs.String(), reason); n != 1 {
+		t.Fatalf("the reason was told %d times over 4 builds, want once", n)
+	}
+	offered = nil // the model goes, and then comes back with the same reason
+	if _, _, err := deps.Build(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	offered = []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
+	if _, _, err := deps.Build(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(f.logs.String(), reason); n != 2 {
+		t.Errorf("the reason was told %d times after the model left and came back, want twice", n)
+	}
+}

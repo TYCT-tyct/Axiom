@@ -36,6 +36,8 @@ type RouteDeps struct {
 	// Built, when set, is told what each published snapshot holds, after it is the router's. The node reports itself
 	// ready there and nowhere else, so readiness is never a promise made before a snapshot exists.
 	Built func(Count)
+
+	told map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
 }
 
 // Count is what one build made of the endpoints suppliers offer: how many are in the snapshot, and how many there were
@@ -59,7 +61,7 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // in the log, since a model that cannot be routed is a price list or a spec to fix. A snapshot with no endpoint at all
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
 // has to say.
-func (d RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
+func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
 	catalogSnap, err := d.Catalog.Current()
 	if err != nil {
 		return nil, Count{}, fmt.Errorf("gateway: the catalog: %w", err)
@@ -101,7 +103,7 @@ func (d RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) 
 
 // Publish replaces the router's snapshot with one Build made and tells Built what it holds. Nothing else takes a
 // snapshot to the router, so what Built hears of is always a snapshot routing already plans with.
-func (d RouteDeps) Publish(s *routing.Snapshot, c Count) {
+func (d *RouteDeps) Publish(s *routing.Snapshot, c Count) {
 	d.Router.Replace(s)
 	if d.Built != nil {
 		d.Built(c)
@@ -111,7 +113,7 @@ func (d RouteDeps) Publish(s *routing.Snapshot, c Count) {
 // Run rebuilds the snapshot every Every and replaces the router's with it, until ctx ends. A failed build is logged and
 // the previous snapshot stays, which then goes stale on its own after routing's MaxStale: a node that cannot read its
 // endpoints stops routing rather than routing to the endpoints it had.
-func (d RouteDeps) Run(ctx context.Context) {
+func (d *RouteDeps) Run(ctx context.Context) {
 	every := d.Every
 	if every <= 0 {
 		every = rebuildEvery
@@ -149,8 +151,22 @@ func note(left map[catalog.ModelID]*leftOut, model catalog.ModelID, reason strin
 }
 
 // report says which models are not routable, and why, so that a call that finds no endpoint has its cause in the log.
-func (d RouteDeps) report(left map[catalog.ModelID]*leftOut) {
+// A reason that stands from one build to the next is told once, not at every build (every 5 seconds): it is told again
+// when it changes or comes back.
+func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
+	for model := range d.told {
+		if _, still := left[model]; !still {
+			delete(d.told, model)
+		}
+	}
 	for model, l := range left {
+		if d.told[model] == l.reason {
+			continue
+		}
+		if d.told == nil {
+			d.told = map[catalog.ModelID]string{}
+		}
+		d.told[model] = l.reason
 		d.Logger.Warn("gateway: a model's endpoints are left out of the routing snapshot",
 			"model", model.String(), "endpoints", l.endpoints, "reason", l.reason)
 	}
@@ -173,6 +189,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "no pricing rule gives it a sale price"
 	}
 	reportable := model.Reportable()
+	if sold.Schedule.Missing(reportable) != (catalog.Reportable{}) {
+		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
+		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
+	}
 	tiers := reportable.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
 	native := routing.Of(r.Formats...)
