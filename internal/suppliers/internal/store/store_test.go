@@ -346,7 +346,7 @@ func TestCredentialsAreStoredSealed(t *testing.T) {
 }
 
 // TestCredentialShapes: what is not the shape of sealed output, or is half sealed, is not stored; a credential still
-// binding has no key yet and any other has one.
+// binding, or erased, has no key and any other has one; an erased one has none.
 func TestCredentialShapes(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -362,6 +362,10 @@ func TestCredentialShapes(t *testing.T) {
 		{"binding, no key yet", func(p *store.InsertCredentialParams) {
 			p.Status, p.Ciphertext, p.Nonce, p.WrappedDek, p.KeyVersion = "binding", nil, nil, nil, nil
 		}, ""},
+		{"erased, with no key", func(p *store.InsertCredentialParams) {
+			p.Status, p.Ciphertext, p.Nonce, p.WrappedDek, p.KeyVersion = "erased", nil, nil, nil, nil
+		}, ""},
+		{"erased, still with its key", func(p *store.InsertCredentialParams) { p.Status = "erased" }, checkViolation},
 		{"active without a key", func(p *store.InsertCredentialParams) {
 			p.Ciphertext, p.Nonce, p.WrappedDek, p.KeyVersion = nil, nil, nil, nil
 		}, checkViolation},
@@ -382,8 +386,8 @@ func TestCredentialShapes(t *testing.T) {
 	}
 }
 
-// TestRowsAreNeverDeletedAndIdentityNeverChanges: the application has no DELETE anywhere, and cannot change what a
-// row is: its id, its supplier, its owner, the address credentials go to.
+// TestRowsAreNeverDeletedAndIdentityNeverChanges: the application has no DELETE anywhere but on a supplier's sealed
+// login (a removal deletes it), and cannot change what a row is: its id, its supplier, its owner, the address credentials go to.
 func TestRowsAreNeverDeletedAndIdentityNeverChanges(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -402,7 +406,7 @@ func TestRowsAreNeverDeletedAndIdentityNeverChanges(t *testing.T) {
 	}
 	other, otherGroup := w.supplier["site A"], w.group["site A"]
 	denied := []string{
-		"DELETE FROM suppliers.suppliers", "DELETE FROM suppliers.supplier_logins", "DELETE FROM suppliers.supplier_groups",
+		"DELETE FROM suppliers.suppliers", "DELETE FROM suppliers.supplier_groups",
 		"DELETE FROM suppliers.credentials", "DELETE FROM suppliers.supplier_models", "DELETE FROM suppliers.supplier_aliases",
 		"DELETE FROM suppliers.endpoints", "TRUNCATE suppliers.credentials",
 		"UPDATE suppliers.suppliers SET origin = 'https://elsewhere.example'",
@@ -425,6 +429,7 @@ func TestRowsAreNeverDeletedAndIdentityNeverChanges(t *testing.T) {
 		"UPDATE suppliers.suppliers SET status = 'paused', config_gen = config_gen + 1",
 		"UPDATE suppliers.credentials SET status = 'disabled'",
 		"UPDATE suppliers.supplier_logins SET version = version + 1",
+		"DELETE FROM suppliers.supplier_logins",
 	} {
 		if err := exec(t, db, platform, statement); err != nil {
 			t.Errorf("%s: %v", statement, err)

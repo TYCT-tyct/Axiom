@@ -134,8 +134,8 @@ func (r *rig) seedSupplierWith(prices string) (suppliers.AttemptReceipt, uuid.UU
 		}{
 			{
 				`INSERT INTO suppliers.suppliers (id, owner_scope, name, kind, origin, upstream_account, native_unit,
-				settlement_currency, mgmt_egress_id, status)
-				VALUES ($1, 'platform', 'Costed', 'newapi', 'https://supplier.test', 'account', 'quota', 'USD', 'direct', 'active')`,
+				settlement_currency, mgmt_egress_id, status, balance_native)
+				VALUES ($1, 'platform', 'Costed', 'newapi', 'https://supplier.test', 'account', 'quota', 'USD', 'direct', 'active', 100)`,
 				[]any{supplier},
 			},
 			{`INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, selected, present, codename)

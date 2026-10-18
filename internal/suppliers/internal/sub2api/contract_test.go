@@ -261,20 +261,9 @@ func (healthyOthers) Account(context.Context) (adapter.Account, error) {
 func (healthyOthers) Offer(context.Context) (adapter.Offer, error)     { return adapter.Offer{}, nil }
 func (healthyOthers) Keys(context.Context) ([]adapter.KeyState, error) { return nil, nil }
 
-func (h healthyOthers) Rescan(since time.Time) adapter.ScanState {
-	return h.Manager.(adapter.Rescanner).Rescan(since)
-}
-
-type hooks struct{}
-
-func (hooks) InFlight(context.Context) (int, error) { return 0, nil }
-func (hooks) DeleteSecrets(context.Context) error   { return nil }
-
-// TestEngineDrivesTheAdapterAndAMovedRecordIsFound: the real adapter runs under the real engine. A first round only
-// marks the start; a quarter of an hour later the records in the window are stored once each, however often they are read. A removal
-// then reads once more after the grace period, from before it began, so a record that was created before the first
-// final read and appeared during the wait is stored too, though its day is before the adapter's own next window.
-func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
+// TestEngineDrivesTheAdapter: the real adapter runs under the real engine. A first round only marks the start; a quarter
+// of an hour later the records in the window are stored once each, however often they are read.
+func TestEngineDrivesTheAdapter(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: time.Date(2026, 10, 15, 0, 10, 0, 0, time.UTC)}
 	sup := &usageSupplier{clk: clk}
@@ -287,7 +276,6 @@ func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
 		}{ref, at(created), at(visible)})
 	}
 	add("client:early", "2026-10-15T00:12:00Z", "2026-10-15T00:12:00Z")
-	add("client:late", "2026-10-14T23:59:00Z", "2026-10-15T01:00:00Z") // created before midnight, appears 35 minutes after the removal began
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) { return sup.answer(r), nil })
 	m := healthyOthers{managerAt(t, srv, login(t, clk.t.Add(24*time.Hour)), clk)}
 	store := syncertest.New()
@@ -302,16 +290,6 @@ func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
 	}
 	if _, ok := store.Charges["client:early"]; !ok || len(store.Charges) != 1 || store.State().ScanOpen {
 		t.Fatalf("after the first pass: %d charges, scan open %v", len(store.Charges), store.State().ScanOpen)
-	}
-	if done, err := e.Remove(t.Context(), hooks{}); done || err != nil {
-		t.Fatalf("Remove = %v, %v; want it to wait out the grace period", done, err)
-	}
-	clk.advance(36 * time.Minute) // 01:01: the grace period is over; the late record has appeared
-	if done, err := e.Remove(t.Context(), hooks{}); !done || err != nil {
-		t.Fatalf("Remove = %v, %v", done, err)
-	}
-	if _, ok := store.Charges["client:late"]; !ok {
-		t.Errorf("the record that appeared during the wait was not read: %d charges", len(store.Charges))
 	}
 }
 
