@@ -7,6 +7,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers/internal/reconcile"
@@ -57,10 +58,18 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 }
 
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the
-// projection of the state onto the supplier, in one transaction that holds only if the lease is still the session's, the
-// supplier's credentials are still the generation it was taken in, and the stored version is expect. Otherwise nothing
-// of the step is written, and the error is syncer.ErrFenced.
+// projection of the state onto the supplier and its listing, in one transaction that holds only if the lease is still the
+// session's, the supplier's credentials are still the generation it was taken in, and the stored version is expect.
+// Otherwise nothing of the step is written, and the error is syncer.ErrFenced.
 func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) error {
+	var snap *catalog.Snapshot
+	if readsListing(c.State) {
+		// Read before the transaction opens, so that a step never waits for a second connection while it holds a lease.
+		var err error
+		if snap, err = st.snapshot(ctx); err != nil {
+			return err
+		}
+	}
 	encoded, err := jsonx.MarshalCanonical(c.State)
 	if err != nil {
 		return fmt.Errorf("persist: encode the state: %w", err)
@@ -83,7 +92,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		return writeStep(ctx, tx, id, c, cur)
+		return writeStep(ctx, tx, id, c, cur, snap, now)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)
@@ -91,8 +100,30 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 	return nil
 }
 
+// readsListing reports whether the state has a listing to project. Until a round has read one — the catalog task has
+// succeeded at least once — there is nothing to write: the tables hold what a person, or an earlier round, put there,
+// and the groups a state does not name are not gone, they were never looked at.
+func readsListing(st syncer.State) bool { return !st.Tasks[syncer.TaskCatalog].LastOK.IsZero() }
+
+// snapshot is the catalog as the projection maps upstream names by. A snapshot the catalog has not loaded yet, or one
+// older than its staleness limit, is loaded here, and the rest of a round uses the copy in memory.
+func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
+	cat := st.s.node.cfg.Catalog
+	if snap, err := cat.Current(); err == nil {
+		return snap, nil
+	}
+	if err := cat.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("persist: read the catalog: %w", err)
+	}
+	snap, err := cat.Current()
+	if err != nil {
+		return nil, fmt.Errorf("persist: read the catalog: %w", err)
+	}
+	return snap, nil
+}
+
 // writeStep writes what a step produced next to its state.
-func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow) error {
+func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
 	if len(c.Events) > 0 {
 		rows := make([]store.SyncEventRow, len(c.Events))
 		for i, e := range c.Events {
@@ -114,7 +145,15 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 	if _, err := reconcile.Ingest(ctx, tx, id, c.Charges); err != nil {
 		return fmt.Errorf("write the charge records: %w", err)
 	}
-	return project(ctx, tx, id, c.State, cur)
+	if err := projectSupplier(ctx, tx, id, c.State, cur); err != nil {
+		return err
+	}
+	if snap == nil {
+		// No listing was read, so there is none to project: the supplier's tables are left as a person or an earlier round
+		// left them.
+		return nil
+	}
+	return projectListing(ctx, tx, id, c.State, cur, snap, now)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the
@@ -139,10 +178,10 @@ func latest(a, b time.Time) time.Time {
 	return a
 }
 
-// project writes onto the supplier what routing and the back office read of the engine's state: the balance last seen
-// and the status. A supplier a person paused stays paused, a removal is not undone, and an engine that is polling again
-// brings back only a supplier that was still connecting or running. cur is the supplier as the step locked it.
-func project(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow) error {
+// projectSupplier writes onto the supplier what routing and the back office read of the engine's state: the balance last
+// seen and the status. A supplier a person paused stays paused, a removal is not undone, and an engine that is polling
+// again brings back only a supplier that was still connecting or running. cur is the supplier as the step locked it.
+func projectSupplier(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow) error {
 	q := store.New()
 	if !st.BalanceAt.IsZero() {
 		at := st.BalanceAt

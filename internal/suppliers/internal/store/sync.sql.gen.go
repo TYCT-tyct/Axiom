@@ -203,22 +203,28 @@ func (q *Queries) ListSyncDue(ctx context.Context, db DBTX, arg ListSyncDueParam
 }
 
 const lockSupplier = `-- name: LockSupplier :one
-SELECT status, status_reason, config_gen FROM suppliers.suppliers WHERE id = $1 FOR NO KEY UPDATE
+SELECT status, status_reason, config_gen, native_unit FROM suppliers.suppliers WHERE id = $1 FOR NO KEY UPDATE
 `
 
 type LockSupplierRow struct {
 	Status       string
 	StatusReason *string
 	ConfigGen    int64
+	NativeUnit   string
 }
 
-// The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
-// transaction ends: a change of the configuration waits for it. FOR NO KEY UPDATE, as an UPDATE of these columns takes,
-// so that rows that refer to the supplier can still be written.
+// The supplier's status, which the engine's state is projected onto, its configuration generation, and the native unit
+// its cost schedules are in, held until the transaction ends: a change of the configuration waits for it. FOR NO KEY
+// UPDATE, as an UPDATE of these columns takes, so that rows that refer to the supplier can still be written.
 func (q *Queries) LockSupplier(ctx context.Context, db DBTX, id uuid.UUID) (LockSupplierRow, error) {
 	row := db.QueryRow(ctx, lockSupplier, id)
 	var i LockSupplierRow
-	err := row.Scan(&i.Status, &i.StatusReason, &i.ConfigGen)
+	err := row.Scan(
+		&i.Status,
+		&i.StatusReason,
+		&i.ConfigGen,
+		&i.NativeUnit,
+	)
 	return i, err
 }
 

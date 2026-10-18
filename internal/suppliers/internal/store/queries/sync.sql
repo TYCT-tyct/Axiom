@@ -33,10 +33,10 @@ WHERE supplier_id = @supplier_id AND version = @expect;
 SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = @id;
 
 -- name: LockSupplier :one
--- The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
--- transaction ends: a change of the configuration waits for it. FOR NO KEY UPDATE, as an UPDATE of these columns takes,
--- so that rows that refer to the supplier can still be written.
-SELECT status, status_reason, config_gen FROM suppliers.suppliers WHERE id = @id FOR NO KEY UPDATE;
+-- The supplier's status, which the engine's state is projected onto, its configuration generation, and the native unit
+-- its cost schedules are in, held until the transaction ends: a change of the configuration waits for it. FOR NO KEY
+-- UPDATE, as an UPDATE of these columns takes, so that rows that refer to the supplier can still be written.
+SELECT status, status_reason, config_gen, native_unit FROM suppliers.suppliers WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: SetSupplierStatus :exec
 UPDATE suppliers.suppliers SET status = @status, status_reason = sqlc.narg(status_reason) WHERE id = @id;

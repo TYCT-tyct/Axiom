@@ -28,8 +28,15 @@ const (
 	NoBalance        Reason = "the balance does not cover the reserve"
 	GroupNotSelected Reason = "the group is not selected"
 	Unmapped         Reason = "the model is not mapped"
+	NotListed        Reason = "the model is not listed in the catalog"
 	CostUnknown      Reason = "the cost is not known"
 	NoUsableKey      Reason = "no credential can be used"
+	// Gone is an endpoint whose model the listing no longer offers: the row is kept for when it comes back and is taken
+	// out of routing meanwhile.
+	Gone Reason = "the listing no longer offers the model"
+	// NoFormat is a name the listing still has in a group nothing can be called from — one sold by subscription, or one
+	// whose price changes by the hour: its formats are none, so it is not a model of the supplier at all.
+	NoFormat Reason = "no call format is served here"
 )
 
 // Check applies the conditions for an endpoint to enter the routing snapshot (internal/suppliers/README.md 「同步」): the supplier is normal, funds are the
