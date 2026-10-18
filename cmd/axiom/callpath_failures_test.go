@@ -12,8 +12,8 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// The node permits three attempts. A refusal can retry the same endpoint with another credential;
-// a rate limit or server error must move to another endpoint. None delivered content to the client.
+// The node permits three attempts. A refusal retries the same endpoint with another credential and, once every credential
+// of the group rests, moves to the next endpoint; a rate limit or server error moves to another endpoint. None delivered content to the client.
 func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -25,6 +25,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 		{"internal error", []int{500}, false},
 		{"unavailable", []int{503}, false},
 		{"credential then endpoint", []int{401, 429}, false},
+		{"credentials of the group all rest", []int{401, 401}, false},
 		{"all fail", []int{401, 429, 503}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,6 +54,10 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 		})
 	}
 }
+
+// failedNative is what an attempt that failed with no usage is estimated at: the request's input at the guessed bytes per
+// token, priced at the fixture's input rate. A refusal before execution (401) costs nothing.
+const failedNative = "0.0005"
 
 func (w *callWorld) checkFailureSuccess(r reply, count int) {
 	w.t.Helper()
@@ -137,13 +142,13 @@ func (w *callWorld) checkFailedAttempts(r reply, statuses []int, count int, char
 		w.t.Fatalf("upstream calls = %d, want %d", got, count)
 	}
 	for i, status := range statuses {
-		flag, zero := "no_usage", "false"
+		flag, native := "no_usage", failedNative
 		if status == http.StatusUnauthorized {
-			flag, zero = "complete", "true"
+			flag, native = "complete", "0"
 		}
-		got := w.query(`SELECT cost_flag || ' ' || (estimated_native = 0)::text || ' ' || charge_ref
+		got := w.query(`SELECT cost_flag || ' ' || estimated_native::text || ' ' || charge_ref
 			FROM suppliers.attempt_costs WHERE request_id::text = $1 AND attempt_seq = $2`, id, i+1)
-		if want := fmt.Sprintf("%s %s relay-%d", flag, zero, i+1); got != want {
+		if want := fmt.Sprintf("%s %s relay-%d", flag, native, i+1); got != want {
 			w.t.Errorf("attempt %d (%d): cost = %q, want %q", i+1, status, got, want)
 		}
 		if i+1 < count {
@@ -182,7 +187,7 @@ func (w *callWorld) checkFailureTransition(id string, seq, status int) {
 	got := w.query(`SELECT (a.endpoint_id = b.endpoint_id)::text || ' ' || (a.credential_id = b.credential_id)::text
 		FROM suppliers.attempt_costs a JOIN suppliers.attempt_costs b ON a.request_id = b.request_id AND b.attempt_seq = a.attempt_seq + 1
 		WHERE a.request_id::text = $1 AND a.attempt_seq = $2`, id, seq)
-	if status == http.StatusUnauthorized {
+	if status == http.StatusUnauthorized && seq == 1 {
 		if got != "true false" {
 			w.t.Errorf("401 retry endpoint/credential identity = %s, want true false", got)
 		}
@@ -191,7 +196,7 @@ func (w *callWorld) checkFailureTransition(id string, seq, status int) {
 	}
 }
 
-// A second request must still avoid the first credential: a retry-local exclusion alone is not a rest.
+// The refused credential is the one the first upstream call used (the first call of a fresh world). A second request must still avoid it: a retry-local exclusion alone is not a rest.
 func (w *callWorld) checkRestedCredential(n runningNode) {
 	w.t.Helper()
 	before := w.supplier.sent()
