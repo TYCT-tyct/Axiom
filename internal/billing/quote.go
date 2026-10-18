@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"time"
+	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -45,12 +46,14 @@ type Model struct {
 }
 
 // Quotable is one route entry as billing quotes it: its locked price schedule, its model, the output limit that
-// applies to it, and whether it can be reserved in segments (routing decides that per entry and request).
+// applies to it, whether it can be reserved in segments (routing decides that per entry and request), and the endpoint
+// it would call, which the reservation keeps as the route a lost request is recorded with.
 type Quotable struct {
 	Price       catalog.Schedule
 	Model       Model
 	MaxOutput   int64
 	Segmentable bool
+	Endpoint    uuid.UUID
 }
 
 // Segments are the site's settings for reserving in segments.

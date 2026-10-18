@@ -148,7 +148,10 @@ func limitOf(amount int64, reset string, ok bool) *billing.Limit {
 func quotables(entries []routing.Entry) []billing.Quotable {
 	q := make([]billing.Quotable, len(entries))
 	for i, e := range entries {
-		q[i] = billing.Quotable{Price: e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable}
+		q[i] = billing.Quotable{
+			Price: e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
+			Endpoint: uuid.UUID(e.Endpoint),
+		}
 	}
 	return q
 }

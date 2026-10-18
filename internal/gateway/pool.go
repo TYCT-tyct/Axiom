@@ -15,8 +15,6 @@ const (
 	Completion Class = iota
 	// CallRecords is the batch writer of call records.
 	CallRecords
-	// Journal is the batch writer of the reconciliation journal.
-	Journal
 	// Admission is admission, cold-key lookup and the read-only key endpoints.
 	Admission
 	classCount
@@ -41,7 +39,6 @@ func newPool(size, reserve, batch int) *Pool {
 	return &Pool{classes: [classCount]poolClass{
 		Completion:  {ceiling: size, max: size},
 		CallRecords: {ceiling: size - reserve, max: batch},
-		Journal:     {ceiling: size - reserve, max: batch},
 		Admission:   {ceiling: size - reserve, max: size},
 	}}
 }

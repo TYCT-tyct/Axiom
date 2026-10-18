@@ -1,8 +1,8 @@
 # suppliers
 
-供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试、写对账日志）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
+供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、同步引擎及其状态、租约和限速桶的持久化、调用面（挑凭证、发请求、记尝试、对账日志）和对账，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；管理接口见「管理接口」，事件投递在后续 PR。「对账日志」一节是日志的设计，已实现，实现的接口在「调用面」。代码与本文不一致时，在同一个 PR 里改本文。
+> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、同步引擎及其状态、租约和限速桶的持久化、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；管理接口见「管理接口」，事件投递在后续 PR。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 代码结构
 
@@ -38,9 +38,9 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `supplier_aliases` | 供应商别名，分组可空（整个供应商有效） | `UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)` |
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
-| `attempt_journal` | 进行中的尝试：对账键、是否已提交 | PK `(request_id, attempt_seq)`；只增不减的合并；请求终结满两天（`ended_requests` 里 billing 告知的时刻）后清除，没告知终结的保留；平台范围 |
+| `attempt_journal` | 旧的对账日志（「没有对账日志」）：没有代码再读写，表按收缩规则留到下一个发布删 | PK `(request_id, attempt_seq)`；平台范围 |
 | `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
-| `ended_requests` | billing 告知的请求终结时刻，日志按它保留两天 | PK `request_id`；只插入；行带请求所属的租户 |
+| `ended_requests` | billing 告知的请求终结时刻与到达终态的时间 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |
 | `charge_events` | 给 billing 的事件，每个版本一行 | `UNIQUE (charge_record_id, revision)`；平台范围 |
@@ -50,10 +50,10 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，管理员确认的值、操作人、理由 | 只插入，最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
 
-- **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；角色隔离随后台任务角色加入。
+- **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
 - **行级安全**：`suppliers` 的策略是 `platform.in_scope(site_id, account_id)`，平台的供应商只有平台范围看得见；其余各表不存归属列，只存 `supplier_id`，策略是"这个供应商对本事务可见"，所以插入也挡住"挂到看不见的供应商下"，也不会有与父对象不一致的标签。
 - **复合外键**：凡同时存 `supplier_id` 和 `supplier_group_id` 的表，用 `(supplier_group_id, supplier_id) → supplier_groups (id, supplier_id)`，分组与行不可能属于不同供应商。别名的分组可空，空表示整个供应商。
-- **授权**：应用角色对配置表没有 DELETE（移除供应商是状态，要删密文行的移除流程随它的代码加授权），只有对账日志可以删（结算两天后清除）；UPDATE 按列授予，不含 `id`、`supplier_id`、归属列、`kind`、`origin`、`upstream_account`：身份和凭证发往的地址不能改。
+- **授权**：应用角色对配置表没有 DELETE（移除供应商是状态，要删密文行的移除流程随它的代码加授权）；旧的对账日志还留着 DELETE，但没有代码用它（「没有对账日志」）；UPDATE 按列授予，不含 `id`、`supplier_id`、归属列、`kind`、`origin`、`upstream_account`：身份和凭证发往的地址不能改。
 - **密钥**：表里没有明文列。加密值写进 `ciphertext`、`nonce`、`wrapped_dek`、`key_version` 四列，数据库只检查字段齐全和长度（nonce 12 字节、密文不短于 16 字节、包裹的数据密钥非空、版本号合法），**不能**分辨密文和别的字节：任何满足长度的明文也写得进去。加密由写入边界保证（只把 `secret.Sealed` 交给查询），值是否真实、是否属于这一行由 `secret.Open` 验证。`secret.Location` 的行 ID 在加密前就要知道，所以 `credentials.id` 由调用方生成，不用默认值。
 - **跨模块引用**：`model_id` 是目录的 ID，没有外键；`endpoints.cost_schedule_id` 与 `cost_schedules` 用（成本计划，端点）复合外键。
 
@@ -185,7 +185,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ## 调用面
 
-已实现（`service.go`、`attempt.go`、`journal.go`、`record.go`）。`Service` 是一个节点上的调用面：快照、凭证运行状态、对账日志缓冲、成本计划。
+已实现（`service.go`、`attempt.go`、`record.go`）。`Service` 是一个节点上的调用面：快照、凭证运行状态、成本计划。
 
 ```go
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
@@ -194,29 +194,22 @@ func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较�
 func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Compact, Body, Header}
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
 type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
-func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执，给对账日志
-func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键
-func (r AttemptReceipt) Key() string                           // 对账键，结算写进 billing.AttemptResult；其余字段不对外
+func (a *Attempt) Receipt() AttemptReceipt                     // 到目前为止的回执
+func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键；字段不对外，billing 只原样传回
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
 func (s *Service) Cost(r AttemptReceipt, u []catalog.Usage) (AttemptCost, error) // 纯内存：原生金额、缺项、cost_flag
 func (s *Service) Credits(r AttemptReceipt, u []catalog.Usage, c platform.Currency) (int64, bool, error) // 纯内存：c 的十亿分之一；即 gateway 的 Costs
-func (s *Service) Journal(e JournalEntry)                      // 非阻塞，进程内缓冲
-func (s *Service) JournalFlushed(id platform.RequestID) <-chan struct{}
-func (s *Service) Settled(id platform.RequestID)
-func (s *Service) Run(ctx context.Context) error               // 每秒写一次日志，结束时再写一次
 func RecordAttempts(ctx context.Context, tx pg.Tx, rows []AttemptRecord) error
-func RecordLostRequest / ResolveLostRequest(ctx, tx, id, site, account ...) error
-func EndRequest(ctx, tx, id, site, account, at) error                // billing 在终结请求的事务里调用
-func PurgeJournal(ctx context.Context, tx pg.Tx, now time.Time) (int64, error) // 删终结满 JournalRetention 的请求的日志
-func JournalOf(ctx context.Context, tx pg.Tx, id platform.RequestID) ([]JournalEntry, error) // 清理读崩溃节点留下的日志
+func RecordLostRequest(ctx, tx, request, site, account uuid.UUID, route []uuid.UUID) error // 清理：请求可能被上游收过钱，路线是它冻结的端点
+func ResolveLostRequest(ctx, tx, request uuid.UUID) error      // 迟到的结算带着真实尝试回来
+func EndRequest(ctx, tx, id, site, account, at) error          // billing 在终结请求的事务里调用
 func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
 ```
 
 与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`）；`Cost` 没有时间参数，按回执里的成本计划计价；`Send` 的入参是 `Call{Format, Compact, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Compact` 选格式的压缩端点路径（`compactPaths` 表里，目前只有 Responses 的 `/v1/responses/compact`）：那个端点不是格式自己的路径，路径只在 `wire` 与 `compactPaths` 两张表里（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
 
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
-- **日志写入有期限**：`Run` 的每次写都有自己的期限（`FlushTimeout`，默认 10 秒），超时保留数据、记日志、退避后重试。
 - **`Acquire`**：在没有冷却、没有过期（按时钟，不靠数据库变更）、在途数低于上限的凭证里挑负载最低的，对在途数做一次比较交换；拿不到返回 `ErrNoSlot`，gateway 跳过这个条目，不算尝试。在途数和冷却时间按凭证 ID 存在快照之外，重建快照不清零。
 - **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
@@ -251,7 +244,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 
 ## 对账
 
-`internal/suppliers/internal/reconcile`。扣费记录由同步引擎在栅栏事务里经 `RecordCharges` 写入（一条记录读两次只存一次）；`Reconcile` 在平台范围的事务里做一遍：
+`internal/suppliers/internal/reconcile`。**M1 只写不跑**：同步引擎在栅栏事务里经 `RecordCharges` 写入扣费记录（一条记录读两次只存一次），结算在它自己的事务里写入每次尝试的成本行（`attempt_costs`，含对账键），清理写入丢失的请求；`Reconcile`（匹配、判定、暂挂、事件）没有任何生产调用者，M1 不起周期任务，等真实的扣费记录有了再开（[M1 计划](https://github.com/TYCT-tyct/Axiom/issues/147)）。下面这一遍是它跑起来时的样子，代码与测试都在：
 
 1. **匹配**：一条语句，先占住只有这个对账键的那一个尝试，再把扣费记录归到它，尝试和扣费记录各有唯一约束，两个节点同时跑也只有一个成功。有两个以上尝试共用一个键时都不对上。已暂挂、已归到丢失请求或已确认未归属的扣费记录，尝试到了就改归到尝试，旧归属在同一条语句里撤销，所以归属的 CHECK 始终成立。
 2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：端点改回"成本未知"（原因 `under_estimated`），退出路由；偏低：只在报告里列出。
@@ -261,15 +254,16 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表一批一批地列，`Config.After` 和报告里的 `Next`（按完成时间、请求、序号排序的游标）把它跨轮推进，列到末尾 `Next` 归零、下一遍从头开始，所以超过一批、始终对不上的尝试最终都会被报告一次。
 7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复；billing 按它幂等处理。没有消息队列时这张表就是事件的出口，billing 读它。
 
-## 对账日志
+## 没有对账日志
 
-进程崩溃后，清理要知道哪些尝试已经向客户端交付了内容、对账键是什么，才能按供应商记录收费（见[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。上游不接受调用方的幂等号，所以由本模块在请求进行中记下来：
+早期设计里，请求进行中由本模块每秒把每次尝试的对账键和"已提交"写进 `suppliers.attempt_journal`，供崩溃后的清理结算。它没有人写也没有人读（[M1 计划](https://github.com/TYCT-tyct/Axiom/issues/147)），已从代码里删掉：`journal.go`、`Service.Journal`/`Settled`/`JournalFlushed`/`Run`、`PurgeJournal`/`JournalOf`、`call.sql` 的两条查询、gateway 的三处调用，以及 gateway 连接池里给它的一类名额。表与授权按收缩规则留到下一个发布删。
 
-- **何时追加**：进入 `Send` 时、拿到响应头里的对账键时、尝试提交（第一次向客户端写出内容）时，gateway 各调一次 `Journal`，追加一行到进程内缓冲：请求 ID、尝试序号、账户、端点、凭证、成本计划版本、`priced_at`、对账键、是否已提交。
-- **怎么写**：后台每秒一条多行 `INSERT … ON CONFLICT`，在本模块的平台范围事务里，一个节点每秒一个事务，不在请求路径上。主键 `(request_id, attempt_seq)`；同一行只插入或补上对账键、已提交标记。写失败退避重试，不丢。
-- **有界**：日志只对还没结算的请求有用。结算提交后（结算事务里已有对账键），gateway 调 `Settled`，这个请求还没写出的条目直接丢弃。一个请求的节点名额在它执行期间和结算后台重试期间一直占着，只在结算提交，或交给清理（结算永久性错误、到截止时间放弃重试）且执行器已停止上游、不再追加条目、不再重试结算、`JournalFlushed` 已关闭之后才释放（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。所以缓冲里只有占着名额的请求的条目，至多是节点名额 × 3 次尝试 × 3 行。日志持续写不进时，交给清理的请求名额不释放，节点占满后新请求得 503，这就是上界。表里的行在结算后 2 天删除。
-- **什么时候清理**：只有终结了的请求的日志才可以删，终结由 billing 经 `EndRequest` 告诉我们（结算完成，或清理完成且校正期过去的时刻，不是写入尝试行的时刻：清理待定时也写尝试行，请求还在等校正），按"终结后 `JournalRetention`（2 天）"删，不按写入时间；没告知终结的请求，日志不论多旧都保留，因为清理要靠它恢复。选这种做法而不是由 billing 传"可以删的请求集合"，是因为保留期和测试都能留在本模块里，接口只有一个幂等的插入，供应商不去推断计费的结算状态；billing 的结算分支（feat/28-settle）合并时在它终结请求的事务里调用 `EndRequest`。
-- **测试**：日志持续写失败，同时有请求结算永久失败：它们的名额不释放，节点占满后返回 503，缓冲始终不超过节点名额 × 9 行；日志恢复后条目落库、名额释放。请求仍在执行时它的日志已全部落库，名额不释放。结算一直暂时性失败、仍在后台重试时日志已全部落库，名额不释放。
+崩溃留下的预留改用两件东西收尾，都在 database 里、都与结算同一次提交：
+
+- **尝试的成本行**（`attempt_costs`）：结算事务里写，与账本的 `supplier_cost` 分录同成同败，所以「这次尝试花了多少钱、对账键是什么、用的是哪个端点」不会只留在崩溃的进程里（[计费的「结算与账本」](../billing/README.md#结算与账本)）。
+- **丢失的请求**（`lost_requests`）：清理接管预留时写一行，带 `route_endpoint_ids`——预留冻结的路线里保留条目的端点（`billing.reservations.endpoints`，与 `prices` 等长同序）。没有尝试行时这是唯一可用的信息：这个请求可能被上游收过钱，钱最可能落在这些端点上。迟到的结算带着真实尝试回来时写 `lost_request_resolutions`。
+
+代价是崩溃前那一刻的尝试没有任何记账：进程没来得及结算，就只有丢失的请求，没有成本行。原来的日志只是把这个窗口从「整个请求」缩到「最近一次写入之后」，而这个写入本身也在请求路径之外；M1 用「不跑周期对账、崩溃的请求记成丢失」接受这个窗口（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
 
 ## 决策与理由
 
@@ -283,6 +277,6 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 | 栅栏是租约的 `lease_fence`，时钟只决定何时可以接手 | 两个节点的时钟差不能让它们同时写进去；写入由数据库里一个只增的数字挡住，与时钟、网络延迟、暂停无关 | 只靠 `lease_until > now()` 判断：被暂停的节点醒来时租约已过期，但这一刻它的判断与别的节点接手之间没有顺序 |
 | 限速桶放数据库里，每个请求一个事务 | 多节点共享一个出口地址时，各自在内存里计数会让合计超过对方的限速，被封号的是预付的账号；管理面请求少，一次事务的代价可忽略 | 把名额均分给各节点：节点数一变就要重分，空闲节点的名额浪费 |
 | 成本计划先存在 `sync_plans`，不立刻落进 `cost_schedules` | 端点行要有目录的 `model_id`，映射还没有；先如实保存，之后落表时按版本顺序取每个端点的最新一条 | 在没有端点时丢弃计划：映射做好后要重新同步才有 |
-| 每秒批量的对账日志，不在发请求前单独写；只有标了已提交的尝试能让清理向用户收费 | 每节点每秒一个事务，崩溃窗口从整个请求时长缩到最近一次成功写入之后，计费的清理结算才走得到。日志看不到之后的尝试，所以只认已提交的：提交后不再换端点，已提交的必是最后一次 | 每次尝试先写一行：往返随尝试数增长 |
+| 成本行写进 billing 的结算事务，不另起一份「进行中尝试」的日志 | 一个事务里成或不成，所以「这次尝试花了多少钱、对账键是什么、哪个端点」与账本同一次提交；崩溃后剩下的是丢失的请求（带预留冻结的路线），不需要第二张表、第二个写入线程和第二个连接池名额 | 进程内日志每秒批量落库：多一条写入路径、一类连接名额，而它只把崩溃窗口缩小一点，M1 又只写不跑对账 |
 | 分组代号在第一次选用时随机生成，取消选用不收回 | 用户看到的是代号不是上游名字，换回来或重选不能让同一个分组换名字 | 由名字派生：名字泄露代号；每次选用重新生成：用户记下的代号失效 |
 | 管理接口里的并发限制默认 4 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；改它的接口以后再加 | 不设上限：新接入的供应商可能被打满 |

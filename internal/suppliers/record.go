@@ -202,15 +202,34 @@ func RecordLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, sit
 }
 
 // ResolveLostRequest notes that a node came back with the real attempts of a lost request, which billing records with
-// RecordAttempts in the same transaction. It is an insert, not a change of the lost request.
-func ResolveLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, account uuid.UUID) error {
-	err := store.New().InsertLostRequestResolution(ctx, tx, store.InsertLostRequestResolutionParams{
-		RequestID: uuid.UUID(id), SiteID: site, AccountID: account,
-	})
+// RecordAttempts in the same transaction. It is an insert, not a change of the lost request, and takes the tenant from
+// it: a request never recorded as lost has nothing to resolve.
+func ResolveLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID) error {
+	err := store.New().InsertLostRequestResolution(ctx, tx, uuid.UUID(id))
 	if err != nil {
 		return fmt.Errorf("resolve the lost request %s: %w", id, err)
 	}
 	return nil
+}
+
+// EndRequest notes that a request ended for good at the time given: billing calls it in the transaction that ends the
+// request, when it is settled, released, or cleaned up, and never before. Telling it again changes nothing.
+func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, account uuid.UUID, at time.Time) error {
+	err := store.New().InsertEndedRequest(ctx, tx, store.InsertEndedRequestParams{
+		RequestID: uuid.UUID(id), SiteID: tenant(site), AccountID: tenant(account), EndedAt: at,
+	})
+	if err != nil {
+		return fmt.Errorf("end the request %s: %w", id, err)
+	}
+	return nil
+}
+
+// tenant is a tenant column: NULL for the zero id, which says a request is the platform's own.
+func tenant(id uuid.UUID) *uuid.UUID {
+	if id == (uuid.UUID{}) {
+		return nil
+	}
+	return &id
 }
 
 // ReconcileConfig is what reconciliation reads from the operator's settings.

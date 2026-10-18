@@ -33,10 +33,9 @@ func (l *Limiter) Acquire(key string, limit int) (release func(), err error) {
 }
 
 // InFlight is the count of requests being served: per account, then for the node. A slot is held from the
-// admission of the request to the end of its settlement, background retries included, and is released only when
-// Settle has committed (then suppliers.Settled), or when the request was handed to the cleanup and its executor has
-// stopped the upstream, will not retry the settlement and has flushed every journal row (suppliers.JournalFlushed).
-// That keeps the unsettled requests, and the journal buffer behind them, within the node limit.
+// admission of the request to the end of its settlement, background retries included, and is released when Settle has
+// committed or when the settlement is given up on and the cleanup takes the reservation over. That keeps the unsettled
+// requests within the node limit.
 type InFlight struct {
 	node, accounts *Limiter
 	nodeMax        int

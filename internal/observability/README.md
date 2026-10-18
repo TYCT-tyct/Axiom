@@ -36,7 +36,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 - **谁**：`site_id`、`account_id`（与调用相同，行级安全看这两列）。
 - **走了哪**：`endpoint_id`、`supplier_id`、`source_class`（official、cloud、relay）、`egress`（按名字）。
-- **结果**：`outcome`（`committed`：内容已交给客户端；`failed`：没有；`unknown`：上游可能已执行）、`error_kind`、`started_at`、`finished_at`、`first_token_ms`。成本、用量和供应商的对账键不在这里重复：suppliers 的 `attempt_costs` 按 `(request_id, attempt_seq)` 保存，与计费同成同败；对账日志另存请求进行中的状态。
+- **结果**：`outcome`（`committed`：内容已交给客户端；`failed`：没有；`unknown`：上游可能已执行）、`error_kind`、`started_at`、`finished_at`、`first_token_ms`。成本、用量和供应商的对账键不在这里重复：suppliers 的 `attempt_costs` 按 `(request_id, attempt_seq)` 保存，与计费同成同败；崩溃或超过截止时间的请求记在 `suppliers.lost_requests` 里。
 - **没有 NULL，文字有界**：与 `call_log` 相同；没有正文、密钥或凭证列。
 
 ## 不变量
@@ -113,7 +113,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 | 决策 | 理由 | 否决的做法 |
 |---|---|---|
-| 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，对账日志是临时的，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
+| 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
 | 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 不再读写 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。列按平台的迁移规则留到停止使用它的版本之后删除 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
 | 队列满时丢掉新记录并计数，不等待 | 写记录不能阻塞或拖慢调用（Issue #29 的验收「写记录不阻塞调用」）；容量与在途名额相当，只有数据库长期落后才会丢；丢失的条数进指标和 `Close`，可以告警。负责人已在对话中把这一取舍交给开发者 | 等待空位：违反不阻塞，还会把数据库的慢传回调用；丢最旧：要加锁、会悄悄丢掉已经接受的记录；写本地磁盘缓冲：文件 I/O 同样会阻塞，重放和崩溃一致性也不在本 PR 的范围；无界队列：内存没有上限 |

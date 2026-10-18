@@ -2,7 +2,7 @@
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
 

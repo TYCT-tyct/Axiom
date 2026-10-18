@@ -29,14 +29,16 @@ func (h *harness) isReleased() bool {
 	}
 }
 
+// settledCalls is how many tries of the settlement were made.
 func (h *harness) settledCalls() int {
-	h.up.mu.Lock()
-	defer h.up.mu.Unlock()
-	return h.up.settled
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.settlements)
 }
 
 // TestASettlementIsRetriedUntilItIsWritten: the same outcome each time, so a try that committed with its
-// acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the journal is told.
+// acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the call gives its slots
+// back once it is written.
 func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{
@@ -57,8 +59,8 @@ func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
 		h.mu.Lock()
 		tries := len(h.settlements)
 		h.mu.Unlock()
-		if tries != 3 || h.settledCalls() != 1 {
-			t.Errorf("%d tries, the journal told %d times", tries, h.settledCalls())
+		if tries != 3 || !h.isReleased() {
+			t.Errorf("%d tries, released %v", tries, h.isReleased())
 		}
 	})
 }
@@ -79,51 +81,46 @@ func TestASettlementNotWrittenInTimeGoesOnInTheBackground(t *testing.T) {
 		if h.elapsed() != h.cfg.SettleRetry || !strings.Contains(h.w.body(), `"billing_pending":true`) || strings.Contains(h.w.body(), `"cost"`) {
 			t.Fatalf("after %v:\n%s", h.elapsed(), h.w.body())
 		}
-		if h.isReleased() || h.settledCalls() != 0 {
+		if h.isReleased() || h.settledCalls() != 1 {
 			t.Fatal("the call gave its slots back before its settlement was written")
 		}
 		<-h.released
-		if h.elapsed() < time.Minute || h.settledCalls() != 1 {
-			t.Errorf("released after %v, the journal told %d times", h.elapsed(), h.settledCalls())
+		if h.elapsed() < time.Minute {
+			t.Errorf("released after %v, before the settlement could be written", h.elapsed())
 		}
 		h.check()
 	})
 }
 
-// TestASettlementThatCannotBeWrittenIsTheCleanups: one billing refuses for good is not retried, and one retried in
-// vain is given up when SettleBackground is over; either way the slots go only once the journal has written what
-// the cleanup settles the call by.
+// TestASettlementThatCannotBeWrittenIsTheCleanups: one billing refuses for good is not retried and its slots go at once,
+// since nothing else will write it; one retried in vain is given up when SettleBackground is over, and its slots go then.
+// Either way nothing more is written, and the cleanup settles the reservation by recording the request lost.
 func TestASettlementThatCannotBeWrittenIsTheCleanups(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		err   error
 		tries func(n int) bool
 		took  time.Duration
-	}{
+	} {
 		{"no attempt to price", fmt.Errorf("settle: %w", billing.ErrNoAttempt), func(n int) bool { return n == 1 }, 0},
 		{"no reservation", fmt.Errorf("read it: %w", pg.ErrNoRows), func(n int) bool { return n == 1 }, 0},
 		{"the database down", io.ErrUnexpectedEOF, func(n int) bool { return n > 10 }, 10*time.Second + time.Minute},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
-			flushed := make(chan struct{})
-			h := newHarness(t, ctx, options{settleErr: tc.err, flushed: flushed, config: func(c *Config) { c.SettleBackground = time.Minute }})
+			h := newHarness(t, ctx, options{settleErr: tc.err, config: func(c *Config) { c.SettleBackground = time.Minute }})
 			h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 			<-h.start()
 			time.Sleep(2 * time.Minute)
-			if h.isReleased() {
-				t.Fatalf("%s: the slots went before the journal was written", tc.name)
-			}
 			h.mu.Lock()
 			n, last := len(h.settlements), h.settlements[len(h.settlements)-1].at.Sub(h.started)
 			h.mu.Unlock()
 			if !tc.tries(n) || last != tc.took {
 				t.Errorf("%s: %d tries, the last after %v", tc.name, n, last)
 			}
-			close(flushed)
-			h.check()
-			if h.settledCalls() != 0 {
-				t.Errorf("%s: the journal was told a settlement was written", tc.name)
+			if !h.isReleased() {
+				t.Errorf("%s: the slots are still held, and nothing will write the reservation", tc.name)
 			}
+			h.check()
 		})
 	}
 }
@@ -150,7 +147,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		h.check()
 	})
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{settleErr: io.ErrUnexpectedEOF, flushed: make(chan struct{})})
+		h := newHarness(t, ctx, options{settleErr: io.ErrUnexpectedEOF})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		<-h.start()
 		stop, cancel := context.WithTimeout(ctx, time.Second)

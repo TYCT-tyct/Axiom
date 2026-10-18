@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"encoding/base64"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,9 +52,9 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 		{"a delivered call whose output never came finally is no zero output", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, svc, receipt := costedRig(t)
+			r, receipt := costedRig(t)
 			sample, _ := sample(t, protocol.Messages)
-			up := withCosts(r, r.billing, svc)
+			up := withCosts(r, r.billing, r.suppliers)
 			up.setReceipt(receipt)
 			up.setScript(costedScript(sample, tc.reported))
 			a := r.funded(1e12)
@@ -74,28 +73,54 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 			if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got < knownCost || got >= saleForTheInput {
 				t.Errorf("the attempt cost the books %d, want the supplier's %d at least and well below the sale's %d", got, knownCost, saleForTheInput)
 			}
+			// The same attempt, on the supplier's side: one row in the settlement's own transaction, priced from the
+			// same schedule, with the receipt's charge ref and the usage the upstream reported. The ref is the
+			// supplier's id of the request, which comes with its response headers: the fake upstream sends none, so the
+			// row has none either — what billing hands over is written as it is (suppliers' own tests cover a ref).
+			var usage, native, flagged string
+			var ref *string
+			err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+				return tx.QueryRow(t.Context(), `SELECT usage::text, estimated_native::text, cost_flag, charge_ref
+					FROM suppliers.attempt_costs WHERE request_id = $1`, r.lastCall().ID).
+					Scan(&usage, &native, &flagged, &ref)
+			})
+			if err != nil {
+				t.Fatalf("the attempt has no cost row of its own: %v", err)
+			}
+			if !strings.Contains(usage, `"input": `+strconv.Itoa(supplierInput)) || ref != nil || native == "0" {
+				t.Errorf("the supplier's row is %s native (%s), ref %v, usage %s; want the reported input, no ref, an amount",
+					native, flagged, ref, usage)
+			}
 			r.ledgerBalanced()
 		})
 	}
 }
 
 // costedRig is a rig whose route entry is a real supplier's endpoint, so that the receipt the executor prices is the
-// one that endpoint's attempt leaves.
-func costedRig(t *testing.T) (*rig, *suppliers.Service, suppliers.AttemptReceipt) {
+// one that endpoint's attempt leaves, and whose settlement writes the supplier's side through the module's own functions
+// (rig_test.go's supplierWrites).
+func costedRig(t *testing.T) (*rig, suppliers.AttemptReceipt) {
 	t.Helper()
 	r := newRig(t, func(o *rigOptions) { o.suppliers = true })
-	svc, receipt, endpoint := r.seedSupplierCost()
+	receipt, endpoint := r.seedSupplierCost()
 	e := r.endpoints["alpha-1"]
 	e.ID = routing.EndpointID(endpoint)
 	r.endpoints["alpha-1"] = e
 	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, e)
-	return r, svc, receipt
+	return r, receipt
 }
 
 // seedSupplierCost writes one supplier into the suppliers tables and loads it: a group with an active credential, an
-// endpoint of the acme/alpha model priced by supplierSchedule, and unit value 0.001. It returns the service, the
-// receipt an attempt on the endpoint leaves, and the endpoint's id.
-func (r *rig) seedSupplierCost() (*suppliers.Service, suppliers.AttemptReceipt, uuid.UUID) {
+// endpoint of the acme/alpha model priced by supplierSchedule, and unit value 0.001. It returns the receipt an attempt on
+// the endpoint leaves, and the endpoint's id.
+func (r *rig) seedSupplierCost() (suppliers.AttemptReceipt, uuid.UUID) {
+	r.t.Helper()
+	return r.seedSupplierWith(supplierSchedule)
+}
+
+// seedSupplierWith is seedSupplierCost with the endpoint's cost schedule given: another schedule prices other items, so
+// a test can check that an attempt's row holds the count of every item it used.
+func (r *rig) seedSupplierWith(prices string) (suppliers.AttemptReceipt, uuid.UUID) {
 	r.t.Helper()
 	ctx := r.t.Context()
 	keys := masterKey(r.t)
@@ -123,7 +148,7 @@ func (r *rig) seedSupplierCost() (*suppliers.Service, suppliers.AttemptReceipt, 
 			{`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
 				VALUES ($1, $2, $3, $4, 'up-alpha', ARRAY['messages'])`, []any{endpoint, supplier, group, uuid.UUID(r.alpha)}},
 			{`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-				VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`, []any{schedule, supplier, endpoint, supplierSchedule}},
+				VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`, []any{schedule, supplier, endpoint, prices}},
 			{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
 			{`INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 0.001, 'test', 'seed')`, []any{supplier}},
 		} {
@@ -136,24 +161,24 @@ func (r *rig) seedSupplierCost() (*suppliers.Service, suppliers.AttemptReceipt, 
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	if err := r.suppliers.Reload(ctx); err != nil {
+		r.t.Fatal(err)
+	}
+	a, err := r.suppliers.Acquire(endpoint)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return a.Done(), endpoint
+}
+
+// newSuppliers makes the rig's suppliers service, before the rig's billing has one to talk to: the tables it reads are
+// written by seedSupplierCost, which reloads it.
+func (r *rig) newSuppliers() (*suppliers.Service, error) {
 	exit, err := egress.New(egress.Direct)
 	if err != nil {
-		r.t.Fatal(err)
+		return nil, err
 	}
-	svc, err := suppliers.New(suppliers.Config{
-		DB: r.db, Scope: platformScope, Keys: keys, Egress: exit, Logger: slog.New(slog.DiscardHandler),
-	})
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	if err := svc.Reload(ctx); err != nil {
-		r.t.Fatal(err)
-	}
-	a, err := svc.Acquire(endpoint)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	return svc, a.Done(), endpoint
+	return suppliers.New(suppliers.Config{DB: r.db, Scope: platformScope, Keys: masterKey(r.t), Egress: exit})
 }
 
 // masterKey reads a keyring from a file, as the node does from AXIOM_MASTER_KEY_FILE.

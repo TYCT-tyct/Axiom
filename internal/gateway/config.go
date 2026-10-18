@@ -24,7 +24,7 @@ type Config struct {
 
 	PoolSize         int // N, database connections: the pool's size, so that every permit has a connection (DefaultConfig)
 	PoolReserve      int // connections only the Completion class may take
-	BatchConnections int // most connections one batch writer (call records, journal) holds
+	BatchConnections int // most connections the batch writer of call records holds
 
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key

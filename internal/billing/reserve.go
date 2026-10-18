@@ -103,12 +103,13 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		return nil, nil, err
 	}
 	locked, models := make([]string, len(q)), make([]uuid.UUID, len(q))
+	endpoints := make([]uuid.UUID, len(q))
 	for _, i := range r.Kept {
-		locked[i], models[i] = fallbacks[i], uuid.UUID(q[i].Model.ID)
+		locked[i], models[i], endpoints[i] = fallbacks[i], uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		Prices: prices, Fallbacks: locked, Models: models,
+		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),

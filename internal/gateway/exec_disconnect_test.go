@@ -93,8 +93,8 @@ func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
 	})
 }
 
-// TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel: nothing was delivered, so the attempt is no commit
-// (the journal never says so), and it is read to the end for its usage, not written.
+// TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel: nothing was delivered, so the attempt is no
+// commit, and it is read to the end for its usage, not written.
 func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
@@ -107,11 +107,6 @@ func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *te
 		a := h.ended().outcome.Attempts[0]
 		if h.w.status != 0 || h.w.wrote() != 0 || a.Result != billing.FailedBeforeCommit || a.Segments[0].Usage.OutputTotal() != 15 {
 			t.Errorf("status %d, %d writes, attempt %+v", h.w.status, h.w.wrote(), a)
-		}
-		for _, e := range h.up.journal {
-			if e.Committed {
-				t.Error("the journal says content was handed to a client that was gone")
-			}
 		}
 	})
 }

@@ -7,7 +7,6 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
-	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -42,35 +41,24 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 	return write(ctx)
 }
 
-// settled follows the settlement up, and reports whether the call's slots are now the background's to give back.
-// A settlement written lets the journal drop the request. One that may still be written is retried in the background
-// with the same outcome, until SettleBackground. One that never will be, or is given up on, is the cleanup's: its
-// slots go once the journal has written all the request journalled, which the cleanup settles by.
+// settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One
+// that may still be written is retried in the background with the same outcome, until SettleBackground; one that never
+// will be, or is given up on, is the cleanup's, which records the request as lost when its reservation runs out. The
+// supplier's side of the attempts is written in the settlement's own transaction, so there is nothing else to wait for.
 func (x *Executor) settled(ctx context.Context, c *Call, o billing.Outcome, err error) bool {
-	id := platform.RequestID(c.ID)
 	if err == nil {
-		x.Upstreams.Settled(id)
 		return false
 	}
 	logger := x.Logger.With("request_id", c.ID.String())
 	if permanent(err) {
 		logger.Error("a settlement cannot be written; the cleanup takes it", "err", err)
-	} else {
-		logger.Warn("a settlement was not written; retrying in the background", "err", err)
+		return false
 	}
+	logger.Warn("a settlement was not written; retrying in the background", "err", err)
 	x.bg.Go(func() {
 		defer c.Done()
-		if !permanent(err) {
-			_, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground))
-			if err == nil {
-				x.Upstreams.Settled(id)
-				return
-			}
+		if _, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground)); err != nil {
 			logger.Error("a settlement was not written in time; the cleanup takes it", "err", err)
-		}
-		select {
-		case <-x.Upstreams.JournalFlushed(id):
-		case <-x.bg.stopped: // the node is going away: its slots go with it
 		}
 	})
 	return true
@@ -93,12 +81,13 @@ func permanent(err error) bool {
 }
 
 // result is what billing takes of an attempt once it is over. The usage is the upstream's report with every item it did
-// not report estimated, and the cost is ours of that usage. An attempt known not to have run used nothing and cost
-// nothing, which is known.
+// not report estimated, the cost is ours of that usage in credits and in the supplier's own unit, and the receipt is
+// what ties the two to the endpoint the attempt called: billing writes them to suppliers with the ledger's cost. An
+// attempt known not to have run used nothing and cost nothing, which is known.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
-	rec.Key = receipt.Key()
+	rec.Receipt, rec.FinishedAt = receipt, time.Now()
 	if rec.Result == billing.NotExecuted {
 		rec.Costed = true
 		return
@@ -116,6 +105,12 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		s.logger.Error("an attempt's cost could not be priced; it is booked as 0", "err", err)
 	}
 	rec.Cost, rec.Costed = cost, known && err == nil
+	// The supplier's own unit is what its charge records are in, so the estimate is what reconciliation compares them
+	// with; a pricing failure leaves it zero and unpriced, which is what the row says.
+	if rec.Estimate, err = s.x.Costs.Cost(receipt, usage); err != nil {
+		s.logger.Error("an attempt's native cost could not be priced", "err", err)
+		rec.Estimate = suppliers.AttemptCost{}
+	}
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the

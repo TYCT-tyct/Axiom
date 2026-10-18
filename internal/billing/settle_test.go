@@ -15,42 +15,46 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
-// supplies is the Suppliers double: it keeps what billing records and serves a journal the test writes.
+// supplies is the Suppliers double: it keeps what billing records of the attempts, the requests it recorded as lost
+// with their routes, and how often it was told a request ended.
 type supplies struct {
 	mu       sync.Mutex
-	attempts map[uuid.UUID][]AttemptRecord
-	journal  map[uuid.UUID]JournalAttempt
-	lost     map[uuid.UUID]bool // true while lost, false once resolved
-	ended    map[uuid.UUID]int  // how many times each request was told to have ended
+	attempts map[uuid.UUID][]suppliers.AttemptRecord
+	lost     map[uuid.UUID][]uuid.UUID // the route of each request recorded lost
+	resolved map[uuid.UUID]bool        // the requests a late settlement resolved
+	ended    map[uuid.UUID]int         // how many times each request was told to have ended
 }
 
 func newSupplies() *supplies {
 	return &supplies{
-		attempts: map[uuid.UUID][]AttemptRecord{}, journal: map[uuid.UUID]JournalAttempt{}, lost: map[uuid.UUID]bool{},
-		ended: map[uuid.UUID]int{},
+		attempts: map[uuid.UUID][]suppliers.AttemptRecord{}, lost: map[uuid.UUID][]uuid.UUID{},
+		resolved: map[uuid.UUID]bool{}, ended: map[uuid.UUID]int{},
 	}
 }
 
-func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, id uuid.UUID, attempts []AttemptRecord) error {
+func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, attempts []suppliers.AttemptRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.attempts[id] = append(s.attempts[id], attempts...)
+	for _, a := range attempts {
+		s.attempts[uuid.UUID(a.Request)] = append(s.attempts[uuid.UUID(a.Request)], a)
+	}
 	return nil
 }
 
-func (s *supplies) CommittedAttempt(_ context.Context, _ pg.Tx, id uuid.UUID) (JournalAttempt, bool, error) {
+func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, route []uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	j, ok := s.journal[id]
-	return j, ok, nil
+	s.lost[id] = route
+	return nil
 }
 
-func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
+func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.lost[id] = true
+	s.resolved[id] = true
 	return nil
 }
 
@@ -64,11 +68,12 @@ func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at
 	return nil
 }
 
-func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
+// lostNow is whether the request is recorded lost and no late settlement has resolved it.
+func (s *supplies) lostNow(id uuid.UUID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.lost[id] = false
-	return nil
+	_, lost := s.lost[id]
+	return lost && !s.resolved[id]
 }
 
 // metered is a route entry priced in billionths: a token of input or output 1, a web search 10; its output limit 100,
@@ -78,7 +83,7 @@ func metered(tb testing.TB) Quotable {
 	return Quotable{
 		Price: mustSchedule(tb, `{"v":1,"currency":"USD",
 			"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`),
-		Model: Model{ContextLength: 1e12}, MaxOutput: 100,
+		Model: Model{ContextLength: 1e12}, MaxOutput: 100, Endpoint: uuid.NewV7(),
 	}
 }
 
@@ -233,55 +238,56 @@ func TestSettleFloor(t *testing.T) {
 	b.balanced()
 }
 
-// TestCleanup: a call no Settle ended is a lost request unless the journal shows a committed attempt with a key, and
-// either way the reservation goes back uncharged: nothing can bring its usage afterwards. A late Settle then charges
-// by the full outcome against what cleanup did.
+// TestCleanup: a call no Settle ended is a lost request, with the route it was frozen with, and its reservation goes
+// back uncharged: nothing can bring its usage afterwards. A late Settle then charges by the full outcome against what
+// cleanup did, and resolves the lost request.
 func TestCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		journal bool
 		late    int64 // the late Settle's usage
 		state   string
 		charged int64
 		lost    bool
 	}{
-		{"lost, settled late", false, 300, "settled", 300, false},
-		{"lost, settled late past the floor", false, 30_000, "settled", 10_000, false},
-		{"journal, settled late", true, 700, "settled", 700, false},
-		{"journal, never settled", true, 0, "cleanup_released", 0, false},
-		{"lost, never settled", false, 0, "cleanup_released", 0, true},
+		{"settled late", 300, "settled", 300, false},
+		{"settled late past the floor", 30_000, "settled", 10_000, false},
+		{"never settled", 0, "cleanup_released", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
-			h := b.hold(1000)
-			b.takenOver(h, tc.journal)
+			q := metered(t)
+			h := b.holdOn(q, 1000)
+			b.takenOver(h)
+			if route := b.supplies.lost[h.id]; len(route) != 1 || route[0] != q.Endpoint {
+				t.Errorf("the lost request's route %v, want the one endpoint the reservation holds", route)
+			}
 			if tc.late > 0 {
 				if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, tc.late, 0, 0))); err != nil {
 					t.Fatal(err)
 				}
 			}
 			state := b.state()
-			if charged := b.count("SELECT charged FROM billing.reservations"); state != tc.state || charged != tc.charged || b.supplies.lost[h.id] != tc.lost {
-				t.Errorf("%s charged %d, lost %v; want %s, %d, %v", state, charged, b.supplies.lost[h.id], tc.state, tc.charged, tc.lost)
+			if charged := b.count("SELECT charged FROM billing.reservations"); state != tc.state || charged != tc.charged ||
+				b.supplies.lostNow(h.id) != tc.lost {
+				t.Errorf("%s charged %d, lost %v; want %s, %d, %v", state, charged, b.supplies.lostNow(h.id), tc.state, tc.charged, tc.lost)
 			}
 			b.balanced()
 		})
 	}
 }
 
-// takenOver lets cleanup take h over, with a committed attempt in the journal or none: the reservation goes back
-// uncharged either way.
-func (b *bank) takenOver(h *Hold, journal bool) {
+// takenOver lets cleanup take h over: the reservation goes back uncharged, and the request is recorded as lost.
+func (b *bank) takenOver(h *Hold) {
 	b.t.Helper()
-	if journal {
-		b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
-	}
 	b.cleanup()
 	if s := b.state(); s != "cleanup_released" {
 		b.t.Fatalf("after cleanup: %s, want cleanup_released", s)
 	}
 	if n := b.count("SELECT charged FROM billing.reservations"); n != 0 {
 		b.t.Fatalf("cleanup charged %d, want nothing", n)
+	}
+	if !b.supplies.lostNow(h.id) {
+		b.t.Fatal("cleanup did not record the request as lost")
 	}
 }
 
@@ -361,10 +367,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 		b.settleRandom(r, pick())
 	case n == 3: // a retry of a settlement already made
 		b.settleRandom(r, pick())
-	default: // a crash: what was left pending goes to cleanup, a journal sometimes showing a committed attempt
-		if r.IntN(2) == 0 {
-			b.supplies.journal[pick().id] = JournalAttempt{Seq: 1, Key: "client:k"}
-		}
+	default: // a crash: what was left pending goes to cleanup, which records the request as lost
 		time.Sleep(time.Duration(r.IntN(2)) * 25 * time.Millisecond)
 		b.cleanup()
 	}

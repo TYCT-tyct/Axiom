@@ -198,7 +198,7 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints
 FROM billing.reservations r
 WHERE r.request_id = $1
 `
@@ -223,6 +223,7 @@ type LockReservationRow struct {
 	Fallbacks       []string
 	Models          []uuid.UUID
 	AttemptEntries  []int32
+	Endpoints       []uuid.UUID
 }
 
 // Run after the account's balance row is locked: every change to a reservation happens under that lock.
@@ -249,6 +250,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.Fallbacks,
 		&i.Models,
 		&i.AttemptEntries,
+		&i.Endpoints,
 	)
 	return i, err
 }

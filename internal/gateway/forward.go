@@ -59,10 +59,9 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	}
 }
 
-// commit is the first content: from here the status is 200 and nothing is retried (I4). The journal learns of it
-// before the client does, so that a crash after the first write still leaves the cleanup the attempt to settle by. A
-// client that is gone gets nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is
-// written to once, at the end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
+// commit is the first content: from here the status is 200 and nothing is retried (I4). A client that is gone gets
+// nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is written to once, at the
+// end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
 	a.content = true
 	if s.isGone() {
@@ -71,7 +70,6 @@ func (s *session) commit(a *attempt, out []byte) {
 	if s.aggregate {
 		return
 	}
-	s.journal(a, true)
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	h := s.w.Header()

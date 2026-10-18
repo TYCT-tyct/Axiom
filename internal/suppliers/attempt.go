@@ -47,10 +47,6 @@ type AttemptReceipt struct {
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 }
 
-// Key is the supplier's own id of the request, which reconciliation matches its charge records by; empty when no
-// response gave one.
-func (r AttemptReceipt) Key() string { return r.ref }
-
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in
 // Authorization: Bearer, which new-api and sub2api both accept on all three.
 var wire = map[protocol.Format]struct {

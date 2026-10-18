@@ -16,6 +16,17 @@ var (
 	insufficientPrivilege  = "42501"
 )
 
+func newRequest() platform.RequestID { return platform.RequestID(uuid.NewV7()) }
+
+// receipt is what an attempt of this world comes back with: its supplier, credential, endpoint and schedule, the
+// supplier's charge reference and when it was priced.
+func (w *world) receipt(ref string) AttemptReceipt {
+	return AttemptReceipt{
+		supplier: w.supplier, credential: w.credential, endpoint: w.endpoint, schedule: w.sc,
+		ref: ref, pricedAt: w.clock.now(),
+	}
+}
+
 func usageOf100x50(t *testing.T) []catalog.Usage {
 	t.Helper()
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 100, catalog.ItemOutput: 50}, catalog.ServiceTierStandard, nil)
@@ -136,7 +147,7 @@ func TestLostRequestsAreOnlyEverAdded(t *testing.T) {
 		}
 	}
 	for range 2 {
-		if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, id, siteA, accountA) }); err != nil {
+		if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, id) }); err != nil {
 			t.Fatal(err)
 		}
 	}
