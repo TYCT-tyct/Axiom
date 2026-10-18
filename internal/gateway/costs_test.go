@@ -152,7 +152,7 @@ func (r *rig) seedSupplierCost() (*suppliers.Service, suppliers.AttemptReceipt, 
 	if err := svc.Reload(ctx); err != nil {
 		r.t.Fatal(err)
 	}
-	a, err := svc.Acquire(suppliers.EndpointID(endpoint))
+	a, err := svc.Acquire(endpoint)
 	if err != nil {
 		r.t.Fatal(err)
 	}
