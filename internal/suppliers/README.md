@@ -258,6 +258,8 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 
 早期设计里，请求进行中由本模块每秒把每次尝试的对账键和"已提交"写进 `suppliers.attempt_journal`，供崩溃后的清理结算。它没有人写也没有人读（[M1 计划](https://github.com/TYCT-tyct/Axiom/issues/147)），已从代码里删掉：`journal.go`、`Service.Journal`/`Settled`/`JournalFlushed`/`Run`、`PurgeJournal`/`JournalOf`、`call.sql` 的两条查询、gateway 的三处调用，以及 gateway 连接池里给它的一类名额。表与授权按收缩规则留到下一个发布删。
 
+### 丢失的请求
+
 崩溃留下的预留改用两件东西收尾，都在 database 里、都与结算同一次提交：
 
 - **尝试的成本行**（`attempt_costs`）：结算事务里写，与账本的 `supplier_cost` 分录同成同败，所以「这次尝试花了多少钱、对账键是什么、用的是哪个端点」不会只留在崩溃的进程里（[计费的「结算与账本」](../billing/README.md#结算与账本)）。
