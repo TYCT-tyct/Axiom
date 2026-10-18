@@ -109,10 +109,12 @@ type quote struct {
 	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
 }
 
-var (
-	errUnpriced = errors.New("billing: the entry's schedule does not price what the request may use")
-	errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
-)
+var errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
+
+// ErrUnpriced is a price schedule that leaves something unpriced: what Quote refuses a request for when the locked
+// schedule does not price an item the request may use, and what Sell returns for a rule M1 cannot turn into a sale
+// price. A model without one has no sale price at all rather than its reference price (docs/domains/billing.md「定价」).
+var ErrUnpriced = errors.New("billing: the entry's schedule does not price what the request may use")
 
 // Quote quotes every entry, drops those whose quote exceeds any available amount, and reserves the highest quote
 // kept, so a fallback never meets an entry dearer than what was reserved. A dropped preferred entry refuses the
@@ -180,7 +182,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	restPrice, ok2 := e.Price.Ceiling(in, tiers, window)
 	outPrice, ok3 := e.Price.Ceiling(1<<catalog.ItemOutput|1<<catalog.ItemReasoning, tiers, longest)
 	if !ok1 || !ok2 || !ok3 {
-		return q, errUnpriced
+		return q, ErrUnpriced
 	}
 	q.output = outPrice
 	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
@@ -205,7 +207,7 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		}
 		price, ok := e.Price.Ceiling(1<<catalog.Item(it), tiers, window)
 		if !ok {
-			return errUnpriced
+			return ErrUnpriced
 		}
 		q.fixed = sum(q.fixed, price.Mul(n))
 	}
@@ -214,7 +216,7 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 	}
 	var ok bool
 	if q.search, ok = e.Price.Ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
-		return errUnpriced
+		return ErrUnpriced
 	}
 	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
 	if d.Compaction {

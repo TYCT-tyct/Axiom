@@ -38,13 +38,11 @@ func runBilling[R any, P interface {
 var billingOperations = map[string]billingOperation{
 	"save-fallbacks":     runBilling(billing.SaveFallbacks),
 	"clear-unknown-item": runBilling(billing.ClearUnknownItem),
-	"close-hold":         runBilling(billing.CloseHold),
 }
 
 // billingLists are the read-only listings, each writing a line per row.
 var billingLists = map[string]func(ctx context.Context, db *pg.DB, write func(any) error) error{
-	"unknown-items":  listUnknownItems,
-	"fallback-holds": listFallbackHolds,
+	"unknown-items": listUnknownItems,
 }
 
 // listUnknownItems writes them from one read: a row is a model's field, so they are few.
@@ -58,29 +56,6 @@ func listUnknownItems(ctx context.Context, db *pg.DB, write func(any) error) err
 		}
 		return err
 	})
-}
-
-// listFallbackHolds writes them a page per read, so neither memory nor a transaction grows with their number.
-func listFallbackHolds(ctx context.Context, db *pg.DB, write func(any) error) error {
-	var after *billing.FallbackHold
-	for {
-		var page []billing.FallbackHold
-		if err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-			page, err = billing.FallbackHolds(ctx, tx, after, billing.FallbackHoldsPage)
-			return err
-		}); err != nil {
-			return err
-		}
-		for _, h := range page {
-			if err := write(h); err != nil {
-				return err
-			}
-		}
-		if len(page) < billing.FallbackHoldsPage {
-			return nil
-		}
-		after = &page[len(page)-1]
-	}
 }
 
 // billingCommand runs `axiom billing <listing>` or `axiom billing <operation> <file>` in the platform scope against

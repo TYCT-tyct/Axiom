@@ -67,7 +67,7 @@
 ### 用量与费用
 
 - **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。
-- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，之后按供应商记录校正，校正结果在调用记录里查（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
+- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；M1 不按供应商记录校正它（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
 - **结算写不进时**：上游已经正常结束、内容完整的，照常结束，但结尾不带费用，改带 `axiom.billing_pending: true`，非流式同样返回 200；费用由后台继续结算，在调用记录里查。只有被截断的流才以 `billing_unavailable` 报错结束。
 - **流开始前就出错也可能收费**（例如已执行的联网搜索，见[计费的「免单规则」](billing.md#免单规则)）：错误体的 `axiom` 对象里带用量和费用。
 - **余额截断**：转发中追加预留失败时，按下文「流中途出错」的方式发错误事件结束回答，说明余额或某个 key 的额度不足、回答已截断（见[计费的「预留与结算」](billing.md#预留与结算)）。
@@ -80,7 +80,7 @@
 |---|---|
 | 排队中 | 停止等待，什么都不收 |
 | 已准入、还没调用上游 | 释放预留，什么都不收 |
-| 已调用上游，端点传递取消 | 立即中断上游，按已产生的用量收费，缺的项估算并标暂估，1 小时内按供应商记录校正 |
+| 已调用上游，端点传递取消 | 立即中断上游，按已产生的用量收费，缺的项估算并标暂估 |
 | 已调用上游，端点不传递取消（不论是否已转发内容） | 继续读完上游但不再转发，按完整用量收费，是准数；读也超时就中断、按暂估收费 |
 
   端点是否传递取消，按[计费的「客户端断开」](billing.md#客户端断开)判断。客户端取消从不免单。客户端自行重试视为新的请求。
@@ -96,7 +96,7 @@
 |---|---|---|---|
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` | `authentication_error` | — |
 | 余额、工作区预算或 key 上限不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`、`workspace_budget` 或 `key_limit`；会重置的上限带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
-| 进行中的请求或暂估待校正的保留暂时占满了余额 | 402 同上，`limit_source` 为 `pending` 或 `pending_correction`，`Retry-After` 是最早释放的时间（待定：见「待定问题」） | `billing_error` | 同上 |
+| 进行中的请求暂时占满了余额 | 402 同上，`limit_source` 为 `pending`，`Retry-After` 是最早释放的时间（待定：见「待定问题」；现在回 `balance`，与上一条相同） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
 | 限流；按 IP、按账户的在途上限；同一账户的资金操作排队超时 | 429 `rate_limited` | `rate_limit_error` | — |
@@ -203,7 +203,7 @@
 
 - 各字段的最终名称和结构写入接口契约时确定
 - `provider.only`、`ignore`、`order`：用户写的是官方 API 的名称或中转站分组的代号（[术语表](../glossary.md)），路由按供应商 ID 过滤；名称到 ID 的对应还没有模块提供（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上），有了才能支持，在此之前返回 400。`max_price` 的单位按本站记账单位每百万 token，二级站点用人民币记账时与 OpenRouter 的美元不同，是否要换算待负责人定
-- 402 的错误体附所需金额和在途预留，`limit_source` 区分 `pending`、`pending_correction`，会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`；预留表的状态只有 `pending`、`released`，没有已暂估，`pending_correction` 无从区分，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
+- 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 上游因请求自身拒绝（4xx）时「保留原文」：suppliers 的 `Failure` 按设计不带上游的文字（对方的文字不进错误、日志和表），gateway 现在回 400 `invalid_request`，不带原文，也没有 `upstream_rejected`；要保留原文，得由适配器把一段筛过的原文放进 `Failure`，并重新评估“对方的文字不进日志和表”这条不变量
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做

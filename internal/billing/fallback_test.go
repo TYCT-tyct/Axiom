@@ -60,19 +60,6 @@ func TestParseFallbacks(t *testing.T) {
 	}
 }
 
-// TestByCost: cost × markup rounds up once, to the billionth, and saturates rather than wraps.
-func TestByCost(t *testing.T) {
-	f := mustFallbacks(t, `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}`)
-	for cost, want := range map[int64]int64{0: 0, 1: 2, 5: 6, 7: 9, 100: 120, math.MaxInt64: math.MaxInt64} {
-		if got := f.byCost(cost); got != want {
-			t.Errorf("byCost(%d) = %d, want %d", cost, got, want)
-		}
-	}
-	if got := mustFallbacks(t, testFallbacks).byCost(3); got != 5 {
-		t.Errorf("1.5 × 3 = %d, want 5", got)
-	}
-}
-
 // TestUses: an unknown value counts its uses, rounded up and bounded; anything else is one use.
 func TestUses(t *testing.T) {
 	for v, want := range map[string]int64{

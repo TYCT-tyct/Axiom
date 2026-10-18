@@ -74,7 +74,7 @@ func newChainFixture(t *testing.T) chainFixture {
 		t.Fatal(err)
 	}
 	if f.billing, err = billing.Start(ctx, app, f.platformScope, billing.Config{
-		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, CorrectionWindow: time.Hour,
+		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour,
 		Logger: slog.New(slog.DiscardHandler),
 	}, silentSuppliers{}); err != nil {
 		t.Fatal(err)
@@ -109,8 +109,8 @@ type chain struct {
 // the call, its attempts and the ledger back under the account's scope.
 func makeChain(t *testing.T, f chainFixture) chain { return makeChainWith(t, f, false) }
 
-// makeChainWith is makeChain with an estimated last attempt when estimated is set: its output was not reported, so the
-// settlement holds a correction window and Correct can replace the charge.
+// makeChainWith is makeChain with an estimated last attempt when estimated is set: its output was not reported, so its
+// charge is an estimate (docs/domains/billing.md「用量来源与暂估」), settled like any other.
 func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 	t.Helper()
 	ctx := t.Context()
@@ -133,8 +133,8 @@ func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 		t.Fatal(err)
 	}
 	final, err := f.billing.Settle(ctx, hold, billing.Outcome{Attempts: []billing.AttemptResult{
-		{Seq: 1, Entry: 0, Cost: 5, Costed: true, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
-		{Seq: 2, Entry: 0, Cost: 7, Costed: true, Segments: []billing.Segment{last}, Result: billing.Committed, Finish: billing.FinishStop},
+		{Seq: 1, Entry: 0, Cost: 5, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
+		{Seq: 2, Entry: 0, Cost: 7, Segments: []billing.Segment{last}, Result: billing.Committed, Finish: billing.FinishStop},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -218,45 +218,6 @@ func TestTraceReadsTheWholeChain(t *testing.T) {
 	checkNoTraceForAnotherAccount(t, f.app, c.request)
 }
 
-// TestLedgerPutsTheCorrectionBeforeTheNewSettle: an estimated settlement corrected with one supplier record posts a
-// reverse and the replacement settle; the ledger lists the reverse first, and another account's scope sees no
-// transactions at all (review of #201).
-func TestLedgerPutsTheCorrectionBeforeTheNewSettle(t *testing.T) {
-	f := newChainFixture(t)
-	c := makeChainWith(t, f, true)
-	if !c.estimated {
-		t.Fatal("the settlement is not estimated: nothing to correct")
-	}
-	usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 50, catalog.ItemOutput: 20},
-		catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.billing.Correct(t.Context(), billing.Correction{
-		Request: c.request, Seq: 2, Revision: 1, Usage: []catalog.Usage{usage}, Cost: 9,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var ledger []billing.LedgerTransaction
-	if err := f.app.ReadTx(t.Context(), f.scope, func(tx pg.Tx) (err error) {
-		ledger, err = billing.LedgerOf(t.Context(), tx, c.request)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reverse, settle := indexOf(ledger, "reverse", 1), indexOf(ledger, "settle", 1)
-	if reverse < 0 || settle < 0 || reverse >= settle {
-		t.Fatalf("the corrected ledger: %+v; the reverse is at %d, the replacement settle at %d", ledger, reverse, settle)
-	}
-	if paid := userBalance(ledger[settle].Entries); paid != 70 {
-		t.Errorf("the replacement charge took %d, want 70", paid)
-	}
-	if refund := userBalance(ledger[reverse].Entries); refund != -60 {
-		t.Errorf("the reverse returned %d, want the original 60", refund)
-	}
-	checkOtherAccountLedger(t, f.app, c.request)
-}
-
 // TestAccountScopeIsNotRefusedByTheChainReads: pg exposes no way to tell a transaction's scope, so the READMEs make the
 // platform scope the caller's rule; an account scope still reads its own chain, supplier cost included. The test pins
 // that, so a future check and the documentation change together.
@@ -272,16 +233,6 @@ func TestAccountScopeIsNotRefusedByTheChainReads(t *testing.T) {
 	}
 }
 
-// indexOf is the position of the transaction of kind at revision, or -1.
-func indexOf(ledger []billing.LedgerTransaction, kind string, revision int64) int {
-	for i, transaction := range ledger {
-		if transaction.Kind == kind && transaction.Revision == revision {
-			return i
-		}
-	}
-	return -1
-}
-
 // entryAmount is the amount of the entry on book in one transaction, or 0.
 func entryAmount(entries []billing.LedgerEntry, book string) int64 {
 	for _, entry := range entries {
@@ -290,25 +241,6 @@ func entryAmount(entries []billing.LedgerEntry, book string) int64 {
 		}
 	}
 	return 0
-}
-
-// userBalance is the amount the user was charged in one transaction's entries.
-func userBalance(entries []billing.LedgerEntry) int64 { return entryAmount(entries, "user_balance") }
-
-// checkOtherAccountLedger: another account's scope reads none of the request's transactions.
-func checkOtherAccountLedger(t *testing.T, app *pg.DB, request uuid.UUID) {
-	t.Helper()
-	other := pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})
-	var ledger []billing.LedgerTransaction
-	if err := app.ReadTx(t.Context(), other, func(tx pg.Tx) (err error) {
-		ledger, err = billing.LedgerOf(t.Context(), tx, request)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(ledger) != 0 {
-		t.Errorf("another account's ledger read returned %d transactions, want none", len(ledger))
-	}
 }
 
 // checkAttempts: the call carries both attempts in order, each on the endpoint it went to.
@@ -399,8 +331,7 @@ func segment(t *testing.T, in, out int64) billing.Segment {
 	return billing.Segment{Usage: usage, Reported: catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemOutput)}
 }
 
-// estimatedSegment is one sampling whose output the upstream did not report, so the settlement is estimated and can be
-// corrected by a supplier record.
+// estimatedSegment is one sampling whose output the upstream did not report, so the settlement's charge is an estimate.
 func estimatedSegment(t *testing.T, in, out int64) billing.Segment {
 	t.Helper()
 	segment := segment(t, in, out)

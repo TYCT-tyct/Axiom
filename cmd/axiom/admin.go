@@ -15,14 +15,10 @@ import (
 	"axiom/internal/suppliers"
 )
 
-//go:generate go run -C ../../tools ./pendingapi ../api/admin.yaml ../cmd/axiom admin_pending.gen.go axiom/internal/platform/adminapi adminAPI pendingAdmin
-
 // adminAPI implements the admin's API (api/admin.yaml). It stands behind the guard, which has found the admin domain,
 // the session of two-step verification and its permission on the platform before a method runs, and kept the request
-// to the contract's schemas. An operation it declares no method for is answered by the embedded pendingAdmin with a
-// 501, until its handler is written.
+// to the contract's schemas.
 type adminAPI struct {
-	pendingAdmin
 	version  string
 	accounts *accounts.Service
 	catalog  *catalog.Catalog

@@ -43,6 +43,19 @@ type Selector struct {
 	ID   string `json:"id,omitempty"`
 }
 
+// Prices reports whether the rule prices for an account of a tier: a rule for an account prices that account alone, one
+// for a tier accounts of that tier, and one for all, everyone. A zero account or tier stands for an audience that has
+// none, so only a rule for all prices it. It is what a pricing preview asks to keep the rules of the audience it shows.
+func (s Selector) Prices(account accounts.AccountID, tier accounts.TierID) bool {
+	switch s.Kind {
+	case "account":
+		return account != accounts.AccountID{} && s.ID == account.TypeID()
+	case "tier":
+		return tier != accounts.TierID{} && s.ID == tier.TypeID()
+	}
+	return true
+}
+
 // Method is how a rule sets the price. Which members a kind uses is checked by Check; the others are absent.
 type Method struct {
 	Kind               string    `json:"kind"`
@@ -192,7 +205,10 @@ func (m Method) checkCostPlus() error {
 	return nil
 }
 
-// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency.
+// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency. It has no upper
+// bound: whether a multiplier takes a price past what a unit price holds depends on the reference price of each model
+// the rule applies to, which Check does not see (the catalog's prices are). Such a model then gets no sale price and
+// the reason is logged, rather than the rule being refused here or the whole site's prices failing (sale.go).
 func (m Method) checkMultiplier() error {
 	multiplier, ok, err := ratio("method/multiplier", m.Multiplier)
 	switch {
@@ -215,6 +231,11 @@ func (m Method) checkFixed(currency platform.Currency) error {
 	}
 	return checkSchedule(m.Schedule, currency)
 }
+
+// SameForEveryModel reports whether the rule's price does not read the model's reference price, so that it is the same
+// wherever it applies. Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
+// versions (sale.go).
+func (m Method) SameForEveryModel() bool { return m.Kind == "fixed" }
 
 // checkSchedule refuses a fixed price that is no price list of the catalog's form, or is in another currency than the
 // site's.
@@ -296,9 +317,27 @@ func Rules(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Rule, error) {
 		if c := slices.Compare(sa[:], sb[:]); c != 0 {
 			return c
 		}
-		return slices.Compare(a.ID[:], b.ID[:])
+		return slices.Compare(a.ID[:], b.ID[:]) // a rule of each target and audience at most, so this is a total order
 	})
 	return rules, nil
+}
+
+// Place is rules with r among them, in the order they are tried: a rule not stored yet, which a pricing preview asks
+// about. It goes after the rules it ties with, so a rule that is no more specific than those there never displaces one;
+// an ID of its own, which only a stored rule has, does not decide where it goes.
+func Place(r Rule, rules []Rule) []Rule {
+	s := r.specificity()
+	i := slices.IndexFunc(rules, func(o Rule) bool {
+		at := o.specificity()
+		return slices.Compare(at[:], s[:]) > 0
+	})
+	if i < 0 {
+		i = len(rules)
+	}
+	out := make([]Rule, 0, len(rules)+1)
+	out = append(out, rules[:i]...)
+	out = append(append(out, r), rules[i:]...)
+	return out
 }
 
 // CreateRule adds a rule to the site. The change is recorded as the rule's first version and in the audit log.

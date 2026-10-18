@@ -61,7 +61,8 @@ type Ledger interface {
 
 // Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the
 // attempt's price is in; *suppliers.Service is one. known is false when that leaves part of the cost out or none of it
-// is known; billing then counts the attempt toward the waiver cap at its sale price (docs/domains/billing.md「免单规则」).
+// is known: the attempt is then booked at whatever came back, which is the platform's cost and never the user's charge
+// (docs/domains/billing.md「供应商成本」).
 type Costs interface {
 	Credits(r suppliers.AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (cost int64, known bool, err error)
 }
