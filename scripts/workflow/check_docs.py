@@ -116,7 +116,7 @@ def limits(root):
         config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return dict(LIMITS), [f"{CONFIG}: not valid UTF-8 TOML: {error}"]
-    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: limits, merge, review, source" for key in config if key not in ("limits", "merge", "review", "source")]
+    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: lanes, limits, merge, review, source" for key in config if key not in ("lanes", "limits", "merge", "review", "source")]
     if "source" in config and not (isinstance(config["source"], str) and SOURCE.fullmatch(config["source"])):
         errors.append(f"{CONFIG}: source must be a full 40-character commit hash")
     review = config.get("review", {})  # read by check_pr.py; validated here, where every config mistake is reported
@@ -125,6 +125,10 @@ def limits(root):
     merge = config.get("merge", {})  # read by manage.py protect and verify; validated here with the rest
     if not isinstance(merge, dict) or set(merge) - {"strict"} or not isinstance(merge.get("strict", True), bool):
         errors.append(f"{CONFIG}: [merge] takes only strict = true or false")
+    lanes = config.get("lanes", {})  # read by changes.py, which runs the slow jobs whenever it cannot read them
+    if not isinstance(lanes, dict) or set(lanes) - {"light", "code"} or not all(
+            isinstance(value, list) and all(isinstance(item, str) and item for item in value) for value in lanes.values()):
+        errors.append(f"{CONFIG}: [lanes] takes only light and code, each a list of path patterns")
     configured = config.get("limits", {})
     if not isinstance(configured, dict):
         return result, errors + [f"{CONFIG}: limits must be a table: [limits]"]
