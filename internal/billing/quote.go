@@ -109,9 +109,7 @@ type quote struct {
 	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
 }
 
-var (
-	errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
-)
+var errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
 
 // ErrUnpriced is a price schedule that leaves something unpriced: what Quote refuses a request for when the locked
 // schedule does not price an item the request may use, and what Sell returns for a rule M1 cannot turn into a sale

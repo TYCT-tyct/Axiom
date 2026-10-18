@@ -50,9 +50,9 @@ func segment(tb testing.TB, counts map[catalog.Item]int64, unknown ...catalog.Un
 }
 
 // fetches is 50 input, 20 output and n web fetches, which protocol cannot map: 70 and n uses at 50 each.
-func fetches(tb testing.TB, input int64, n string) Segment {
+func fetches(tb testing.TB, n string) Segment {
 	tb.Helper()
-	return segment(tb, map[catalog.Item]int64{in: input, catalog.ItemOutput: 20},
+	return segment(tb, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20},
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: n})
 }
 
@@ -118,7 +118,7 @@ func fallbackDefault(t *testing.T) {
 func fallbackEstimated(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h := b.hold(1000)
-	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
+	if f := b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, "2"))); !f.Estimated || f.Charged != platform.AmountExact(170) {
 		t.Errorf("Settle = %+v, want 170 estimated", f)
 	}
 	b.expect("settled", 170)
@@ -260,9 +260,9 @@ func TestUnknownItems(t *testing.T) {
 	q.Model.ID = model
 	const fetch = "usage.server_tool_use.web_fetch_requests"
 	first := b.holdOn(q, 100)
-	b.settleWith(first, outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
-	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "1"))) // the row is the first tenant's
+	b.settleWith(first, outcome(Committed, FinishStop, false, fetches(t, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "2")))
+	b.settleWith(b.holdFor(b.secondTenant(10_000), q, 100), outcome(Committed, FinishStop, false, fetches(t, "1"))) // the row is the first tenant's
 	estimate := b.holdOn(q, 100)
 	b.settleWith(estimate, outcome(Committed, FinishStop, true, unknown(t, 50, "usage.new_thing_tokens", "5")))
 	items := b.unknownItems()
@@ -276,7 +276,7 @@ func TestUnknownItems(t *testing.T) {
 		t.Errorf("%d alerts, want one per field:\n%s", n, logs.String())
 	}
 	b.checkClearing(model, fetch)
-	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
+	b.settleWith(b.holdOn(q, 100), outcome(Committed, FinishStop, false, fetches(t, "1")))
 	if n := strings.Count(logs.String(), "an unknown billing item appeared"); n != 2 || len(b.unknownItems()) != 1 {
 		t.Errorf("a cleared field came back: %d alerts, %+v", n, b.unknownItems())
 	}

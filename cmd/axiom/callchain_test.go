@@ -233,16 +233,6 @@ func TestAccountScopeIsNotRefusedByTheChainReads(t *testing.T) {
 	}
 }
 
-// indexOf is the position of the transaction of kind at revision, or -1.
-func indexOf(ledger []billing.LedgerTransaction, kind string, revision int64) int {
-	for i, transaction := range ledger {
-		if transaction.Kind == kind && transaction.Revision == revision {
-			return i
-		}
-	}
-	return -1
-}
-
 // entryAmount is the amount of the entry on book in one transaction, or 0.
 func entryAmount(entries []billing.LedgerEntry, book string) int64 {
 	for _, entry := range entries {
@@ -251,25 +241,6 @@ func entryAmount(entries []billing.LedgerEntry, book string) int64 {
 		}
 	}
 	return 0
-}
-
-// userBalance is the amount the user was charged in one transaction's entries.
-func userBalance(entries []billing.LedgerEntry) int64 { return entryAmount(entries, "user_balance") }
-
-// checkOtherAccountLedger: another account's scope reads none of the request's transactions.
-func checkOtherAccountLedger(t *testing.T, app *pg.DB, request uuid.UUID) {
-	t.Helper()
-	other := pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})
-	var ledger []billing.LedgerTransaction
-	if err := app.ReadTx(t.Context(), other, func(tx pg.Tx) (err error) {
-		ledger, err = billing.LedgerOf(t.Context(), tx, request)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(ledger) != 0 {
-		t.Errorf("another account's ledger read returned %d transactions, want none", len(ledger))
-	}
 }
 
 // checkAttempts: the call carries both attempts in order, each on the endpoint it went to.

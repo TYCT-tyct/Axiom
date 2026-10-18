@@ -105,9 +105,9 @@ func TestSalePricesTakesTheMostSpecificRule(t *testing.T) {
 	f := newSnapshotter(t)
 	priced, unbilled := f.model("acme/priced"), f.model("beta/unbilled")
 	rules := []Rule{
-		{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "model", ID: priced.String()}, Audience: Selector{Kind: "all"}, Method: multiplied("3")}, ID: uuid.NewV7(), Rev: 1},
-		{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: multiplied("2")}, ID: uuid.NewV7(), Rev: 1},
-		{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1.5")}, ID: uuid.NewV7(), Rev: 1},
+		{Enabled: true, Target: Selector{Kind: "model", ID: priced.String()}, Audience: Selector{Kind: "all"}, Method: multiplied("3"), ID: uuid.NewV7(), Rev: 1},
+		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7(), Rev: 1},
+		{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1.5"), ID: uuid.NewV7(), Rev: 1},
 	}
 	sold, err := SalePrices(rules, f.snapshot(), usd)
 	if err != nil {
@@ -139,17 +139,19 @@ func TestSalePricesLeavesWhatNoRulePrices(t *testing.T) {
 	for name, rules := range map[string][]Rule{
 		"no rules": nil,
 		"a rule that is off": {
-			{RuleInput: RuleInput{Enabled: false, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("2")}, ID: uuid.NewV7()},
+			{Enabled: false, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7()},
 		},
 		"cost plus, which M1 does not price": {
-			{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: plus("0.25")}, ID: uuid.NewV7()},
+			{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: plus("0.25"), ID: uuid.NewV7()},
 		},
 		"an exchange rate, which M1 does not have": {
-			{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"},
-				Method: Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}}, ID: uuid.NewV7()},
+			{
+				Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"},
+				Method: Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}, ID: uuid.NewV7(),
+			},
 		},
 		"a target that prices no model in M1": {
-			{RuleInput: RuleInput{Enabled: true, Target: Selector{Kind: "source_type", ID: "relay"}, Audience: Selector{Kind: "all"}, Method: multiplied("2")}, ID: uuid.NewV7()},
+			{Enabled: true, Target: Selector{Kind: "source_type", ID: "relay"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7()},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

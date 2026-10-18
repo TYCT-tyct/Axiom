@@ -115,7 +115,7 @@
 
 ### 数值域
 
-- `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（如成本计划里官方价乘分组倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
+- `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（`Schedule.Scaled`：成本计划里官方价乘分组倍率，售价里参考价乘站点倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
 - `Usage` 每项 0 … 10¹⁰，字段不导出，只能经 `NewUsage` 构造，负数或超限返回错误；零值是全零的合法用量。不变量由构造守住，`Cost` 不再校验。门槛求和最多 `NumItems` × 10¹⁰，int64 不会溢出。
 - 单项乘积 ≤ 10²⁸，`NumItems`（少于 16）项之和 < 1.6 × 10²⁹，在 128 位有符号整数（约 1.7 × 10³⁸）之内。这个域里不可能溢出，仍逐步检查，溢出返回错误而不是截断。
 - `Cost` 返回 `platform.Exact`：128 位整数，单位 10⁻¹⁵，币种随价目表。汇率和加价倍率由 billing 转成 `math/big.Rat` 再乘，只在记账时取整一次；本模块不做币种换算。
@@ -258,6 +258,7 @@ func (s Schedule) BaseRate(it Item) (platform.UnitPrice, bool) // 标准档、�
 func (s Schedule) Missing(r Reportable) Reportable                    // 上架门槛用
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) // 替换参考价前防退化；两边都有分档而口径不同时 ErrTierBasisChanged
 func (s Schedule) Fill(prices map[Item]platform.UnitPrice) Schedule   // 给每个服务等级缺基础价的这些项补上价格，已有的不动
+func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedule, error) // 每个单价乘倍率、改记币种，向上取整一次；没定价的项仍没有价
 func (s Schedule) Currency() platform.Currency
 func Normalize(name string) string
 

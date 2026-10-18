@@ -25,7 +25,7 @@ func TestFallbackHoldsPages(t *testing.T) {
 	want := make([]uuid.UUID, 5)
 	for i := range want {
 		h := b.hold(100)
-		b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, 50, "1")))
+		b.settleWith(h, outcome(Committed, FinishStop, false, fetches(t, "1")))
 		want[i] = h.id
 	}
 	b.sql("UPDATE billing.reservations SET state = 'estimated', correct_by = '2030-01-01T00:00:00Z'")
@@ -102,7 +102,7 @@ func TestSettledCallsHoldNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	fallback, guessed := b.hold(1000), b.hold(1000)
-	b.settleWith(fallback, outcome(Committed, FinishStop, false, fetches(t, 50, "2")))
+	b.settleWith(fallback, outcome(Committed, FinishStop, false, fetches(t, "2")))
 	b.settleWith(guessed, outcome(Committed, FinishStop, false, used(t, 300, 20, 0, in)))
 	if holds := b.fallbackHolds(); len(holds) != 0 {
 		t.Errorf("FallbackHolds = %+v, want none", holds)

@@ -53,7 +53,7 @@ func TestSell(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := Sell(Rule{RuleInput: RuleInput{Enabled: true, Method: tc.method}, ID: uuid.NewV7()}, ref, usd)
+			s, err := Sell(Rule{Enabled: true, Method: tc.method, ID: uuid.NewV7()}, ref, usd)
 			if tc.refusal != nil {
 				if !errors.Is(err, tc.refusal) {
 					t.Fatalf("Sell = %v, want %v", err, tc.refusal)
@@ -77,7 +77,7 @@ func TestSellIsPure(t *testing.T) {
 	t.Parallel()
 	const cny = `{"v":1,"currency":"USD","rates":{"input":"0.0000001","output":"0.0000005"}}`
 	ref := reference(t, uuid.NewV7(), cny)
-	r := Rule{RuleInput: RuleInput{Enabled: true, Method: multiplied("1.2")}, ID: uuid.NewV7(), Rev: 3}
+	r := Rule{Enabled: true, Method: multiplied("1.2"), ID: uuid.NewV7(), Rev: 3}
 	first, err := Sell(r, ref, usd)
 	if err != nil {
 		t.Fatal(err)
@@ -86,9 +86,18 @@ func TestSellIsPure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := first.MarshalJSON()
-	b, _ := second.MarshalJSON()
-	original, _ := ref.Schedule.MarshalJSON()
+	a, err := first.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := second.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := ref.Schedule.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(a) != string(b) {
 		t.Errorf("two sales differ:\n%s\n%s", a, b)
 	}
@@ -105,7 +114,7 @@ func TestSellIsPure(t *testing.T) {
 func TestPriceVersion(t *testing.T) {
 	t.Parallel()
 	ref := reference(t, uuid.NewV7(), `{"v":1,"currency":"USD","rates":{"input":"1"}}`)
-	r := Rule{RuleInput: RuleInput{Enabled: true, Method: multiplied("1.2")}, ID: uuid.NewV7(), Rev: 1}
+	r := Rule{Enabled: true, Method: multiplied("1.2"), ID: uuid.NewV7(), Rev: 1}
 	base := priceVersion(r, ref)
 	if again := priceVersion(r, ref); again != base {
 		t.Errorf("the version is not stable: %s, %s", base, again)
@@ -128,11 +137,11 @@ func TestPriceVersion(t *testing.T) {
 // so a preview never displaces a stored rule it is no more specific than.
 func TestPlace(t *testing.T) {
 	t.Parallel()
-	all := Rule{RuleInput: RuleInput{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}}, ID: uuid.MustParse(model)}
-	author := Rule{RuleInput: RuleInput{Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}}, ID: uuid.NewV7()}
-	modelRule := Rule{RuleInput: RuleInput{Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}}, ID: uuid.NewV7()}
+	all := Rule{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, ID: uuid.MustParse(model)}
+	author := Rule{Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, ID: uuid.NewV7()}
+	modelRule := Rule{Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}, ID: uuid.NewV7()}
 	stored := []Rule{modelRule, author, all}
-	placed := Place(Rule{RuleInput: RuleInput{Target: Selector{Kind: "author", ID: "other"}, Audience: Selector{Kind: "all"}}}, stored)
+	placed := Place(Rule{Target: Selector{Kind: "author", ID: "other"}, Audience: Selector{Kind: "all"}}, stored)
 	var order []string
 	for _, r := range placed {
 		order = append(order, r.Target.Kind+"/"+r.Target.ID)
