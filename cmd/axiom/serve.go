@@ -254,7 +254,8 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
 	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
-	limits, err := gateway.New(gateway.DefaultConfig())
+	gate := gateway.DefaultConfig()
+	limits, err := gateway.New(gate)
 	if err != nil {
 		return nodeRoutes{}, err
 	}
@@ -278,8 +279,8 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, limits: limits,
-		records: recorder, logger: logger,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
+		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -293,12 +294,19 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers through exit, the
-// client the whole node shares.
+// startSync starts the queue with the syncing of the suppliers and the ledger's daily check on it. It reaches the
+// suppliers through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+	}); err != nil {
+		return nil, err
+	}
+	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
+	// is registered here and not with the call path, which starts after the queue).
+	if err := billing.RegisterReconcile(billing.ReconcileConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
 		return nil, err
 	}

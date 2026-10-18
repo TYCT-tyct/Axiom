@@ -46,7 +46,7 @@ function readMethod(
   if (kind === "reference_multiplier") {
     const multiplier = (values.multiplier ?? "").trim();
     return decimal.test(multiplier)
-      ? { kind, multiplier, currency_conversion: values.currency_conversion === "face" ? "face" : "exchange" }
+      ? { kind, multiplier, currency_conversion: values.currency_conversion === "exchange" ? "exchange" : "face" }
       : { problem: words.multiplier };
   }
   const schedule = readSchedule(values, existing?.schedule, words);

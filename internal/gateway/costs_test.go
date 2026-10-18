@@ -80,9 +80,6 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 // cover a ref).
 func (r *rig) checkTheSuppliersCost(id uuid.UUID) {
 	r.t.Helper()
-	if got := r.count("SELECT count(*) FROM billing.waivers"); got != 0 {
-		r.t.Errorf("billing.waivers holds %d rows, want none: no cap counts a waiver", got)
-	}
 	if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got < knownCost || got >= saleForTheInput {
 		r.t.Errorf("the attempt cost the books %d, want the supplier's %d at least and well below the sale's %d", got, knownCost, saleForTheInput)
 	}

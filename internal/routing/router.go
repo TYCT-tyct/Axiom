@@ -15,7 +15,6 @@ type Config struct {
 	StickyTTL     time.Duration // how long a session stays stuck when its preset says nothing; default 1h
 	StickyMax     int           // sessions remembered; default 100000
 	SessionPrefix int           // bytes of the body SessionKey reads; default 16 KiB
-	BytesPerToken int64         // the body bytes one token is taken to be, to estimate the input against a context; default 4
 	MaxAttempts   int           // attempts per request when the preset says nothing; default 4
 	AttemptWindow time.Duration // how long after admission a new attempt may start; default 2m
 	Recovery      time.Duration // how long a 429 weighs on an endpoint; default 1m
@@ -25,7 +24,8 @@ type Config struct {
 	RetryWindow   time.Duration // the budget's window; default 1m
 
 	// FirstSegment and Overshoot are billing's segment size and extension allowance in output tokens: an entry whose
-	// output limit is not above their sum is reserved whole, so it is not Segmentable. Zero means any limit is.
+	// output limit is not above their sum is reserved whole, so it is not Segmentable. A zero FirstSegment, M1's, means
+	// no entry is: every reservation is whole.
 	FirstSegment, Overshoot int64
 
 	Now  func() time.Time // default time.Now
@@ -63,7 +63,6 @@ func (c *Config) setDefaults() {
 	c.StickyMax = orDefault(c.StickyMax, 100000)
 	c.SessionPrefix = orDefault(c.SessionPrefix, 16<<10)
 	c.MaxAttempts = orDefault(c.MaxAttempts, 4)
-	c.BytesPerToken = orDefault(c.BytesPerToken, 4)
 	c.RetryFloor = orDefault(c.RetryFloor, 3)
 	c.ThrottleFloor = orDefault(c.ThrottleFloor, 0.1)
 	c.RetryRatio = orDefault(c.RetryRatio, 0.2)
@@ -82,7 +81,7 @@ func (c *Config) validate() error {
 			return errors.New("routing: a duration is negative")
 		}
 	}
-	for _, n := range []int64{int64(c.StickyMax), int64(c.SessionPrefix), int64(c.MaxAttempts), c.BytesPerToken, c.RetryFloor, c.FirstSegment, c.Overshoot} {
+	for _, n := range []int64{int64(c.StickyMax), int64(c.SessionPrefix), int64(c.MaxAttempts), c.RetryFloor, c.FirstSegment, c.Overshoot} {
 		if n < 0 {
 			return errors.New("routing: a limit is negative")
 		}

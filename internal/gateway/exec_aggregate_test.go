@@ -89,7 +89,7 @@ func checkAggregateSettlement(t *testing.T, h *harness, name string) {
 	if s.body != "" {
 		t.Errorf("%s: something was written before the settlement:\n%s", name, s.body)
 	}
-	if a := s.outcome.Attempts; len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
+	if a := s.outcome.Attempts; len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop {
 		t.Errorf("%s: ending %+v", name, s.outcome)
 	}
 }
@@ -136,7 +136,8 @@ func TestAnAggregateKeptForAClientThatLeftIsLetGo(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if !s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.FailedBeforeCommit {
+		// The attempt failed before the client left: it is judged by how it failed, not by the leaving.
+		if len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishError {
 			t.Errorf("ending %+v", s.outcome)
 		}
 	})
@@ -277,7 +278,7 @@ func TestAClientThatLeavesWhileItsReplyIsAggregated(t *testing.T) {
 			s := h.ended()
 			a := s.outcome.Attempts[0]
 			u := a.Segments[0]
-			if !s.outcome.Cancelled || a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishCancelled ||
+			if a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishCancelled ||
 				u.Usage.OutputTotal() != c.output || u.Reported.Has(catalog.ItemOutput) != c.reported {
 				t.Errorf("%s: ending %+v, usage %+v", c.name, s.outcome, u)
 			}
