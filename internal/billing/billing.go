@@ -30,11 +30,16 @@ func Migrations() pg.Module {
 // Config is what billing's database work needs from the site's settings (internal/gateway/README.md「超时与限额」).
 type Config struct {
 	HolderTTL time.Duration // how long a heartbeat keeps the holder alive
+	Heartbeat time.Duration // how often Run pushes the holder's expiry out; default a third of the TTL
 	ReapGrace time.Duration // how long past its expiry a holder is reaped
 	Lifetime  time.Duration // a reservation's deadline after admission: the longest call plus the settlement grace
 	Segments  Segments
 	Logger    *slog.Logger // where alerts go; default slog.Default()
 }
+
+// heartbeatLimit is the longest period a heartbeat may have: one heartbeat missed must still leave the holder alive
+// by the database's clock, and Alive keeps a margin back on top of that (internal/gateway/config.go:118).
+func (c Config) heartbeatLimit() time.Duration { return c.HolderTTL / 3 }
 
 // Billing writes reservations under one holder, this start of the process.
 type Billing struct {
@@ -62,6 +67,11 @@ var ErrReaped = errors.New("billing: the holder was reaped")
 // Start checks the fallback prices, without valid ones billing does not run (docs/domains/billing.md「价目表缺项」), and
 // registers a new holder. platform is the platform scope, which only cmd/ builds.
 func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s Suppliers) (*Billing, error) {
+	config.Heartbeat = cmp.Or(config.Heartbeat, config.heartbeatLimit())
+	if config.Heartbeat <= 0 || config.Heartbeat > config.heartbeatLimit() {
+		return nil, fmt.Errorf("billing: the heartbeat %v must be above 0 and at most a third of the holder's TTL %v",
+			config.Heartbeat, config.HolderTTL)
+	}
 	b := &Billing{
 		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
 		logger: cmp.Or(config.Logger, slog.Default()),
@@ -145,6 +155,71 @@ func (b *Billing) fence(ctx context.Context, tx pg.Tx) error {
 		return fmt.Errorf("billing: fence the holder: %w", err)
 	}
 	return nil
+}
+
+// The cleanup's pace: a sweep every 30 seconds takes over at most cleanupBatch reservations in each of at most
+// cleanupRounds batches. The work of a sweep is bounded, because one that never returned would also stop the heartbeat
+// and the node would reap itself; a backlog larger than that drains over the sweeps that follow.
+const (
+	cleanupEvery  = 30 * time.Second
+	cleanupBatch  = 200
+	cleanupRounds = 5
+)
+
+// Run keeps this process's holder alive and lets cleanup take over what no Settle will, until ctx ends: a sweep at
+// once and then every 30 seconds, a heartbeat every Config.Heartbeat. A heartbeat finding the holder reaped returns
+// ErrReaped: from then on nothing this process writes is fenced in, so it must stop serving and start over with a new
+// holder (cmd/axiom). Any other failure is logged and retried on the next beat; meanwhile Alive turns false, which
+// stops new attempts (internal/gateway/README.md「尝试」).
+func (b *Billing) Run(ctx context.Context) error {
+	b.sweep(ctx) // the predecessor's leftovers, before the first period passes
+	beat := time.NewTicker(b.config.Heartbeat)
+	defer beat.Stop()
+	sweep := time.NewTicker(cleanupEvery)
+	defer sweep.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-beat.C:
+			err := b.Heartbeat(ctx)
+			if errors.Is(err, ErrReaped) {
+				b.logger.Error("billing: the holder was reaped; this node stops taking requests")
+				return err
+			}
+			if err != nil && ctx.Err() == nil {
+				b.logger.Error("billing: the heartbeat failed; no attempt starts until it succeeds", "err", err)
+			}
+		case <-sweep.C:
+			if ctx.Err() != nil {
+				return nil
+			}
+			b.sweep(ctx)
+		}
+	}
+}
+
+// sweep reaps the holders that expired, then takes over what no settlement will. The reap comes first, so a
+// reservation whose holder has just gone is cleaned in the same sweep.
+func (b *Billing) sweep(ctx context.Context) {
+	if n, err := b.Reap(ctx); err != nil {
+		b.logger.Error("billing: reaping the holders failed", "err", err)
+	} else if n > 0 {
+		b.logger.Warn("billing: reaped the holders of nodes that stopped heartbeating", "holders", n)
+	}
+	cleaned := 0
+	for range cleanupRounds {
+		n, err := b.Cleanup(ctx, cleanupBatch)
+		if err != nil {
+			b.logger.Error("billing: the cleanup failed", "cleaned", cleaned, "err", err)
+			return
+		}
+		cleaned += n
+		if n < cleanupBatch {
+			return
+		}
+	}
+	b.logger.Warn("billing: more reservations are due than one sweep takes over", "cleaned", cleaned)
 }
 
 var queries = New()
