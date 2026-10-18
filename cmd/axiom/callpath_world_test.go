@@ -65,11 +65,12 @@ const (
 // fakeSupplier is a new-api relay: it answers /v1/messages and /v1/responses with the recorded upstream streams, with
 // the request id header a new-api relay sends, and remembers what it was sent.
 type fakeSupplier struct {
-	server  *httptest.Server
-	streams map[string]string // the recorded upstream stream each path answers with
-	mu      sync.Mutex
-	replies map[string]string // what a path answers with instead, until answer clears it
-	seen    []supplied
+	server   *httptest.Server
+	streams  map[string]string // the recorded upstream stream each path answers with
+	mu       sync.Mutex
+	replies  map[string]string // what a path answers with instead, until answer clears it
+	seen     []supplied
+	failures []int // HTTP statuses consumed before the recorded successful replies
 }
 
 type supplied struct{ path, auth, body string }
@@ -96,13 +97,19 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 		if err != nil {
 			t.Errorf("the fake supplier could not read a request: %v", err)
 		}
-		n, reply := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
-		if reply == "" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
+		n, reply, status := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
 		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
+		if status != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			reply = `{"error":{"type":"new_api_error","message":"upstream refused"}}`
+		} else {
+			if reply == "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
 		if _, err := io.WriteString(w, reply); err != nil {
 			t.Errorf("the fake supplier could not answer: %v", err)
 		}
@@ -113,14 +120,17 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 
 // record remembers a call and says how many there have been, and what it is to be answered with: nothing for a path the
 // supplier does not serve.
-func (f *fakeSupplier) record(s supplied) (n int, reply string) {
+func (f *fakeSupplier) record(s supplied) (n int, reply string, status int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen = append(f.seen, s)
+	if len(f.failures) > 0 {
+		status, f.failures = f.failures[0], f.failures[1:]
+	}
 	if reply = f.replies[s.path]; reply == "" {
 		reply = f.streams[s.path]
 	}
-	return len(f.seen), reply
+	return len(f.seen), reply, status
 }
 
 // answer makes the path reply with the stream from now on, or with its recorded one again when the stream is empty.
