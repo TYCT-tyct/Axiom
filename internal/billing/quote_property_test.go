@@ -103,7 +103,11 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	for _, it := range toolItems {
 		c.e.Model.MaxUses[it] = n() % 4
 		if r.IntN(2) == 0 {
-			c.d.ServerTools = append(c.d.ServerTools, ServerTool{Item: it, MaxUses: n() % 4})
+			uses := n() % 4
+			if uses == 0 && c.e.Model.MaxUses[it] == 0 {
+				uses = 1 // a tool with no limit of its own, on a model with no default, is refused (ErrUnbounded), not quoted
+			}
+			c.d.ServerTools = append(c.d.ServerTools, ServerTool{Item: it, MaxUses: uses})
 		}
 	}
 	for _, it := range []catalog.Item{cacheWrite, cacheWrite1h} {
@@ -114,9 +118,7 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	if r.IntN(2) == 0 {
 		c.e.Model.Reports.Add(catalog.ItemCacheRead)
 	}
-	if strings.Contains(c.json, "priority") && r.IntN(2) == 0 {
-		c.d.ServiceTiers.Add(catalog.ServiceTierPriority)
-	}
+	drawTiers(&c, r)
 	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5 * time.Second)))}
 	if limit == math.MaxInt64 {
 		c.s.Overshoot = time.Duration(n()) // so overshoot × speed can pass math.MaxInt64
@@ -190,7 +192,7 @@ func (c quoteCase) call(tb testing.TB, r *rand.Rand) *big.Rat {
 		counts[r.IntN(len(counts))][catalog.Item(it)] += upTo(n)
 	}
 	st := catalog.ServiceTierStandard
-	if c.d.ServiceTiers.Has(catalog.ServiceTierPriority) && r.IntN(2) == 0 {
+	if c.servedAt().Has(catalog.ServiceTierPriority) && r.IntN(2) == 0 {
 		st = catalog.ServiceTierPriority
 	}
 	total := new(big.Rat)
@@ -206,6 +208,30 @@ func (c quoteCase) call(tb testing.TB, r *rand.Rand) *big.Rat {
 		total.Add(total, cost.Rat())
 	}
 	return total
+}
+
+// drawTiers lets the request allow priority, and the endpoint be offered at standard alone, at priority alone (the
+// quote still prices standard) or at both, when the schedule has a priority tier.
+func drawTiers(c *quoteCase, r *rand.Rand) {
+	if !strings.Contains(c.json, "priority") {
+		return
+	}
+	if r.IntN(2) == 0 {
+		c.d.ServiceTiers.Add(catalog.ServiceTierPriority)
+	}
+	if r.IntN(2) == 0 {
+		c.e.Model.ServiceTiers = [...]catalog.ServiceTierSet{
+			1 << catalog.ServiceTierStandard, 1 << catalog.ServiceTierPriority, 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority,
+		}[r.IntN(3)]
+	}
+}
+
+// servedAt is the tiers a call can be served at: the request's, within the endpoint's when it is known.
+func (c quoteCase) servedAt() catalog.ServiceTierSet {
+	if c.e.Model.ServiceTiers == 0 {
+		return c.d.ServiceTiers
+	}
+	return c.d.ServiceTiers & c.e.Model.ServiceTiers
 }
 
 // prompts draws each sampling's prompt, the first up to the request's bound and the others up to the context length,
@@ -259,7 +285,7 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 		first = window
 	}
 	uses, samplings := c.referenceUses()
-	tiers := c.d.ServiceTiers
+	tiers := c.servedAt()
 	tiers.Add(catalog.ServiceTierStandard)
 	inputs := c.d.InputItems
 	inputs.Add(in)

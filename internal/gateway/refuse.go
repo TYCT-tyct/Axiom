@@ -108,6 +108,9 @@ func refusal(err error) (r *Refusal, expected bool) {
 		return errNoModel, true
 	case errors.Is(err, protocol.ErrInvalid):
 		return invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": ")), true
+	case errors.Is(err, billing.ErrUnbounded):
+		return invalid("a server tool is enabled without a limit on its uses, and this model has no default one: state it " +
+			"(max_uses in Messages, max_tool_calls in Responses)"), true
 	case errors.Is(err, accounts.ErrStale), errors.Is(err, catalog.ErrStale), errors.Is(err, routing.ErrStale),
 		errors.Is(err, billing.ErrTerminated), errors.Is(err, errCommitUnknown), errors.Is(err, context.DeadlineExceeded):
 		return ErrOverloaded, true // the node cannot serve now; the first request that finds it so is not a bug
