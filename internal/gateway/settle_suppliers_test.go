@@ -25,9 +25,9 @@ import (
 // is the only fake, as in the ledger and cost tests: what is checked is the writing back.
 
 const (
-	// The counts the upstream reports over the call's three samplings: the reply's, and the two compactions the request's
-	// context management asked for. They are all different and none is zero, so a count recorded in another item's place,
-	// or a sampling left out of the row, changes the sums.
+	// The counts the upstream reports over the call's three samplings: the reply's, and the two compactions its answer
+	// lists. They are all different and none is zero, so a count recorded in another item's place, or a sampling left out
+	// of the row, changes the sums.
 	segmentInput, segmentCacheRead, segmentOutput = 130, 70, 60
 	compactionInput, compactionCacheRead, compactionOutput = 10, 5, 20
 	secondInput, secondCacheRead, secondOutput             = 3, 2, 4
@@ -79,10 +79,10 @@ func supplierEveryItemRig(t *testing.T, prices string) (*rig, suppliers.AttemptR
 }
 
 // TestTheRowHoldsEverySegmentAndEveryItemTheUpstreamReported: the call's attempt used three samplings — the reply and the
-// two compactions the request asked for — and the supplier's row of it holds the input, the cache read and the output
-// added over all three, priced by the supplier's own schedule rather than the sale price, on the endpoint the attempt was
-// made on. A row that kept only the reply's counts, that lost an item's count, or that was priced from what the user pays
-// fails here.
+// two compactions its answer lists — and the supplier's row of it holds the input, the cache read and the output added
+// over all three, priced by the supplier's own schedule rather than the sale price, on the endpoint the attempt was made
+// on. A row that kept only the reply's counts, that lost an item's count, or that was priced from what the user pays fails
+// here.
 func TestTheRowHoldsEverySegmentAndEveryItemTheUpstreamReported(t *testing.T) {
 	t.Parallel()
 	r, receipt, endpoint := supplierEveryItemRig(t, supplierScheduleEvery)
@@ -211,8 +211,8 @@ func TestASettlementTellsSuppliersTheRequestIsOver(t *testing.T) {
 }
 
 // threeSegments is the upstream's answer: a reply that reports its input and its cache reads and delivers content, which
-// commits the call, then the final usage event, which reports the reply's output and the two compactions the request
-// asked for, each a sampling with usage of its own; message_stop ends the stream, so every count is final.
+// commits the call, then the final usage event, which reports the reply's output and the two compactions the answer
+// lists, each a sampling with usage of its own; message_stop ends the stream, so every count is final.
 func threeSegments(sample []string) string {
 	start := "event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_1","type":"message",` +
 		`"role":"assistant","model":"up-alpha","content":[],"stop_reason":null,"stop_sequence":null,"usage":{` +
