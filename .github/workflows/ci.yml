@@ -94,14 +94,16 @@ jobs:
           echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table.
+      # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table. A train
+      # adds `secrets`, which workflow.yml runs for a PR but nothing dispatches for a train.
       - if: env.BASE != '' && steps.changes.outputs.docs_only == 'true'
-        run: just md-checks
-      # `check-ci` is `just check` without the two checks workflow.yml's required `secrets` job (gitleaks) and `docs` job
-      # (scripts/workflow tests and check_docs.py) already run on every PR and main push, so they would run twice per
-      # build. Local `just check`, the pre-push gate, still runs them. The tests stay cacheable.
+        run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
+      # A PR runs `check-ci`: `just check` without the two checks workflow.yml's required `secrets` job (gitleaks) and
+      # `docs` job (scripts/workflow tests and check_docs.py) already run on it, so they would run twice per build. A
+      # train or main runs `just check` itself, the local pre-push gate: workflow.yml does not run for the commits the
+      # train merges, and two PRs whose docs pass alone can break a link together. The tests stay cacheable.
       - if: env.BASE == '' || steps.changes.outputs.docs_only != 'true'
-        run: just check-ci ${{ env.BASE == '' && 'bench-once' || '' }}
+        run: just ${{ github.event_name == 'pull_request' && 'check-ci' || 'check' }} ${{ env.BASE == '' && 'bench-once' || '' }}
       # bench-once (every benchmark once under -race, which catches races in benchmark code) runs on main only, as
       # part of the step above: a PR or train runs bench-compare below, which runs the same benchmarks again without -race,
       # so running both on every PR was the same benchmarks twice.

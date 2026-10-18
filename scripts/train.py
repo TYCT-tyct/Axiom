@@ -5,12 +5,16 @@ main together. A train builds the queued PRs merged onto the latest base in queu
 after they land, and lands them only if that build passes.
 
 Invariants:
-- A PR lands only at the head SHA recorded when its train was assembled (gh pr merge --match-head-commit), and only
-  after a build of the train prefix ending at it passed.
-- Before each merge, the base's tree equals the train's tree just before that PR; landing stops otherwise. Landing stops
-  at the first PR that cannot land, since every later PR was tested with it.
-- Landing is resumable: the verified prefix is kept as the branch train/<base>/land, whose first-parent merges record
-  each PR and its SHA, with the status train/verified on its tip. A run that finds it lands whatever is not yet merged.
+- A verified train lands whole: a passing build is evidence for its whole tree, not for the shorter prefixes in it (a
+  later PR can fix what earlier ones broke together), so every PR of it is checked (open, queued, on the base, at the
+  recorded head SHA) before the first merge, and if any fails nothing lands. Each PR merges only at that SHA
+  (gh pr merge --match-head-commit).
+- Before each merge, the base's tree equals the train's tree just before that PR. A PR that changes after landing
+  began (a window of seconds), or a tree that does not match, leaves main on an untested state: the run stops with an
+  alarm and no train runs on that base until the train-alarm/<base>/* branch it leaves is deleted.
+- Landing is resumable: the verified train is kept as the branch train/<base>/land, whose first-parent merges record
+  each PR and its SHA, with the status train/verified on its tip. It is deleted only after every PR landed and main's
+  own build was dispatched, so a run that finds it lands what is not yet merged, or only dispatches that build.
 - No PR code runs here: assembly only merges commits; the builds are separate ci.yml runs on the train branches,
   dispatched with inputs.base, so ci.yml's own md-only, deploy and bench rules see the train's whole change.
 
@@ -59,7 +63,7 @@ class Car:
 
 
 class Abort(Exception):
-    """The train stops without blaming any PR: they stay queued for the next train."""
+    """The run stops without blaming any PR: they stay queued, and a verified train stays recorded for the next run."""
 
 
 # ---- decisions, kept free of I/O so they are tested directly ----
@@ -131,8 +135,10 @@ def parse_flaky(text):
     return entries
 
 
-def landing_step(entry, pr):
+def landing_step(entry, pr, base):
     """What to do with one entry of a verified train: 'landed' (an earlier run merged it), 'merge', or why to stop."""
+    if pr["baseRefName"] != base:
+        return f"its base changed to {pr['baseRefName']}"
     if pr["state"] == "MERGED":
         return "landed" if pr["headRefOid"] == entry.sha else f"merged at {pr['headRefOid'][:7]}, not the tested head"
     if pr["state"] != "OPEN":
@@ -142,6 +148,15 @@ def landing_step(entry, pr):
     if QUEUE not in pr["labels"]:
         return "it left the queue"
     return "merge"
+
+
+def landing_plan(steps):
+    """Return (landed, problem) for a verified train's steps: how many leading PRs are already merged, and why the rest
+    cannot all land (None when they can). It lands whole or not at all; see the module's invariants."""
+    landed = 0
+    while landed < len(steps) and steps[landed] == "landed":
+        landed += 1
+    return landed, next((step for step in steps[landed:] if step != "merge"), None)
 
 
 def squash_body(body):
@@ -287,22 +302,24 @@ class Train:
             if fetched != entry.sha:
                 log(f"#{entry.number} moved to {fetched[:7]} while the train was assembled; it waits for the next one")
                 continue
-            added = self.added_migrations(base, entry.sha)
-            if clash := added & taken:
-                listed = ", ".join(f"`{directory}` {version:05d}" for directory, version in sorted(clash))
-                self.eject(entry, CONFLICT, f"It adds a migration version that main or a PR ahead of it already uses: {listed}. Renumber it.")
-                continue
             before = git("rev-parse", "HEAD")
             if conflicts := self.try_merge(entry.sha, f"train: #{entry.number} {entry.sha}\n\n{entry.title}"):
                 self.eject(entry, CONFLICT, "It conflicts with main or a PR ahead of it in the train:\n\n" + "\n".join(f"- `{f}`" for f in conflicts))
                 continue
+            # Checked before migrations: a PR the train just squash-merged still lists its migrations as added
             if git("rev-parse", "HEAD^{tree}") == git("rev-parse", f"{before}^{{tree}}"):
                 # already in the base: GitHub can list a PR as open and queued for seconds after the train merged it
                 git("reset", "-q", "--hard", before)
                 log(f"#{entry.number} changes nothing on {base[:7]}; left out")
                 continue
+            added = self.added_migrations(base, entry.sha)
+            if clash := added & taken:
+                git("reset", "-q", "--hard", before)
+                listed = ", ".join(f"`{directory}` {version:05d}" for directory, version in sorted(clash))
+                self.eject(entry, CONFLICT, f"It adds a migration version that main or a PR ahead of it already uses: {listed}. Renumber it.")
+                continue
             if blobs := self.new_workflow_blobs(entry.sha):
-                git("reset", "-q", "--hard", "HEAD^1")
+                git("reset", "-q", "--hard", before)
                 self.eject(entry, CONFLICT, "Its workflow changes merge with other changes to the same files: "
                            + ", ".join(f"`{b}`" for b in blobs) + ". Merge main into it.")
                 continue
@@ -378,7 +395,7 @@ class Train:
     # landing
 
     def land(self, base, cars):
-        """Land cars (a passing prefix on base). Return the commit later trains build on, or None when landing stopped."""
+        """Land cars (a passing train on base). Return the commit later trains build on, or None when nothing landed."""
         if self.dry_run:
             log(f"dry run: would land {', '.join(f'#{car.entry.number}' for car in cars)}; later trains build on {cars[-1].commit[:7]}")
             return cars[-1].commit
@@ -387,55 +404,83 @@ class Train:
         return self.land_verified()
 
     def land_verified(self):
-        """Land train/<base>/land, skipping what an earlier run already merged."""
+        """Land train/<base>/land whole, skipping what an earlier run already merged. Return the new base commit, or None
+        when nothing could land; raise Abort when it must stop, keeping the record unless main is now untested."""
+        cars, trees = self.read_land_ref()
+        steps = [landing_step(car.entry, self.pr(car.entry.number), self.base) for car in cars]
+        landed, problem = landing_plan(steps)
+        if problem and not landed:
+            log(f"nothing lands: #{cars[steps.index(problem)].entry.number} {problem}; the train's PRs wait for the next one")
+            self.drop_land_ref()
+            return None
+        if problem:  # an earlier run stopped part-way and a PR changed since: main holds a prefix no build tested
+            raise self.alarm(cars[:landed], f"#{cars[steps.index(problem, landed)].entry.number} {problem} after "
+                                            f"{landed} of the verified train's {len(cars)} PRs landed")
+        for index in range(landed, len(cars)):
+            car = cars[index]
+            if self.base_tree() != trees[index]:
+                raise self.alarm(cars[:index], f"{self.base} does not match the tested train before #{car.entry.number}")
+            pr = self.pr(car.entry.number)
+            if (step := landing_step(car.entry, pr, self.base)) != "merge":
+                if index == 0:
+                    log(f"nothing lands: #{car.entry.number} {step}")
+                    self.drop_land_ref()
+                    return None
+                raise self.alarm(cars[:index], f"#{car.entry.number} {step} while its train was landing")
+            self.status(car.entry.sha, STATUS, "success", "landed by the merge train")
+            if error := self.merge(car.entry, pr):
+                raise Abort(f"merging #{car.entry.number} failed, the next run resumes the landing: {error}")
+            log(f"landed #{car.entry.number} at {car.entry.sha[:7]}")
+            self.changed += 1
+        if self.base_tree() != trees[-1]:
+            raise self.alarm(cars, f"{self.base} does not match the tested train after its {len(cars)} PRs landed")
+        if self.base == "main":
+            # merges made with GITHUB_TOKEN start no push workflows, so main's own full build is started here; the
+            # record goes only after this succeeds, so a run stopped in between dispatches it on resume
+            self.dispatch_main()
+        self.drop_land_ref()
+        return self.base_head()
+
+    def dispatch_main(self):
+        sh("gh", "workflow", "run", "ci.yml", "-R", self.repo, "--ref", self.base)
+
+    def read_land_ref(self):
+        """The cars of train/<base>/land and the trees before and after each: trees[i] is the base after i of them."""
         git("fetch", "-q", "origin", self.base, f"+refs/heads/{self.land_ref}:refs/remotes/origin/{self.land_ref}")
         cars, start = train_record(git("log", "--first-parent", "--format=%H %s", f"origin/{self.land_ref}"))
-        trees = [git("rev-parse", f"{commit}^{{tree}}") for commit in [start] + [car.commit for car in cars]]
-        merged, done = [], 0  # done: the cars now on the base, so the base's tree must be trees[done]
-        for index, car in enumerate(cars):
-            pr = self.pr(car.entry.number)
-            step = landing_step(car.entry, pr)
-            if step == "landed":
-                done = index + 1
-                continue
-            if step != "merge":
-                log(f"landing stops at #{car.entry.number}: {step}; it and the PRs after it wait for the next train")
-                break
-            if self.base_tree() != trees[index]:
-                break  # reported below
-            self.status(car.entry.sha, STATUS, "success", "landed by the merge train")
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as body:
-                body.write(squash_body(pr["body"]))
-            result = sh("gh", "pr", "merge", str(car.entry.number), "-R", self.repo, "--squash", "--match-head-commit",
-                        car.entry.sha, "--subject", f"{pr['title']} (#{car.entry.number})", "--body-file", body.name, check=False)
-            os.unlink(body.name)
-            if result.returncode:
-                log(f"merging #{car.entry.number} failed, landing stops: {result.stderr.strip()}")
-                break
-            log(f"landed #{car.entry.number} at {car.entry.sha[:7]}")
-            merged.append(car.entry.number)
-            self.changed += 1
-            done = index + 1
-        matches = self.base_tree() == trees[done]
-        if not matches:
-            self.alarm(merged, f"{self.base} does not match the tested train after {done} of its {len(cars)} PRs")
+        return cars, [git("rev-parse", f"{commit}^{{tree}}") for commit in [start] + [car.commit for car in cars]]
+
+    def merge(self, entry, pr):
+        """Squash-merge at the recorded head; return the error, or None."""
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as body:
+            body.write(squash_body(pr["body"]))
+        result = sh("gh", "pr", "merge", str(entry.number), "-R", self.repo, "--squash", "--match-head-commit", entry.sha,
+                    "--subject", f"{pr['title']} (#{entry.number})", "--body-file", body.name, check=False)
+        os.unlink(body.name)
+        return (result.stderr.strip() or "failed") if result.returncode else None
+
+    def drop_land_ref(self):
         git("push", "-q", "origin", f":refs/heads/{self.land_ref}")
-        if merged and self.base == "main":
-            # merges made with GITHUB_TOKEN start no push workflows, so main's own full build is started here
-            sh("gh", "workflow", "run", "ci.yml", "-R", self.repo, "--ref", self.base)
-        return git("rev-parse", f"origin/{self.base}") if matches and done == len(cars) else None
+
+    def base_head(self):
+        git("fetch", "-q", "origin", self.base)
+        return git("rev-parse", f"origin/{self.base}")
 
     def base_tree(self):
-        git("fetch", "-q", "origin", self.base)
-        return git("rev-parse", f"origin/{self.base}^{{tree}}")
+        return git("rev-parse", f"{self.base_head()}^{{tree}}")
 
     def alarm(self, landed, problem):
-        body = (f"**Merge train alarm.** {problem} ({self.run_url}). The train stopped; main's own build still runs. "
-                f"Compare `{self.base}` with the train branch `{self.land_ref}` in the run log before queueing more.")
-        log(problem)
-        for number in landed:
-            self.api(f"issues/{number}/comments", "-F", "body=@-", data=body)
+        """Report that main is in a state no build tested, keep the train for inspection as train-alarm/<base>/<run>
+        (which also stops later runs), and return the Abort that ends this run."""
+        hold = f"train-alarm/{self.base}/{self.run_url.rsplit('/', 1)[-1]}"
+        git("push", "-q", "-f", "origin", f"origin/{self.land_ref}:refs/heads/{hold}")
+        self.drop_land_ref()
+        body = (f"**Merge train alarm.** {problem} ({self.run_url}). No train runs on `{self.base}` until the branch "
+                f"`{hold}`, which holds the verified train, is deleted: check `{self.base}` first (docs/ops/merge-train.md).")
+        for car in landed:
+            self.api(f"issues/{car.entry.number}/comments", "-F", "body=@-", data=body)
         self.api("issues", "-X", "POST", "-f", f"title=Merge train: {problem}", "-F", "body=@-", data=body)
+        return Abort(problem)
 
     # the driver
 
@@ -451,6 +496,9 @@ class Train:
                     self.api(f"actions/runs/{run['id']}/cancel", "-X", "POST", check=False)
             git("push", "-q", "origin", f":{ref}")
 
+    def alarm_held(self):
+        return git("ls-remote", "origin", f"refs/heads/train-alarm/{self.base}/*")
+
     def resume(self):
         if not git("ls-remote", "origin", f"refs/heads/{self.land_ref}"):
             return
@@ -463,26 +511,29 @@ class Train:
             git("push", "-q", "origin", f":refs/heads/{self.land_ref}")
 
     def run(self):
-        if not self.dry_run:
-            self.resume()
-        self.sweep()
-        # Another train follows while the last one changed the queue; one that changed nothing would only repeat itself
-        while entries := self.eligible():
-            before = self.changed
-            try:
-                self.train(entries)
-            except Abort as error:
-                log(f"train stopped, every PR stays queued: {error}")
-                return 1
-            finally:
-                self.sweep()
-            if self.dry_run or self.changed == before:
-                return 0
-        return 0
+        if not self.dry_run and (held := self.alarm_held()):
+            log(f"no train runs while an alarm is open: delete {held.split()[1]} once {self.base} is checked")
+            return 1
+        try:
+            if not self.dry_run:
+                self.resume()
+            self.sweep()
+            # Another train follows while the last one changed the queue; one that changed nothing would only repeat itself
+            while entries := self.eligible():
+                before = self.changed
+                try:
+                    self.train(entries)
+                finally:
+                    self.sweep()
+                if self.dry_run or self.changed == before:
+                    return 0
+            return 0
+        except Abort as error:  # nothing more is assembled, built or merged in this run
+            log(f"the run stops: {error}")
+            return 1
 
     def train(self, entries):
-        git("fetch", "-q", "origin", self.base)
-        self.ride(git("rev-parse", f"origin/{self.base}"), entries)
+        self.ride(self.base_head(), entries)
 
     def ride(self, base, entries):
         """Build entries on base (any commit, a train that has not landed included), land what passes and eject the
