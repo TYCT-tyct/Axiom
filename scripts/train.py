@@ -28,6 +28,7 @@ import tempfile
 import time
 import tomllib
 from dataclasses import dataclass
+from urllib.parse import quote
 
 QUEUE, HOTFIX, CONFLICT, FAILED = "queue", "hotfix", "train:conflict", "train:failed"
 STATUS = "train"  # required on main; posted on a PR head just before the train merges it
@@ -220,7 +221,7 @@ class Train:
 
     def eligible(self):
         """Queued PRs whose own required checks are green; the others wait in place. A dry run only reports them."""
-        required = [rule_check["context"] for rule in self.api("rules/branches/main") or []
+        required = [rule_check["context"] for rule in self.api(f"rules/branches/{quote(self.base, safe='')}") or []
                     if rule["type"] == "required_status_checks" for rule_check in rule["parameters"]["required_status_checks"]]
         entries = []
         for pr in self.queued():
