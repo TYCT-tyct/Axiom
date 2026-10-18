@@ -89,6 +89,25 @@ test.describe("signing in", () => {
     expect(new URL(page.url()).pathname).toBe("/console/keys");
   });
 
+  test("a visitor whose page is still loading when the session answers is sent to sign in once", async ({ page }) => {
+    await mockConsole(page);
+    // The page's code is held until the sign-in page shows, so the session answers before the router has shown its
+    // first page, as on a busy machine. A gate that read the address its own redirect made would redirect again,
+    // forever, and the page would never answer.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/console/assets/keys-*.js", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await page.goto("/console/keys", { waitUntil: "commit" });
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(new URL(page.url()).search).toBe("?next=%2Fkeys");
+    release();
+    await signIn(page);
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+  });
+
   test("an address to return to that leaves the app is dropped", async ({ page }) => {
     await mockConsole(page);
     await page.goto("/console/sign-in?next=//evil.example/");
