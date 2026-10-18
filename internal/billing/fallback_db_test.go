@@ -56,6 +56,16 @@ func fetches(tb testing.TB, n string) Segment {
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: n})
 }
 
+// servedAt is segment with its usage reported at the given service tier.
+func servedAt(tb testing.TB, st catalog.ServiceTier, counts map[catalog.Item]int64) Segment {
+	tb.Helper()
+	u, err := catalog.NewUsage(counts, st, nil)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
+}
+
 func (b *bank) settleWith(h *Hold, o Outcome) Final {
 	b.t.Helper()
 	f, err := b.billing.Settle(b.t.Context(), h, o)
@@ -94,6 +104,7 @@ func TestFallbackPrices(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{"a known per-use item without a price takes the default", fallbackDefault},
+		{"a tier the price list lacks is charged, not given away", fallbackUnlistedTier},
 		{"unknown uses are priced by the fallback", fallbackEstimated},
 		{"unknown uses down to the floor, another reservation covered", fallbackFloor},
 		{"a late Settle after cleanup released charges the uses", fallbackLate},
@@ -113,6 +124,35 @@ func fallbackDefault(t *testing.T) {
 		t.Errorf("Settle = %+v, want 180 exact: the search at the model's 10, the executions at the default 50", f)
 	}
 	b.expect("settled", 180)
+}
+
+// fallbackUnlistedTier: a schedule that prices the standard tier only, as one whose model's spec declares no other can,
+// still charges a call its upstream served at priority — which no price list has, so Cost prices nothing — at the
+// fallback prices, estimated: 70 tokens at the highest token price 1 and the search at its default 20. Before, the call
+// was charged nothing but the flag (docs/domains/billing.md「定价」: an upstream that reports a tier the price list lacks
+// is charged the fallback prices and marked estimated). A waiver keeps the search alone.
+func fallbackUnlistedTier(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		o    Outcome
+		want int64
+	}{
+		{"50 input and 20 output at priority, one search", outcome(Committed, FinishStop,
+			servedAt(t, catalog.ServiceTierPriority, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 90},
+		{"waived: the tokens go, the search stays", outcome(Unknown, FinishNone,
+			servedAt(t, catalog.ServiceTierPriority, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
+			if f := b.settleWith(b.hold(1000), tc.o); !f.Estimated || f.Charged != platform.AmountExact(tc.want) {
+				t.Errorf("Settle = %+v, want %d estimated: a normal answer is never free", f, tc.want)
+			}
+			b.expect("settled", tc.want)
+			if n := b.count("SELECT balance FROM billing.balances"); n != 10_000-tc.want {
+				t.Errorf("balance %d, want %d", n, 10_000-tc.want)
+			}
+		})
+	}
 }
 
 func fallbackEstimated(t *testing.T) {

@@ -189,7 +189,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "no pricing rule gives it a sale price"
 	}
 	reportable := model.Reportable()
-	if sold.Schedule.Missing(reportable) != (catalog.Reportable{}) {
+	if billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
 		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
 	}

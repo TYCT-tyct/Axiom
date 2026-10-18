@@ -259,7 +259,8 @@ const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCo
 // the per-use items, still at the band the whole sampling falls in, as the cost of the sampling less its cost without
 // them. s is the schedule admission filled with the per-use defaults. Charged items with usage the upstream did not
 // report or the schedule cannot price, or any usage protocol could not map, make the charge estimated; usage protocol
-// could not map is charged at its fallback price (docs/domains/billing.md「价目表缺项」).
+// could not map, and an item the schedule prices nowhere, are charged at their fallback prices
+// (docs/domains/billing.md「价目表缺项」).
 func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool) (priced, error) {
 	var p priced
 	total := platform.Exact{}
@@ -271,6 +272,9 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
 		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), perUseOnly)
+		}
+		if err == nil {
+			cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
 		}
 		if err == nil {
 			total, err = total.Add(cost)
@@ -308,6 +312,34 @@ func addFallbacks(s catalog.Schedule, f fallbacks, cost platform.Exact, unknown 
 		}
 		var err error
 		if cost, err = cost.Add(price); err != nil {
+			return platform.Exact{}, err
+		}
+	}
+	return cost, nil
+}
+
+// addMissing adds to cost the fallback price of each charged item the schedule prices nowhere, which Cost leaves out of
+// its total rather than failing: an upstream that reports a service tier no price list has, or a price list that leaves
+// an item out, is charged at the fallback prices instead of nothing (docs/domains/billing.md「价目表缺项」). A token is
+// charged at tokenPrice, the highest price of a token anywhere; a per-use item at its default, the price admission would
+// have filled in every tier the schedule offers. Only items with usage are in missing, and charged is what a waiver
+// leaves chargeable.
+func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.Usage, missing, charged catalog.ItemSet) (platform.Exact, error) {
+	charged &= missing // nothing short of it: the schedule priced what it could and it was all priced
+	if charged == 0 {
+		return cost, nil
+	}
+	tokens := tokenPrice(s)
+	for it := range catalog.NumItems {
+		if !charged.Has(it) {
+			continue
+		}
+		rate := tokens
+		if perUseItems.Has(it) {
+			rate = f.perUse[it]
+		}
+		var err error
+		if cost, err = cost.Add(rate.Mul(u.Count(it))); err != nil {
 			return platform.Exact{}, err
 		}
 	}

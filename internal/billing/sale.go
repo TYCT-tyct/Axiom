@@ -22,6 +22,16 @@ type Sold struct {
 	Schedule catalog.Schedule
 }
 
+// Unpriced is the part of r the sale price s does not price, which keeps the model off routing: the listing threshold of
+// docs/domains/billing.md「定价」. The known per-use items are not part of it: every currency has a default price for each
+// of them, which admission fills in (docs/domains/billing.md「价目表缺项」), so a fixed price list that leaves one out still
+// prices it. What is left is what no default covers, and a call the schedule prices nowhere is charged at the fallback
+// prices rather than nothing.
+func Unpriced(s catalog.Schedule, r catalog.Reportable) catalog.Reportable {
+	r.Items &^= perUseItems
+	return s.Missing(r)
+}
+
 // Sell is the whole sale price one rule sets for one reference price: a pure function of the rule and the reference
 // price, so the same rule versions and reference price always give the same price list, with no database in between.
 //

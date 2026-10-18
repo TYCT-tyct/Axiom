@@ -36,7 +36,16 @@ const specAll = `{"items":["input","output","cache_read","cache_write"],"tiers":
 // specNoServing is a spec that lists what the upstream may report but says nothing about what an endpoint offers.
 const specNoServing = `{"items":["input","output"],"tiers":["standard"]}`
 
+// specSearch is a spec whose upstream may report a per-use item: a sale price need not price it, because every currency
+// has a default price for it (docs/domains/billing.md「价目表缺项」).
+const specSearch = `{"items":["input","output","web_search"],"tiers":["standard"],` +
+	`"context_length":200000,"max_output_tokens":8192,"streams":true,"abilities":["tools","web_search"]}`
+
+// reference is a model's reference price in USD, prices as the catalog publishes them.
 const reference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375"}}`
+
+// searchReference prices specSearch's items too: the catalog lists no model whose reference price leaves one out.
+const searchReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","web_search":"0.01"}}`
 
 // saleRule is the method of a rule for acme's models: 1.5 times the reference price, in the main site's currency.
 const saleRule = `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`
@@ -98,6 +107,13 @@ func newRouteFixture(t *testing.T) *routeFixture {
 // seed lists and names a model with the spec and a reference price: the catalog lists no model without one.
 func (f *routeFixture) seed(slug, spec string) catalog.ModelID {
 	f.t.Helper()
+	return f.seedPrice(slug, spec, reference)
+}
+
+// seedPrice is seed with a reference price of its own: the catalog lists no model whose reference price leaves out an
+// item its spec says the upstream may report.
+func (f *routeFixture) seedPrice(slug, spec, price string) catalog.ModelID {
+	f.t.Helper()
 	ctx := f.t.Context()
 	op := func() catalog.Op {
 		return catalog.Op{Actor: audit.System("gateway.test"), Key: uuid.NewV7(), Reason: "test"}
@@ -120,7 +136,7 @@ func (f *routeFixture) seed(slug, spec string) catalog.ModelID {
 		f.t.Fatal(err)
 	}
 	if _, err := f.cat.PublishPrice(ctx, catalog.PublishPriceRequest{
-		Op: op(), Model: catalog.ModelID(id), Source: catalog.SourceManual, Schedule: jsonx.Raw(reference),
+		Op: op(), Model: catalog.ModelID(id), Source: catalog.SourceManual, Schedule: jsonx.Raw(price),
 		Evidence: jsonx.Raw(`{"url":"https://example.com/pricing"}`),
 	}); err != nil {
 		f.t.Fatal(err)
@@ -425,7 +441,8 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 
 // TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort: a sale price that does not price an item the model reports (a
 // fixed price list is not checked against the model when it is made) would answer every call 503 once a call reported
-// that item, so the model is left out with the reason in the log.
+// that item, so the model is left out with the reason in the log. A per-use item is not short: its site's default price
+// covers it (the test after this one).
 func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
 	f := newRouteFixture(t)
 	short, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
@@ -439,6 +456,27 @@ func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
 	}
 	if logs := f.logs.String(); !strings.Contains(logs, "its sale price lacks a price") {
 		t.Errorf("the log does not say why:\n%s", logs)
+	}
+}
+
+// TestRouteBuildSellsAModelWhoseSalePriceLeavesAPerUseItemOut: a fixed price list that prices no web search still sells a
+// model whose spec says its upstream may report one, because admission fills in the site's default price for it. Leaving
+// the model out would answer plain text calls 404 too (docs/domains/billing.md「价目表缺项」).
+func TestRouteBuildSellsAModelWhoseSalePriceLeavesAPerUseItemOut(t *testing.T) {
+	f := newRouteFixture(t)
+	model := f.seedPrice("acme/searcher", specSearch, searchReference)
+	short, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.prices[model] = billing.Sold{Version: uuid.NewV7(), Schedule: short}
+	r := routable(model, protocol.Messages)
+	f.build([]suppliers.Routable{r})
+	if want := (Count{Endpoints: 1, Offered: 1}); f.count != want {
+		t.Fatalf("the build made %+v, want %+v: the search has a default price", f.count, want)
+	}
+	if got := f.planned(call(model)); len(got) != 1 || got[0] != r.ID {
+		t.Errorf("routing plans to %v, want the endpoint %s", got, r.ID)
 	}
 }
 
