@@ -313,7 +313,6 @@ func (r *Relay) finishAggregate(out []byte, f Final) []byte {
 	if err := r.feed(out); err == nil {
 		if body, err := r.agg.body(); err == nil {
 			r.status, r.state = http.StatusOK, ended
-			r.release()
 			return body
 		}
 	}
