@@ -253,7 +253,6 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) // cfg: 平台范围、
 func (s *Service) Load(ctx context.Context, logger *slog.Logger) error // 站点、域名、设置、角色的快照；核对权限名；启动重载循环
 func (s *Service) SiteForHost(host string) (Site, Surface, error) // Host 原样（小写、非默认端口带端口）；ErrUnknownHost、ErrStale
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error)
-func (s *Service) DisableKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error
 func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error
 func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) (Caller, error) // 只认出，不判定能否使用
 func (s *Service) GetKeyInfo(ctx context.Context, tx pg.Tx, key KeyID) (KeyInfo, error)      // 名称、标签（前缀...末四位）、过期时间，供 GET /key；别的账户的 key 是 ErrKeyNotFound
