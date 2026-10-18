@@ -10,6 +10,90 @@ import (
 	"time"
 )
 
+const getCallTrace = `-- name: GetCallTrace :one
+SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account_id, workspace_id::text AS workspace_id,
+    key_id::text AS key_id, end_user_hash, host(ip) AS ip, client_app, session_id, subagent_id, request_class,
+    language, used_tools, has_image, has_file, model, route::text AS route, usage::text AS usage, service_tier,
+    price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind,
+    consent_version, training_allowed
+FROM observability.call_log
+WHERE id = ($1::text)::uuid
+`
+
+type GetCallTraceRow struct {
+	ID              string
+	At              time.Time
+	SiteID          string
+	AccountID       string
+	WorkspaceID     string
+	KeyID           string
+	EndUserHash     string
+	Ip              string
+	ClientApp       string
+	SessionID       string
+	SubagentID      string
+	RequestClass    string
+	Language        string
+	UsedTools       bool
+	HasImage        bool
+	HasFile         bool
+	Model           string
+	Route           string
+	Usage           string
+	ServiceTier     string
+	PriceNano       int64
+	CostNano        int64
+	Currency        string
+	FreeOfCharge    bool
+	LatencyMs       int32
+	FirstTokenMs    int32
+	FinishReason    string
+	ErrorKind       string
+	ConsentVersion  string
+	TrainingAllowed bool
+}
+
+// One call in full, for the chain read (README.md「追溯」): route included, and its request ID is the key the attempts,
+// the ledger and the supplier charges are read by. A call that has not been written yet is no rows, and the scope's
+// row-level security decides which calls exist for the reader.
+func (q *Queries) GetCallTrace(ctx context.Context, db DBTX, id string) (GetCallTraceRow, error) {
+	row := db.QueryRow(ctx, getCallTrace, id)
+	var i GetCallTraceRow
+	err := row.Scan(
+		&i.ID,
+		&i.At,
+		&i.SiteID,
+		&i.AccountID,
+		&i.WorkspaceID,
+		&i.KeyID,
+		&i.EndUserHash,
+		&i.Ip,
+		&i.ClientApp,
+		&i.SessionID,
+		&i.SubagentID,
+		&i.RequestClass,
+		&i.Language,
+		&i.UsedTools,
+		&i.HasImage,
+		&i.HasFile,
+		&i.Model,
+		&i.Route,
+		&i.Usage,
+		&i.ServiceTier,
+		&i.PriceNano,
+		&i.CostNano,
+		&i.Currency,
+		&i.FreeOfCharge,
+		&i.LatencyMs,
+		&i.FirstTokenMs,
+		&i.FinishReason,
+		&i.ErrorKind,
+		&i.ConsentVersion,
+		&i.TrainingAllowed,
+	)
+	return i, err
+}
+
 const getOwnCall = `-- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
@@ -70,15 +154,14 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 const insertCallLogs = `-- name: InsertCallLogs :execrows
 INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, key_id, end_user_hash, ip, client_app,
     session_id, subagent_id, request_class, language, used_tools, has_image, has_file, model, endpoint_id, source_class,
-    egress, attempt_count, route, ledger_entry_ids, usage, service_tier, price_nano, cost_nano, currency, free_of_charge,
+    egress, attempt_count, route, usage, service_tier, price_nano, cost_nano, currency, free_of_charge,
     latency_ms, first_token_ms, finish_reason, error_kind, consent_version, training_allowed)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'request_class', r ->> 'language',
     (r ->> 'used_tools')::boolean, (r ->> 'has_image')::boolean, (r ->> 'has_file')::boolean, r ->> 'model',
     (r ->> 'endpoint_id')::uuid, r ->> 'source_class', r ->> 'egress', (r ->> 'attempt_count')::smallint,
-    (r ->> 'route')::jsonb,
-    ARRAY(SELECT jsonb_array_elements_text(r -> 'ledger_entry_ids'))::uuid[], r -> 'usage', r ->> 'service_tier',
+    (r ->> 'route')::jsonb, r -> 'usage', r ->> 'service_tier',
     (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
     r ->> 'consent_version', (r ->> 'training_allowed')::boolean

@@ -53,6 +53,14 @@ var serviceTierNames = [numServiceTiers]string{"standard", "flex", "priority", "
 
 func (st ServiceTier) String() string { return serviceTierNames[st] }
 
+// ParseItem returns the item a stored name denotes: the inverse of Item.String.
+func ParseItem(name string) (Item, error) { return lookup[Item](itemNames[:], name) }
+
+// ParseServiceTier returns the service tier a stored name denotes: the inverse of ServiceTier.String.
+func ParseServiceTier(name string) (ServiceTier, error) {
+	return lookup[ServiceTier](serviceTierNames[:], name)
+}
+
 // ItemSet is a set of billing items.
 type ItemSet = set[Item]
 

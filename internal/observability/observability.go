@@ -76,9 +76,10 @@ type AttemptRecord struct {
 }
 
 // CallRecord is everything the log keeps of one request, known only while it happened, and its attempts. Amounts are
-// in billing's smallest unit. It names no key, credential or conversation text; the ledger entries and supplier
-// charges are kept by their owners under the same ID. The call's endpoint, source class, egress and attempt count are
-// the last attempt's, so the row cannot disagree with its attempts.
+// in billing's smallest unit. It names no key, credential or conversation text; the ledger transactions and supplier
+// charges are kept by their owners under the same request ID, which is the only link between them (README「追溯」). The
+// call's endpoint, source class, egress and attempt count are the last attempt's, so the row cannot disagree with its
+// attempts.
 type CallRecord struct {
 	ID                               uuid.UUID // the request ID
 	At                               time.Time // when the request started
@@ -92,7 +93,6 @@ type CallRecord struct {
 	Model                            string // the public name the client asked for
 	Attempts                         []AttemptRecord
 	Route                            []byte // a JSON object, routing's record of how the endpoint was chosen
-	Ledger                           []uuid.UUID
 	Usage                            map[catalog.Item]int64
 	ServiceTier                      catalog.ServiceTier
 	PriceNano, CostNano              int64
@@ -128,7 +128,6 @@ type row struct {
 	Egress          string           `json:"egress"`
 	AttemptCount    int              `json:"attempt_count"`
 	Route           string           `json:"route"`
-	LedgerEntryIDs  []string         `json:"ledger_entry_ids"`
 	Usage           map[string]int64 `json:"usage"`
 	ServiceTier     string           `json:"service_tier"`
 	PriceNano       int64            `json:"price_nano"`
@@ -212,10 +211,6 @@ func newCallRow(r CallRecord) (row, error) {
 	if !r.IP.IsValid() {
 		return row{}, errors.New("ip: not set")
 	}
-	ledger := make([]string, len(r.Ledger))
-	for i, id := range r.Ledger {
-		ledger[i] = id.String()
-	}
 	endUser := ""
 	if r.EndUser != (EndUserHash{}) {
 		endUser = hex.EncodeToString(r.EndUser.sum[:])
@@ -231,7 +226,7 @@ func newCallRow(r CallRecord) (row, error) {
 		ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, RequestClass: r.Class,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
 		EndpointID: endpoint, SourceClass: sourceClass, Egress: egress, AttemptCount: len(r.Attempts), Route: route,
-		LedgerEntryIDs: ledger, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
+		Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed,

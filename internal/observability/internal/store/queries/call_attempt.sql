@@ -10,3 +10,13 @@ SELECT (r ->> 'request_id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'attempt_se
     (r ->> 'finished_at')::timestamptz, (r ->> 'first_token_ms')::integer
 FROM jsonb_array_elements(@rows::jsonb) AS r
 ON CONFLICT (request_id, at, attempt_seq) DO NOTHING;
+
+-- name: ListTraceAttempts :many
+-- Every attempt of a call, in the order they were made (README.md「追溯」). The call's start is given so only its month
+-- partition is read, though the primary key's request_id prefix would find the rows without it.
+SELECT request_id::text AS request_id, at, attempt_seq, site_id::text AS site_id, account_id::text AS account_id,
+    endpoint_id::text AS endpoint_id, supplier_id::text AS supplier_id, source_class, egress, outcome, error_kind,
+    started_at, finished_at, first_token_ms
+FROM observability.call_attempt
+WHERE request_id = (@request_id::text)::uuid AND at = @at
+ORDER BY attempt_seq;

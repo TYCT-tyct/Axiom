@@ -1,14 +1,17 @@
 package observability
 
 import (
+	"net/netip"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/observability/internal/store"
+	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -199,71 +202,66 @@ func TestRecordsAreStoredOnceAndNeverRefusedForLackOfAPartition(t *testing.T) {
 	}
 }
 
-// TestCallAndAttemptsRoundTrip: a call written twice stores one row per attempt, and the call's endpoint, source
-// class, egress and attempt count are the last attempt's, so the record links its attempts, route and ledger entries.
+// TestCallAndAttemptsRoundTrip: a call written twice stores one call and one row per attempt, its endpoint, source
+// class, egress and attempt count are the last attempt's, and GetTrace reads the whole record back — every field, its
+// attempts in order and routing's route — by the request ID alone.
 func TestCallAndAttemptsRoundTrip(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
 	rec := record(uuid.NewV7(), now)
+	rec.Route = []byte(`{"excluded":[{"endpoint":"p1","reason":"context"}],"route":["a","b"]}`)
 	keep(t, db, rec)
 	keep(t, db, rec) // a retry whose first write had committed
 	checkCallRow(t, db, rec)
-	checkAttemptsInOrder(t, db, rec)
+	got := trace(t, db, rec.ID)
+	var wantRoute, gotRoute any
+	if err := jsonx.Unmarshal(rec.Route, &wantRoute); err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonx.Unmarshal(got.Route, &gotRoute); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(wantRoute, gotRoute); diff != "" {
+		t.Errorf("route (-want +got):\n%s", diff)
+	}
+	rec.Route, got.Route = nil, nil
+	if diff := cmp.Diff(rec, got, cmp.Comparer(func(a, b EndUserHash) bool { return a == b }),
+		cmp.Comparer(func(a, b platform.Currency) bool { return a == b }),
+		cmp.Comparer(func(a, b netip.Addr) bool { return a == b })); diff != "" {
+		t.Errorf("the call read back (-want +got):\n%s", diff)
+	}
+}
+
+// trace reads a call's chain in the platform scope.
+func trace(t *testing.T, db *pg.DB, id uuid.UUID) CallRecord {
+	t.Helper()
+	var rec CallRecord
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		rec, err = GetTrace(t.Context(), tx, id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return rec
 }
 
 func checkCallRow(t *testing.T, db *pg.DB, rec CallRecord) {
 	t.Helper()
 	var count, attempts int
-	var endpoint, source, egress, route string
-	var ledger int
+	var endpoint, source, egress string
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT count(*), max(attempt_count), max(endpoint_id::text), max(source_class),
-			max(egress), max(route::text), max(cardinality(ledger_entry_ids))
+			max(egress)
 			FROM observability.call_log WHERE id = $1`, rec.ID).
-			Scan(&count, &attempts, &endpoint, &source, &egress, &route, &ledger)
+			Scan(&count, &attempts, &endpoint, &source, &egress)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	last := rec.Attempts[len(rec.Attempts)-1]
 	if count != 1 || attempts != len(rec.Attempts) || endpoint != last.Endpoint.String() || source != last.SourceClass ||
-		egress != last.Egress || ledger != len(rec.Ledger) || !strings.Contains(route, `"preset"`) {
-		t.Errorf("call: %d rows, %d attempts, endpoint %q, source %q, egress %q, route %q, %d ledger entries",
-			count, attempts, endpoint, source, egress, route, ledger)
-	}
-}
-
-func checkAttemptsInOrder(t *testing.T, db *pg.DB, rec CallRecord) {
-	t.Helper()
-	var seqs []int
-	var outcomes, endpoints, errors []string
-	var firstTokens []int
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		rows, err := tx.Query(t.Context(), `SELECT attempt_seq, outcome, error_kind, endpoint_id::text, first_token_ms
-			FROM observability.call_attempt WHERE request_id = $1 ORDER BY attempt_seq`, rec.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var seq int
-			var outcome, errKind, endpoint string
-			var first int
-			if err := rows.Scan(&seq, &outcome, &errKind, &endpoint, &first); err != nil {
-				return err
-			}
-			seqs, outcomes, errors, endpoints, firstTokens = append(seqs, seq), append(outcomes, outcome),
-				append(errors, errKind), append(endpoints, endpoint), append(firstTokens, first)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	wantSeqs, wantOutcomes := []int{1, 2}, []string{string(AttemptFailed), string(AttemptCommitted)}
-	if !slices.Equal(seqs, wantSeqs) || !slices.Equal(outcomes, wantOutcomes) ||
-		!slices.Equal(errors, []string{"rate_limited", ""}) ||
-		!slices.Equal(endpoints, []string{rec.Attempts[0].Endpoint.String(), rec.Attempts[1].Endpoint.String()}) ||
-		!slices.Equal(firstTokens, []int{0, 300}) {
-		t.Errorf("attempts: seqs %v, outcomes %v, errors %v, endpoints %v, first tokens %v", seqs, outcomes, errors, endpoints, firstTokens)
+		egress != last.Egress {
+		t.Errorf("call: %d rows, %d attempts, endpoint %q, source %q, egress %q",
+			count, attempts, endpoint, source, egress)
 	}
 }
 
@@ -369,6 +367,40 @@ func TestCallLogHoldsNoContentOrSecret(t *testing.T) {
 		}
 		if len(unbounded) > 0 {
 			t.Errorf("%s: text and JSON columns without a size or format check: %v", table, unbounded)
+		}
+	}
+}
+
+// TestCallLogCoversTheWriteTimeFields: every field of docs/domains/observability.md「写入时记全」has a column, on the
+// call or on its attempt, under the group the document puts it in. A removed or renamed column fails here, so the
+// acceptance item is checked field by field rather than by reading the schema by eye.
+func TestCallLogCoversTheWriteTimeFields(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	calls, _ := columns(t, db, "call_log")
+	attempts, _ := columns(t, db, "call_attempt")
+	for _, group := range []struct {
+		name   string
+		table  map[string]string
+		fields []string
+	}{
+		{"who", calls, []string{"site_id", "account_id", "workspace_id", "key_id", "end_user_hash", "ip"}},
+		{"with what", calls, []string{"client_app", "session_id", "subagent_id", "request_class"}},
+		{"where", calls, []string{"model", "endpoint_id", "source_class", "egress", "route"}},
+		{"result", calls, []string{
+			"usage", "price_nano", "cost_nano", "latency_ms", "first_token_ms", "finish_reason", "error_kind", "free_of_charge",
+		}},
+		{"rights", calls, []string{"consent_version", "training_allowed"}},
+		{"write labels", calls, []string{"client_app", "model", "source_class", "language", "used_tools", "has_image", "has_file"}},
+		{"each attempt", attempts, []string{
+			"request_id", "attempt_seq", "endpoint_id", "supplier_id", "source_class", "egress", "started_at", "finished_at",
+			"first_token_ms", "outcome", "error_kind",
+		}},
+	} {
+		for _, field := range group.fields {
+			if _, ok := group.table[field]; !ok {
+				t.Errorf("%s: no column %q", group.name, field)
+			}
 		}
 	}
 }
