@@ -1,0 +1,79 @@
+[
+  {
+    "case": "members in another order, with other spacing",
+    "first": "{\"amount\":{\"amount\":\"2500000000\",\"currency\":\"USD\"},\"reason\":\"gift\"}",
+    "again": "{ \"reason\": \"gift\", \"amount\": { \"currency\": \"USD\", \"amount\": \"2500000000\" } }",
+    "same": true
+  },
+  {
+    "case": "a string escaped or not",
+    "first": "{\"reason\":\"caf\\u00e9\"}",
+    "again": "{\"reason\":\"café\"}",
+    "same": true
+  },
+  {
+    "case": "integers past 2^53 that differ",
+    "first": "{\"rev\":9007199254740992}",
+    "again": "{\"rev\":9007199254740993}",
+    "same": false
+  },
+  {
+    "case": "a fraction written two ways",
+    "first": "{\"ratio\":0.50}",
+    "again": "{\"ratio\":5e-1}",
+    "same": true
+  },
+  {
+    "case": "a list in another order",
+    "first": "{\"items\":[\"input\",\"output\"]}",
+    "again": "{\"items\":[\"output\",\"input\"]}",
+    "same": false
+  },
+  {
+    "case": "a member left out or null",
+    "first": "{\"reason\":\"gift\"}",
+    "again": "{\"reason\":\"gift\",\"expires_at\":null}",
+    "same": false
+  },
+  {
+    "case": "another amount",
+    "first": "{\"amount\":{\"amount\":\"2500000000\",\"currency\":\"USD\"},\"reason\":\"gift\"}",
+    "again": "{\"amount\":{\"amount\":\"25000000000\",\"currency\":\"USD\"},\"reason\":\"gift\"}",
+    "same": false
+  },
+  {
+    "case": "a supplier's login with another secret",
+    "operation": "createSupplier",
+    "first": "{\"name\":\"Acme\",\"kind\":\"newapi\",\"origin\":\"https://8.8.8.8\",\"upstream_account\":\"ops-1\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"pat-secret\"},\"reason\":\"second source\"}",
+    "again": "{\"name\":\"Acme\",\"kind\":\"newapi\",\"origin\":\"https://8.8.8.8\",\"upstream_account\":\"ops-1\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"another-secret\"},\"reason\":\"second source\"}",
+    "same": true
+  },
+  {
+    "case": "a supplier's origin spelled another way",
+    "operation": "createSupplier",
+    "first": "{\"name\":\"Acme\",\"kind\":\"newapi\",\"origin\":\"https://8.8.8.8\",\"upstream_account\":\"ops-2\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"pat-secret\"},\"reason\":\"second source\"}",
+    "again": "{\"name\":\"Acme\",\"kind\":\"newapi\",\"origin\":\"HTTPS://8.8.8.8:443\",\"upstream_account\":\"ops-2\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"pat-secret\"},\"reason\":\"second source\"}",
+    "same": true
+  },
+  {
+    "case": "a supplier with another name",
+    "operation": "createSupplier",
+    "first": "{\"name\":\"Acme\",\"kind\":\"newapi\",\"origin\":\"https://8.8.8.8\",\"upstream_account\":\"ops-3\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"pat-secret\"},\"reason\":\"second source\"}",
+    "again": "{\"name\":\"Other\",\"kind\":\"newapi\",\"origin\":\"https://8.8.8.8\",\"upstream_account\":\"ops-3\",\"settlement_currency\":\"USD\",\"login\":{\"access_token\":\"pat-secret\"},\"reason\":\"second source\"}",
+    "same": false
+  },
+  {
+    "case": "a new login with another secret",
+    "operation": "replaceSupplierLogin",
+    "first": "{\"login\":{\"access_token\":\"new-secret\"},\"reason\":\"rotated\"}",
+    "again": "{\"login\":{\"access_token\":\"newer-secret\"},\"reason\":\"rotated\"}",
+    "same": true
+  },
+  {
+    "case": "a new login with another reason",
+    "operation": "replaceSupplierLogin",
+    "first": "{\"login\":{\"access_token\":\"new-secret\"},\"reason\":\"rotated\"}",
+    "again": "{\"login\":{\"access_token\":\"new-secret\"},\"reason\":\"leaked\"}",
+    "same": false
+  }
+]
