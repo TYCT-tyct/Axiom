@@ -20,6 +20,7 @@
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
+| `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
@@ -48,7 +49,7 @@
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
 | 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，要求函数体的两个 `current_setting` 都在、函数名不出现，两组断言同时排除空计划和子查询写法（带子查询的函数体不再被内联，每行一次调用） |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
-| 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope` 和构造任意范围的 `pg.NewScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
+| 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在测试文件之外拒绝构造任意范围的 `pg.NewScope`，在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
 | Axiom 的 schema 里每张表都受行级安全约束 | `serve` 启动时检查各模块同名的 schema（`platform` 和[依赖表](../../docs/architecture.md#模块之间的依赖)里的模块）：除版本表外，每张表都 ENABLE 并 FORCE 行级安全，并且有策略；没有策略的表什么都查不到，是迁移漏了一步，在启动时报出，而不是在运行时表现为查不到数据。测试分别建只 FORCE 没 ENABLE、只 ENABLE 没 FORCE、没有策略的表 |
 | 登录前的查找只经 `axiom_lookup` 的定义者函数 | `serve` 启动时检查：这些 schema 里的 `SECURITY DEFINER` 函数都属于 `axiom_lookup`，`search_path` 固定为 `pg_catalog, pg_temp`，除所有者外只有 `axiom_app` 能执行；`axiom_lookup` 存在（不存在说明没跑过迁移，提示先运行 `axiom migrate`），不能登录、不是超级用户、没有 BYPASSRLS，不拥有任何表，在任何 schema 里都没有 CREATE。测试分别构造函数的三种违规，以及查找角色能登录、拥有表、能在 schema 里建对象的情况；查找角色是超级用户、带 BYPASSRLS、不存在这三种改的是整个实例的角色，在不并行的测试里改完即恢复 |
@@ -102,13 +103,13 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 | 监听 | 提供什么 |
 |---|---|
-| 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；以后加模型调用接口、支付回调 |
+| 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；模型调用接口（`/v1/`、`/api/v1/`，`cmd/axiom` 的 `withModelCalls`）；支付回调以后加 |
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
 `serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
-公网的每个请求都经过 `httpserver.Public`：
+公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
 - **请求与尝试的编号**：`platform.RequestID` 是请求 ID 的类型，各模块的表都用它记同一个调用；`platform.AttemptSeq` 从 1 起给一个请求的尝试编号，上限 `MaxAttempts`（3，含结果未知的尝试）。放在平台是因为 billing、suppliers、observability 都要用，而它们之间不互相依赖。
 - **访问日志**：每个请求一行，记方法、路由模式、状态、字节数、耗时和请求 ID；记路由模式而不是路径，路径里可能有 ID 或密钥。
@@ -142,7 +143,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 约定 | 内容 | 检查 |
 |---|---|---|
 | 路径与版本 | 路径以 `/api/<文件名>/v1/` 开头。加操作、加字段、加可选参数向后兼容，不升版本；改变含义或删除才升 v2 | 检查前缀 |
-| 安全声明 | 每个操作显式写 `security`：`[]` 是公开；要会话的写 `session`，改数据的再加 `csrf`。`x-axiom-level` 写会话要证明到哪一步（`any`、`pending_mfa`、`signed_in`、`mfa`），`x-axiom-permission` 写在该会话的范围上需要的权限名（不需要写 `none`）。管理接口的操作都作用于平台，所以都要 `mfa` | 检查 |
+| 安全声明 | 每个操作显式写 `security`：`[]` 是公开；要会话的写 `session`，改数据的再加 `csrf`。`x-axiom-level` 写会话要证明到哪一步（`any`、`pending_mfa`、`signed_in`、`mfa`），`x-axiom-permission` 写在该会话的范围上需要的权限名（不需要写 `none`）。管理接口里 Session 标签以外的操作都作用于平台，所以都要 `mfa` | 检查 |
 | 改数据的请求 | 带站点登记的 `Origin`、`Content-Type: application/json`，有会话的再带 `X-CSRF-Token`；不满足返回 403 `origin_rejected`。接口不开放 CORS | 改数据的操作必须有 403 |
 | 错误体 | 所有失败都是 `{"error": {"code", "message", "fields"}}`，`code` 取自封闭的枚举 `ErrorCode`，前端按它翻译，`message` 是写给日志和开发者的英文；请求 ID 在 `X-Request-ID` 头里。`default` 响应和每个非 2xx 响应都用这个体 | 检查 |
 | 分页 | 键集游标：`cursor`（不透明，原样传回，只对同一组筛选有效）、`limit`（默认 50，最大 200），响应 `{data, next_cursor}`，最后一页的 `next_cursor` 是 null。游标里放什么由实现定，只要沿用所在查询的排序键（如调用记录的 `(at, id)`），不用 OFFSET | 返回 `next_cursor` 的操作必须带这两个参数 |
@@ -150,7 +151,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 比率与十进制数 | 倍率、单位价值、余额的原生数量都是十进制文本（`Decimal`），单价是 `UnitPrice`（至多 15 位小数），不经过浮点数 | — |
 | ID | 账户模块的实体用 TypeID（`user_…`、`acct_…`、`key_…`、`ws_…`、`site_…`、`tier_…`）；调用编号、目录、供应商、定价的行用 UUID 文本。路径里格式不对和不存在一样返回 404 | 模式写在契约里 |
 | 缺省与空 | 响应里没有的值就不出现，不写 null（`next_cursor` 是唯一的例外）；`PUT` 整体替换，请求里没写的可选项取「没有限制」或默认值，所以页面把读到的设置连同修改一起送回 | — |
-| 管理接口的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别的操作者、别的操作或别的内容用过是 409 `idempotency_key_reused`，存法见「幂等」）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
+| 管理接口里 Session 标签以外的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别的操作者、别的操作或别的内容用过是 409 `idempotency_key_reused`，存法见「幂等」）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
 | 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同 `//go:generate` 和嵌入一起删掉。控制台的 18 个操作都有处理器，那一套已经删掉；管理接口的 40 个也都有处理器（定价试算补上最后一条），那一套同样已经删掉；下一个契约再加回来 | `just generated` |
 | 两份契约共有的部分 | 会话与两步验证的操作和 `Error`、`Money`、`Balance` 等模式在两份契约里各写一遍，不引用外部文件（生成器要为外部引用另做一个包，每份契约才不自成一体）。两份里同名的操作和定义必须完全相同 | 检查 |
 | 契约的约束谁来强制 | **定论**：`cmd/axiom` 的守卫（`guard`）在处理器之前，按嵌入程序的契约本身强制；契约由 oapi-codegen 的 `embedded-spec` 编进生成的 `consoleapi`（`GetSpec`，随 `just generate` 更新，`just generated` 保证不过期），启动时用 kin-openapi 读出每个操作的规则，读不通或有操作的声明程序强制不了（没有 `security`、会话操作缺 `x-axiom-level`、权限名没在 accounts 声明、改数据的会话操作没有 `csrf`）就不启动。守卫在生成的路由之前运行（生成的包装先解析查询参数、后跑中间件，守卫放在中间件里就挡不住"无会话却先得到 400"），整个请求在控制台有 15 秒的期限（`consoleDeadline`），在管理接口有一分钟（`adminDeadline`），到期是 503 `unavailable`，说明工作可能已经做完，让客户端先看再重试。守卫的顺序：站点（Host 是某站点的控制台域名，否则 404）→ 改数据的请求的 Origin 与 JSON → 会话与它的级别、CSRF 令牌（`verifyMfa` 的待验证会话和令牌也先在这里认出，用户行锁内的复核仍在 accounts）→ 账户上的权限 → 请求体先过 `jsonx` 的策略（UTF-8、成员名不重复、嵌套不超过 256 层，生成代码和校验器用的解析器不执行它，所以在守卫里读一遍）→ 查询参数与请求体的 schema。生成的处理器读请求体也用 `jsonx.Decode`（名字区分大小写，未知成员跳过），与校验器按同一条规则读成员名；用 encoding/json 读，`MODELS` 会被校验器当作未知成员放行、又被读进 `models`，绕过 schema 的上限。生成代码走的是 `consoleapi/templates/strict-http.tmpl`，即 oapi-codegen v2.8.0 的同名模板改了解码那一行，升级 oapi-codegen 时按新模板重做这一处。生成的包装自己的解析失败只答"请求读不了"，不重复解析器看到的内容。所以没有会话的客户端只会知道它没有会话；校验失败是 400 `invalid_request`，`fields` 逐条写出出错的位置（请求体的 JSON 指针，或查询参数名）和规则，不写值。路径里的 ID 不在此校验：格式不对与不存在同样是 404。契约表达不了的（跨成员的规则，如 `limit_reset` 要有 `spend_limit`；表的约束，如地址能解析）由处理器的输入检查补上，同样写成 400 和 `fields` | — |
@@ -187,7 +188,8 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_http_server_requests_total` | 计数 | `route`、`status_class`、`outcome` |
   | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
   | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
-  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
 
@@ -269,7 +271,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 谁在何时对什么做了什么改动，记在 `platform.audit_log`，由 `audit.Record` 写入。所有模块都写这一张表，[运营](../../docs/domains/operations.md#审计)读取、检索和回放。它在平台，是因为 accounts、billing、catalog、payments 都要留审计，又都不能引用 `operations`。
 
-- **什么时候记**：改后台数据（设置、价格、额度、角色、凭证等）和领域文档要求留审计的操作，由做改动的模块在改动自己的事务里调用 `Record`，并把它的错误当作改动的错误返回：审计写不进，改动也不成立。目前还没有模块调用 `Record`，第一个调用方是 accounts。模块自己的改动历史（如 catalog 的 `change` 表）是它的领域数据，与审计日志互不替代；catalog 的管理操作是否另记审计日志待定，见 [catalog 的「决策与理由」](../catalog/README.md#决策与理由)。
+- **什么时候记**：改后台数据（设置、价格、额度、角色、凭证等）和领域文档要求留审计的操作，由做改动的模块在改动自己的事务里调用 `Record`，并把它的错误当作改动的错误返回：审计写不进，改动也不成立。accounts、billing、catalog、suppliers 的改动已经调用它。模块自己的改动历史（如 catalog 的 `change` 表）是它的领域数据，与审计日志互不替代；catalog 的管理操作在自己的 `change` 表之外也调 `Record`，见 [catalog 的「决策与理由」](../catalog/README.md#决策与理由)。
 - **记什么**：
 
   | 列 | 内容 |
@@ -291,7 +293,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ## 幂等
 
-管理接口的写操作带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID）：丢了响应就用同一个键重发，得到第一次的结果，改动不做第二次。`internal/platform/idem` 把键存在 `platform.idempotency`，只有平台范围读写。
+Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID）：丢了响应就用同一个键重发，得到第一次的结果，改动不做第二次。`internal/platform/idem` 把键存在 `platform.idempotency`，只有平台范围读写。
 
 | 列 | 内容 |
 |---|---|
@@ -332,7 +334,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 镜像里的根证书由程序内嵌（`golang.org/x/crypto/x509roots/fallback`，系统没有根证书时 Go 才用它） | scratch 镜像没有证书库，出站 HTTPS 会全部失败；内嵌只多一行导入、不改镜像、不依赖构建机上有没有证书文件，根证书随依赖升级更新 | 往镜像里复制 `ca-certificates.crt`：要在构建机上找到这个文件，Windows 上没有；多一个构建阶段或基础镜像：违背“镜像只有程序” |
 | 迁移管理员不必是超级用户，测试也这样跑 | 生产上缺的权限在测试里就暴露 | 测试用超级用户：权限问题到部署时才发现 |
 | 测试用 testcontainers，一个测试二进制一个容器，每个测试一份模板副本 | 对着真实的 PostgreSQL 测；复制模板只要几十毫秒，测试互不影响 | 每个测试一个容器：慢；共用一个库：测试互相干扰 |
-| 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），以后的管理后台和运营接口各一份，在各自的监听上 | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台和运营接口只挂在管理监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |
+| 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），`api/admin.yaml`（管理后台，管理监听），以后的运营接口再加一份，在自己的监听上 | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台和运营接口只挂在管理监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |
 | 前端三个应用嵌入程序，预压缩在构建时做，不在请求时压 | 一个文件部署（[总体架构](../../docs/architecture.md#技术选型)「前端交付」）；请求路径上不占 CPU，体积预算量的就是发出去的字节 | 请求时压缩加缓存：占 CPU，要管缓存；只嵌 br 或 gz，旧客户端要解压：多一份代码 |
 | 缓存策略按文件名判断（`assets/` 下带 8 位哈希），不读清单 | Vite 和 `theme.js` 都用这个名字；一条正则，不依赖构建的内部文件 | 读 `manifest.json`：多一个要随构建同步的文件 |
 | 管理监听默认 `127.0.0.1:8082`，不是 `:8082` | 管理后台不对公网开放；忘了配置的部署也是安全的，容器里由 compose 明确打开 | 默认 `:8082`：忘了限制来源就暴露 |
@@ -357,7 +359,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | 列表用键集游标，所有列表同一套 | 不用 OFFSET，新记录到达时翻页不重不漏，深页不变慢（[observability 的「读」](../observability/README.md#读)）；OpenRouter 的 key 列表用 offset，但我们的列表里有会增长到几十万行的调用记录。一套约定，前端一个分页组件 | OFFSET：深页读得多；按列表分别约定：每个页面一套分页代码 |
 | 每个监听面一份自成一体的契约，会话操作在两份里各写一遍，检查保证两份相同 | 会话属于签发它的面（域名、Cookie、路径各一套），管理接口不能被挂到公网（上一节）。跨文件引用在 oapi-codegen 里要 `--import-mapping`，还得为共享部分另生成一个包（2026-10-15 实测：不给映射直接报错）；共享一份会话契约、两个前缀各挂一次，则前端要为同一组操作维护两套路径 | 外部引用加共享包：多一个包、三条生成命令，换来省下约十个操作的重复；一份大契约：管理接口容易挂错监听 |
 | 契约先行，没有处理器的操作由生成的桩返回 501 | 处理器分几个 PR 并行写；生成的 `StrictServerInterface` 要求每个操作都有方法，没有桩则契约一加操作构建就断，有了桩，每个 PR 只加自己的方法 | 手写桩：并行的 PR 改同一个文件；嵌入空接口：未实现的操作调用时 panic；等所有处理器写完再合契约：前后端不能并行 |
-| 管理接口的写操作一律带 `Idempotency-Key` 和 `reason` | [运营](../../docs/domains/operations.md#运营接口)要求所有写操作能防重复、能审计；目录的 `op_key`、`reason`、`rev` 已经是这个形状，接口原样透传；一个形状，agent 和管理后台用同一套 | 只给花钱的操作加：agent 要判断哪些要加 |
+| 管理接口里 Session 标签以外的写操作一律带 `Idempotency-Key` 和 `reason` | [运营](../../docs/domains/operations.md#运营接口)要求所有写操作能防重复、能审计；目录的 `op_key`、`reason`、`rev` 已经是这个形状，接口原样透传；一个形状，agent 和管理后台用同一套 | 只给花钱的操作加：agent 要判断哪些要加 |
 | 管理接口的幂等键存在平台的一张表里，在改动自己的事务里占键 | accounts 的设置、供应商、计费的赠送都没有自己的 `op_key`，各加一个，每个模块一份实现，也查不出一个键被别种改动用过；一张平台表一份实现，占键与改动同成同败，并发由唯一索引排队。代价是平台多一张只增长的表（保留期待定）和一个泛型函数 | 每个模块各加 `op_key` 列（目录的做法）：重复实现，不能跨操作检出复用；用赠送批次的 ID 当键（`AddCredit` 的 ID 幂等）：只覆盖一个操作；应用层锁加缓存：多节点不成立 |
 | 设置用 `PUT` 整体替换，不用带 `null` 的 `PATCH` | Go 生成的类型分不清「没写」和「写成了 null」；整体替换没有这个歧义，页面本来就提交整张表单 | JSON Merge Patch：要引入可空类型，两端的语义要对齐 |
 | 契约的约束由守卫按嵌入程序的契约统一强制（kin-openapi），会话、CSRF、权限也从契约的 `security`、`x-axiom-level`、`x-axiom-permission` 读 | 规则只有契约一处，不会和处理器漂移；管理接口的契约有上百个约束，逐个处理器手写必漏；契约读不通启动就失败，没有"忘了校验"的操作。代价是主模块多了 kin-openapi 和它的 5 个依赖（jsonpointer、swag/jsonname、oasdiff/yaml、yaml3、jsonschema/v6），每个请求多一次 schema 校验（微秒级，控制台不在调用路径上） | 每个处理器手写校验：漂移，也要在每个新操作里重写；`go:embed` 契约原文件：`api/` 下不能放 Go 文件（[模块边界规则](../../docs/architecture.md#模块边界规则)），放到别处就要复制一份 YAML；在运行时读文件：部署要多带文件 |

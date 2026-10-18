@@ -40,8 +40,8 @@
 |---|---|---|
 | 读完请求体 | 2 分钟 | 408 |
 | 候选端点都满载时排队 | 20 秒 | 429 |
-| 等上游的响应头 | 60 秒，按端点可调；`/responses/compact` 10 分钟 | 换下一个端点 |
-| 上游没有新数据（心跳、注释、重复快照不算） | 180 秒，按模型可调 | 开始转发前换端点，之后以 `timeout` 结束 |
+| 等上游的响应头 | 60 秒（现在全站一个值，按端点调还没有）；`/responses/compact` 10 分钟 | 换下一个端点 |
+| 上游没有新数据（心跳、注释、重复快照不算） | 180 秒（现在全站一个值，按模型调还没有） | 开始转发前换端点，之后以 `timeout` 结束 |
 | 准入后不再发起新的尝试 | 120 秒 | 返回最后一次尝试的错误 |
 | 单次调用最长 | 60 分钟 | 取消上游、结算，以 `timeout` 结束 |
 | 一个请求的尝试次数 | 3 次，共用上面的期限，换端点不重新计时 | 返回最后一次尝试的错误 |
@@ -108,7 +108,7 @@
 | 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
-| 上游因请求本身拒绝（4xx） | 上游的状态码和原话，抹掉供应商身份，`upstream_rejected` | 上游原样 | — |
+| 上游因请求本身拒绝（4xx） | 400 `invalid_request`，不带上游原话（保留原文待定，见待定问题） | `invalid_request_error` | — |
 | 所有尝试都失败，含各自超时 | 502 `upstream_error` | `api_error` | 上游中途出错，`upstream_error` |
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `request_too_large` | `invalid_request_error`；`request_too_large` | — |
@@ -199,7 +199,7 @@
 | 续接在第一版做，排在 M2；M1 对 `previous_response_id` 返回 400 | 开发者按负责人的授权决定（对话中的全权委托）。负责人同意的是第一版要有续接（本表「Responses 会话状态由我们保存」），第一版是 M0–M3，排进哪个里程碑由开发者定。M1 的验收客户端用不到：Codex 的 HTTP 传输每轮发完整历史（OpenAI《Unrolling the Codex agent loop》，2026-01-23："Codex does not use it today"），只有 WebSocket 用它，M1 不支持 WebSocket。M1 的端到端测试用录制样本验证这个前提，不成立就提前到 M1。省四个 PR，不推迟验收 |
 | 跨格式时缓存标记按 OpenRouter 转换，表达不了的丢掉，不拒绝请求 | 负责人在对话中授权开发者按推荐自行决定。CONTRIBUTING「产品设计」要求对齐 OpenRouter：它把文本块的 `cache_control` 转成 OpenAI 的 `prompt_cache_breakpoint`，TTL 不转（OpenRouter《Prompt caching》，2026-10-16）。拒绝会让带缓存标记的 Chat 请求到不了任何 Responses 端点；标记不改变模型读到的内容，收费按上游报告的实际缓存用量，丢掉只影响命中率，不会算错钱 |
 | 结算写不进时，内容完整的照常结束、不带费用、带 `billing_pending`；只有截断的才报 `billing_unavailable` | 不发出没入账的费用，也不让客户端把已完成的一轮当失败重发、付两次。没选一律报 `billing_unavailable`：主库切换时，整批在途的请求会被客户端重发、重复收费 |
-| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用和校正只在调用记录里查（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
+| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查，M1 没有校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
 
 ## 待定问题
 

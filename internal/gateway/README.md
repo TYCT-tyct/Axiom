@@ -2,7 +2,7 @@
 
 编排一次模型调用：认 key、读请求、准入与路由、调上游、计量与追加、结算、记录。对外行为见[接入与对外接口](../../docs/domains/gateway.md)，调用经过哪些模块见[总体架构的「一次调用怎么走」](../../docs/architecture.md#一次调用怎么走)；这里写代码层面的顺序、所有权、期限、并发、故障和测试。
 
-> 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G8（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
+> 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G9（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
 
 M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2。出口只有 `platform/egress` 直连。
 
@@ -33,7 +33,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 9 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
 | 7 | 尝试：本地持有者检查 → `Acquire` → `Prepare` → `Bind` → `Send`；从读到第一个字节起计量，暂存开头事件到提交点 | suppliers、protocol、billing | 上游 | 见「超时与限额」 | 提交前按 `routing.Decide` 换条目 |
 | 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
-| 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 15 DB（一次尝试） | 2s × 重试 | 「结束与结算」 |
+| 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 13 DB（一次尝试） | 2s × 重试 | 「结束与结算」 |
 | 10 | 每条退出路径释放凭证、名额；异步写调用记录、quality 观测、粘性 | gateway、observability、quality | 0 | — | 「并发、背压与共享状态」 |
 
 ## 准入
@@ -255,7 +255,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 结算（`SettleRetry`、`SettleBackground`） | 单次 2s，退避重试 10s 后改为后台重试 20 分钟 | 「计量、追加与结算」 |
 | 持有者 | TTL 60s，心跳 10s，回收宽限 60s | billing 的「持有者与截止时间」 |
 | 预留截止时间 | 准入 + 单次调用最长 + 30 分钟结算宽限 | 清理接管 |
-| 优雅退出 | `AXIOM_SHUTDOWN_TIMEOUT` 到期取消全部上游，再给结算 30s | 交给清理 |
+| 优雅退出 | `AXIOM_SHUTDOWN_TIMEOUT` 内排空监听，再等调用和结算 `drainWait`（15s）；到期取消全部上游，再给结算 `abortGrace`（5s） | 交给清理 |
 
 - 默认值是后台配置的种子，保存时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPConnections`、`IPInFlight`、`MaxBody`、`KeyRate`、`CountRate`、`RateWindow`、`KeyLookup`，默认 1000、500、32 MiB、每 key 每分钟 6000 次（调用）、每 key 每分钟 6000 次（计数）、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；结算宽限 > 结算的前台加后台重试（`SettleRetry` + `SettleBackground`，默认 10s + 20 分钟，给清理接管留约 10 分钟）；批量写的连接数 ≤ N − 保留数；每 key 等待者 ≤ 全局等待者。
 - **限额**：每个请求最多 3 次尝试（含结果未知的），共享期限，换端点不重置时钟。重试预算按供应商、在进程内：1 分钟内重试不超过首次请求数的 10%，保底每分钟 5 次；用完跳过该供应商并写进路由记录。凭证范围的失败在同端点换凭证，也算一次尝试；疑似出口拦截在 M1 按端点处理并报告 quality。suppliers、egress 不暗中重试 POST。
@@ -302,7 +302,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 10 | 调用记录写不进 | 队列满即丢弃新记录并计数，不阻塞调用；崩溃丢最近一次成功写入之后的记录。记录不在时 `generation` 返回 404 `generation_not_found`，不提供账本精简版（见[「辅助接口」的 `generation`](#辅助接口)） |
 | 暂估 | 上游没报告的用量、价目表缺的项 | 按锁定价格和兜底价收，标暂估；预留里没用掉的部分随结算一起释放，没有后续校正 |
 | 对账 | 某供应商持续缺逐笔记录 | 停止向它路由并告警 |
-| 退出 | 优雅退出到期 | 取消全部上游（不传递取消的因此暂估），结算 30s，之后的交给回收 |
+| 退出 | 优雅退出到期 | 取消全部上游（不传递取消的因此暂估），结算 `abortGrace`（5s），之后的交给回收 |
 
 每个 HTTP 请求一个请求 ID，客户端重试是新请求。不承诺外部调用恰好一次：上游已执行而响应丢失的窗口消除不了，由对账兜底。
 
@@ -315,9 +315,9 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 入口转核心 | 1ms | M1 同进程 | 达标 |
 | 认 key、读请求、路由 | 2ms | 缓存命中 + `Inspect`（全扫一遍）+ `SessionKey`（有界前缀）+ 名字解析 + `Plan`；`Prepare` 另扫一遍，在事务外 | **风险**：两遍全扫，1–4 MiB 估 4–16ms。G1 实测见下；超标先让 `Inspect` 产出可复用的位置表给 `Prepare` |
 | 限流和粘性 | 2ms | M1 为 0；M2 1 C | 达标 |
-| 准入 | 5ms | 8 DB（含提交） | 约 3–5ms，待实测；RTT 1ms 即超标，核心与库必须同机房 |
+| 准入 | 5ms | 9 DB（含提交） | 约 3–5ms，待实测；RTT 1ms 即超标，核心与库必须同机房 |
 | 出口发请求、首字节 | 2ms + 1ms | `Prepare` 在事务外，复用长连接 | 达标；转换单独基准 |
-| 追加、结算 | 不在首字路径 | 追加 9 DB（已覆盖时 6），结算 15 DB（一次尝试） | 结算尾延迟目标 p95 10ms，单独报告 |
+| 追加、结算 | 不在首字路径 | 追加 9 DB（已覆盖时 6），结算 13 DB（一次尝试） | 结算尾延迟目标 p95 10ms，单独报告 |
 
 **组合扫描实测**（`BenchmarkScan`：`Inspect`、`SessionKey`、`Prepare` 依次各一遍，开发机 i5-12500H、Windows、同时在跑别的任务，每组 3 轮 100 次，取范围）：
 
@@ -335,7 +335,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 
 | # | 内容 | 依赖 |
 |---|---|---|
-| G10 | 调用记录背压、quality 观测、指标、链路 | O1、O2 |
+| G10 | quality 观测、粘性写回（`Router.Stick`）、网关的指标和链路 | O1、O2 |
 | G11 | 端到端：Claude Code、Codex、Chat SDK 经 new-api、sub2api；故障注入；主备切换；压测 | 全部 |
 
 测试先行，至少包括：B 的读语句在 A 提交前开始（B2）；孤儿处理先于迟到的 COMMIT、回收与在途准入和追加交错、结算确认丢失后重试不补扣（B4、B5）；聚合与写阻塞时消耗不超超额额度（G6）；大事件越过当前段、事件持续到达却迟迟不结束都在读的过程中触发追加或停读（P5、G6）；冷 key 洪峰叠加热点账户结算（G2）；数据库中断 30s 与 150s（G11）。压测场景见[性能的「怎么验证」](../../docs/performance.md#怎么验证)。
@@ -365,7 +365,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | 连接分类按池内总在用数授予，批量写同准入类 | 保证最后 16 个只给完成类；若只按各类自己的数量限制，批量写加准入可以把保底吃到 16 以下 | 按类各自的上限 |
 | 排队用 `Epoch` 补上"看负载与入队之间的释放" | 没有它，那次释放无人可唤醒，请求睡满 20 秒还拿 429，而容量是空的 | 无等待者时的释放攒成许可：空闲时攒下的许可会让以后每个新来的白跑一遍 9 次往返的准入 |
 | 先认 key 再读请求体 | 认 key 只要头；未认证的慢速请求体不占业务名额 | 先读体 |
-| 准入的 1s 是一个 context 期限，不下发 `lock_timeout`、`statement_timeout` | `pg.Tx` 没有批量，`SET LOCAL` 多一次往返（准入 8 次变 9 次）；期限到时 pgx 取消语句、事务回滚，对客户端效果相同 | 事务里 `SET LOCAL`：区分等锁和慢语句，但每次准入多一次往返；有批量后再加 |
+| 准入的 1s 是一个 context 期限，不下发 `lock_timeout`、`statement_timeout` | `pg.Tx` 没有批量，`SET LOCAL` 多一次往返（准入 9 次变 10 次）；期限到时 pgx 取消语句、事务回滚，对客户端效果相同 | 事务里 `SET LOCAL`：区分等锁和慢语句，但每次准入多一次往返；有批量后再加 |
 | `fn` 写完预留之后 `Admit` 的任何错误都按"可能已提交"处理 | 提交失败和确认丢失无法区分；`SettleOrphan` 对已提交的释放、对已回滚的写墓碑，重复执行无害 | 只认特定错误：漏掉的那一种会留下永不释放的预留 |
 | key 没有预设时用零 ID 的预设 | 预设内容在路由快照里，网关不另带一份默认 | 网关内置默认预设：两份会不一致 |
 | 未宣告长度的请求体从 4 KiB 起翻倍增长，每次分配前先计入、复制后退还旧的 | 分配之前计入，所以并发的慢上传和大请求受预算约束，小的分块请求也不预占整个上限；峰值是新旧两个缓冲，不是 `io.ReadAll` 的全部分块加整体复制（约两倍正文，其中的一半没人计）。代价：留下的缓冲至多正文的两倍，预算中途不够会在读到一半时回 503 | 按上限预占：每个分块请求占 32 MiB；`io.ReadAll` 配 2 倍上限预占：仍然是预占；读完再复制成恰好的大小：多一份峰值 |

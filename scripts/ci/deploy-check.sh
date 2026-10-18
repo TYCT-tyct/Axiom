@@ -20,7 +20,7 @@ export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
 
 compose() { docker compose -f deploy/compose.yaml "$@"; }
 
-# No 45-second graceful stop in CI (the compose file's local default): a short one finishes before the runner kills the
+# No 90-second graceful stop in CI (the compose file's default): a short one finishes before the runner kills the
 # step, and `down` by project name works before deploy/.env exists.
 down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --timeout 5; }
 
