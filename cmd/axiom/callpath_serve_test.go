@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/json/v2" //nolint:depguard // decodes the node's own responses; jsonx guards input from outside
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"axiom/internal/platform/httpserver"
 )
 
 const (
@@ -231,5 +234,36 @@ func (w *callWorld) checkBalanced() {
 	if got := w.query(`SELECT count(*)::text FROM billing.balances b WHERE b.reserved <>
 		coalesce((SELECT sum(r.amount) FROM billing.reservations r WHERE r.account_id = b.account_id AND r.state = 'pending'), 0)`); got != "0" {
 		w.t.Errorf("%s balances reserve more or less than their pending reservations", got)
+	}
+}
+
+// TestModelCallsAreMountedBesideTheConsole: /v1 and /api/v1 answer from the gateway, not from the console's /api/ and
+// not through its compressor, which gzips the large JSON answers it is given; everything else still reaches the
+// console. A large answer is what tells the two apart: the compressor leaves small ones alone.
+func TestModelCallsAreMountedBesideTheConsole(t *testing.T) {
+	big := []byte(`{"text":"` + strings.Repeat("x", 4096) + `"}`)
+	answering := func(who string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Answered-By", who)
+			if _, err := w.Write(big); err != nil {
+				t.Errorf("%s could not answer: %v", who, err)
+			}
+		})
+	}
+	console := http.NewServeMux()
+	console.Handle("/api/", httpserver.Compress(answering("console")))
+	routes := withModelCalls(console, answering("gateway"))
+	for path, want := range map[string]string{
+		"/v1/messages": "gateway", "/api/v1/responses": "gateway", "/api/console/v1/version": "console",
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, req)
+		encoded := rec.Header().Get("Content-Encoding") != ""
+		if got := rec.Header().Get("X-Answered-By"); got != want || encoded != (want == "console") {
+			t.Errorf("%s was answered by %q, encoded %v; want %q, encoded %v", path, got, encoded, want, want == "console")
+		}
 	}
 }

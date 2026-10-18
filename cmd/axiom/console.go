@@ -105,9 +105,9 @@ func publicRoutes(api consoleapi.StrictServerInterface, g *guard, frontend *webu
 }
 
 // withModelCalls puts the model API in front of the public listener's routes: /v1 and /api/v1, the same calls under
-// OpenRouter's prefix, for every method the gateway answers. They are mounted outside Compress because their answers
-// are streams, which a compressor would hold back, and outside the console's prefix so that no API's 404 answers a
-// call. Only the public listener gets them: the admin one is behind a guard no model client has a session for.
+// OpenRouter's prefix, for every method the gateway answers. They are mounted outside Compress because the gateway
+// writes its answers itself, streams and keep-alives included, and decides when they are flushed, and outside the
+// console's prefix so that no API's 404 answers a call. Only the public listener gets them: the admin one is behind a guard no model client has a session for.
 func withModelCalls(routes http.Handler, calls http.Handler) http.Handler {
 	mount := http.NewServeMux()
 	mount.Handle("/v1/", calls)
