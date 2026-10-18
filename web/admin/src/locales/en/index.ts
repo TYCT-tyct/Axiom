@@ -32,6 +32,15 @@ export default {
     done: "Done.",
     replayed: "This was already done earlier. Below is the result from then; nothing was done again.",
     close: "Close",
+    unknown:
+      "It isn’t known whether this change was made. The form is locked: resending sends the same request, which the server does at most once. To change it, close this and look at the current data first.",
+    resend: "Resend as it was",
+    stale:
+      "Someone else changed this after you opened it. Nothing was saved, so their change isn’t overwritten. Reloading fills in the current version and discards what you entered here.",
+    reload: "Reload",
+    reused:
+      "This request’s key was already used for different content, so the first attempt may have been made. Close this and look at the current data before deciding whether to do it again.",
+    check: "Close and look at the current data",
   },
   users,
   suppliers,

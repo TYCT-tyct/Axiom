@@ -2,7 +2,7 @@ import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Icon, SelectField, TextField } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
-import { ChangeDialog, type Problem } from "../change";
+import { ChangeDialog, type Problem, useSnapshot } from "../change";
 import { Code } from "../parts";
 import { readiness } from "./readiness";
 import { readSpec, SpecFields } from "./spec-fields";
@@ -11,10 +11,12 @@ type Model = AdminSchemas["Model"];
 const params = (model: Model, key: string) => ({ path: { model_id: model.id }, header: { "Idempotency-Key": key } });
 
 // Replaces the baseline spec as of the revision the person read; the old one stays in the change history.
-export function SpecDialog({ model, onClose }: { model: Model; onClose: () => void }) {
+export function SpecDialog({ model: live, onClose }: { model: Model; onClose: () => void }) {
   const { t } = useTranslation();
+  const [model, reload] = useSnapshot(live);
   return (
     <ChangeDialog
+      reload={reload}
       title={t("models.spec.title")}
       intro={<p>{t("models.spec.intro")}</p>}
       action={t("models.spec.action")}
@@ -87,7 +89,7 @@ export function NameDialog({ model, onClose }: { model: Model; onClose: () => vo
 // Putting a draft on sale passes the review gate, which says what is missing when it fails; retiring takes a model out
 // of use for good, and its names are never used again.
 export function ModelStatusDialog({
-  model,
+  model: live,
   to,
   onClose,
 }: {
@@ -96,9 +98,11 @@ export function ModelStatusDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const [model, reload] = useSnapshot(live);
   const checks = to === "listed" ? readiness(model) : [];
   return (
     <ChangeDialog
+      reload={reload}
       title={t(`models.status.${to}.title`, { slug: model.slug })}
       intro={
         <>

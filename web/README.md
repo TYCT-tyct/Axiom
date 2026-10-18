@@ -57,7 +57,7 @@
 | 只显示一次的内容（key 明文、恢复码）放在不能用 Esc 或点背景关掉的对话框里，用户确认后才关；生成恢复码的请求还没回来时，发起请求的对话框也不能关；确认时读新会话失败，恢复码仍留在屏幕上并说明原因，可以重试 | `Dialog` 的 `dismissible`、`packages/app/src/totp-dialogs.tsx`；端到端测试覆盖 |
 | 两步验证的二维码在本地用 `qrcode-generator` 画成 SVG 的 `<path>`，不拼 HTML 字符串，也不把密钥交给外部服务 | `packages/app/src/qr.tsx` |
 | 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动，表格行内的按钮和链接不跑出表格自己的滚动框 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
-| 后台的每个改数据的操作都填理由、有确认（高风险的要输入对象的名字）、防重复提交；一个操作一个 Idempotency-Key，对话框打开时生成，没收到响应时原样重发，被拒绝后换新；结果标明是不是之前已完成的那次 | `admin/src/change.tsx` 的 `ChangeDialog`；端到端的模拟按契约要求 Idempotency-Key 和理由，同一个键再来就返回存下的结果并带 `Idempotency-Replayed` |
+| 后台的每个改数据的操作都填理由、有确认（高风险的要输入对象的名字）、防重复提交；一个操作一个 Idempotency-Key，对话框打开时生成，没收到响应时锁定表单、原样重发，明确被拒绝后换新；按修订号改的对话框收到 `stale_revision` 要重新载入才能再保存；结果标明是不是之前已完成的那次 | `admin/src/change.tsx` 的 `ChangeDialog`，状态转换在 `admin/src/attempt.ts`（规则见[前端](../docs/frontend.md)「决策与理由」）；端到端的模拟按契约要求 Idempotency-Key 和理由，同一个键带同样的请求体再来就返回存下的结果并带 `Idempotency-Replayed`，换了请求体就拒绝（`idempotency_key_reused`） |
 | 后台的所有操作要求通过两步验证的会话：没有第二因素的账户只能到开启两步验证的页面，恢复码对话框在页面之上，换了会话也不会丢 | `packages/app` 的 `Gate` 的 `enroll` 阶段与 `RecoveryCodesHost`；`e2e/admin-access.spec.ts` |
 | 接口只经 `@axiom/api` 调用，错误统一成带状态码和请求 ID的 `ApiError`，状态码 0 表示没有收到响应；收到了但解析不了的响应是普通的 `Error`，没有状态码。都保留原始错误作为 `cause` | 生成的类型不手改；`just generated` 检查 |
 | 依赖用精确版本，发布满 7 天才能装上；依赖的安装脚本不运行 | `pnpm-workspace.yaml` 的 `minimumReleaseAge` 和 `strictDepBuilds`：需要安装脚本的依赖让安装失败，必须明确决定；目前没有放行任何依赖 |

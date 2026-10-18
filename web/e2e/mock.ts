@@ -14,7 +14,7 @@ type Schemas = components["schemas"];
 export type ErrorCode = Schemas["ErrorCode"];
 type Level = "none" | "pending_mfa" | "password" | "mfa";
 
-type Stored = { operation: string; status: number; json: unknown };
+type Stored = { operation: string; fingerprint: string; status: number; json: unknown };
 
 // What every surface keeps about the person at the keyboard.
 export type AuthState = {
@@ -136,8 +136,21 @@ function refusal(state: AuthState, needs: Needs, method: Method, headers: Record
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// The content of a request as the server compares it under a key: its body as JSON with each object's members in one
+// order (the path is in the operation).
+function fingerprint(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(fingerprint).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const members = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${members.map(([name, member]) => `${JSON.stringify(name)}:${fingerprint(member)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 // A change on the admin API carries an Idempotency-Key and a reason of 1 to 1000 characters. The reply to a key already
-// seen is the stored one, flagged; the same key for another operation is refused.
+// seen with the same request is the stored one, flagged; the same key for another operation or another body is refused.
 function changeRefusal(state: AuthState, headers: Record<string, string>, body: unknown, operation: string) {
   const key = headers["idempotency-key"] ?? "";
   const reason = (body as { reason?: unknown } | undefined)?.reason;
@@ -148,7 +161,7 @@ function changeRefusal(state: AuthState, headers: Record<string, string>, body: 
   if (!seen) {
     return { key };
   }
-  if (seen.operation !== operation) {
+  if (seen.operation !== operation || seen.fingerprint !== fingerprint(body)) {
     return { refused: fail(409, "idempotency_key_reused"), key };
   }
   return { refused: { status: seen.status, json: seen.json, headers: { "Idempotency-Replayed": "true" } }, key };
@@ -183,7 +196,12 @@ export async function mockApi<S extends AuthState>(page: Page, base: string, han
         state,
       });
     if (change && !refused && reply.status < 400) {
-      state.stored.set(change.key, { operation, status: reply.status, json: reply.json });
+      state.stored.set(change.key, {
+        operation,
+        fingerprint: fingerprint(body),
+        status: reply.status,
+        json: reply.json,
+      });
     }
     if (state.dropReplies > 0) {
       state.dropReplies -= 1;

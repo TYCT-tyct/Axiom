@@ -110,24 +110,6 @@ test.describe("the model catalog", () => {
     expect(state.models[0]?.status).toBe("draft");
   });
 
-  test("a change made against an older revision is refused, and the next try is against the new one", async ({
-    page,
-  }) => {
-    const state = await open(page, model1);
-    await expect(h1(page, "openai/model-1")).toBeVisible();
-    await press(page, "models.spec.edit").click();
-    // someone else changed the model after this page read it
-    const model = state.models[0];
-    if (model) {
-      model.rev += 1;
-    }
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
-    expect(model?.rev).toBe(5);
-  });
-
   test("a price version is published against the current one, and a stale one is refused", async ({ page }) => {
     const state = await open(page, model1);
     await expect(page.getByRole("cell", { name: /^3\D/ }).first()).toBeVisible();
@@ -136,12 +118,21 @@ test.describe("the model catalog", () => {
     await dialog(page).getByLabel(words("models.price.evidence")).fill("new price page");
     // a version published by someone else in the meantime
     const row = state.models[0]?.prices[0];
-    if (row) {
+    if (row?.schedule) {
       row.id = uuid(6, 999);
+      row.schedule = { ...row.schedule, rates: { ...row.schedule.rates, input: "0.000005" } };
     }
     await send(page, "vendor cut prices");
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.stale"));
+    expect(state.models[0]?.prices[0]?.schedule?.rates.input).toBe("0.000005");
+    // the form is filled again from the version now current, and only then can it be published over it
+    await dialog(page)
+      .getByRole("button", { name: zhText("change.reload") })
+      .click();
+    await expect(dialog(page).getByLabel(inputRate, { exact: true })).toHaveValue("5");
+    await dialog(page).getByLabel(inputRate, { exact: true }).fill("4");
+    await dialog(page).getByLabel(words("models.price.evidence")).fill("new price page");
+    await send(page, "vendor cut prices");
     await expect(done(page)).toBeVisible();
     await close(page);
     await expect(page.getByRole("cell", { name: /^4\D/ }).first()).toBeVisible();
@@ -237,13 +228,20 @@ test.describe("pricing", () => {
       .first()
       .click();
     await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    // someone else changed the rule after this dialog read it
     const rule = state.rules[0];
     if (rule) {
       rule.rev += 1;
     }
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.stale"));
+    expect(rule?.enabled).toBe(true);
+    await dialog(page)
+      .getByRole("button", { name: zhText("change.reload") })
+      .click();
+    await expect(dialog(page).getByLabel(words("pricing.rule.enabled"))).toBeChecked();
+    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    await send(page);
     await expect(done(page)).toBeVisible();
     expect(state.rules.find((r) => !r.enabled && r.target.kind === "model")?.rev).toBe(3);
   });
