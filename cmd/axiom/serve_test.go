@@ -269,6 +269,8 @@ func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 // awaitRecord reads log records until the node logs msg. The node logs "ready" after it has set the probes' readiness.
 func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addresses {
 	t.Helper()
+	timeout := time.NewTimer(10 * time.Second) // one deadline: other records must not extend it
+	defer timeout.Stop()
 	for {
 		select {
 		case line := <-logs:
@@ -281,7 +283,7 @@ func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addr
 			}
 		case err := <-done:
 			t.Fatalf("the node stopped before logging %q: %v", msg, err)
-		case <-time.After(10 * time.Second):
+		case <-timeout.C:
 			t.Fatalf("the node did not log %q", msg)
 		}
 	}
