@@ -2,10 +2,7 @@
 # source: the project-workflow commit the managed files were copied from; only upgrades change it.
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
-source = "0c691c69805fee1bcf3044195ee5ea92ad75abe6"
-
-[review]
-waiver = false # CONTRIBUTING.md: every PR, upgrades included, gets an independent review
+source = "545f5d0b560cd7da62eec569d685a4a2a4ac6575"
 
 [merge]
-strict = false # CI takes about 35 minutes a round with a dozen PRs in flight and no merge queue on a personal private repo; instead each PR takes main in and runs the full CI before it is queued, and main runs the full CI on every push (CONTRIBUTING.md step 9, #192)
+strict = true # manage.py metrics --since 2026-10-14 (measured 2026-10-17): ci median 8.3 min, sustained_open_prs 2, suggested_strict true; merging stale branches let two PRs add the same migration version and broke tests that only failed together (#150, #182). Revisit if open PRs stay above ~4.
