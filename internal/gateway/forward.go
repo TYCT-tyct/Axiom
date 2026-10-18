@@ -410,4 +410,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 
 // drop lets go of a relay whose stream is not going to be used: its ending is written for nobody, which gives back
 // what it held of the node's memory.
-func drop(relay *protocol.Relay) { relay.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil) }
+func drop(relay *protocol.Relay) {
+	relay.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil)
+	relay.Release() // an aggregate relay keeps its budget past Fail for a body that will not be written
+}
