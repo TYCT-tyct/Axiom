@@ -176,7 +176,7 @@ type session struct {
 
 	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
 	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
-	currency platform.Currency       // of the last attempt's price
+	currency platform.Currency       // of the last attempt's price, the site's until one is made
 	skips    skips
 	last     *attempt // the attempt in progress, or the last one made
 
@@ -199,7 +199,7 @@ type session struct {
 func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *session {
 	now := time.Now()
 	return &session{
-		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now,
+		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now, currency: c.site.Currency,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
 	}
