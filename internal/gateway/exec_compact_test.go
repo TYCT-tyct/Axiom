@@ -106,7 +106,7 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 		t.Errorf("the reply was written before the settlement:\n%s", s.body)
 	}
 	a := s.outcome.Attempts
-	if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
+	if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop {
 		t.Fatalf("ending %+v", s.outcome)
 	}
 	u := a[0].Segments[0]
@@ -276,7 +276,7 @@ func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if !s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishCancelled {
+		if len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if a[0].Segments[0].Usage.Count(catalog.ItemInput) != 60 {
@@ -325,7 +325,7 @@ func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.Aggregated {
+		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if got := a[0].Segments[0].Usage.Count(catalog.ItemInput); got != 60 {
@@ -349,7 +349,7 @@ func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.Aggregated {
+		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if got := a[0].Segments[0].Usage.Count(catalog.ItemOutput); got != 6 {

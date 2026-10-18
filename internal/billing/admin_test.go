@@ -9,13 +9,12 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// credited is a bank in which one credit of 500, expiring in an hour, was made.
+// credited is a bank in which one credit of 500 was made.
 func credited(t *testing.T) (*bank, Credit) {
 	t.Helper()
 	b := newBank(t, 0, 0, Config{})
-	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
 	c := Credit{
-		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500, ExpiresAt: &expires,
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500,
 		Actor: audit.System("billing.test"), Reason: "a gift",
 	}
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error { return AddCredit(t.Context(), tx, c) }); err != nil {
@@ -35,14 +34,13 @@ func (b *bank) readCredit(scope pg.Scope, id uuid.UUID) (batch CreditBatch, ok b
 	return batch, ok
 }
 
-// TestReadCredit: the batch a credit made is read back with its amount, expiry and the time it was made; a batch of
+// TestReadCredit: the batch a credit made is read back with its amount, no expiry (nothing sets one yet, #230) and the time it was made; a batch of
 // nobody's is not found.
 func TestReadCredit(t *testing.T) {
 	t.Parallel()
 	b, c := credited(t)
 	got, ok := b.readCredit(b.platform, c.ID)
-	if !ok || got.ID != c.ID || got.Site != c.Site || got.Account != c.Account || got.Amount != 500 || got.ExpiresAt == nil ||
-		!got.ExpiresAt.Equal(*c.ExpiresAt) || time.Since(got.CreatedAt) > time.Minute {
+	if !ok || got.ID != c.ID || got.Site != c.Site || got.Account != c.Account || got.Amount != 500 || got.ExpiresAt != nil || time.Since(got.CreatedAt) > time.Minute {
 		t.Errorf("the batch: %+v %v", got, ok)
 	}
 	if _, ok := b.readCredit(b.platform, uuid.NewV7()); ok {

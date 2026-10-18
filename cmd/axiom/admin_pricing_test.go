@@ -19,7 +19,7 @@ func ruleJSON(target, audience, method string) string {
 
 const (
 	everything = `{"kind":"all"}`
-	plus25     = `{"kind":"cost_plus","markup_ratio":"0.25"}`
+	faced      = `{"kind":"reference_multiplier","multiplier":"1.25","currency_conversion":"face"}`
 )
 
 // pricingFixture is the admin with a model, a tier and an account to write rules for.
@@ -62,10 +62,10 @@ func (f pricingFixture) list() []adminapi.PricingRule {
 // and audited with the reason.
 func TestCreatePricingRule(t *testing.T) {
 	f := newPricingFixture(t)
-	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"cost_plus","margin_ratio":"0.2","fixed_markup":{"output":"0.000001"}},"constraints":{"min_margin_ratio":"0.1"}}`
+	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"reference_multiplier","multiplier":"1.25","currency_conversion":"face"},"constraints":{"min_margin_ratio":"0.1"}}`
 	made := f.create(body)
 	if made.Rev != 0 || !made.Enabled || made.Target.Kind != "model" || *made.Target.Id != f.model || made.Audience.Id != nil ||
-		*made.Method.MarginRatio != "0.2" || *made.Method.FixedMarkup.Output != "0.000001" || *made.Constraints.MinMarginRatio != "0.1" ||
+		*made.Method.Multiplier != "1.25" || *made.Method.CurrencyConversion != "face" || *made.Constraints.MinMarginRatio != "0.1" ||
 		time.Since(made.UpdatedAt) > time.Minute {
 		t.Errorf("the rule: %+v", made)
 	}
@@ -92,16 +92,16 @@ func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 	f := newPricingFixture(t)
 	model := `{"kind":"model","id":"` + f.model + `"}`
 	for _, rule := range []string{
-		ruleJSON(everything, everything, plus25),
-		ruleJSON(`{"kind":"author","id":"acme"}`, everything, plus25),
-		ruleJSON(model, everything, plus25),
+		ruleJSON(everything, everything, faced),
+		ruleJSON(`{"kind":"author","id":"acme"}`, everything, faced),
+		ruleJSON(model, everything, faced),
 	} {
 		f.create(rule)
 	}
 	// Rules for an account or a tier cannot be made yet (TestPricingRulesForOneAudienceWait), but the order they will be
 	// tried in is already the stored form's, so they are written as a later release will.
-	f.store("model", f.model, "account", f.account, plus25)
-	f.store("model", f.model, "tier", f.tier, plus25)
+	f.store("model", f.model, "account", f.account, faced)
+	f.store("model", f.model, "tier", f.tier, faced)
 	var order []string
 	for _, r := range f.list() {
 		order = append(order, string(r.Target.Kind)+"/"+string(r.Audience.Kind))
@@ -115,18 +115,18 @@ func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 // version stays in the history.
 func TestUpdatePricingRule(t *testing.T) {
 	f := newPricingFixture(t)
-	made := f.create(ruleJSON(everything, everything, plus25))
-	disabled := strings.Replace(ruleJSON(everything, everything, `{"kind":"cost_plus","markup_ratio":"0.5"}`), `"enabled":true`, `"enabled":false`, 1)
+	made := f.create(ruleJSON(everything, everything, faced))
+	disabled := strings.Replace(ruleJSON(everything, everything, `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`), `"enabled":true`, `"enabled":false`, 1)
 	rec := f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+disabled+`,"reason":"off for now"}`, newKey())
 	expectAdmin(t, "updatePricingRule", rec, http.StatusOK, "")
 	var changed adminapi.PricingRule
 	decode(t, rec, &changed)
-	if changed.Rev != 1 || changed.Enabled || *changed.Method.MarkupRatio != "0.5" || changed.Id != made.Id {
+	if changed.Rev != 1 || changed.Enabled || *changed.Method.Multiplier != "1.5" || changed.Id != made.Id {
 		t.Errorf("the changed rule: %+v", changed)
 	}
 	expectAdmin(t, "the same rev again", f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+disabled+`,"reason":"r"}`, newKey()),
 		http.StatusConflict, codeStaleRevision)
-	if got := f.text("SELECT string_agg(rev::text || ':' || (body->'method'->>'markup_ratio') || ':' || reason, ',' ORDER BY rev) FROM billing.pricing_rule_versions"); got != "0:0.25:a new rule,1:0.5:off for now" {
+	if got := f.text("SELECT string_agg(rev::text || ':' || (body->'method'->>'multiplier') || ':' || reason, ',' ORDER BY rev) FROM billing.pricing_rule_versions"); got != "0:1.25:a new rule,1:1.5:off for now" {
 		t.Errorf("the versions: %s", got)
 	}
 	f.expectAudit("pricing_rule.update", map[string]string{"reason": "off for now", "detail->>'rev'": "1"})
@@ -136,7 +136,7 @@ func TestUpdatePricingRule(t *testing.T) {
 // of another request is refused.
 func TestPricingRuleKeys(t *testing.T) {
 	f := newPricingFixture(t)
-	key, body := newKey(), `{"rule":`+ruleJSON(everything, everything, plus25)+`,"reason":"r"}`
+	key, body := newKey(), `{"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`
 	rec := f.change(f.s, http.MethodPost, "/pricing/rules", body, key)
 	expectAdmin(t, "createPricingRule", rec, http.StatusCreated, "")
 	var first, again adminapi.PricingRule
@@ -149,7 +149,7 @@ func TestPricingRuleKeys(t *testing.T) {
 	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "1" {
 		t.Errorf("%s rules, want 1", got)
 	}
-	other := `{"rule":` + ruleJSON(`{"kind":"author","id":"acme"}`, everything, plus25) + `,"reason":"r"}`
+	other := `{"rule":` + ruleJSON(`{"kind":"author","id":"acme"}`, everything, faced) + `,"reason":"r"}`
 	expectAdmin(t, "the key with another rule", f.change(f.s, http.MethodPost, "/pricing/rules", other, key), http.StatusConflict, codeIdempotencyReuse)
 }
 
@@ -157,18 +157,29 @@ func TestPricingRuleKeys(t *testing.T) {
 // target and audience is a 409; a rule that is not there is a 404; none changes anything.
 func TestPricingRuleRefusals(t *testing.T) {
 	f := newPricingFixture(t)
-	f.create(ruleJSON(everything, everything, plus25))
+	f.create(ruleJSON(everything, everything, faced))
 	for _, c := range []struct{ name, rule, pointer string }{
 		{"both ratios", ruleJSON(everything, everything, `{"kind":"cost_plus","markup_ratio":"1","margin_ratio":"0.5"}`), "/rule/method"},
 		{"a negative markup", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"cost_plus","markup_ratio":"-1"}`), "/rule/method/markup_ratio"},
 		{"a multiplier of nothing", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"reference_multiplier","multiplier":"0"}`), "/rule/method/multiplier"},
 		{"a fixed price in another currency", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
 			`{"kind":"fixed","schedule":{"v":1,"currency":"CNY","rates":{"input":"1"}}}`), "/rule/method/schedule/currency"},
-		{"a model ID that is no model's", ruleJSON(`{"kind":"model","id":"nonsense"}`, everything, plus25), "/rule/target/id"},
-		{"a tier", ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`, plus25), "/rule/audience/kind"},
-		{"an account", ruleJSON(everything, `{"kind":"account","id":"`+f.account+`"}`, plus25), "/rule/audience/kind"},
-		{"a model the catalog lacks", ruleJSON(`{"kind":"model","id":"0198c0a8-0000-7000-8000-000000000009"}`, everything, plus25), ""},
-		{"an author the catalog lacks", ruleJSON(`{"kind":"author","id":"nobody"}`, everything, plus25), ""},
+		{"a model ID that is no model's", ruleJSON(`{"kind":"model","id":"nonsense"}`, everything, faced), "/rule/target/id"},
+		{"a tier", ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`, faced), "/rule/audience/kind"},
+		{"an account", ruleJSON(everything, `{"kind":"account","id":"`+f.account+`"}`, faced), "/rule/audience/kind"},
+		// What this release prices is a model, an author or everything, by a multiplier read as the site's currency or by a
+		// fixed price: the rest would be accepted and then not applied, so it is refused (docs/domains/billing.md「定价」).
+		{"an endpoint", ruleJSON(`{"kind":"endpoint","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
+		{"a group", ruleJSON(`{"kind":"group","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
+		{"a supplier", ruleJSON(`{"kind":"supplier","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
+		{"a source type", ruleJSON(`{"kind":"source_type","id":"relay"}`, everything, faced), "/rule/target/kind"},
+		{"cost plus", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"cost_plus","markup_ratio":"0.25"}`), "/rule/method/kind"},
+		{"a multiplier by exchange", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
+			`{"kind":"reference_multiplier","multiplier":"2","currency_conversion":"exchange"}`), "/rule/method/currency_conversion"},
+		{"a multiplier with no conversion named", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
+			`{"kind":"reference_multiplier","multiplier":"2"}`), "/rule/method/currency_conversion"},
+		{"a model the catalog lacks", ruleJSON(`{"kind":"model","id":"0198c0a8-0000-7000-8000-000000000009"}`, everything, faced), ""},
+		{"an author the catalog lacks", ruleJSON(`{"kind":"author","id":"nobody"}`, everything, faced), ""},
 	} {
 		rec := f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+c.rule+`,"reason":"r"}`, newKey())
 		expectAdmin(t, c.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
@@ -177,11 +188,11 @@ func TestPricingRuleRefusals(t *testing.T) {
 		}
 	}
 	expectAdmin(t, "a second rule of one target and audience", f.change(f.s, http.MethodPost, "/pricing/rules",
-		`{"rule":`+ruleJSON(everything, everything, plus25)+`,"reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
+		`{"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
 	expectAdmin(t, "a rule that is not there", f.change(f.s, http.MethodPut, "/pricing/rules/0198c0a8-0000-7000-8000-000000000009",
-		`{"rev":0,"rule":`+ruleJSON(everything, everything, plus25)+`,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
+		`{"rev":0,"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
 	expectAdmin(t, "an ID that is none", f.change(f.s, http.MethodPut, "/pricing/rules/nonsense",
-		`{"rev":0,"rule":`+ruleJSON(everything, everything, plus25)+`,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
+		`{"rev":0,"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
 	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules") + f.auditCount("pricing_rule.create"); got != "11" {
 		t.Errorf("rules and audit entries after the refusals: %s, want 1 and 1", got)
 	}

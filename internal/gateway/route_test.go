@@ -260,6 +260,11 @@ func (f *routeFixture) checkEntry(r suppliers.Routable, built routing.Entry) {
 	if built.Limits.ContextLength != 200000 || built.MaxOutput != 8192 {
 		t.Errorf("context %d, max output %d; want the spec's 200000 and 8192", built.Limits.ContextLength, built.MaxOutput)
 	}
+	// The spec records no image size: the entry says so by leaving it 0, which the reservation takes to be the whole
+	// context, so it never falls below what a request with an image can spend; the charge's estimate is billing's.
+	if first, _ := billing.InputBound(billing.Demand{Images: 1}, built.Limits); first != built.Limits.ContextLength {
+		t.Errorf("an image is bounded at %d tokens, want the context %d", first, built.Limits.ContextLength)
+	}
 	if built.Price.Version != f.prices[f.served].Version {
 		t.Errorf("price version %s, want the sale price's %s", built.Price.Version, f.prices[f.served].Version)
 	}

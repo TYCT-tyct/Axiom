@@ -66,7 +66,7 @@ func checkSettlementBeforeTheEnding(t *testing.T, s settlement) {
 
 func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	t.Helper()
-	if len(e.Attempts) != 1 || e.Cancelled {
+	if len(e.Attempts) != 1 {
 		t.Fatalf("ending %+v", e)
 	}
 	a := e.Attempts[0]

@@ -15,7 +15,7 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
-	tokens int64                  // an estimate of the input, in tokens; see Config.BytesPerToken
+	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
 	now    time.Time
@@ -36,7 +36,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
-		tokens: in.Req.TextBytes / r.cfg.BytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -131,9 +131,10 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 func (r *Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
-	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments).
+	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
+	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
 	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
-		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
+		c.OutputSpeed > 0 && r.cfg.FirstSegment > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
 	target := c.Target
 	format, _ := c.callFormat(n)
 	target.Format = format
@@ -211,7 +212,7 @@ func (c *candidate) unavailable() Reason {
 }
 
 // unfit is what the request needs and the endpoint lacks. The input is an estimate of its tokens from the body's bytes
-// (Config.BytesPerToken), so an endpoint is left out only when the request surely does not fit; one that turns out too
+// (billing.InputBytesPerToken), so an endpoint is left out only when the request surely does not fit; one that turns out too
 // small answers with a context error, which falls back to the next entry.
 func (c *candidate) unfit(n *need) Reason {
 	switch {
