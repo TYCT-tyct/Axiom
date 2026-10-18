@@ -80,15 +80,36 @@ jobs:
       # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table.
       - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only == 'true'
         run: just md-checks
-      # The tests stay cacheable; bench-once runs every benchmark under -race on PRs too, and bench-compare below still
-      # compares allocations without -race.
+      # `check-ci` is `just check` without the two checks workflow.yml's required `secrets` job (gitleaks) and `docs` job
+      # (scripts/workflow tests and check_docs.py) already run on every PR and main push, so they would run twice per
+      # build. Local `just check`, the pre-push gate, still runs them. The tests stay cacheable.
       - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: just check-all
+        run: just check-ci ${{ github.event_name == 'push' && 'bench-once' || '' }}
+      # bench-once (every benchmark once under -race, which catches races in benchmark code) runs on main pushes only,
+      # as part of the step above: a PR runs bench-compare below, which runs the same benchmarks again without -race,
+      # so running both on every PR was the same benchmarks twice.
+      #
       # The deployment checks below start the stack on this host with the job's own compose project, image tag, volumes
       # and kernel-picked host ports, and tear it down however the step ends (scripts/ci/deploy-check.sh), so jobs on
       # runners sharing a host neither collide nor wait for each other. Without a turn to wait for, three `just up` of
-      # at most 5 minutes each, the checks and the teardown fit.
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
+      # at most 5 minutes each, the checks and the teardown fit. A PR runs them only when it changes what they deploy
+      # (scripts/ci_skips.py deploy-needed: deploy/, Dockerfiles, cmd/axiom's config, env and variables, migrations, the
+      # script itself); main runs them on every push, so anything the path rule missed is caught there.
+      - id: deploy_scope
+        if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+        run: |
+          status=0
+          python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
+          if [ "$status" -eq 10 ]; then
+            echo "deploy-check skipped: nothing it deploys changed between $BASE and HEAD"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            [ "$status" -eq 0 ] || echo "deploy-needed check exited $status; running deploy-check"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+      - if: github.event_name == 'push' || (steps.changes.outputs.docs_only != 'true' && steps.deploy_scope.outputs.run == 'true')
         run: bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
       - if: github.event_name == 'pull_request'
