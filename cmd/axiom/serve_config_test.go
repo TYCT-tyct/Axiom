@@ -27,6 +27,7 @@ func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
 	base := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	withPool := func(size int) []string {
 		return append(slices.Clone(base), fmt.Sprintf("AXIOM_DATABASE_URL=%s&pool_max_conns=%d", url, size))
@@ -82,22 +83,30 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 		environ []string
 		want    []string
 	}{
-		{"no key files", []string{database}, []string{"AXIOM_MASTER_KEY_FILE: required", "AXIOM_KEY_HASH_FILE: required"}},
+		{"no key files", []string{database}, []string{
+			"AXIOM_MASTER_KEY_FILE: required", "AXIOM_KEY_HASH_FILE: required", "AXIOM_IDENTITY_KEY_FILE: required",
+		}},
 		{
 			"files that are not there",
-			[]string{database, "AXIOM_MASTER_KEY_FILE=/planted-value/master", "AXIOM_KEY_HASH_FILE=" + good},
+			[]string{database, "AXIOM_MASTER_KEY_FILE=/planted-value/master", "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good},
 			[]string{"AXIOM_MASTER_KEY_FILE: open: file not found"},
 		},
 		{
 			"a hashing key file that is no key file",
-			[]string{database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + filepath.Join(t.TempDir(), "planted-value")},
+			[]string{database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + filepath.Join(t.TempDir(), "planted-value"), "AXIOM_IDENTITY_KEY_FILE=" + good},
 			[]string{"AXIOM_KEY_HASH_FILE: open: file not found"},
+		},
+		{
+			// The identity key is a file of its own, so its absence is the one the node names (#205).
+			"an identity key file that is not there",
+			[]string{database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=/planted-value/identity"},
+			[]string{"AXIOM_IDENTITY_KEY_FILE: open: file not found"},
 		},
 		{
 			"settings that are no settings",
 			[]string{
-				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_HASH_CONCURRENCY=0",
-				"AXIOM_HASH_WAIT=planted-value", "AXIOM_TRUSTED_PROXIES=planted-value", "AXIOM_HASH_CONCURENCY=4",
+				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
+				"AXIOM_HASH_CONCURRENCY=0", "AXIOM_HASH_WAIT=planted-value", "AXIOM_TRUSTED_PROXIES=planted-value", "AXIOM_HASH_CONCURENCY=4",
 			},
 			[]string{
 				"AXIOM_HASH_CONCURRENCY: want a whole number of at least 1", "AXIOM_HASH_WAIT: want a positive duration",
@@ -112,7 +121,7 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			want    []string
 		}{
 			"a key file others can read",
-			[]string{database, "AXIOM_MASTER_KEY_FILE=" + readable, "AXIOM_KEY_HASH_FILE=" + good},
+			[]string{database, "AXIOM_MASTER_KEY_FILE=" + readable, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good},
 			[]string{"AXIOM_MASTER_KEY_FILE: permissions must deny all group and other access"},
 		})
 	}

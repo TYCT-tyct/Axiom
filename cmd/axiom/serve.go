@@ -58,6 +58,7 @@ type nodeSettings struct {
 	startupTimeout, shutdownTimeout   time.Duration
 	databaseURL                       string
 	masterKeyFile, keyHashFile        string
+	identityKeyFile                   string
 	hashConcurrency                   int
 	hashWait                          time.Duration
 	trustedProxies                    []netip.Prefix
@@ -75,6 +76,9 @@ func readSettings(environ []string) (nodeSettings, error) {
 		databaseURL:     env.Required(pg.DatabaseURLVar),
 		masterKeyFile:   env.Required(masterKeyFileVar),
 		keyHashFile:     env.Required(keyHashFileVar),
+		// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
+		// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
+		identityKeyFile: env.Required(identityKeyFileVar),
 		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 		// GOMAXPROCS and 2 seconds).
 		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
@@ -111,6 +115,10 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
 
+	limits, err := nodeLimits()
+	if err != nil {
+		return err
+	}
 	recorder := startRecorder(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
@@ -127,37 +135,46 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	routes, adminRoutes, err := console.routes(ctx, db, tel, logger)
+	routes, err := console.routes(ctx, db, tel, logger, limits, recorder)
 	if err != nil {
 		return err
 	}
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes, cfg.adminAddr, adminRoutes, cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
-	served := startServing(servers, &health, logger)
+	served := startServing(servers, logger)
+	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
+	// rebuild (the card's first invariant).
+	go announceReady(ctx, routes.calls.ready, &health, logger)
 
 	var stopped error
 	select {
 	case err := <-served:
 		stopped = fmt.Errorf("a listener stopped: %w", err)
+	case err := <-routes.calls.reaped:
+		stopped = fmt.Errorf("this node's holder is gone: %w", err)
 	case <-ctx.Done():
 	}
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	// One deadline for the whole shutdown: the recorder drains after the listeners stop, when no request can enqueue.
+	// One deadline for the whole shutdown: the calls and their settlements drain after the listeners stop, when no new
+	// one can start, and the recorder drains last.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
 	defer cancel()
-	return errors.Join(stopped, shutdown(ctx, cfg.shutdownTimeout, &health, servers), queue.Stop(ctx), recorder.Close(ctx))
+	err = shutdown(ctx, cfg.shutdownTimeout, &health, servers)
+	routes.calls.Drain(ctx)
+	return errors.Join(stopped, err, queue.Stop(ctx), recorder.Close(ctx))
 }
 
-// consoleParts are what the console's API needs that the node can check before it touches the database: the secrets
-// read from protected files, whose errors name the variable and never the path or the contents, and the contract
-// the guard enforces.
+// consoleParts are what the node builds from its configuration before it touches the database: the secrets read from
+// protected files, whose errors name the variable and never the path or the contents, and the contract the guard
+// enforces.
 type consoleParts struct {
 	cfg           nodeSettings
-	master        *secret.Keyring // seals users' TOTP secrets
+	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials
 	hashes        *secret.MACKeys // keys API keys are hashed with
+	identity      []byte          // derives what replaces the client's identifiers upstream
 	contract      *contract
 	adminContract *contract
 	frontend      *webui.Frontend // the pages of the three apps
@@ -172,6 +189,10 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
+	identity, err := secret.LoadSecret(identityKeyFileVar, cfg.identityKeyFile)
+	if err != nil {
+		return consoleParts{}, err
+	}
 	console, err := consoleContract()
 	if err != nil {
 		return consoleParts{}, err
@@ -181,46 +202,84 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	return consoleParts{cfg, master, hashes, console, admin, frontend}, err
+	return consoleParts{cfg, master, hashes, identity, console, admin, frontend}, err
+}
+
+// nodeRoutes are what the node's listeners serve and the call path behind the public one.
+type nodeRoutes struct {
+	public, admin http.Handler
+	calls         callNode
+}
+
+// nodeLimits is the node's in-process limits, built from the gateway's defaults: the one value both the accounts module
+// and the call path take their limits from. A key lookup that misses the cache uses a database connection like an
+// admission does, so the two must share the counting, or a flood of unknown keys would be bounded by nothing
+// (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
+func nodeLimits() (*gateway.Backpressure, error) {
+	cfg := gateway.DefaultConfig()
+	limits, err := gateway.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return limits, nil
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
-// ctx ends, and puts the console's API in front of it for the public listener and the admin's API for the admin
-// listener. Opening an account also opens its balance (openBalance).
-func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) (public, admin http.Handler, err error) {
+// ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
+// it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
+func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
+	limits *gateway.Backpressure, recorder *observability.Recorder) (nodeRoutes, error) {
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
-		HashWait: p.cfg.hashWait, Meter: tel.Metrics.Meter("axiom/accounts"), OnAccountOpened: openBalance,
+		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
+		OnAccountOpened: openBalance,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nodeRoutes{}, err
 	}
 	if err := service.Load(ctx, logger); err != nil {
-		return nil, nil, err
+		return nodeRoutes{}, err
 	}
-	public = publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-		&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger)
 	cat, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{Logger: logger})
 	if err != nil {
-		return nil, nil, err
+		return nodeRoutes{}, err
 	}
-	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	exit, err := outbound(tel)
 	if err != nil {
-		return nil, nil, err
+		return nodeRoutes{}, err
+	}
+	// The console's admin and the calls share one outbound client, so the node keeps one set of connections to its
+	// suppliers and the suppliers' sync uses them too (startSync gets its own, in the queue's goroutine).
+	calls, err := startCallPath(ctx, callDeps{
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, limits: limits,
+		records: recorder, tel: tel, logger: logger,
+	})
+	if err != nil {
+		return nodeRoutes{}, err
 	}
 	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
 	if err != nil {
-		return nil, nil, err
+		return nodeRoutes{}, err
 	}
-	admin = adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
+	public := withModelCalls(
+		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
+			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
+		calls.api)
+	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
-	return public, admin, nil
+	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
+}
+
+// outbound is the client a node reaches its suppliers through: one pool of connections from the node's own address
+// (egress.Direct), shared by the call path and the sync. A test replaces it to let a node call a supplier on loopback.
+var outbound = func(tel *telemetry.Telemetry) (*egress.Client, error) {
+	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 }
 
 // startSync starts the queue with the syncing of the suppliers on it. It reaches the suppliers from the node's own
 // address (egress.Direct).
 func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
-	exit, err := egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
+	exit, err := outbound(tel)
 	if err != nil {
 		return nil, err
 	}
@@ -270,14 +329,13 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 	return db, nil
 }
 
-// startServing serves every listener and reports the node ready. The channel carries the error of the first listener to
-// stop.
-func startServing(servers []*listening, health *httpserver.Health, logger *slog.Logger) <-chan error {
+// startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not
+// reported here: it waits for the routing snapshot (announceReady), so a node that cannot route never says it can.
+func startServing(servers []*listening, logger *slog.Logger) <-chan error {
 	served := make(chan error, len(servers))
 	for _, s := range servers {
 		go func() { served <- s.server.Serve(s.listener) }()
 	}
-	health.SetReady(true)
 	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
 	return served
 }

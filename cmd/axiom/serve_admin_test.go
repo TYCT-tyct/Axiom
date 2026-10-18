@@ -17,6 +17,7 @@ func TestServeAdminListener(t *testing.T) {
 		return append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 			"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		}, extra...)
 	}
 	start := func(extra ...string) (adminAddr, publicAddr string, stop func()) {

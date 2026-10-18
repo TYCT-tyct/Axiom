@@ -112,6 +112,7 @@ func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
 	p := startAxiom(t, []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_DATABASE_URL=" + c.database.App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		"AXIOM_SHUTDOWN_TIMEOUT=1m", // long enough that only the second signal can explain a quick exit
 	}, "serve")
 	serving := p.until(t, "serving")
