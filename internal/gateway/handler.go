@@ -306,7 +306,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 	if r.Context().Err() != nil && !errors.Is(err, errBodyTimeout) {
 		return
 	}
-	ref, expected := refusal(err)
+	ref, expected := refusal(format, err)
 	switch {
 	case !expected:
 		h.Logger.Error("a request failed unexpectedly", "request_id", httpserver.RequestID(r.Context()), "err", err)

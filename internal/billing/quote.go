@@ -128,6 +128,13 @@ var ErrUnpriced = errors.New("billing: the entry's schedule does not price what 
 // call (docs/domains/billing.md「预留与结算」). A client states the limit (max_uses, max_tool_calls) and is served.
 var ErrUnbounded = errors.New("billing: a server tool is enabled with no limit on its uses")
 
+// UnboundedError is an ErrUnbounded that names the tool, so the gateway can tell the client what to do about it.
+type UnboundedError struct{ Item catalog.Item }
+
+func (e *UnboundedError) Error() string { return ErrUnbounded.Error() + ": " + e.Item.String() }
+
+func (*UnboundedError) Unwrap() error { return ErrUnbounded }
+
 // Quote quotes every entry, drops those whose quote exceeds any available amount, and reserves the highest quote
 // kept, so a fallback never meets an entry dearer than what was reserved. A dropped preferred entry refuses the
 // request with *Insufficient, naming the first source in avail that falls short.
@@ -179,7 +186,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	uses, samplings := serverToolUses(d, e.Model)
 	for _, t := range d.ServerTools {
 		if uses[t.Item] == 0 {
-			return q, fmt.Errorf("%w: %s", ErrUnbounded, t.Item)
+			return q, &UnboundedError{t.Item}
 		}
 	}
 	first, longest := inputBound(d, e.Model, samplings)

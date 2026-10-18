@@ -107,7 +107,7 @@
 | 没有可用端点，永久性的：能力、上下文、格式、预设或请求覆盖过滤掉了全部端点，或没有售价 | 404 `no_endpoint`，附过滤原因 | `not_found_error` | — |
 | 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
-| 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages）或 `max_tool_calls`（Responses），不调用上游 | `invalid_request_error` | — |
+| 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
 | 上游因请求本身拒绝（4xx） | 上游的状态码和原话，抹掉供应商身份，`upstream_rejected` | 上游原样 | — |
 | 所有尝试都失败，含各自超时 | 502 `upstream_error` | `api_error` | 上游中途出错，`upstream_error` |
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
