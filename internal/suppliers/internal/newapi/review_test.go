@@ -140,8 +140,10 @@ func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 	groups, _ := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.Group], error) {
 		return om.Offer(t.Context(), from)
 	})
-	if len(groups.Items) != 120 || *served2 != 122 {
-		t.Errorf("%d groups from %d requests, want 120 from 122", len(groups.Items), *served2)
+	// 120 model reads, the groups and the prices, and one read of the groups per resume: the position names the groups
+	// it was read over, so a pass that goes on checks they are still the supplier's before it goes on reading them.
+	if len(groups.Items) != 120 || *served2 != 123 {
+		t.Errorf("%d groups from %d requests, want 120 from 123", len(groups.Items), *served2)
 	}
 }
 

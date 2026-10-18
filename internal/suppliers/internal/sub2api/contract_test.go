@@ -151,7 +151,8 @@ func manyGroups(n int) func(adapter.Request) adapter.Response {
 
 // TestOfferLargerThanOneRateWindowFinishes: 29 groups with a key each take 3 + 29×3 = 90 panel requests, more than a
 // window allows. The offer keeps the position of its reads, so a read after the window goes on where the one before
-// stopped — the keys are listed once, not once per window — and the offer ends with every group.
+// stopped — the keys are listed once, not once per window — and the offer ends with every group. A pass that goes on
+// checks the groups its position names against the supplier's once, which is one more request, not another pass.
 func TestOfferLargerThanOneRateWindowFinishes(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: epoch}

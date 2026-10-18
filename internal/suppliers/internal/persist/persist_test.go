@@ -219,7 +219,7 @@ func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T
 		t.Fatal(err)
 	}
 	state, listing := c.stored()
-	if strings.Contains(state, "OfferAt") || strings.Contains(state, "KeysAt") || !strings.Contains(listing, "page") {
+	if strings.Contains(state, "OfferAt") || strings.Contains(state, "KeysAt") || !strings.Contains(listing, `"offer"`) || !strings.Contains(listing, `"keys"`) {
 		t.Errorf("the state holds a listing position (%s), or the column does not hold it (%s)", state, listing)
 	}
 

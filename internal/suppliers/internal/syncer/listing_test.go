@@ -32,6 +32,8 @@ type pager[T any] struct {
 
 func newPager[T any](t *testing.T, pages [][]T) *pager[T] { return &pager[T]{t: t, pages: pages} }
 
+// read reads the listing from from as far as it goes, like an adapter does: page after page until it ends, or until the
+// limits refuse one, which keeps the page it reached and holds no item.
 func (p *pager[T]) read(from adapter.Listing) adapter.Page[T] {
 	pos := paged[T]{V: 1, Page: 1, Total: len(p.pages)}
 	if len(from) > 0 {
@@ -42,17 +44,18 @@ func (p *pager[T]) read(from adapter.Listing) adapter.Page[T] {
 	if pos.Total != len(p.pages) { // the supplier's listing changed under the position: it begins again
 		pos = paged[T]{V: 1, Page: 1, Total: len(p.pages)}
 	}
-	if pos.Page == p.blockAt {
-		p.blockAt = 0
-		return adapter.Page[T]{Next: p.encode(pos), Until: p.until}
+	for {
+		if pos.Page == p.blockAt {
+			p.blockAt = 0
+			return adapter.Page[T]{Next: p.encode(pos), Until: p.until}
+		}
+		p.served = append(p.served, pos.Page)
+		pos.Items = append(pos.Items, p.pages[pos.Page-1]...)
+		pos.Page++
+		if pos.Page > len(p.pages) {
+			return adapter.Page[T]{Items: pos.Items, Done: true}
+		}
 	}
-	p.served = append(p.served, pos.Page)
-	pos.Items = append(pos.Items, p.pages[pos.Page-1]...)
-	pos.Page++
-	if pos.Page > len(p.pages) {
-		return adapter.Page[T]{Items: pos.Items, Done: true}
-	}
-	return adapter.Page[T]{Next: p.encode(pos)}
 }
 
 func (p *pager[T]) encode(pos paged[T]) adapter.Listing {

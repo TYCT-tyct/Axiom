@@ -537,7 +537,8 @@ func TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing(t *testing.T) {
 }
 
 // TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen: an Open that the supplier's limits refuse is not remembered as
-// the round's failure: the next task of the round opens again, and the round goes through.
+// the round's failure: the next task of the round opens again and goes through, and the task the refusal stopped is due
+// when they reopen, so the round after it reads the balance.
 func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 	t.Parallel()
 	s := &system{account: healthy(), holdOpen: 300 * time.Millisecond}
@@ -545,8 +546,19 @@ func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
-	if s.opens.Load() < 2 || s.accounts.Load() != 1 {
-		t.Errorf("the adapter was opened %d times and the balance read %d times, want a second open and one read", s.opens.Load(), s.accounts.Load())
+	if s.opens.Load() < 2 {
+		t.Errorf("the adapter was opened %d times, want the task after the refused open to open it again", s.opens.Load())
+	}
+	if s.accounts.Load() != 0 {
+		t.Errorf("the balance was read %d times by a round whose open the limits refused, want it left for the round they reopen in", s.accounts.Load())
+	}
+
+	time.Sleep(400 * time.Millisecond) // the limits reopen
+	if err := c.node("b", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
+		t.Fatal(err)
+	}
+	if s.accounts.Load() != 1 {
+		t.Errorf("the balance was read %d times, want once: the refused open was not remembered as a failure", s.accounts.Load())
 	}
 }
 

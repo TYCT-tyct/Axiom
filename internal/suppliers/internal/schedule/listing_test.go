@@ -12,9 +12,10 @@ import (
 func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 	t.Parallel()
 	s := &system{account: healthy()}
-	s.keys.pages, s.keys.stopAt, s.keys.wait = 3, 2, time.Minute
+	s.keys.pages, s.keys.stopAt, s.keys.wait = 3, 2, 200*time.Millisecond
 	c := newCluster(t, s)
 	n := c.node("a", time.Hour)
+	start := time.Now()
 	if err := n.s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
@@ -28,11 +29,14 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 	}
 	var due time.Time
 	c.row("SELECT next_due FROM suppliers.sync_states WHERE supplier_id = $1", &due)
-	if !due.After(time.Now()) || due.Sub(time.Now()) > s.keys.wait+time.Minute {
-		t.Errorf("the supplier is due at %v, want the moment the limits reopen", due)
+	// Due when the limits reopen, not at one of the intervals of minutes: a supplier whose limits stopped it is due again
+	// when they do, so the sweep brings a job for it then, without the wait counting as a failure or holding a worker.
+	if wait := due.Sub(start); wait <= 0 || wait > 10*time.Second {
+		t.Errorf("the supplier is due %v after the job began, want it due when the limits reopen, in %v", wait, s.keys.wait)
 	}
 
 	s.keys.wait = 0 // the limits have reopened
+	time.Sleep(300 * time.Millisecond)
 	if err := n.s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
