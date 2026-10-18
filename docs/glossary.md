@@ -119,7 +119,7 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 额度 | credit | 站点的记账单位：1 额度 = 1 个单位的站点记账货币 |
 | 额度批次 | credit_grant | 一次额度进账（充值、赠送、兑换、调整），可单独设过期时间 |
 | 成本计划 | cost_schedule | 适配器为端点生成的"用量 → 成本"计算表 |
-| 价格版本 | `PriceRef.Version` | 请求开始时锁定的那一版售价，见[计费的「定价」](domains/billing.md#定价)；M1 的版本号是规则、修订和参考价行的摘要，发布动作与成本参与见 M2 |
+| 价格版本 | `PriceRef.Version` | 请求开始时锁定的那一版售价，见[计费的「定价」](domains/billing.md#定价)；M1 的版本号是规则、修订和参考价行的摘要，发布动作与成本参与见 [#234](https://github.com/TYCT-tyct/Axiom/issues/234)（M2） |
 | 汇率 | fx_rate | 两种货币之间的换算值，交易时锁定 |
 | 币种 | currency（`platform.Currency`） | 一种货币，用三个大写字母的代码表示，如 USD、CNY |
 | 单价 | unit_price（`platform.UnitPrice`） | 每个计费单位（每个 token 或每次）的价格，十进制定点数，最多 15 位小数，见[计费的「钱的表示」](domains/billing.md#钱的表示) |
