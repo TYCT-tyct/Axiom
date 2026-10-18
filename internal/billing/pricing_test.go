@@ -141,6 +141,25 @@ func (r rules) create(in RuleInput) (Rule, error) {
 	return made, err
 }
 
+// store writes a rule straight into the table, as a release that lets an administrator make a rule for one account or
+// one tier will have it: CreateRule refuses those now.
+func (r rules) store(in RuleInput) {
+	r.t.Helper()
+	method, err := jsonx.MarshalCanonical(in.Method)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if err := r.tx(func(tx pg.Tx) error {
+		_, err := tx.Exec(r.t.Context(), `INSERT INTO billing.pricing_rules
+			(id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, '{}'::jsonb)`,
+			uuid.NewV7(), r.site, in.Enabled, in.Target.Kind, in.Target.ID, in.Audience.Kind, in.Audience.ID, method)
+		return err
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
 func (r rules) update(id uuid.UUID, rev int64, in RuleInput) (Rule, error) {
 	var made Rule
 	err := r.tx(func(tx pg.Tx) (err error) {
@@ -186,9 +205,13 @@ func TestRulesAreTriedMostSpecificFirst(t *testing.T) {
 		{Enabled: false, Target: Selector{Kind: "endpoint", ID: model}, Audience: Selector{Kind: "account", ID: acctID}, Method: plus("1")},
 		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: plus("1")},
 	} {
-		if _, err := r.create(in); err != nil {
-			t.Fatal(err)
+		if in.Audience.Kind == "all" {
+			if _, err := r.create(in); err != nil {
+				t.Fatal(err)
+			}
+			continue
 		}
+		r.store(in) // CreateRule refuses the audiences of a later release; the order they will be tried in is already fixed
 	}
 	var order []string
 	for _, rule := range r.list() {
