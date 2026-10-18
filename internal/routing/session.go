@@ -2,9 +2,7 @@ package routing
 
 import (
 	"bytes"
-	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/jsontext" //nolint:depguard // jsonx has no token-by-token reader; the prefix is cut mid-value, which only a token reader handles
 	"sync"
 	"time"
@@ -147,15 +145,6 @@ func metadataUser(dec *jsontext.Decoder) (user string, ok bool) {
 	}
 	_, err := dec.ReadToken() // the object's end
 	return user, ok && err == nil
-}
-
-// Upstream is the opaque identifier passed to the upstream in place of the client's session value: derived with the
-// account-side secret, so tenants that all send "default" do not meet at the upstream, and the client's own value is
-// not revealed. The same session always gets the same identifier.
-func (k SessionKey) Upstream(secret []byte) string {
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(k[:])
-	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
 const stickyShards = 16

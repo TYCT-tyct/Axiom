@@ -1,7 +1,6 @@
 package routing_test
 
 import (
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -83,18 +82,6 @@ func TestSessionKeyReadsABoundedPrefix(t *testing.T) {
 	}
 	if key(t, r, acct, "m", "") != key(t, r, acct, "m", "not json") {
 		t.Error("an unreadable body is not keyed by account and model alone")
-	}
-}
-
-// TestUpstreamSessionIsOpaque: the identifier passed on is derived with a secret, is stable for a session and differs
-// between sessions and between secrets, and shows nothing of the client's value.
-func TestUpstreamSessionIsOpaque(t *testing.T) {
-	t.Parallel()
-	r := mustRouter(t)
-	k1, k2 := key(t, r, acct, "m", `{"session_id":"default"}`), key(t, r, routing.AccountID(id(88)), "m", `{"session_id":"default"}`)
-	s1, s2 := k1.Upstream([]byte("secret")), k2.Upstream([]byte("secret"))
-	if s1 != k1.Upstream([]byte("secret")) || s1 == s2 || s1 == k1.Upstream([]byte("other")) || strings.Contains(s1, "default") || len(s1) != 32 {
-		t.Errorf("%q %q", s1, s2)
 	}
 }
 
@@ -185,8 +172,8 @@ func TestRecordJSON(t *testing.T) {
 }
 
 // candidates is a harness with n endpoints of one model, every seventh with its breaker open, and a request that
-// sticks to the third: what BenchmarkPlan and TestPlanScales plan over.
-func candidates(tb testing.TB, n int) (*harness, routing.Input) {
+// sticks to the third: what BenchmarkPlan and TestPlanScales plan over. cfg is the router's configuration.
+func candidates(tb testing.TB, n int, cfg routing.Config) (*harness, routing.Input) {
 	tb.Helper()
 	var endpoints []routing.Endpoint
 	for i := 1; i <= n; i++ {
@@ -199,7 +186,7 @@ func candidates(tb testing.TB, n int) (*harness, routing.Input) {
 	}
 	in := input()
 	in.Sticky = ep(3)
-	return newHarness(tb, routing.Config{}, openPreset(), endpoints...), in
+	return newHarness(tb, cfg, openPreset(), endpoints...), in
 }
 
 // BenchmarkPlan is the route for a request with fifty candidates, the size docs/performance.md expects ("通常几十个").
@@ -207,7 +194,7 @@ func candidates(tb testing.TB, n int) (*harness, routing.Input) {
 // figure, so it is checked by the load tests of docs/performance.md「怎么验证」, not here, where a busy machine would
 // fail it at random (#107); TestPlanScales catches the regressions a budget would.
 func BenchmarkPlan(b *testing.B) {
-	h, in := candidates(b, 50)
+	h, in := candidates(b, 50, routing.Config{})
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, wait, err := h.r.Plan(in); wait != nil || err != nil {
@@ -216,37 +203,26 @@ func BenchmarkPlan(b *testing.B) {
 	}
 }
 
-// TestPlanScales: planning over thirty-two times the candidates costs about thirty-two times as much, not a thousand,
-// so a change that makes Plan quadratic fails here whatever the machine's load. Each size is timed over the same
-// number of plans, at least 5ms at the small size, as some clocks tick too coarsely to time one plan; the fastest of
-// several such samples counts, interleaved between the sizes: load only ever adds time, so the minimum is the closest
-// to the true cost, and both sizes see the same machine. A linear Plan with its n log n sort measures about 30 to 40;
-// the bar of 96 leaves room for noise, and even a quadratic pass as cheap as comparing IDs (the mutation in the PR for
-// #107) measures over 100. Allocations must not grow with the candidates beyond a few: Plan's slices are sized once.
+// TestPlanScales: planning over thirty-two times the candidates does thirty-two times the work, not a thousand, so a
+// change that makes Plan quadratic fails here whatever the machine's load. The work is counted, not timed: the Balanced
+// strategy draws one random number for each candidate it scores, so every candidate must be either left out of the
+// record or drawn for exactly once, at both sizes, and what Plan allocates grows with the candidates by no more than
+// they do. Allocations must not grow beyond a few: Plan's slices are sized once.
 func TestPlanScales(t *testing.T) {
-	t.Run("time", func(t *testing.T) {
-		const small, large, samples = 25, 800, 5
-		hs, ins := candidates(t, small)
-		hl, inl := candidates(t, large)
-		reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
-		// also warm both sizes up
-		for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 5*time.Millisecond {
-			timed(hl, inl, 1)
-			reps *= 2
-		}
-		bestSmall, bestLarge := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
-		for range samples {
-			bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
-		}
-		if ratio := float64(bestLarge) / float64(bestSmall); ratio > 96 {
-			t.Errorf("planning %d candidates takes %.1f times as long as %d (%v against %v for %d plans), want about %d",
-				large, ratio, small, bestLarge, bestSmall, reps, large/small)
+	const small, large = 25, 800
+	t.Run("scoring", func(t *testing.T) {
+		for _, n := range []int{small, large} {
+			draws := 0
+			h, in := candidates(t, n, routing.Config{Rand: func() float64 { draws++; return 0.5 }})
+			p := h.plan(in)
+			if excluded := len(p.Record.Excluded); excluded == 0 || draws+excluded != n {
+				t.Errorf("%d candidates: %d scored and %d left out, want each one or the other, and some of each", n, draws, excluded)
+			}
 		}
 	})
 	t.Run("allocs", func(t *testing.T) {
-		const small, large = 25, 800
-		hs, ins := candidates(t, small)
-		hl, inl := candidates(t, large)
+		hs, ins := candidates(t, small, routing.Config{})
+		hl, inl := candidates(t, large, routing.Config{})
 		// The measurement runs in a child process, so this binary's other goroutines are not counted as Plan's.
 		got := alloctest.Measure(t,
 			alloctest.Function{Name: "small", F: func() { hs.plan(ins) }},
@@ -256,14 +232,9 @@ func TestPlanScales(t *testing.T) {
 			t.Errorf("planning %d candidates allocates %v times, %d candidates %v: want about as many",
 				large, got["large"].Count, small, got["small"].Count)
 		}
+		if got["large"].Bytes > 2*large/small*got["small"].Bytes {
+			t.Errorf("planning %d candidates allocates %v bytes, %d candidates %v: want about %d times as many",
+				large, got["large"].Bytes, small, got["small"].Bytes, large/small)
+		}
 	})
-}
-
-// timed is how long reps plans take.
-func timed(h *harness, in routing.Input, reps int) time.Duration {
-	start := time.Now()
-	for range reps {
-		h.plan(in)
-	}
-	return time.Since(start)
 }

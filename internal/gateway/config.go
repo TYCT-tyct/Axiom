@@ -16,11 +16,10 @@ import (
 type Config struct {
 	NodeInFlight int // requests served at once, disconnected ones still being read included
 
-	IPConnections int   // connections one client address may hold open
-	IPInFlight    int   // requests one client address may have in flight
-	MaxBody       int64 // largest request body, in bytes
-	KeyRate       int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
-	CountRate     int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
+	IPInFlight int   // requests one client address may have in flight
+	MaxBody    int64 // largest request body, in bytes
+	KeyRate    int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
+	CountRate  int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
 	PoolSize         int // N, database connections: the pool's size, so that every permit has a connection (DefaultConfig)
 	PoolReserve      int // connections only the Completion class may take
@@ -56,7 +55,6 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		NodeInFlight:      5000,
-		IPConnections:     1000,
 		IPInFlight:        500,
 		MaxBody:           32 << 20,
 		KeyRate:           6000,
@@ -137,7 +135,6 @@ type Backpressure struct {
 	Pool     *Pool // for the connections that need no account gate: cold-key lookup, batch writers
 	Queue    *Queue
 	Rate     *RateCounter
-	IPConns  *Limiter // connections per client address
 	IPCalls  *Limiter // requests in flight per client address
 	cfg      Config
 }
@@ -154,7 +151,6 @@ func New(cfg Config) (*Backpressure, error) {
 		Pool:     pool,
 		Queue:    newQueue(cfg.QueueMax, cfg.QueuePerKey),
 		Rate:     NewRateCounter(cfg.RateWindow),
-		IPConns:  NewLimiter(ErrRateLimited),
 		IPCalls:  NewLimiter(ErrRateLimited),
 		cfg:      cfg,
 	}, nil

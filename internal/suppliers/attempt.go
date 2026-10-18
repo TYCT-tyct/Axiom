@@ -21,6 +21,20 @@ import (
 // whether the supplier ran the request (Executed).
 type Failure = adapter.Failure
 
+// Scope is what a failure says is at fault, and so what to stop using; the constants are the adapter's, named here for
+// gateway, which maps them one by one to routing's.
+type Scope = adapter.Scope
+
+// The scopes of a Failure.
+const (
+	ScopeRequest    = adapter.ScopeRequest
+	ScopeEgress     = adapter.ScopeEgress
+	ScopeEndpoint   = adapter.ScopeEndpoint
+	ScopeCredential = adapter.ScopeCredential
+	ScopeGroup      = adapter.ScopeGroup
+	ScopeSupplier   = adapter.ScopeSupplier
+)
+
 // CallPolicy is how calls to an endpoint behave: whether they stream and whether the supplier stops when we do.
 type CallPolicy = adapter.CallPolicy
 

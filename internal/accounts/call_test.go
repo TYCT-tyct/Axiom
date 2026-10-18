@@ -152,7 +152,7 @@ func TestNextCallReadsTheDatabase(t *testing.T) {
 	t.Parallel()
 	changes := map[string]func(t *testing.T, db *pg.DB, database pgtest.Database, a *accounts.Service, keyID accounts.KeyID){
 		"the key disabled": func(t *testing.T, db *pg.DB, _ pgtest.Database, a *accounts.Service, keyID accounts.KeyID) {
-			inPlatform(t, db, func(tx pg.Tx) error { return a.DisableKey(t.Context(), tx, system, keyID) })
+			inPlatform(t, db, func(tx pg.Tx) error { return disableKey(t.Context(), tx, a, keyID) })
 		},
 		"the key deleted": func(t *testing.T, db *pg.DB, _ pgtest.Database, a *accounts.Service, keyID accounts.KeyID) {
 			inPlatform(t, db, func(tx pg.Tx) error { return a.DeleteKey(t.Context(), tx, system, keyID) })
@@ -482,7 +482,7 @@ func checkAdmission(t *testing.T, admitted accounts.Admission, c accounts.Caller
 }
 
 // TestKeyChangesAreRecorded: making, disabling and deleting a key each leave an audit entry with the change; a key
-// already disabled or deleted is not found again. A new key's daily limit is its site's, or the default.
+// already deleted is not found again. A new key's daily limit is its site's, or the default.
 func TestKeyChangesAreRecorded(t *testing.T) {
 	t.Parallel()
 	db, database, s, key := callSetup(t)
@@ -493,7 +493,7 @@ func TestKeyChangesAreRecorded(t *testing.T) {
 	steps := []struct {
 		change func(context.Context, pg.Tx, audit.Actor, accounts.KeyID) error
 		want   error
-	}{{s.DisableKey, nil}, {s.DisableKey, accounts.ErrKeyNotFound}, {s.DeleteKey, nil}, {s.DeleteKey, accounts.ErrKeyNotFound}}
+	}{{disabler(s), nil}, {s.DeleteKey, nil}, {s.DeleteKey, accounts.ErrKeyNotFound}, {disabler(s), accounts.ErrKeyNotFound}}
 	for i, step := range steps {
 		if err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error { return step.change(t.Context(), tx, system, c.KeyID()) }); !errors.Is(err, step.want) {
 			t.Errorf("step %d: %v, want %v", i, err, step.want)
@@ -501,7 +501,7 @@ func TestKeyChangesAreRecorded(t *testing.T) {
 	}
 	got := texts(t, db, platform, "SELECT action || ' ' || target_id FROM platform.audit_log ORDER BY id")
 	id := c.KeyID().TypeID()
-	if strings.Join(got, "; ") != "api_key.create "+id+"; api_key.disable "+id+"; api_key.delete "+id {
+	if strings.Join(got, "; ") != "api_key.create "+id+"; api_key.update "+id+"; api_key.delete "+id {
 		t.Errorf("audit entries: %v", got)
 	}
 	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(`INSERT INTO accounts.site_settings (site_id, new_key_daily_limit) VALUES (:s1, 5)`)); err != nil {
