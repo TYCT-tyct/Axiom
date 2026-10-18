@@ -1,3 +1,4 @@
+# probe: a comment-only workflow change
 # Project checks that read the PR description, apart from ci.yml so that editing a description reruns only these.
 # Every job here is a check the ruleset protecting main requires (manage.py protect reads this file), so keep the names.
 name: describe
