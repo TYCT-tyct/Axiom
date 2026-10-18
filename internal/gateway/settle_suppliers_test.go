@@ -15,8 +15,6 @@ import (
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // The supplier's side of a settlement, run with the suppliers module's own service rather than a double: what an attempt
@@ -246,7 +244,7 @@ func (r *rig) supplierRow(id uuid.UUID) (supplierRow, bool) {
 		err := tx.QueryRow(r.t.Context(), `SELECT attempt_seq, usage, cost_flag, estimated_native::text,
 			charge_ref, endpoint_id FROM suppliers.attempt_costs WHERE request_id = $1 ORDER BY attempt_seq`, id).
 			Scan(&row.seq, &usage, &row.flag, &row.native, &row.ref, &row.endpoint)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pg.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
