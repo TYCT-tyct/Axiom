@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,11 @@ func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.U
 func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, lost := s.lost[id]; !lost {
+		// The real one fails on a request that was never recorded as lost (suppliers' ResolveLostRequest writes no row
+		// and reports it), so the double fails too, rather than hiding the bug.
+		return fmt.Errorf("no lost request %s to resolve", id)
+	}
 	s.resolved[id] = true
 	return nil
 }
@@ -130,7 +136,7 @@ func used(tb testing.TB, input, output, searches int64, estimated ...catalog.Ite
 }
 
 func outcome(result Result, finish FinishReason, cancelled bool, segments ...Segment) Outcome {
-	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Costed: true, Segments: segments, Result: result, Finish: finish}}}
+	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
 }
 
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
@@ -183,6 +189,23 @@ func TestWaiversHaveNoCap(t *testing.T) {
 		if n := b.count("SELECT count(*) FROM " + table); n != 0 {
 			t.Errorf("%s holds %d rows, want none", table, n)
 		}
+	}
+	b.balanced()
+}
+
+// TestACancelledCallStillLeavesTheSuppliersRow: cancelling is not free for the platform, so a cancelled call's attempt is
+// written to suppliers with the cost billing booked for it, whatever the user is charged (docs/domains/billing.md「客户端断开」).
+func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	h := b.hold(1000)
+	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishNone, true, used(t, 50, 20, 0))); err != nil {
+		t.Fatal(err)
+	}
+	if rows := b.supplies.attempts[h.id]; len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("suppliers got %+v for the cancelled call, want its one attempt", rows)
+	}
+	if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); n != 7 {
+		t.Errorf("the books hold the attempt at %d, want 7: its cost whether or not the user is charged", n)
 	}
 	b.balanced()
 }
@@ -266,13 +289,39 @@ func TestCleanup(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			state := b.state()
-			if charged := b.count("SELECT charged FROM billing.reservations"); state != tc.state || charged != tc.charged ||
-				b.supplies.lostNow(h.id) != tc.lost {
-				t.Errorf("%s charged %d, lost %v; want %s, %d, %v", state, charged, b.supplies.lostNow(h.id), tc.state, tc.charged, tc.lost)
-			}
+			b.wantReservation(h, tc.state, tc.charged, tc.lost)
 			b.balanced()
 		})
+	}
+}
+
+// TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped: the reservation marks an entry it dropped for its quote with
+// the zero id, and no charge can come from the endpoint of an entry that was never to be called, so the route suppliers
+// is given has only the kept ones, in order.
+func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
+	first, dropped, last := metered(t), metered(t), metered(t)
+	dropped.MaxOutput = 1e9 // a quote far beyond the balance
+	var h *Hold
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.takenOver(h)
+	if route, want := b.supplies.lost[h.id], []uuid.UUID{first.Endpoint, last.Endpoint}; !slices.Equal(route, want) {
+		t.Errorf("the lost request's route is %v, want the kept entries %v", route, want)
+	}
+}
+
+// wantReservation checks what the reservation of h came to: its state, what it charged, and whether its request is
+// still lost.
+func (b *bank) wantReservation(h *Hold, state string, charged int64, lost bool) {
+	b.t.Helper()
+	gotState, gotCharged, gotLost := b.state(), b.count("SELECT charged FROM billing.reservations"), b.supplies.lostNow(h.id)
+	if gotState != state || gotCharged != charged || gotLost != lost {
+		b.t.Errorf("%s charged %d, lost %v; want %s, %d, %v", gotState, gotCharged, gotLost, state, charged, lost)
 	}
 }
 

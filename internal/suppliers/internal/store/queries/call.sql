@@ -36,11 +36,17 @@ VALUES (@request_id, @site_id, @account_id, @route_endpoint_ids)
 ON CONFLICT (request_id) DO NOTHING;
 
 -- The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
--- A request that was never recorded as lost has nothing to resolve, and no row is written.
--- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
-ON CONFLICT (request_id) DO NOTHING;
+-- Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+-- lost, which has nothing to resolve and writes no row, is told from one resolved already.
+-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost;
 
 -- name: MatchCharges :many
 -- Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:

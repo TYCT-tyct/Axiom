@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -164,7 +165,12 @@ func (f *routeFixture) salePrices() (map[catalog.ModelID]billing.Sold, error) {
 	if err != nil {
 		return nil, err
 	}
-	return billing.SalePrices(rules, snap, usd)
+	var listed []catalog.ModelID
+	for m := range snap.Models() {
+		listed = append(listed, m.ID)
+	}
+	sold, unpriced := billing.SalePrices(rules, snap, listed, usd)
+	return sold, errors.Join(unpriced...)
 }
 
 // routable is one suppliers.Routable of a model on a supplier, as the sync writes them.

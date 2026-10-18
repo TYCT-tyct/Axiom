@@ -65,40 +65,40 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 			case !tc.waived && charged == 0:
 				t.Error("the call was free, want it charged: an output the upstream never reported is no zero output")
 			}
-			if got := r.count("SELECT count(*) FROM billing.waivers"); got != 0 {
-				t.Errorf("billing.waivers holds %d rows, want none: no cap counts a waiver", got)
-			}
-			// The supplier's own amount for what the attempt used — the reported tokens, and any the relay had to
-			// count itself — and never the sale price, a hundred times more.
-			if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got < knownCost || got >= saleForTheInput {
-				t.Errorf("the attempt cost the books %d, want the supplier's %d at least and well below the sale's %d", got, knownCost, saleForTheInput)
-			}
-			// The same attempt, on the supplier's side: one row in the settlement's own transaction, priced from the
-			// same schedule, with the receipt's charge ref and the usage the upstream reported. The ref is the
-			// supplier's id of the request, which comes with its response headers: the fake upstream sends none, so the
-			// row has none either — what billing hands over is written as it is (suppliers' own tests cover a ref).
-			var usage, native, flagged string
-			var ref *string
-			err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-				return tx.QueryRow(t.Context(), `SELECT usage::text, estimated_native::text, cost_flag, charge_ref
-					FROM suppliers.attempt_costs WHERE request_id = $1`, r.lastCall().ID).
-					Scan(&usage, &native, &flagged, &ref)
-			})
-			if err != nil {
-				t.Fatalf("the attempt has no cost row of its own: %v", err)
-			}
-			if !strings.Contains(usage, `"input": `+strconv.Itoa(supplierInput)) || ref != nil || native == "0" {
-				t.Errorf("the supplier's row is %s native (%s), ref %v, usage %s; want the reported input, no ref, an amount",
-					native, flagged, ref, usage)
-			}
+			r.checkTheSuppliersCost(r.lastCall().ID)
 			r.ledgerBalanced()
 		})
 	}
 }
 
+// checkTheSuppliersCost checks what a costed call left in the books and on the supplier's side. The books hold the
+// supplier's own amount for what the attempt used — the reported tokens, and any the relay had to count itself — and
+// never the sale price, a hundred times more; no cap counts a waiver. The supplier's row is the same attempt, written in
+// the settlement's own transaction and priced from the same schedule, with the usage the upstream reported and the
+// receipt's charge ref. The ref is the supplier's id of the request, which comes with its response headers: the fake
+// upstream sends none, so the row has none either — what billing hands over is written as it is (suppliers' own tests
+// cover a ref).
+func (r *rig) checkTheSuppliersCost(id uuid.UUID) {
+	r.t.Helper()
+	if got := r.count("SELECT count(*) FROM billing.waivers"); got != 0 {
+		r.t.Errorf("billing.waivers holds %d rows, want none: no cap counts a waiver", got)
+	}
+	if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got < knownCost || got >= saleForTheInput {
+		r.t.Errorf("the attempt cost the books %d, want the supplier's %d at least and well below the sale's %d", got, knownCost, saleForTheInput)
+	}
+	row, ok := r.supplierRow(id)
+	if !ok {
+		r.t.Fatal("the attempt has no cost row of its own")
+	}
+	if row.items["input"] != supplierInput || row.ref != nil || row.native == "0" {
+		r.t.Errorf("the supplier's row is %s native (%s), ref %v, items %v; want the reported input, no ref, an amount",
+			row.native, row.flag, row.ref, row.items)
+	}
+}
+
 // costedRig is a rig whose route entry is a real supplier's endpoint, so that the receipt the executor prices is the
 // one that endpoint's attempt leaves, and whose settlement writes the supplier's side through the module's own functions
-// (rig_test.go's supplierWrites).
+// (suppliers.CallWrites).
 func costedRig(t *testing.T) (*rig, suppliers.AttemptReceipt) {
 	t.Helper()
 	r := newRig(t, func(o *rigOptions) { o.suppliers = true })

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 	"uuid"
@@ -12,7 +13,6 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
-	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
@@ -21,30 +21,6 @@ import (
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
-
-// callPath is billing.Suppliers as the suppliers module implements it: the writes billing makes in the transaction of
-// its own settlement and cleanup, which is how a call's supplier side commits exactly when the ledger's cost does
-// (docs/architecture.md 规则 5). billing names suppliers' types, so this is all that joins the two: cmd/ is the only
-// package that may hold both, and neither module knows the other's wiring.
-type callPath struct{}
-
-var _ billing.Suppliers = callPath{}
-
-func (callPath) RecordAttempts(ctx context.Context, tx pg.Tx, attempts []suppliers.AttemptRecord) error {
-	return suppliers.RecordAttempts(ctx, tx, attempts)
-}
-
-func (callPath) RecordLostRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, route []uuid.UUID) error {
-	return suppliers.RecordLostRequest(ctx, tx, platform.RequestID(request), site, account, route)
-}
-
-func (callPath) ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error {
-	return suppliers.ResolveLostRequest(ctx, tx, platform.RequestID(request))
-}
-
-func (callPath) EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error {
-	return suppliers.EndRequest(ctx, tx, platform.RequestID(request), site, account, at)
-}
 
 const (
 	// nodeMemory is the node's budget for request bodies, conversions, relay buffers and aggregated replies, which
@@ -134,7 +110,7 @@ func startLedger(ctx context.Context, db *pg.DB, logger *slog.Logger) (*billing.
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
 		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger,
-	}, callPath{})
+	}, suppliers.CallWrites{})
 }
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.
@@ -161,7 +137,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 	return gateway.RouteDeps{
 		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable(), nil },
 		Catalog:      d.catalog,
-		Prices:       salePrices(d.db, d.accounts, d.catalog),
+		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
 		UnknownItems: unknownItems(d.db),
 		Router:       router,
 		Logger:       d.logger,
@@ -237,8 +213,9 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 // salePrices is each model's sale price in the main site's currency: the site's pricing rules applied to the catalog's
 // reference prices (billing.SalePrices). M1 prices the node's models at the main site's, because the currency a call is
 // charged in is the site's and a routing snapshot is one per node, not one per site; a secondary site with its own
-// currency and rules is G8's.
-func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog) func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
+// currency and rules is G8's. Only the rules that price everyone count, for the same reason: a rule for one account or
+// tier cannot price a model for the whole node.
+func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog, logger *slog.Logger) func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
 	return func(ctx context.Context) (map[catalog.ModelID]billing.Sold, error) {
 		// A node deployed before its site exists prices nothing, so no model is routable: that is a normal state of a
 		// fresh deployment, and the site is set up through `axiom site` on a node that is already serving.
@@ -258,7 +235,17 @@ func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog) func(c
 		if err != nil {
 			return nil, err
 		}
-		return billing.SalePrices(rules, snap, site.Currency)
+		rules = slices.DeleteFunc(rules, func(r billing.Rule) bool { return !r.Audience.Prices(accounts.AccountID{}, accounts.TierID{}) })
+		listed := make([]catalog.ModelID, 0)
+		for m := range snap.Models() {
+			listed = append(listed, m.ID)
+		}
+		sold, unpriced := billing.SalePrices(rules, snap, listed, site.Currency)
+		for _, err := range unpriced {
+			// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices.
+			logger.Warn("a sale price the catalog cannot hold; the model is not sold", "err", err)
+		}
+		return sold, nil
 	}
 }
 

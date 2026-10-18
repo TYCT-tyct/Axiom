@@ -205,7 +205,10 @@ func (m Method) checkCostPlus() error {
 	return nil
 }
 
-// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency.
+// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency. It has no upper
+// bound: whether a multiplier takes a price past what a unit price holds depends on the reference price of each model
+// the rule applies to, which Check does not see (the catalog's prices are). Such a model then gets no sale price and
+// the reason is logged, rather than the rule being refused here or the whole site's prices failing (sale.go).
 func (m Method) checkMultiplier() error {
 	multiplier, ok, err := ratio("method/multiplier", m.Multiplier)
 	switch {
@@ -228,6 +231,11 @@ func (m Method) checkFixed(currency platform.Currency) error {
 	}
 	return checkSchedule(m.Schedule, currency)
 }
+
+// SameForEveryModel reports whether the rule's price does not read the model's reference price, so that it is the same
+// wherever it applies. Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
+// versions (sale.go).
+func (m Method) SameForEveryModel() bool { return m.Kind == "fixed" }
 
 // checkSchedule refuses a fixed price that is no price list of the catalog's form, or is in another currency than the
 // site's.
@@ -305,12 +313,11 @@ func Rules(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Rule, error) {
 		}
 	}
 	slices.SortFunc(rules, func(a, b Rule) int {
-		if less(a, b) {
-			return -1
-		} else if less(b, a) {
-			return 1
+		sa, sb := a.specificity(), b.specificity()
+		if c := slices.Compare(sa[:], sb[:]); c != 0 {
+			return c
 		}
-		return 0
+		return slices.Compare(a.ID[:], b.ID[:]) // a rule of each target and audience at most, so this is a total order
 	})
 	return rules, nil
 }
@@ -331,15 +338,6 @@ func Place(r Rule, rules []Rule) []Rule {
 	out = append(out, rules[:i]...)
 	out = append(append(out, r), rules[i:]...)
 	return out
-}
-
-// less orders two rules as Rules does: by target, then audience, then ID.
-func less(a, b Rule) bool {
-	sa, sb := a.specificity(), b.specificity()
-	if c := slices.Compare(sa[:], sb[:]); c != 0 {
-		return c < 0
-	}
-	return slices.Compare(a.ID[:], b.ID[:]) < 0
 }
 
 // CreateRule adds a rule to the site. The change is recorded as the rule's first version and in the audit log.

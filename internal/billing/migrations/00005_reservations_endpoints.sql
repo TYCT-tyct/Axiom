@@ -6,5 +6,3 @@
 -- the supplier reports later can be told which endpoint it was from; without them a lost request says nothing about
 -- where to look.
 ALTER TABLE billing.reservations ADD COLUMN endpoints uuid[] NOT NULL DEFAULT '{}';
-
-GRANT UPDATE (endpoints) ON billing.reservations TO axiom_app;

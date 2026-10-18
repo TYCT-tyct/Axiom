@@ -46,8 +46,8 @@ type Hold struct {
 	keyWindow       time.Time
 }
 
-// lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement,
-// cleanup and corrections price usage with them, whichever process runs them.
+// lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement and
+// cleanup price usage with them, whichever process runs them.
 func lockedPrices(q []Quotable, kept []int) ([]string, error) {
 	prices := make([]string, len(q))
 	for _, i := range kept {

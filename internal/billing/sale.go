@@ -27,14 +27,15 @@ type Sold struct {
 //
 // reference_multiplier with currency_conversion face is the reference price's numbers times the rule's multiplier, read
 // as the site's currency (the 中转站 convention: LiteLLM and OpenRouter publish in US dollars, and a site reads those
-// numbers as its own). fixed is the rule's own price list. The other ways give no sale price in M1: ErrUnpriced for
-// cost_plus, which needs a supplier's cost (M2), and for exchange, which needs exchange rates
-// (docs/domains/billing.md「定价」, #167, #185). A model without a sale price has none: nothing is ever charged at its
-// reference price by default.
+// numbers as its own). It applies only where the reference price is already in the site's currency: an exchange rate is
+// not what face means, and M1 has none. fixed is the rule's own price list. The other ways give no sale price in M1:
+// ErrUnpriced for cost_plus, which needs a supplier's cost (M2), for exchange, which needs exchange rates, and for a
+// rule that reads a reference price the model has none of (docs/domains/billing.md「定价」, #167, #185). A model without
+// a sale price has none: nothing is ever charged at its reference price by default.
 func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.Schedule, error) {
 	switch r.Method.Kind {
 	case "reference_multiplier":
-		if r.Method.CurrencyConversion != "face" || r.Method.Multiplier == nil {
+		if r.Method.CurrencyConversion != "face" || r.Method.Multiplier == nil || ref.ID == uuid.Nil() || ref.Currency != site.String() {
 			return catalog.Schedule{}, ErrUnpriced
 		}
 		s, err := ref.Schedule.Scaled(*r.Method.Multiplier, site)
@@ -52,34 +53,68 @@ func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.S
 	return catalog.Schedule{}, ErrUnpriced
 }
 
-// SalePrices is each listed model's sale price under rules, the rules for one audience in the order they are tried
+// SalePrices is the sale price of each of models under rules, the rules for one audience in the order they are tried
 // (Rules). The first rule that prices a model prices it: a rule for the model beats one for its author, which beats one
 // for everything, and a rule that is off, or sets no price in M1's ways, leaves the model to the next. A model no rule
 // prices is left out: it has no sale price, so routing leaves its entries out (NoPrice) instead of selling them at the
 // reference price.
 //
+// A rule that does not leave a model to the next is one whose price cannot be made at all: a reference price whose
+// numbers the catalog cannot hold once multiplied, past a unit price's ceiling. That model is left out, as if no rule
+// priced it, and the reason comes back here for the caller to report: one model's price never takes the site's other
+// prices with it, and M1 cannot refuse such a rule at Check time, since whether it overflows depends on the reference
+// price of each model it applies to.
+//
 // A target that is not a model, an author or everything does not price a model in M1: endpoints, groups, suppliers and
 // source types are chosen per endpoint, which routing's snapshot does not have yet.
-func SalePrices(rules []Rule, snap *catalog.Snapshot, currency platform.Currency) (map[catalog.ModelID]Sold, error) {
-	sold := map[catalog.ModelID]Sold{}
-	for m := range snap.Models() {
-		ref, hasRef := snap.ReferencePrice(m.ID, currency.String())
-		for _, r := range rules {
-			if !r.Enabled || !pricesModel(r.Target, m) || !hasRef && r.Method.Kind == "reference_multiplier" {
-				continue
-			}
-			s, err := Sell(r, ref, currency)
-			if errors.Is(err, ErrUnpriced) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			sold[m.ID] = Sold{Version: priceVersion(r, ref), Schedule: s}
-			break
+func SalePrices(rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, currency platform.Currency) (map[catalog.ModelID]Sold, []error) {
+	sold := make(map[catalog.ModelID]Sold, len(models))
+	var unpriced []error
+	// A rule whose price is the same for every model is worked out for the first model it prices and sold alike to the
+	// rest: a fixed price list is parsed once however many models the rule prices.
+	same := map[uuid.UUID]Sold{}
+	for _, id := range models {
+		m, ok := snap.Model(id)
+		if !ok {
+			continue // not a listed model, which the caller tells the client about
+		}
+		ref, _ := snap.ReferencePrice(id, currency.String())
+		s, priced, err := firstPrice(rules, m, ref, currency, same)
+		if err != nil {
+			unpriced = append(unpriced, err)
+		}
+		if priced {
+			sold[id] = s
 		}
 	}
-	return sold, nil
+	return sold, unpriced
+}
+
+// firstPrice is the price the first rule that prices m gives it, with same holding what rules of one price for every
+// model gave already. A rule whose price cannot be made is an error and the model has no price; the later rules are not
+// tried, as SalePrices says.
+func firstPrice(rules []Rule, m catalog.Model, ref catalog.ReferencePrice, currency platform.Currency, same map[uuid.UUID]Sold) (Sold, bool, error) {
+	for _, r := range rules {
+		if !r.Enabled || !pricesModel(r.Target, m) {
+			continue
+		}
+		if s, done := same[r.ID]; done {
+			return s, true, nil
+		}
+		s, err := Sell(r, ref, currency)
+		if errors.Is(err, ErrUnpriced) {
+			continue // a rule that sets no price in M1's ways leaves the model to the next
+		}
+		if err != nil {
+			return Sold{}, false, err
+		}
+		g := Sold{Version: priceVersion(r, ref), Schedule: s}
+		if r.Method.SameForEveryModel() {
+			same[r.ID] = g
+		}
+		return g, true, nil
+	}
+	return Sold{}, false, nil
 }
 
 // pricesModel: the rule's target holds the model.
@@ -97,9 +132,14 @@ func pricesModel(t Selector, m catalog.Model) bool {
 
 // priceVersion identifies a sale price: the rule's ID and rev and the reference price's row. A digest makes the version
 // change with any of them, so the same inputs always give the same version and a changed price never reuses one. It is
-// a version 8 UUID (RFC 9562), a value of our own rather than a random one.
+// a version 8 UUID (RFC 9562), a value of our own rather than a random one. A fixed price does not read the reference
+// price, so publishing one does not give the fixed rule a new version.
 func priceVersion(r Rule, ref catalog.ReferencePrice) uuid.UUID {
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s:%d:%s", r.ID, r.Rev, ref.ID))
+	id := ref.ID
+	if r.Method.SameForEveryModel() {
+		id = uuid.Nil()
+	}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s:%d:%s", r.ID, r.Rev, id))
 	var version uuid.UUID
 	copy(version[:], sum[:16])
 	version[6] = version[6]&0x0f | 0x80

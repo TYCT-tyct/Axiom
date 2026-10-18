@@ -47,7 +47,7 @@ func TestBillingCommand(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
-	for _, listing := range []string{"unknown-items", "fallback-holds"} {
+	for _, listing := range []string{"unknown-items"} {
 		if out, err := run(listing); err != nil || out != "" {
 			t.Errorf("%s = %q, %v; want no lines", listing, out, err)
 		}

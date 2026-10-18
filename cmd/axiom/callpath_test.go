@@ -7,17 +7,18 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
-// TestTheCallPathIsWhatBillingWritesSuppliersThrough: the adapter cmd/ hands billing is the suppliers module's own
-// functions, so what billing writes in its cleanup transaction lands in suppliers' tables: the reservation goes back,
+// TestTheCallPathIsWhatBillingWritesSuppliersThrough: the suppliers.CallWrites billing is handed is the suppliers
+// module's own functions, so what billing writes in its cleanup transaction lands in suppliers' tables: the reservation goes back,
 // the request is recorded as lost with the route the reservation froze — both entries of it, in the order the call would
 // have tried them — and its end is written too, with no attempt's cost row, since nothing settled it. The same
 // transaction is one commit, whichever module's rows it holds (docs/architecture.md 规则 5).
 func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
 	f := newChainFixtureWith(t, billing.Config{
 		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond,
-	}, callPath{})
+	}, suppliers.CallWrites{})
 	ctx := t.Context()
 	request, first, second := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	route := []billing.Quotable{

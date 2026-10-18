@@ -172,3 +172,18 @@ func TestLostRequestsAreOnlyEverAdded(t *testing.T) {
 		t.Errorf("another tenant's lost request: %v, want row-level security to refuse", err)
 	}
 }
+
+// TestOnlyALostRequestCanBeResolved: a resolution takes its tenant from the lost request, so one for a request never
+// recorded as lost writes nothing, and says so rather than reporting a resolution that is not there.
+func TestOnlyALostRequestCanBeResolved(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	own := pg.NewScope(false, []uuid.UUID{siteA}, nil)
+	err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, newRequest()) })
+	if err == nil {
+		t.Error("resolving a request that was never recorded as lost succeeded, want an error")
+	}
+	if n := w.count("SELECT count(*) FROM suppliers.lost_request_resolutions"); n != 0 {
+		t.Errorf("%d resolutions written for a request that was never lost", n)
+	}
+}

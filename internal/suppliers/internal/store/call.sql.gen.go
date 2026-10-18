@@ -233,17 +233,25 @@ func (q *Queries) InsertLostRequest(ctx context.Context, db DBTX, arg InsertLost
 	return err
 }
 
-const insertLostRequestResolution = `-- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
-ON CONFLICT (request_id) DO NOTHING
+const insertLostRequestResolution = `-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost
 `
 
 // The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
-// A request that was never recorded as lost has nothing to resolve, and no row is written.
-func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) error {
-	_, err := db.Exec(ctx, insertLostRequestResolution, requestID)
-	return err
+// Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+// lost, which has nothing to resolve and writes no row, is told from one resolved already.
+func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) (int32, error) {
+	row := db.QueryRow(ctx, insertLostRequestResolution, requestID)
+	var named int32
+	err := row.Scan(&named)
+	return named, err
 }
 
 const listRoutable = `-- name: ListRoutable :many

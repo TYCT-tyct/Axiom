@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/billing"
@@ -26,7 +28,7 @@ const (
 	// The counts the upstream reports over the call's three samplings: the reply's, and the two compactions its answer
 	// lists. They are all different and none is zero, so a count recorded in another item's place, or a sampling left out
 	// of the row, changes the sums.
-	segmentInput, segmentCacheRead, segmentOutput = 130, 70, 60
+	segmentInput, segmentCacheRead, segmentOutput          = 130, 70, 60
 	compactionInput, compactionCacheRead, compactionOutput = 10, 5, 20
 	secondInput, secondCacheRead, secondOutput             = 3, 2, 4
 	// everyInput and the two sums below are what the row must hold: the items added over the three samplings.
@@ -53,10 +55,13 @@ const (
 
 // supplierEveryItemRig is a rig whose alpha-1 entry is a real supplier endpoint priced by the cost schedule given, with
 // the receipt an attempt on it leaves and the endpoint's id.
-func supplierEveryItemRig(t *testing.T, prices string) (*rig, suppliers.AttemptReceipt, uuid.UUID) {
+func supplierEveryItemRig(t *testing.T, prices string, more ...func(*rigOptions)) (*rig, suppliers.AttemptReceipt, uuid.UUID) {
 	t.Helper()
 	r := newRig(t, func(o *rigOptions) {
 		o.suppliers = true
+		for _, f := range more {
+			f(o)
+		}
 		o.endpoints = func(name string, e *routing.Endpoint) {
 			if name != "alpha-1" {
 				return
@@ -163,10 +168,46 @@ func TestAnItemTheSupplierDoesNotPriceIsUnpriced(t *testing.T) {
 	r.ledgerBalanced()
 }
 
+// TestAnAttemptTheUpstreamReportedLittleOfIsNotWrittenComplete: reconciliation judges a price only against a complete
+// estimate, so a row whose usage is the gateway's guess must not say complete. An attempt whose upstream reported no
+// usage at all is flagged no_usage, whatever the estimate puts in its place; one that reported the input and left the
+// output to the estimate is unpriced.
+func TestAnAttemptTheUpstreamReportedLittleOfIsNotWrittenComplete(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		script func(sample []string) scripted
+		want   suppliers.CostFlag
+	}{
+		{"nothing reported: the stream breaks before any usage", func([]string) scripted { return serve(beat{hangup: true}) }, suppliers.CostNoUsage},
+		{"the input reported, the output estimated", func(s []string) scripted { return costedScript(s, false) }, suppliers.CostUnpriced},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, receipt, _ := supplierEveryItemRig(t, supplierScheduleEvery)
+			sample, _ := sample(t, protocol.Messages)
+			up := withCosts(r, r.billing, r.suppliers)
+			up.setReceipt(receipt)
+			up.setScript(tc.script(sample))
+			a := r.funded(1e12)
+			r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
+
+			row, ok := r.supplierRow(r.lastCall().ID)
+			if !ok {
+				t.Fatal("the attempt left no row on the supplier's side")
+			}
+			if row.flag != tc.want.String() {
+				t.Errorf("the row is flagged %q, want %q: the usage it holds is partly or wholly a guess", row.flag, tc.want)
+			}
+			r.ledgerBalanced()
+		})
+	}
+}
+
 // TestASettlementTellsSuppliersTheRequestIsOver: the settlement ends the request and tells the supplier so in the same
 // transaction, for the call's own tenant, at a time — the row a charge scanner relies on to know nothing more is coming
-// for the request. Settling the same outcome again, as a retry after a crash does, changes nothing the supplier holds:
-// no second row, no second ending.
+// for the request. Settling the same outcome again, as a retry after a crash does, is answered from the settled
+// reservation and writes nothing (suppliers' record_test.go holds the rows' own idempotence).
 func TestASettlementTellsSuppliersTheRequestIsOver(t *testing.T) {
 	t.Parallel()
 	r, receipt, _ := supplierEveryItemRig(t, supplierScheduleEvery)
@@ -206,6 +247,70 @@ func TestASettlementTellsSuppliersTheRequestIsOver(t *testing.T) {
 		t.Errorf("the supplier's rows changed when the same outcome was settled twice:\nbefore %s\nafter  %s", before, after)
 	}
 	r.ledgerBalanced()
+}
+
+// TestALateSettlementResolvesTheLostRequestInSuppliersTables: a call whose settlement billing refuses for good is taken
+// over by the cleanup, which leaves the supplier a lost request with the route the reservation froze and no cost row;
+// the settlement arriving after all then writes the attempt's row, resolves the lost request and, the request having
+// ended already, ends it no second time — all in suppliers' own tables, through the production adapter.
+func TestALateSettlementResolvesTheLostRequestInSuppliersTables(t *testing.T) {
+	t.Parallel()
+	r, receipt, endpoint := supplierEveryItemRig(t, supplierScheduleEvery, func(o *rigOptions) { o.lifetime = 100 * time.Millisecond })
+	sample, _ := sample(t, protocol.Messages)
+	ledger := &recordingLedger{Billing: r.billing, refuse: fmt.Errorf("settle: %w", billing.ErrNoAttempt)}
+	up := withCosts(r, ledger, r.suppliers)
+	up.setReceipt(receipt)
+	up.setScript(serve(beat{data: threeSegments(sample)}))
+	a := r.funded(1e12)
+	r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
+	call := r.lastCall()
+	outcome, ok := ledger.outcome()
+	if !ok {
+		t.Fatal("the settlement was never tried")
+	}
+
+	time.Sleep(200 * time.Millisecond) // past the reservation's deadline
+	if n, err := r.billing.Cleanup(t.Context(), 10); err != nil || n != 1 {
+		t.Fatalf("Cleanup = %d, %v; want the one reservation", n, err)
+	}
+	if state := r.reservationState(call.ID); state != "cleanup_released" {
+		t.Fatalf("after the cleanup the reservation is %q, want cleanup_released", state)
+	}
+	if got, want := r.lostPath(call.ID, endpoint), (lostPath{lost: 1, ended: 1}); got != want {
+		t.Errorf("after the cleanup suppliers hold %+v, want %+v", got, want)
+	}
+
+	if _, err := r.billing.Settle(t.Context(), call.Hold, outcome); err != nil {
+		t.Fatalf("the late settlement: %v", err)
+	}
+	if state := r.reservationState(call.ID); state != "settled" {
+		t.Errorf("after the late settlement the reservation is %q, want settled", state)
+	}
+	if got, want := r.lostPath(call.ID, endpoint), (lostPath{lost: 1, resolved: 1, rows: 1, ended: 1}); got != want {
+		t.Errorf("after the late settlement suppliers hold %+v, want %+v", got, want)
+	}
+	if r.charged(call.ID) == 0 {
+		t.Error("the late settlement charged nothing, want the call's usage charged: the cleanup charged none")
+	}
+	r.ledgerBalanced()
+}
+
+// lostPath is how many of each row the supplier holds of a request that went the way of a lost one.
+type lostPath struct {
+	lost     int64 // lost requests whose route is the one endpoint the reservation froze
+	resolved int64 // resolutions of it
+	rows     int64 // attempt cost rows
+	ended    int64 // endings
+}
+
+func (r *rig) lostPath(id, endpoint uuid.UUID) lostPath {
+	r.t.Helper()
+	return lostPath{
+		lost:     r.count(`SELECT count(*) FROM suppliers.lost_requests WHERE request_id = $1 AND route_endpoint_ids = ARRAY[$2]::uuid[]`, id, endpoint),
+		resolved: r.count(`SELECT count(*) FROM suppliers.lost_request_resolutions WHERE request_id = $1`, id),
+		rows:     r.count(`SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1`, id),
+		ended:    r.count(`SELECT count(*) FROM suppliers.ended_requests WHERE request_id = $1`, id),
+	}
 }
 
 // threeSegments is the upstream's answer: a reply that reports its input and its cache reads and delivers content, which
@@ -272,28 +377,17 @@ func (r *rig) supplierHolds(id uuid.UUID) string {
 	var out strings.Builder
 	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
 		for _, query := range []string{
-			`SELECT to_jsonb(a)::text FROM suppliers.attempt_costs a WHERE a.request_id = $1 ORDER BY a.attempt_seq`,
-			`SELECT to_jsonb(e)::text FROM suppliers.ended_requests e WHERE e.request_id = $1`,
-			`SELECT to_jsonb(l)::text FROM suppliers.lost_requests l WHERE l.request_id = $1`,
-			`SELECT to_jsonb(s)::text FROM suppliers.lost_request_resolutions s WHERE s.request_id = $1`,
+			`SELECT coalesce(string_agg(to_jsonb(a)::text, E'\n' ORDER BY a.attempt_seq), '') FROM suppliers.attempt_costs a WHERE a.request_id = $1`,
+			`SELECT coalesce(string_agg(to_jsonb(e)::text, E'\n'), '') FROM suppliers.ended_requests e WHERE e.request_id = $1`,
+			`SELECT coalesce(string_agg(to_jsonb(l)::text, E'\n'), '') FROM suppliers.lost_requests l WHERE l.request_id = $1`,
+			`SELECT coalesce(string_agg(to_jsonb(s)::text, E'\n'), '') FROM suppliers.lost_request_resolutions s WHERE s.request_id = $1`,
 		} {
-			rows, err := tx.Query(r.t.Context(), query, id)
-			if err != nil {
+			var rows string
+			if err := tx.QueryRow(r.t.Context(), query, id).Scan(&rows); err != nil {
 				return err
 			}
-			for rows.Next() {
-				var row string
-				if err := rows.Scan(&row); err != nil {
-					rows.Close()
-					return err
-				}
-				out.WriteString(row)
-				out.WriteByte('\n')
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
+			out.WriteString(rows)
+			out.WriteByte('\n')
 		}
 		return nil
 	}); err != nil {
@@ -317,6 +411,7 @@ func (r *rig) reservationState(id uuid.UUID) string {
 // recordingLedger is billing, keeping the outcome the settlement was given: what a retry after a crash hands back.
 type recordingLedger struct {
 	*billing.Billing
+	refuse   error // when set, the settlement is recorded and refused instead of written, as one billing refuses for good
 	mu       sync.Mutex
 	given    billing.Outcome
 	recorded bool
@@ -326,6 +421,9 @@ func (l *recordingLedger) Settle(ctx context.Context, h *billing.Hold, o billing
 	l.mu.Lock()
 	l.given, l.recorded = o, true
 	l.mu.Unlock()
+	if l.refuse != nil {
+		return billing.Final{}, l.refuse
+	}
 	return l.Billing.Settle(ctx, h, o)
 }
 

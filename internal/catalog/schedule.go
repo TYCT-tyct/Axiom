@@ -239,7 +239,7 @@ func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedul
 	return out, nil
 }
 
-func (l level) scaled(m *big.Rat) (out level, err error) {
+func (l *level) scaled(m *big.Rat) (out level, err error) {
 	if out.base, err = l.base.scaled(m); err != nil {
 		return level{}, err
 	}

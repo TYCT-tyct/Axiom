@@ -25,7 +25,7 @@ type CostFlag uint8
 const (
 	CostComplete CostFlag = iota // every item with usage has a price
 	CostUnpriced                 // some item with usage has none: the estimate holds only the priced part
-	CostNoUsage                  // the supplier reported nothing: the estimate is zero
+	CostNoUsage                  // the supplier reported no usage, so any estimate rests on guessed counts or is zero
 )
 
 func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "no_usage"}[f] }
@@ -79,11 +79,12 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 // Credits is the attempt's Cost in billionths of a credit of currency: its native amount times the unit value the
 // attempt began with, rounded up once (docs/domains/billing.md「钱的表示」). known is false when that is not the whole
 // cost: the estimate leaves some usage out, the supplier is paid in another currency (there are no exchange rates yet),
-// or the amount is beyond what an amount holds. The priced part is still given when it can be told in currency.
-func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (credits int64, known bool, err error) {
-	c, err := s.Cost(r, usage)
+// or the amount is beyond what an amount holds. The priced part is still given when it can be told in currency. The
+// Cost it was converted from is returned with it, so that one pricing serves both.
+func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c AttemptCost, credits int64, known bool, err error) {
+	c, err = s.Cost(r, usage)
 	if err != nil || r.currency != currency {
-		return 0, false, err
+		return c, 0, false, err
 	}
 	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
 	q, m := new(big.Int).DivMod(new(big.Int).Mul(money.Num(), big.NewInt(1e9)), money.Denom(), new(big.Int))
@@ -91,9 +92,9 @@ func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency plat
 		q.Add(q, big.NewInt(1))
 	}
 	if !q.IsInt64() {
-		return 0, false, nil
+		return c, 0, false, nil
 	}
-	return q.Int64(), c.Flag != CostUnpriced, nil
+	return c, q.Int64(), c.Flag != CostUnpriced, nil
 }
 
 // usedItems are the items the usage has a count of.
@@ -203,11 +204,15 @@ func RecordLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, sit
 
 // ResolveLostRequest notes that a node came back with the real attempts of a lost request, which billing records with
 // RecordAttempts in the same transaction. It is an insert, not a change of the lost request, and takes the tenant from
-// it: a request never recorded as lost has nothing to resolve.
+// it: a request never recorded as lost has nothing to resolve, and that is an error, since billing resolves only what
+// its own state says is lost.
 func ResolveLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID) error {
-	err := store.New().InsertLostRequestResolution(ctx, tx, uuid.UUID(id))
+	named, err := store.New().InsertLostRequestResolution(ctx, tx, uuid.UUID(id))
 	if err != nil {
 		return fmt.Errorf("resolve the lost request %s: %w", id, err)
+	}
+	if named == 0 {
+		return fmt.Errorf("resolve the lost request %s: it was never recorded as lost", id)
 	}
 	return nil
 }
@@ -222,6 +227,31 @@ func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, acco
 		return fmt.Errorf("end the request %s: %w", id, err)
 	}
 	return nil
+}
+
+// CallWrites is the writes above as billing.Suppliers names them, with the request as a plain uuid: billing calls them
+// in the transaction of its own settlement and cleanup, which is how a call's supplier side commits exactly when the
+// ledger's cost does (docs/architecture.md 规则 5). It has no state: the zero value is the one to hand billing.
+type CallWrites struct{}
+
+// RecordAttempts is the package function of the name.
+func (CallWrites) RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) error {
+	return RecordAttempts(ctx, tx, attempts)
+}
+
+// RecordLostRequest is the package function of the name, with the request as a uuid.
+func (CallWrites) RecordLostRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, route []uuid.UUID) error {
+	return RecordLostRequest(ctx, tx, platform.RequestID(request), site, account, route)
+}
+
+// ResolveLostRequest is the package function of the name, with the request as a uuid.
+func (CallWrites) ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error {
+	return ResolveLostRequest(ctx, tx, platform.RequestID(request))
+}
+
+// EndRequest is the package function of the name, with the request as a uuid.
+func (CallWrites) EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error {
+	return EndRequest(ctx, tx, platform.RequestID(request), site, account, at)
 }
 
 // tenant is a tenant column: NULL for the zero id, which says a request is the platform's own.
