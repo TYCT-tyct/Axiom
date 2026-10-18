@@ -63,13 +63,16 @@ func InsertSyncPlans(ctx context.Context, db DBTX, supplier uuid.UUID, version i
 // and the schedule itself.
 type PlanVersion struct{ Endpoint, Fingerprint, Schedule, Basis string }
 
+// planVersions reads one row per version asked for. DISTINCT ON keeps the newest row of a version that is stored more
+// than once: the same schedule confirmed by a person and then published by the supplier has one fingerprint and two
+// bases, and which one is read back must not depend on the order the rows come in.
 const planVersions = `
-SELECT DISTINCT p.endpoint, p.fingerprint, p.schedule::text, p.basis
+SELECT DISTINCT ON (p.endpoint, p.fingerprint) p.endpoint, p.fingerprint, p.schedule::text, p.basis
 FROM suppliers.sync_plans p
 JOIN unnest($2::text[], $3::text[]) AS k (endpoint, fingerprint)
     ON k.endpoint = p.endpoint AND k.fingerprint = p.fingerprint
 WHERE p.supplier_id = $1
-ORDER BY p.endpoint`
+ORDER BY p.endpoint, p.fingerprint, p.version DESC, p.seq DESC`
 
 // PlanVersions reads the schedules of the named versions of a supplier's cost plans. The projection writes a
 // cost_schedules row from them: the engine keeps only the fingerprints of the plans in force, and a model mapped after

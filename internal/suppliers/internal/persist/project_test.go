@@ -59,7 +59,7 @@ func listing(version int64, groups []listedGroup) syncer.Commit {
 			if m.plan != nil {
 				model.Plan = m.plan.fingerprint
 				plans = append(plans, syncer.Plan{
-					Endpoint: g.ref + "/" + m.name, Fingerprint: m.plan.fingerprint, Schedule: m.plan.schedule, Basis: m.plan.basis,
+					Endpoint: syncer.PlanKey(g.ref, m.name), Fingerprint: m.plan.fingerprint, Schedule: m.plan.schedule, Basis: m.plan.basis,
 				})
 			}
 			snap.Models = append(snap.Models, model)

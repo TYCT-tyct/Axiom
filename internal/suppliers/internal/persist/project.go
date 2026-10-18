@@ -121,7 +121,7 @@ func (p *projector) readPlans(ctx context.Context) (map[string]store.PlanVersion
 	for _, g := range p.st.Groups {
 		for _, m := range g.Models {
 			if m.Plan != "" {
-				keys = append(keys, store.PlanVersion{Endpoint: g.Ref + "/" + m.Name, Fingerprint: m.Plan})
+				keys = append(keys, store.PlanVersion{Endpoint: syncer.PlanKey(g.Ref, m.Name), Fingerprint: m.Plan})
 			}
 		}
 	}
@@ -333,7 +333,9 @@ func (p *projector) desired(groups map[string]uuid.UUID, states map[nameKey]name
 			if !ok {
 				continue
 			}
-			if had, ok := out[key]; ok && !better(d, had) {
+			// The name that is evidence of the version takes the endpoint; between two of a kind the one the listing
+			// reads first keeps it.
+			if had, ok := out[key]; ok && (had.exact || !d.exact) {
 				continue
 			}
 			out[key] = d
@@ -350,17 +352,11 @@ func (p *projector) wanted(ref string, group uuid.UUID, m syncer.ModelSnap, stat
 	}
 	d := desiredEndpoint{upstream: m.Name, formats: state.formats, exact: !state.unverified}
 	if m.Plan != "" {
-		if v, ok := p.plans[ref+"/"+m.Name]; ok && v.Fingerprint == m.Plan {
+		if v, ok := p.plans[syncer.PlanKey(ref, m.Name)]; ok && v.Fingerprint == m.Plan {
 			d.plan = &v
 		}
 	}
 	return modelKey{group: group, model: uuid.UUID(state.model)}, d, true
-}
-
-// better reports whether d should take the endpoint from had, when two names of one group stand for the same model: the
-// name that is evidence of the version takes it, and between two of a kind the one the listing reads first keeps it.
-func better(d, had desiredEndpoint) bool {
-	return d.exact && !had.exact
 }
 
 // endpoint brings one stored endpoint in line with the listing: the name and formats a call uses, and the cost schedule
@@ -396,22 +392,22 @@ func (p *projector) setCost(ctx context.Context, r store.ListProjectedEndpointsR
 		// The plan is the one in force. A row the projection itself took down comes back; a row reconciliation took down
 		// stays down, because its verdict is that this estimate is too low, and the estimate has not changed.
 		if r.CostState != "known" && ours(r.CostStateReason) {
-			return p.putCost(ctx, r.ID, d.plan.Fingerprint, *d.plan)
+			return p.putCost(ctx, r.ID, *d.plan)
 		}
 		return nil
 	}
-	return p.putCost(ctx, r.ID, r.Fingerprint, *d.plan)
+	return p.putCost(ctx, r.ID, *d.plan)
 }
 
 // putCost puts a cost schedule of an endpoint in force, making the row when the endpoint has none for this plan.
-func (p *projector) putCost(ctx context.Context, endpoint uuid.UUID, have string, plan store.PlanVersion) error {
+func (p *projector) putCost(ctx context.Context, endpoint uuid.UUID, plan store.PlanVersion) error {
 	id, err := p.costSchedule(ctx, endpoint, plan)
 	if err != nil {
 		return err
 	}
 	err = p.q.SetProjectedEndpointCost(ctx, p.tx, store.SetProjectedEndpointCostParams{ID: endpoint, CostScheduleID: &id})
 	if err != nil {
-		return fmt.Errorf("set the cost of endpoint %s: %w (was %q)", endpoint, err, have)
+		return fmt.Errorf("set the cost of endpoint %s: %w", endpoint, err)
 	}
 	return nil
 }
@@ -441,15 +437,7 @@ func (p *projector) makeEndpoint(ctx context.Context, key modelKey, d desiredEnd
 	if err != nil {
 		return fmt.Errorf("make the endpoint of model %s in group %s: %w", key.model, key.group, err)
 	}
-	schedule, err := p.costSchedule(ctx, id, *d.plan)
-	if err != nil {
-		return err
-	}
-	err = p.q.SetProjectedEndpointCost(ctx, p.tx, store.SetProjectedEndpointCostParams{ID: id, CostScheduleID: &schedule})
-	if err != nil {
-		return fmt.Errorf("set the cost of endpoint %s: %w", id, err)
-	}
-	return nil
+	return p.putCost(ctx, id, *d.plan)
 }
 
 // costSchedule is the row of the endpoint's cost schedule for this plan, made when the endpoint has none for it yet. A
