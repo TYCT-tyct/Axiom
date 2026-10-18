@@ -94,12 +94,12 @@ func TestRefusalOfAnError(t *testing.T) {
 		"a reaped holder":                        {billing.ErrTerminated, 503, "overloaded", false},
 		"a deadline":                             {wrapped(errors.Join(errors.New("x"), context.DeadlineExceeded)), 503, "overloaded", false},
 		"a body Inspect cannot read":             {fmt.Errorf("%w: model is missing", protocol.ErrInvalid), 400, "invalid_request", false},
-		"a server tool with no limit":            {wrapped(fmt.Errorf("%w: web_search", billing.ErrUnbounded)), 400, "invalid_request", false},
+		"a server tool with no limit":            {wrapped(&billing.UnboundedError{Item: catalog.ItemWebSearch}), 400, "invalid_request", false},
 		"a permanent lack of endpoints":          {&routing.NoEndpoint{Reasons: []routing.Excluded{{Reason: routing.NoCandidates}}, Permanent: true}, 404, "no_endpoint", false},
 		"a key not allowed the only model asked": {&routing.NoEndpoint{Reasons: []routing.Excluded{{Reason: routing.NotAllowed}}, Permanent: true}, 404, "model_not_found", false},
 		"an error nobody expected":               {errors.New("boom"), 503, "overloaded", true},
 	} {
-		got, expected := refusal(tc.err)
+		got, expected := refusal(protocol.Chat, tc.err)
 		if got.Status != tc.status || got.Code != tc.code || expected == tc.unexpected {
 			t.Errorf("%s: %d %s expected=%v, want %d %s", name, got.Status, got.Code, expected, tc.status, tc.code)
 		}
@@ -116,5 +116,27 @@ func TestRefusalOfAnError(t *testing.T) {
 	if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusServiceUnavailable ||
 		strings.Join(body.Error.Reasons, ",") != "breaker_open,retry_budget" || rec.Header().Get("Retry-After") != "1" {
 		t.Errorf("a temporary lack of endpoints: %d %s, Retry-After %q", rec.Code, rec.Body, rec.Header().Get("Retry-After"))
+	}
+}
+
+// A client is told to write a limit only where its format has a field for one.
+func TestUnboundedSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		format protocol.Format
+		item   catalog.Item
+		want   string
+	}{
+		"messages web_search":        {protocol.Messages, catalog.ItemWebSearch, "set max_uses"},
+		"messages code_execution":    {protocol.Messages, catalog.ItemCodeExecution, "code_execution tool is not supported yet"},
+		"responses web_search":       {protocol.Responses, catalog.ItemWebSearch, "set max_tool_calls"},
+		"responses code_interpreter": {protocol.Responses, catalog.ItemCodeExecution, "set max_tool_calls"},
+		"chat web_search":            {protocol.Chat, catalog.ItemWebSearch, "web_search tool is not supported yet"},
+		"chat code_interpreter":      {protocol.Chat, catalog.ItemCodeExecution, "code_execution tool is not supported yet"},
+	} {
+		r, expected := refusal(tc.format, fmt.Errorf("entry 0: %w", &billing.UnboundedError{Item: tc.item}))
+		if !expected || r.Status != http.StatusBadRequest || !strings.Contains(r.Message, tc.want) {
+			t.Errorf("%s: %d %q, want 400 containing %q", name, r.Status, r.Message, tc.want)
+		}
 	}
 }

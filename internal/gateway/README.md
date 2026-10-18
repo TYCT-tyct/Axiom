@@ -183,7 +183,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | 暂时性错误 | 后台以同一结局重试到 `SettleBackground`，写进就在后台归还，放弃则同下一行 |
 | 永久性错误（`permanent`：`ErrNoAttempt`、找不到预留行、SQLSTATE 22/23/42 类），或后台放弃 | 记 error，交给清理：`Run` 返回时归还，清理按预留的截止时间接管并记丢失的请求（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)） |
 
-**优雅退出**（`Executor.Drain(ctx, grace)`）：等执行中的调用和后台结算，到 `ctx` 结束；然后取消全部尝试（每个尝试的 context 经 `context.AfterFunc` 挂在执行器的 `shutdown` 上，原因 `errShutdown`，不论端点是否传递取消），不再发起新尝试（408），提交后的流以 `timeout` 结束、按已有用量结算；再给 `grace`（cmd 给 30s）；仍在重试的后台结算停下交给清理。计数用锁而不是 `sync.WaitGroup`：退出等待期间可能有调用从零开始，`WaitGroup` 不允许。`Handler.Drain` 的 `SettleOrphan` 用同一个 `background`。
+**优雅退出**（`Executor.Drain(ctx, grace)`）：等执行中的调用和后台结算，到 `ctx` 结束；然后取消全部尝试（每个尝试的 context 经 `context.AfterFunc` 挂在执行器的 `shutdown` 上，原因 `errShutdown`，不论端点是否传递取消），不再发起新尝试（408），提交后的流以 `timeout` 结束、按已有用量结算；再给 `grace`（cmd 的 drainWait 15 秒之后给 abortGrace 5 秒）；仍在重试的后台结算停下交给清理。计数用锁而不是 `sync.WaitGroup`：退出等待期间可能有调用从零开始，`WaitGroup` 不允许。`Handler.Drain` 的 `SettleOrphan` 用同一个 `background`。
 
 ## 计量与追加
 

@@ -75,7 +75,7 @@ services:
     build: .
     image: ${DEPLOY_IMAGE:-axiom:local}
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 75s # AXIOM_SHUTDOWN_TIMEOUT (30s by default), then the drain of calls and settlements (15s + 5s), the queue and the recorder, with a margin
+    stop_grace_period: 90s # worst case: AXIOM_SHUTDOWN_TIMEOUT (30s by default) for the listeners, the drain of calls and settlements (15s + 5s), AXIOM_SHUTDOWN_TIMEOUT again for the queue and the recorder in parallel (80s), with a margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable

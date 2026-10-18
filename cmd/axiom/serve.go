@@ -165,21 +165,27 @@ func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbou
 
 // stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
 // answering, not ready), then the calls and their settlements, then the loops that keep the holder alive for them, then
-// the queue and the recorder, which the calls may still have fed. Each stage has a deadline of its own, so a long stream
-// that uses the listeners' up does not take the recorder's with it (deploy/compose.yaml's stop_grace_period covers them
-// all).
+// the queue and the recorder, which the calls may still have fed, the two together: a slow job then cannot use up the
+// recorder's time. Each stage has a deadline of its own, so a long stream that uses the listeners' up does not take the
+// recorder's with it. The worst case is timeout + drainWait + abortGrace + timeout (deploy/compose.yaml's
+// stop_grace_period covers it).
 func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening,
 	calls callNode, queue *pg.Queue, recorder *observability.Recorder,
 ) error {
 	err := shutdown(ctx, timeout, health, servers)
 	calls.Drain(ctx)
 	calls.stop()
-	within := func(stop func(context.Context) error) error {
-		ctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		return stop(ctx)
-	}
-	return errors.Join(err, within(queue.Stop), within(recorder.Close))
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var queueErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		queueErr = queue.Stop(ctx)
+	}()
+	recorderErr := recorder.Close(ctx)
+	<-done
+	return errors.Join(err, queueErr, recorderErr)
 }
 
 // awaitEnd waits until the node is asked to stop (nil), a listener stops, or the billing loop ends because this node's

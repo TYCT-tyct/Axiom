@@ -91,7 +91,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 // refusal says how a failure of the admission path is answered, and whether it is one the gateway expected. An
 // unexpected one is answered as the node being busy, which is what a database that does not answer looks like to a
 // client, and the caller logs it.
-func refusal(err error) (r *Refusal, expected bool) {
+func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 	if r, ok := errors.AsType[*Refusal](err); ok {
 		return r, true
 	}
@@ -109,13 +109,32 @@ func refusal(err error) (r *Refusal, expected bool) {
 	case errors.Is(err, protocol.ErrInvalid):
 		return invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": ")), true
 	case errors.Is(err, billing.ErrUnbounded):
-		return invalid("a server tool is enabled without a limit on its uses, and this model has no default one: state it " +
-			"(max_uses in Messages, max_tool_calls in Responses)"), true
+		return unbounded(f, err), true
 	case errors.Is(err, accounts.ErrStale), errors.Is(err, catalog.ErrStale), errors.Is(err, routing.ErrStale),
 		errors.Is(err, billing.ErrTerminated), errors.Is(err, errCommitUnknown), errors.Is(err, context.DeadlineExceeded):
 		return ErrOverloaded, true // the node cannot serve now; the first request that finds it so is not a bug
 	}
 	return ErrOverloaded, false
+}
+
+// unbounded tells a client what to do about a server tool it enabled without a limit on its uses: write the limit where
+// the format has a field for it (Messages' web_search has max_uses, Responses has max_tool_calls), and where it has none
+// (Chat's tools, Messages' code_execution) say the tool is not supported yet in that format: no request there can be
+// served, so asking for a limit would send the client looking for a field that does not exist.
+func unbounded(f protocol.Format, err error) *Refusal {
+	var tool string
+	if u, ok := errors.AsType[*billing.UnboundedError](err); ok {
+		tool = u.Item.String()
+	}
+	switch {
+	case f == protocol.Responses:
+		return invalid("the " + tool + " tool is enabled without a limit on its uses, and this model has no default one: " +
+			"set max_tool_calls")
+	case f == protocol.Messages && tool == catalog.ItemWebSearch.String():
+		return invalid("the web_search tool is enabled without a limit on its uses, and this model has no default one: " +
+			"set max_uses on the tool")
+	}
+	return invalid("the " + tool + " tool is not supported yet in this format for this model, which has no default limit on its uses")
 }
 
 var limitSources = map[billing.Source]string{
