@@ -143,9 +143,8 @@ func (w *callWorld) checkFreeReply(n runningNode) {
 		logged = w.query("SELECT free_of_charge::text || ' ' || price_nano::text || ' ' || finish_reason FROM observability.call_log WHERE id::text = $1", id)
 		return logged != ""
 	})
-	t.Logf("the free call is logged as %q", logged)
-	if !strings.HasPrefix(logged, "true 0 ") {
-		t.Errorf("the call log holds %q for the free call, want it free and charged nothing", logged)
+	if logged != "true 0 error" { // the stream broke off, which the relay reports as an error finish
+		t.Errorf("the call log holds %q for the free call, want it free, charged nothing and ended in error", logged)
 	}
 	w.checkBalanced()
 }
