@@ -187,6 +187,9 @@ func checkCharged(t *testing.T, h *harness) {
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
 	}
+	if a[0].Estimate.Flag != suppliers.CostComplete || a[0].Estimate.Native != (platform.Exact{}) {
+		t.Errorf("not executed: the supplier's row is %+v, want complete and nothing: it is known to have cost nothing", a[0].Estimate)
+	}
 	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
 		t.Errorf("unknown: %+v", a[1])
 	}
@@ -197,16 +200,17 @@ func checkCharged(t *testing.T, h *harness) {
 
 // TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, is booked as the cost that came
 // back, and an error is logged. Nothing corrects it in M1: the cost is the platform's, and the charge to the user never
-// rests on it. A failure is never a cost the platform knows.
+// rests on it. A failure is never a cost the platform knows: the supplier's row of it is flagged unpriced, not complete.
 func TestACostThatIsNotKnown(t *testing.T) {
 	errPricing := errors.New("the cost schedule could not be read")
 	for _, tc := range []struct {
-		name string
-		o    options
-		cost int64
+		name     string
+		o        options
+		cost     int64
+		unpriced bool // the supplier's row must say so
 	}{
-		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70},
-		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70},
+		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70, false},
+		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70, true},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, tc.o)
@@ -218,6 +222,9 @@ func TestACostThatIsNotKnown(t *testing.T) {
 			}
 			if a[0].Cost != tc.cost {
 				t.Errorf("%s: cost %d, want %d", tc.name, a[0].Cost, tc.cost)
+			}
+			if tc.unpriced && a[0].Estimate.Flag != suppliers.CostUnpriced {
+				t.Errorf("%s: the supplier's row is flagged %q, want unpriced: a failure is not a cost known to be zero", tc.name, a[0].Estimate.Flag)
 			}
 		})
 	}
