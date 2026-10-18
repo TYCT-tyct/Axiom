@@ -211,7 +211,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending is out.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
-	o := billing.Outcome{Attempts: s.ends, Cancelled: s.isGone()}
+	o := billing.Outcome{Attempts: s.ends}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {

@@ -256,8 +256,8 @@ func TestOutputThatCostsNothingNeverWaitsForAnExtension(t *testing.T) {
 		h.client()
 		<-done
 		h.check()
-		if s := h.ended(); !s.outcome.Cancelled || h.elapsed() != time.Second {
-			t.Errorf("cancelled %t after %v", s.outcome.Cancelled, h.elapsed())
+		if s := h.ended(); s.outcome.Attempts[0].Finish != billing.FinishCancelled || h.elapsed() != time.Second {
+			t.Errorf("finish %v after %v", s.outcome.Attempts[0].Finish, h.elapsed())
 		}
 	})
 }
@@ -295,7 +295,7 @@ func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
 		if got := h.elapsed(); got != 1950*time.Millisecond {
 			t.Errorf("a client that does not read was given %v", got)
 		}
-		if s := h.ended(); !s.outcome.Cancelled {
+		if s := h.ended(); s.outcome.Attempts[0].Finish != billing.FinishCancelled {
 			t.Errorf("outcome %+v", s.outcome)
 		}
 	})

@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"fmt"
-	"time"
 	"uuid"
 
 	"axiom/internal/platform/audit"
@@ -94,7 +93,6 @@ type Credit struct {
 	ID            uuid.UUID
 	Site, Account uuid.UUID
 	Amount        int64 // billionths of a credit, positive
-	ExpiresAt     *time.Time
 	Actor         audit.Actor
 	Reason        string
 }
@@ -114,7 +112,7 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		return err
 	}
 	if err := queries.InsertCreditBatch(ctx, tx, InsertCreditBatchParams{
-		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount, ExpiresAt: c.ExpiresAt,
+		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount,
 	}); err != nil {
 		return fmt.Errorf("billing: write the credit batch: %w", err)
 	}
@@ -122,17 +120,4 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		Actor: c.Actor, Action: "credit.add", Target: audit.Target{Module: "billing", Kind: "account", ID: c.Account.String()},
 		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"},
 	})
-}
-
-// Reconcile lists what the daily reconciliation refuses: a transaction whose entries do not balance, a balance that
-// differs from its book. It reads every tenant, so it runs in the platform scope.
-func (b *Billing) Reconcile(ctx context.Context) (problems []string, err error) {
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
-		problems, err = queries.Unbalanced(ctx, tx)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("billing: reconcile: %w", err)
-	}
-	return problems, nil
 }

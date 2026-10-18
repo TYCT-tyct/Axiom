@@ -28,6 +28,7 @@ type supplies struct {
 	resolved map[uuid.UUID]bool        // the requests a late settlement resolved
 	ended    map[uuid.UUID]int         // how many times each request was told to have ended
 	stuck    chan struct{}             // when set, recording a lost request waits for it to close or the context to end
+	failLost map[uuid.UUID]error       // the requests whose recording as lost fails, with the error
 }
 
 func newSupplies() *supplies {
@@ -56,6 +57,9 @@ func (s *supplies) RecordLostRequest(ctx context.Context, _ pg.Tx, id, _, _ uuid
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.failLost[id]; err != nil {
+		return err
+	}
 	s.lost[id] = route
 	return nil
 }
@@ -143,8 +147,8 @@ func used(tb testing.TB, input, output, searches int64, estimated ...catalog.Ite
 	return Segment{Usage: u, Reported: reported}
 }
 
-func outcome(result Result, finish FinishReason, cancelled bool, segments ...Segment) Outcome {
-	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
+func outcome(result Result, finish FinishReason, segments ...Segment) Outcome {
+	return Outcome{Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
 }
 
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
@@ -156,18 +160,20 @@ func TestSettleWaivers(t *testing.T) {
 		o    Outcome
 		want int64
 	}{
-		{"delivered and finished", outcome(Committed, FinishStop, false, full), 80},
-		{"aggregated", outcome(Aggregated, FinishStop, false, full), 80},
-		{"delivered, no output, no finish: only the search", outcome(Committed, FinishNone, false, zero), 10},
-		{"delivered, no output, an error finish", outcome(Committed, FinishError, false, zero), 10},
-		{"delivered, no output, a stop finish is not waived", outcome(Committed, FinishStop, false, zero), 60},
-		{"cancelled is never waived", outcome(Committed, FinishNone, true, zero), 60},
-		{"cancelled before any content", outcome(Unknown, FinishNone, true, full), 80},
-		{"unknown: model usage free, the search charged", outcome(Unknown, FinishNone, false, full), 10},
-		{"failed before commit", outcome(FailedBeforeCommit, FinishError, false, full), 10},
-		{"not executed", outcome(NotExecuted, FinishNone, false), 0},
-		{"no reported usage is not a zero output", outcome(Committed, FinishNone, false, used(t, 50, 0, 1, in, catalog.ItemOutput, webSearch)), 60},
-		{"input reported, output not: not a zero output", outcome(Committed, FinishNone, false, used(t, 50, 0, 1, catalog.ItemOutput)), 60},
+		{"delivered and finished", outcome(Committed, FinishStop, full), 80},
+		{"aggregated", outcome(Aggregated, FinishStop, full), 80},
+		{"delivered, no output, no finish: only the search", outcome(Committed, FinishNone, zero), 10},
+		{"delivered, no output, an error finish", outcome(Committed, FinishError, zero), 10},
+		{"delivered, no output, a stop finish is not waived", outcome(Committed, FinishStop, zero), 60},
+		{"cancelled is never waived", outcome(Committed, FinishCancelled, zero), 60},
+		{"cancelled before any content", outcome(Unknown, FinishCancelled, full), 80},
+		{"unknown: model usage free, the search charged", outcome(Unknown, FinishNone, full), 10},
+		{"failed before commit", outcome(FailedBeforeCommit, FinishError, full), 10},
+		// The client leaving after the failure is not in the outcome: the charged attempt failed, so it is waived.
+		{"failed with nothing delivered, the client left after", outcome(Unknown, FinishError, full), 10},
+		{"not executed", outcome(NotExecuted, FinishNone), 0},
+		{"no reported usage is not a zero output", outcome(Committed, FinishNone, used(t, 50, 0, 1, in, catalog.ItemOutput, webSearch)), 60},
+		{"input reported, output not: not a zero output", outcome(Committed, FinishNone, used(t, 50, 0, 1, catalog.ItemOutput)), 60},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
@@ -181,22 +187,17 @@ func TestSettleWaivers(t *testing.T) {
 }
 
 // TestWaiversHaveNoCap: a hundred zero-output calls in a row are all free, and nothing counts them: the daily cap is
-// gone, so the waiver table gets no rows at all (docs/domains/billing.md「免单规则」).
+// gone, so nothing is kept of them but the books' own entries (docs/domains/billing.md「免单规则」).
 func TestWaiversHaveNoCap(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	for i := range 100 {
-		f, err := b.billing.Settle(t.Context(), b.hold(1000), outcome(Committed, FinishNone, false, used(t, 50, 0, 0)))
+		f, err := b.billing.Settle(t.Context(), b.hold(1000), outcome(Committed, FinishNone, used(t, 50, 0, 0)))
 		if err != nil || f.Charged != (platform.Exact{}) {
 			t.Fatalf("call %d: Settle = %+v, %v; want nothing charged", i, f, err)
 		}
 	}
 	if n := b.count("SELECT balance FROM billing.balances"); n != 10_000 {
 		t.Errorf("balance %d after a hundred free calls, want 10000", n)
-	}
-	for _, table := range []string{"billing.waivers", "billing.corrections"} {
-		if n := b.count("SELECT count(*) FROM " + table); n != 0 {
-			t.Errorf("%s holds %d rows, want none", table, n)
-		}
 	}
 	b.balanced()
 }
@@ -206,7 +207,7 @@ func TestWaiversHaveNoCap(t *testing.T) {
 func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	h := b.hold(1000)
-	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishNone, true, used(t, 50, 20, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishCancelled, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
 	}
 	if rows := b.supplies.attempts[h.id]; len(rows) != 1 || rows[0].Seq != 1 {
@@ -221,7 +222,7 @@ func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
 // balanced runs the reconciliation and the floor check.
 func (b *bank) balanced() {
 	b.t.Helper()
-	problems, err := b.billing.Reconcile(b.t.Context())
+	problems, err := Reconcile(b.t.Context(), b.app, b.platform)
 	if err != nil || len(problems) != 0 {
 		b.t.Errorf("Reconcile = %v, %v", problems, err)
 	}
@@ -236,7 +237,7 @@ func (b *bank) balanced() {
 func TestSettleOnce(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(1000)
-	o := outcome(Committed, FinishStop, false, used(t, 50, 20, 1))
+	o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
 	for range 3 {
 		if f, err := b.billing.Settle(t.Context(), h, o); err != nil || f.Charged != platform.AmountExact(80) {
 			t.Fatalf("Settle = %+v, %v", f, err)
@@ -256,14 +257,14 @@ func TestSettleOnce(t *testing.T) {
 func TestSettleFloor(t *testing.T) {
 	b := newBank(t, 2000, -100, Config{})
 	other, h := b.hold(500), b.hold(1000) // 600 and 1100 reserved; 2100 may be spent
-	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, 5000, 0, 0)))
+	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
 	if err != nil || f.Charged != platform.AmountExact(1500) {
 		t.Fatalf("Settle = %+v, %v; want 2000 + 100 - 600 = 1500 charged", f, err)
 	}
 	if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'platform_borne'"); n != 3500 {
 		t.Errorf("the platform bore %d, want 3500", n)
 	}
-	if _, err := b.billing.Settle(t.Context(), other, outcome(Committed, FinishStop, false, used(t, 500, 100, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), other, outcome(Committed, FinishStop, used(t, 500, 100, 0))); err != nil {
 		t.Fatal(err)
 	}
 	b.balanced()
@@ -293,7 +294,7 @@ func TestCleanup(t *testing.T) {
 				t.Errorf("the lost request's route %v, want the one endpoint the reservation holds", route)
 			}
 			if tc.late > 0 {
-				if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, tc.late, 0, 0))); err != nil {
+				if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, tc.late, 0, 0))); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -433,7 +434,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 	b.t.Helper()
 	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
-	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), r.IntN(4) == 0, //nolint:gosec // G115: below 9
+	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), //nolint:gosec // G115: below 9
 		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
 	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
 		b.t.Fatal(err)
@@ -462,7 +463,7 @@ func maybeUnknown(tb testing.TB, r *rand.Rand, s Segment) Segment {
 // scope reads them.
 func TestLedgerScope(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
-	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
 	}
 	var n int64
@@ -480,7 +481,7 @@ func TestSettleBalanceExtremes(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(100)
 	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d, floor = -1", int64(math.MaxInt64)))
-	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
+	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
 		t.Errorf("Settle = %+v, %v; want 70 charged", f, err)
 	}
 }
