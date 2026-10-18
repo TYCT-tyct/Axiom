@@ -67,7 +67,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 **`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、compact 标记（`/responses/compact` 的调用原样透传）、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
 
 **错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的；Messages 的 `type` 由状态码决定。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
-- 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。所需金额和在途预留、`pending` 两种来源还没有，待 billing 报告。
+- 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。在途预留占满余额时同样报 `balance`：`Insufficient` 还没有区分它的来源，也没有所需金额，待 billing 报告。
 - `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
 - 满载排队超时回 429，`Retry-After` 是 `Wait.RetryAfter` 取整。
 - 路由、目录、站点快照过旧，持有者失效（`billing.ErrTerminated`），准入期限到，提交确认丢失：503 `overloaded`。其余没预料到的错误同样回 503，并记 error 日志。
@@ -170,7 +170,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - **任何一次追加失败都截断**，不等到当前段用完，也不等上游再发数据：追加的 goroutine 失败时，除了把结果放进通道，还以 `*extendFailed`（带着失败）为原因取消尝试，阻塞在 `Relay.Next` 里的所有者因此立刻醒来，`broke` 认出这个原因，按它的失败走 `truncate`，所以一个追加失败后上游完全静默的流，立即以 `billing_unavailable` 结束，不是等 180s 的空闲超时再报 `timeout`。`*Insufficient` 截断为 `credits_insufficient`（带 `limit_source`，会重置的上限在提交前的回答带 `Retry-After: 60`），其余（数据库错误、超时、`ErrTerminated`）为 `billing_unavailable`。截断（`attempt.truncate`）取消上游（原因 `errCut`），结束原因 `FinishTruncated`，花掉这一段的那一步不写；提交后以 `Relay.Fail` 结束，提交前没有内容交到客户端，以错误码回答（402 / 503），结局 `FailedBeforeCommit`，所以只收按次项目，不再换条目：别的条目花的是同一个账户。
 - **结算前没有追加在途**（billing 的前提）：`stream` 退出时（含出错、panic）`defer` 等在途的那次返回，至多 `ExtendWait`。
 
-**尝试的结局**（`attempt.result`，在 `close` 里）：对账键取回执的 `Key()`；确知未执行的没有用量、成本 0，成本已知；其余按 `estimated` 补齐上游没报告的项再交 `Costs` 定成本，币种取这次尝试条目的价格币种；`Costs` 的"是否完整已知"原样记进 `AttemptResult.Costed`（定不出就记 0、未知，并记 error 日志：成本是平台自己的，不影响向用户收费，M1 也不再按供应商记录改正）。`estimated` 只动回复那一段：输入侧一项都没报告时输入取首次采样的输入，其中文本按 4 字节 1 个 token（`billing.InputBound` 算，图片和文件仍按上界，合计不超过准入的上界），输出没报告最终值时取 max(已报告的下界, min(读到的正文、推理和工具参数的字节 ÷ 3 向上取整, 本次尝试的输出上限))（上限是计量器自己用的那个值，`Meter.OutputCap`：条目的输出上限乘选择数；推理算在上限里，已报告的下界高于上限时照报告），搜索没报告时取事件数；报告了的原样保留，billing 据"有数但没报告"标暂估。比例的口径和理由见[计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)：比例和上限都在 `estimated` 里，不会超过预留覆盖的部分（`TestAnEstimateIsNeverChargedBeyondTheReservation` 用真实账本核对）；标暂估只说明这次收费建立在估算上，M1 没有校正它的后续步骤。
+**尝试的结局**（`attempt.result`，在 `close` 里）：对账键取回执的 `Key()`；确知未执行的没有用量、成本 0；其余按 `estimated` 补齐上游没报告的项再交 `Costs` 定成本，币种取这次尝试条目的价格币种。成本是平台自己的，定不出就记 0 并记 error 日志：不影响向用户收费，M1 也不按供应商记录改正。`estimated` 只动回复那一段：输入侧一项都没报告时输入取首次采样的输入，其中文本按 4 字节 1 个 token（`billing.InputBound` 算，图片和文件仍按上界，合计不超过准入的上界），输出没报告最终值时取 max(已报告的下界, min(读到的正文、推理和工具参数的字节 ÷ 3 向上取整, 本次尝试的输出上限))（上限是计量器自己用的那个值，`Meter.OutputCap`：条目的输出上限乘选择数；推理算在上限里，已报告的下界高于上限时照报告），搜索没报告时取事件数；报告了的原样保留，billing 据"有数但没报告"标暂估。比例的口径和理由见[计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)：比例和上限都在 `estimated` 里，不会超过预留覆盖的部分（`TestAnEstimateIsNeverChargedBeyondTheReservation` 用真实账本核对）；标暂估只说明这次收费建立在估算上，M1 没有校正它的后续步骤。
 
 **结算**（`Executor.settle`，前台与后台共用）：同一个 `billing.Outcome` 反复交给 `Ledger.Settle`，每次 2s，间隔 50ms 起翻倍到 2s（`background.retry`）；确认丢失后的重试拿回 billing 存的 `Final`，不补扣。前台试满 `SettleRetry`（10s）：写进就 `Upstreams.Settled`，结尾带费用；没写进，内容完整的以 `Final{Pending}` 结束（`billing_pending`），其余结尾不带费用。之后（`Executor.settled`）：
 
@@ -287,7 +287,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 1 | 慢速请求体攻击 | 未认证的不读体；有 key 的受按 IP、按账户上限约束 |
 | 6 | 数据库慢、锁等待 / 持有者失效 | 1s 内回滚 503 / 写入 0 行 503；都没有预留 |
 | 6 | COMMIT 确认丢失 | 503 不发上游；`SettleOrphan` 锁余额行后释放或写墓碑；进程死了由清理释放 |
-| 7–8 | 节点崩溃（已发出、结算前） | 回收后按[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)收尾：有已提交且带对账键的尝试的，清理待定、按记录清理结算；其余清理释放并记丢失的请求 |
+| 7–8 | 节点崩溃（已发出、结算前） | 回收后按[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)收尾，两种情形都不向用户收费：有已提交且带对账键的尝试的，清理结算并记下那次尝试；其余清理释放并记丢失的请求。成本由平台承担 |
 | 7 | 上游连不上、出错 | 换条目；失败尝试的成本在最后结算里记 |
 | 8 | 追加时数据库慢 | 等满 1s 截断为 `billing_unavailable`；消耗不超过超额额度 |
 | 9 | 结算失败或超时 | 内容完整的照常结束、不带费用；执行器继续重试，比较后再写只有一方生效，迟到方按 billing 的终态分支 |

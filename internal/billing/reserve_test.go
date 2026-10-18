@@ -112,10 +112,9 @@ func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 // are the sums of the pending amounts, and the balance never passes its floor.
 func (b *bank) consistent() {
 	b.t.Helper()
-	// What a reservation still holds: all of it while pending or awaiting a supplier record, the rest of an estimate
-	// until its window ends; and what it charged, which its windows have spent.
-	const held = `CASE r.state WHEN 'pending' THEN r.amount WHEN 'cleanup_pending' THEN r.amount
-		WHEN 'estimated' THEN greatest(r.amount - r.charged, 0) ELSE 0 END`
+	// What a reservation still holds: all of a pending one, since only settlement or cleanup ends it; and what it
+	// charged, which its windows have spent.
+	const held = `CASE r.state WHEN 'pending' THEN r.amount ELSE 0 END`
 	const window = `((r.workspace_id, r.workspace_window) = (s.subject, s.window_start)
 		OR (r.key_id, r.key_window) = (s.subject, s.window_start))`
 	for name, query := range map[string]string{

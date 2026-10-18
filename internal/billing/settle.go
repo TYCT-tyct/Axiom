@@ -47,13 +47,11 @@ type Outcome struct {
 }
 
 // AttemptResult is one attempt: the route entry it bound, its reconciliation key, its cost to the platform in
-// billionths of a credit (suppliers' Cost estimates it) and whether that cost is all of it, its usage by sampling, and
-// how it ended. Costed false is a cost that leaves something out, or nothing known.
+// billionths of a credit (suppliers' Cost estimates it), its usage by sampling, and how it ended.
 type AttemptResult struct {
 	Seq, Entry int
 	Key        string
 	Cost       int64
-	Costed     bool
 	Segments   []Segment
 	Result     Result
 	Finish     FinishReason
@@ -129,10 +127,12 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err 
 	return f, err
 }
 
-// settle branches on what the reservation became (README.md「预留的状态」).
+// settle branches on what the reservation became (README.md「预留的状态」). A cleanup's states are not among the
+// ones that answer with what they stored: cleanup charged nothing, so the usage a late Settle brings is still to be
+// charged, and that is what late does.
 func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error) {
 	switch c.row.State {
-	case "settled", "estimated", "released":
+	case "settled", "released":
 		return c.stored()
 	}
 	if len(o.Attempts) == 0 {
@@ -145,7 +145,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 		return Final{}, err
 	}
 	last := o.Attempts[len(o.Attempts)-1]
-	if c.row.State == "cleanup_released" {
+	if c.row.State == "cleanup_released" { // the usage arrived after all: the request is no longer lost
 		if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
 			return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
 		}
@@ -157,7 +157,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	if err != nil {
 		return Final{}, err
 	}
-	if c.row.State == "pending" || c.row.State == "cleanup_pending" { // held: amount is still reserved
+	if c.row.State == "pending" { // held: amount is still reserved
 		err = c.end(ctx, tx, p, last)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)

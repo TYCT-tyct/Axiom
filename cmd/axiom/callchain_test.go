@@ -133,8 +133,8 @@ func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 		t.Fatal(err)
 	}
 	final, err := f.billing.Settle(ctx, hold, billing.Outcome{Attempts: []billing.AttemptResult{
-		{Seq: 1, Entry: 0, Cost: 5, Costed: true, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
-		{Seq: 2, Entry: 0, Cost: 7, Costed: true, Segments: []billing.Segment{last}, Result: billing.Committed, Finish: billing.FinishStop},
+		{Seq: 1, Entry: 0, Cost: 5, Segments: []billing.Segment{segment(t, 50, 0)}, Result: billing.FailedBeforeCommit, Finish: billing.FinishError},
+		{Seq: 2, Entry: 0, Cost: 7, Segments: []billing.Segment{last}, Result: billing.Committed, Finish: billing.FinishStop},
 	}})
 	if err != nil {
 		t.Fatal(err)

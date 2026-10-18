@@ -3,6 +3,7 @@ package main
 import (
 	"maps"
 	"net/http"
+	"strings"
 	"testing"
 
 	"axiom/internal/platform/adminapi"
@@ -44,8 +45,18 @@ func (f catalogFixture) listed(slug string) adminapi.Model {
 // timesTwo is a sale price: the reference price times 2, read at face.
 const timesTwo = `{"kind":"reference_multiplier","multiplier":"2","currency_conversion":"face"}`
 
+// timesThree and timesFour are further sale prices, the reference price times them at face.
+const (
+	timesThree = `{"kind":"reference_multiplier","multiplier":"3","currency_conversion":"face"}`
+	timesFour  = `{"kind":"reference_multiplier","multiplier":"4","currency_conversion":"face"}`
+)
+
 // TestPreviewPricing: a rule that is stored says what the model it names would sell for, and asking for the price
 // stores nothing.
+//
+// Of the contract's four statuses, only priced and unpriced have a producer in M1: below_floor and cost_unknown both
+// compare a sale price with an endpoint's cost, and an endpoint has one from routing in M2 (m1-plan.md §4.2). No test
+// can show a row of either.
 func TestPreviewPricing(t *testing.T) {
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
@@ -169,6 +180,47 @@ func TestPreviewPricingAudience(t *testing.T) {
 	}
 	if got, want := in(`,"account_id":"`+f.account+`"`), "0.000005"; got != want {
 		t.Errorf("the account pays %s, want its tier's %s", got, want)
+	}
+}
+
+// TestPreviewPricingPlacesAReplacementByItsTarget: a rule put in place of one for everything is tried as the rule it
+// is, where its own target and audience put it, not where the rule it replaces stood: a rule for a model decides for
+// that model, and the rule for its author, which stood before the replaced rule, does not.
+func TestPreviewPricingPlacesAReplacementByItsTarget(t *testing.T) {
+	f := newPreview(t)
+	other := f.listed("acme/beta")
+	f.create(ruleJSON(`{"kind":"author","id":"acme"}`, everything, timesTwo))
+	all := f.create(ruleJSON(everything, everything, timesFour))
+	body := `{"model_ids":["` + f.model + `","` + other.Id + `"],"replaces_rule_id":"` + all.Id + `","rule":` +
+		ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesThree) + `}`
+	sale := map[string]string{}
+	for _, row := range f.preview(body) {
+		sale[row.ModelId] = saleOf(row)
+	}
+	if want := map[string]string{f.model: "0.000003", other.Id: "0.000002"}; !maps.Equal(sale, want) {
+		t.Errorf("the preview with a replacement for everything: %v, want %v", sale, want)
+	}
+}
+
+// TestPreviewPricingRefusesARuleThatCannotDecide: a rule for a target and audience the site already prices is refused
+// as creating it would be, and a replacement that would tie another rule names replaces_rule_id, the member that
+// changes that rule instead.
+func TestPreviewPricingRefusesARuleThatCannotDecide(t *testing.T) {
+	f := newPreview(t)
+	f.create(ruleJSON(everything, everything, timesTwo))
+	mine := f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesThree))
+	tie := ruleJSON(everything, everything, timesFour)
+	expectAdmin(t, "a rule for everything, which the site has",
+		f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+tie+`}`, as(f.s)),
+		http.StatusConflict, codeConflict)
+	rec := f.do(http.MethodPost, "/pricing/previews",
+		`{"model_ids":["`+f.model+`"],"replaces_rule_id":"`+mine.Id+`","rule":`+tie+`}`, as(f.s))
+	expectAdmin(t, "a replacement that ties the rule for everything", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+	if body := rec.Body.String(); !strings.Contains(body, `"/replaces_rule_id"`) {
+		t.Errorf("the refusal does not name replaces_rule_id: %s", body)
+	}
+	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "2" {
+		t.Errorf("%s rules after two refused previews, want the 2 stored ones", got)
 	}
 }
 

@@ -53,3 +53,11 @@ var adminRefusals = []refusal{
 func unprocessable(message string) *apiError {
 	return &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: message}
 }
+
+// unprocessableFields is unprocessable with the members the request should change: pointer is the JSON Pointer of the
+// one that fixes it, as the contract's errors name fields.
+func unprocessableFields(pointer, message string) *apiError {
+	e := unprocessable("the request breaks a rule of the admin API")
+	e.fields = []errorField{{Pointer: pointer, Message: message}}
+	return e
+}

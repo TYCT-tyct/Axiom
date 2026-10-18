@@ -194,7 +194,6 @@ func checkCharged(t *testing.T, h *harness) {
 		t.Fatalf("attempts %+v", a)
 	}
 	input := estimatedInput(t, h, 1)
-	checkCosted(t, a)
 	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
 		t.Errorf("not executed: %+v", a[0])
 	}
@@ -206,19 +205,9 @@ func checkCharged(t *testing.T, h *harness) {
 	}
 }
 
-// checkCosted: every attempt's cost is known, the one known not to have run as well as those priced.
-func checkCosted(t *testing.T, a []billing.AttemptResult) {
-	t.Helper()
-	for _, at := range a {
-		if !at.Costed {
-			t.Errorf("attempt %d: its cost is not known", at.Seq)
-		}
-	}
-}
-
-// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, reaches billing as not known,
-// with whatever cost came back: the waiver cap then counts the attempt at its sale price
-// (docs/domains/billing.md「免单规则」). A failure is never a known cost, whatever the implementation says.
+// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, is booked as the cost that came
+// back, and an error is logged. Nothing corrects it in M1: the cost is the platform's, and the charge to the user never
+// rests on it. A failure is never a cost the platform knows.
 func TestACostThatIsNotKnown(t *testing.T) {
 	errPricing := errors.New("the cost schedule could not be read")
 	for _, tc := range []struct {
@@ -237,8 +226,8 @@ func TestACostThatIsNotKnown(t *testing.T) {
 			if len(a) != 1 {
 				t.Fatalf("%s: attempts %+v", tc.name, a)
 			}
-			if a[0].Costed || a[0].Cost != tc.cost {
-				t.Errorf("%s: cost %d, known %v; want %d, not known", tc.name, a[0].Cost, a[0].Costed, tc.cost)
+			if a[0].Cost != tc.cost {
+				t.Errorf("%s: cost %d, want %d", tc.name, a[0].Cost, tc.cost)
 			}
 		})
 	}

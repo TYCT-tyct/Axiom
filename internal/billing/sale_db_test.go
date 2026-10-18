@@ -109,9 +109,9 @@ func TestSalePricesTakesTheMostSpecificRule(t *testing.T) {
 		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7(), Rev: 1},
 		{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1.5"), ID: uuid.NewV7(), Rev: 1},
 	}
-	sold, err := SalePrices(rules, f.snapshot(), usd)
-	if err != nil {
-		t.Fatal(err)
+	sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{priced, unbilled}, usd)
+	if len(unpriced) != 0 {
+		t.Fatalf("SalePrices reported %v", unpriced)
 	}
 	// The reference price is 0.000001 an input token, so each rule's multiplier reads as its own input price.
 	if got := text(t, sold, priced); !strings.Contains(got, `"input":"0.000003"`) {
@@ -122,8 +122,9 @@ func TestSalePricesTakesTheMostSpecificRule(t *testing.T) {
 	}
 	// A disabled model rule lets the author's through.
 	rules[0].Enabled = false
-	if sold, err = SalePrices(rules, f.snapshot(), usd); err != nil {
-		t.Fatal(err)
+	sold, unpriced = SalePrices(rules, f.snapshot(), []catalog.ModelID{priced, unbilled}, usd)
+	if len(unpriced) != 0 {
+		t.Fatalf("SalePrices reported %v", unpriced)
 	}
 	if got := text(t, sold, priced); !strings.Contains(got, `"input":"0.000002"`) {
 		t.Errorf("a disabled rule priced the model as %s, want the author's 2 times", got)
@@ -153,16 +154,40 @@ func TestSalePricesLeavesWhatNoRulePrices(t *testing.T) {
 		"a target that prices no model in M1": {
 			{Enabled: true, Target: Selector{Kind: "source_type", ID: "relay"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7()},
 		},
+		"a multiplier the reference price cannot be scaled by": {
+			{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1000000000000"), ID: uuid.NewV7()},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			sold, err := SalePrices(rules, f.snapshot(), usd)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{model}, usd)
 			if _, ok := sold[model]; ok {
 				t.Errorf("%s gave the model a sale price", name)
 			}
+			if strings.Contains(name, "cannot be scaled") != (len(unpriced) == 1) {
+				t.Errorf("%s reported %v: only a price the catalog cannot hold is reported", name, unpriced)
+			}
 		})
+	}
+}
+
+// TestSalePricesPricesOnlyWhatIsAsked: the models the caller names are the ones priced, so a site's whole catalog is
+// never walked for a preview of a few models.
+func TestSalePricesPricesOnlyWhatIsAsked(t *testing.T) {
+	t.Parallel()
+	f := newSnapshotter(t)
+	asked, unasked := f.model("acme/asked"), f.model("beta/unasked")
+	rules := []Rule{
+		{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7(), Rev: 1},
+	}
+	sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{asked}, usd)
+	if len(unpriced) != 0 {
+		t.Fatalf("SalePrices reported %v", unpriced)
+	}
+	if len(sold) != 1 {
+		t.Errorf("sold %d models, want the one asked for: %v", len(sold), sold)
+	}
+	if _, ok := sold[unasked]; ok {
+		t.Error("a model the caller did not ask for was priced")
 	}
 }
 

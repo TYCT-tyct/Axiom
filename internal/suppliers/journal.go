@@ -253,9 +253,10 @@ func seqOf(n int16) platform.AttemptSeq { return platform.AttemptSeq(n) } //noli
 const JournalRetention = 48 * time.Hour
 
 // EndRequest tells the module that a request ended for good at the time given, and so that its journal is of no use
-// after JournalRetention: billing calls it in the transaction that ends the request, when it is settled, or cleaned up
-// and its time for correction is over. Not when the attempt costs are written, which cleanup does while the request
-// still waits to be corrected. Telling it again changes nothing.
+// after JournalRetention: billing calls it in the transaction that ends the request, whichever state ends it —
+// settled, released, or taken over by cleanup, since cleanup's states are as final as settlement's (a late Settle
+// posts against them and does not reopen the request). Not when the attempt costs are written, which cleanup does
+// before it decides. Telling it again changes nothing.
 func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, account *uuid.UUID, at time.Time) error {
 	err := store.New().InsertEndedRequest(ctx, tx, store.InsertEndedRequestParams{
 		RequestID: uuid.UUID(id), SiteID: site, AccountID: account, EndedAt: at,

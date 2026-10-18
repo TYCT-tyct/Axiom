@@ -1328,7 +1328,7 @@ export interface components {
             kind: "account" | "tier" | "all";
             id?: string;
         };
-        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
+        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
         PricingMethod: {
             /** @enum {string} */
             kind: "cost_plus" | "reference_multiplier" | "fixed";
@@ -1384,7 +1384,7 @@ export interface components {
             tier_id?: components["schemas"]["TierId"];
             /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
             account_id?: components["schemas"]["AccountId"];
-            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. */
+            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. One whose target and audience are those of a rule the site keeps, and which replaces nothing, is refused: the site holds one rule for each, and the stored one would price the models (422, pointing at `replaces_rule_id`). */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };
@@ -1394,7 +1394,7 @@ export interface components {
             /** @description The endpoint this row prices. Absent for a model with no endpoint, which has the one row. */
             endpoint_id?: components["schemas"]["Uuid"];
             /**
-             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
              * @enum {string}
              */
             status: "priced" | "cost_unknown" | "below_floor" | "unpriced";

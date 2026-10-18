@@ -10,8 +10,8 @@ import (
 
 // Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), up to max reservations,
 // each in a transaction of its own under its balance row lock, and returns how many it changed. A pending reservation
-// past its deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged,
-// and the supplier's reconciliation keeps what the journal holds of it.
+// past its deadline or under a reaped holder is ended uncharged — released, or settled when the journal shows a
+// committed attempt — since the node that would have settled it is gone (takeOver).
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
 	var due []DueReservationsRow
 	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
@@ -57,6 +57,10 @@ func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (
 // takeOver ends a pending reservation no Settle will, charging nothing: the journal's committed attempt is recorded
 // with its reconciliation key, so the supplier's charge matches it, and every other request is recorded as lost.
 // Nothing can bring the call's usage afterwards, so the whole reservation goes back.
+//
+// The two cases end in different states, though neither charges: a request no journal knows is released, and one with a
+// committed attempt is settled, because only a lost request may be resolved when its usage arrives after all
+// (settle.go's late settlement). Neither records a lost request for a committed attempt: there would be none to resolve.
 func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
 	j, committed, err := c.b.suppliers.CommittedAttempt(ctx, tx, c.id)
 	if err != nil {
@@ -73,5 +77,5 @@ func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
 		return err
 	}
 	c.entries = attemptEntries(records)
-	return c.release(ctx, tx, "cleanup_released", c.row.Amount)
+	return c.release(ctx, tx, "cleanup_settled", c.row.Amount)
 }

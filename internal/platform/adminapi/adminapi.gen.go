@@ -1228,7 +1228,7 @@ type PricingPreviewRequest struct {
 	// ReplacesRuleId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ReplacesRuleId *Uuid `json:"replaces_rule_id,omitempty"`
 
-	// Rule A rule to add, or to put in place of `replaces_rule_id`, for this preview only.
+	// Rule A rule to add, or to put in place of `replaces_rule_id`, for this preview only. One whose target and audience are those of a rule the site keeps, and which replaces nothing, is refused: the site holds one rule for each, and the stored one would price the models (422, pointing at `replaces_rule_id`).
 	Rule *PricingRuleInput `json:"rule,omitempty"`
 
 	// TierId The tier whose price to show. Absent, and without `account_id`: the site's default tier. Not with `account_id`.
@@ -1255,11 +1255,11 @@ type PricingPreviewRow struct {
 	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
 	Slug ModelSlug `json:"slug"`
 
-	// Status `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+	// Status `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
 	Status PricingPreviewRowStatus `json:"status"`
 }
 
-// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
 type PricingPreviewRowStatus string
 
 // PricingRule defines model for PricingRule.

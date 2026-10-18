@@ -94,13 +94,12 @@ func permanent(err error) bool {
 
 // result is what billing takes of an attempt once it is over. The usage is the upstream's report with every item it did
 // not report estimated, and the cost is ours of that usage. An attempt known not to have run used nothing and cost
-// nothing, which is known.
+// nothing.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Key = receipt.Key()
 	if rec.Result == billing.NotExecuted {
-		rec.Costed = true
 		return
 	}
 	rec.Segments = estimated(a.usage, a.seen, routing.DemandOf(&s.c.Request), a.entry.Limits, a.meter.OutputCap())
@@ -108,14 +107,14 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	cost, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+	cost, _, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
-		// Ours to know, not the user's to pay: reconciliation sets it from the supplier's record, and a settlement
-		// held back for it would leave a call that can be priced to the cleanup. A cost that could not be priced is
-		// not known, whatever came back with it: the waiver cap then counts the attempt at its sale price.
-		s.logger.Error("an attempt's cost could not be priced; it is booked as 0", "err", err)
+		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
+		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that
+		// can be priced to the cleanup.
+		s.logger.Error("an attempt's cost could not be priced; it is booked at what came back", "err", err)
 	}
-	rec.Cost, rec.Costed = cost, known && err == nil
+	rec.Cost = cost
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
@@ -124,8 +123,8 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 // output by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far and
 // never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
 // to); the web searches by the events seen. The ratios stand in for the estimates by model the docs want, which have no
-// data yet; the bounds and the cap keep an estimate within what the reservation covers, and a supplier's record
-// corrects it.
+// data yet; the bounds and the cap keep an estimate within what the reservation covers. Nothing corrects an estimate
+// after the charge in M1: the supplier's record is the platform's cost, not the user's bill.
 func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64) []billing.Segment {
 	d.TextBytes = tokensOf(d.TextBytes, inputBytesPerToken)
 	input, _ := billing.InputBound(d, m)

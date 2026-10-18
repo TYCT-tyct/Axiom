@@ -67,6 +67,12 @@ func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at
 func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.lost[id] {
+		// The real one writes a resolution whose request must be a lost request (internal/suppliers: the foreign key
+		// of lost_request_resolutions), so resolving a request that was never recorded as lost fails there. The double
+		// fails too, rather than hiding the bug.
+		return fmt.Errorf("no lost request %s to resolve", id)
+	}
 	s.lost[id] = false
 	return nil
 }
@@ -125,7 +131,7 @@ func used(tb testing.TB, input, output, searches int64, estimated ...catalog.Ite
 }
 
 func outcome(result Result, finish FinishReason, cancelled bool, segments ...Segment) Outcome {
-	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Costed: true, Segments: segments, Result: result, Finish: finish}}}
+	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
 }
 
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
@@ -235,7 +241,8 @@ func TestSettleFloor(t *testing.T) {
 
 // TestCleanup: a call no Settle ended is a lost request unless the journal shows a committed attempt with a key, and
 // either way the reservation goes back uncharged: nothing can bring its usage afterwards. A late Settle then charges
-// by the full outcome against what cleanup did.
+// by the full outcome against what cleanup did — a delivery the node crashed on included, whose reservation cleanup
+// settled rather than released, so that the arriving usage resolves nothing (the lost request it is not).
 func TestCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -247,8 +254,8 @@ func TestCleanup(t *testing.T) {
 	}{
 		{"lost, settled late", false, 300, "settled", 300, false},
 		{"lost, settled late past the floor", false, 30_000, "settled", 10_000, false},
-		{"journal, settled late", true, 700, "settled", 700, false},
-		{"journal, never settled", true, 0, "cleanup_released", 0, false},
+		{"delivered, node crashed, settled late", true, 700, "settled", 700, false},
+		{"delivered, node crashed, never settled", true, 0, "cleanup_settled", 0, false},
 		{"lost, never settled", false, 0, "cleanup_released", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,15 +277,17 @@ func TestCleanup(t *testing.T) {
 }
 
 // takenOver lets cleanup take h over, with a committed attempt in the journal or none: the reservation goes back
-// uncharged either way.
+// uncharged either way, settled when the journal showed a delivery and released when the request was lost.
 func (b *bank) takenOver(h *Hold, journal bool) {
 	b.t.Helper()
+	want := "cleanup_released"
 	if journal {
 		b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
+		want = "cleanup_settled"
 	}
 	b.cleanup()
-	if s := b.state(); s != "cleanup_released" {
-		b.t.Fatalf("after cleanup: %s, want cleanup_released", s)
+	if s := b.state(); s != want {
+		b.t.Fatalf("after cleanup: %s, want %s", s, want)
 	}
 	if n := b.count("SELECT charged FROM billing.reservations"); n != 0 {
 		b.t.Fatalf("cleanup charged %d, want nothing", n)

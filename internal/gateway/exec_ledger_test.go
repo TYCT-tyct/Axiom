@@ -245,11 +245,10 @@ func (r *rig) funded(amount int64) account {
 	return a
 }
 
-// heldByAccount counts the balances whose reserved is not what their reservations still hold: all of a pending one,
-// and the rest of an estimate until its correction window ends (billing's own tests hold the same).
+// heldByAccount counts the balances whose reserved is not what their reservations still hold: all of a pending one
+// (billing's own tests hold the same).
 const heldByAccount = `SELECT count(*) FROM billing.balances b WHERE b.reserved <> coalesce((SELECT sum(CASE r.state
-	WHEN 'pending' THEN r.amount WHEN 'cleanup_pending' THEN r.amount WHEN 'estimated' THEN greatest(r.amount - r.charged, 0)
-	ELSE 0 END) FROM billing.reservations r WHERE r.account_id = b.account_id), 0)`
+	WHEN 'pending' THEN r.amount ELSE 0 END) FROM billing.reservations r WHERE r.account_id = b.account_id), 0)`
 
 // ledgerBalanced: nothing is pending, what the balances hold is what the reservations do, no balance passed its floor,
 // the ledger reconciles, and no call was charged twice.
