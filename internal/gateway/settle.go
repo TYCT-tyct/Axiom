@@ -45,10 +45,11 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 // that may still be written is retried in the background with the same outcome, until SettleBackground; one that never
 // will be, or is given up on, is the cleanup's, which records the request as lost when its reservation runs out. The
 // supplier's side of the attempts is written in the settlement's own transaction, so there is nothing else to wait for.
-func (x *Executor) settled(ctx context.Context, c *Call, o billing.Outcome, err error) bool {
+func (x *Executor) settled(ctx context.Context, s *session, o billing.Outcome, err error) bool {
 	if err == nil {
 		return false
 	}
+	c, trail := s.c, s.trail()
 	logger := x.Logger.With("request_id", c.ID.String())
 	if permanent(err) {
 		logger.Error("a settlement cannot be written; the cleanup takes it", "err", err)
@@ -57,9 +58,12 @@ func (x *Executor) settled(ctx context.Context, c *Call, o billing.Outcome, err 
 	logger.Warn("a settlement was not written; retrying in the background", "err", err)
 	x.bg.Go(func() {
 		defer c.Done()
-		if _, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground)); err != nil {
+		f, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground))
+		if err != nil {
 			logger.Error("a settlement was not written in time; the cleanup takes it", "err", err)
+			return
 		}
+		x.log(trail, o, f, time.Now())
 	})
 	return true
 }

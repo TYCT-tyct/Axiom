@@ -14,6 +14,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -63,6 +64,13 @@ type Costs interface {
 	Cost(r suppliers.AttemptReceipt, usage []catalog.Usage) (suppliers.AttemptCost, error)
 }
 
+// Records is the call log as the calls write it: *observability.Recorder, whose Enqueue never waits for the record to be
+// written and drops it when its queue is full (internal/observability/README.md「写入」). A node gives one; a test of
+// the call's money may leave it out, and then the calls are not logged.
+type Records interface {
+	Enqueue(observability.CallRecord) error
+}
+
 // ExecDeps are what an Executor needs. Every one is required.
 type ExecDeps struct {
 	Router    *routing.Router
@@ -77,6 +85,9 @@ type ExecDeps struct {
 	// IdentitySecret derives the identifiers sent upstream in place of the client's session and end-user ones; it is
 	// the same for every node, or a session's cache would not follow it from one to another.
 	IdentitySecret []byte
+	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
+	// observation and a call never depends on it; a node always gives it.
+	Records Records
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -172,6 +183,7 @@ type session struct {
 	logger   *slog.Logger
 
 	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
+	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency platform.Currency       // of the last attempt's price
 	skips    skips
 	last     *attempt // the attempt in progress, or the last one made
@@ -232,7 +244,10 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	default:
 		s.finish(e.relay.Fail(e.err, fin))
 	}
-	s.handedOff = s.x.settled(ctx, s.c, o, err)
+	s.handedOff = s.x.settled(ctx, s, o, err)
+	if err == nil {
+		s.x.log(s.trail(), o, f, time.Now())
+	}
 }
 
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
@@ -272,6 +287,159 @@ func (s *session) let() {
 	}
 }
 
+// try is what the call log needs of an attempt that the settlement does not carry: the route entry it bound, and when
+// it began. The two run in step with session.ends, one entry each in the order the attempts were made.
+type try struct {
+	entry   routing.Entry
+	started time.Time
+}
+
+// trail is a finished call as the call log takes it: the call, its attempts, when it began and in which currency it was
+// priced. A settlement that is written in the background keeps this rather than the session, whose response writer and
+// buffers belong to a request that is over.
+type trail struct {
+	call     *Call
+	tries    []try
+	start    time.Time
+	currency platform.Currency
+}
+
+func (s *session) trail() trail {
+	return trail{call: s.c, tries: s.tries, start: s.start, currency: s.currency}
+}
+
+// log writes the call into the call log. The record's amounts are the settlement's, so it is written once that is: the
+// ledger's charge is what the call cost, and a record that said zero while the settlement was still to come would
+// disagree with it (docs/domains/observability.md「追溯」). A record the recorder will not take is dropped and
+// counted there: the log is observation, and a call never fails or waits for it.
+func (x *Executor) log(t trail, o billing.Outcome, f billing.Final, end time.Time) {
+	if x.Records == nil {
+		return
+	}
+	err := x.Records.Enqueue(recordOf(t, o, f, end))
+	if err != nil && !errors.Is(err, observability.ErrQueueFull) && !errors.Is(err, observability.ErrClosed) {
+		x.Logger.Error("a call's record could not be written", "request_id", t.call.ID.String(), "err", err)
+	}
+}
+
+// recordOf is the call log's record of one call: the request, the route it took, its attempts, and what the ledger
+// charged it. What the gateway does not know is left empty rather than guessed: the client's own session and subagent
+// identifiers, the language of the request, the consent it was made under, and the end user, which is the site's to
+// hash. The first token is not measured yet, so every attempt records none.
+func recordOf(t trail, o billing.Outcome, f billing.Final, end time.Time) observability.CallRecord {
+	c := t.call
+	rec := observability.CallRecord{
+		ID: c.ID, At: t.start,
+		Site: uuid.UUID(c.site.ID), Account: uuid.UUID(c.caller.AccountID()),
+		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
+		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,
+		Model: c.Request.Model, SessionID: "", SubagentID: "", ClientApp: "", Language: "",
+		Usage:       usageOf(f),
+		ServiceTier: tierOf(f),
+		// The charge is what the floor let the user pay, and zero is a call that was waived; the cost is what the
+		// attempts cost us, whether or not the user paid it.
+		PriceNano: f.Charged.CeilAmount(), CostNano: costOf(o), Currency: t.currency,
+		Free:    f.Charged.Cmp(platform.Exact{}) == 0,
+		Latency: end.Sub(t.start),
+	}
+	if route, err := c.Plan.Record.JSON(); err == nil {
+		rec.Route = route
+	}
+	rec.Attempts = attemptsOf(o, t.tries)
+	if n := len(rec.Attempts); n > 0 {
+		rec.FinishReason = finishOf(o.Attempts[n-1])
+	}
+	return rec
+}
+
+// usageOf is the usage the settlement charged: the samplings of the attempt that was billed, added up.
+func usageOf(f billing.Final) map[catalog.Item]int64 {
+	counts := make(map[catalog.Item]int64)
+	for _, seg := range f.Segments {
+		for it := range catalog.NumItems {
+			counts[it] += seg.Usage.Count(it)
+		}
+	}
+	return counts
+}
+
+// tierOf is the service tier the billed attempt was served at.
+func tierOf(f billing.Final) catalog.ServiceTier {
+	if len(f.Segments) == 0 {
+		return catalog.ServiceTierStandard
+	}
+	return f.Segments[0].Usage.ServiceTier()
+}
+
+// costOf is what the attempts cost the platform, in billionths of a credit: billing's own figure, which the waivers do
+// not change.
+func costOf(o billing.Outcome) (n int64) {
+	for _, a := range o.Attempts {
+		n += a.Cost
+	}
+	return n
+}
+
+// attemptsOf is the call's attempts as the log keeps them, from the settlement's results and the entries they bound.
+// The source class is left empty: it is the endpoint's, and a routed entry does not carry it (routing.Entry has what a
+// call needs of the endpoint, not what the snapshot weighed it by).
+func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
+	out := make([]observability.AttemptRecord, 0, len(o.Attempts))
+	for i, a := range o.Attempts {
+		if i >= len(tries) {
+			break // a settlement can name no more attempts than were made; the log says what it has
+		}
+		t := tries[i]
+		out = append(out, observability.AttemptRecord{
+			Seq: platform.AttemptSeq(a.Seq), Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
+			Egress: directEgress, Outcome: outcomeOf(a), StartedAt: t.started, FinishedAt: a.FinishedAt,
+		})
+	}
+	return out
+}
+
+// outcomeOf is how an attempt ended, as the log keeps it: whether content reached the client, and whether the supplier
+// may have run the request anyway.
+func outcomeOf(a billing.AttemptResult) observability.AttemptOutcome {
+	switch a.Result {
+	case billing.Committed, billing.Aggregated:
+		return observability.AttemptCommitted
+	case billing.Unknown:
+		return observability.AttemptUnknown
+	case billing.FailedBeforeCommit, billing.NotExecuted:
+		return observability.AttemptFailed
+	}
+	return observability.AttemptUnknown // a result this build does not know is not taken for a success
+}
+
+// finishOf is the settlement's finish reason by the log's name.
+func finishOf(a billing.AttemptResult) string {
+	switch a.Finish {
+	case billing.FinishStop:
+		return "stop"
+	case billing.FinishToolUse:
+		return "tool_use"
+	case billing.FinishLength:
+		return "length"
+	case billing.FinishRefusal:
+		return "refusal"
+	case billing.FinishError:
+		return "error"
+	case billing.FinishTruncated:
+		return "truncated"
+	case billing.FinishTimeout:
+		return "timeout"
+	case billing.FinishCancelled:
+		return "cancelled"
+	case billing.FinishNone:
+	}
+	return "" // none reported: the upstream said nothing, or the call ended before an answer
+}
+
+// directEgress is the one way a node reaches its suppliers: from its own address (internal/platform/egress), which is
+// what the log's egress column names.
+const directEgress = "direct"
+
 // final is what the ending reports of a settlement.
 func (s *session) final(f billing.Final) *protocol.Final {
 	fin := &protocol.Final{Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated}
@@ -290,8 +458,11 @@ func (s *session) settleOnPanic(ctx context.Context) {
 	}
 	if !s.concluded {
 		o := billing.Outcome{Attempts: s.ends}
-		_, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
-		s.handedOff = s.x.settled(ctx, s.c, o, err)
+		f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
+		s.handedOff = s.x.settled(ctx, s, o, err)
+		if err == nil {
+			s.x.log(s.trail(), o, f, time.Now())
+		}
 	}
 	panic(p)
 }
