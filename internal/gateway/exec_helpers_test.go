@@ -518,7 +518,8 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 
 // fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with. The native
 // amount, which the settlement writes to suppliers, is the same figure in the supplier's own unit, so a test can see it
-// where the attempt rows go.
+// where the attempt rows go. On an error it returns the figure with a zero AttemptCost, a state the real Credits never
+// reaches (it returns 0 with its error); what that pins is that the executor books the amount that comes back.
 type fakeCosts struct {
 	cost  int64
 	known bool
