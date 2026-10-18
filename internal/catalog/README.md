@@ -244,6 +244,8 @@ func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲�
 func (u Usage) ServiceTier() ServiceTier // 实际服务的等级，供应商记录扣费所报的等级
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
+func ParseItem(name string) (Item, error)               // 存下的计费项名的反解，与 Item.String 互逆；认不出的报错
+func ParseServiceTier(name string) (ServiceTier, error) // 同上，服务等级
 
 type Schedule struct{ /* 币种、门槛口径、门槛、每个服务等级的单价；字段不导出 */ }
 func ParseSchedule(b []byte) (Schedule, error)                       // 拒绝还不支持的条件
