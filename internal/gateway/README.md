@@ -147,13 +147,16 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 **不要流的客户端**（`!Request.Stream`）走同一条收尾路径，只是答案是一整份响应体：见下文「非流式聚合与 compact」。
 
-**接缝**（没有生产路径上的 stub；`cmd/axiom` 还没有接线，这些补上才能接）：
+**接缝**（没有生产路径上的 stub；全部由 `cmd/axiom` 的 `callpath.go` 接上）：
 
-- `Costs`：尝试的成本，按这次尝试的价格币种计的十亿分之一额度，以及它是否完整已知；生产实现是 `*suppliers.Service` 的 `Credits`（[suppliers 的「调用面」](../suppliers/README.md#调用面)），接线时把服务直接交给 `ExecDeps.Costs`，不加包装。`costs_test.go` 用真实的服务和账本跑通一次调用：账上是成本计划 × 单位价值，这次尝试的成本就是那个已知值（`TestTheAttemptCostIsTheSuppliersKnownCost`，同时核对 `billing.waivers` 里一行也没有），其余用例仍用固定值。
-- `Alive`：`billing.Alive`，由 cmd 接上；`Upstreams`：`NewUpstreams(*suppliers.Service)`；`Ledger`：`*billing.Billing`。billing 的 `Suppliers` 在结算事务里写尝试行要回执，`billing.AttemptRecord` 现在只带对账键，cmd 的适配要补上它。
-- `Endpoint.Target` 没有生产者（见 routing README 的「现在的输入类型」），`ExecDeps.IdentitySecret` 要由 cmd 从配置文件读出：所有节点必须相同，否则会话的上游缓存换节点就断。两者都补上之前，`Executor` 接不进 `cmd/axiom`。
+- `Costs`：尝试的成本，按这次尝试的价格币种计的十亿分之一额度，以及它是否完整已知；生产实现是 `*suppliers.Service` 的 `Credits`（[suppliers 的「调用面」](../suppliers/README.md#调用面)），直接交给 `ExecDeps.Costs`，不加包装。`costs_test.go` 用真实的服务和账本跑通一次调用：账上是成本计划 × 单位价值，这次尝试的成本就是那个已知值（`TestTheAttemptCostIsTheSuppliersKnownCost`，同时核对 `billing.waivers` 里一行也没有），其余用例仍用固定值。
+- `Alive` 是 `billing.Alive`，`Upstreams` 是 `NewUpstreams(*suppliers.Service)`，`Ledger` 是 `*billing.Billing`；billing 的 `Suppliers` 由 `cmd/axiom` 的 `callPath` 实现，把结算事务里的写入原样转给 suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`。
+- `Endpoint.Target` 由 `route.go` 的 `RouteDeps` 填：`Model` 是端点的 `upstream_name`，`Streams` 是规格与供应商策略的交集；请求要的其余改写项（思考、缓存断点、对话中途的系统消息）目录规格还没有记录，留空（见 routing README 的「现在的输入类型」）。`ExecDeps.IdentitySecret` 由节点从 `AXIOM_IDENTITY_KEY_FILE` 读出，所有节点必须相同，否则会话的上游缓存换节点就断。
+- `ExecDeps.Records` 是调用记录（`*observability.Recorder`）：每次调用在结算写成之后入队一条，金额用账本实收的数，所以记录与账本一致；结算在后台重试的，成功时才记。记录是观测，入队不等写库，队列满了丢弃并计数，调用从不因它失败。记录里网关不知道的字段（客户端自己的会话与子 agent 标识、语言、终端用户）留空不猜，用户协议版本写 `none`（还没有协议可记）、类别一律 `chat`，首字时间还没有量。省略它时调用不记录，账本测试因此不需要记录器。
 - 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。粘性的写回（`Router.Stick`）和 quality 的观测在 G10。
 - 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接；零输出这条规则本身没有上限，连续多少次都按它免。
+
+**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，没有售价或规格的模型整个排除并记一条带原因的日志），`Publish` 替换路由的快照并通知节点，`Run` 启动后每 5 秒重建一次。质量、置信度、健康度和吞吐是 1，只在 `endpointOf` 这一处赋，等 quality 有了数据再换。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
 
 ## 计量、追加与结算
 
@@ -328,19 +331,10 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 
 ## PR 拆分
 
-每个约 400 行非生成代码，测试先行；G1–G9 已落地（G6、G7 合为一个 PR，约 1400 行，其中测试约 900 行，因为追加在途时不能结算、截断要经结算才能结束，两者共用读循环的出口；G1、G3 合为一个 PR，约 900 行非生成代码，因为准入的错误出口和限额由入口一并定下；G4、G5 合为一个 PR，约 700 行非生成代码，因为尝试循环和提交点之后的转发共用同一个读循环和同一个收尾）。下层的工作在各自的 Issue：accounts #23（关键路径：G1 要 `SiteForHost`、`AuthenticateKey`，G3 要 `Admit`）；catalog #24（名字解析、快照）；suppliers #25（S8 调用面、`Cost`、`RecordAttempts`；S9 对账）；routing #26（R1 快照含负载与端点实测的取消；R2 `Plan`、`Segmentable`、`NoEndpoint`、`Decide`；R3 路由记录）；protocol #27（P4 `Prepare`，已合并（#78），按 protocol 的「转发（草图）」扩展签名；P5 `Relay`；P6–P10 跨格式与聚合）；billing #28（B1 表、持有者、截止时间；B2 `Reserve`；B3 `Meter`、`Extend`；B4 `Settle`；B5 回收、清理、`SettleOrphan`、补扣；B6 校正与保留释放）；observability #29、#54（O1 调用记录批量写；O2 指标与链路）。各线按各模块 README 的接口草图用测试替身并行。
+G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）已落地。剩下两块，各约 400 行非生成代码，测试先行：
 
 | # | 内容 | 依赖 |
 |---|---|---|
-| G1 | 路径与别名、按 IP 上限、先认 key 后读体、节点与账户名额、头白名单、`/v1/models`、拒绝升级与 `previous_response_id`、错误出口；组合扫描基准 | accounts、protocol |
-| G2 | 三个 context、进程内预检、账户闸、分类连接信号量、FIFO 排队、启动检查 | — |
-| G3 | 准入编排、裁剪路线、402/429/404/503、`SettleOrphan` | R2、B2 |
-| G4 | 尝试循环、`Bind`、结果未知判定、`Decide`、重试预算、`StartBy` | S8、P4、P5 |
-| G5 | Relay 所有者、转发、保活、空闲计时、写期限、断开四种情况 | P5 |
-| G6 | 全阶段计量、追加、暂停、截断 | B3 |
-| G7 | 收费表、结算与结尾、`billing_pending`、持续重试、优雅退出 | B4 |
-| G8 | 非流式聚合、Chat 跨格式、`/responses/compact` | P6–P10 |
-| G9 | `count_tokens`、`/api/v1/key`、`credits`、`generation`、旧版余额接口 | O1、B1 |
 | G10 | 调用记录背压、quality 观测、指标、链路 | O1、O2 |
 | G11 | 端到端：Claude Code、Codex、Chat SDK 经 new-api、sub2api；故障注入；主备切换；压测 | 全部 |
 

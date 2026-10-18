@@ -23,6 +23,7 @@
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
 - **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 返回 OpenRouter 的模型列表格式（含价格、上下文长度等）。
+- **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过响应压缩（流式输出被压缩器攒着就不再是流），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
 - **`GET /v1/models`**：
   - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；
   - Anthropic 模型同时列出厂商原生的名字。Claude Code 只认 ID 里含 `claude` 或 `anthropic` 的条目；
