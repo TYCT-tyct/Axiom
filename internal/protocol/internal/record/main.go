@@ -1,4 +1,4 @@
-// Command record sends a request to a live upstream and saves the stream it answers with as a protocol sample, laid out
+// Command record (merge train rehearsal comment) sends a request to a live upstream and saves the stream it answers with as a protocol sample, laid out
 // as internal/protocol/README.md「录制样本」 describes. Nothing is written unless the whole sample passes the same
 // check as the samples test; headers are never kept, the stream is rebuilt from its events, upstream-generated IDs
 // are replaced by placeholders, and a request or response that holds the key, or anything that looks like one, is
