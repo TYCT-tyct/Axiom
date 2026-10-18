@@ -25,7 +25,7 @@ func multiplied(multiplier string) Method {
 	return Method{Kind: "reference_multiplier", Multiplier: &multiplier, CurrencyConversion: "face"}
 }
 
-func fixed(schedule string) Method { return Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)} }
+func fixed() Method { return Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)} }
 
 // TestSell: a sale price is the reference price times the rule's multiplier, or the rule's own price list, and nothing
 // else in M1 gives one. The rounding happens once, against the price the catalog holds, so the same inputs always give
@@ -46,7 +46,7 @@ func TestSell(t *testing.T) {
 		{"0.5 down", multiplied("0.5"), `"input":"0.00000005"`, nil},
 		{"a millionth", multiplied("0.000001"), `"input":"0.0000000000001"`, nil},
 		{"no finite decimal rounds up once", multiplied("0.3333333333333333333"), `"input":"0.000000033333334"`, nil},
-		{"a fixed price is the rule's own", fixed(fixedUS), `"input":"0.000002"`, nil},
+		{"a fixed price is the rule's own", fixed(), `"input":"0.000002"`, nil},
 		{"cost plus has no price in M1", plus("0.25"), "", ErrUnpriced},
 		{"an exchange rate has none either", Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}, "", ErrUnpriced},
 		{"a multiplier read at face without a multiplier", Method{Kind: "reference_multiplier", CurrencyConversion: "face"}, "", ErrUnpriced},
@@ -123,7 +123,7 @@ func TestSellNeedsAReferencePrice(t *testing.T) {
 	if _, err := Sell(r, other, usd); !errors.Is(err, ErrUnpriced) {
 		t.Errorf("Sell at face from a price in CNY = %v, want ErrUnpriced", err)
 	}
-	if _, err := Sell(Rule{Enabled: true, Method: fixed(fixedUS), ID: uuid.NewV7()}, catalog.ReferencePrice{}, usd); err != nil {
+	if _, err := Sell(Rule{Enabled: true, Method: fixed(), ID: uuid.NewV7()}, catalog.ReferencePrice{}, usd); err != nil {
 		t.Errorf("a fixed price needs no reference price: %v", err)
 	}
 }
@@ -151,12 +151,12 @@ func TestPriceVersion(t *testing.T) {
 	if v := base.String()[14]; v != '8' {
 		t.Errorf("the version is a version-%c UUID, want 8: %s", v, base)
 	}
-	priced := Rule{Enabled: true, Method: fixed(fixedUS), ID: uuid.NewV7(), Rev: 1}
+	priced := Rule{Enabled: true, Method: fixed(), ID: uuid.NewV7(), Rev: 1}
 	if priceVersion(priced, ref) != priceVersion(priced, other) {
 		t.Error("a fixed price's version moved with the reference price's row")
 	}
 	priced.Rev++
-	if priceVersion(priced, ref) == priceVersion(Rule{Method: fixed(fixedUS), ID: priced.ID, Rev: 1}, ref) {
+	if priceVersion(priced, ref) == priceVersion(Rule{Method: fixed(), ID: priced.ID, Rev: 1}, ref) {
 		t.Error("a fixed price's new rev kept the version")
 	}
 }

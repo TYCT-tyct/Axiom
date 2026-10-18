@@ -79,32 +79,42 @@ func SalePrices(rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, 
 			continue // not a listed model, which the caller tells the client about
 		}
 		ref, _ := snap.ReferencePrice(id, currency.String())
-	rules:
-		for _, r := range rules {
-			if !r.Enabled || !pricesModel(r.Target, m) {
-				continue
-			}
-			if s, done := same[r.ID]; done {
-				sold[id] = s
-				break
-			}
-			s, err := Sell(r, ref, currency)
-			if errors.Is(err, ErrUnpriced) {
-				continue // a rule that sets no price in M1's ways leaves the model to the next
-			}
-			if err != nil {
-				unpriced = append(unpriced, err)
-				break rules
-			}
-			g := Sold{Version: priceVersion(r, ref), Schedule: s}
-			if r.Method.SameForEveryModel() {
-				same[r.ID] = g
-			}
-			sold[id] = g
-			break
+		s, priced, err := firstPrice(rules, m, ref, currency, same)
+		if err != nil {
+			unpriced = append(unpriced, err)
+		}
+		if priced {
+			sold[id] = s
 		}
 	}
 	return sold, unpriced
+}
+
+// firstPrice is the price the first rule that prices m gives it, with same holding what rules of one price for every
+// model gave already. A rule whose price cannot be made is an error and the model has no price; the later rules are not
+// tried, as SalePrices says.
+func firstPrice(rules []Rule, m catalog.Model, ref catalog.ReferencePrice, currency platform.Currency, same map[uuid.UUID]Sold) (Sold, bool, error) {
+	for _, r := range rules {
+		if !r.Enabled || !pricesModel(r.Target, m) {
+			continue
+		}
+		if s, done := same[r.ID]; done {
+			return s, true, nil
+		}
+		s, err := Sell(r, ref, currency)
+		if errors.Is(err, ErrUnpriced) {
+			continue // a rule that sets no price in M1's ways leaves the model to the next
+		}
+		if err != nil {
+			return Sold{}, false, err
+		}
+		g := Sold{Version: priceVersion(r, ref), Schedule: s}
+		if r.Method.SameForEveryModel() {
+			same[r.ID] = g
+		}
+		return g, true, nil
+	}
+	return Sold{}, false, nil
 }
 
 // pricesModel: the rule's target holds the model.
