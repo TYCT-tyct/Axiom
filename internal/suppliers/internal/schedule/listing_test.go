@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,10 +23,8 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 	if s.keysFinished.Load() != 0 || s.opens.Load() != 1 {
 		t.Errorf("the listing of keys ended %d times after %d opens, want it stopped by the limits", s.keysFinished.Load(), s.opens.Load())
 	}
-	var kept bool
-	c.row("SELECT listing ->> 'keys' IS NOT NULL FROM suppliers.sync_states WHERE supplier_id = $1", &kept)
-	if !kept {
-		t.Error("the page the limits stopped the listing at was not kept")
+	if listing := c.listing(); !strings.Contains(listing, `"keys": "`) {
+		t.Errorf("the page the limits stopped the listing at was not kept: %s", listing)
 	}
 	var due time.Time
 	c.row("SELECT next_due FROM suppliers.sync_states WHERE supplier_id = $1", &due)
@@ -46,10 +45,15 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 	if s.keysFinished.Load() != 1 {
 		t.Errorf("the listing of keys ended %d times, want once", s.keysFinished.Load())
 	}
-	var ended bool
-	// The column keeps the member as null while it is empty, so it is the value that says whether the position is gone.
-	c.row("SELECT listing ->> 'keys' IS NULL FROM suppliers.sync_states WHERE supplier_id = $1", &ended)
-	if !ended {
-		t.Error("a listing that ended kept its page")
+	if listing := c.listing(); strings.Contains(listing, `"keys": "`) {
+		t.Errorf("a listing that ended kept its page: %s", listing)
 	}
+}
+
+// listing is the supplier's column of listing positions, as text, empty when it holds none.
+func (c *cluster) listing() string {
+	c.t.Helper()
+	var listing string
+	c.row("SELECT coalesce(listing::text, '') FROM suppliers.sync_states WHERE supplier_id = $1", &listing)
+	return listing
 }
