@@ -1,12 +1,12 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
 Markdown-only changes run the cheap checks that read Markdown instead of the whole build; a benchmark comparison is
-skipped only for Markdown-only and web/-only changes, and the deployment check runs only for changes that can move
-what it deploys. The decisions come from the file list, never a guess about what reads what. A failed diff runs the
+skipped only for Markdown-only and web/-only changes, and the deployment check is skipped only when every changed file is clearly outside the container. The decisions come from the file list, never a guess about what reads what. A failed diff runs the
 build, the comparison and the deployment check; bench-needed and deploy-needed use exit code 10 for "not needed", so
 any other outcome runs them.
 """
 
+import re
 import subprocess
 import sys
 from pathlib import PurePosixPath
@@ -35,21 +35,30 @@ def needs_benchmark(paths: list[str]) -> bool:
     return not (all_md(paths) or web_only(paths))
 
 
-def moves_deployment(path: str) -> bool:
-    """Whether a changed file can alter what scripts/ci/deploy-check.sh deploys or how it checks it."""
+# Scripts that only check the repository or run CI; every other scripts/ file may be used by `just up`'s build
+# (scripts/web_cache.py) or by the deployment check (deploy-check.sh, deploy_name.py).
+IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|workflow/.*|ci/runner-host\.sh)")
+
+
+def irrelevant_to_deployment(path: str) -> bool:
+    """Whether a changed file is clearly outside the image and the deployment check; anything unsure is relevant."""
     parts = PurePosixPath(path).parts
     name = parts[-1]
-    if parts[0] == "deploy" or "migrations" in parts[:-1] or name.startswith("Dockerfile"):
-        return True
-    if path in ("scripts/ci/deploy-check.sh", "scripts/deploy_name.py", "justfile"):  # the script and the `up` it runs
-        return True
-    return parts[:2] == ("cmd", "axiom") and not name.endswith("_test.go") and any(
-        word in name for word in ("config", "env", "variables")
+    return (
+        name.lower().endswith(".md")
+        or name.endswith("_test.go")
+        or "testdata" in parts[:-1]
+        or parts[0] == ".github"
+        or IRRELEVANT_SCRIPT.fullmatch(path) is not None
+        or parts[:2] == ("web", "e2e")
+        or path == "web/playwright.config.ts"
     )
 
 
 def needs_deploy_check(paths: list[str]) -> bool:
-    return any(moves_deployment(path) for path in paths)
+    """Run it unless every changed file is irrelevant: the container is built from production Go, go.mod, web/, deploy/
+    and the justfile, and a startup, config or embedding change there breaks it without breaking a unit test."""
+    return not (paths and all(irrelevant_to_deployment(path) for path in paths))
 
 
 def main(argv: list[str]) -> int:

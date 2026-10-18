@@ -92,16 +92,16 @@ jobs:
       # The deployment checks below start the stack on this host with the job's own compose project, image tag, volumes
       # and kernel-picked host ports, and tear it down however the step ends (scripts/ci/deploy-check.sh), so jobs on
       # runners sharing a host neither collide nor wait for each other. Without a turn to wait for, three `just up` of
-      # at most 5 minutes each, the checks and the teardown fit. A PR runs them only when it changes what they deploy
-      # (scripts/ci_skips.py deploy-needed: deploy/, Dockerfiles, cmd/axiom's config, env and variables, migrations, the
-      # script itself); main runs them on every push, so anything the path rule missed is caught there.
+      # at most 5 minutes each, the checks and the teardown fit. A PR skips them only when every changed file is clearly
+      # outside the container (scripts/ci_skips.py deploy-needed: Markdown, tests, testdata, .github, check scripts,
+      # web/e2e); anything else runs them. Main runs them on every push.
       - id: deploy_scope
         if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
         run: |
           status=0
           python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
           if [ "$status" -eq 10 ]; then
-            echo "deploy-check skipped: nothing it deploys changed between $BASE and HEAD"
+            echo "deploy-check skipped: only files outside the container changed between $BASE and HEAD"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             [ "$status" -eq 0 ] || echo "deploy-needed check exited $status; running deploy-check"
