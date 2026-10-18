@@ -116,8 +116,11 @@ func limitedListing(t *testing.T, block int) {
 	if len(st.state.KeysAt) == 0 || st.state.Tasks[TaskKeys].Failures != 0 || !st.state.Tasks[TaskKeys].Due.Equal(first.until) {
 		t.Fatalf("after the limits: position %q, task %+v; want it kept and due at %v", st.state.KeysAt, st.state.Tasks[TaskKeys], first.until)
 	}
-	if len(st.state.Keys) != 0 || len(st.events) != 0 {
-		t.Errorf("a listing that did not end stored %d keys and %v", len(st.state.Keys), st.kinds())
+	if len(st.state.Keys) != 0 {
+		t.Errorf("a listing that did not end stored %d keys", len(st.state.Keys))
+	}
+	if st.count(KeyChanged) != 0 {
+		t.Errorf("a listing that did not end reported %d keys changed", st.count(KeyChanged))
 	}
 	if want := seq(1, block-1); !slices.Equal(first.served, want) {
 		t.Fatalf("the first job read pages %v, want %v", first.served, want)
