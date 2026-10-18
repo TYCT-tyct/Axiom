@@ -115,23 +115,37 @@ func (m *manager) Account(context.Context) (adapter.Account, error) {
 }
 
 func (m *manager) Offer(_ context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
-	page, next, done, until := m.s.offer.read(from)
-	if !done {
-		return adapter.Page[adapter.Group]{Next: next, Until: until}, nil
+	var groups []adapter.Group
+	for {
+		page, next, done, until := m.s.offer.read(from)
+		if !until.IsZero() {
+			return adapter.Page[adapter.Group]{Next: next, Until: until}, nil
+		}
+		groups = append(groups, adapter.Group{
+			Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`),
+			Models: []adapter.Model{{UpstreamName: "m"}},
+		})
+		if done {
+			return adapter.Page[adapter.Group]{Done: true, Items: groups}, nil
+		}
+		from = next
 	}
-	return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
-		Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`),
-		Models: []adapter.Model{{UpstreamName: "m"}},
-	}}}, nil
 }
 
 func (m *manager) Keys(_ context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-	page, next, done, until := m.s.keys.read(from)
-	if !done {
-		return adapter.Page[adapter.KeyState]{Next: next, Until: until}, nil
+	var keys []adapter.KeyState
+	for {
+		page, next, done, until := m.s.keys.read(from)
+		if !until.IsZero() {
+			return adapter.Page[adapter.KeyState]{Next: next, Until: until}, nil
+		}
+		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive})
+		if done {
+			m.s.keysFinished.Add(1)
+			return adapter.Page[adapter.KeyState]{Done: true, Items: keys}, nil
+		}
+		from = next
 	}
-	m.s.keysFinished.Add(1)
-	return adapter.Page[adapter.KeyState]{Done: true, Items: []adapter.KeyState{{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive}}}, nil
 }
 
 func (*manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
