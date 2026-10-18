@@ -7,21 +7,21 @@ import (
 	"time"
 )
 
-// TestRunKeepsTheHolderAlive: the loop's heartbeat is what keeps this process able to write at all. A holder alive from
-// its registration only until the TTL less Alive's margin, its last beat must not be older than that margin at any
-// moment: the beats here come every 2s with a 9s TTL, so a loop that beat less often, or stopped beating, is seen
-// inside the window of a few periods.
+// TestRunKeepsTheHolderAlive: the loop's heartbeat, at the period Start gives it when the configuration names none, is
+// what keeps this process able to write at all. Alive holds for the TTL less a margin of 5s after a beat, 4s here, and
+// the default period is a third of the 9s TTL: a loop that beat less often, or stopped, is seen inside the 7s the test
+// watches, which is two periods and more than the window.
 func TestRunKeepsTheHolderAlive(t *testing.T) {
-	b := newBank(t, 0, 0, Config{HolderTTL: 9 * time.Second, Heartbeat: 2 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
+	b := newBank(t, 0, 0, Config{HolderTTL: 9 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	beats := b.billing.beat.Load()
 	stop := runInBackground(t, b)
-	for deadline := time.Now().Add(9 * time.Second / 2); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+	for deadline := time.Now().Add(7 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
 		if !b.billing.Alive() {
 			t.Fatal("the holder went stale while its loop was beating")
 		}
 	}
-	if b.billing.beat.Load() <= beats+int64(2*time.Second) {
-		t.Error("the holder's expiry was not pushed out twice in a heartbeat period each")
+	if b.billing.beat.Load() <= beats+int64(5*time.Second) {
+		t.Error("the holder's expiry was not pushed out twice, once in each default heartbeat period")
 	}
 	stop()
 }

@@ -29,7 +29,7 @@ import (
 
 // specAll is a model whose spec declares everything an endpoint needs, with tools and prompt caching: what Claude Code
 // and Codex ask for.
-const specAll = `{"items":["input","output","cache_read","cache_write"],"tiers":["standard","priority"],` +
+const specAll = `{"items":["input","output","cache_read","cache_write"],"tiers":["standard"],` +
 	`"context_length":200000,"max_output_tokens":8192,"streams":true,` +
 	`"abilities":["tools","images","documents","reasoning","prompt_cache","structured_output","web_search","code_execution"]}`
 
@@ -38,9 +38,8 @@ const specNoServing = `{"items":["input","output"],"tiers":["standard"]}`
 
 const reference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375"}}`
 
-// saleRule prices every model at 1.5 times its reference price, in the main site's currency.
-const saleRule = `{"enabled":true,"target":{"kind":"all"},"audience":{"kind":"all"},` +
-	`"method":{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}}`
+// saleRule is the method of a rule for acme's models: 1.5 times the reference price, in the main site's currency.
+const saleRule = `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`
 
 // routeFixture is a catalog on a migrated database with its sale prices, and the router the snapshots go to. The
 // suppliers' side, and what billing met but cannot price, are set by each test.
@@ -65,7 +64,7 @@ type routeFixture struct {
 
 func newRouteFixture(t *testing.T) *routeFixture {
 	t.Helper()
-	database := pgtest.New(t, catalog.Migrations)
+	database := pgtest.New(t, catalog.Migrations, billing.Migrations())
 	db, err := pg.Open(t.Context(), database.App)
 	if err != nil {
 		t.Fatal(err)
@@ -80,14 +79,14 @@ func newRouteFixture(t *testing.T) *routeFixture {
 		t.Fatal(err)
 	}
 	f := &routeFixture{t: t, db: db, cat: cat, router: router, logs: new(strings.Builder)}
-	f.served = f.seed("acme/served", specAll, true)
-	f.nospec = f.seed("acme/nospec", specNoServing, true)
-	f.unpriced = f.seed("acme/unpriced", specAll, false)
+	f.served = f.seed("acme/served", specAll)
+	f.nospec = f.seed("acme/nospec", specNoServing)
+	f.unpriced = f.seed("other/unpriced", specAll)
 	f.unlistedID = catalog.ModelID(uuid.NewV7())
 	// The rule is inserted directly: billing's own tests cover creating one, and this file is about what a rule
 	// already there does to a snapshot.
 	f.exec("INSERT INTO billing.pricing_rules (id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints) "+
-		"VALUES ($1, $2, true, 'all', '', 'all', '', $3::jsonb, '{}'::jsonb)", uuid.NewV7(), uuid.NewV7(), saleRule)
+		"VALUES ($1, $2, true, 'author', 'acme', 'all', '', $3::jsonb, '{}'::jsonb)", uuid.NewV7(), uuid.NewV7(), saleRule)
 	if err := cat.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +96,8 @@ func newRouteFixture(t *testing.T) *routeFixture {
 	return f
 }
 
-// seed lists and names a model with the spec, and gives it a reference price when priced says so.
-func (f *routeFixture) seed(slug, spec string, priced bool) catalog.ModelID {
+// seed lists and names a model with the spec and a reference price: the catalog lists no model without one.
+func (f *routeFixture) seed(slug, spec string) catalog.ModelID {
 	f.t.Helper()
 	ctx := f.t.Context()
 	op := func() catalog.Op {
@@ -121,13 +120,11 @@ func (f *routeFixture) seed(slug, spec string, priced bool) catalog.ModelID {
 	if _, err := f.cat.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: catalog.ModelID(id), Name: slug, Visibility: catalog.VisibilityPublic}); err != nil {
 		f.t.Fatal(err)
 	}
-	if priced {
-		if _, err := f.cat.PublishPrice(ctx, catalog.PublishPriceRequest{
-			Op: op(), Model: catalog.ModelID(id), Source: catalog.SourceManual, Schedule: jsonx.Raw(reference),
-			Evidence: jsonx.Raw(`{"url":"https://example.com/pricing"}`),
-		}); err != nil {
-			f.t.Fatal(err)
-		}
+	if _, err := f.cat.PublishPrice(ctx, catalog.PublishPriceRequest{
+		Op: op(), Model: catalog.ModelID(id), Source: catalog.SourceManual, Schedule: jsonx.Raw(reference),
+		Evidence: jsonx.Raw(`{"url":"https://example.com/pricing"}`),
+	}); err != nil {
+		f.t.Fatal(err)
 	}
 	if _, err := f.cat.ListModel(ctx, catalog.ModelRequest{Op: op(), Model: catalog.ModelID(id), Rev: 0}); err != nil {
 		f.t.Fatal(err)
@@ -214,9 +211,17 @@ func (f *routeFixture) planned(in routing.Input) []uuid.UUID {
 	return out
 }
 
-// streams is a plan request for a streaming call of a model.
-func streams(model string) routing.Input {
-	return routing.Input{Req: &protocol.Request{Model: model, Stream: true}}
+// call is a plan request for a small streaming Messages call of the model, at any service tier the catalog's models
+// have, with the changes the test makes to it.
+func call(model catalog.ModelID, edits ...func(*protocol.Request)) routing.Input {
+	req := &protocol.Request{
+		Format: protocol.Messages, Model: "m", Stream: true, Choices: 1, TextBytes: 100,
+		ServiceTiers: 1 << catalog.ServiceTierStandard,
+	}
+	for _, edit := range edits {
+		edit(req)
+	}
+	return routing.Input{Req: req, Models: []catalog.ModelID{model}}
 }
 
 // TestRouteBuildMapsWhatRoutableGives: an endpoint of a listed, priced model whose spec declares everything is in the
@@ -229,10 +234,10 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	if want := (Count{Endpoints: 1, Offered: 1}); f.count != want {
 		t.Errorf("the build made %+v, want %+v", f.count, want)
 	}
-	if got := f.planned(streams("acme/served")); len(got) != 1 || got[0] != r.ID {
+	if got := f.planned(call(f.served)); len(got) != 1 || got[0] != r.ID {
 		t.Fatalf("routing plans to %v, want the endpoint %s", got, r.ID)
 	}
-	plan, _, err := f.router.Plan(streams("acme/served"))
+	plan, _, err := f.router.Plan(call(f.served))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +251,8 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	if built.Price.Version != f.prices[f.served].Version {
 		t.Errorf("price version %s, want the sale price's %s", built.Price.Version, f.prices[f.served].Version)
 	}
-	if !built.Segmentable {
-		t.Error("the endpoint is not segmentable, though its output limit is well above a segment")
+	if built.Segmentable {
+		t.Error("the endpoint is segmentable, though nothing measures its output speed: the whole output limit is reserved")
 	}
 	if got := uuid.UUID(built.Supplier); got != r.Supplier {
 		t.Errorf("the plan's supplier is %s, want %s", got, r.Supplier)
@@ -266,18 +271,16 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.served, protocol.Messages, protocol.Responses)})
-	if got := f.planned(routing.Input{
-		Req: &protocol.Request{Model: "acme/served", Needs: protocol.Tools},
-	}); len(got) != 1 {
+	if got := f.planned(call(f.served, func(r *protocol.Request) { r.Needs = protocol.Tools })); len(got) != 1 {
 		t.Fatalf("a call that needs tools was planned to %d endpoints, want the one whose spec declares tools", len(got))
 	}
-	if got := f.planned(routing.Input{Req: &protocol.Request{Model: "acme/served", Format: protocol.Chat}}); len(got) != 1 {
+	if got := f.planned(call(f.served, func(r *protocol.Request) { r.Format = protocol.Chat })); len(got) != 1 {
 		t.Errorf("a Chat call was planned to %d endpoints, want the one serving Chat by conversion", len(got))
 	}
 	// A stream is what a Claude Code or Codex turn is: an endpoint whose supplier cannot pass one must not be planned to.
 	f.build([]suppliers.Routable{withStreams(routable(f.served, protocol.Messages), false)})
-	if got := f.planned(streams("acme/served")); len(got) != 0 {
-		t.Errorf("a stream was planned to %d endpoints, want none: the supplier's policy passes no stream", len(got))
+	if _, _, err := f.router.Plan(call(f.served)); err == nil {
+		t.Error("a stream was planned to an endpoint whose supplier's policy passes no stream")
 	}
 }
 
@@ -289,7 +292,7 @@ func withStreams(r suppliers.Routable, streams bool) suppliers.Routable {
 
 // TestRouteBuildLeavesOutWhatItCannotDescribe: a model whose spec says nothing of what an endpoint offers, a model no
 // rule prices, and an endpoint of a model the catalog does not hold are all left out, the log says which and why, and
-// the snapshot still holds the one model that can be routed. That is the card's third invariant: nothing is guessed,
+// the snapshot still holds the one model that can be routed. Nothing is guessed,
 // and a model that cannot be routed leaves a line an administrator can act on.
 func TestRouteBuildLeavesOutWhatItCannotDescribe(t *testing.T) {
 	f := newRouteFixture(t)
@@ -350,7 +353,7 @@ func TestRouteBuildFlagsAModelThatReportedAnUnpricedItem(t *testing.T) {
 	if f.count.Endpoints != 1 {
 		t.Errorf("%+v: the flagged endpoint was left out", f.count)
 	}
-	if _, _, err := f.router.Plan(streams("acme/served")); err == nil {
+	if _, _, err := f.router.Plan(call(f.served)); err == nil {
 		t.Errorf("routing planned to a model the price list cannot price: %v", err)
 	}
 	if snap == nil {
@@ -366,7 +369,7 @@ func TestRouteBuildPublishesOnlyNewerSnapshots(t *testing.T) {
 	older := f.build([]suppliers.Routable{a})
 	newer := f.build([]suppliers.Routable{a, b})
 	f.deps.Publish(older, Count{Endpoints: 1, Offered: 1}) // late, and older: refused
-	if got := f.planned(streams("acme/served")); len(got) != 2 {
+	if got := f.planned(call(f.served)); len(got) != 2 {
 		t.Errorf("routing plans to %d endpoints, want the newer snapshot's 2", len(got))
 	}
 	if newer == nil || older == nil {
@@ -386,7 +389,7 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 		"the sale prices": func(d *RouteDeps) {
 			d.Prices = func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return nil, boom }
 		},
-		"the unknown items": func(d *RouteDeps) {
+		"the unknown billing items": func(d *RouteDeps) {
 			d.UnknownItems = func(context.Context) ([]billing.UnknownItem, error) { return nil, boom }
 		},
 	} {
