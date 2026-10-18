@@ -6,8 +6,8 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
-# Run every check the CI build job runs, except one run of each benchmark: `check-all` adds those, and CI runs it on
-# every pull request and main push
+# Run every check the CI build job runs, except one run of each benchmark: `check-all` adds those. This is the local
+# pre-push gate, so it keeps `secrets` and `docs`, which CI's build leaves to workflow.yml (see `check-ci`)
 check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
@@ -86,13 +86,17 @@ test: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
     go test -C tools -race ./...
 
-# Every benchmark compiles and runs once, with the race detector. CI runs this on pull requests and main pushes;
-# bench-compare still compares allocations on PRs, without -race.
+# Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a pull request runs
+# bench-compare instead, which compares allocations without -race.
 bench-once: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
 
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
+
+# What CI's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's required `secrets`
+# and `docs` jobs already run on every PR and main push. `script-tests` is the half of `docs` workflow.yml does not run.
+check-ci: script-tests modules adapters-removable scope api tidy generated lint deadcode test vuln web
 
 # The checks that read Markdown: the docs tests (including the pull request template), module boundaries, and the pg
 # module table. A Markdown-only PR runs this instead of the full build.
@@ -148,10 +152,13 @@ secrets:
     git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null || { echo "origin/main is missing, so the branch cannot be scanned: run git fetch origin main"; exit 1; }
     go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --log-opts=origin/main..HEAD .
 
-docs:
-    {{ python }} -m unittest discover -s scripts
+docs: script-tests
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py
+
+# This repository's own script tests (scripts/test_*.py)
+script-tests:
+    {{ python }} -m unittest discover -s scripts
 
 # Install the frontend's dependencies exactly as web/pnpm-lock.yaml pins them; dependencies' install scripts never run
 web-install:
