@@ -527,7 +527,7 @@ type fakeCosts struct {
 
 func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
 	if c.err != nil {
-		return suppliers.AttemptCost{}, 0, false, c.err
+		return suppliers.AttemptCost{}, c.cost, c.known, c.err // the figure still comes: the executor books it whatever the error
 	}
 	return suppliers.AttemptCost{Native: platform.AmountExact(c.cost), Flag: suppliers.CostComplete}, c.cost, c.known, nil
 }

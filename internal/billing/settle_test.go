@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -291,6 +292,26 @@ func TestCleanup(t *testing.T) {
 			b.wantReservation(h, tc.state, tc.charged, tc.lost)
 			b.balanced()
 		})
+	}
+}
+
+// TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped: the reservation marks an entry it dropped for its quote with
+// the zero id, and no charge can come from the endpoint of an entry that was never to be called, so the route suppliers
+// is given has only the kept ones, in order.
+func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
+	first, dropped, last := metered(t), metered(t), metered(t)
+	dropped.MaxOutput = 1e9 // a quote far beyond the balance
+	var h *Hold
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.takenOver(h)
+	if route, want := b.supplies.lost[h.id], []uuid.UUID{first.Endpoint, last.Endpoint}; !slices.Equal(route, want) {
+		t.Errorf("the lost request's route is %v, want the kept entries %v", route, want)
 	}
 }
 
