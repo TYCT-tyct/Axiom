@@ -146,7 +146,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	}
 	served := startServing(servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
-	// rebuild (the card's first invariant).
+	// rebuild.
 	go announceReady(ctx, routes.calls.ready, &health, logger)
 
 	var stopped error
@@ -215,14 +215,7 @@ type nodeRoutes struct {
 // and the call path take their limits from. A key lookup that misses the cache uses a database connection like an
 // admission does, so the two must share the counting, or a flood of unknown keys would be bounded by nothing
 // (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
-func nodeLimits() (*gateway.Backpressure, error) {
-	cfg := gateway.DefaultConfig()
-	limits, err := gateway.New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return limits, nil
-}
+func nodeLimits() (*gateway.Backpressure, error) { return gateway.New(gateway.DefaultConfig()) }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
@@ -264,7 +257,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	public := withModelCalls(
 		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
-		calls.api)
+		calls.handler)
 	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil

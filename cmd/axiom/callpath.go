@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 	"uuid"
@@ -75,10 +74,9 @@ type callDeps struct {
 	logger   *slog.Logger            //
 }
 
-// callNode is a node's call path: the API the public listener mounts, the handler and the executor whose background
-// work the shutdown drains, the signal that routing can route, and the one loop whose end stops the node.
+// callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
+// shutdown drains, the signal that routing can route, and the one loop whose end stops the node.
 type callNode struct {
-	api      http.Handler
 	handler  *gateway.Handler
 	executor *gateway.Executor
 	ready    <-chan struct{} // closed once a published snapshot can route
@@ -88,7 +86,7 @@ type callNode struct {
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
 // inputs fresh, and returns the handler the public listener serves. The first reading of every input happens here,
 // synchronously, so a node whose catalog, endpoints or prices cannot be read fails its start instead of becoming ready
-// and answering 503 (the card's first invariant). A node that can route nothing starts too, but stays not ready: a
+// and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	gate := gateway.DefaultConfig()
@@ -179,7 +177,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}()
 	go reloadEndpoints(ctx, upstreams, d.logger)
 	go routes.Run(ctx)
-	return callNode{api: handler, handler: handler, executor: executor, ready: ready, reaped: reaped}, nil
+	return callNode{handler: handler, executor: executor, ready: ready, reaped: reaped}, nil
 }
 
 // announceReady reports the node ready once its routing snapshot can route, and stops listening when the node ends.
