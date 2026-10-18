@@ -17,7 +17,7 @@ func TestWaiverPricesPerUseItemsAtTheBand(t *testing.T) {
 		"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"},
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"web_search":"0.00000002"}}]}}`)
 	h := b.holdOn(banded, 3000)
-	if f, err := b.billing.Settle(t.Context(), h, outcome(Unknown, FinishNone, false, used(t, 2000, 20, 1))); err != nil || f.Charged != platform.AmountExact(20) {
+	if f, err := b.billing.Settle(t.Context(), h, outcome(Unknown, FinishNone, used(t, 2000, 20, 1))); err != nil || f.Charged != platform.AmountExact(20) {
 		t.Errorf("Settle = %+v, %v; want the search at the long-context price, 20", f, err)
 	}
 }
@@ -54,7 +54,7 @@ func unknown(t *testing.T, input int64, field, value string) Segment {
 func TestSettleReturnsTheStoredFinal(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
-	first, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 300, 20, 0, in)))
+	first, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 300, 20, 0, in)))
 	if err != nil || !first.Estimated {
 		t.Fatalf("Settle = %+v, %v; want an estimate", first, err)
 	}
@@ -62,7 +62,7 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 	if s := b.state(); s != "settled" {
 		t.Errorf("the estimate is %s, want settled: nothing may correct it later", s)
 	}
-	again, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, true, used(t, 1, 1, 0)))
+	again, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 1, 1, 0)))
 	if err != nil || !again.Estimated || again.Charged != first.Charged || len(again.Segments) != 1 || again.Segments[0].Usage.Count(in) != 300 {
 		t.Errorf("retry = %+v, %v; want the first's %+v", again, err, first)
 	}
@@ -74,7 +74,7 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 func TestEndRequest(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	settled, pending := b.hold(100), b.hold(100)
-	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
 	}
 	if ended := b.supplies.ended[pending.id]; ended != 0 {
