@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import check_pr
-from check_pr import change, closing, describe, review, unfinished, unticked_acceptance, waiver_allowed
+from check_pr import change, closing, describe, review, title_warnings, unfinished, unticked_acceptance, waiver_allowed
 
 TEMPLATE = "## Background / 背景\n<!-- why -->\n\n## Verification / 验证\n<!-- evidence -->\n"
 BODY = "## Background / 背景\nbecause\n## Verification / 验证\nran it\n"
@@ -36,11 +36,16 @@ class DescribeTest(unittest.TestCase):
             "Fix: capitalised": False,
             "fix: ends with a period.": False,
             "feature: unknown type": False,
-            "docs: " + "x" * 70: False,
+            "docs: " + "x" * 70: True,  # too long only warns
         }
         for title, ok in cases.items():
             with self.subTest(title):
                 self.assertEqual(describe(title, BODY, "someone", TEMPLATE) == [], ok)
+
+    def test_a_long_title_warns_without_failing(self):
+        self.assertEqual(title_warnings("docs: " + "x" * 66, "someone"), [])
+        self.assertEqual(len(title_warnings("docs: " + "x" * 67, "someone")), 1)
+        self.assertEqual(title_warnings("docs: " + "x" * 67, "dependabot[bot]"), [])
 
     def test_every_template_section_is_filled(self):
         self.assertEqual(describe("docs: x y", TEMPLATE, "someone", TEMPLATE), [
@@ -259,6 +264,35 @@ class ReviewTest(unittest.TestCase):
         self.assertNotEqual(review(HEAD, BODY, "someone", older[:1], same_change=same), [])  # its should-fix still needs the answer
         self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="fedcba9")], same_change=same), [])
         self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(sha="1234567")], same_change=same), [])  # another change
+        self.assertEqual(review(HEAD, BODY, "someone", [*older[:1], comment(f"作者回应 · 提交 {HEAD[:7]}")], same_change=same), [])
+
+    def test_the_authors_answer_covers_commits_after_a_review_without_blocking_findings(self):
+        same = lambda commit: commit == "fedcba9"
+        history = ["1111111", "1234567", "fedcba9", HEAD]  # the PR's commits, oldest first; 7654321 is not among them
+        ancestor = lambda commit, later: commit in history and any(sha.startswith(later) or later.startswith(sha) for sha in history[history.index(commit):])
+        answer = lambda sha: comment(f"作者回应 · 提交 {sha} · 改了应修")
+        cases = {
+            "should-fix fixed in the head": ([reviewed(should=1, sha="1234567"), answer(HEAD[:7])], True),
+            "clean review, then a conflicted base merge": ([reviewed(sha="1234567"), answer(HEAD)], True),
+            "answer then only a base merge": ([reviewed(sha="1234567"), answer("fedcba9")], True),
+            "answer names the reviewed commit only": ([reviewed(should=1, sha="1234567"), answer("1234567")], False),
+            "answer names an older commit": ([reviewed(sha="1234567"), answer("7654321")], False),
+            "answer before the review": ([answer(HEAD[:7]), reviewed(sha="1234567")], False),
+            "blocking findings need a review": ([reviewed(blocking=1, sha="1234567"), answer(HEAD[:7])], False),
+            "a later blocking review wins": ([reviewed(sha="1234567"), answer(HEAD[:7]), reviewed(blocking=1, sha="1234567")], False),
+            "an older clean review posted after a blocking one": ([reviewed(blocking=1, sha="1234567"), reviewed(sha="1111111"),
+                                                                   answer(HEAD[:7])], False),
+            "a review of another PR's commit": ([reviewed(sha="7654321"), answer(HEAD[:7])], False),
+            "a blocking review of the head comes first": ([reviewed(blocking=1), reviewed(sha="1234567"), answer(HEAD[:7])], False),
+            "outsider's answer": ([reviewed(sha="1234567"), {**answer(HEAD[:7]), "author_association": "NONE"}], False),
+        }
+        for name, (comments, ok) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(review(HEAD, BODY, "someone", comments, allow_waiver=False, same_change=same, ancestor=ancestor) == [], ok)
+        problem, = review(HEAD, BODY, "someone", [reviewed(should=1, sha="1234567")], ancestor=ancestor)
+        self.assertIn(f"作者回应 · 提交 {HEAD[:7]}", problem)  # the message names the way out
+        problem, = review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="1234567")], ancestor=ancestor)
+        self.assertNotIn("作者回应", problem)
 
     def test_change_ignores_base_merges_but_not_the_prs_own_lines(self):
         with tempfile.TemporaryDirectory() as tmp:

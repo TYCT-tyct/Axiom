@@ -52,11 +52,11 @@ func TestMapUpstream(t *testing.T) {
 		"undated name is a candidate": {nil, "claude-sonnet-4-5", Mapping{Model: id(1), Mapped: true, Unverified: true}},
 		"alias":                       {&alias, "sonnet:free", Mapping{Model: id(1), Mapped: true}},
 		"alias beats recognition":     {&alias, "gpt-3", Mapping{Model: id(1), Mapped: true}},
-		"unknown name":                {nil, "mystery-model", Mapping{}},
-		"suffix":                      {nil, "claude-sonnet-4-5:free", Mapping{}},
-		"retired model":               {nil, "gpt-3", Mapping{}},
-		"alias to a retired model":    {&retired, "x", Mapping{}},
-		"alias to a missing model":    {&unknown, "x", Mapping{}},
+		"unknown name":                {nil, "mystery-model", Mapping{Why: Unmapped}},
+		"suffix":                      {nil, "claude-sonnet-4-5:free", Mapping{Why: Unmapped}},
+		"retired model":               {nil, "gpt-3", Mapping{Why: NotListed}},
+		"alias to a retired model":    {&retired, "x", Mapping{Why: NotListed}},
+		"alias to a missing model":    {&unknown, "x", Mapping{Why: Unmapped}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

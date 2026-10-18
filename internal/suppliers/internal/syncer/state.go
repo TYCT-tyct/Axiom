@@ -81,6 +81,12 @@ type GroupSnap struct {
 	Models                  []ModelSnap
 }
 
+// PlanKey names an endpoint the way the engine keeps it in its state and the way its cost plans are stored
+// (suppliers.sync_plans.endpoint): the group's ref and the model's upstream name. Every writer and reader of a plan goes
+// through it, because a key built in two places that disagree loses the plan without an error: every endpoint of that
+// name would be left with its cost unknown and no reason in any log.
+func PlanKey(ref, model string) string { return ref + "/" + model }
+
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
 // 「持久化」), except CatchUpNotified, which a store reads from what it stored besides the state, so the constants of
 // Task, Status and RemovalStep only gain members at the end, and any other change to its fields that an old stored

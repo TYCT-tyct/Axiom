@@ -91,7 +91,9 @@ func (c *testClock) advance(d time.Duration) {
 
 var platformScope = pg.PlatformScope()
 
-const scheduleJSON = `{"v":1,"currency":"XXX","rates":{"input":"0.075","output":"0.3"}}`
+// scheduleJSON is a cost schedule in the canonical form catalog.Schedule writes back, so a test can compare a schedule
+// read from the database with it as text.
+const scheduleJSON = `{"currency":"XXX","rates":{"input":"0.075","output":"0.3"},"v":1}`
 
 func newKeys(t *testing.T) *secret.Keyring {
 	t.Helper()

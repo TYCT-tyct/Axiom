@@ -16,6 +16,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/pg"
@@ -125,7 +126,11 @@ func newCluster(t *testing.T, s *system) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &cluster{t: t, database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}), system: s, keys: keys}
+	c := &cluster{
+		t: t, system: s, keys: keys,
+		// The projection maps a listing's upstream names by the catalog, so the supplier's database has one.
+		database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}, catalog.Migrations),
+	}
 	c.reader = c.open()
 	c.supplier = c.addSupplier("fake.example", "connecting")
 	return c

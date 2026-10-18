@@ -10,9 +10,10 @@ WHERE id = @id;
 -- name: ListRoutable :many
 -- Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
 -- endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
--- cooldown are judged by the clock when a credential is picked.
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
-    v.id AS unit_value_id, v.value::text AS unit_value,
+-- cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+-- call must send it; model_id is the catalog model the snapshot of routing names it by.
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
