@@ -232,8 +232,8 @@ func (m Method) checkFixed(currency platform.Currency) error {
 	return checkSchedule(m.Schedule, currency)
 }
 
-// SameForEveryModel: the rule's price does not read the model's reference price, so it is the same wherever it applies.
-// Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
+// SameForEveryModel reports whether the rule's price does not read the model's reference price, so that it is the same
+// wherever it applies. Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
 // versions (sale.go).
 func (m Method) SameForEveryModel() bool { return m.Kind == "fixed" }
 

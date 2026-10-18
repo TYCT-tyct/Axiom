@@ -181,11 +181,9 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	if err != nil {
 		return nil, err
 	}
-	models := make([]catalog.ModelID, len(request.Body.ModelIds))
-	for i, id := range request.Body.ModelIds {
-		if models[i], err = modelIDOf(id); err != nil {
-			return nil, err
-		}
+	models, err := modelIDsOf(request.Body.ModelIds)
+	if err != nil {
+		return nil, err
 	}
 	sold, unpriced := billing.SalePrices(rules, snap, models, site.Currency)
 	for _, err := range unpriced {
@@ -195,20 +193,41 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	}
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
 	for i, id := range request.Body.ModelIds {
-		m, ok := snap.Model(models[i])
-		if !ok {
-			return nil, catalog.ErrModelNotFound
-		}
-		row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.Unpriced}
-		if s, ok := sold[models[i]]; ok {
-			row.Status = adminapi.Priced
-			if row.Sale, err = scheduleBody(s.Schedule); err != nil {
-				return nil, err
-			}
+		row, err := previewRow(id, snap, models[i], sold)
+		if err != nil {
+			return nil, err
 		}
 		rows.Data = append(rows.Data, row)
 	}
 	return adminapi.PreviewPricing200JSONResponse(rows), nil
+}
+
+func modelIDsOf(ids []string) ([]catalog.ModelID, error) {
+	models := make([]catalog.ModelID, len(ids))
+	for i, id := range ids {
+		var err error
+		if models[i], err = modelIDOf(id); err != nil {
+			return nil, err
+		}
+	}
+	return models, nil
+}
+
+// previewRow is the row of one model: priced when sold has its sale price, else unpriced.
+func previewRow(id string, snap *catalog.Snapshot, model catalog.ModelID, sold map[catalog.ModelID]billing.Sold) (adminapi.PricingPreviewRow, error) {
+	m, ok := snap.Model(model)
+	if !ok {
+		return adminapi.PricingPreviewRow{}, catalog.ErrModelNotFound
+	}
+	row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.Unpriced}
+	if s, ok := sold[model]; ok {
+		row.Status = adminapi.Priced
+		var err error
+		if row.Sale, err = scheduleBody(s.Schedule); err != nil {
+			return row, err
+		}
+	}
+	return row, nil
 }
 
 // previewAudience is whom the preview prices for: the account and its tier when the request names an account, else the
@@ -292,27 +311,13 @@ func previewedRules(ctx context.Context, a *adminAPI, site accounts.Site, rules 
 		}
 		return rules, nil
 	}
-	in, err := ruleInputOf(*body.Rule)
+	in, err := a.checkedRuleInput(ctx, site, *body.Rule)
 	if err != nil {
 		return nil, err
 	}
-	if err := in.Check(site.Currency); err != nil {
-		return nil, ruleProblem(err)
-	}
-	if err := a.checkSubjects(ctx, site, in); err != nil {
+	rest, err := withoutReplaced(rules, body.ReplacesRuleId)
+	if err != nil {
 		return nil, err
-	}
-	rest := rules
-	if !createsRule {
-		id, err := uuid.Parse(*body.ReplacesRuleId)
-		if err != nil || id.String() != *body.ReplacesRuleId {
-			return nil, invalidField("/replaces_rule_id", "not a rule's ID")
-		}
-		i := slices.IndexFunc(rules, func(r billing.Rule) bool { return r.ID == id })
-		if i < 0 {
-			return nil, billing.ErrRuleNotFound
-		}
-		rest = slices.Delete(rules, i, i+1)
 	}
 	if slices.ContainsFunc(rest, func(r billing.Rule) bool { return r.Target == in.Target && r.Audience == in.Audience }) {
 		if createsRule {
@@ -325,6 +330,34 @@ func previewedRules(ctx context.Context, a *adminAPI, site accounts.Site, rules 
 	// of replaces_rule_id by its own target and audience, not by where that rule stood: a rule for a model put in place
 	// of the one for everything prices that model, rather than being tried after every rule the site has.
 	return billing.Place(billing.Rule{RuleInput: in}, rest), nil
+}
+
+// checkedRuleInput is the request's rule, once it passes what creating it would check.
+func (a adminAPI) checkedRuleInput(ctx context.Context, site accounts.Site, rule adminapi.PricingRuleInput) (billing.RuleInput, error) {
+	in, err := ruleInputOf(rule)
+	if err != nil {
+		return in, err
+	}
+	if err := in.Check(site.Currency); err != nil {
+		return in, ruleProblem(err)
+	}
+	return in, a.checkSubjects(ctx, site, in)
+}
+
+// withoutReplaced is rules less the one replaces names, or rules when it names none.
+func withoutReplaced(rules []billing.Rule, replaces *string) ([]billing.Rule, error) {
+	if replaces == nil {
+		return rules, nil
+	}
+	id, err := uuid.Parse(*replaces)
+	if err != nil || id.String() != *replaces {
+		return nil, invalidField("/replaces_rule_id", "not a rule's ID")
+	}
+	i := slices.IndexFunc(rules, func(r billing.Rule) bool { return r.ID == id })
+	if i < 0 {
+		return nil, billing.ErrRuleNotFound
+	}
+	return slices.Delete(rules, i, i+1), nil
 }
 
 // scheduleBody is a schedule as the contract gives it, through the canonical form both sides read.
