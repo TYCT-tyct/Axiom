@@ -23,7 +23,7 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 		t.Errorf("the listing of keys ended %d times after %d opens, want it stopped by the limits", s.keysFinished.Load(), s.opens.Load())
 	}
 	var kept bool
-	c.row("SELECT listing ? 'keys' FROM suppliers.sync_states WHERE supplier_id = $1", &kept)
+	c.row("SELECT listing ->> 'keys' IS NOT NULL FROM suppliers.sync_states WHERE supplier_id = $1", &kept)
 	if !kept {
 		t.Error("the page the limits stopped the listing at was not kept")
 	}
@@ -47,7 +47,8 @@ func TestALimitedListingIsKeptForTheNextJob(t *testing.T) {
 		t.Errorf("the listing of keys ended %d times, want once", s.keysFinished.Load())
 	}
 	var ended bool
-	c.row("SELECT NOT (coalesce(listing, '{}'::jsonb) ? 'keys') FROM suppliers.sync_states WHERE supplier_id = $1", &ended)
+	// The column keeps the member as null while it is empty, so it is the value that says whether the position is gone.
+	c.row("SELECT listing ->> 'keys' IS NULL FROM suppliers.sync_states WHERE supplier_id = $1", &ended)
 	if !ended {
 		t.Error("a listing that ended kept its page")
 	}
