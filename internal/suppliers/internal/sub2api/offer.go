@@ -91,14 +91,14 @@ func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page
 func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
 	p := decodeOffer(from)
 	if p.V == 0 {
-		return m.startOffer(ctx)
+		return m.startOffer(ctx, nil)
 	}
 	groups, err := m.groupList(ctx)
 	if err != nil {
 		return offerProgress{}, err
 	}
 	if !sameGroups(groups, p.Groups) {
-		return m.startOffer(ctx)
+		return m.startOffer(ctx, groups)
 	}
 	return p, nil
 }
@@ -164,11 +164,14 @@ func stopped(err error, p offerProgress) (adapter.Page[adapter.Group], bool, err
 	return adapter.Page[adapter.Group]{}, false, err
 }
 
-// startOffer reads what the whole pass works from: the groups and the multipliers that replace theirs.
-func (m *manager) startOffer(ctx context.Context) (offerProgress, error) {
-	groups, err := m.groupList(ctx)
-	if err != nil {
-		return offerProgress{}, err
+// startOffer reads what the whole pass works from: the groups (read here when the caller has none) and the multipliers
+// that replace theirs.
+func (m *manager) startOffer(ctx context.Context, groups []groupDTO) (offerProgress, error) {
+	var err error
+	if groups == nil {
+		if groups, err = m.groupList(ctx); err != nil {
+			return offerProgress{}, err
+		}
 	}
 	overrides, err := m.userMultipliers(ctx)
 	if err != nil {

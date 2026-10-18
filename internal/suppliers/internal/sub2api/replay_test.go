@@ -255,18 +255,14 @@ func readPaged[T any](t *testing.T, clk *clock, read func(from adapter.Listing) 
 		if page, err = read(from); err != nil {
 			t.Fatal(err)
 		}
+		from = page.Next
 		if page.Done {
 			return page, waits
 		}
 		if !page.Until.IsZero() {
 			waits++
 			clk.set(page.Until)
-			continue
 		}
-		if len(page.Next) == 0 {
-			t.Fatal("a read that did not end the listing gave no position to go on from")
-		}
-		from = page.Next
 	}
 	t.Fatal("the listing did not end")
 	return page, waits

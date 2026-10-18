@@ -33,12 +33,13 @@ func keyList(total *int) func(adapter.Request) adapter.Response {
 	}
 }
 
-// TestAKeyListingThatChangedUnderItsPositionBeginsAgain: a key removed during a listing moves its pages forward, so going
-// on from the stored page would skip one. The position is given up and the listing is read again whole; the keys that are
-// gone do not come back with it.
+// TestAKeyListingThatChangedUnderItsPositionBeginsAgain: a key removed while a listing was stopped moves its pages
+// forward, so going on from the stored page would skip one. The position is given up and the listing is read again whole;
+// the keys that are gone do not come back with it.
 func TestAKeyListingThatChangedUnderItsPositionBeginsAgain(t *testing.T) {
 	t.Parallel()
 	total, asked := 250, []int{}
+	limited := true
 	serve := keyList(&total)
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
 		page, err := keyPageOf(r.Path)
@@ -46,21 +47,24 @@ func TestAKeyListingThatChangedUnderItsPositionBeginsAgain(t *testing.T) {
 			return adapter.Response{}, err
 		}
 		asked = append(asked, page)
+		if limited && page == 2 {
+			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
+		}
 		return serve(r), nil
 	})
 	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
 	first, err := m.Keys(t.Context(), nil)
 	if err != nil || first.Done || len(first.Next) == 0 {
-		t.Fatalf("the first read: done %v, position %q, %v; want a position to go on from", first.Done, first.Next, err)
+		t.Fatalf("the read the limits stopped: done %v, position %q, %v; want a position to go on from", first.Done, first.Next, err)
 	}
 
-	total = 150 // a hundred keys went away
+	limited, total = false, 150 // a hundred keys went away
 	page, err := m.Keys(t.Context(), first.Next)
 	if err != nil || !page.Done || len(page.Items) != total {
 		t.Fatalf("after the listing changed: done %v, %d keys, %v; want the %d it holds now", page.Done, len(page.Items), err, total)
 	}
-	if want := []int{1, 2, 1, 2}; !slices.Equal(asked, want) {
-		t.Errorf("the pages read were %v, want %v: the listing began again", asked, want)
+	if want := []int{1, 2, 2, 1, 2}; !slices.Equal(asked, want) {
+		t.Errorf("the pages asked for were %v, want %v: the listing began again", asked, want)
 	}
 	for i, k := range page.Items {
 		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {

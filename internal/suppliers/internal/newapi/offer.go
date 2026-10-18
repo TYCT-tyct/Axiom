@@ -91,14 +91,14 @@ func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page
 func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
 	p := decodeOffer(from)
 	if p.V == 0 {
-		return m.startOffer(ctx)
+		return m.startOffer(ctx, nil)
 	}
 	groups, err := m.groupsNow(ctx)
 	if err != nil {
 		return offerProgress{}, err
 	}
 	if !slices.Equal(sortedKeys(groups), p.Names) {
-		return m.startOffer(ctx)
+		return m.startOffer(ctx, groups)
 	}
 	return p, nil
 }
@@ -136,11 +136,13 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	return page, true, nil
 }
 
-// startOffer reads what the whole pass works from: the groups, their ratios and the prices.
-func (m *manager) startOffer(ctx context.Context) (offerProgress, error) {
-	groups, err := m.groupsNow(ctx)
-	if err != nil {
-		return offerProgress{}, err
+// startOffer reads what the whole pass works from: the groups (read here when the caller has none) and the prices.
+func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) (offerProgress, error) {
+	var err error
+	if groups == nil {
+		if groups, err = m.groupsNow(ctx); err != nil {
+			return offerProgress{}, err
+		}
 	}
 	var pricing struct {
 		Data []priceEntry `json:"data"`
