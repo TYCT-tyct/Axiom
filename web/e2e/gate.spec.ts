@@ -11,6 +11,11 @@ const schemes = ["light", "dark"] as const;
 const languages = ["zh", "en"] as const;
 const widths = [360, 768, 1280, 2560] as const;
 
+// Nothing here is shared: every check gets its own page, its own mocked API state (suite.prepare) and the one server
+// Playwright starts for the whole run. In the default mode a single worker took the whole file by itself, 8.9 of the
+// 9.1 minutes a full run took.
+test.describe.configure({ mode: "parallel" });
+
 async function setup(page: Page, scheme: (typeof schemes)[number], language: (typeof languages)[number]) {
   await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
   await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);

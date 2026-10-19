@@ -1,0 +1,8 @@
+# Known-flaky Go tests. When every failure of a merge train's build is listed here, the train reruns the failed job once
+# before bisecting (CONTRIBUTING.md「合并队列」). Each entry names an open issue that tracks the fix; CI's build fails
+# once that issue is closed, so the entry goes when the flake does. id is the package path from the module root, a dot
+# and the top-level test name:
+#
+# [[test]]
+# id = "internal/gateway.TestStreamTimeout"
+# issue = 245
