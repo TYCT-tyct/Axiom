@@ -20,7 +20,7 @@ const maxRejectionText = 2 << 10
 // of the system behind it), the credentials it echoes, and the request id new-api appends to every message, which is
 // also what tells a client which system is behind us.
 var (
-	addressPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S+`)
+	addressPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s)\]>"']+`)
 	secretPattern  = regexp.MustCompile(`(?i)\b(?:sk|ak)-[a-z0-9_-]{8,}|\bbearer\s+[a-z0-9._~+/=-]{8,}|\bapi[_-]?key\s*[:=]\s*\S+`)
 	requestID      = regexp.MustCompile(`(?i)\s*\((?:request[ _-]?id|req[ _-]?id)[: ][^)]*\)`)
 	// relayBrand is the name of the software behind a supplier. A supplier is usually a new-api or sub2api, and its own

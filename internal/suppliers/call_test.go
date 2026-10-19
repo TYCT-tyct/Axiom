@@ -316,7 +316,7 @@ func TestARefusedRequestKeepsWhatTheSupplierSaidOfIt(t *testing.T) {
 	w := newWorld(t, 4)
 	server := newSupplierServer(t)
 	w.pointAt(server.URL)
-	want := &protocol.Rejection{Message: "max_tokens must be above 0 ([hidden], see [address])", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
+	want := &protocol.Rejection{Message: "max_tokens must be above 0 (Bearer [hidden], see [address])", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
 	for _, c := range []struct {
 		name, body string
 		want       *protocol.Rejection

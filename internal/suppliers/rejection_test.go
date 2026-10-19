@@ -35,8 +35,8 @@ func TestRejectionOfKeepsTheWordsAndNotTheSupplier(t *testing.T) {
 			&protocol.Rejection{Message: "max_tokens: too small", Type: "invalid_request_error"},
 		},
 		{
-			"addresses", `{"error":{"message":"see https://docs.relay.example/limits?token=abc and http://10.0.0.1:3000/x. Done"}}`,
-			&protocol.Rejection{Message: "see [address] and [address] Done"},
+			"addresses", `{"error":{"message":"see (https://docs.relay.example/limits?token=abc) and http://10.0.0.1:3000/x. Done"}}`,
+			&protocol.Rejection{Message: "see ([address]) and [address] Done"},
 		},
 		{
 			"the host, in any case, and the key", `{"error":{"message":"API.relay.EXAMPLE:8443 refused ` + key + `"}}`,
