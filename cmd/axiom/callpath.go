@@ -139,7 +139,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger,
+		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter,
 	})
 	return callNode{handler: handler, executor: executor}, err
 }
