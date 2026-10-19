@@ -91,6 +91,7 @@ func (r *Router) Block(e Entry, scope Scope, after time.Duration) {
 		r.state.of(e.Endpoint).blocked.block(until)
 	case ScopeSupplier:
 		r.state.supplier(e.Supplier).block(until)
+	case ScopeRequest, ScopeEgress, ScopeCredential, ScopeGroup: // nothing to pause in routing
 	}
 }
 

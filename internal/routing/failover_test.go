@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -65,7 +66,8 @@ func TestCooldownCannotBeShortenedAndDoesNotClearInflight(t *testing.T) {
 		if wait != nil || err == nil {
 			t.Fatalf("blocked full endpoint should be unavailable, wait %v, err %v", wait, err)
 		}
-		if no, ok := err.(*routing.NoEndpoint); !ok || no.Permanent || no.Reasons[0].Reason != routing.CoolingDown {
+		var no *routing.NoEndpoint
+		if !errors.As(err, &no) || no.Permanent || no.Reasons[0].Reason != routing.CoolingDown {
 			t.Fatalf("cooldown is not a temporary exclusion: %v", err)
 		}
 		h.now = t0.Add(time.Minute)
