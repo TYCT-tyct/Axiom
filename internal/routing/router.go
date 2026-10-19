@@ -17,7 +17,7 @@ type Config struct {
 	SessionPrefix int           // bytes of the body SessionKey reads; default 16 KiB
 	MaxAttempts   int           // attempts per request when the preset says nothing; default 4
 	AttemptWindow time.Duration // how long after admission a new attempt may start; default 2m
-	Recovery      time.Duration // how long a 429 weighs on an endpoint; default 1m
+	Recovery      time.Duration // 429 weight recovery and cooldown without a retry time; default 1m
 	ThrottleFloor float64       // the weight factor right after a 429; default 0.1
 	RetryRatio    float64       // retries a supplier may receive per request it received; default 0.2
 	RetryFloor    int64         // retries always allowed in a window, so a quiet supplier can be retried onto; default 3
@@ -48,7 +48,7 @@ func New(cfg Config) (*Router, error) {
 		return nil, err
 	}
 	return &Router{
-		cfg: cfg, state: &state{endpoints: map[EndpointID]*epState{}}, sticky: newSticky(cfg.StickyMax),
+		cfg: cfg, state: &state{endpoints: map[EndpointID]*epState{}, suppliers: map[SupplierID]*cooldown{}}, sticky: newSticky(cfg.StickyMax),
 		budget: newBudget(cfg.RetryRatio, cfg.RetryFloor, cfg.RetryWindow),
 	}, nil
 }

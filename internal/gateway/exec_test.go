@@ -126,7 +126,7 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 		{"a group's too", routing.ScopeGroup, false, [3]int{1, 1, 0}, 200, billing.Unknown},
 		{"a supplier's too", routing.ScopeSupplier, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"a credential's tries the entry again", routing.ScopeCredential, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
-		{"the route to it likewise", routing.ScopeEgress, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
+		{"the only egress failing moves to the next entry", routing.ScopeEgress, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"the request's own is the client's", routing.ScopeRequest, true, [3]int{1, 0, 0}, 400, billing.NotExecuted},
 	}
 	for _, tc := range cases {

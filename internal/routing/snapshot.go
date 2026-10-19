@@ -232,6 +232,7 @@ type candidate struct {
 	blend        float64       // input plus output base rate, as a number; only for weighting
 	cacheCheaper bool          // reading the cache costs less than input, which is when sticking pays
 	state        *epState
+	supplier     *cooldown
 }
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
@@ -277,7 +278,7 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	if e.ServiceTiers == 0 {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
-	c := &candidate{Endpoint: e, state: r.state.of(e.ID), model: billing.Model{
+	c := &candidate{Endpoint: e, state: r.state.of(e.ID), supplier: r.state.supplier(e.Supplier), model: billing.Model{
 		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
