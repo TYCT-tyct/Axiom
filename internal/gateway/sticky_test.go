@@ -22,7 +22,7 @@ const (
 
 // stickyRouter routes one model over ep(1), dear, and ep(2), cheap, by the cheapest strategy: with no session stuck,
 // ep(2) is always first.
-func stickyRouter(t *testing.T) (*routing.Router, catalog.ModelID) {
+func stickyRouter(t *testing.T, ttl time.Duration) (*routing.Router, catalog.ModelID) {
 	t.Helper()
 	router, err := routing.New(routing.Config{})
 	if err != nil {
@@ -44,7 +44,7 @@ func stickyRouter(t *testing.T) (*routing.Router, catalog.ModelID) {
 		})
 	}
 	snap, err := router.NewSnapshot(time.Now(), endpoints, []routing.Preset{{
-		Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest,
+		Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest, StickyTTL: ttl,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func served(h *harness) (n int) {
 // there, though the cheap one is first for anyone else; a session that never stuck still starts on the cheap one.
 func TestASessionStaysOnTheEndpointThatServedIt(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		router, model := stickyRouter(t)
+		router, model := stickyRouter(t, 0)
 		session, other := routing.SessionKey{1}, routing.SessionKey{2}
 
 		first := sessionCall(t, ctx, router, model, session)
@@ -124,7 +124,7 @@ func TestASessionStaysOnTheEndpointThatServedIt(t *testing.T) {
 // moves to, so the call after goes there first.
 func TestASessionMovesWhenItsEndpointFails(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		router, model := stickyRouter(t)
+		router, model := stickyRouter(t, 0)
 		session := routing.SessionKey{1}
 		router.Stick(session, ep(1), 0)
 
@@ -152,7 +152,7 @@ func TestASessionMovesWhenItsEndpointFails(t *testing.T) {
 // the failure says nothing of its cache.
 func TestACallThatServesNothingWritesNothing(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		router, model := stickyRouter(t)
+		router, model := stickyRouter(t, 0)
 		fresh, held := routing.SessionKey{1}, routing.SessionKey{2}
 		router.Stick(held, ep(1), 0)
 		for _, key := range []routing.SessionKey{fresh, held} {
@@ -174,10 +174,9 @@ func TestACallThatServesNothingWritesNothing(t *testing.T) {
 // TestTheStickyTimeIsTheRoutes: the time a preset gives rides the plan to the write.
 func TestTheStickyTimeIsTheRoutes(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		router, model := stickyRouter(t)
+		router, model := stickyRouter(t, 2*time.Minute)
 		session := routing.SessionKey{1}
 		h := sessionCall(t, ctx, router, model, session)
-		h.call.Plan.StickyTTL = 2 * time.Minute
 		h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
 		h.run()
 		if _, ok := router.Stuck(session); !ok {
