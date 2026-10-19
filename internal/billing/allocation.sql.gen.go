@@ -13,38 +13,47 @@ import (
 )
 
 const allocationState = `-- name: AllocationState :one
-SELECT allocated_seq, unfunded, unbatched FROM billing.balances WHERE account_id = $1
+SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances WHERE account_id = $1
 `
 
 type AllocationStateRow struct {
 	AllocatedSeq int64
+	AllocatedAt  time.Time
+	AllocatedID  uuid.UUID
 	Unfunded     int64
-	Unbatched    int64
 }
 
-// Where the allocation of an account stands; run after the account's balance row is locked.
+// Where the allocation of an account stands: the key of the last transaction replayed, and the debt.
 func (q *Queries) AllocationState(ctx context.Context, db DBTX, accountID uuid.UUID) (AllocationStateRow, error) {
 	row := db.QueryRow(ctx, allocationState, accountID)
 	var i AllocationStateRow
-	err := row.Scan(&i.AllocatedSeq, &i.Unfunded, &i.Unbatched)
+	err := row.Scan(
+		&i.AllocatedSeq,
+		&i.AllocatedAt,
+		&i.AllocatedID,
+		&i.Unfunded,
+	)
 	return i, err
 }
 
 const dueAccounts = `-- name: DueAccounts :many
-SELECT DISTINCT b.account_id FROM billing.credit_batches b
-WHERE b.expires_at <= clock_timestamp() AND b.consumed + b.expired < b.amount AND b.account_id > $1
+SELECT b.account_id FROM billing.credit_batches b
+WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > $2
+GROUP BY b.account_id
 ORDER BY b.account_id
-LIMIT $2
+LIMIT $3
 `
 
 type DueAccountsParams struct {
+	Now   time.Time
 	After uuid.UUID
 	Max   int32
 }
 
-// The accounts with a batch whose time has come and which still holds something, after the account given, in order.
+// The accounts with a batch whose time has come at now and which still holds something, after the account given, in
+// order. now is the one time the run takes, so the range on expires_at is a bound of the index credit_batches_due.
 func (q *Queries) DueAccounts(ctx context.Context, db DBTX, arg DueAccountsParams) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, dueAccounts, arg.After, arg.Max)
+	rows, err := db.Query(ctx, dueAccounts, arg.Now, arg.After, arg.Max)
 	if err != nil {
 		return nil, err
 	}
@@ -63,35 +72,118 @@ func (q *Queries) DueAccounts(ctx context.Context, db DBTX, arg DueAccountsParam
 	return items, nil
 }
 
+const expiryCursor = `-- name: ExpiryCursor :one
+SELECT after FROM billing.expiry_cursor
+`
+
+func (q *Queries) ExpiryCursor(ctx context.Context, db DBTX) (uuid.UUID, error) {
+	row := db.QueryRow(ctx, expiryCursor)
+	var after uuid.UUID
+	err := row.Scan(&after)
+	return after, err
+}
+
+const liveBatches = `-- name: LiveBatches :many
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
+    coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
+FROM billing.credit_batches b
+JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
+WHERE b.account_id = $1 AND (b.consumed > 0 OR b.consumed + b.expired < b.amount)
+`
+
+type LiveBatchesRow struct {
+	ID        uuid.UUID
+	SiteID    uuid.UUID
+	Source    string
+	ExpiresAt *time.Time
+	Amount    int64
+	Consumed  int64
+	Expired   int64
+	OpenedSeq int64
+	OpenedAt  time.Time
+	OpenedID  uuid.UUID
+}
+
+// The batches the replay works on: those that hold something, and those spent from, which a return gives back to. Each
+// comes with the key of the credit transaction that opened it (seq 0 for one from before the sequence). consumed and
+// expired are what the allocation has stored: they trail the ledger until the account is replayed. Served by
+// credit_batches_by_account.
+func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]LiveBatchesRow, error) {
+	rows, err := db.Query(ctx, liveBatches, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LiveBatchesRow
+	for rows.Next() {
+		var i LiveBatchesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.Source,
+			&i.ExpiresAt,
+			&i.Amount,
+			&i.Consumed,
+			&i.Expired,
+			&i.OpenedSeq,
+			&i.OpenedAt,
+			&i.OpenedID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const movements = `-- name: Movements :many
-SELECT t.seq, t.kind, t.request_id, sum(e.amount)::bigint AS debit
-FROM billing.transactions t
-JOIN billing.entries e ON e.transaction_id = t.id AND e.book = 'user_balance'
-WHERE t.account_id = $1 AND t.seq > $2
-GROUP BY t.id
-HAVING sum(e.amount) <> 0
-ORDER BY t.seq
-LIMIT $3
+WITH page AS (
+    SELECT t.id, t.created_at, coalesce(t.seq, 0)::bigint AS seq, t.kind, t.request_id
+    FROM billing.transactions t
+    WHERE t.account_id = $1
+        AND (coalesce(t.seq, 0), t.created_at, t.id) > ($2::bigint, $3::timestamptz, $4::uuid)
+    ORDER BY coalesce(t.seq, 0), t.created_at, t.id
+    LIMIT $5
+)
+SELECT p.seq, p.created_at, p.id, p.kind, p.request_id,
+    coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
+FROM page p
+ORDER BY p.seq, p.created_at, p.id
 `
 
 type MovementsParams struct {
 	AccountID uuid.UUID
-	After     int64
+	AfterSeq  int64
+	AfterAt   time.Time
+	AfterID   uuid.UUID
 	Max       int32
 }
 
 type MovementsRow struct {
 	Seq       int64
+	CreatedAt time.Time
+	ID        uuid.UUID
 	Kind      string
 	RequestID uuid.UUID
 	Debit     int64
 }
 
-// What moved the account's balance after the sequence number given, in the order it was posted: one row per
-// transaction, with its net debit on the user's balance (positive takes from the user). A page at a time, so a long
-// history is not held in memory.
+// A page of the account's transactions after the key given, in the order the replay reads them, each with its net
+// debit on the user's balance (positive takes from the user, 0 when it did not touch it). The page is bounded first,
+// by the index transactions_by_account_order, and only its transactions have their entries summed, so what a page reads
+// grows with the page and not with the history behind it. A transaction that moved nothing still takes its place in the
+// page, so the cursor passes it.
 func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) ([]MovementsRow, error) {
-	rows, err := db.Query(ctx, movements, arg.AccountID, arg.After, arg.Max)
+	rows, err := db.Query(ctx, movements,
+		arg.AccountID,
+		arg.AfterSeq,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +193,8 @@ func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) (
 		var i MovementsRow
 		if err := rows.Scan(
 			&i.Seq,
+			&i.CreatedAt,
+			&i.ID,
 			&i.Kind,
 			&i.RequestID,
 			&i.Debit,
@@ -115,26 +209,40 @@ func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) (
 	return items, nil
 }
 
-const saveAllocation = `-- name: SaveAllocation :exec
-UPDATE billing.balances SET allocated_seq = $1, unfunded = $2, unbatched = $3
-WHERE account_id = $4
+const saveAllocation = `-- name: SaveAllocation :execrows
+UPDATE billing.balances SET allocated_seq = $1, allocated_at = $2, allocated_id = $3,
+    unfunded = $4
+WHERE account_id = $5 AND allocated_seq = $6 AND allocated_at = $7 AND allocated_id = $8
 `
 
 type SaveAllocationParams struct {
 	AllocatedSeq int64
+	AllocatedAt  time.Time
+	AllocatedID  uuid.UUID
 	Unfunded     int64
-	Unbatched    int64
 	AccountID    uuid.UUID
+	WasSeq       int64
+	WasAt        time.Time
+	WasID        uuid.UUID
 }
 
-func (q *Queries) SaveAllocation(ctx context.Context, db DBTX, arg SaveAllocationParams) error {
-	_, err := db.Exec(ctx, saveAllocation,
+// Moves the allocation of an account from the key it was read at to the key it was replayed to. 0 rows: someone else
+// moved it first, so what was replayed here is stale and must be dropped.
+func (q *Queries) SaveAllocation(ctx context.Context, db DBTX, arg SaveAllocationParams) (int64, error) {
+	result, err := db.Exec(ctx, saveAllocation,
 		arg.AllocatedSeq,
+		arg.AllocatedAt,
+		arg.AllocatedID,
 		arg.Unfunded,
-		arg.Unbatched,
 		arg.AccountID,
+		arg.WasSeq,
+		arg.WasAt,
+		arg.WasID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const saveBatches = `-- name: SaveBatches :exec
@@ -154,51 +262,12 @@ func (q *Queries) SaveBatches(ctx context.Context, db DBTX, arg SaveBatchesParam
 	return err
 }
 
-const unspentBatches = `-- name: UnspentBatches :many
-SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, t.seq
-FROM billing.credit_batches b
-JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
-WHERE b.account_id = $1 AND b.consumed + b.expired < b.amount
+const saveExpiryCursor = `-- name: SaveExpiryCursor :exec
+INSERT INTO billing.expiry_cursor (one, after) VALUES (true, $1)
+ON CONFLICT (one) DO UPDATE SET after = EXCLUDED.after
 `
 
-type UnspentBatchesRow struct {
-	ID        uuid.UUID
-	SiteID    uuid.UUID
-	Source    string
-	ExpiresAt *time.Time
-	Amount    int64
-	Consumed  int64
-	Expired   int64
-	Seq       int64
-}
-
-// The batches that still hold something, each with the sequence number of the credit transaction that opened it.
-// consumed and expired are what the allocation has stored: they trail the ledger until the account is replayed.
-func (q *Queries) UnspentBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]UnspentBatchesRow, error) {
-	rows, err := db.Query(ctx, unspentBatches, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []UnspentBatchesRow
-	for rows.Next() {
-		var i UnspentBatchesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.SiteID,
-			&i.Source,
-			&i.ExpiresAt,
-			&i.Amount,
-			&i.Consumed,
-			&i.Expired,
-			&i.Seq,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) SaveExpiryCursor(ctx context.Context, db DBTX, after uuid.UUID) error {
+	_, err := db.Exec(ctx, saveExpiryCursor, after)
+	return err
 }

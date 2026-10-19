@@ -9,75 +9,206 @@ import (
 	"uuid"
 
 	"github.com/riverqueue/river"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/platform/pg"
 )
 
-// expireEvery is how often credit past its expiry is written off (docs/domains/billing.md「额度批次」「到期」). A node
-// that starts, or a new leader of the queue, runs it again at once; a run finds only what is due, so a repeat costs
-// nothing.
-const expireEvery = time.Minute
+// The pace of the expiry (docs/domains/billing.md「额度批次」「到期」). A run is cut short by its budget, below the
+// queue's job timeout, and the next goes on after the last account it reached; an account that takes longer than its
+// budget fails and the run goes on to the next, so one slow account cannot hold the rest back.
+const (
+	expireEvery         = time.Minute
+	expireRunBudget     = 5 * time.Minute
+	expireAccountBudget = 30 * time.Second
+	dueAccountsPage     = 50
+)
 
-// expireBatch is how many accounts one query of the run takes.
-const expireBatch = 200
+// expirer runs the expiry of credit batches.
+type expirer struct {
+	db       *pg.DB
+	scope    pg.Scope
+	logger   *slog.Logger
+	failures metric.Int64Counter
+	// What the tests turn down: the transactions one read of the ledger takes, the accounts one read of the due
+	// accounts takes, and the budgets.
+	movements     int32
+	accounts      int32
+	accountBudget time.Duration
+	runBudget     time.Duration
+}
 
-// ExpireDue writes off, in every account, what is left of each credit batch whose expiry has passed, and returns how
-// many accounts it changed. Each account is a transaction of its own under its balance row lock; one that fails does
-// not stop the rest, and its error is joined into the one returned. It reads and writes every tenant, so it runs in
-// the platform scope.
-func ExpireDue(ctx context.Context, db *pg.DB, platform pg.Scope, logger *slog.Logger) (changed int, err error) {
-	var failed []error
-	for after := (uuid.UUID{}); ; {
-		var due []uuid.UUID
-		err := db.Tx(ctx, platform, func(tx pg.Tx) (err error) {
-			due, err = queries.DueAccounts(ctx, tx, DueAccountsParams{After: after, Max: expireBatch})
-			return err
-		})
-		if err != nil {
-			return changed, errors.Join(append(failed, fmt.Errorf("billing: find the credit that is due: %w", err))...)
-		}
-		for _, account := range due {
-			written, err := expireInTx(ctx, db, platform, account)
-			if err != nil {
-				failed = append(failed, err)
-				if ctx.Err() != nil {
-					return changed, errors.Join(failed...) // the rest would fail for the same reason
-				}
-			} else if written > 0 {
-				changed++
-				logger.Info("billing: credit expired", "account", account.String(), "amount", written)
-			}
-		}
-		if len(due) < expireBatch {
-			return changed, errors.Join(failed...)
-		}
-		after = due[len(due)-1]
+func newExpirer(db *pg.DB, scope pg.Scope, logger *slog.Logger, meter metric.Meter) *expirer {
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("billing")
+	}
+	return &expirer{
+		db: db, scope: scope, logger: logger,
+		failures:  counter(meter, "axiom.billing.expire.failures", "Accounts whose expired credit could not be written off in a run."),
+		movements: movementPage, accounts: dueAccountsPage, accountBudget: expireAccountBudget, runBudget: expireRunBudget,
 	}
 }
 
-func expireInTx(ctx context.Context, db *pg.DB, platform pg.Scope, account uuid.UUID) (written int64, err error) {
-	err = db.Tx(ctx, platform, func(tx pg.Tx) (err error) {
-		written, err = ExpireAccount(ctx, tx, account)
+// run writes off, in every account with a batch past its expiry, what is left of the batch, going on after the
+// account the last run reached, and returns how many accounts it changed and how many it could not write off. An
+// account that fails is counted and logged and the run goes on; the error returned is for what stops the run. The scan
+// wraps to the start when it has gone through every due account, or when the run's budget is spent it stops, and the
+// next run continues from there.
+func (e *expirer) run(ctx context.Context) (changed, failed int, err error) {
+	start := time.Now()
+	after, now, err := e.begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for {
+		due, err := e.due(ctx, now, after)
+		if err != nil {
+			return changed, failed, err
+		}
+		for _, account := range due {
+			after = account
+			c, f := e.visit(ctx, account, failed)
+			changed, failed = changed+c, failed+f
+			if ctx.Err() != nil || time.Since(start) > e.runBudget {
+				return changed, failed, e.finish(ctx, after, failed)
+			}
+		}
+		if len(due) < int(e.accounts) {
+			return changed, failed, e.finish(ctx, uuid.UUID{}, failed)
+		}
+		if err := e.saveCursor(ctx, after); err != nil {
+			return changed, failed, err
+		}
+	}
+}
+
+// visit writes off one account and counts what came of it: 1 changed when something was written off, 1 failed when it
+// could not be. failedBefore is how many accounts failed in the run so far, to keep the log short.
+func (e *expirer) visit(ctx context.Context, account uuid.UUID, failedBefore int) (changed, failed int) {
+	written, err := e.expire(ctx, account)
+	switch {
+	case err != nil:
+		e.failures.Add(ctx, 1)
+		if failedBefore < maxProblemsLogged {
+			e.logger.Error("billing: credit could not be written off", "account", account.String(), "err", err)
+		}
+		return 0, 1
+	case written > 0:
+		e.logger.Info("billing: credit expired", "account", account.String(), "amount", written)
+		return 1, 0
+	}
+	return 0, 0
+}
+
+// finish stores where the next run goes on, and reports a run that failed some accounts beyond the ones logged.
+func (e *expirer) finish(ctx context.Context, after uuid.UUID, failed int) error {
+	if failed > maxProblemsLogged {
+		e.logger.Error("billing: more accounts could not be written off than are listed", "accounts", failed)
+	}
+	select {
+	case <-ctx.Done():
+		return nil // the node is stopping; the next run starts from the stored place
+	default:
+		return e.saveCursor(ctx, after)
+	}
+}
+
+// begin reads where the scan goes on and the database's time, which the whole run bounds expires_at by.
+func (e *expirer) begin(ctx context.Context) (after uuid.UUID, now time.Time, err error) {
+	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) error {
+		after, err = queries.ExpiryCursor(ctx, tx)
+		if errors.Is(err, pg.ErrNoRows) {
+			after, err = uuid.UUID{}, nil
+		}
+		if err != nil {
+			return err
+		}
+		now, err = queries.Now(ctx, tx)
 		return err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("billing: expire the credit of %s: %w", account, err)
+		return after, now, fmt.Errorf("billing: start the expiry: %w", err)
+	}
+	return after, now, nil
+}
+
+func (e *expirer) due(ctx context.Context, now time.Time, after uuid.UUID) (accounts []uuid.UUID, err error) {
+	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) (err error) {
+		accounts, err = queries.DueAccounts(ctx, tx, DueAccountsParams{Now: now, After: after, Max: e.accounts})
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("billing: find the credit that is due: %w", err)
+	}
+	return accounts, nil
+}
+
+func (e *expirer) saveCursor(ctx context.Context, after uuid.UUID) error {
+	err := e.db.Tx(ctx, e.scope, func(tx pg.Tx) error { return queries.SaveExpiryCursor(ctx, tx, after) })
+	if err != nil {
+		return fmt.Errorf("billing: save where the expiry goes on: %w", err)
+	}
+	return nil
+}
+
+// expire writes off the expired credit of one account within the account's budget, and returns the amount. It
+// replays the history in short transactions that hold no lock, a page each, so that the account's calls are not held
+// up by a long history, and then, in one transaction under the account's balance row lock, replays what is left and
+// writes off.
+func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, e.accountBudget)
+	defer cancel()
+	for more := true; more; {
+		if more, err = e.advance(ctx, account); err != nil {
+			return 0, err
+		}
+	}
+	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) (err error) {
+		written, err = writeOffAccount(ctx, tx, account, e.movements)
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("billing: write off the credit of %s: %w", account, err)
 	}
 	return written, nil
 }
 
-// ExpireAccount writes off the expired part of the account's batches in tx, which must be in the platform scope, and
+// advance replays one page of the account's history in a transaction of its own and without the lock, and reports
+// whether there may be more. Another transaction moving the allocation first ends it: the locked step that follows
+// goes on from wherever the allocation stands.
+//
+// It is safe without the lock because a transaction that moves the user's balance takes its seq under the lock (post),
+// so any page it reads is a prefix of what the lock will see: nothing can commit later with a place before it.
+func (e *expirer) advance(ctx context.Context, account uuid.UUID) (more bool, err error) {
+	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) error {
+		a, err := loadAllocation(ctx, tx, account)
+		if err != nil {
+			return err
+		}
+		if more, err = a.catchUpPage(ctx, tx, account, e.movements); err != nil {
+			return err
+		}
+		return a.save(ctx, tx, account)
+	})
+	if errors.Is(err, errStale) {
+		return false, nil
+	}
+	return more, err
+}
+
+// writeOffAccount writes off the expired part of the account's batches in tx, which must be in the platform scope, and
 // returns the amount. It holds the account's balance row lock to the end of the transaction, replays the allocation to
 // the latest movement, writes off, and stores the allocation.
 //
 // What counts as unspent is what the replay leaves at the moment the lock is taken, so credit spent after its expiry
-// and before the write-off is used, not lapsed. The write-off is capped at the balance less the reservations and the
-// floor (room), so that every reservation admitted before it can still be settled in full: its charge is capped at
-// what the balance leaves above the floor once the other reservations are covered (cap), and the write-off leaves
-// that no lower than the reservation's own amount. What the cap holds back is written off by a later run, when the
-// reservation has settled. A batch of which nothing is left is skipped, so a run that finds nothing to do writes
-// nothing, and a second run after one writes nothing either.
-func ExpireAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (written int64, err error) {
+// and before the write-off is used, not lapsed. The write-off is capped at the balance less the reservations, and not
+// by the floor: the floor is an allowance for charges, and an expiry that used it would put the user in debt for credit
+// that the calls in flight could have used. With that cap, the balance stays at least what is reserved, so every
+// reservation admitted before it can still be settled in full (its charge is capped by cap, which is at least its own
+// amount). What the cap holds back is written off by a later run, when the reservations have settled. A second run
+// finds nothing left to write off.
+func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (written int64, err error) {
 	balance, err := lockAccount(ctx, tx, account)
 	if err != nil {
 		return 0, err
@@ -86,25 +217,25 @@ func ExpireAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (written in
 	if err != nil {
 		return 0, err
 	}
-	if err := a.catchUp(ctx, tx, account); err != nil {
+	if err := a.catchUp(ctx, tx, account, size); err != nil {
 		return 0, err
 	}
 	if got := a.funded(); got != balance.Balance {
 		return 0, fmt.Errorf("billing: the allocation of %s funds %d of a balance of %d; nothing is written off", account, got, balance.Balance)
 	}
-	if written, err = a.writeOffDue(ctx, tx, account, room(balance, 0)); err != nil {
+	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved}, 0)); err != nil {
 		return 0, err
 	}
 	if written > 0 {
-		if err := a.catchUp(ctx, tx, account); err != nil {
+		if err := a.catchUp(ctx, tx, account, size); err != nil {
 			return 0, err
 		}
 	}
 	return written, a.save(ctx, tx, account)
 }
 
-// writeOffDue posts an expiry for each open batch whose time has come, in expiry order so that a cap of limit
-// spares the batches that expire last, and returns the total. It does not replay what it posts.
+// writeOffDue posts an expiry for each open batch whose time has come, in expiry order so that a cap of limit spares the
+// batches that expire last, and returns the total. It does not replay what it posts.
 func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUID, limit int64) (written int64, err error) {
 	now, err := queries.Now(ctx, tx)
 	if err != nil {
@@ -134,23 +265,25 @@ type expireArgs struct{ singleRun }
 func (expireArgs) Kind() string { return "billing.expire_credit" }
 
 // ExpireConfig is what the expiry job needs: the database, the platform scope that only cmd/ builds, the queue the job
-// runs on and where its log goes.
+// runs on, where its log goes and the meter of its counter (nil for none).
 type ExpireConfig struct {
 	DB     *pg.DB
 	Scope  pg.Scope
 	Queue  *pg.Queue
 	Logger *slog.Logger
+	Meter  metric.Meter
 }
 
 // RegisterExpire adds the expiry of credit to the queue, before it starts: a run every minute, on whichever node leads
 // the queue. It needs only the database, like the reconciliation.
 func RegisterExpire(cfg ExpireConfig) error {
-	// An account that cannot be written off is not a failed job: the job did the rest, and River's retries back off for
-	// longer each time while a retrying job keeps the next run from being inserted, which would hold every other
-	// account's expiry back. The next run tries the account again.
+	e := newExpirer(cfg.DB, cfg.Scope, cfg.Logger, cfg.Meter)
+	// An account that cannot be written off is not a failed job: the run counts and logs it and goes on, and a job that
+	// failed would be retried with a growing delay while a retrying job keeps the next run from being inserted, which
+	// would hold every other account's expiry back.
 	work := func(ctx context.Context, _ *river.Job[expireArgs]) error {
-		if _, err := ExpireDue(ctx, cfg.DB, cfg.Scope, cfg.Logger); err != nil {
-			cfg.Logger.Error("billing: credit could not be written off", "err", err)
+		if _, _, err := e.run(ctx); err != nil {
+			cfg.Logger.Error("billing: the expiry of credit stopped", "err", err)
 		}
 		return nil
 	}

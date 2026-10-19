@@ -393,7 +393,7 @@ func TestCreditOnce(t *testing.T) {
 }
 
 // TestLedgerProperty drives random sequences of credits, some of them expiring, reservations, settlements with retries
-// and crashes left to cleanup, some with usage only a fallback price covers, and write-offs of expired credit, and checks
+// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit and charges given back, and checks
 // after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
 // the floor holds, and the credit batches fund exactly the balance without any being over-spent.
 func TestLedgerProperty(t *testing.T) {
@@ -405,7 +405,7 @@ func TestLedgerProperty(t *testing.T) {
 			for range 40 {
 				b.step(r, &holds)
 				b.balanced()
-				b.replayed()
+				b.replayed(b.admitted.Account)
 			}
 		})
 	}
@@ -414,11 +414,13 @@ func TestLedgerProperty(t *testing.T) {
 func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	b.t.Helper()
 	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
-	switch n := r.IntN(8); {
+	switch n := r.IntN(9); {
 	case n == 0:
 		b.creditBatch(r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
 	case n == 6 || n == 7:
 		b.expire()
+	case n == 8:
+		b.giveBackSome(r)
 	case n == 1 || len(*holds) == 0:
 		if h, err := b.tryHold(r.Int64N(1500)); err == nil {
 			*holds = append(*holds, h)
@@ -432,6 +434,16 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	default: // a crash: what was left pending goes to cleanup, which records the request as lost
 		time.Sleep(time.Duration(r.IntN(2)) * 25 * time.Millisecond)
 		b.cleanup()
+	}
+}
+
+// giveBackSome gives back some of what calls have been charged, as a correction will: never more than that.
+func (b *bank) giveBackSome(r *rand.Rand) {
+	b.t.Helper()
+	net := b.count("SELECT coalesce(sum(e.amount), 0) FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id " +
+		"WHERE e.book = 'user_balance' AND t.kind IN ('settle', 'reverse')")
+	if net > 0 {
+		b.reverse(1 + r.Int64N(net))
 	}
 }
 

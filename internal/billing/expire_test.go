@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"bytes"
 	"errors"
 	"log/slog"
 	"slices"
@@ -21,58 +20,69 @@ var (
 	muchLater = func() *time.Time { t := time.Now().Add(2 * time.Hour); return &t }()
 )
 
+// expirer is the expiry of the bank's database, its log thrown away.
+func (b *bank) expirer() *expirer {
+	return newExpirer(b.app, b.platform, slog.New(slog.DiscardHandler), nil)
+}
+
 // expire runs the expiry of the bank's account and checks that what it stored is what a replay of the whole ledger
 // from nothing gives.
 func (b *bank) expire() int64 {
 	b.t.Helper()
-	var written int64
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		written, err = ExpireAccount(b.t.Context(), tx, b.admitted.Account)
-		return err
-	}); err != nil {
+	written, err := b.expirer().expire(b.t.Context(), b.admitted.Account)
+	if err != nil {
 		b.t.Fatal(err)
 	}
-	fresh := b.replayed()
-	var stored struct{ seq, unfunded, unbatched int64 }
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(b.t.Context(), "SELECT allocated_seq, unfunded, unbatched FROM billing.balances").Scan(&stored.seq, &stored.unfunded, &stored.unbatched)
-	}); err != nil {
-		b.t.Fatal(err)
-	}
-	if stored.seq != fresh.seq || stored.unfunded != fresh.unfunded || stored.unbatched != fresh.unbatched {
-		b.t.Errorf("stored allocation %+v, a replay from nothing gives seq %d unfunded %d unbatched %d", stored, fresh.seq, fresh.unfunded, fresh.unbatched)
-	}
-	for id, batch := range fresh.batches {
-		var consumed, expired int64
-		if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-			return tx.QueryRow(b.t.Context(), "SELECT consumed, expired FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired)
-		}); err != nil {
-			b.t.Fatal(err)
-		}
-		if consumed != batch.consumed || expired != batch.expired {
-			b.t.Errorf("batch %s stores consumed %d expired %d, a replay from nothing gives %d %d", id, consumed, expired, batch.consumed, batch.expired)
-		}
-	}
+	b.checkStored(b.admitted.Account)
 	return written
 }
 
-// replayed replays the bank's whole ledger onto its batches as the credit transactions made them, and checks the
-// invariants that hold at any time: the replay funds exactly the balance, and no batch is over-spent.
-func (b *bank) replayed() *allocation {
+// checkStored compares what the allocation of the account stores with a replay of the whole ledger from nothing.
+func (b *bank) checkStored(account uuid.UUID) {
+	b.t.Helper()
+	fresh := b.replayed(account)
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		stored, err := loadAllocation(b.t.Context(), tx, account)
+		if err != nil {
+			return err
+		}
+		if stored.at.compare(fresh.at) != 0 || stored.unfunded != fresh.unfunded {
+			b.t.Errorf("stored allocation at %v unfunded %d, a replay from nothing gives %v %d", stored.at, stored.unfunded, fresh.at, fresh.unfunded)
+		}
+		for id, batch := range fresh.batches {
+			var consumed, expired int64
+			if err := tx.QueryRow(b.t.Context(), "SELECT consumed, expired FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired); err != nil {
+				return err
+			}
+			if consumed != batch.consumed || expired != batch.expired {
+				b.t.Errorf("batch %s stores consumed %d expired %d, a replay from nothing gives %d %d", id, consumed, expired, batch.consumed, batch.expired)
+			}
+		}
+		return nil
+	}); err != nil {
+		b.t.Fatal(err)
+	}
+}
+
+// replayed replays the whole ledger of the account onto its batches as the credit transactions made them, and checks
+// the invariants that hold at any time: the replay funds exactly the balance, and no batch is over-spent.
+func (b *bank) replayed(account uuid.UUID) *allocation {
 	b.t.Helper()
 	var a *allocation
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		rows, err := tx.Query(b.t.Context(), `SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, 0::bigint, 0::bigint, t.seq
+		rows, err := tx.Query(b.t.Context(), `SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, 0::bigint, 0::bigint,
+				coalesce(t.seq, 0)::bigint, t.created_at, t.id
 			FROM billing.credit_batches b JOIN billing.transactions t
-			ON t.request_id = b.id AND t.kind = 'credit' AND t.attempt_seq = 0 AND t.revision = 0`)
+			ON t.request_id = b.id AND t.kind = 'credit' AND t.attempt_seq = 0 AND t.revision = 0
+			WHERE b.account_id = $1`, account)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
-		var batches []UnspentBatchesRow
+		var batches []LiveBatchesRow
 		for rows.Next() {
-			var r UnspentBatchesRow
-			if err := rows.Scan(&r.ID, &r.SiteID, &r.Source, &r.ExpiresAt, &r.Amount, &r.Consumed, &r.Expired, &r.Seq); err != nil {
+			var r LiveBatchesRow
+			if err := rows.Scan(&r.ID, &r.SiteID, &r.Source, &r.ExpiresAt, &r.Amount, &r.Consumed, &r.Expired, &r.OpenedSeq, &r.OpenedAt, &r.OpenedID); err != nil {
 				return err
 			}
 			batches = append(batches, r)
@@ -81,12 +91,12 @@ func (b *bank) replayed() *allocation {
 			return err
 		}
 		a = newAllocation(AllocationStateRow{}, batches)
-		return a.catchUp(b.t.Context(), tx, b.admitted.Account)
+		return a.catchUp(b.t.Context(), tx, account, 7)
 	}); err != nil {
 		b.t.Fatal(err)
 	}
-	if got, want := a.funded(), b.count("SELECT balance FROM billing.balances"); got != want {
-		b.t.Errorf("the batches fund %d of a balance of %d", got, want)
+	if got, want := a.funded(), b.count("SELECT balance FROM billing.balances WHERE account_id = '"+account.String()+"'"); got != want {
+		b.t.Errorf("the batches of %s fund %d of a balance of %d", account, got, want)
 	}
 	for _, batch := range a.batches {
 		if batch.consumed+batch.expired > batch.amount {
@@ -126,6 +136,12 @@ func (b *bank) charge(n int64) {
 func (b *bank) batchLeft(id uuid.UUID) int64 {
 	b.t.Helper()
 	return b.count("SELECT amount - consumed - expired FROM billing.credit_batches WHERE id = '" + id.String() + "'")
+}
+
+// balanceOf is the balance of the account.
+func (b *bank) balanceOf(account uuid.UUID) int64 {
+	b.t.Helper()
+	return b.count("SELECT balance FROM billing.balances WHERE account_id = '" + account.String() + "'")
 }
 
 // TestExpire: what is left of a batch past its expiry is written off, once, as the books' credit-expired income. What
@@ -193,9 +209,10 @@ func TestExpireLeavesWhatIsNotDue(t *testing.T) {
 	}
 }
 
-// TestExpireKeepsReservationsPayable: a write-off leaves the balance no lower than the reservations admitted before it
-// and the floor allow, so each of them still settles in full and the platform bears nothing; what the cap held back is
-// written off by a later run, once the reservation is settled.
+// TestExpireKeepsReservationsPayable: a write-off leaves the balance no lower than the reservations admitted before it,
+// so each of them still settles in full and the platform bears nothing; what the cap held back is written off by a later
+// run, once the reservation is settled. A floor below zero is an allowance for charges and the write-off does not use
+// it: the user is not put in debt for credit that lapsed.
 func TestExpireKeepsReservationsPayable(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
@@ -204,7 +221,7 @@ func TestExpireKeepsReservationsPayable(t *testing.T) {
 	}{
 		{"a reservation settled in part", 0, 150, 100, 50, 0},
 		{"a reservation settled in full", 0, 200, 100, 0, 0},
-		{"a floor below zero lets more lapse, and the call still pays in full", -50, 200, 150, 0, -50},
+		{"a floor below zero does not let more lapse", -50, 200, 100, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBank(t, 0, tc.floor, Config{})
@@ -221,11 +238,42 @@ func TestExpireKeepsReservationsPayable(t *testing.T) {
 			if got := b.expire(); got != tc.second {
 				t.Errorf("written off %d after the call, want %d", got, tc.second)
 			}
-			if n := b.count("SELECT balance FROM billing.balances"); n != tc.closed {
-				t.Errorf("balance %d, want %d", n, tc.closed)
+			if balance, debt := b.count("SELECT balance FROM billing.balances"), b.count("SELECT unfunded FROM billing.balances"); balance != tc.closed || debt != 0 {
+				t.Errorf("balance %d and debt %d, want %d and none", balance, debt, tc.closed)
 			}
 			b.balanced()
 		})
+	}
+}
+
+// TestExpireTakesWhatAReturnGaveBack: a charge given back goes to the batch it was taken from, which has expired, so the
+// next run writes it off, and does not make the credit last.
+func TestExpireTakesWhatAReturnGaveBack(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	b.creditBatch(100, longAgo)
+	b.charge(60)
+	b.reverse(60)
+	if got := b.expire(); got != 100 {
+		t.Errorf("written off %d, want the whole 100: the 60 given back belongs to the expired batch", got)
+	}
+	if n := b.count("SELECT balance FROM billing.balances"); n != 0 {
+		t.Errorf("balance %d, want 0", n)
+	}
+	b.balanced()
+}
+
+// reverse gives n back to the account as the reversal of a charge does, under the account's lock.
+func (b *bank) reverse(n int64) {
+	b.t.Helper()
+	e := event{site: b.admitted.Site, account: b.admitted.Account, kind: "reverse", request: uuid.NewV7(), revision: lateRevision}
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		if _, err := lockAccount(b.t.Context(), tx, e.account); err != nil {
+			return err
+		}
+		_, err := post(b.t.Context(), tx, e, reversal(n, n)...)
+		return err
+	}); err != nil {
+		b.t.Fatal(err)
 	}
 }
 
@@ -241,12 +289,7 @@ func TestExpireRacesSettle(t *testing.T) {
 		var settleErr, expireErr error
 		var f Final
 		wg.Go(func() { f, settleErr = b.billing.Settle(t.Context(), h, o) })
-		wg.Go(func() {
-			expireErr = b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-				_, err = ExpireAccount(t.Context(), tx, b.admitted.Account)
-				return err
-			})
-		})
+		wg.Go(func() { _, expireErr = b.expirer().expire(t.Context(), b.admitted.Account) })
 		wg.Wait()
 		if settleErr != nil || expireErr != nil || f.Charged != platform.AmountExact(150) {
 			t.Fatalf("round %d: Settle = %+v, %v; expiry %v", round, f, settleErr, expireErr)
@@ -280,7 +323,11 @@ func TestChargesTakeEachUnitFromOneBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		wg.Go(func() { b.expireNoCheck() })
+		wg.Go(func() {
+			if _, err := b.expirer().expire(t.Context(), b.admitted.Account); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 	wg.Wait()
 	b.expire()
@@ -294,13 +341,45 @@ func TestChargesTakeEachUnitFromOneBatch(t *testing.T) {
 	b.balanced()
 }
 
-func (b *bank) expireNoCheck() {
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		_, err := ExpireAccount(b.t.Context(), tx, b.admitted.Account)
-		return err
-	}); err != nil {
-		b.t.Error(err)
+// TestReplayWhileCharging: the replay runs, in pages and without the lock, while calls are settled, and what it stores
+// in the end is what a replay of the ledger from nothing gives: no movement is missed or replayed twice, whatever the
+// order the two interleave in.
+func TestReplayWhileCharging(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	b.creditBatch(100_000, farAhead)
+	b.creditBatch(100_000, nil)
+	e := b.expirer()
+	e.movements = 3
+	var wg sync.WaitGroup
+	var charged int64
+	var chargeErr error
+	wg.Go(func() {
+		for i := range int64(40) {
+			h, err := b.tryHold(0)
+			if err == nil {
+				_, err = b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 1+i, 0, 0)))
+			}
+			if err != nil {
+				chargeErr = err
+				return
+			}
+			charged += 1 + i
+		}
+	})
+	for range 25 {
+		if _, err := e.expire(t.Context(), b.admitted.Account); err != nil {
+			t.Fatal(err)
+		}
 	}
+	wg.Wait()
+	if chargeErr != nil {
+		t.Fatal(chargeErr)
+	}
+	b.expire()
+	if n := b.count("SELECT sum(consumed) FROM billing.credit_batches"); n != charged {
+		t.Errorf("%d consumed, want the %d charged", n, charged)
+	}
+	b.balanced()
 }
 
 // TestExpireRefusesAnAllocationThatDisagrees: a balance the batches do not fund, which no code here makes, is not
@@ -309,44 +388,10 @@ func TestExpireRefusesAnAllocationThatDisagrees(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	b.sql("UPDATE billing.balances SET balance = balance + 1")
-	err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		_, err := ExpireAccount(t.Context(), tx, b.admitted.Account)
-		return err
-	})
-	if err == nil {
+	if _, err := b.expirer().expire(t.Context(), b.admitted.Account); err == nil {
 		t.Error("the run went through")
 	}
 	if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire'"); n != 0 {
 		t.Errorf("%d expiry transactions written", n)
-	}
-}
-
-// TestExpireDue: the run goes through every account with credit due and writes each off; one it cannot write off is
-// reported and does not hold the others back.
-func TestExpireDue(t *testing.T) {
-	var logs bytes.Buffer
-	b := newBank(t, 0, 0, Config{})
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	other := b.secondTenant(10)
-	b.creditBatch(100, longAgo)
-	b.addCreditTo(other, Credit{ID: uuid.NewV7(), Amount: 70, ExpiresAt: longAgo})
-	b.addCreditTo(other, Credit{ID: uuid.NewV7(), Amount: 5, ExpiresAt: farAhead})
-	changed, err := ExpireDue(t.Context(), b.app, b.platform, logger)
-	if err != nil || changed != 2 {
-		t.Fatalf("ExpireDue = %d, %v; want 2 accounts", changed, err)
-	}
-	if n := b.count("SELECT sum(balance) FROM billing.balances"); n != 15 {
-		t.Errorf("balances add up to %d, want the 15 that is not due", n)
-	}
-	if changed, err := ExpireDue(t.Context(), b.app, b.platform, logger); err != nil || changed != 0 {
-		t.Errorf("a second run = %d, %v; want nothing", changed, err)
-	}
-
-	b.creditBatch(40, longAgo)
-	b.addCreditTo(other, Credit{ID: uuid.NewV7(), Amount: 30, ExpiresAt: longAgo})
-	b.sql("UPDATE billing.balances SET balance = balance + 1 WHERE account_id = '" + b.admitted.Account.String() + "'")
-	changed, err = ExpireDue(t.Context(), b.app, b.platform, logger)
-	if err == nil || changed != 1 {
-		t.Errorf("ExpireDue = %d, %v; want the other account written off and the broken one reported", changed, err)
 	}
 }

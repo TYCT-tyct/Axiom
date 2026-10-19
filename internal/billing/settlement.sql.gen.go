@@ -162,6 +162,44 @@ func (q *Queries) InsertEntries(ctx context.Context, db DBTX, arg InsertEntriesP
 	return err
 }
 
+const insertLockedTransaction = `-- name: InsertLockedTransaction :execrows
+WITH locked AS (SELECT 1 FROM billing.balances WHERE account_id = $3 FOR UPDATE)
+INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
+SELECT $1, $2, $3, $4, $5, $6, $7 FROM locked
+ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING
+`
+
+type InsertLockedTransactionParams struct {
+	ID         uuid.UUID
+	SiteID     uuid.UUID
+	AccountID  uuid.UUID
+	Kind       string
+	RequestID  uuid.UUID
+	AttemptSeq int32
+	Revision   int64
+}
+
+// InsertTransaction for a transaction that moves the user's balance: the account's balance row is locked by the same
+// statement before the row, and so its seq, is made, so the sequence numbers of one account's balance movements follow
+// the order they commit, which the allocation replays by (internal/billing/README.md「额度批次的分配与到期」). The lock
+// is taken again, without waiting, by a caller that holds it. 0 rows: the event was posted already, or the account has
+// no balance row.
+func (q *Queries) InsertLockedTransaction(ctx context.Context, db DBTX, arg InsertLockedTransactionParams) (int64, error) {
+	result, err := db.Exec(ctx, insertLockedTransaction,
+		arg.ID,
+		arg.SiteID,
+		arg.AccountID,
+		arg.Kind,
+		arg.RequestID,
+		arg.AttemptSeq,
+		arg.Revision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertTransaction = `-- name: InsertTransaction :execrows
 INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

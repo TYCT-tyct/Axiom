@@ -39,7 +39,7 @@ export default {
     amountHint: "最多 9 位小数，例如 12.5。有单次上限，超过会被拒绝。",
     amountInvalid: "请输入大于 0 的金额，最多 9 位小数，例如 12.5。",
     expires: "到期时间",
-    expiresHint: "留空表示不过期。到期后剩余的额度会被核销。",
+    expiresHint: "留空表示不过期。到期后剩余的额度会被作废。",
     expiresInvalid: "到期时间必须晚于现在。",
     submit: "加额度",
     granted: "已给 {{email}} 加 {{amount}}。",

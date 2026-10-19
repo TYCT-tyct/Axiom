@@ -312,7 +312,7 @@ func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egres
 	}
 	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
 	if err := billing.RegisterExpire(billing.ExpireConfig{
-		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
 		return nil, err
 	}
