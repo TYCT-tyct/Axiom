@@ -30,6 +30,7 @@ func TestSameRequestUnderAKey(t *testing.T) {
 			continue
 		}
 		t.Run(c.Case, func(t *testing.T) {
+			t.Parallel()
 			f := newSupplierFixture(t)
 			method, path, status := http.MethodPost, "/suppliers", http.StatusCreated
 			if c.Operation == "replaceSupplierLogin" {

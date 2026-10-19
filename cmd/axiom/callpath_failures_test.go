@@ -30,6 +30,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 		{"all fail", []int{401, 429, 503}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			w := newCallWorld(t)
 			w.seedFailover()
 			w.supplier.mu.Lock()
