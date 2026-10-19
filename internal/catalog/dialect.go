@@ -28,14 +28,23 @@ func ParseDialectFile(data []byte) (DialectFile, error) {
 		return DialectFile{}, fmt.Errorf("dialect file: %w", err)
 	}
 	for slug, keys := range f.Models {
-		if _, err := parseDialect(keys); err != nil {
+		if err := keys.check(); err != nil {
 			return DialectFile{}, fmt.Errorf("dialect file, %s: %w", slug, err)
-		}
-		if members, err := keys.members(); err != nil || len(members) == 0 {
-			return DialectFile{}, fmt.Errorf("dialect file, %s: it sets no key (%v)", slug, err)
 		}
 	}
 	return f, nil
+}
+
+// check is why the keys are not a dialect to write: one the catalog does not know, or none at all.
+func (k DialectKeys) check() error {
+	if _, err := parseDialect(k); err != nil {
+		return err
+	}
+	members, err := k.members()
+	if err == nil && len(members) == 0 {
+		err = errors.New("it sets no key")
+	}
+	return err
 }
 
 // members are the keys set, as the spec spells them.
@@ -92,13 +101,34 @@ func (c *Catalog) applyDialect(ctx context.Context, actor audit.Actor, slug stri
 	case model.Status == StatusRetired:
 		return DialectRetired, nil, ""
 	}
+	spec, changes, err := mergeDialect(model.Spec, keys)
+	switch {
+	case err != nil:
+		return failed(err)
+	case len(changes) == 0:
+		return DialectUnchanged, nil, ""
+	case !apply:
+		return DialectSet, changes, ""
+	}
+	_, err = c.UpdateSpec(ctx, UpdateSpecRequest{
+		Actor: actor, Key: uuid.NewV7(), Reason: reason, Model: model.ID, Rev: model.Rev, Spec: spec,
+	})
+	if err != nil {
+		return failed(err)
+	}
+	return DialectSet, changes, ""
+}
+
+// mergeDialect is the spec with the keys' members set, and the changes that made: "key: before -> after" for each member
+// the spec lacked or had with another value. Every other member is carried as it is.
+func mergeDialect(spec jsonx.Raw, keys DialectKeys) (merged jsonx.Raw, changes []string, err error) {
 	have := map[string]jsonx.Raw{}
-	if err := jsonx.Unmarshal(model.Spec, &have); err != nil {
-		return failed(fmt.Errorf("its spec is no JSON object: %w", err))
+	if err := jsonx.Unmarshal(spec, &have); err != nil {
+		return nil, nil, fmt.Errorf("its spec is no JSON object: %w", err)
 	}
 	want, err := keys.members()
 	if err != nil {
-		return failed(err)
+		return nil, nil, err
 	}
 	for _, key := range slices.Sorted(maps.Keys(want)) {
 		if old, ok := have[key]; !ok || !bytes.Equal(old, want[key]) {
@@ -110,23 +140,8 @@ func (c *Catalog) applyDialect(ctx context.Context, actor audit.Actor, slug stri
 			have[key] = want[key]
 		}
 	}
-	if len(changes) == 0 {
-		return DialectUnchanged, nil, ""
-	}
-	if !apply {
-		return DialectSet, changes, ""
-	}
-	spec, err := jsonx.MarshalCanonical(have)
-	if err != nil {
-		return failed(err)
-	}
-	_, err = c.UpdateSpec(ctx, UpdateSpecRequest{
-		Op: Op{Actor: actor, Key: uuid.NewV7(), Reason: reason}, Model: model.ID, Rev: model.Rev, Spec: spec,
-	})
-	if err != nil {
-		return failed(err)
-	}
-	return DialectSet, changes, ""
+	merged, err = jsonx.MarshalCanonical(have)
+	return merged, changes, err
 }
 
 // modelBySlug reads the model whose slug is exactly slug; ErrModelNotFound when there is none.

@@ -122,14 +122,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
-		if unsupported.Detail != "" {
-			s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
-				"supplier", entry.Supplier, "endpoint", entry.Endpoint)
-		}
-		if s.skips.unsupported == "" {
-			s.skips.unsupported = unsupported.Reason
-		}
-		s.exclude(entry, routing.FormatNotServed)
+		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
 		conn.Done()
@@ -144,6 +137,19 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		return nextEntry, ended{}
 	}
 	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
+// when no entry is left; why, when it is a key the model's spec lacks, goes to the log and no further.
+func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.NotSupported) {
+	if unsupported.Detail != "" {
+		s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
+			"supplier", entry.Supplier, "endpoint", entry.Endpoint)
+	}
+	if s.skips.unsupported == "" {
+		s.skips.unsupported = unsupported.Reason
+	}
+	s.exclude(entry, routing.FormatNotServed)
 }
 
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is

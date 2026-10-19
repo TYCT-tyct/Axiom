@@ -174,30 +174,39 @@ func TestSamplingAndForcedToolAreDecidedApart(t *testing.T) {
 	})
 }
 
+// refusalOf is what an endpoint that says nothing of its model (but for change) answers to a Chat request.
+func refusalOf(t *testing.T, body string, change func(*protocol.Target)) *protocol.NotSupported {
+	t.Helper()
+	r, err := protocol.Inspect(protocol.Chat, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
+	change(&target)
+	_, err = protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+	ns, _ := errors.AsType[*protocol.NotSupported](err)
+	if ns == nil {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	return ns
+}
+
 // TestAnUnsetClaimIsTheOperatorsToKnow: the reason a refusal gives is what the client may be told, and says nothing of
 // the spec; which key is missing is in Detail, which only the log gets.
 func TestAnUnsetClaimIsTheOperatorsToKnow(t *testing.T) {
-	for name, body := range map[string]string{
-		"reasoning":  chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning":{"effort":"high"}`),
-		"mid-system": chatBody(`"messages":[` + userHi + `,{"role":"system","content":"x"}]`),
-		"after tool": chatBody(`"messages":[` + userHi + `,` + callTurn + `,{"role":"system","content":"x"}]`),
-		"sampling":   chatBody(`"messages":[` + userHi + `],"top_p":0.5`),
-		"forced":     chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`),
+	nothing := func(*protocol.Target) {}
+	for name, c := range map[string]struct {
+		body   string
+		change func(*protocol.Target)
+	}{
+		"reasoning":  {chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning":{"effort":"high"}`), nothing},
+		"mid-system": {chatBody(`"messages":[` + userHi + `,{"role":"system","content":"x"}]`), nothing},
+		"after tool": {chatBody(`"messages":[` + userHi + `,` + callTurn + `,{"role":"system","content":"x"}]`), func(tg *protocol.Target) { tg.MidSystem = catalog.ClaimYes }},
+		"sampling":   {chatBody(`"messages":[` + userHi + `],"top_p":0.5`), nothing},
+		"forced":     {chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), nothing},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, err := protocol.Inspect(protocol.Chat, []byte(body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
-			if name == "after tool" {
-				target.MidSystem = catalog.ClaimYes
-			}
-			_, err = protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
-			ns, _ := errors.AsType[*protocol.NotSupported](err)
-			if ns == nil {
-				t.Fatalf("got %v, want a refusal", err)
-			}
+			ns := refusalOf(t, c.body, c.change)
 			if !strings.HasSuffix(ns.Reason, " yet") || strings.Contains(ns.Reason, "spec") {
 				t.Errorf("Reason %q is not for the client", ns.Reason)
 			}

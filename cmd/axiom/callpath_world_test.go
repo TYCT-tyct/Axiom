@@ -38,7 +38,7 @@ const (
 	servedSpec = `{"items":["input","output","cache_read","cache_write","web_search"],"tiers":["standard","priority"],` +
 		`"context_length":200000,"max_output_tokens":8192,"streams":true,"abilities":["tools","web_search","reasoning"],` +
 		`"thinking":"manual","encrypted_reasoning":true,"mid_system":true,"untrusted_system_after_tools":false,` +
-		`"default_sampling_only":false,"cache_breakpoints":false}`
+		`"default_sampling_only":false,"forced_tool_choice":true,"cache_breakpoints":false}`
 	// servedReference is three dollars a million tokens of input and fifteen of output, and twice that at the priority
 	// tier, which prices every item the spec reports since a tier inherits nothing from the standard one.
 	servedReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375","web_search":"0.01"},` +
