@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,11 +34,12 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 	for _, c := range diffCases() {
 		t.Run(c.name, func(t *testing.T) {
 			theirs := send(t, api.base, "", orKey(c.key, api.key), c)
+			theirs.body = newAPIRequestID.ReplaceAll(theirs.body, nil)
 			ours := send(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
 			for _, d := range compareReplies(theirs, ours) {
 				explainOrFail(t, rules, c.name, d)
 			}
-			if err := errorCodeIsStatus(ours); err != nil {
+			if err := reasoningNamesAgree(ours); err != nil {
 				t.Errorf("Axiom: %v", err)
 			}
 		})
@@ -48,6 +50,10 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 		}
 	}
 }
+
+// newAPIRequestID is the " (request id: ...)" new-api ends every message of its errors with. It is its own request id,
+// which Axiom does not copy (the request id header is a difference of its own), so it is taken out of the words.
+var newAPIRequestID = regexp.MustCompile(`\s*\(request id: [^)]*\)`)
 
 func orKey(override, key string) string {
 	if override != "" {
@@ -61,7 +67,7 @@ func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
 	t.Helper()
 	line := fmt.Sprintf("%s: new-api %s, Axiom %s", d.at, d.newAPI, d.axiom)
 	if r := explain(rules, name, d); r != nil {
-		t.Logf("%s [%s] %s", line, [...]string{"allowed", "open"}[r.status], r.reason)
+		t.Logf("%s [allowed] %s", line, r.reason)
 		return
 	}
 	t.Errorf("%s [unexplained]", line)

@@ -170,7 +170,7 @@ func (s *eventReader) rewrite(rules formatRules) (event, error) {
 		return event{}, err
 	}
 	p := &s.rw
-	p.body, p.out, p.at, p.usageAt = data, s.buf[:0], 0, -1
+	p.body, p.out, p.at, p.usageAt, p.ending = data, s.buf[:0], 0, -1, s.e.role == ending
 	if p.dec == nil {
 		p.dec = jsontext.NewDecoder(bytes.NewBuffer(data))
 	} else {
@@ -265,10 +265,15 @@ func unquotedLen(v jsontext.Value) int64 {
 	return n
 }
 
-// usage copies a usage object's members the format defines and drops the rest, such as a relay's cost, and null,
-// marking where the object closes (docs/domains/gateway.md「用量与费用」).
+// usage copies a usage object's members the format defines and drops the rest, such as a relay's cost, marking where
+// the object closes (docs/domains/gateway.md「用量与费用」). A null usage is kept, as OpenAI writes it in the events
+// before the response ends (response.created); the ending's is dropped, since the settlement writes the usage object
+// there and a second member of the name would be a duplicate.
 func (p *rewriter) usage() error {
 	if ok, err := p.open('{', "an object"); !ok {
+		if err == nil && !p.ending {
+			return nil
+		}
 		p.at = p.offset()
 		return err
 	}

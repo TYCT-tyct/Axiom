@@ -162,7 +162,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 分组、凭证、模型、别名、端点属于同一个供应商 | 复合外键；测试对四张表各试一次跨供应商引用 |
 | 身份和发往的地址不能改，不能删除 | 按列授权、不授 DELETE；测试逐列、逐表 |
 | 成本未知的端点不会被当成已知 | `known_has_schedule` CHECK；成本状态进快照的条件在后续的快照查询里 |
-| 对方的文字不进错误、日志和表 | sub2api 的失败路径只带状态码和白名单内的代码（`knownCodes`，不在表内的代码一律说"没有已知代码"，回显了凭证的 `reason`、`code` 也进不来）；测试让响应回显一个凭证，核对每个读取的错误里都没有它；录制样本里的令牌、key、邮箱、地址、请求编号都是占位符 |
+| 对方的文字不进错误、日志和表（唯一的例外是下一行的 `Failure.Rejection`） | sub2api 的失败路径只带状态码和白名单内的代码（`knownCodes`，不在表内的代码一律说"没有已知代码"，回显了凭证的 `reason`、`code` 也进不来）；测试让响应回显一个凭证，核对每个读取的错误里都没有它；录制样本里的令牌、key、邮箱、地址、请求编号都是占位符 |
 | 缺成员的成功响应不是空结果 | `open` 要求 `code` 为 0 且有 `data`，列表和页数缺失即 `ErrUnrecognised`；表驱动测试覆盖 `{"code":0}`、`null`、`{}`、缺 `pages` 等 |
 | 5xx 不会因为响应里的代码被当成"没执行" | `Classify` 先排除 5xx；契约测试（`adaptertest`）对已知拒绝代码的 5xx 也要求"可能执行了" |
 | 引擎与适配器的扫描协议一致 | 位置是适配器自己的不透明字节，第一次调用不带位置；`adaptertest.RunScan` 对每个适配器检查（含结束一遍后的位置能再传回），新 API 和 sub2api 各有一个真实适配器经引擎读完一遍的测试 |
@@ -171,6 +171,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 移除之后库里没有这家供应商的密文，用它做过的尝试仍能结算 | `Admin.Remove` 一个事务：登录行删除、凭证的四个密文列清空且状态为 `erased`（表的 CHECK 拒绝"已清除却还有密文"），行保留；测试：移除后登录行为 0、凭证全部清空、审计记录列出 key 的 ID 而不含密文、下一次 `Reload` 后不在路由里、之后仍能写 `attempt_costs`、再移除一次不改代次也不重复审计 |
 | 没有余额的供应商不进路由 | `ListRoutable` 要求 `balance_native > 0`；测试：没读过、为 0、透支的不进，为正的进 |
 | 失败不带对方的文本，没把握不算免费 | `Cause` 的成员；`adaptertest` |
+| 对方拒绝请求本身时，它的话只给这次回复用，且已去掉能指向对方的内容 | 只有 `Send` 在 `ScopeRequest` 的失败上填 `Failure.Rejection`（`rejectionOf`），适配器的 `Classify` 仍不留文字；去掉所有网址、本次用的凭证、对方的域名及每一级上级域名（`hostNames`，两段以上）、先整串遮蔽的本次凭证、形似凭证的串、`(request id: …)`、new-api / sub2api 的名字，`type` 只留 OpenAI、Anthropic 的通用取值，每项至多 2 KiB；`TestRejectionOfKeepsTheWordsAndNotTheSupplier`、`TestARefusedRequestKeepsWhatTheSupplierSaidOfIt` |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`；`just adapters-removable`（现在对 new-api 真实生效） |
 | 一个供应商同一时刻最多一个同步任务在排队或运行 | 任务按参数唯一，状态含运行；测试：入队两次只插入一个，完成后能再入队；扫描三次只为到期、没人持有的供应商入队一个任务 |
 | 排队后被暂停或移除的供应商不被调用 | 取到租约后读状态，不在 `syncable` 里就结束；测试：入队后改为暂停、移除中、已移除、需处理，再跑任务，适配器没被打开、状态没动、租约已还 |
@@ -225,7 +226,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **`Acquire`**：在没有冷却、没有过期（按时钟，不靠数据库变更）、在途数低于上限的凭证里挑负载最低的，对在途数做一次比较交换；拿不到返回 `ErrNoSlot`，gateway 跳过这个条目，不算尝试。在途数和冷却时间按凭证 ID 存在快照之外，重建快照不清零。
 - **`Routable`** 是给 `routing` 建快照的投影，只含已经能调的端点（启用、成本已知、分组选中、有可用的凭证、供应商在正常状态）：`ID`、`Supplier`、`Model`（目录模型）、`Upstream`（发给上游的名字）、`Formats`（这个端点能用的调用格式，来自 `endpoints.formats`）、`Schedule`（成本计划，已按分组倍率缩放）、`Streams` 和 `Cancels`（适配器对这个供应商的说法）。它读的是 `Reload` 的快照，所以同一个快照里不会一半旧一半新；快照记着最后一次成功的 `Reload` 开始读库的时间，超过 `Config.MaxStale`（默认 30 秒，同目录）就返回 `ErrStale`，这样 `Reload` 一直失败时，期间被停用或移除的供应商不会无限期接流量（`gateway` 的重建因此失败，路由快照按自己的最长陈旧时间过期）；`ListRoutable` 是同一批行的查询，测试核对两边一致。模型的规格（上下文、输出上限、能力位）不在返回值里：那是目录的 `Model.Serving()`，`routing` 建快照时自己查。
-- **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
+- **`Send`** 对拒绝请求本身的失败（`ScopeRequest`）还附上 `Failure.Rejection`：响应体里 `error` 对象的 `message`、`type`、`param`、`code`（OpenAI 和 Anthropic 的外壳同位置），清洗见「不变量」；响应体不是这种对象时为空，网关回统一的说法。**给每个失败标明上游是否执行过**（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
 - **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执带行 id，但目前不落库：要按 id 复算已结算的尝试，需先给 `attempt_costs` 加 `unit_value_id` 列（兼容的改动）。

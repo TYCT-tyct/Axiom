@@ -66,7 +66,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 **`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、compact 标记（`/responses/compact` 的调用原样透传）、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
 
-**错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的；Messages 的 `type` 由状态码决定。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
+**错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的（`message`、`type`、`param`、`code`，`code` 是错误类型的名字，`metadata.error_type` 同它）；`type` 由状态码决定。`protocol.RenderError` 写同样的外壳（尝试之后的错误、流中途的错误），两个写入函数由 `TestARefusalIsAnErrorOfProtocol` 拴在一起：每种拒绝与 protocol 写的同一个错误逐字相同。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
 - 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。在途预留占满余额时同样报 `balance`：`Insufficient` 还没有区分它的来源，也没有所需金额，待 billing 报告。
 - `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
 - 满载排队超时回 429，`Retry-After` 是 `Wait.RetryAfter` 取整。
@@ -130,7 +130,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 没有任何条目可试时（`exhausted`）：有过尝试是 502 `upstream_error`；否则有凭证名额被占的是 429（`Retry-After: 1`），有条目不在 suppliers 里的是 503，其余是 400 附 `NotSupported` 的原因。
 
-**转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。
+**转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。
 
 读结束的各种情况（`broke`、`complete`）：
 
@@ -385,7 +385,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | 响应头等待用计时器取消尝试的 context，不是包住 `Send` 的短 context | 请求的 context 管着整个响应体的读取，短 context 会在响应头到了之后继续掐流 | 给 `Send` 一个带期限的 context |
 | 重试预算在尝试之前取（`TakeRetry`），第一次尝试记 `Sent` | `Plan` 只看不取；并发的重试靠 `TakeRetry` 各占一次 | 在 `Plan` 里扣 |
 | 过了 `Plan.StartBy` 不再发起尝试，且以它为准，不读 `Config.StartBy` | 它由路由器按预设的窗口算好，`Config.StartBy` 只是种子；默认值下（StartBy 120s、空闲 180s）提交前空闲超时那次已过了窗口，所以只有空闲超时调短（按模型可调）才会换端点，返回最后一次尝试的错误（502）是文档的规则 | 两处都读：同一个值两个来源 |
-| 上游因请求自身拒绝（`ScopeRequest`）回 400 `invalid_request`，不带上游原文 | `suppliers.Failure` 按设计不带上游文字，文档的“保留原文、`upstream_rejected`”做不到；见 gateway.md 的待定问题 | 在 Failure 里带原文：违背“对方的文字不进错误、日志和表” |
+| 上游因请求自身拒绝（`ScopeRequest`）回 400 `invalid_request`，带上游的 `message`、`type`、`param`、`code`（`Failure.Rejection`，已去掉网址、凭证、请求编号），没有原话时用统一的说法 | 负责人 2026-10-18：影响兼容的行为照 new-api；Claude Code 靠原话自动恢复。`Rejection` 只在这一处出现，只进给客户端的响应，不进日志和表（`failed` 只把它交给 `protocol.Error`） | 让每个适配器的 `Classify` 带原文：各清洗一遍，漏一个就泄露；原样透传：会暴露供应商的网址 |
 | 非流式的答案也由同一个读循环聚合，而不是另开一条路 | 上游一律以流调用，计量、追加、截断、结算、断开四种情况都只有一份；聚合只是出口不同（`RelayOptions.Aggregate`） | 上游按客户端的 `stream` 调用：计量看不到进度，非分段预留，转换后的请求体还得再转换回复 |
 | 聚合时提交点不写响应头，失败的尝试可以换端点 | 客户端在整份回复写好之前什么都没收到，所以"I4 提交后不换尝试"对它是写出那一刻；代价是聚合的回复在最后一次尝试之前不占状态码 | 见到第一个内容就定 200：中途失败只能返回半截内容，或丢掉已生成的内容报错 |
 | 聚合保留"最后一次有内容的尝试"，下一次尝试开始时放掉 | 文档只让"最后一次尝试生成了部分内容"随错误返回，各次尝试的内容不混；保留一个 `Relay` 最多 16 MiB | 把每次尝试的内容都留着：容量随尝试数翻倍，且违反不混的要求 |

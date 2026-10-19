@@ -125,8 +125,8 @@ func (c *converted) render() (data []byte, content bool, err error) {
 	members := []struct {
 		name string
 		v    []byte
-	}{{"content", d.content}, {"refusal", d.refusal}, {"reasoning", d.reasoning}}
-	n := len(c.head) + len(d.content) + len(d.refusal) + len(d.reasoning) + len(d.details) + len(d.tools) + 160
+	}{{"content", d.content}, {"refusal", d.refusal}, {"reasoning", d.reasoning}, {"reasoning_content", d.reasoning}}
+	n := len(c.head) + len(d.content) + len(d.refusal) + 2*len(d.reasoning) + len(d.details) + len(d.tools) + 160
 	content = n > len(c.head)+160
 	if !content && !d.role {
 		return nil, false, nil

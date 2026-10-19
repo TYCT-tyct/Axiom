@@ -39,6 +39,9 @@ func checkStream(t *testing.T, h *harness) {
 	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "text/event-stream; charset=utf-8" {
 		t.Fatalf("status %d, headers %v", h.w.status, h.w.header)
 	}
+	if got := h.w.header.Get("X-Accel-Buffering"); got != "no" {
+		t.Errorf("X-Accel-Buffering is %q: an nginx in front would buffer the stream", got)
+	}
 	body := h.w.body()
 	for _, want := range []string{`"text": "Hello"`, `"text": "!"`, h.call.ID.String(), `"model": "claude-opus-5-5"`, `"cost":0.003703701,"cost_currency":"USD"`} {
 		if !strings.Contains(body, want) {
@@ -138,6 +141,39 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 			}
 			if first := h.ended().outcome.Attempts[0]; first.Result != tc.result {
 				t.Errorf("%s: the first attempt's result %d", tc.name, first.Result)
+			}
+		})
+	}
+}
+
+// TestARefusedRequestIsAnsweredInTheUpstreamsWords: when the supplier refuses the request itself, the client reads what
+// the supplier said of it (Claude Code recovers from the text), in the shell of its format; with nothing said, the
+// error is ours.
+func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
+	messages := protocol.Messages
+	said := &protocol.Rejection{Message: "max_tokens: Input should be greater than 0", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
+	for _, tc := range []struct {
+		name      string
+		client    protocol.Format
+		rejection *protocol.Rejection
+		want      []string
+	}{
+		{"Chat", protocol.Chat, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+		{"Messages", protocol.Messages, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"error_type":"invalid_request"`}},
+		{"nothing said", protocol.Chat, nil, []string{`"message":"The request is not valid."`, `"code":"invalid_request"`}},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{client: tc.client, upstream: &messages})
+			f := failing(routing.ScopeRequest, true, suppliers.Failure{Rejection: tc.rejection})
+			h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, f }}
+			h.run()
+			if h.w.status != http.StatusBadRequest {
+				t.Errorf("%s: status %d:\n%s", tc.name, h.w.status, h.w.body())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(h.w.body(), want) {
+					t.Errorf("%s: no %s in %s", tc.name, want, h.w.body())
+				}
 			}
 		})
 	}

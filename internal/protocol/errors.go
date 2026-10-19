@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"fmt"
 
 	"axiom/internal/catalog"
@@ -49,17 +50,28 @@ var errorTypes = [...]struct {
 }
 
 // Error is an error to answer or to end a stream with. Details are members of a JSON object that say more, such as
-// "limit_source":"balance" for a 402, each led by a comma; they go next to the error type.
+// "limit_source":"balance" for a 402, each led by a comma; they go next to the error type. Rejection, when set, is
+// what the upstream said of a request it refused.
 type Error struct {
-	Type    ErrorType
-	Message string
-	Details string
+	Type      ErrorType
+	Message   string
+	Details   string
+	Rejection *Rejection
 }
 
-// message is what the error says: the caller's message, or the type's own.
+// Rejection is how an upstream said it refused a request (a 4xx), after the supplier's identity was taken out of it:
+// the words of its error and the members OpenAI's and new-api's error objects have besides, which a client branches on
+// (a code like context_length_exceeded). An empty member is one the upstream did not give (docs/domains/gateway.md
+// 「错误」).
+type Rejection struct{ Message, Type, Param, Code string }
+
+// message is what the error says: the caller's message, the upstream's words, or the type's own.
 func (e Error) message() string {
-	if e.Message != "" {
+	switch {
+	case e.Message != "":
 		return e.Message
+	case e.Rejection != nil && e.Rejection.Message != "":
+		return e.Rejection.Message
 	}
 	return errorTypes[e.Type].message
 }
@@ -67,6 +79,25 @@ func (e Error) message() string {
 // appendErrorType appends the error type member and the details.
 func appendErrorType(dst []byte, e Error) []byte {
 	return append(append(dst, `"error_type":"`+errorTypes[e.Type].name+`"`...), e.Details...)
+}
+
+// appendOpenAIError appends the error object of Chat's shell, which Responses uses before a stream starts: new-api's
+// and OpenAI's members message, type, param and code, and metadata with the unified error type and the details. Our own
+// error has the unified error type as its string code and "" as param; a rejection has the upstream's type, param and
+// code, null when it gave none, as new-api passes them on (docs/domains/gateway.md「错误」).
+func appendOpenAIError(dst []byte, e Error) []byte {
+	t := errorTypes[e.Type]
+	typ, param, code := t.messages, "", appendQuoted(nil, t.name)
+	if r := e.Rejection; r != nil {
+		typ, param, code = cmp.Or(r.Type, typ), r.Param, []byte("null")
+		if r.Code != "" {
+			code = appendQuoted(nil, r.Code)
+		}
+	}
+	dst = append(appendQuoted(append(dst, `{"message":`...), e.message()), `,"type":`...)
+	dst = append(appendQuoted(dst, typ), `,"param":`...)
+	dst = append(append(append(appendQuoted(dst, param), `,"code":`...), code...), `,"metadata":{`...)
+	return append(appendErrorType(dst, e), "}}"...)
 }
 
 // RenderError returns the status and the body of an error answered before any stream starts, in format f's own
@@ -95,8 +126,7 @@ func renderError(f Format, e Error, charged *charges) (status int, body []byte) 
 		body = fmt.Appendf(nil, `{"type":"error","error":{"type":%q,"message":`, t.messages)
 		body = append(appendErrorType(append(appendQuoted(body, e.message()), ','), e), '}')
 	} else {
-		body = fmt.Appendf(nil, `{"error":{"code":%d,"message":`, t.status)
-		body = append(appendErrorType(append(appendQuoted(body, e.message()), `,"metadata":{`...), e), "}}"...)
+		body = appendOpenAIError(append(body, `{"error":`...), e)
 	}
 	if charged != nil {
 		body = append(appendCharged(append(body, `,"axiom":{"usage":`...), f, charged), '}')

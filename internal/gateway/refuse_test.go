@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -25,8 +27,8 @@ func TestErrorShells(t *testing.T) {
 		format protocol.Format
 		want   string
 	}{
-		{protocol.Chat, `{"error":{"code":402,"message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"type":"billing_error"}}`},
-		{protocol.Responses, `{"error":{"code":402,"message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"type":"billing_error"}}`},
+		{protocol.Chat, `{"error":{"code":"credits_insufficient","message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"param":"","type":"billing_error"}}`},
+		{protocol.Responses, `{"error":{"code":"credits_insufficient","message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"param":"","type":"billing_error"}}`},
 		{protocol.Messages, `{"error":{"error_type":"credits_insufficient","limit_source":"key_limit","message":"The credits available are not enough for this request.","type":"billing_error"},"type":"error"}`},
 	} {
 		rec := httptest.NewRecorder()
@@ -37,6 +39,49 @@ func TestErrorShells(t *testing.T) {
 		if rec.Header().Get("Retry-After") != "60" || rec.Header().Get("Connection") != "" {
 			t.Errorf("format %d: Retry-After %q (the longest Claude Code honours is 60), Connection %q",
 				tc.format, rec.Header().Get("Retry-After"), rec.Header().Get("Connection"))
+		}
+	}
+}
+
+// TestARefusalIsAnErrorOfProtocol: an error answered before the call and one answered after an attempt are written by two
+// functions, and a client must not be able to tell which wrote it: each refusal has the body protocol writes for the
+// same error, in every format.
+func TestARefusalIsAnErrorOfProtocol(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		refusal *Refusal
+		typ     protocol.ErrorType
+	}{
+		{errUnauthorized, protocol.Authentication},
+		{&Refusal{Status: 402, Code: "credits_insufficient"}, protocol.CreditsInsufficient},
+		{errKeyRate, protocol.RateLimited},
+		{ErrOverloaded, protocol.Overloaded},
+		{errNoModel, protocol.ModelNotFound},
+		{&Refusal{Status: 404, Code: "no_endpoint"}, protocol.NoEndpoint},
+		{&Refusal{Status: 503, Code: "no_endpoint"}, protocol.NoEndpointForNow},
+		{invalid("x"), protocol.InvalidRequest},
+		{errTooLarge, protocol.RequestTooLarge},
+		{errBodyTimeout, protocol.Timeout},
+	} {
+		for _, f := range []protocol.Format{protocol.Chat, protocol.Responses, protocol.Messages} {
+			rec := httptest.NewRecorder()
+			r := *tc.refusal
+			r.Message = "m"
+			writeRefusal(rec, f, &r)
+			status, body := protocol.RenderError(f, protocol.Error{Type: tc.typ, Message: "m"}, nil)
+			if rec.Code != status {
+				t.Errorf("%s, format %d: status %d, protocol's %d", r.Code, f, rec.Code, status)
+			}
+			var got, want any
+			if err := jsonx.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := jsonx.Unmarshal(body, &want); err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("%s, format %d (-protocol +refusal):\n%s", r.Code, f, diff)
+			}
 		}
 	}
 }

@@ -52,8 +52,21 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		{"other wording", "chat-claude-429-whole", "json.error.message", `"upstream said"`, `"boom"`, false},
 		{"ping before content", "messages-claude-text-stream", "sse[ping]", `{"type":"ping"}`, absent, true},
 		{"another event dropped", "messages-claude-text-stream", "sse[content_block_delta]", `{"type":"x"}`, absent, false},
-		{"reasoning with a newline more", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_text", `"abc\n"`, `"abc"`, true},
-		{"reasoning changed", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_text", `"abd\n"`, `"abc"`, false},
+		{"reasoning_content with a newline more", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_content", `"abc\n"`, `"abc"`, true},
+		{"reasoning_content changed", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_content", `"abd\n"`, `"abc"`, false},
+		{"own error is not the upstream's refusal", "chat-claude-invalid-json", "json.error.type", `"new_api_error"`, `"invalid_request_error"`, true},
+		{"a refusal whose type differs", "chat-claude-400-whole", "json.error.type", `"invalid_request_error"`, `"api_error"`, false},
+		{"empty code of a wrong key", "chat-claude-wrong-key", "json.error.code", `""`, `"authentication"`, true},
+		{"empty code where Axiom has a number", "chat-claude-wrong-key", "json.error.code", `""`, "401", false},
+		{"a refusal's message differs", "chat-claude-400-whole", "json.error.message", `"max_tokens: too small"`, `"The request is not valid."`, false},
+		{"a refusal's code differs", "responses-gpt-400-whole", "json.error.code", `"invalid_value"`, `"upstream_error"`, false},
+		{"upstream 502's code", "responses-gpt-500-whole", "json.error.code", "null", `"upstream_error"`, true},
+		{"unified error type", "chat-claude-400-whole", "json.error.metadata.error_type", absent, `"invalid_request"`, true},
+		{"stream header on a failed stream", "chat-claude-429-stream", "header.x-accel-buffering", "no", absent, true},
+		{"stream header missing from a stream that starts", "chat-claude-text-stream", "header.x-accel-buffering", "no", absent, false},
+		{"reasoning beside reasoning_content", "chat-claude-reasoning-whole", "json.choices[].message.reasoning", absent, `"abc"`, true},
+		{"reasoning_content missing", "chat-claude-reasoning-whole", "json.choices[].message.reasoning_content", `"abc"`, absent, false},
+		{"usage null dropped", "responses-gpt-text-stream", "sse[response.created].response.usage", "null", absent, false},
 		{"times", "chat-claude-text-whole", "json.created", "1741290958", "1792390509", true},
 		{"time that is no time", "chat-claude-text-whole", "json.created", "1741290958", `"soon"`, false},
 	} {
@@ -143,25 +156,29 @@ func TestDiffHarnessToolArgumentsAddUp(t *testing.T) {
 	}
 }
 
-// TestDiffHarnessErrorCodeIsStatus: the numeric error.code the error.code rule lets through must be the HTTP status.
-func TestDiffHarnessErrorCodeIsStatus(t *testing.T) {
+// TestDiffHarnessReasoningNamesAgree: Axiom's two names for the reasoning of a Chat reply carry the same text.
+func TestDiffHarnessReasoningNamesAgree(t *testing.T) {
 	t.Parallel()
+	whole := func(body string) reply {
+		return reply{status: 200, header: http.Header{"Content-Type": {"application/json"}}, body: []byte(body)}
+	}
 	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-		ok     bool
+		name string
+		r    reply
+		ok   bool
 	}{
-		{"the status", http.StatusBadGateway, `{"error":{"code":502,"message":"x"}}`, true},
-		{"another status", http.StatusBadGateway, `{"error":{"code":200,"message":"x"}}`, false},
-		{"a client error's", http.StatusTooManyRequests, `{"error":{"code":401}}`, false},
-		{"a string code is the open rule's", http.StatusBadRequest, `{"error":{"code":"invalid_value"}}`, true},
-		{"no error", http.StatusOK, `{"id":"x"}`, true},
+		{"whole, the same", whole(`{"choices":[{"message":{"reasoning":"abc","reasoning_content":"abc"}}]}`), true},
+		{"whole, none", whole(`{"choices":[{"message":{"content":"x"}}]}`), true},
+		{"whole, another text", whole(`{"choices":[{"message":{"reasoning":"WRONG","reasoning_content":"abc"}}]}`), false},
+		{"whole, one name", whole(`{"choices":[{"message":{"reasoning_content":"abc"}}]}`), false},
+		{"stream, the same", sseReply(chatChunks(`{"reasoning":"a","reasoning_content":"a"}`, `{"reasoning":"b","reasoning_content":"b"}`)), true},
+		{"stream, another text in one delta", sseReply(chatChunks(`{"reasoning":"a","reasoning_content":"a"}`, `{"reasoning":"x","reasoning_content":"b"}`)), false},
+		{"stream, one name", sseReply(chatChunks(`{"reasoning":"a"}`)), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if err := errorCodeIsStatus(reply{status: tc.status, body: []byte(tc.body)}); (err == nil) != tc.ok {
-				t.Errorf("errorCodeIsStatus = %v, want ok %v", err, tc.ok)
+			if err := reasoningNamesAgree(tc.r); (err == nil) != tc.ok {
+				t.Errorf("reasoningNamesAgree = %v, want ok %v", err, tc.ok)
 			}
 		})
 	}

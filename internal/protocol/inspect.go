@@ -5,6 +5,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // jsonx has no token-by-token reader; jsontext's defaults are its strictness, and token checks jsonx.MaxDepth
+	"encoding/json/v2"       //nolint:depguard // only the type of the errors jsonx returns, to tell the client what they are about
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +86,27 @@ var ErrInvalid = errors.New("protocol: invalid request")
 
 var errTooDeep = fmt.Errorf("nesting deeper than %d levels", jsonx.MaxDepth)
 
+// badJSON is what a client is told of a body that is not JSON. It is new-api's sentence, which the differential test
+// (docs/domains/gateway.md「与 new-api 的有意差异」) holds ours to.
+const badJSON = "Invalid request: invalid JSON request body"
+
+// bodyFault is what the client reads of an error met while reading its body. The decoders' own text is not for the
+// client: it names offsets and Go types (`jsontext: unexpected EOF within "/model" after offset 9`, `cannot unmarshal
+// JSON string into Go struct field canon.model`), which no client can act on and which tell what parses the body.
+// A syntax error is badJSON, a value of the wrong type is named by its JSON pointer, which is the client's own path,
+// and the errors of ours (a missing model, a member of the wrong type) already say what to change.
+func bodyFault(err error) string {
+	var syntax *jsontext.SyntacticError
+	var semantic *json.SemanticError
+	switch {
+	case errors.As(err, &syntax):
+		return badJSON
+	case errors.As(err, &semantic):
+		return "the value at " + string(semantic.JSONPointer) + " is not of a type this member takes"
+	}
+	return err.Error()
+}
+
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
@@ -93,7 +115,7 @@ func Inspect(f Format, body []byte) (Request, error) {
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}
 	if err := s.top(); err != nil {
-		return Request{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	s.r.ServiceTiers = s.fast
 	if s.r.ServiceTiers == 0 {
