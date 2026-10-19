@@ -17,7 +17,7 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		cfg.PoolSize, cfg.PoolReserve = 12, 4 // admission may use 8
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,7 +51,7 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 
 		time.Sleep(cfg.AccountGateWait)
 		if refused := countRefused(hotAdmissions); refused != len(hotAdmissions) {
-			t.Fatalf("%d of %d hot admissions got ErrRateLimited", refused, len(hotAdmissions))
+			t.Fatalf("%d of %d hot admissions got errAccountGate", refused, len(hotAdmissions))
 		}
 	})
 }
@@ -60,7 +60,7 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 func TestFundsReleasesTheGateWhenTheConnectionWaitEnds(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -221,6 +221,11 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 			if s := h.ended(); len(s.outcome.Attempts) != 0 {
 				t.Errorf("%s: %d attempts", tc.name, len(s.outcome.Attempts))
 			}
+			want := map[string]int64{}
+			if tc.status == http.StatusTooManyRequests {
+				want["credentials_busy"] = 1
+			}
+			wantRefused(t, h.refused(), want)
 			excluded := h.call.Plan.Record.Excluded
 			if len(excluded) == 0 || excluded[0].Reason != tc.reason {
 				t.Errorf("%s: the route's record: %+v", tc.name, excluded)
@@ -312,7 +317,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	limits, err := New(DefaultConfig())
+	limits, err := New(DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

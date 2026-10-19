@@ -365,6 +365,7 @@ type harness struct {
 	client  context.CancelFunc
 	events  []string
 	cfg     Config
+	refused func() map[string]int64 // the 429s counted so far, by reason
 	started time.Time
 
 	mu          sync.Mutex
@@ -398,7 +399,9 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if h.router, err = routing.New(o.routing); err != nil {
 		t.Fatal(err)
 	}
-	limits, err := New(h.cfg)
+	meter, refused := countingMeter(t)
+	h.refused = refused
+	limits, err := New(h.cfg, meter.Meter("test"))
 	if err != nil {
 		t.Fatal(err)
 	}

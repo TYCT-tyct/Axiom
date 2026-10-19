@@ -198,6 +198,9 @@ func (s *session) answer(e ended, fin *protocol.Final) {
 	if s.gone || s.started || s.req.Context().Err() != nil {
 		return
 	}
+	if status == http.StatusTooManyRequests { // the only 429 a call ends in after its admission: no credential had a slot
+		s.x.Limits.refused(s.req.Context(), errCredentialsBusy)
+	}
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
 	if e.after > 0 {

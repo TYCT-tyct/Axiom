@@ -8,7 +8,7 @@ import (
 )
 
 func TestDefaultConfigIsValid(t *testing.T) {
-	if _, err := New(DefaultConfig()); err != nil {
+	if _, err := New(DefaultConfig(), nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -42,7 +42,7 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg := DefaultConfig()
 			tc.change(&cfg)
-			if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := New(cfg, nil); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("New() error = %v, want one naming %s", err, tc.want)
 			}
 		})

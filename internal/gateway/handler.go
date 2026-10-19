@@ -310,6 +310,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		return
 	}
 	ref, expected := refusal(format, err)
+	h.Limits.refused(r.Context(), ref)
 	switch {
 	case !expected:
 		h.Logger.Error("a request failed unexpectedly", "request_id", httpserver.RequestID(r.Context()), "err", err)

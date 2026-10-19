@@ -57,6 +57,7 @@ type rig struct {
 	router   *routing.Router
 	billing  *billing.Billing
 	limits   *Backpressure
+	refused  func() map[string]int64 // the 429s counted so far, by reason
 	memory   *protocol.Memory
 	handler  *Handler
 	server   *httptest.Server
@@ -130,7 +131,9 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.db.Close)
-	if r.limits, err = New(r.cfg); err != nil {
+	meter, refused := countingMeter(t)
+	r.refused = refused
+	if r.limits, err = New(r.cfg, meter.Meter("test")); err != nil {
 		t.Fatal(err)
 	}
 	r.warmConnections(12)

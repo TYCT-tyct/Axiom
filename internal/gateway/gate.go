@@ -25,7 +25,7 @@ func newAccountGate(admissionWait time.Duration) *accountGate {
 	return &accountGate{admissionWait: admissionWait, accounts: map[string]*gateWaiters{}}
 }
 
-// enter takes the gate of account. An admission waits at most admissionWait and then gets ErrRateLimited, so a
+// enter takes the gate of account. An admission waits at most admissionWait and then gets errAccountGate, so a
 // client that hammers one account is refused rather than left holding a request open; a completion waits for as
 // long as ctx lets it, since it carries money that is already committed.
 func (g *accountGate) enter(parent context.Context, account string, class Class) (func(), error) {
@@ -50,11 +50,11 @@ func (g *accountGate) enter(parent context.Context, account string, class Class)
 	g.mu.Unlock()
 
 	if !wt.park(ctx, &g.mu) {
-		return nil, expired(parent)
+		return nil, expired(parent, errAccountGate)
 	}
 	if ctx.Err() != nil {
 		g.release(account)
-		return nil, expired(parent)
+		return nil, expired(parent, errAccountGate)
 	}
 	return g.releaser(account), nil
 }

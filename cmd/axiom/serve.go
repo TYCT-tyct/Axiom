@@ -255,7 +255,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
 	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
 	gate := gateway.DefaultConfig()
-	limits, err := gateway.New(gate)
+	limits, err := gateway.New(gate, tel.Metrics.Meter("axiom/gateway"))
 	if err != nil {
 		return nodeRoutes{}, err
 	}

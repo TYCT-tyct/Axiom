@@ -14,7 +14,7 @@ func acquire(ctx context.Context, p *Pool, c Class) func() (func(), error) {
 func TestPoolKeepsTheLastConnectionsForCompletion(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +48,7 @@ func TestPoolKeepsTheLastConnectionsForCompletion(t *testing.T) {
 // A batch writer holds at most BatchConnections.
 func TestPoolBatchWritersHaveTheirOwnLimit(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		bp, err := New(DefaultConfig())
+		bp, err := New(DefaultConfig(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +65,7 @@ func TestPoolBatchWritersHaveTheirOwnLimit(t *testing.T) {
 func TestPoolBatchWritersStayOutOfTheReserve(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestPoolBatchWritersStayOutOfTheReserve(t *testing.T) {
 func TestPoolDeadContextKeepsNothing(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
-		bp, err := New(cfg)
+		bp, err := New(cfg, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

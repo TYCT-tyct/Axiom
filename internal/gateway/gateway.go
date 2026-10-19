@@ -12,20 +12,35 @@ import (
 // Refusal is a call the gateway turns away. The error exit writes Status and Code, plus Retry-After when RetryAfter
 // is not zero (docs/domains/gateway.md「错误」). A refusal that has an estimate of its wait, such as the queue's 429,
 // gets that estimate from the caller that has it, as a copy; the shared ones below are never changed. Message, when
-// set, replaces the text of the code, and Details are members added beside error_type.
+// set, replaces the text of the code, and Details are members added beside error_type. Reason is which limit turned
+// the call away when several share a Code; it is counted (Backpressure.refused) and never sent to the client.
 type Refusal struct {
 	Status     int
 	Code       string
 	RetryAfter int // seconds
+	Reason     string
 	Message    string
 	Details    map[string]any
 }
 
 func (r *Refusal) Error() string { return r.Code }
 
+// rateLimited is a 429 for one of the limits below. They share the code rate_limited (docs/domains/gateway.md「错误」), so
+// a client reads one thing whatever the limit; the reason tells an operator which limit it was.
+func rateLimited(reason string) *Refusal {
+	return &Refusal{Status: 429, Code: "rate_limited", Reason: reason}
+}
+
 var (
-	// ErrRateLimited is a per-IP or per-account limit, a full queue, or an account gate that stayed busy: 429.
-	ErrRateLimited = &Refusal{Status: 429, Code: "rate_limited"}
+	errIPInFlight      = rateLimited("ip_in_flight")      // the client address has IPInFlight requests in flight
+	errAccountInFlight = rateLimited("account_in_flight") // the account has its in-flight limit of requests
+	errKeyRate         = rateLimited("key_rate")          // the key made more than KeyRate requests in RateWindow
+	errCountRate       = rateLimited("count_rate")        // the key made more than CountRate count_tokens requests in RateWindow
+	errAccountGate     = rateLimited("account_gate")      // the account's gate stayed busy for AccountGateWait
+	errQueueFull       = rateLimited("queue_full")        // every candidate endpoint is full and the queue has QueueMax waiters
+	errQueueKeyFull    = rateLimited("queue_key_full")    // the same, and the key has QueuePerKey of them
+	errQueueWait       = rateLimited("queue_wait")        // the same, and the call waited QueueWait
+	errCredentialsBusy = rateLimited("credentials_busy")  // every credential of the route is at its concurrency limit
 	// ErrOverloaded is a node that has no capacity left and does not queue: 503.
 	ErrOverloaded = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}
 )
@@ -48,10 +63,10 @@ func SettleContext(client context.Context, timeout time.Duration) (context.Conte
 }
 
 // expired is the error of a wait that ended: the caller's own context error if that is why, otherwise the wait's
-// limit ran out, which is a 429.
-func expired(parent context.Context) error {
+// limit ran out, which is the 429 limit.
+func expired(parent context.Context, limit *Refusal) error {
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	return ErrRateLimited
+	return limit
 }

@@ -41,8 +41,10 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 			deadline = time.Now().Add(h.Limits.cfg.QueueWait)
 		}
 		if err := h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch, deadline); err != nil {
-			if errors.Is(err, ErrRateLimited) {
-				return &Refusal{Status: ErrRateLimited.Status, Code: ErrRateLimited.Code, RetryAfter: seconds(wait.after)}
+			if limit, ok := errors.AsType[*Refusal](err); ok {
+				full := *limit
+				full.RetryAfter = seconds(wait.after)
+				return &full
 			}
 			return err
 		}
@@ -81,7 +83,7 @@ func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
 // or the request is refused 402.
 func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c *Call) error {
 	if c.rate > h.Limits.cfg.KeyRate {
-		return ErrRateLimited
+		return errKeyRate
 	}
 	plan, wait, err := h.Router.Plan(routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,

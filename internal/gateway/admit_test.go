@@ -216,4 +216,5 @@ func TestKeyRate(t *testing.T) {
 	if codes[0] != 200 || codes[1] != 200 || codes[2] != 429 || r.count(allRows) != 2 {
 		t.Errorf("statuses %v, %d reservation rows", codes, r.count(allRows))
 	}
+	wantRefused(t, r.refused(), map[string]int64{"key_rate": 1})
 }

@@ -52,7 +52,7 @@ func holdsExactly(t *testing.T, bp *Backpressure, limit int64, body []byte) {
 func TestUnannouncedBodyIsChargedBeforeItIsAllocated(t *testing.T) {
 	t.Parallel()
 	const limit = 1 << 22
-	bp, err := New(DefaultConfig())
+	bp, err := New(DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
