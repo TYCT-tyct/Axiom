@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import train
 from train import Car, Entry
@@ -170,6 +171,19 @@ class Landing(unittest.TestCase):
         with self.assertRaises(train.Abort):
             fake.land_verified()
         self.assertEqual(fake.actions, ["alarm"])
+
+
+class Alarm(unittest.TestCase):
+    def test_an_alarm_holds_the_train_reports_and_starts_mains_build(self):
+        fake = FakeLand(2)
+        fake.repo, fake.run_url, fake.land_ref, calls = "x/y", "https://github.com/x/y/actions/runs/7", "train/main/land", []
+        fake.api = lambda path, *args, **kwargs: calls.append(path)
+        with mock.patch.object(train, "git", lambda *args, **kwargs: calls.append(" ".join(args))):
+            error = train.Train.alarm(fake, fake.cars[:1], "main does not match the tested train")
+        self.assertIsInstance(error, train.Abort)
+        self.assertIn("push -q -f origin origin/train/main/land:refs/heads/train-alarm/main/7", calls)
+        self.assertEqual(calls[1:], ["issues/1/comments", "issues"])
+        self.assertEqual(fake.actions, ["drop", "dispatch"])
 
 
 class Stopping(unittest.TestCase):

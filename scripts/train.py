@@ -480,6 +480,8 @@ class Train:
         for car in landed:
             self.api(f"issues/{car.entry.number}/comments", "-F", "body=@-", data=body)
         self.api("issues", "-X", "POST", "-f", f"title=Merge train: {problem}", "-F", "body=@-", data=body)
+        if self.base == "main":
+            self.dispatch_main()  # main holds an untested state: its build says whether to revert (merge-train.md)
         return Abort(problem)
 
     # the driver
