@@ -366,9 +366,10 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 }
 
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
-// address, closes it on the way out, so no writer goroutine outlives serve.
+// address, closes it on the way out, so no writer goroutine outlives serve. Not parallel: it reads every goroutine's
+// stack, and a parallel test's serve has a writer of its own; a top-level sequential test runs while the package's
+// parallel tests wait.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
-	t.Parallel()
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
