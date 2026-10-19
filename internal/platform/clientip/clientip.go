@@ -19,7 +19,9 @@ func Addr(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	if err != nil {
 		return netip.Addr{}
 	}
-	addr := remote.Addr().Unmap()
+	// A zone names a local interface, not a client; kept, it would make one client many (a new map key per suffix)
+	// and never match a trusted prefix.
+	addr := remote.Addr().Unmap().WithZone("")
 	isTrusted := func(a netip.Addr) bool {
 		for _, p := range trusted {
 			if p.Contains(a) {
@@ -42,7 +44,7 @@ func Addr(r *http.Request, trusted []netip.Prefix) netip.Addr {
 		if err != nil {
 			return addr // a header we cannot read is not believed
 		}
-		if hop = hop.Unmap(); !isTrusted(hop) {
+		if hop = hop.Unmap().WithZone(""); !isTrusted(hop) {
 			return hop
 		}
 	}

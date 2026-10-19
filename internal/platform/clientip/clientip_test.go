@@ -36,6 +36,8 @@ func TestAddr(t *testing.T) {
 		{"IPv6 behind an IPv4 proxy", trusted, "10.1.1.1:1", []string{"2001:db8::1"}, "2001:db8::1"},
 		{"an IPv6 proxy", trusted, "[2001:db8:ffff::1]:1", []string{"2001:db8::1"}, "2001:db8::1"},
 		{"an IPv6 chain of proxies", trusted, "[2001:db8:ffff::1]:1", []string{"2001:db8::1, 2001:db8:ffff::2"}, "2001:db8::1"},
+		{"a zone on a hop", trusted, "10.1.1.1:1", []string{"2001:db8::1%a"}, "2001:db8::1"},
+		{"a zone on a trusted hop", trusted, "10.1.1.1:1", []string{"198.51.100.1, 2001:db8:ffff::2%b"}, "198.51.100.1"},
 		{"v4 in v6 clothes", trusted, "[::ffff:10.1.1.1]:1", []string{"::ffff:198.51.100.1"}, "198.51.100.1"},
 		{"an address that is no address", trusted, "pipe", []string{"198.51.100.1"}, ""},
 		{"an address without a port", trusted, "10.1.1.1", []string{"198.51.100.1"}, ""},
