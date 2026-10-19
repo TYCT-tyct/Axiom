@@ -2,19 +2,26 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/platform/adminapi"
 )
 
-// ruleJSON is a rule: the member after "rule" in the body of a request.
+// ruleJSON is a rule with no constraints: the member after "rule" in the body of a request.
 func ruleJSON(target, audience, method string) string {
-	return `{"enabled":true,"target":` + target + `,"audience":` + audience + `,"method":` + method + `,"constraints":{}}`
+	return ruleJSONWith(target, audience, method, `{}`)
+}
+
+// ruleJSONWith is a rule with the constraints as given, as a request writes them.
+func ruleJSONWith(target, audience, method, constraints string) string {
+	return `{"enabled":true,"target":` + target + `,"audience":` + audience + `,"method":` + method + `,"constraints":` + constraints + `}`
 }
 
 const (
@@ -63,10 +70,11 @@ func (f pricingFixture) list() []adminapi.PricingRule {
 func TestCreatePricingRule(t *testing.T) {
 	t.Parallel()
 	f := newPricingFixture(t)
-	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"reference_multiplier","multiplier":"1.25","currency_conversion":"face"},"constraints":{"min_margin_ratio":"0.1"}}`
+	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"reference_multiplier","multiplier":"1.25","currency_conversion":"face"},"constraints":{}}`
 	made := f.create(body)
 	if made.Rev != 0 || !made.Enabled || made.Target.Kind != "model" || *made.Target.Id != f.model || made.Audience.Id != nil ||
-		*made.Method.Multiplier != "1.25" || *made.Method.CurrencyConversion != "face" || *made.Constraints.MinMarginRatio != "0.1" ||
+		*made.Method.Multiplier != "1.25" || *made.Method.CurrencyConversion != "face" ||
+		made.Constraints.MinMarginRatio != nil || made.Constraints.ReferenceMinRatio != nil || made.Constraints.ReferenceMaxRatio != nil ||
 		time.Since(made.UpdatedAt) > time.Minute {
 		t.Errorf("the rule: %+v", made)
 	}
@@ -83,9 +91,18 @@ func TestCreatePricingRule(t *testing.T) {
 // into the table, as the superuser: this release refuses to make one.
 func (f pricingFixture) store(targetKind, targetID, audienceKind, audienceID, method string) {
 	f.t.Helper()
+	f.storeRule(targetKind, targetID, audienceKind, audienceID, method, `{}`)
+}
+
+// storeRule is store with the constraints as given, as a release before this one could have saved them, and returns the
+// rule's ID.
+func (f pricingFixture) storeRule(targetKind, targetID, audienceKind, audienceID, method, constraints string) string {
+	f.t.Helper()
+	id := uuid.NewV7().String()
 	f.run(`INSERT INTO billing.pricing_rules (id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints)
-		SELECT uuidv7(), id, true, '` + targetKind + `', '` + targetID + `', '` + audienceKind + `', '` + audienceID + `', '` + method + `'::jsonb, '{}'::jsonb
+		SELECT '` + id + `', id, true, '` + targetKind + `', '` + targetID + `', '` + audienceKind + `', '` + audienceID + `', '` + method + `'::jsonb, '` + constraints + `'::jsonb
 		FROM accounts.sites WHERE is_main`)
+	return id
 }
 
 // TestPricingRulesAreListedInTheOrderTheyAreTried: the most specific target first, then the most specific audience.
@@ -200,5 +217,51 @@ func TestPricingRuleRefusals(t *testing.T) {
 		`{"rev":0,"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
 	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules") + f.auditCount("pricing_rule.create"); got != "11" {
 		t.Errorf("rules and audit entries after the refusals: %s, want 1 and 1", got)
+	}
+}
+
+// TestPricingRuleConstraintsWait: this release does not apply a rule's constraints, so creating, changing or previewing
+// a rule that carries any of them is refused as 422 naming the member, and nothing is stored or changed; a rule with
+// none is accepted.
+func TestPricingRuleConstraintsWait(t *testing.T) {
+	t.Parallel()
+	f := newPricingFixture(t)
+	made := f.create(ruleJSON(everything, everything, faced))
+	for _, c := range []struct {
+		name, constraints, pointer string
+	}{
+		{"a minimum margin", `{"min_margin_ratio":"0.1"}`, "/rule/constraints/min_margin_ratio"},
+		{"a reference floor", `{"reference_min_ratio":"0.5"}`, "/rule/constraints/reference_min_ratio"},
+		{"a reference ceiling", `{"reference_max_ratio":"3"}`, "/rule/constraints/reference_max_ratio"},
+	} {
+		rule := ruleJSONWith(`{"kind":"author","id":"acme"}`, everything, faced, c.constraints)
+		for what, rec := range map[string]*httptest.ResponseRecorder{
+			"creating":   f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+rule+`,"reason":"r"}`, newKey()),
+			"changing":   f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+rule+`,"reason":"r"}`, newKey()),
+			"previewing": f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+rule+`}`, as(f.s)),
+		} {
+			expectAdmin(t, what+" a rule with "+c.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+			fields := errorDetailOf(t, rec).Fields
+			switch {
+			case fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != c.pointer:
+				t.Errorf("%s a rule with %s: fields %v, want %s", what, c.name, fields, c.pointer)
+			case !strings.Contains((*fields)[0].Message, "not supported yet"):
+				t.Errorf("%s a rule with %s: %q does not say the constraint is not supported yet", what, c.name, (*fields)[0].Message)
+			}
+		}
+	}
+	// Empty constraints are what every rule of this release has, and previewing one still accepts them.
+	rows := f.preview(`{"model_ids":["` + f.model + `"],"rule":` + ruleJSON(`{"kind":"author","id":"acme"}`, everything, faced) + `}`)
+	if len(rows) != 1 || rows[0].Status != adminapi.Priced {
+		t.Errorf("a preview with a rule of no constraints: %+v", rows)
+	}
+	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "1" {
+		t.Errorf("%s rules after the refusals, want the one stored rule", got)
+	}
+	if got := f.text("SELECT count(*)::text FROM billing.pricing_rule_versions"); got != "1" {
+		t.Errorf("%s versions after the refusals, want the rule's first", got)
+	}
+	if got := f.text("SELECT method->>'multiplier' FROM billing.pricing_rules"); got != "1.25" {
+		t.Errorf("the stored rule is at %s, want 1.25: the refused changes changed nothing", got)
 	}
 }

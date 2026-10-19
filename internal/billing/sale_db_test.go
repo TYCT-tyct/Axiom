@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"uuid"
@@ -128,6 +129,47 @@ func TestSalePricesTakesTheMostSpecificRule(t *testing.T) {
 	}
 	if got := text(t, sold, priced); !strings.Contains(got, `"input":"0.000002"`) {
 		t.Errorf("a disabled rule priced the model as %s, want the author's 2 times", got)
+	}
+}
+
+// TestSalePricesRefusesAStoredConstraint: a rule stored with a constraint that matches a model ends that model's
+// pricing: the broader rule after it does not price the model, and the other model is priced alike whichever order the
+// two come in. The broader rule's fixed price is cached by rule, so neither that price nor the refusal crosses models.
+func TestSalePricesRefusesAStoredConstraint(t *testing.T) {
+	t.Parallel()
+	f := newSnapshotter(t)
+	hit, other := f.model("acme/hit"), f.model("beta/other")
+	r := func(s string) *string { return &s }
+	constrained := Rule{
+		Enabled: true, Target: Selector{Kind: "model", ID: hit.String()}, Audience: Selector{Kind: "all"},
+		Method: multiplied("2"), Constraints: Constraints{MinMarginRatio: r("0.1")}, ID: uuid.NewV7(), Rev: 1,
+	}
+	global := Rule{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: fixed(), ID: uuid.NewV7(), Rev: 1}
+	rules := []Rule{constrained, global}
+	for name, models := range map[string][]catalog.ModelID{
+		"the constrained model first": {hit, other},
+		"the other model first":       {other, hit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sold, unpriced := SalePrices(rules, f.snapshot(), models, usd)
+			if _, ok := sold[hit]; ok {
+				t.Error("the model the constrained rule names was sold")
+			}
+			if got, want := text(t, sold, other), `"input":"0.000002"`; !strings.Contains(got, want) {
+				t.Errorf("the other model sold as %s, want the global fixed price containing %s", got, want)
+			}
+			if len(unpriced) != 1 {
+				t.Fatalf("reported %v, want one refusal", unpriced)
+			}
+			refusal, ok := errors.AsType[*RuleRefusal](unpriced[0])
+			if !ok || refusal.Rule != constrained.ID || refusal.Model != hit {
+				t.Errorf("the refusal %v, want rule %s for model %s", unpriced[0], constrained.ID, hit)
+			}
+			if !errors.Is(unpriced[0], ErrRuleRefuses) {
+				t.Errorf("the refusal is not ErrRuleRefuses: %v", unpriced[0])
+			}
+		})
 	}
 }
 
