@@ -22,7 +22,7 @@ func TestReadinessFollowsTheSnapshot(t *testing.T) {
 	defer stop()
 	status := func() int {
 		rec := httptest.NewRecorder()
-		health.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		health.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 		return rec.Code
 	}
 	await := func(want int, when string) {
