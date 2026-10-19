@@ -146,9 +146,22 @@ func BenchmarkClosure(b *testing.B) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bench", "lib", "testonly"}
-	if diff := cmp.Diff(want, found["probe/bench"].dirs); diff != "" {
+	want := closure{"bench", "lib", "testonly"}
+	if diff := cmp.Diff(want, found["probe/bench"]); diff != "" {
 		t.Errorf("test closure (-want +got):\n%s", diff)
+	}
+}
+
+// TestClosureRejectsAPackageOutsideTheTree: a benchmark package whose directory is not under the tree would get an
+// empty closure and be skipped for good, so the gate fails instead.
+func TestClosureRejectsAPackageOutsideTheTree(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"lib/lib.go":          "package lib\n",
+		"bench/bench.go":      "package bench\n",
+		"bench/bench_test.go": "package bench\n\nimport \"testing\"\n\nfunc BenchmarkX(b *testing.B) {}\n",
+	})
+	if _, err := closures(t.Context(), filepath.Join(dir, "lib"), "the probe module", []string{"probe/bench"}); err == nil {
+		t.Fatal("a benchmark package outside the tree got a closure")
 	}
 }
 
@@ -521,7 +534,7 @@ func TestParseRejectsUnreadableBenchmarkLines(t *testing.T) {
 // binary compiles, or below it, can move the allocation counts, and so can a module file, which decides how every
 // package compiles. Everything else is skipped.
 func TestAffects(t *testing.T) {
-	routing := closure{dirs: []string{"internal/protocol", "internal/routing"}}
+	routing := closure{"internal/protocol", "internal/routing"}
 	cases := []struct {
 		name     string
 		change   diff
@@ -530,17 +543,24 @@ func TestAffects(t *testing.T) {
 	}{
 		{"a file of a package the test binary compiles", diff{files: []string{"internal/routing/plan.go"}}, []closure{routing}, true},
 		{"a test file", diff{files: []string{"internal/routing/session_test.go"}}, []closure{routing}, true},
-		{"a file below a package, such as its testdata", diff{files: []string{"internal/platform/typeid/testdata/many"}}, []closure{{dirs: []string{"internal/platform/typeid"}}}, true},
-		{"a file a package embeds, which lives in its directory", diff{files: []string{"internal/catalog/testdata/dataset.json"}}, []closure{{dirs: []string{"internal/catalog"}}}, true},
+		{"a file below a package, such as its testdata", diff{files: []string{"internal/platform/typeid/testdata/many"}}, []closure{{"internal/platform/typeid"}}, true},
+		{"a file a package embeds, which lives in its directory", diff{files: []string{"internal/catalog/testdata/dataset.json"}}, []closure{{"internal/catalog"}}, true},
 		{"a file of a package the test binary does not compile", diff{files: []string{"internal/gateway/scan.go"}}, []closure{routing}, false},
 		{"a directory that only starts like one of the closure", diff{files: []string{"internal/routing2/plan.go"}}, []closure{routing}, false},
-		{"a package only the other side compiles", diff{files: []string{"internal/new/scan.go"}}, []closure{{}, {dirs: []string{"internal/new"}}}, true},
+		{"a package only the other side compiles", diff{files: []string{"internal/new/scan.go"}}, []closure{{}, {"internal/new"}}, true},
 		{"no change", diff{}, []closure{routing}, false},
 		{"go.mod", diff{files: []string{"go.mod"}}, []closure{routing}, true},
 		{"go.sum", diff{files: []string{"go.sum"}}, nil, true},
 		{"go.work", diff{files: []string{"go.work"}}, nil, true},
 		{"a module file of another module", diff{files: []string{"tools/go.mod"}}, nil, true},
 		{"the changed files could not be read", diff{all: true}, nil, true},
+		{"the justfile", diff{files: []string{"justfile"}}, []closure{routing}, true},
+		{"the ci workflow", diff{files: []string{".github/workflows/ci.yml"}}, []closure{routing}, true},
+		{"the setup action", diff{files: []string{".github/actions/setup/action.yml"}}, []closure{routing}, true},
+		{"the gate itself", diff{files: []string{"tools/benchgate/main.go"}}, []closure{routing}, true},
+		{"another workflow", diff{files: []string{".github/workflows/review.yml"}}, []closure{routing}, false},
+		{"a justfile of a subdirectory", diff{files: []string{"web/justfile"}}, []closure{routing}, false},
+		{"another tool", diff{files: []string{"tools/other/main.go"}}, []closure{routing}, false},
 		{"a file nobody compiles", diff{files: []string{"docs/performance.md"}}, []closure{routing}, false},
 	}
 	for _, c := range cases {
@@ -555,41 +575,37 @@ func TestAffects(t *testing.T) {
 // TestPlan keeps the decision per package, whichever side lists it: a package both sides have is measured on both or
 // left out of both, and a package only one side has stays there.
 func TestPlan(t *testing.T) {
-	routing, gateway := closure{dirs: []string{"internal/routing"}}, closure{dirs: []string{"internal/gateway"}}
+	routing, gateway := closure{"internal/routing"}, closure{"internal/gateway"}
 	cases := []struct {
 		name                            string
 		change                          diff
-		base, head                      []string
-		baseClosures, headClosures      map[string]closure
+		base, head                      side
 		wantBase, wantHead, wantSkipped []string
 	}{
 		{
 			"a package the change cannot reach is left out of both sides",
 			diff{files: []string{"internal/routing/plan.go"}},
-			[]string{"internal/gateway", "internal/routing"}, []string{"internal/gateway", "internal/routing"},
-			map[string]closure{"internal/gateway": gateway, "internal/routing": routing},
-			map[string]closure{"internal/gateway": gateway, "internal/routing": routing},
+			side{[]string{"internal/gateway", "internal/routing"}, map[string]closure{"internal/gateway": gateway, "internal/routing": routing}},
+			side{[]string{"internal/gateway", "internal/routing"}, map[string]closure{"internal/gateway": gateway, "internal/routing": routing}},
 			[]string{"internal/routing"}, []string{"internal/routing"}, []string{"internal/gateway"},
 		},
 		{
 			"a package only one side has stays there",
 			diff{files: []string{"internal/new/x.go", "internal/routing/plan.go"}},
-			[]string{"internal/routing"}, []string{"internal/new", "internal/routing"},
-			map[string]closure{"internal/routing": routing},
-			map[string]closure{"internal/new": {dirs: []string{"internal/new"}}, "internal/routing": routing},
+			side{[]string{"internal/routing"}, map[string]closure{"internal/routing": routing}},
+			side{[]string{"internal/new", "internal/routing"}, map[string]closure{"internal/new": {"internal/new"}, "internal/routing": routing}},
 			[]string{"internal/routing"}, []string{"internal/new", "internal/routing"}, nil,
 		},
 		{
 			"a module file runs every package",
 			diff{files: []string{"go.mod"}},
-			[]string{"internal/gateway"}, []string{"internal/gateway"},
-			nil, nil,
+			side{packages: []string{"internal/gateway"}}, side{packages: []string{"internal/gateway"}},
 			[]string{"internal/gateway"}, []string{"internal/gateway"}, nil,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			base, head, skipped := plan(c.change, c.base, c.head, c.baseClosures, c.headClosures)
+			base, head, skipped := plan(c.change, c.base, c.head)
 			if diff := cmp.Diff(c.wantBase, base); diff != "" {
 				t.Errorf("base targets (-want +got):\n%s", diff)
 			}
