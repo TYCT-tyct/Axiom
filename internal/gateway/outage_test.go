@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,6 +58,23 @@ func (r outageRig) fail(t *testing.T, err error) int {
 
 func (r outageRig) lines() int { return strings.Count(r.logs.String(), "\n") }
 
+// expectTold checks the log and the metric after n requests were refused for cause: one line, the full count, and one
+// line more when the outage ends.
+func (r outageRig) expectTold(t *testing.T, cause string, n int) {
+	t.Helper()
+	if r.lines() != 1 {
+		t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, r.lines(), r.logs)
+	}
+	if got := refusals(t, r.tel, cause); got != strconv.Itoa(n) {
+		t.Errorf("the metric counts %s refusals, want %d", got, n)
+	}
+	r.outage.recovered()
+	r.outage.recovered() // a request after the end tells nothing more
+	if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused="+strconv.Itoa(n)) {
+		t.Errorf("the end of the outage is not told once with its count:\n%s", r.logs)
+	}
+}
+
 // TestAnOutageIsLoggedOnceNotPerRequest: however many requests an outage refuses, the log holds one line when it begins
 // and one when it ends, while the metric counts every request.
 func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
@@ -77,17 +95,7 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 					t.Fatalf("an outage is answered %d, want 503", code)
 				}
 			}
-			if r.lines() != 1 {
-				t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, r.lines(), r.logs)
-			}
-			if got := refusals(t, r.tel, tc.cause); got != "500" {
-				t.Errorf("the metric counts %s refusals, want %d", got, n)
-			}
-			r.outage.recovered()
-			r.outage.recovered() // a request after the end tells nothing more
-			if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused=500") {
-				t.Errorf("the end of the outage is not told once with its count:\n%s", r.logs)
-			}
+			r.expectTold(t, tc.cause, n)
 		})
 	}
 }
