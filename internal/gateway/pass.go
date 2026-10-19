@@ -24,42 +24,42 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
-	body, held, err := readWhole(s.x.Memory, resp.Body, idle, idleFor)
+	body, err := readWhole(s.x.Memory, resp.Body, idle, idleFor, &s.replyHeld)
 	if err != nil {
-		s.x.Memory.Refund(held)
+		s.dropReply()
 		return s.failedReply(a, ctx, err)
 	}
 	a.usage = protocol.UsageOf(body)
 	rec := &s.ends[a.i]
 	if s.isGone() { // the reply was read to the end for what it says it used, but nothing of it reaches the client
-		s.x.Memory.Refund(held)
+		s.dropReply()
 		rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishCancelled
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{}
 	}
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
-	s.replyHeld = held
 	return over, ended{reply: body, status: resp.StatusCode}
 }
 
 // readWhole reads a reply whole within the node's memory budget, charging each growth of its buffer before it is made,
 // and keeps the idle timer from firing while the upstream says something. It holds, and leaves charged, the capacity of
-// what it returns, which the caller gives back. Growing the buffer holds the old one and the new one at once, so the
+// what it returns, which the caller gives back; held is where that is counted as it grows, so that a read that panics
+// leaves it with the caller too. Growing the buffer holds the old one and the new one at once, so the
 // node's real peak at a growth is the capacity charged plus the old one, at most twice what was charged (1.5 times it
 // for the doubling steps): the charge bounds the reply, not the instant of a copy.
-func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFor time.Duration) (reply []byte, held int64, err error) {
+func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFor time.Duration, held *int64) (reply []byte, err error) {
 	for {
 		if len(reply) == cap(reply) {
 			// One byte past the limit: a reply of exactly the limit ends, rather than being taken for a larger one.
 			room := min(compactLimit+1-len(reply), max(cap(reply), 64<<10))
 			if room <= 0 {
-				return reply, held, protocol.ErrMemory
+				return reply, protocol.ErrMemory
 			}
 			if !memory.Charge(int64(room)) {
-				return reply, held, protocol.ErrMemory
+				return reply, protocol.ErrMemory
 			}
-			held += int64(room)
+			*held += int64(room)
 			grown := make([]byte, len(reply), cap(reply)+room)
 			copy(grown, reply)
 			reply = grown
@@ -71,11 +71,11 @@ func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFo
 		}
 		switch {
 		case len(reply) > compactLimit:
-			return reply, held, protocol.ErrMemory
+			return reply, protocol.ErrMemory
 		case errors.Is(err, io.EOF):
-			return reply, held, nil
+			return reply, nil
 		case err != nil:
-			return reply, held, err
+			return reply, err
 		}
 	}
 }

@@ -182,8 +182,9 @@ type session struct {
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
 	// live is the relay the call must release however it ends, panic included: the one being read, then the one the
-	// call ends with. A kept part is always the live one too: the next attempt lets it go before it makes a relay. Release
-	// does nothing the second time, so a path that already released a relay need not clear this.
+	// call ends with. It is the backstop for a way out that skips the release; drop clears it once a relay is let go,
+	// so that a discarded relay's buffers are not kept reachable (and the budget they were charged against reused)
+	// while the next attempt waits on its upstream. A kept part is always the live one too.
 	live      *protocol.Relay
 	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
 
@@ -224,7 +225,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
-		s.answerReply(e)
+		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
@@ -288,16 +289,10 @@ func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 	s.respond(status, body)
 }
 
-// answerReply writes the body an upstream answered whole, as the compact endpoint does: it goes to the client as it came
-// (docs/domains/gateway.md「转发规则」), after the settlement, which nothing in it reports.
-func (s *session) answerReply(e ended) {
-	s.respond(e.status, e.reply)
-}
-
 // let drops the aggregate reply kept for the answer, if there is one: the call is over, or another attempt replaced it.
 func (s *session) let() {
 	if s.part != nil {
-		drop(s.part)
+		s.drop(s.part)
 		s.part = nil
 	}
 }
@@ -306,12 +301,17 @@ func (s *session) let() {
 // reply.
 func (s *session) release() {
 	s.let()
-	s.x.Memory.Refund(s.replyHeld)
-	s.replyHeld = 0
+	s.dropReply()
 	if s.live != nil {
 		s.live.Release()
 		s.live = nil
 	}
+}
+
+// dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.
+func (s *session) dropReply() {
+	s.x.Memory.Refund(s.replyHeld)
+	s.replyHeld = 0
 }
 
 // final is what the ending reports of a settlement.

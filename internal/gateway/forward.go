@@ -259,7 +259,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		return over, ended{relay: relay, err: e}
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	return s.unanswered(a, e, again)
 }
 
@@ -305,13 +305,13 @@ func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.E
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
 	if !again { // the client is gone, the call is out of road or the reservation failed: the error alone answers it
-		drop(relay)
+		s.drop(relay)
 		return s.unanswered(a, e, false)
 	}
 	if a.content {
 		s.keep(relay) // it answers the call if no entry is left, and nothing else of it reaches the client
 	} else {
-		drop(relay)
+		s.drop(relay)
 	}
 	return s.unanswered(a, e, true)
 }
@@ -354,12 +354,12 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		switch {
 		case s.isGone():
 			rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishCancelled
-			drop(relay)
+			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 			return over, ended{}
 		case !a.content: // a 200 with nothing in it is a failure: the next entry answers
 			rec.Result = billing.FailedBeforeCommit
-			drop(relay)
+			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 			return nextEntry, ended{}
 		}
@@ -376,7 +376,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		return over, ended{relay: relay, done: true}
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	if s.isGone() {
 		rec.Finish = billing.FinishCancelled
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
@@ -402,7 +402,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 		return over, e
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	if s.isGone() {
 		return over, ended{}
 	}
@@ -410,8 +410,11 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 }
 
 // drop lets go of a relay whose stream is not going to be used: its ending is written for nobody, which gives back
-// what it held of the node's memory.
-func drop(relay *protocol.Relay) {
+// what it held of the node's memory, and the session lets go of the relay itself. A panic before that leaves it in live.
+func (s *session) drop(relay *protocol.Relay) {
 	relay.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil)
 	relay.Release() // an aggregate relay keeps its budget past Fail for a body that will not be written
+	if s.live == relay {
+		s.live = nil
+	}
 }
