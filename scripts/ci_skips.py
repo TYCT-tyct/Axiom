@@ -37,7 +37,7 @@ def needs_benchmark(paths: list[str]) -> bool:
 
 # Scripts that only check the repository or run CI; every other scripts/ file may be used by `just up`'s build
 # (scripts/web_cache.py) or by the deployment check (deploy-check.sh, deploy_name.py).
-IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|workflow/.*|ci/runner-host\.sh)")
+IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|train\.py|workflow/.*|ci/runner-host\.sh)")
 
 
 def irrelevant_to_deployment(path: str) -> bool:

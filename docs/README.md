@@ -33,6 +33,7 @@
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
 | 支付：收款渠道、充值流程、加密货币、手续费、退款与拒付、防欺诈、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
+| 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：谁拍板、一次改动的流程、文档、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 | 本项目的补充和例外：负责人、谁拍板的补充、产品设计基线、一个 PR 的流程、评审、代码质量标准、检查清单、质量审计、里程碑收尾、发布 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
