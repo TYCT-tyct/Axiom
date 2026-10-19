@@ -171,9 +171,9 @@ type LiveBatchesRow struct {
 	OpenedID  uuid.UUID
 }
 
-// The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from before the sequence). consumed and
-// expired are what the allocation has stored: they trail the ledger until the account is replayed. Served by
-// credit_batches_by_account.
+// The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
+// before the sequence). consumed and expired are what the allocation has stored: they trail the ledger until the
+// account is replayed. Served by credit_batches_by_account.
 func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]LiveBatchesRow, error) {
 	rows, err := db.Query(ctx, liveBatches, accountID)
 	if err != nil {
