@@ -3,6 +3,7 @@ package gateway
 import (
 	"cmp"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"axiom/internal/catalog"
@@ -36,6 +37,12 @@ const (
 	errAlias  = "Model aliases such as ~author/family-latest are not supported yet; use the model's own name."
 )
 
+// maxModelName bounds the whole name a client writes, variants included, in bytes. The call record keeps that name and
+// its column takes at most 200 characters (internal/observability/migrations/00001_call_log.sql), and the catalog took
+// no name longer than this either, so a name the catalog would have refused before variants is still refused here,
+// before anything is reserved, however many variants are stacked on a short base.
+const maxModelName = 200
+
 func noVariant(message string) *Refusal {
 	return &Refusal{Status: http.StatusNotFound, Code: errNoModel.Code, Message: message}
 }
@@ -46,6 +53,9 @@ func noVariant(message string) *Refusal {
 // exist, whether or not the base exists. :exacto is left to rank, because an explicit provider.sort replaces it
 // (OpenRouter《Exacto》, 2026-10-19).
 func parseModelName(name string) (modelName, *Refusal) {
+	if len(name) > maxModelName {
+		return modelName{}, noVariant("The model name is longer than the " + strconv.Itoa(maxModelName) + " bytes a model name may have.")
+	}
 	base, rest, more := strings.Cut(name, ":")
 	if strings.HasPrefix(strings.TrimSpace(base), "~") {
 		return modelName{}, invalid(errAlias)
@@ -76,53 +86,75 @@ func parseModelName(name string) (modelName, *Refusal) {
 	return m, nil
 }
 
-// resolve turns the model the request names, then the alternates it lists, into models, and works out the ranking the
-// route takes from the names. The first must exist; an alternate that does not is left out, as it could not be tried.
-//
-// The ranking is one for the request: an explicit provider.sort first, as OpenRouter says of :exacto ("an explicit sort
-// ... overrides it"; for :nitro and :floor it is silent, and they are treated alike), then the first name's variant. A
-// variant that cannot be honored is refused, alternates' included, so none is ignored: an :exacto nothing replaces, and
-// a sorting variant on an alternate that differs from the ranking the request gets, as routing ranks per request.
-func resolve(snap *catalog.Snapshot, req *protocol.Request, explicit *routing.Strategy) ([]catalog.ModelID, *routing.Strategy, error) {
-	primary, ref := parseModelName(req.Model)
-	if ref != nil {
-		return nil, nil, ref
-	}
-	first, err := snap.ResolvePublic(primary.base)
-	if err != nil {
-		return nil, nil, err
-	}
-	ranking := cmp.Or(explicit, primary.sort)
-	if primary.exacto && ranking == nil {
-		return nil, nil, invalid(errExacto)
-	}
-	models := []catalog.ModelID{first.Model}
-	for _, name := range req.Models {
-		id, ok, err := alternate(snap, name, ranking)
-		if err != nil {
-			return nil, nil, err
-		}
-		if ok {
-			models = append(models, id)
-		}
-	}
-	return models, ranking, nil
+// variantNames are the models a request names, by the base names the catalog is asked for.
+type variantNames struct {
+	primary    string   // the base name of the model the request names
+	alternates []string // the base names of the models it lists that could be tried
 }
 
-// alternate resolves one name of the request's models under the ranking the request gets. ok is false for a name
-// that could not be tried, which is left out.
-func alternate(snap *catalog.Snapshot, name string, ranking *routing.Strategy) (id catalog.ModelID, ok bool, err error) {
+// readRouting reads what a request's provider object and model names ask of the route, for a call and for a count alike,
+// so they refuse alike. The ranking is an explicit provider.sort first, as OpenRouter says of :exacto ("an explicit
+// sort ... overrides it"; for :nitro and :floor it is silent, and they are treated alike), then the first name's
+// variant. A variant that cannot be honored is refused, alternates' included, so none is ignored: an :exacto only an
+// explicit provider.sort replaces (a sort variant on the first name does not rank an alternate's quality), and a sorting
+// variant on an alternate that differs from the ranking the request gets, as routing ranks per request. An alternate
+// that is a catalog variant or has an unknown suffix is left out, as it could not be tried.
+func readRouting(req *protocol.Request) (routing.Override, variantNames, error) {
+	over, err := override(req.Provider)
+	if err != nil {
+		return over, variantNames{}, err
+	}
+	primary, ref := parseModelName(req.Model)
+	if ref != nil {
+		return over, variantNames{}, ref
+	}
+	explicit := over.Sort != nil
+	if primary.exacto && !explicit {
+		return over, variantNames{}, invalid(errExacto)
+	}
+	over.Sort = cmp.Or(over.Sort, primary.sort)
+	v := variantNames{primary: primary.base}
+	for _, name := range req.Models {
+		base, ok, err := alternate(name, explicit, over.Sort)
+		if err != nil {
+			return over, variantNames{}, err
+		}
+		if ok {
+			v.alternates = append(v.alternates, base)
+		}
+	}
+	return over, v, nil
+}
+
+// alternate reads one name of the request's models under the ranking the request has. ok is false for a name that
+// could not be tried. explicit says the request wrote a provider.sort, the only thing that replaces an :exacto here.
+func alternate(name string, explicit bool, ranking *routing.Strategy) (base string, ok bool, err error) {
 	alt, ref := parseModelName(name)
 	switch {
 	case ref != nil && ref.Status == http.StatusNotFound:
-		return id, false, nil
+		return "", false, nil
 	case ref != nil:
-		return id, false, ref
-	case alt.exacto && ranking == nil:
-		return id, false, invalid(errExacto)
+		return "", false, ref
+	case alt.exacto && !explicit:
+		return "", false, invalid(errExacto)
 	case alt.sort != nil && (ranking == nil || *ranking != *alt.sort):
-		return id, false, invalid("A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request.")
+		return "", false, invalid("A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request.")
 	}
-	m, err := snap.ResolvePublic(alt.base)
-	return m.Model, err == nil, nil
+	return alt.base, true, nil
+}
+
+// resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an
+// alternate that does not is left out, as it could not be tried.
+func resolve(snap *catalog.Snapshot, v variantNames) ([]catalog.ModelID, error) {
+	first, err := snap.ResolvePublic(v.primary)
+	if err != nil {
+		return nil, err
+	}
+	models := []catalog.ModelID{first.Model}
+	for _, name := range v.alternates {
+		if m, err := snap.ResolvePublic(name); err == nil {
+			models = append(models, m.Model)
+		}
+	}
+	return models, nil
 }

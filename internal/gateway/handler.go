@@ -290,7 +290,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
 		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
 	}
-	over, err := override(req.Provider)
+	over, names, err := readRouting(&req)
 	if err != nil {
 		return err
 	}
@@ -298,11 +298,10 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	models, ranking, err := resolve(snap, &req, over.Sort)
+	models, err := resolve(snap, names)
 	if err != nil {
 		return err
 	}
-	over.Sort = ranking
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
 	if r.Header.Get("X-Claude-Code-Context-Compacted") != "" { // the cache it stuck for is gone: choose afresh

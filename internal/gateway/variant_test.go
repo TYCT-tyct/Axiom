@@ -80,32 +80,35 @@ func TestModelVariantsRoute(t *testing.T) {
 		}
 	})
 	a := r.newAccount(1e9)
-	one, two := r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID
+	one, two, three := r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID, r.endpoints["beta-1"].ID
 	for name, tc := range map[string]struct {
 		model, members string
 		want           []routing.EndpointID
 	}{
-		"nitro":                             {"acme/alpha:nitro", "", []routing.EndpointID{two, one}},
-		"floor":                             {"acme/alpha:floor", "", []routing.EndpointID{one, two}},
-		"the last one wins":                 {"acme/alpha:floor:nitro", "", []routing.EndpointID{two, one}},
-		"in the other order":                {"acme/alpha:nitro:floor", "", []routing.EndpointID{one, two}},
-		"spelled loosely":                   {"ACME/Alpha:Nitro", "", []routing.EndpointID{two, one}},
-		"the explicit sort replaces nitro":  {"acme/alpha:nitro", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
-		"the explicit sort replaces floor":  {"acme/alpha:floor", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
-		"an explicit sort that agrees":      {"acme/alpha:nitro", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
-		"exacto, replaced by the sort":      {"acme/alpha:exacto", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
-		"exacto, replaced by a variant":     {"acme/alpha:exacto:nitro", "", []routing.EndpointID{two, one}},
-		"an alternate that ranks the same":  {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, nil},
-		"an alternate that is not a model":  {"acme/alpha:nitro", `"models":["acme/none:free","acme/beta"],`, nil},
-		"a variant on the alternate agrees": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:floor"],`, nil},
+		"nitro":                                      {"acme/alpha:nitro", "", []routing.EndpointID{two, one}},
+		"floor":                                      {"acme/alpha:floor", "", []routing.EndpointID{one, two}},
+		"the last one wins":                          {"acme/alpha:floor:nitro", "", []routing.EndpointID{two, one}},
+		"in the other order":                         {"acme/alpha:nitro:floor", "", []routing.EndpointID{one, two}},
+		"spelled loosely":                            {"ACME/Alpha:Nitro", "", []routing.EndpointID{two, one}},
+		"the explicit sort replaces nitro":           {"acme/alpha:nitro", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
+		"the explicit sort replaces floor":           {"acme/alpha:floor", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
+		"an explicit sort that agrees":               {"acme/alpha:nitro", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
+		"exacto, replaced by the sort":               {"acme/alpha:exacto", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
+		"exacto, replaced by a variant":              {"acme/alpha:exacto:nitro", "", []routing.EndpointID{two, one}},
+		"an alternate that ranks the same":           {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, []routing.EndpointID{two, one, three}},
+		"an alternate that is not a model":           {"acme/alpha:nitro", `"models":["acme/none:free","acme/beta"],`, []routing.EndpointID{two, one, three}},
+		"a variant on the alternate agrees":          {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:floor"],`, []routing.EndpointID{one, two, three}},
+		"an alternate exacto, replaced by the sort":  {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:exacto"],`, []routing.EndpointID{one, two, three}},
+		"an alternate exacto, replaced by a variant": {"acme/alpha:nitro", `"models":["acme/beta:exacto:nitro"],`, []routing.EndpointID{two, one, three}},
+		"the most variants a name can hold":          {"acme/alpha" + strings.Repeat(":nitro", 31), "", []routing.EndpointID{two, one}},
 	} {
 		route, resp, body := r.sendNamed(a, tc.model, tc.members)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s: %d %s", name, resp.StatusCode, body)
 			continue
 		}
-		if tc.want != nil && !cmp.Equal(route[:len(tc.want)], tc.want) {
-			t.Errorf("%s: route %v, want it to begin %v", name, route, tc.want)
+		if !cmp.Equal(route, tc.want) {
+			t.Errorf("%s: route %v, want %v", name, route, tc.want)
 		}
 		if got := r.calls()[len(r.calls())-1].Request.Model; got != tc.model {
 			t.Errorf("%s: the call's model is %q, want what the client sent, %q", name, got, tc.model)
@@ -143,6 +146,10 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		"an alternate's sort":      {"acme/alpha", `"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
 		"an alternate's other":     {"acme/alpha:floor", `"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
 		"an alternate's other too": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
+		"an alternate's exacto, whatever the first name ranks": {"acme/alpha:nitro", `"models":["acme/beta:exacto"],`, 400, "invalid_request", ":exacto"},
+		"an alternate's exacto after the first name's floor":   {"acme/alpha:floor", `"models":["acme/alpha:exacto"],`, 400, "invalid_request", ":exacto"},
+		"a name longer than a record holds":                    {"acme/alpha" + strings.Repeat(":nitro", 32), "", 404, "model_not_found", "longer than"},
+		"a long name of a base nothing has":                    {strings.Repeat("a", 201), "", 404, "model_not_found", "longer than"},
 	} {
 		_, resp, body := r.sendNamed(a, tc.model, tc.members)
 		if code, _ := errorOf(t, body); resp.StatusCode != tc.status || code != tc.code || !strings.Contains(body, tc.text) {
@@ -156,17 +163,80 @@ func TestModelVariantsAreRefused(t *testing.T) {
 }
 
 // TestCountTokensReadsVariants: counting reads the model as a call does, so a name that a call would serve is counted and
-// one it would refuse is refused alike.
+// one it would refuse is refused alike, an :exacto that only an explicit provider.sort replaces included.
 func TestCountTokensReadsVariants(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(5e9)
-	for model, status := range map[string]int{
-		"acme/alpha:nitro": 200, "acme/alpha:floor:nitro": 200, "acme/alpha:online": 400, "acme/alpha:free": 404, "~acme/x-latest": 400,
+	for name, tc := range map[string]struct {
+		model, members string
+		status         int
+	}{
+		"nitro":                           {"acme/alpha:nitro", "", 200},
+		"the last variant wins":           {"acme/alpha:floor:nitro", "", 200},
+		"online":                          {"acme/alpha:online", "", 400},
+		"free":                            {"acme/alpha:free", "", 404},
+		"an alias":                        {"~acme/x-latest", "", 400},
+		"exacto":                          {"acme/alpha:exacto", "", 400},
+		"exacto, replaced by the sort":    {"acme/alpha:exacto", `"provider":{"sort":"price"},`, 200},
+		"exacto, replaced by a variant":   {"acme/alpha:exacto:nitro", "", 200},
+		"an alternate's exacto":           {"acme/alpha:nitro", `"models":["acme/beta:exacto"],`, 400},
+		"an alternate's exacto, replaced": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:exacto"],`, 200},
+		"a provider a call would refuse":  {"acme/alpha", `"provider":{"only":["acme"]},`, 400},
+		"a name too long to be recorded":  {"acme/alpha" + strings.Repeat(":nitro", 32), "", 404},
 	} {
-		resp, body := r.do(http.MethodPost, "/v1/messages/count_tokens", a.key, strings.NewReader(strings.Replace(countBody, "acme/alpha", model, 1)))
-		if resp.StatusCode != status {
-			t.Errorf("%s: %d %s, want %d", model, resp.StatusCode, body, status)
+		body := strings.Replace(strings.Replace(countBody, "acme/alpha", tc.model, 1), `{"model"`, `{`+tc.members+`"model"`, 1)
+		if resp, out := r.do(http.MethodPost, "/v1/messages/count_tokens", a.key, strings.NewReader(body)); resp.StatusCode != tc.status {
+			t.Errorf("%s: %d %s, want %d", name, resp.StatusCode, out, tc.status)
 		}
 	}
+}
+
+// TestAModelNameTooLongToBeRecordedIsRefusedFirst: the call record holds the name the client wrote, whole, in at most 200
+// characters, so a short base with variants stacked past that is refused at the door like a long base always was: before
+// anything is reserved, charged or sent, not served and then lost from the record.
+func TestAModelNameTooLongToBeRecordedIsRefusedFirst(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for _, model := range []string{"acme/alpha" + strings.Repeat(":nitro", 32), "acme/alpha" + strings.Repeat(":floor:nitro", 100)} {
+		route, resp, body := r.sendNamed(a, model, "")
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "model_not_found" || len(route) != 0 {
+			t.Errorf("%d bytes: %d %s, route %v", len(model), resp.StatusCode, body, route)
+		}
+	}
+	if r.count(allRows) != 0 || len(r.calls()) != 0 || r.count("SELECT balance FROM billing.balances WHERE account_id = $1", a.id) != 1e9 {
+		t.Error("a reservation, a call or a charge was made for a name that was refused")
+	}
+	r.idle(1 << 30)
+}
+
+// TestAnAlternateWithAVariantServesWhenTheFirstModelCannot: the alternate with a variant is not only listed, it takes the
+// call when the first model has no endpoint left, and it is the only entry of the route.
+func TestAnAlternateWithAVariantServesWhenTheFirstModelCannot(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			if strings.HasPrefix(name, "alpha") {
+				e.Enabled = false
+			}
+		}
+	})
+	a := r.newAccount(1e9)
+	beta := []routing.EndpointID{r.endpoints["beta-1"].ID}
+	for name, tc := range map[string]struct {
+		model, members string
+		status         int
+		want           []routing.EndpointID
+	}{
+		"no alternate":                  {"acme/alpha:nitro", "", http.StatusNotFound, nil},
+		"an alternate with a variant":   {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, http.StatusOK, beta},
+		"an alternate that is no model": {"acme/alpha:nitro", `"models":["acme/beta:free"],`, http.StatusNotFound, nil},
+	} {
+		route, resp, body := r.sendNamed(a, tc.model, tc.members)
+		if resp.StatusCode != tc.status || !cmp.Equal(route, tc.want) {
+			t.Errorf("%s: %d %s, route %v, want %d %v", name, resp.StatusCode, body, route, tc.status, tc.want)
+		}
+	}
+	r.idle(1 << 30)
 }
