@@ -10,6 +10,22 @@ import (
 
 const initialExchange = `{"base":"USD","quote":"CNY","numerator":"71","denominator":"10","expected_version":0,"kind":"initial","reason":"verified direction"}`
 
+func checkExchangeLists(t *testing.T, f pricingFixture) {
+	t.Helper()
+	for path, want := range map[string]int{
+		"/pricing/exchange-rates":                          1,
+		"/pricing/exchange-rates/USD/CNY":                  2,
+		"/pricing/exchange-rates/CNY/USD?before_version=2": 1,
+	} {
+		rec := f.do(http.MethodGet, path, "", as(f.s))
+		var list adminapi.ExchangeRateList
+		decode(t, rec, &list)
+		if rec.Code != http.StatusOK || len(list.Data) != want {
+			t.Errorf("%s: %d %+v", path, rec.Code, list)
+		}
+	}
+}
+
 func TestAdminExchangeHistoryCorrectionAndReplay(t *testing.T) {
 	f := newPricingFixture(t)
 	key := newKey()
@@ -32,27 +48,19 @@ func TestAdminExchangeHistoryCorrectionAndReplay(t *testing.T) {
 	}
 	rec = f.change(f.s, http.MethodPost, "/pricing/exchange-rates", correction, newKey())
 	expectAdmin(t, "setExchangeRate", rec, http.StatusConflict, codeStaleRevision)
-	for _, path := range []string{"/pricing/exchange-rates", "/pricing/exchange-rates/USD/CNY", "/pricing/exchange-rates/CNY/USD?before_version=2"} {
-		rec = f.do(http.MethodGet, path, "", as(f.s))
-		var list adminapi.ExchangeRateList
-		decode(t, rec, &list)
-		want := 1
-		if path == "/pricing/exchange-rates/USD/CNY" {
-			want = 2
-		}
-		if rec.Code != http.StatusOK || len(list.Data) != want {
-			t.Errorf("%s: %d %+v", path, rec.Code, list)
-		}
-	}
+	checkExchangeLists(t, f)
 	f.expectAudit("exchange_rate.initial", map[string]string{"reason": "verified direction", "target_id": first.Id, "detail->>'version'": "1"})
 }
 
 func TestAdminExchangeInvalidFields(t *testing.T) {
 	f := newPricingFixture(t)
 	for _, tc := range []struct{ old, new, pointer string }{
-		{`"USD"`, `"XXX"`, "/base"}, {`"CNY"`, `"USD"`, "/quote"},
-		{`"71"`, `"0"`, "/numerator"}, {`"10"`, `"-1"`, "/denominator"},
-		{`"initial"`, `"unknown"`, "/kind"}, {`"verified direction"`, `" "`, "/reason"},
+		{`"USD"`, `"XXX"`, "/base"},
+		{`"CNY"`, `"USD"`, "/quote"},
+		{`"71"`, `"0"`, "/numerator"},
+		{`"10"`, `"-1"`, "/denominator"},
+		{`"initial"`, `"unknown"`, "/kind"},
+		{`"verified direction"`, `" "`, "/reason"},
 	} {
 		rec := f.change(f.s, http.MethodPost, "/pricing/exchange-rates", strings.Replace(initialExchange, tc.old, tc.new, 1), newKey())
 		expectAdmin(t, "setExchangeRate", rec, http.StatusUnprocessableEntity, codeUnprocessable)

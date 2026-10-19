@@ -67,13 +67,9 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
 	// Start time bounds freshness even if reading a source stalls during the build.
 	builtAt := time.Now()
-	var rates []platform.ExchangeRate
-	if d.ExchangeRates != nil {
-		var err error
-		rates, err = d.ExchangeRates(ctx)
-		if err != nil {
-			return nil, Count{}, fmt.Errorf("gateway: exchange rates: %w", err)
-		}
+	rates, err := d.exchangeRates(ctx)
+	if err != nil {
+		return nil, Count{}, err
 	}
 	catalogSnap, err := d.Catalog.Current()
 	if err != nil {
@@ -103,17 +99,8 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 			note(left, catalog.ModelID(r.Model), why)
 			continue
 		}
+		e.Exchange = exchangeBasis(rates, r.Currency, e.Price.Schedule.Currency())
 		built = append(built, e)
-		if r.Currency != e.Price.Schedule.Currency() {
-			basis := platform.ExchangeRate{Base: r.Currency.String(), Quote: e.Price.Schedule.Currency().String()}
-			for _, rate := range rates {
-				if _, ok := rate.Between(r.Currency, e.Price.Schedule.Currency()); ok {
-					basis = rate
-					break
-				}
-			}
-			built[len(built)-1].Exchange = basis
-		}
 	}
 	d.report(left)
 	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
@@ -121,6 +108,31 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 		return nil, Count{}, err
 	}
 	return snap, Count{Endpoints: len(built), Offered: len(routable)}, nil
+}
+
+func (d *RouteDeps) exchangeRates(ctx context.Context) ([]platform.ExchangeRate, error) {
+	if d.ExchangeRates == nil {
+		return nil, nil
+	}
+	rates, err := d.ExchangeRates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: exchange rates: %w", err)
+	}
+	return rates, nil
+}
+
+// exchangeBasis is the configured rate between a supplier's currency and the site's, or the bare pair when none is
+// configured, so that the missing rate is frozen with the route too. Same currency needs none.
+func exchangeBasis(rates []platform.ExchangeRate, from, to platform.Currency) platform.ExchangeRate {
+	if from == to {
+		return platform.ExchangeRate{}
+	}
+	for _, rate := range rates {
+		if _, ok := rate.Between(from, to); ok {
+			return rate
+		}
+	}
+	return platform.ExchangeRate{Base: from.String(), Quote: to.String()}
 }
 
 // Publish replaces the router's snapshot with one Build made and tells Built what it holds. Nothing else takes a

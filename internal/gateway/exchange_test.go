@@ -17,26 +17,44 @@ import (
 	"axiom/internal/suppliers"
 )
 
+func exchangeCurrency(t *testing.T, code string) platform.Currency {
+	t.Helper()
+	c, err := platform.ParseCurrency(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func (f *routeFixture) publish() {
+	f.t.Helper()
+	snap, count, err := f.deps.Build(f.t.Context())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.deps.Publish(snap, count)
+}
+
+func wantVersion(t *testing.T, entries []routing.Entry, version int64, who string) {
+	t.Helper()
+	for _, e := range entries {
+		if e.Exchange.Version != version {
+			t.Fatalf("%s got rate version %d want %d", who, e.Exchange.Version, version)
+		}
+	}
+}
+
 func TestRouteFreezesExchangeAcrossRefreshes(t *testing.T) {
 	f := newRouteFixture(t)
-	cny, _ := platform.ParseCurrency("CNY")
-	jpy, _ := platform.ParseCurrency("JPY")
 	a, b := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
-	a.Currency, b.Currency = cny, jpy
+	a.Currency, b.Currency = exchangeCurrency(t, "CNY"), exchangeCurrency(t, "JPY")
 	f.build([]suppliers.Routable{a, b})
 	rates := []platform.ExchangeRate{
 		{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Numerator: 10, Denominator: 71, Version: 1},
 		{ID: uuid.NewV7(), Base: "JPY", Quote: "USD", Numerator: 1, Denominator: 150, Version: 1},
 	}
 	f.deps.ExchangeRates = func(context.Context) ([]platform.ExchangeRate, error) { return rates, nil }
-	publish := func() {
-		snap, count, err := f.deps.Build(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.deps.Publish(snap, count)
-	}
-	publish()
+	f.publish()
 	old, wait, err := f.router.Plan(call(f.served))
 	if err != nil || wait != nil || len(old.Entries) != 2 {
 		t.Fatalf("plan: %+v %v %v", old, wait, err)
@@ -48,21 +66,13 @@ func TestRouteFreezesExchangeAcrossRefreshes(t *testing.T) {
 			rates[i].Version = version
 			rates[i].Numerator = version
 		}
-		publish()
+		f.publish()
 		fresh, _, err := f.router.Plan(call(f.served))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, e := range fresh.Entries {
-			if e.Exchange.Version != version {
-				t.Fatal("new request got old rate")
-			}
-		}
-		for _, e := range old.Entries {
-			if e.Exchange.Version != 1 {
-				t.Fatal("in-flight request changed rate")
-			}
-		}
+		wantVersion(t, fresh.Entries, version, "new request")
+		wantVersion(t, old.Entries, 1, "in-flight request")
 	}
 }
 
@@ -92,59 +102,54 @@ func TestExchangeRefreshFailureDoesNotExtendFreshness(t *testing.T) {
 	}
 }
 
+func (f *routeFixture) setCNYRate(version int64) error {
+	kind := "adjustment"
+	if version == 0 {
+		kind = "initial"
+	}
+	return f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := billing.SetExchangeRate(f.t.Context(), tx, audit.System("gateway.test"), billing.ExchangeInput{
+			Base: "CNY", Quote: "USD", Numerator: "10", Denominator: "71", Kind: kind,
+			ExpectedVersion: version, Reason: "commit during a routing build",
+		})
+		return err
+	})
+}
+
+func (f *routeFixture) currentRates(ctx context.Context) (rates []platform.ExchangeRate, err error) {
+	err = f.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		rows, err := billing.ExchangeRates(ctx, tx)
+		for _, r := range rows {
+			rates = append(rates, r.Basis())
+		}
+		return err
+	})
+	return rates, err
+}
+
 func TestRouteBuildKeepsTheRatesReadBeforeAConcurrentCommit(t *testing.T) {
 	f := newRouteFixture(t)
 	e := routable(f.served, protocol.Messages)
-	e.Currency, _ = platform.ParseCurrency("CNY")
+	e.Currency = exchangeCurrency(t, "CNY")
 	f.build([]suppliers.Routable{e})
-	set := func(version int64) error {
-		return f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-			kind := "adjustment"
-			if version == 0 {
-				kind = "initial"
-			}
-			_, err := billing.SetExchangeRate(t.Context(), tx, audit.System("gateway.test"), billing.ExchangeInput{
-				Base: "CNY", Quote: "USD", Numerator: "10", Denominator: "71", Kind: kind,
-				ExpectedVersion: version, Reason: "commit during a routing build",
-			})
-			return err
-		})
-	}
-	if err := set(0); err != nil {
+	if err := f.setCNYRate(0); err != nil {
 		t.Fatal(err)
 	}
-	f.deps.ExchangeRates = func(ctx context.Context) (rates []platform.ExchangeRate, err error) {
-		err = f.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
-			rows, err := billing.ExchangeRates(ctx, tx)
-			for _, r := range rows {
-				rates = append(rates, r.Basis())
-			}
-			return err
-		})
-		return
-	}
+	f.deps.ExchangeRates = f.currentRates
 	changed := false
 	f.deps.Prices = func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
-		if !changed {
-			changed = true
-			if err := set(1); err != nil {
-				return nil, err
-			}
+		if changed {
+			return f.prices, nil
 		}
-		return f.prices, nil
+		changed = true
+		return f.prices, f.setCNYRate(1)
 	}
 	for _, version := range []int64{1, 2} {
-		snap, count, err := f.deps.Build(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.deps.Publish(snap, count)
+		f.publish()
 		plan, _, err := f.router.Plan(call(f.served))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plan.Entries[0].Exchange.Version != version {
-			t.Fatalf("build used version %d want %d", plan.Entries[0].Exchange.Version, version)
-		}
+		wantVersion(t, plan.Entries, version, "build")
 	}
 }

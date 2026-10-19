@@ -16,6 +16,38 @@ func fxInput(n, d, kind string, version int64) ExchangeInput {
 	return ExchangeInput{Base: "USD", Quote: "CNY", Numerator: n, Denominator: d, Kind: kind, ExpectedVersion: version, Reason: "verified manual rate"}
 }
 
+func mustNormalize(t *testing.T, in ExchangeInput) platform.ExchangeRate {
+	t.Helper()
+	r, err := in.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// oneStale reports whether exactly one of two racing writes won and the other saw the superseded version.
+func oneStale(a, b error) bool {
+	return a == nil && errors.Is(b, ErrStaleExchange) || b == nil && errors.Is(a, ErrStaleExchange)
+}
+
+// race runs the writes at once, each in its own transaction, and returns their errors.
+func race(t *testing.T, r rules, ins ...ExchangeInput) []error {
+	start := make(chan struct{})
+	done := make(chan error, len(ins))
+	for _, in := range ins {
+		go func() {
+			<-start
+			done <- r.tx(func(tx pg.Tx) error { _, err := SetExchangeRate(t.Context(), tx, system, in); return err })
+		}()
+	}
+	close(start)
+	errs := make([]error, len(ins))
+	for i := range errs {
+		errs[i] = <-done
+	}
+	return errs
+}
+
 func TestExchangeValidation(t *testing.T) {
 	for name, edit := range map[string]func(*ExchangeInput){
 		"zero":                    func(in *ExchangeInput) { in.Numerator = "0" },
@@ -41,10 +73,10 @@ func TestExchangeValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	forward, _ := fxInput("71", "10", "initial", 0).normalized()
+	forward := mustNormalize(t, fxInput("71", "10", "initial", 0))
 	in := fxInput("10", "71", "initial", 0)
 	in.Base, in.Quote = "CNY", "USD"
-	reverse, _ := in.normalized()
+	reverse := mustNormalize(t, in)
 	if forward != reverse {
 		t.Fatalf("directions differ: %+v %+v", forward, reverse)
 	}
@@ -56,9 +88,12 @@ func TestExchangeChangeBounds(t *testing.T) {
 		n, d, kind string
 		want       bool
 	}{
-		{"355", "10", "adjustment", true}, {"3551", "100", "adjustment", false},
-		{"142", "100", "adjustment", true}, {"1419", "1000", "adjustment", false},
-		{"14", "100", "adjustment", false}, {"14", "100", "correction", true},
+		{"355", "10", "adjustment", true},
+		{"3551", "100", "adjustment", false},
+		{"142", "100", "adjustment", true},
+		{"1419", "1000", "adjustment", false},
+		{"14", "100", "adjustment", false},
+		{"14", "100", "correction", true},
 		{"4000000", "1", "correction", false},
 	} {
 		in := fxInput(tc.n, tc.d, tc.kind, 1)
@@ -85,15 +120,9 @@ func TestExchangeWritesAreSerializedAndAudited(t *testing.T) {
 	if _, err := write(fxInput("71", "10", "initial", 0)); err != nil {
 		t.Fatal(err)
 	}
-	start := make(chan struct{})
-	done := make(chan error, 2)
-	for _, in := range []ExchangeInput{fxInput("284", "10", "adjustment", 1), fxInput("1775", "1000", "adjustment", 1)} {
-		go func() { <-start; _, err := write(in); done <- err }()
-	}
-	close(start)
-	a, b := <-done, <-done
-	if !((a == nil && errors.Is(b, ErrStaleExchange)) || (b == nil && errors.Is(a, ErrStaleExchange))) {
-		t.Fatalf("concurrent results: %v / %v", a, b)
+	errs := race(t, r, fxInput("284", "10", "adjustment", 1), fxInput("1775", "1000", "adjustment", 1))
+	if !oneStale(errs[0], errs[1]) {
+		t.Fatalf("concurrent results: %v", errs)
 	}
 	if err := r.tx(func(tx pg.Tx) error {
 		rows, err := ExchangeRateHistory(t.Context(), tx, "USD", "CNY", 0)
@@ -119,21 +148,11 @@ func TestExchangeWritesAreSerializedAndAudited(t *testing.T) {
 
 func TestExchangeFirstDirectionsAndIdempotency(t *testing.T) {
 	r := newRules(t)
-	start := make(chan struct{})
-	done := make(chan error, 2)
 	forward := fxInput("14", "100", "initial", 0)
 	reverse := fxInput("100", "14", "initial", 0)
 	reverse.Base, reverse.Quote = "CNY", "USD"
-	for _, in := range []ExchangeInput{forward, reverse} {
-		go func() {
-			<-start
-			done <- r.tx(func(tx pg.Tx) error { _, err := SetExchangeRate(t.Context(), tx, system, in); return err })
-		}()
-	}
-	close(start)
-	a, b := <-done, <-done
-	if !((a == nil && errors.Is(b, ErrStaleExchange)) || (b == nil && errors.Is(a, ErrStaleExchange))) {
-		t.Fatalf("first directions: %v %v", a, b)
+	if errs := race(t, r, forward, reverse); !oneStale(errs[0], errs[1]) {
+		t.Fatalf("first directions: %v", errs)
 	}
 	in := fxInput("71", "10", "correction", 1)
 	fingerprint, err := idem.Fingerprint(in)
@@ -141,32 +160,29 @@ func TestExchangeFirstDirectionsAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	claim := idem.Claim{Key: uuid.NewV7(), Actor: system, Operation: "setExchangeRate", Fingerprint: fingerprint}
-	var first BillingExchangeRate
-	for i := range 2 {
-		if err := r.tx(func(tx pg.Tx) error {
-			row, replayed, err := idem.Once(t.Context(), tx, claim, func() (BillingExchangeRate, error) { return SetExchangeRate(t.Context(), tx, system, in) })
-			if err == nil {
-				if replayed != (i == 1) {
-					t.Errorf("replayed=%v", replayed)
-				}
-				if i == 0 {
-					first = row
-				} else if row.ID != first.ID || row.Version != 2 {
-					t.Errorf("replay changed basis: %+v", row)
-				}
-			}
+	once := func() (row BillingExchangeRate, replayed bool) {
+		err := r.tx(func(tx pg.Tx) (err error) {
+			row, replayed, err = idem.Once(t.Context(), tx, claim, func() (BillingExchangeRate, error) { return SetExchangeRate(t.Context(), tx, system, in) })
 			return err
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if i == 0 {
-			if err := r.tx(func(tx pg.Tx) error {
-				_, err := SetExchangeRate(t.Context(), tx, system, fxInput("72", "10", "adjustment", 2))
-				return err
-			}); err != nil {
-				t.Fatal(err)
-			}
-		}
+		return row, replayed
+	}
+	first, replayed := once()
+	if replayed {
+		t.Error("first call replayed")
+	}
+	// A newer version appears before the lost confirmation is retried; the retry must still return the first answer.
+	if err := r.tx(func(tx pg.Tx) error {
+		_, err := SetExchangeRate(t.Context(), tx, system, fxInput("72", "10", "adjustment", 2))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if row, replayed := once(); !replayed || row.ID != first.ID || row.Version != 2 {
+		t.Errorf("replay changed basis: %+v replayed=%v", row, replayed)
 	}
 }
 

@@ -132,6 +132,22 @@ type AttemptRecord struct {
 	FinishedAt    time.Time
 }
 
+// setBasis saves what the cost was computed from; an attempt without a rate or a conversion keeps those columns NULL.
+func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
+	if a.Receipt.unitValueID != (uuid.UUID{}) {
+		row.UnitValueID = &a.Receipt.unitValueID
+	}
+	if a.Receipt.currency != a.Cost.Currency {
+		if _, ok := a.Receipt.exchange.Between(a.Receipt.currency, a.Cost.Currency); ok {
+			row.ExchangeRateID = &a.Receipt.exchange.ID
+		}
+	}
+	if a.Cost.Conversion != "" {
+		from, to := a.Receipt.currency.String(), a.Cost.Currency.String()
+		row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &a.Cost.Conversion
+	}
+}
+
 // RecordAttempts writes the cost and reconciliation key of a request's attempts, all in one statement, in the
 // transaction of billing's settlement, so that they are there if and only if the cost billing booked is. An attempt
 // already recorded stays as it was: a settlement repeated after a crash changes nothing.
@@ -155,18 +171,7 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
 			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate,
 		}
-		if a.Receipt.unitValueID != (uuid.UUID{}) {
-			row.UnitValueID = &a.Receipt.unitValueID
-		}
-		if a.Receipt.currency != a.Cost.Currency {
-			if _, ok := a.Receipt.exchange.Between(a.Receipt.currency, a.Cost.Currency); ok {
-				row.ExchangeRateID = &a.Receipt.exchange.ID
-			}
-		}
-		if a.Cost.Conversion != "" {
-			from, to := a.Receipt.currency.String(), a.Cost.Currency.String()
-			row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &a.Cost.Conversion
-		}
+		setBasis(&row, a)
 		if a.Receipt.ref != "" {
 			row.ChargeRef = &a.Receipt.ref
 		}

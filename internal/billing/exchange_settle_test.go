@@ -42,35 +42,36 @@ func TestExchangeReservationPersistsBeforeAnyAttempt(t *testing.T) {
 }
 
 func TestExchangeProfitUnknownAndSettlementReplay(t *testing.T) {
-	for _, known := range []bool{false, true} {
-		t.Run(map[bool]string{false: "one unknown attempt", true: "all known"}[known], func(t *testing.T) {
-			b := newBank(t, 10000, 0, Config{})
-			h := b.hold(100)
-			o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
-			o.Attempts[0].Seq = 2
-			o.Attempts[0].CostKnown = true
-			failed := AttemptResult{Seq: 1, Cost: 5, CostKnown: known, Result: Unknown}
-			o.Attempts = append([]AttemptResult{failed}, o.Attempts...)
-			first, err := b.billing.Settle(t.Context(), h, o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if (first.Profit != nil) != known {
-				t.Fatalf("profit known=%v: %v", known, first.Profit)
-			}
-			if known && *first.Profit != 68 {
-				t.Fatalf("profit %d want 80 - 5 - 7", *first.Profit)
-			}
-			// A retry carrying changed costs must return the originally persisted result.
-			o.Attempts[0].CostKnown = !known
-			o.Attempts[0].Cost = 1000
-			again, err := b.billing.Settle(t.Context(), h, o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if (again.Profit != nil) != known || known && *again.Profit != *first.Profit {
-				t.Fatalf("replay changed profit: %v", again.Profit)
-			}
-		})
+	t.Run("one unknown attempt", func(t *testing.T) { checkProfitReplay(t, false) })
+	t.Run("all known", func(t *testing.T) { checkProfitReplay(t, true) })
+}
+
+func checkProfitReplay(t *testing.T, known bool) {
+	b := newBank(t, 10000, 0, Config{})
+	h := b.hold(100)
+	o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
+	o.Attempts[0].Seq = 2
+	o.Attempts[0].CostKnown = true
+	failed := AttemptResult{Seq: 1, Cost: 5, CostKnown: known, Result: Unknown}
+	o.Attempts = append([]AttemptResult{failed}, o.Attempts...)
+	first, err := b.billing.Settle(t.Context(), h, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (first.Profit != nil) != known {
+		t.Fatalf("profit known=%v: %v", known, first.Profit)
+	}
+	if known && *first.Profit != 68 {
+		t.Fatalf("profit %d want 80 - 5 - 7", *first.Profit)
+	}
+	// A retry carrying changed costs must return the originally persisted result.
+	o.Attempts[0].CostKnown = !known
+	o.Attempts[0].Cost = 1000
+	again, err := b.billing.Settle(t.Context(), h, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (again.Profit != nil) != known || known && *again.Profit != *first.Profit {
+		t.Fatalf("replay changed profit: %v", again.Profit)
 	}
 }
