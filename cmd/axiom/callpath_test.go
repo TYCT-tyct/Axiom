@@ -1,14 +1,38 @@
 package main
 
 import (
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
+
+// TestTheEndpointSourcePassesTheSnapshotsStaleness: the routing rebuild reads the suppliers service's own answer, so a
+// snapshot no Reload has confirmed fails the build as ErrStale instead of being read as "no endpoints". The difference
+// is what a call gets: 503 overloaded while the sources cannot be confirmed, 404 no_endpoint once they can.
+func TestTheEndpointSourcePassesTheSnapshotsStaleness(t *testing.T) {
+	t.Parallel()
+	upstreams, err := suppliers.New(suppliers.Config{Clock: func() time.Time {
+		return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := routing.New(routing.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := routeDeps(callDeps{}, router, upstreams, &atomic.Bool{})
+	if got, err := deps.Endpoints(t.Context()); !errors.Is(err, suppliers.ErrStale) || got != nil {
+		t.Errorf("the endpoint source = %v, %v; want no endpoint and suppliers.ErrStale", got, err)
+	}
+}
 
 // TestTheCallPathIsWhatBillingWritesSuppliersThrough: the suppliers.CallWrites billing is handed is the suppliers
 // module's own functions, so what billing writes in its cleanup transaction lands in suppliers' tables: the reservation goes back,

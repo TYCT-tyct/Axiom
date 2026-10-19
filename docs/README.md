@@ -22,6 +22,7 @@
 | 模型目录在代码里怎么加载、同步和发布快照：参考价、名字解析、价目表 | [internal/catalog/README.md](../internal/catalog/README.md) | 实现或调用 `catalog` 之前 |
 | 三种调用格式的转换与透传：解析、转换、流式读写、用量 | [internal/protocol/README.md](../internal/protocol/README.md) | 实现或调用 `protocol` 之前 |
 | 平台层：监听与接口约定、日志与遥测、数据库访问、加密、前端文件、配置 | [internal/platform/README.md](../internal/platform/README.md) | 改动 `platform`、`cmd/axiom` 的组装或任何跨模块的基础设施之前 |
+| 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
 | 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
 | 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
 | 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
@@ -33,7 +34,8 @@
 | 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
-| 支付：收款渠道、充值流程、加密货币、手续费、退款与拒付、防欺诈、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
+| 支付：收款渠道与商户账户、订单状态、金额与汇率、手续费、回调与到账、补单、加密货币、退款与拒付、防欺诈、对账、后台配置、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
+| 支付在代码里的接口：渠道接口、billing 要提供的函数、不变量、表与行级安全、事务与任务、PR 拆分 | [internal/payments/README.md](../internal/payments/README.md) | 实现或调用 `payments`、写新的收款渠道插件之前 |
 | 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：谁拍板、一次改动的流程、文档、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |

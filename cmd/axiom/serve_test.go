@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/telemetry"
 )
 
 // TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
@@ -366,7 +368,8 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 }
 
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
-// address, closes it on the way out, so no writer goroutine outlives serve.
+// address, closes it on the way out, so the writer has exited when serve returns. The test holds the Recorder that
+// this call created, so no other node's writer, parallel or earlier, can change the outcome.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	t.Parallel()
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -378,16 +381,20 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
 		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
-	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
+	var recorder *observability.Recorder
+	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
+		recorder = startRecorder(ctx, db, tel, logger)
+		return recorder
+	}
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record); err == nil {
 		t.Fatal("the node started on a taken address")
 	}
-	buf := make([]byte, 1<<20)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "observability.(*Recorder).writer") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the call-record writer is still running after serve returned")
-		}
+	if recorder == nil {
+		t.Fatal("the node failed before it started the recorder")
+	}
+	select {
+	case <-recorder.Done():
+	default:
+		t.Fatal("the call-record writer is still running after serve returned")
 	}
 }

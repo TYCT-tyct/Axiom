@@ -192,10 +192,16 @@ function MethodFields({ method }: { method?: Method }) {
 
 function ConstraintFields({ constraints }: { constraints?: Rule["constraints"] }) {
   const { t } = useTranslation();
+  const stored = Object.values(constraints ?? {}).some((value) => value !== undefined);
   return (
-    <fieldset className="min-w-0 space-y-3">
+    <fieldset disabled className="min-w-0 space-y-3">
       <legend className="mb-1 text-ui font-medium text-t2">{t("pricing.constraints.title")}</legend>
       <p className="text-label text-t4">{t("pricing.constraints.hint")}</p>
+      {stored ? (
+        <p role="status" className="text-label text-warn">
+          {t("pricing.constraints.stored")}
+        </p>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <TextField
           label={t("pricing.constraints.minMargin")}

@@ -67,7 +67,8 @@ type Method struct {
 	Schedule           jsonx.Raw `json:"schedule,omitempty"`
 }
 
-// Constraints are limits on the price a rule sets, as ratios.
+// Constraints are limits on the price a rule sets, as ratios. This release does not apply them (#234): Check refuses a
+// rule that carries one, and a stored one refuses to price the models it matches (Sell).
 type Constraints struct {
 	MinMarginRatio    *string `json:"min_margin_ratio,omitempty"`
 	ReferenceMinRatio *string `json:"reference_min_ratio,omitempty"`
@@ -274,26 +275,21 @@ func checkRates(rates jsonx.Raw) error {
 	return nil
 }
 
+// check refuses every member of a constraint: the sale price does not apply constraints in this release
+// (docs/domains/billing.md「定价」, #234), so accepting one would store a limit no price obeys. Every way of saving or
+// previewing a rule runs Check; a rule stored with one refuses to price instead (Sell).
 func (c Constraints) check() error {
-	margin, hasMargin, err := ratio("constraints/min_margin_ratio", c.MinMarginRatio)
-	if err != nil {
-		return err
-	}
-	low, hasLow, err := ratio("constraints/reference_min_ratio", c.ReferenceMinRatio)
-	if err != nil {
-		return err
-	}
-	high, hasHigh, err := ratio("constraints/reference_max_ratio", c.ReferenceMaxRatio)
-	if err != nil {
-		return err
-	}
-	switch {
-	case hasMargin && margin.Cmp(big.NewRat(1, 1)) >= 0:
-		return &RuleError{"constraints/min_margin_ratio", "is below 1"}
-	case hasLow && low.Sign() <= 0, hasHigh && high.Sign() <= 0:
-		return &RuleError{"constraints/reference_min_ratio", "and reference_max_ratio are greater than 0"}
-	case hasLow && hasHigh && low.Cmp(high) > 0:
-		return &RuleError{"constraints/reference_min_ratio", "is at most reference_max_ratio"}
+	for _, m := range []struct {
+		field string
+		set   *string
+	}{
+		{"constraints/min_margin_ratio", c.MinMarginRatio},
+		{"constraints/reference_min_ratio", c.ReferenceMinRatio},
+		{"constraints/reference_max_ratio", c.ReferenceMaxRatio},
+	} {
+		if m.set != nil {
+			return &RuleError{m.field, "is not supported yet: the sale price does not apply it"}
+		}
 	}
 	return nil
 }

@@ -279,7 +279,7 @@ func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog, logger
 		sold, unpriced := billing.SalePrices(rules, snap, listed, site.Currency)
 		for _, err := range unpriced {
 			// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices.
-			logger.Warn("a sale price the catalog cannot hold; the model is not sold", "err", err)
+			logger.Warn("a model has no sale price; it is not sold", "err", err)
 		}
 		return sold, nil
 	}
