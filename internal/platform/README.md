@@ -15,7 +15,7 @@
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」。生成的代码里内嵌的契约是 gzip 后的 base64，会被 gitleaks 的 `generic-api-key` 误报，所以仓库根的 `.gitleaks.toml` 只对这两个包的 `.gen.go` 放行，别处的密钥照常拦下 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
+| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
@@ -191,6 +191,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
+| `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
 
   新指标加进这张表，并在同一个 PR 里加测试读到它的名字。

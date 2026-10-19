@@ -31,10 +31,15 @@ func (q *Queries) AttemptCost(ctx context.Context, db DBTX, arg AttemptCostParam
 
 const dueReservations = `-- name: DueReservations :many
 SELECT r.request_id, r.account_id, r.state FROM billing.reservations r JOIN billing.holders h ON h.id = r.holder_id
-WHERE r.state = 'pending' AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
+WHERE r.state = 'pending' AND r.request_id > $1 AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
 ORDER BY r.request_id
-LIMIT $1
+LIMIT $2
 `
+
+type DueReservationsParams struct {
+	After uuid.UUID
+	Max   int32
+}
 
 type DueReservationsRow struct {
 	RequestID uuid.UUID
@@ -42,9 +47,9 @@ type DueReservationsRow struct {
 	State     string
 }
 
-// What cleanup must take over: pending past the deadline or under a reaped holder.
-func (q *Queries) DueReservations(ctx context.Context, db DBTX, max int32) ([]DueReservationsRow, error) {
-	rows, err := db.Query(ctx, dueReservations, max)
+// What cleanup must take over: pending past the deadline or under a reaped holder, the page that follows the request after.
+func (q *Queries) DueReservations(ctx context.Context, db DBTX, arg DueReservationsParams) ([]DueReservationsRow, error) {
+	rows, err := db.Query(ctx, dueReservations, arg.After, arg.Max)
 	if err != nil {
 		return nil, err
 	}

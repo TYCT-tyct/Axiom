@@ -123,6 +123,12 @@ record format scenario request:
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
 
+# Send the same requests to Axiom and to the official new-api image, both served by one fake upstream that replays the
+# protocol samples, and fail on any difference docs/domains/gateway.md「与 new-api 的有意差异」 does not explain. It pulls
+# an image and starts a container, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> diff
+diff: web-embed
+    go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
+
 compose := "docker compose -f deploy/compose.yaml"
 
 # Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to

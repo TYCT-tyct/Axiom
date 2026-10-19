@@ -73,7 +73,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if h.Limits.Rate.Count(countRateKey(caller)) > h.Limits.cfg.CountRate {
 		return 0, ErrRateLimited
 	}
-	snap, err := h.Catalog.Current()
+	snap, err := h.currentCatalog()
 	if err != nil {
 		return 0, err
 	}

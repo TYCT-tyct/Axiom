@@ -156,7 +156,7 @@ func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbou
 	served := startServing(servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
-	stopAnnouncing := announceReady(ctx, routes.calls.ready, &health, logger)
+	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
 	stopped := awaitEnd(ctx, served, routes.calls.reaped)
 	stopAnnouncing()
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())

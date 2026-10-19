@@ -54,9 +54,9 @@ INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, exp
 VALUES (@id, @site_id, @account_id, 'gift', @amount, sqlc.narg(expires_at));
 
 -- name: DueReservations :many
--- What cleanup must take over: pending past the deadline or under a reaped holder.
+-- What cleanup must take over: pending past the deadline or under a reaped holder, the page that follows the request after.
 SELECT r.request_id, r.account_id, r.state FROM billing.reservations r JOIN billing.holders h ON h.id = r.holder_id
-WHERE r.state = 'pending' AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
+WHERE r.state = 'pending' AND r.request_id > @after AND (r.deadline < clock_timestamp() OR h.reaped_at IS NOT NULL)
 ORDER BY r.request_id
 LIMIT @max;
 
