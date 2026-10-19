@@ -14,9 +14,10 @@ func TestOpenAIOverlapAndImages(t *testing.T) {
 	for _, format := range []protocol.Format{protocol.Chat, protocol.Responses} {
 		for _, alias := range []string{"prompt", "input"} {
 			for _, tc := range []struct {
-				name, body                                  string
-				input, read, write, image, output, imageOut int64
-				invalid                                     bool
+				name, body                                         string
+				input, read, write, image, audio, output, imageOut int64
+				unknown                                            int // members recorded as unknown usage
+				invalid                                            bool
 			}{
 				{name: "overlap", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80}}`, read: 80, write: 80},
 				{name: "overlap with audio", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80,"audio_tokens":10}}`, read: 80, write: 80},
@@ -40,6 +41,12 @@ func TestOpenAIOverlapAndImages(t *testing.T) {
 				{name: "image above total", body: `{"input_tokens":100,"input_tokens_details":{"image_tokens":101}}`, invalid: true},
 				{name: "cached image above cache", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":60,"cached_tokens_details":{"image_tokens":41}}}`, invalid: true},
 				{name: "cached image above image", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":10,"cached_tokens_details":{"image_tokens":11}}}`, invalid: true},
+				{name: "fully cached audio", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"audio_tokens":800,"cached_tokens_details":{"audio_tokens":800}}}`, read: 1000},
+				{name: "partly cached audio", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":400,"audio_tokens":500,"cached_tokens_details":{"audio_tokens":300}}}`, input: 400, read: 400, audio: 200},
+				{name: "cached audio without intersection", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"audio_tokens":800}}`, read: 1000},
+				{name: "cached audio above audio", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"audio_tokens":10,"cached_tokens_details":{"audio_tokens":11}}}`, invalid: true},
+				{name: "cached modalities above cache", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"audio_tokens":30,"image_tokens":30,"cached_tokens_details":{"audio_tokens":21,"image_tokens":20}}}`, invalid: true},
+				{name: "unknown cached member is recorded", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"cached_tokens_details":{"video_tokens":800}}}`, read: 1000, unknown: 1},
 				{name: "output parts above total", body: `{"output_tokens":100,"output_tokens_details":{"image_tokens":90,"reasoning_tokens":20}}`, invalid: true},
 			} {
 				t.Run(fmt.Sprintf("%v/%s/%s", format, alias, tc.name), func(t *testing.T) {
@@ -57,14 +64,14 @@ func TestOpenAIOverlapAndImages(t *testing.T) {
 					}
 					v := u.Segments[0].Usage
 					want := map[catalog.Item]int64{catalog.ItemInput: tc.input, catalog.ItemCacheRead: tc.read, catalog.ItemCacheWrite: tc.write,
-						catalog.ItemImageIn: tc.image, catalog.ItemOutput: tc.output, catalog.ItemImageOut: tc.imageOut}
+						catalog.ItemImageIn: tc.image, catalog.ItemAudioIn: tc.audio, catalog.ItemOutput: tc.output, catalog.ItemImageOut: tc.imageOut}
 					for it := range catalog.NumItems {
 						if v.Count(it) != want[it] {
 							t.Errorf("%s = %d, want %d", it, v.Count(it), want[it])
 						}
 					}
-					if len(v.Unknown()) != 0 {
-						t.Errorf("mapped details became unknown: %v", v.Unknown())
+					if len(v.Unknown()) != tc.unknown {
+						t.Errorf("unknown usage %v, want %d of it", v.Unknown(), tc.unknown)
 					}
 					total, present := decode(t, []byte(tc.body))["input_tokens"]
 					n, ok := v.PhysicalInput()

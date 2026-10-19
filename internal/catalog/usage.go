@@ -80,9 +80,13 @@ func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
 // Add puts v in the set.
 func (s *set[T]) Add(v T) { *s |= 1 << v }
 
-// inputSide are the items a prompt is made of, the only ones a context tier's threshold may add up.
-const inputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |
+// InputSide are the items a prompt is made of, the only ones a context tier's threshold may add up. They are also the
+// items an upstream reports before the reply starts.
+const InputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |
 	1<<ItemImageIn
+
+// OutputSide are the token items a reply is made of, which an upstream's output total adds up (Usage.OutputTotal).
+const OutputSide ItemSet = 1<<ItemOutput | 1<<ItemReasoning | 1<<ItemAudioOut | 1<<ItemImageOut
 
 // maxCount bounds every count, so a tier's sum of up to NumItems counts stays far inside int64.
 const maxCount = 1e10
@@ -163,7 +167,7 @@ func (u Usage) InputTotal() int64 {
 	}
 	var total int64
 	for it := range NumItems {
-		if inputSide.Has(it) {
+		if InputSide.Has(it) {
 			total += u.q[it]
 		}
 	}

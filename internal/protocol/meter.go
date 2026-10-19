@@ -18,6 +18,9 @@ type usageReport struct {
 	unknown       []catalog.UnknownUsage
 	physicalInput *int64
 	outputTotal   *int64
+	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
+	// snapshot even when its total is the same as before.
+	inputDetailed, outputDetailed bool
 }
 
 // maxCount bounds a count as catalog.NewUsage does, checked before any arithmetic on counts, so none overflows.
@@ -38,9 +41,9 @@ func (r *usageReport) sortUnknown() {
 
 // meter keeps the reply's usage as reported so far, merged field by field: what a report leaves out keeps its earlier
 // value, so a tier or an unknown count reported once stays. Counts only go up, except normalized OpenAI breakdowns
-// are replaced together at a nondecreasing physical total. A later 0 total leaves the earlier snapshot, as
-// some relays clear the input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier
-// starts as the request's.
+// are replaced together, when the report carries the side's details or a larger total; a report of the same total
+// without details leaves the earlier split. A later 0 total leaves the earlier snapshot, as some relays clear the
+// input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier starts as the request's.
 type meter struct {
 	usageReport
 	compactions []Segment
@@ -48,10 +51,6 @@ type meter struct {
 	invalid     error
 	scratch     map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
 }
-
-// finalOnSight are the items whose first report is final: the input is read before the reply starts.
-const finalOnSight = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite |
-	1<<catalog.ItemCacheWrite1h | 1<<catalog.ItemAudioIn | 1<<catalog.ItemImageIn)
 
 // The meter is kept through the settlement, so what it holds is bounded and charged up front as meterMemory: at most
 // maxUnknown unknown fields for the reply and as many over its compactions, each a field and a value of at most
@@ -117,12 +116,12 @@ func (m *meter) bound(r usageReport, compactions []usageReport) error {
 
 // takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid.
 func (m *meter) takeCounts(r usageReport) bool {
-	if !m.takeSide(r.physicalInput, &m.physicalInput, finalOnSight, r) ||
-		!m.takeSide(r.outputTotal, &m.outputTotal, outputSide, r) {
+	if !m.takeSide(r.physicalInput, r.inputDetailed, &m.physicalInput, catalog.InputSide, r) ||
+		!m.takeSide(r.outputTotal, r.outputDetailed, &m.outputTotal, catalog.OutputSide, r) {
 		return false
 	}
 	for it := range catalog.NumItems {
-		if r.physicalInput != nil && finalOnSight.Has(it) || r.outputTotal != nil && outputSide.Has(it) {
+		if r.physicalInput != nil && catalog.InputSide.Has(it) || r.outputTotal != nil && catalog.OutputSide.Has(it) {
 			continue // a normalized snapshot must not retain a stale remainder or modality count
 		}
 		n := r.counts[it]
@@ -138,20 +137,24 @@ func (m *meter) takeCounts(r usageReport) bool {
 	return true
 }
 
-const outputSide = catalog.ItemSet(1<<catalog.ItemOutput | 1<<catalog.ItemReasoning | 1<<catalog.ItemAudioOut | 1<<catalog.ItemImageOut)
-
 // takeSide replaces an OpenAI breakdown together: later cache or image details can reduce ordinary tokens to zero
-// without reducing the physical total. Merging their maxima would charge those tokens twice.
-func (m *meter) takeSide(total *int64, kept **int64, side catalog.ItemSet, r usageReport) bool {
+// without reducing the physical total, and merging their maxima would charge those tokens twice. A report of the same
+// total without the side's details object says nothing about the split, so the earlier one stays: replacing it would
+// turn cached tokens back into ordinary ones. A larger total is a new snapshot, details or not.
+func (m *meter) takeSide(total *int64, detailed bool, kept **int64, side catalog.ItemSet, r usageReport) bool {
 	if total == nil {
 		return true
 	}
-	if *kept != nil && *total < **kept {
-		if *total == 0 {
+	if *kept != nil {
+		switch {
+		case *total == 0 && **kept > 0:
 			return true // some relays clear totals in later events
+		case *total < **kept:
+			m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", **kept, *total)
+			return false
+		case *total == **kept && !detailed:
+			return true
 		}
-		m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", **kept, *total)
-		return false
 	}
 	*kept = total
 	m.seen = m.seen&^side | r.seen&side
@@ -186,7 +189,7 @@ func (m *meter) progress() (Segment, catalog.ItemSet) {
 	if err != nil && m.invalid == nil {
 		m.invalid = err
 	}
-	final := m.seen & finalOnSight
+	final := m.seen & catalog.InputSide // the input is read before the reply starts, so its first report is final
 	switch {
 	case m.invalid != nil:
 		return Segment{Usage: u}, 0

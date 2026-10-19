@@ -12,7 +12,7 @@ import (
 
 // FuzzCost checks Cost against an independent math/big model of README.md「条件」 and「计费项与用量」: the service tier's
 // own prices, or every item missing when the schedule has none for it; the highest tier whose threshold the basis sum
-// strictly exceeds, a tier's prices over the service tier's base prices, reasoning at the output price when it has
+// (images counted as input when the basis names input but not image_in) strictly exceeds, a tier's prices over the service tier's base prices, reasoning at the output price when it has
 // none of its own, every other item with usage and no price reported as missing, and the exact total of the priced
 // items, whose tier the whole usage chose, missing items included. Missing must cover whatever Cost finds missing, so a
 // schedule that passes the listing threshold never meets an unpriced item. Each input seeds a batch of random
@@ -201,6 +201,9 @@ func (c costCase) cost() (*big.Rat, []catalog.Item) {
 	var length int64
 	for _, it := range c.basis {
 		length += c.usage[it]
+	}
+	if slices.Contains(c.basis, in) && !slices.Contains(c.basis, imageIn) {
+		length += c.usage[imageIn] // images were part of input before they were split out
 	}
 	l, offered := c.levels[c.tier]
 	tier := prices{}

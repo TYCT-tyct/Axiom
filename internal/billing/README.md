@@ -131,7 +131,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 
 ## 结算与账本
 
-- OpenAI 的物理输入总数与计费量分开；`storedSegment.physical_input` 连同存在性写入 `final_usage`，重试解码、`costWithout` 和 gateway 的暂估重建都保留它，避免回显或上下文分档把缓存重叠多算。旧记录没有此字段时沿用原有计费项口径。映射和有效价格契约见 [catalog](../catalog/README.md#计费项与用量)。
+- OpenAI 的物理输入总数与计费量分开；`storedSegment.physical_input` 连同存在性写入 `final_usage`，重试解码、`costWithout` 和 gateway 的暂估重建都保留它，避免回显或上下文分档把缓存重叠多算。旧记录没有此字段时沿用原有计费项口径。`decodeUsage` 严格拒绝未知成员（静默跳过会改变分档含义），所以滚动发布的窗口里，旧节点读到新节点写的带 `physical_input` 的 `final_usage`（只有 OpenAI 用量才带）会报错，重试落到新节点即成功，不会多算或少算。发布顺序：先让旧节点停接新请求并排空在途结算，再升级；不排空时，窗口内只有这类重试会报错。回滚同理：回滚前这些行只能由新版本读。映射和有效价格契约见 [catalog](../catalog/README.md#计费项与用量)。
 
 迁移 `migrations/00002_settlement.sql`，查询 `queries/settlement.sql`。
 

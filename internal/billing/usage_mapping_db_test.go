@@ -16,7 +16,15 @@ func TestConcurrentOverlapAndImageSettlements(t *testing.T) {
 	q.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000001","cache_write":"0.000000002","output":"0.000000001","image_out":"0.00000001"}}`)
 	q.Model.Reports = 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemImageOut
 	q.MaxOutput = 10
-	seg := acceptedOpenAI(t, `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80},"output_tokens":10,"output_tokens_details":{"image_tokens":10}}`, catalog.ServiceTierStandard, true)
+	// What protocol makes of 100 input tokens, 80 of them read and 80 written, and 10 output tokens that are all images.
+	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, catalog.ItemImageOut: 10}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, err = u.WithPhysicalInput(100); err != nil {
+		t.Fatal(err)
+	}
+	seg := Segment{Usage: u, Reported: 1<<in | 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemOutput | 1<<catalog.ItemReasoning | 1<<catalog.ItemImageOut}
 	var wg sync.WaitGroup
 	errs := make(chan error, 6)
 	for _, finish := range []FinishReason{FinishStop, FinishError, FinishCancelled} {

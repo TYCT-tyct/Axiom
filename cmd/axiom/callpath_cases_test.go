@@ -259,7 +259,7 @@ func (w *callWorld) checkPriority(n runningNode) {
 		},
 		{
 			"Responses", "/v1/responses", responsesCall, strings.Replace(responsesCall, `"input"`, `"service_tier":"default","input"`, 1),
-			"codex_cli_rs/0.50.0", 37*9_000 + 11*45_000, 37*20 + 11*80, 5_625, // an OpenAI input may be billed as a cache write
+			"codex_cli_rs/0.50.0", 37*9_000 + 11*45_000, 37*20 + 11*80, 6_075, // an OpenAI input may be billed as a cache read and a cache write at once: a read's 450 and a write's 5_625 a token
 			booking{charge: responsesCharge, cost: responsesCost, upstream: "up-gpt", input: 37, output: 11, app: "codex"},
 		},
 	} {
@@ -301,7 +301,7 @@ func (w *callWorld) checkBoundedSearch(n runningNode) {
 		}},
 		{"Responses max_tool_calls", "/v1/responses", "codex_cli_rs/0.50.0", func(limit int) string {
 			return fmt.Sprintf(`{"model":"gpt-6-astra","input":"Hello!","max_tool_calls":%d,"tools":[{"type":"web_search"}]}`, limit)
-		}, `"web_search_call"`, 11_250, booking{ // an OpenAI input may be billed as a cache write
+		}, `"web_search_call"`, 12_150, booking{ // as above: 6_075 a token for each reread
 			charge: responsesCharge + searchCharge, cost: responsesCost + searchCost, upstream: "up-gpt", input: 37, output: 11, searches: 1, app: "codex",
 			estimated: true, // Responses does not report the searches in its usage: they are counted from the events
 		}},

@@ -47,6 +47,38 @@ func TestPhysicalInputAboveSummedQuantities(t *testing.T) {
 	}
 }
 
+// A basis that names input but not image_in still counts the images as input: before images were split out of input
+// they were part of it, so a prompt of 250000 tokens with 100000 of them images fell in the tier above 200000.
+func TestInputBasisCountsImagesAsInput(t *testing.T) {
+	for _, tc := range []struct {
+		name, basis string
+		c           counts
+		physical    int64 // 0 for a usage that reports no physical total
+		want        string
+	}{
+		{"images above the threshold", `"input"`, counts{in: 150000, imageIn: 100000}, 250000, "500000"},
+		{"without a physical total", `"input"`, counts{in: 150000, imageIn: 100000}, 0, "500000"},
+		{"images in the basis", `"input","image_in"`, counts{in: 150000, imageIn: 100000}, 250000, "500000"},
+		{"below the threshold", `"input"`, counts{in: 100000, imageIn: 90000}, 190000, "190000"},
+		{"a cache read outside the basis", `"input"`, counts{in: 150000, imageIn: 100000, cacheRead: 10000}, 260000, "510000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := mustParse(t, fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"1"},"context_tiers":{"basis":[%s],"method":"whole","tiers":[{"above":200000,"rates":{"input":"2"}}]}}`, tc.basis))
+			u := mustUsage(t, tc.c)
+			if tc.physical > 0 {
+				var err error
+				if u, err = u.WithPhysicalInput(tc.physical); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cost, missing, err := s.Cost(u)
+			if err != nil || missing != 0 || cost.Rat().RatString() != tc.want {
+				t.Fatalf("cost %v, missing %v, %v; want %s", cost.Rat(), missing, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestPhysicalInputPresenceAndRecount(t *testing.T) {
 	u := mustUsage(t, counts{in: 10})
 	if _, ok := u.PhysicalInput(); ok {

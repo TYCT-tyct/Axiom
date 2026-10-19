@@ -2,13 +2,10 @@ package billing
 
 import (
 	"fmt"
-	"math/rand/v2"
-	"strings"
 	"testing"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/protocol"
 )
 
 func TestImageSaleReservationAndCostAgree(t *testing.T) {
@@ -45,7 +42,7 @@ func TestImageSaleReservationAndCostAgree(t *testing.T) {
 				if err != nil || p.estimated || p.price != cost.CeilAmount() {
 					t.Fatalf("sale %+v, cost %v, err %v", p, cost.Rat(), err)
 				}
-				e := Quotable{Price: s, Model: Model{ContextLength: 1000, Reports: reports}, MaxOutput: 20}
+				e := Quotable{Price: s, Model: Model{ContextLength: 1000, Reports: reports, OpenAIUsage: true}, MaxOutput: 20}
 				q, err := quoteEntry(Demand{TextBytes: n, ServiceTiers: 1 << tier}, e, Segments{})
 				if err != nil || q.amount.Cmp(cost) < 0 {
 					t.Fatalf("quote %v below cost %v: %v", q.amount.Rat(), cost.Rat(), err)
@@ -55,104 +52,72 @@ func TestImageSaleReservationAndCostAgree(t *testing.T) {
 	}
 }
 
-// Prices, tiers, modality splits and repeated samplings vary independently. Parse through protocol before pricing,
-// so the property quantifies over accepted reports rather than a second implementation of the mapping.
-func FuzzAcceptedOpenAIUsageFitsQuote(f *testing.F) {
-	for seed := range uint64(4) {
-		f.Add(seed, ^seed)
-	}
-	f.Fuzz(func(t *testing.T, a, b uint64) {
-		r := rand.New(rand.NewPCG(a, b)) //nolint:gosec // test data
-		for range 30 {
-			c := randomQuoteCase(t, r, 4000)
-			c.d.InputItems.Add(cacheWrite)
-			c.e.Model.Reports = 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemImageIn | 1<<catalog.ItemImageOut
-			q, err := quoteEntry(c.d, c.e, c.s)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, samplings := serverToolUses(c.d, c.e.Model)
-			first, _ := inputBound(c.d, c.e.Model, samplings)
-			output := min(q.outputCap, c.s.Output)
-			if !c.e.Segmentable {
-				output = q.outputCap
-			}
-			var segments []Segment
-			for j := range samplings {
-				n := c.e.Model.ContextLength
-				if j == 0 {
-					n = first
-				}
-				n = r.Int64N(n + 1)
-				read, write := r.Int64N(n+1), r.Int64N(n+1)
-				out := r.Int64N(output + 1)
-				output -= out
-				body := fmt.Sprintf(`{"input_tokens":%d,"input_tokens_details":{"cached_tokens":%d,"cache_write_tokens":%d,"image_tokens":%d},"output_tokens":%d,"output_tokens_details":{"image_tokens":%d}}`, n, read, write, r.Int64N(n+1), out, r.Int64N(out+1))
-				tier := catalog.ServiceTierStandard
-				if c.servedAt().Has(catalog.ServiceTierPriority) && r.IntN(2) == 0 {
-					tier = catalog.ServiceTierPriority
-				}
-				segments = append(segments, acceptedOpenAI(t, body, tier, j%2 == 0))
-			}
-			p, err := priceSegments(c.e.Price, fallbacks{}, segments, false)
-			if err != nil || p.estimated || p.price > q.amount.CeilAmount() {
-				t.Fatalf("settlement %+v exceeds quote %v: %v; %s", p, q.amount.Rat(), err, c.json)
-			}
-			var exact platform.Exact
-			for _, seg := range segments {
-				cost, missing, err := c.e.Price.Cost(seg.Usage)
-				if err != nil || missing != 0 {
-					t.Fatalf("cost: %v, missing %v", err, missing)
-				}
-				exact = sum(exact, cost)
-			}
-			if exact.Cmp(q.amount) > 0 {
-				t.Fatalf("exact cost %v exceeds quote %v", exact.Rat(), q.amount.Rat())
-			}
-		}
-	})
-}
-
-func acceptedOpenAI(t testing.TB, body string, tier catalog.ServiceTier, chat bool) Segment {
-	t.Helper()
-	f := protocol.Responses
-	stream := `data: {"type":"response.completed","sequence_number":0,"response":{"id":"r","model":"m","output":[],"usage":` + body + "}}\n\n"
-	if chat {
-		f = protocol.Chat
-		stream = `data: {"id":"c","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"x"},"finish_reason":"stop"}],"usage":` + body + "}\n\ndata: [DONE]\n\n"
-	}
-	relay := protocol.NewRelay(f, f, strings.NewReader(stream), protocol.UsageContext{Tier: tier}, protocol.RelayOptions{Memory: protocol.NewMemory(0)})
-	defer relay.Release()
-	for {
-		step, err := relay.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if step.Kind == protocol.StepUpstreamDone {
-			break
-		}
-	}
-	u := relay.Usage()
-	if u.Invalid != nil || len(u.Segments) != 1 {
-		t.Fatalf("invalid usage: %+v", u)
-	}
-	return Segment{Usage: u.Segments[0].Usage, Reported: u.Segments[0].Reported}
-}
-
+// An OpenAI call may bill the same 100 tokens as a cache read and as a cache write, so its input is reserved at
+// read + write per token; a Messages call bills the items apart, so only the dearest price bounds it, and the cache
+// write the request does not ask for is not reserved at all.
 func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
-	for _, tc := range []struct{ read, write, want string }{{"0.1", "1.25", "135"}, {"2", "1.25", "325"}, {"1000", "1000", "200000"}} {
-		s := mustSchedule(t, fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":"1","cache_read":%q,"cache_write":%q,"output":"0"}}`, tc.read, tc.write))
-		q, err := quoteEntry(Demand{TextBytes: 100, InputItems: 1 << cacheWrite}, Quotable{Price: s, Model: Model{ContextLength: 100, Reports: 1 << catalog.ItemCacheRead}}, Segments{})
-		if err != nil || q.amount.Rat().RatString() != tc.want {
-			t.Fatalf("quote %v, %v; want %s", q.amount.Rat(), err, tc.want)
-		}
+	for _, tc := range []struct {
+		name        string
+		openAI      bool
+		cacheMarker bool // the request marks a cache breakpoint, so it may produce a cache write
+		read, write string
+		want        string
+	}{
+		{"openai", true, true, "0.1", "1.25", "135"},
+		{"openai without a marker", true, false, "0.1", "1.25", "135"},
+		{"openai, dearer read", true, true, "2", "1.25", "325"},
+		{"openai, highest prices", true, true, "1000", "1000", "200000"},
+		{"messages with a marker", false, true, "0.1", "1.25", "125"},
+		{"messages without a marker", false, false, "0.1", "1.25", "100"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := mustSchedule(t, fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":"1","cache_read":%q,"cache_write":%q,"output":"0"}}`, tc.read, tc.write))
+			d := Demand{TextBytes: 100}
+			if tc.cacheMarker {
+				d.InputItems = 1 << cacheWrite
+			}
+			m := Model{ContextLength: 100, Reports: 1<<catalog.ItemCacheRead | 1<<cacheWrite, OpenAIUsage: tc.openAI}
+			q, err := quoteEntry(d, Quotable{Price: s, Model: m}, Segments{})
+			if err != nil || q.amount.Rat().RatString() != tc.want {
+				t.Fatalf("quote %v, %v; want %s", q.amount.Rat(), err, tc.want)
+			}
+		})
+	}
+}
+
+// OpenAI reports image tokens whether or not the model's spec lists the item, so they are reserved at their own price
+// even when Reports names only input and output: 100 prompt tokens that are all images settle at 100 × 10.
+func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prices string
+		openAI bool
+		want   string
+	}{
+		{"image priced above input", `"input":"1","image_in":"10"`, true, "1000"},
+		{"image priced at zero", `"input":"1","image_in":"0"`, true, "100"},
+		{"image unpriced falls back to input", `"input":"3"`, true, "300"},
+		{"messages reports no images", `"input":"1","image_in":"10"`, false, "100"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{`+tc.prices+`,"output":"0"}}`)
+			m := Model{ContextLength: 100, Reports: 1<<in | 1<<catalog.ItemOutput, OpenAIUsage: tc.openAI}
+			q, err := quoteEntry(Demand{TextBytes: 100}, Quotable{Price: s, Model: m}, Segments{})
+			if err != nil || q.amount.Rat().RatString() != tc.want {
+				t.Fatalf("quote %v, %v; want %s", q.amount.Rat(), err, tc.want)
+			}
+			u := usage(t, map[catalog.Item]int64{catalog.ItemImageIn: 100})
+			if cost, _, err := s.Cost(u); tc.openAI && (err != nil || cost.Cmp(q.amount) > 0) {
+				t.Fatalf("settlement %v exceeds the quote %v: %v", cost.Rat(), q.amount.Rat(), err)
+			}
+		})
 	}
 }
 
 func TestExtraSearchCoversOverlappingRereads(t *testing.T) {
 	e := entry(t, true, 1)
 	e.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"0.1","cache_write":"1.25","output":"1","web_search":"2"}}`)
-	e.Model.Reports = 1<<catalog.ItemCacheRead | 1<<cacheWrite
+	e.Model.Reports, e.Model.OpenAIUsage = 1<<catalog.ItemCacheRead|1<<cacheWrite, true
 	d := Demand{TextBytes: 100, Compaction: true, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
 	m := meter(t, d, e)
 	// Each extra search costs 2, plus two rereads of a 1000-token context at 0.1+1.25.
@@ -185,13 +150,14 @@ func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
 }
 
 func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
-	seg := acceptedOpenAI(t, `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80},"output_tokens":0}`, catalog.ServiceTierStandard, true)
-	counts := map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, webSearch: 1}
-	var err error
-	seg.Usage, err = seg.Usage.Recount(counts, nil)
+	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, webSearch: 1}, catalog.ServiceTierStandard, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if u, err = u.WithPhysicalInput(100); err != nil {
+		t.Fatal(err)
+	}
+	seg := Segment{Usage: u}
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"cache_read":"1","cache_write":"1","web_search":"1"},"context_tiers":{"basis":["input","cache_read","cache_write"],"method":"whole","tiers":[{"above":150,"rates":{"web_search":"10","cache_read":"2"}}]}}`)
 	b, err := encodeUsage([]Segment{seg})
 	if err != nil {

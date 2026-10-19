@@ -118,6 +118,7 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	if r.IntN(2) == 0 {
 		c.e.Model.Reports.Add(catalog.ItemCacheRead)
 	}
+	c.e.Model.OpenAIUsage = r.IntN(2) == 0
 	drawTiers(&c, r)
 	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5*time.Second)) + 1)} // both above 0, or the entry is refused
 	if limit == math.MaxInt64 {
@@ -304,6 +305,9 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
 		inputs.Add(catalog.ItemCacheRead)
 	}
+	if c.e.Model.OpenAIUsage {
+		inputs |= c.e.Model.Reports&(1<<cacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+	}
 	longest := first.Int64()
 	if samplings.Cmp(b(1)) > 0 || uses[webSearch] != nil {
 		longest = c.e.Model.ContextLength
@@ -314,7 +318,7 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 			tb.Fatalf("no price for %v", items)
 		}
 		rate := p.Rat()
-		if items.Has(catalog.ItemCacheRead) && items.Has(cacheWrite) {
+		if c.e.Model.OpenAIUsage && items.Has(catalog.ItemCacheRead) && items.Has(cacheWrite) {
 			read, _ := c.e.Price.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
 			write, _ := c.e.Price.Ceiling(1<<cacheWrite, tiers, length)
 			combined := new(big.Rat).Add(read.Rat(), write.Rat())

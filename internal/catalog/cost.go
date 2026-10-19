@@ -25,14 +25,17 @@ func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err erro
 	return total, missing, nil
 }
 
-// band is the context tier the prompt length falls in: 0 for the base prices, i+1 above the i-th threshold.
+// band is the context tier the prompt length falls in: 0 for the base prices, i+1 above the i-th threshold. A basis
+// that names input but not image_in counts the images as input, as it did while images were not split out of input.
 func (s Schedule) band(u Usage) int {
 	var length int64 // at most NumItems × 10¹⁰
-	whole := s.basis.Has(ItemInput)
+	inputBasis := s.basis.Has(ItemInput)
+	whole := inputBasis
 	for it := range NumItems {
-		if s.basis.Has(it) {
+		switch {
+		case s.basis.Has(it), it == ItemImageIn && inputBasis:
 			length += u.q[it]
-		} else if inputSide.Has(it) && u.q[it] != 0 {
+		case InputSide.Has(it) && u.q[it] != 0:
 			whole = false
 		}
 	}

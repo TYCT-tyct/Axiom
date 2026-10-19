@@ -78,7 +78,7 @@
 - OpenAI 上游单独报告的图片直接折成图片项，不依赖价目表；缺图片价时按同侧普通价回落。其他格式只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。视频没有自己的计费项，计入 `image_in`。例如 Gemini 2.5 Flash 的音频输入每百万 $1.00、文本 $0.30，Gemini 3.6 Flash 的图片和视频每百万 $1.00、文本 $0.75（Gemini 定价页，2026-10-14）。
 - **物理总数与计费数量分开**：OpenAI 的 `PhysicalInput()` 保留原始总数及存在性（显式 0 不等于缺失），客户端输入回显用 `InputTotal()`，不把重叠计费量重新相加。输入计费总和是 `max(物理总数, 缓存读 + 缓存写)`，输出各项之和仍等于上游输出总数。Messages 的输入、缓存读写继续互斥，物理提示词长度由它们相加得到。
 - **OpenAI 缓存重叠兼容口径**：每项都必须是 0 … 10¹⁰ 且不大于总数；缓存读、写各按报告量收费，普通输入取剩余量并夹到 0。`100/80/80` 的计费量是 `0/80/80`，物理输入和回显都是 100。这是经参考实现验证的兼容计费政策，不是对所有供应商交集语义的推断；供应商实际扣费仍须对账确认。没有写入计费的模型不报该字段，按 0。
-- **图片与缓存交叉统计**：输入的 `cached_tokens_details.image_tokens` 从图片量扣除；明细必须不超过图片和缓存读总量，缓存图片与文本明细之和不超过缓存读。再把模态限制到 `max(总数 − 缓存读 − 缓存写, 0)` 中，先音频、后图片；无交集明细时也只收这个余量内的图片，不能把全缓存图片再收一次图片价。`text_tokens` 是总量内的已知明细，只校验计数，不加入 `Unknown` 或额外收费。两种格式的 `input/prompt_tokens_details` 和 `output/completion_tokens_details` 别名均适用。
+- **图片与缓存交叉统计**：输入的 `cached_tokens_details.image_tokens` 从图片量扣除；明细必须不超过图片和缓存读总量，缓存图片与文本明细之和不超过缓存读。再把模态限制到 `max(总数 − 缓存读 − 缓存写, 0)` 中，先音频、后图片；无交集明细时也只收这个余量内的图片，不能把全缓存图片再收一次图片价。音频同理：`cached_tokens_details.audio_tokens` 不超过音频量，先从音频量扣除。`text_tokens` 是总量内的已知明细，只校验计数，不加入 `Unknown` 或额外收费。交集对象里其他未映射的成员（如 `video_tokens`）已含在 `cached_tokens` 里，只记入 `Unknown` 供监控，计费不补收（`billing` 的 `unknownCost` 按路径 `.cached_tokens_details.` 判断）。两种格式的 `input/prompt_tokens_details` 和 `output/completion_tokens_details` 别名均适用。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
 - 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
 - **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是按这些计法折算的近似值。
@@ -89,7 +89,7 @@
 
 ### 条件
 
-价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`（概念名；代码里是价目表的字段 `basis`、`above` 和每档的价格），计法是整单按档：`TierBasis` 所选项的数量之和（有物理输入时不超过物理总数）严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。完整输入口径用物理总数；部分口径仍只选它声明的项并以物理总数封顶，不能把只看缓存读的口径也改成整份提示词。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
+价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`（概念名；代码里是价目表的字段 `basis`、`above` 和每档的价格），计法是整单按档：`TierBasis` 所选项的数量之和（有物理输入时不超过物理总数）严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。完整输入口径用物理总数；部分口径仍只选它声明的项并以物理总数封顶，不能把只看缓存读的口径也改成整份提示词。口径含 `input` 而不含 `image_in` 时，图片输入算作输入一并求和：图片拆出之前它本来就在输入里，门槛含义不变（口径 `input`、门槛 200000，250000 的提示词里 100000 是图片，仍进高一档）。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
 
 - Anthropic Haiku 5.5：超过 100,000 token，"prompt length counts all of its input tokens, including cache reads and cache writes"，`TierBasis` = {`input`, `cache_read`, `cache_write`, `cache_write_1h`}；Claude 4.6 及以后的其他模型 1M 内统一价（Anthropic Pricing 页，2026-10-14）。
 - Gemini：提示词超过 200k，`TierBasis` = {`input`, `cache_read`, `audio_in`, `image_in`}，输出和缓存价同时换档（Gemini 定价页，2026-10-14）。
@@ -116,7 +116,7 @@
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。本模块只把 `spec.abilities` 读成 `Serving.Abilities`（见「表」下 `spec` 一条），带不带能力位由 `protocol` 转，判断归路由。
 
 - **图片有效价格**：`Schedule.price` 是 `Cost`、`Missing`、`Ceiling` 共用的解析器；先查该服务等级、该上下文档的图片项（包括继承的基础图片价），仅缺项才回落到同档的 input/output。显式 0 是有效价格，不回落；不跨服务等级继承。路由门槛、预留、售价和供应商成本因而使用同一政策。同价回落是兼容默认值，不是保证保本，真实图片更贵时须录独立价。
-- **重叠的预留**：billing 在每次采样的物理输入上界 N 上，取 `N × max(输入侧最高价, 缓存读最高价 + 缓存写最高价)`，读写只有在都可能出现时合并；各最高价覆盖允许的服务等级和上下文档。后续采样及追加搜索的重读用同一上界。报价只有可能报告的计费项，没有端点格式，故对可能读写的 Messages 路线也保守预留；实际计费不变。两项分别相乘再比较精确金额，避免单价之和超出单价类型上限。
+- **重叠的预留**：billing 在每次采样的物理输入上界 N 上，取 `N × max(输入侧最高价, 缓存读最高价 + 缓存写最高价)`，读写只有在调用格式是 Chat 或 Responses 时合并（`billing.Model.OpenAIUsage`，由路由按端点的调用格式设置；Messages 的各项互不重叠，仍取单项最高价）；这时输入侧价格集合固定含图片输入，不论规格是否列出；各最高价覆盖允许的服务等级和上下文档。后续采样及追加搜索的重读用同一上界。两项分别相乘再比较精确金额，避免单价之和超出单价类型上限。
 
 ### 数值域
 

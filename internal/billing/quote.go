@@ -43,6 +43,9 @@ type Model struct {
 	OutputSpeed             int64                  // the fastest output, in tokens per second
 	MaxUses                 map[catalog.Item]int64 // each server tool's default most uses
 	Reports                 catalog.ItemSet        // the items the upstream may report (catalog.Reportable)
+	// OpenAIUsage is set when the entry is called in Chat or Responses, whose usage includes cached tokens in the input
+	// total and whose cache reads and writes may overlap and be billed together; a Messages call reports them apart.
+	OpenAIUsage bool
 	// ServiceTiers are the tiers the endpoint is offered at. A request that names no tier may be served at any the
 	// endpoint offers, but only at those, so the quote needs the schedule to price only those. Empty means unknown, and
 	// the request's own tiers all count.
@@ -209,10 +212,14 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
-	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead|1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn|1<<catalog.ItemImageIn)
+	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
 	in.Add(catalog.ItemInput)
-	firstPrice, ok1 := inputCeiling(e.Price, in, tiers, first)
-	restPrice, ok2 := inputCeiling(e.Price, in, tiers, window)
+	if e.Model.OpenAIUsage {
+		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
+		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+	}
+	firstPrice, ok1 := inputCeiling(e.Price, in, tiers, first, e.Model.OpenAIUsage)
+	restPrice, ok2 := inputCeiling(e.Price, in, tiers, window, e.Model.OpenAIUsage)
 	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
 		e.Model.Reports&(1<<catalog.ItemAudioOut)
 	outPrice, ok3 := e.Price.Ceiling(outItems, tiers, longest)
@@ -284,11 +291,11 @@ func (p inputPrice) Mul(n int64) platform.Exact {
 	return ordinary
 }
 
-// The quote has reportable items, not the selected wire format. Covering overlap whenever both items are possible
-// also safely covers Chat converted to Messages, without guessing an endpoint's format from its model name.
-func inputCeiling(s catalog.Schedule, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64) (p inputPrice, ok bool) {
+// inputCeiling is the dearest input price. An OpenAI call may bill the same cached tokens as a read and as a write, so
+// its ceiling keeps both prices to be added; any other call bills its items apart, and the dearest one bounds them.
+func inputCeiling(s catalog.Schedule, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64, overlap bool) (p inputPrice, ok bool) {
 	p.ordinary, ok = s.Ceiling(items, tiers, length)
-	if !ok || !items.Has(catalog.ItemCacheRead) || !items.Has(catalog.ItemCacheWrite) {
+	if !overlap || !ok || !items.Has(catalog.ItemCacheRead) || !items.Has(catalog.ItemCacheWrite) {
 		return p, ok
 	}
 	p.read, _ = s.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
