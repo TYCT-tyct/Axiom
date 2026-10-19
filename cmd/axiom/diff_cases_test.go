@@ -91,10 +91,11 @@ var diffPairs = []struct{ client, backend string }{
 
 // body is a request of the client's format to the model, for a conversation, as a stream or whole.
 func (c diffClient) body(model string, stream bool, kind, reply string) string {
-	return c.bodyOf(model, stream, strings.ReplaceAll(c.members[kind], "{reply}", reply))
+	return diffBody(model, stream, strings.ReplaceAll(c.members[kind], "{reply}", reply))
 }
 
-func (c diffClient) bodyOf(model string, stream bool, members string) string {
+// diffBody is a request to a model with the members that make it a conversation.
+func diffBody(model string, stream bool, members string) string {
 	body := `{"model":` + strconv.Quote(model) + `,"stream":` + strconv.FormatBool(stream)
 	if members != "" {
 		body += "," + members

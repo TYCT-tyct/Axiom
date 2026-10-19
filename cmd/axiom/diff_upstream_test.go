@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -26,8 +26,7 @@ type diffUpstream struct {
 	t       *testing.T
 	server  *httptest.Server
 	replies map[string]diffReply
-	mu      sync.Mutex
-	calls   []diffUpstreamCall
+	calls   atomic.Int64
 }
 
 // diffReply is one answer: a stream and the same answer whole, or an error.
@@ -37,15 +36,12 @@ type diffReply struct {
 	body          string
 }
 
-// diffUpstreamCall is a request that reached the upstream, who made it and what it carried, for the log of a failure.
-type diffUpstreamCall struct{ side, path, body string }
-
 var (
 	replyMarker = regexp.MustCompile(`diff:([a-z0-9-]+)`)
 	modelMember = regexp.MustCompile(`"model"\s*:\s*"[^"]*"`)
 )
 
-// newAPIChannelKey is the credential new-api's channel holds; Axiom's is supplierKey. They tell the two gateways apart.
+// newAPIChannelKey is the credential new-api's channel holds. The fake upstream takes any.
 const newAPIChannelKey = "sk-newapi-channel-secret"
 
 func newDiffUpstream(t *testing.T) *diffUpstream {
@@ -70,16 +66,8 @@ func (u *diffUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		u.t.Errorf("the upstream could not read a request: %v", err)
 	}
-	side := "axiom"
-	if strings.Contains(r.Header.Get("Authorization")+r.Header.Get("X-Api-Key"), newAPIChannelKey) {
-		side = "new-api"
-	}
-	u.mu.Lock()
-	u.calls = append(u.calls, diffUpstreamCall{side, r.URL.Path, string(body)})
-	n := len(u.calls)
-	u.mu.Unlock()
 	// What a relay sends and a gateway must not pass on (docs/domains/gateway.md「转发规则」).
-	w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
+	w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.FormatInt(u.calls.Add(1), 10))
 	w.Header().Set("X-Upstream", "secret")
 	w.Header().Set("Openai-Organization", "org-secret")
 	w.Header().Set("Cf-Ray", "0000000000000000-AMS")
@@ -127,18 +115,6 @@ func wireOf(path string) string {
 		return "messages"
 	}
 	return "responses"
-}
-
-// sent is what reached the upstream from a side, in order.
-func (u *diffUpstream) sent(side string) (out []diffUpstreamCall) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	for _, c := range u.calls {
-		if c.side == side {
-			out = append(out, c)
-		}
-	}
-	return out
 }
 
 // diffReplies is every answer the cases name: the recorded streams, the whole replies of the same conversations, and

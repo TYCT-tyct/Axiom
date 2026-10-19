@@ -172,8 +172,8 @@ func anchors(a, b []event) [][2]int {
 	for i := range t {
 		t[i] = make([]int, len(b)+1)
 	}
-	for i := len(a) - 1; i >= 0; i-- {
-		for j := len(b) - 1; j >= 0; j-- {
+	for i := range slices.Backward(a) {
+		for j := range slices.Backward(b) {
 			switch {
 			case same(a[i], b[j]):
 				t[i][j] = t[i+1][j+1] + 1

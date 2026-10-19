@@ -42,7 +42,7 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	container, err := testcontainers.Run(ctx, newAPIImage,
 		testcontainers.WithExposedPorts("3000/tcp"),
 		testcontainers.WithHostPortAccess(up.port()),
-		testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}),
+		testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}), //nolint:gosec // a throwaway container's, not a credential
 		testcontainers.WithWaitStrategy(wait.ForHTTP("/api/status").WithPort("3000/tcp").WithStartupTimeout(2*time.Minute)),
 	)
 	testcontainers.CleanupContainer(t, container)

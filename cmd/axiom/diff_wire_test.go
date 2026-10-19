@@ -128,8 +128,9 @@ func (w *callWorld) declareAbilities() {
 		if err != nil {
 			w.t.Fatal(err)
 		}
+		op := catalog.Op{Actor: audit.System("diff.test"), Key: uuid.NewV7(), Reason: "abilities of the differential test"}
 		if _, err := cat.UpdateSpec(w.t.Context(), catalog.UpdateSpecRequest{
-			Op:    catalog.Op{Actor: audit.System("diff.test"), Key: uuid.NewV7(), Reason: "abilities of the differential test"},
+			Op:    op,
 			Model: catalog.ModelID(id), Rev: rev, Spec: jsonx.Raw(spec),
 		}); err != nil {
 			w.t.Fatal(err)
