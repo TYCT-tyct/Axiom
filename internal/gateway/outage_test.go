@@ -58,8 +58,7 @@ func (r outageRig) fail(t *testing.T, err error) int {
 func (r outageRig) lines() int { return strings.Count(r.logs.String(), "\n") }
 
 // TestAnOutageIsLoggedOnceNotPerRequest: however many requests an outage refuses, the log holds one line when it begins
-// and one when it ends, while the metric counts every request, and a failure that is not an outage is still logged
-// for each request.
+// and one when it ends, while the metric counts every request.
 func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -89,14 +88,19 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 			if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused=500") {
 				t.Errorf("the end of the outage is not told once with its count:\n%s", r.logs)
 			}
-			r.logs.Reset()
-			for range 3 {
-				r.fail(t, errors.New("a bug"))
-			}
-			if r.lines() != 3 {
-				t.Errorf("3 failures that are not an outage wrote %d lines, want 3", r.lines())
-			}
 		})
+	}
+}
+
+// TestAFailureThatIsNotAnOutageIsStillLoggedPerRequest: only a dependency being out is told once; a bug is told each time.
+func TestAFailureThatIsNotAnOutageIsStillLoggedPerRequest(t *testing.T) {
+	t.Parallel()
+	r := newOutageRig(t)
+	for range 3 {
+		r.fail(t, errors.New("a bug"))
+	}
+	if r.lines() != 3 {
+		t.Errorf("3 failures that are not an outage wrote %d lines, want 3", r.lines())
 	}
 }
 
