@@ -80,14 +80,20 @@ func FuzzAcceptedOpenAIUsageFitsQuote(f *testing.F) {
 }
 
 // randomOpenAIPrices is a schedule with a context tier over a random basis, each tier overriding random prices, and
-// sometimes a priority tier. Images are priced only sometimes, as a schedule may leave them to the fallback.
+// sometimes a priority tier. Images are priced only sometimes, as a schedule may leave them to the fallback. Output is
+// free half of the time, so that the reserved output cannot make up for an input that is reserved short.
 func randomOpenAIPrices(r *rand.Rand) string {
+	freeOutput := r.IntN(2) == 0
 	rates := func(base bool) string {
 		var parts []string
 		for _, it := range []string{"input", "cache_read", "cache_write", "output", "image_in", "image_out"} {
 			required := base && !strings.HasPrefix(it, "image")
 			if required || r.IntN(2) == 0 {
-				parts = append(parts, fmt.Sprintf("%q:\"%d.%06d\"", it, r.IntN(50), r.IntN(1_000_000)))
+				price := fmt.Sprintf("%d.%06d", r.IntN(50), r.IntN(1_000_000))
+				if freeOutput && (it == "output" || it == "image_out") {
+					price = "0"
+				}
+				parts = append(parts, fmt.Sprintf("%q:%q", it, price))
 			}
 		}
 		return "{" + strings.Join(parts, ",") + "}"
