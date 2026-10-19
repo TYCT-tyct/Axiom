@@ -51,7 +51,7 @@
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
 | `store` | — | 一律 `false`，没有就加上 | 状态由本站保存 |
 | `max_output_tokens` | — | 没有或 `null` 时设为 `Target.MaxOutput`（大于 0 才设）；写了的不动 | 预留按条目的输出上限算，发出去的必须是同一个值（I1）；Messages 的 `max_tokens` 上游必须有，请求没写就是上游的错，不补 |
-| `include` | — | `Target.EncryptedReasoning` 时保证含 `reasoning.encrypted_content`：没有就加，`null` 换成只含它的数组，数组里没有就插在开头；否则不动 | 上游不保存状态时，推理只能加密后带回下一轮；不推理的模型收到它返回 400 |
+| `include` | — | `Target.EncryptedReasoning` 为 yes 时保证含 `reasoning.encrypted_content`：没有就加，`null` 换成只含它的数组，数组里没有就插在开头；否则不动 | 上游不保存状态时，推理只能加密后带回下一轮；不推理的模型收到它返回 400 |
 
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
 - **压缩请求**（`Target.Compact`）：它不是生成，只改必须改的三样——`model` 换成端点的名字，`prompt_cache_key`、`user`、`safety_identifier` 换成派生值，路由参数删除——其余成员原样，`store`、`include`、`max_output_tokens`、`stream`、`input` 既不补也不改，也不拼历史，因为压缩请求没有这些语义（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream` 逐字节核对。
@@ -66,14 +66,15 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 - **规范模型**：`canon` 用 jsonx 读 Chat 请求，形状就是 Chat 的：M1 只有 Chat 请求要转换，以后另两种格式的客户端要跨格式时，各自读进同一个模型。凡是原样搬运的字符串都存成原文（`jsontext.Value`），引号和转义照旧写出，所以上游读到的解码值与客户端写的完全相同，不经过解码再编码。
 - **读一次**：每条消息的内容在读请求时一次读成部件，两个方向都用它；名字和拒答按下表放进部件，流式交回的推理条目在这里合并。
 - **先查形状，再查能不能表达**：函数工具和函数调用的名字、文本部件的 `text` 是字符串，调用的 `arguments` 是字符串，名字和拒答是字符串，JSON schema 回复有名字和对象 schema，否则是客户端的错（`ErrInvalid`）；Chat 有而目标格式表达不了的，是这个端点的不足（`*NotSupported`），gateway 换端点。Chat 定义了而 `canon` 没读的成员，只有取默认值或 `null` 时才放过（`frequency_penalty` 0、`n` 1、`logprobs` false、`modalities` 只有文本等），否则 `*NotSupported`；路由参数和本站扩展读过就丢。工具调用要一一配对、ID 不重复不为空，函数以外的工具和调用（如 `custom`）也是 `*NotSupported`，不当成形状错。
-- **`Target` 里的模型数据**：`MaxOutput`（请求没写输出上限时发给上游的上限，也就是它被报价的上限，gateway 取条目的输出上限；Messages 必须有，Responses 写成 `max_output_tokens`，0 为不发）、`Streams`（端点能流式：请求里一律要流，见「同格式改写」）、`Thinking`（`ThinkingAdaptive` 用 `thinking.type: adaptive` 和 `output_config.effort`，`ThinkingManual` 用 `budget_tokens`）、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`，Responses 端点的 `CacheBreakpoints`，由 gateway 从模型规格填，不按模型名猜。
+- **`Target` 里的模型数据**：`MaxOutput`（请求没写输出上限时发给上游的上限，也就是它被报价的上限，gateway 取条目的输出上限；Messages 必须有，Responses 写成 `max_output_tokens`，0 为不发）、`Streams`（端点能流式：请求里一律要流，见「同格式改写」）、`Thinking`（`ThinkingAdaptive` 用 `thinking.type: adaptive` 和 `output_config.effort`，`ThinkingManual` 用 `budget_tokens`，`ThinkingNone` 是模型不思考）、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`，Responses 端点的 `CacheBreakpoints`，以及两种格式都用的 `EncryptedReasoning`，由 gateway 从模型规格（`catalog.Dialect`）原样填，不按模型名猜。
+- **规格没说不是 no**：这些字段是 `catalog.Claim`（`ClaimUnset`、`ClaimNo`、`ClaimYes`）和 `catalog.Thinking`（零值 `ThinkingUnset`），零值是「没配置」，不是任何一个答案，所以零值的 `Target` 不会悄悄当成自适应思考之类的默认（`TestAZeroTargetAnswersNothing`）。一条规则：请求要用到这个答案时，未设置和明确否定一样返回 `*NotSupported`（原因写明规格没说），gateway 换端点；请求用不到时，未设置无关。具体：要推理而 `Thinking` 不是 `adaptive`、`manual`（`none` 和未设置）；对话中途的系统消息而 `MidSystem` 不是 yes；该消息紧跟工具结果而 `UntrustedSystemAfterTools` 不是 no；非默认的 `temperature`、`top_p` 或强制选工具而 `DefaultSamplingOnly` 不是 no。另外两个只是给请求添东西：`EncryptedReasoning` 不是 yes 时不加 `include`，`CacheBreakpoints` 不是 yes 时不写断点，未设置与 no 的写法相同（不加不会出错，加错会被上游拒绝），区别只留在 `Target` 里，让它能被看见。`TestAnUnsetClaimIsNeverAnAnswer`、`TestThinkingIsAsTheSpecSaysOrNotAtAll` 逐项列出三种答案。
 
 | Chat | → Messages（Anthropic《Messages API reference》，2026-10-14） | → Responses（OpenAI《Create a model response》，2026-10-14） |
 |---|---|---|
 | 开头的 `system`、`developer` 消息 | 顶层 `system` 的文本块 | 原位的 `message` 项，角色不变 |
-| 对话中的 `system`、`developer` 消息 | `MidSystem` 时原位的 `role: "system"`，须紧跟用户或工具结果、后面是助手或结尾；紧跟工具结果而模型不信任时、位置不合规时 `*NotSupported`（《Mid-conversation system messages》，2026-10-13） | 原位 |
+| 对话中的 `system`、`developer` 消息 | `MidSystem` 为 yes 时原位的 `role: "system"`，须紧跟用户或工具结果、后面是助手或结尾；`MidSystem` 不是 yes 时、紧跟工具结果而 `UntrustedSystemAfterTools` 不是 no 时、位置不合规时 `*NotSupported`（《Mid-conversation system messages》，2026-10-13） | 原位 |
 | 第一条非系统消息不是用户 | `*NotSupported` | 照写 |
-| 文本 | 文本块，带着 OpenRouter 写法的 `cache_control`；空文本不写 | `input_text`；助手的是 `output_text`；文本块（助手的也一样）的 `cache_control` 在 `CacheBreakpoints` 的模型上写成 `prompt_cache_breakpoint: {"mode": "explicit"}`，其余模型和图片、文件、工具上的不写，TTL 不转，规则和对费用的影响见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)。所以发往 Responses 时 `UsageContext.CacheTTL1h` 总是 false |
+| 文本 | 文本块，带着 OpenRouter 写法的 `cache_control`；空文本不写 | `input_text`；助手的是 `output_text`；文本块（助手的也一样）的 `cache_control` 在 `CacheBreakpoints` 为 yes 的模型上写成 `prompt_cache_breakpoint: {"mode": "explicit"}`，其余模型（包括规格没说的）和图片、文件、工具上的不写，TTL 不转，规则和对费用的影响见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)。所以发往 Responses 时 `UsageContext.CacheTTL1h` 总是 false |
 | 消息的 `name` | 按 OpenRouter 对非 OpenAI 模型的做法，以 `name: ` 写在第一段文本（或拒答）之前，没有文本就单独一段（OpenRouter《API reference》「Requests」，2026-10-16）；工具结果的不写，它的调用 ID 已经说明 | 同左 |
 | 助手的 `refusal`，消息的成员或 `refusal` 部件 | 写成一个文本块：拒答就是助手说的话，Anthropic 自己的拒答也是文本 | 助手消息里的 `refusal` 部件 |
 | 别的角色的 `refusal` 部件 | `*NotSupported` | `*NotSupported` |
@@ -85,10 +86,10 @@ M1 只把 Chat 客户端的请求转换给 Messages、Responses 端点（[接入
 | 回放的推理（OpenRouter `reasoning_details`） | 先把客户端按流式收到的样子交回的条目合并：类型和 `index` 相同的是一条，文本和摘要按顺序拼接，签名、密文、ID 取给了的那个（OpenRouter《Reasoning tokens》「Streaming Response」，2026-10-15）；只回放 `anthropic-claude-v1` 格式、带签名的 `reasoning.text` 和 `reasoning.encrypted`，放在助手消息最前 | 同左合并后，只回放 `openai-responses-v1` 格式、带密文的推理项，按项 ID 合并摘要和密文：每个 ID 解码一次作为映射键，按出现顺序写出、写原文 |
 | 空的助手消息 | 不写（Anthropic 拒绝空内容，前后的用户消息由它合并） | 一个空的 `output_text` |
 | 函数工具 | `input_schema`，没有就是空对象；`strict: true` 只在 schema 属于 Anthropic 的子集时写，否则 `*NotSupported` | `strict` 总是写，Chat 没写就写 `false`：Responses 把没写当成 `true` 并改写 schema（OpenAI《Function calling》「Strict mode」） |
-| `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `DefaultSamplingOnly` 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |
-| 推理强度 | 自适应模型：`low` 到 `max` 照写，`none` 关闭，其余和推理预算 `*NotSupported`；手动模型：预算 = max(min(上限 × 比例, 128000), 1024)，比例按 OpenRouter（xhigh 0.95、high 0.8、medium 0.5、low 0.2、minimal 0.1），必须小于 `max_tokens`；最后一条助手消息调用了工具却没有可回放的推理时 `*NotSupported`（《Extended thinking》） | `reasoning.effort`，要看推理时加 `summary: "auto"`；推理预算 `*NotSupported` |
+| `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `DefaultSamplingOnly` 不是 no 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |
+| 推理强度 | `Thinking` 是 `none` 或未设置时 `*NotSupported`；自适应模型：`low` 到 `max` 照写，`none` 关闭，其余和推理预算 `*NotSupported`；手动模型：预算 = max(min(上限 × 比例, 128000), 1024)，比例按 OpenRouter（xhigh 0.95、high 0.8、medium 0.5、low 0.2、minimal 0.1），必须小于 `max_tokens`；最后一条助手消息调用了工具却没有可回放的推理时 `*NotSupported`（《Extended thinking》） | `reasoning.effort`，要看推理时加 `summary: "auto"`；推理预算 `*NotSupported` |
 | `response_format` | `json_schema` 在子集内时写进 `output_config.format`；`json_object` 和子集外的 `*NotSupported` | `text.format` |
-| `temperature`、`top_p` | 默认值 1 不写；其余在 0 到 1 之间照写，思考时或 `DefaultSamplingOnly` 时 `*NotSupported` | 照写 |
+| `temperature`、`top_p` | 默认值 1 不写；其余在 0 到 1 之间照写，思考时或 `DefaultSamplingOnly` 不是 no 时 `*NotSupported` | 照写 |
 | `stop` | `stop_sequences` | `*NotSupported` |
 | `verbosity` | `*NotSupported` | `text.verbosity` |
 | 输出上限 | `max_tokens`：`max_tokens`、`max_completion_tokens` 取大，都没有用 `Target.MaxOutput` | `max_output_tokens`，没有时用 `Target.MaxOutput`（大于 0 才写） |

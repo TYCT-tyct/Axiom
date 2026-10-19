@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -71,7 +72,7 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	if err != nil {
 		return nil, err
 	}
-	target := protocol.Target{Format: to, Model: "up", MidSystem: true}
+	target := claudeLike(to)
 	if to == protocol.Messages { // which requires a cap; for Responses it is the gateway's to give (TestPrepareOutputCap)
 		target.MaxOutput = 4096
 	}
@@ -82,12 +83,22 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	return u.Body, err
 }
 
-func manual(t *protocol.Target)         { t.Thinking = protocol.ThinkingManual }
-func breakpoints(t *protocol.Target)    { t.CacheBreakpoints = true }
-func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = true }
-func noMidSystem(t *protocol.Target)    { t.MidSystem = false }
-func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = true }
-func encrypting(t *protocol.Target)     { t.EncryptedReasoning = true }
+// claudeLike is an endpoint whose spec says the whole of its dialect, as for a Claude model that thinks adaptively: nothing
+// is left unset, since an unset claim is refused where the request needs it (TestAnUnsetClaimIsNeverAnAnswer).
+func claudeLike(to protocol.Format) protocol.Target {
+	return protocol.Target{
+		Format: to, Model: "up", Thinking: catalog.ThinkingAdaptive, MidSystem: catalog.ClaimYes,
+		UntrustedSystemAfterTools: catalog.ClaimNo, DefaultSamplingOnly: catalog.ClaimNo,
+		CacheBreakpoints: catalog.ClaimNo, EncryptedReasoning: catalog.ClaimNo,
+	}
+}
+
+func manual(t *protocol.Target)         { t.Thinking = catalog.ThinkingManual }
+func breakpoints(t *protocol.Target)    { t.CacheBreakpoints = catalog.ClaimYes }
+func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = catalog.ClaimYes }
+func noMidSystem(t *protocol.Target)    { t.MidSystem = catalog.ClaimNo }
+func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = catalog.ClaimYes }
+func encrypting(t *protocol.Target)     { t.EncryptedReasoning = catalog.ClaimYes }
 func streaming(t *protocol.Target)      { t.Streams = true }
 func encryptingStream(t *protocol.Target) {
 	encrypting(t)
@@ -475,8 +486,9 @@ func FuzzConvert(f *testing.F) {
 		if err != nil {
 			return
 		}
-		u, err := protocol.Prepare(&r, body, protocol.Target{Format: to, Model: "up", MaxOutput: 4096, MidSystem: true},
-			protocol.Rewrites{Identity: derive})
+		target := claudeLike(to)
+		target.MaxOutput = 4096
+		u, err := protocol.Prepare(&r, body, target, protocol.Rewrites{Identity: derive})
 		ns, _ := errors.AsType[*protocol.NotSupported](err)
 		switch {
 		case ns != nil, errors.Is(err, protocol.ErrInvalid):

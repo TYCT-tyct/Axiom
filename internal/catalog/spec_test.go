@@ -99,3 +99,59 @@ func TestParseAbility(t *testing.T) {
 		t.Error("ParseAbility(telepathy) took a name the catalog does not have")
 	}
 }
+
+// TestDialect: each key of how requests to the model are written is read on its own, and a key the spec leaves out (or
+// sets to null) is unset, which is not a no: absent and false are different claims. A name the catalog does not know,
+// or a value of the wrong type, is refused when the spec is saved, not ignored.
+func TestDialect(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		spec string
+		want Dialect
+		err  string
+	}{
+		{name: "nothing said", spec: `{}`},
+		{name: "null says nothing", spec: `{"thinking":null,"mid_system":null,"encrypted_reasoning":null}`},
+		{
+			name: "every key, yes",
+			spec: `{"thinking":"adaptive","encrypted_reasoning":true,"mid_system":true,"untrusted_system_after_tools":true,
+				"default_sampling_only":true,"cache_breakpoints":true}`,
+			want: Dialect{
+				Thinking: ThinkingAdaptive, EncryptedReasoning: ClaimYes, MidSystem: ClaimYes, UntrustedSystemAfterTools: ClaimYes,
+				DefaultSamplingOnly: ClaimYes, CacheBreakpoints: ClaimYes,
+			},
+		},
+		{
+			name: "every key, no",
+			spec: `{"thinking":"none","encrypted_reasoning":false,"mid_system":false,"untrusted_system_after_tools":false,
+				"default_sampling_only":false,"cache_breakpoints":false}`,
+			want: Dialect{
+				Thinking: ThinkingNone, EncryptedReasoning: ClaimNo, MidSystem: ClaimNo, UntrustedSystemAfterTools: ClaimNo,
+				DefaultSamplingOnly: ClaimNo, CacheBreakpoints: ClaimNo,
+			},
+		},
+		{name: "manual thinking alone", spec: `{"thinking":"manual"}`, want: Dialect{Thinking: ThinkingManual}},
+		{name: "one no among the unset", spec: `{"mid_system":false}`, want: Dialect{MidSystem: ClaimNo}},
+		{name: "unknown thinking", spec: `{"thinking":"telepathy"}`, err: `unknown name "telepathy"`},
+		{name: "empty thinking", spec: `{"thinking":""}`, err: `unknown name ""`},
+		{name: "a claim that is no bool", spec: `{"mid_system":"yes"}`, err: "spec"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, err := parseSpec([]byte(tc.spec))
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("parseSpec error = %v, want one with %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSpec: %v", err)
+			}
+			if got := (Model{dialect: s.dialect}).Dialect(); got != tc.want {
+				t.Errorf("Dialect() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

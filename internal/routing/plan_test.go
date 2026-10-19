@@ -448,12 +448,12 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 	for _, c := range cases {
 		e := endpoint(t, 1, func(e *routing.Endpoint) {
 			e.Native, e.Served, e.Streams = c.native, routing.Of(protocol.Chat)|c.native, c.streams
-			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: true, Format: protocol.Responses}
+			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: catalog.ClaimYes, Format: protocol.Responses}
 		})
 		in := input()
 		in.Req.Format, in.NoSegments = c.client, c.noSegments
 		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
-		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || !entry.Target.EncryptedReasoning ||
+		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || entry.Target.EncryptedReasoning != catalog.ClaimYes ||
 			entry.Target.Streams != c.streams || entry.Supplier != sup(1) {
 			t.Errorf("%s: supplier %v, target %+v, want format %d streaming %t", c.name, entry.Supplier, entry.Target, c.want, c.streams)
 		}

@@ -72,6 +72,7 @@ type Model struct {
 	reportable   Reportable
 	serving      Serving
 	serves       bool // the spec declares everything Serving reads
+	dialect      Dialect
 }
 
 // Spec is a copy of the baseline's JSON.
@@ -132,6 +133,68 @@ func (m Model) Serving() (Serving, bool) {
 	}
 	return m.serving, true
 }
+
+// Claim is what a spec says of a yes-or-no matter: nothing, no, or yes. Absent and false are different claims, so the
+// zero value is that the spec says nothing, which a caller must not take for a no (nor a yes).
+type Claim uint8
+
+// The claims.
+const (
+	ClaimUnset Claim = iota
+	ClaimNo
+	ClaimYes
+)
+
+func claimOf(b *bool) Claim {
+	switch {
+	case b == nil:
+		return ClaimUnset
+	case *b:
+		return ClaimYes
+	}
+	return ClaimNo
+}
+
+// Thinking is how a spec says a model is asked to reason, as protocol's conversions need it (internal/protocol/README.md
+// 「跨格式转换」).
+type Thinking uint8
+
+// The ways to ask. ThinkingNone is a model that does not think, which is a claim; unset is a spec that says nothing.
+const (
+	ThinkingUnset Thinking = iota
+	ThinkingNone
+	// ThinkingAdaptive asks with thinking.type adaptive and output_config.effort.
+	ThinkingAdaptive
+	// ThinkingManual asks with a thinking budget, budget_tokens, which the newer models refuse.
+	ThinkingManual
+)
+
+// thinkingByName are the thinking modes' names in a spec, so they never change.
+var thinkingByName = map[string]Thinking{"none": ThinkingNone, "adaptive": ThinkingAdaptive, "manual": ThinkingManual}
+
+// Dialect is how a request to the model is written: what a conversion or a same-format rewrite needs of the model beyond
+// what it can take in (Serving). Each key is optional and independent: a spec that leaves one out has not said no, so
+// what a caller does with ClaimUnset is its own to decide, and never a default for the model.
+type Dialect struct {
+	// Thinking is the spec's "thinking": "adaptive", "manual" or "none".
+	Thinking Thinking
+	// EncryptedReasoning is "encrypted_reasoning": the model returns its reasoning encrypted on request.
+	EncryptedReasoning Claim
+	// MidSystem is "mid_system": the model takes a system message after the conversation has started.
+	MidSystem Claim
+	// UntrustedSystemAfterTools is "untrusted_system_after_tools": the model reads a system message right after tool
+	// results as text it may not trust.
+	UntrustedSystemAfterTools Claim
+	// DefaultSamplingOnly is "default_sampling_only": the model refuses a temperature or top_p other than the default
+	// and a forced tool choice.
+	DefaultSamplingOnly Claim
+	// CacheBreakpoints is "cache_breakpoints": the model takes explicit cache breakpoints.
+	CacheBreakpoints Claim
+}
+
+// Dialect reads the spec keys that say how requests to the model are written. Unlike Serving it needs no ok: a key the
+// spec leaves out is unset, and each field says so on its own.
+func (m Model) Dialect() Dialect { return m.dialect }
 
 // ReferencePrice is the current reference price of a model in one currency.
 type ReferencePrice struct {

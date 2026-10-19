@@ -226,6 +226,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
+		dialect: spec.dialect,
 	}, nil
 }
 
@@ -250,6 +251,14 @@ type specJSON struct {
 	MaxOutput *int64    `json:"max_output_tokens"`
 	Streams   *bool     `json:"streams"`
 	Abilities *[]string `json:"abilities"`
+
+	// What a request to the model is written with, each of which a spec may leave out (Dialect).
+	Thinking                  *string `json:"thinking"`
+	EncryptedReasoning        *bool   `json:"encrypted_reasoning"`
+	MidSystem                 *bool   `json:"mid_system"`
+	UntrustedSystemAfterTools *bool   `json:"untrusted_system_after_tools"`
+	DefaultSamplingOnly       *bool   `json:"default_sampling_only"`
+	CacheBreakpoints          *bool   `json:"cache_breakpoints"`
 }
 
 type spec struct {
@@ -257,6 +266,7 @@ type spec struct {
 	declared   bool // both lists are present, possibly empty
 	serving    Serving
 	serves     bool // every key Serving reads is present
+	dialect    Dialect
 }
 
 // parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
@@ -274,9 +284,14 @@ func parseSpec(raw []byte) (spec, error) {
 	if err != nil {
 		return spec{}, err
 	}
+	dialect, err := parseDialect(w)
+	if err != nil {
+		return spec{}, err
+	}
 	return spec{
 		reportable: reportable,
 		serving:    serving,
+		dialect:    dialect,
 		declared:   w.Items != nil && w.Tiers != nil,
 		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
 	}, nil
@@ -324,4 +339,22 @@ func parseServing(w specJSON) (Serving, error) {
 		s.Abilities = abilities
 	}
 	return s, nil
+}
+
+// parseDialect reads how the spec says requests to the model are written. A key it leaves out, or sets to null, stays
+// unset; a thinking mode it names must be one the catalog knows, as with the abilities.
+func parseDialect(w specJSON) (Dialect, error) {
+	d := Dialect{
+		EncryptedReasoning: claimOf(w.EncryptedReasoning), MidSystem: claimOf(w.MidSystem),
+		UntrustedSystemAfterTools: claimOf(w.UntrustedSystemAfterTools), DefaultSamplingOnly: claimOf(w.DefaultSamplingOnly),
+		CacheBreakpoints: claimOf(w.CacheBreakpoints),
+	}
+	if w.Thinking != nil {
+		t, ok := thinkingByName[*w.Thinking]
+		if !ok {
+			return Dialect{}, fmt.Errorf("spec thinking: unknown name %q", *w.Thinking)
+		}
+		d.Thinking = t
+	}
+	return d, nil
 }

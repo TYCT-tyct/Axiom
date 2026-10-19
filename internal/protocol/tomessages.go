@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 )
 
@@ -81,13 +82,20 @@ func (m *messagesWriter) check() error {
 func (m *messagesWriter) checkThinking() error {
 	m.effort = m.c.effort()
 	m.thinkingOn = m.effort != "" && m.effort != "none"
-	switch {
-	case !m.thinkingOn:
+	if !m.thinkingOn {
 		return nil
-	case m.t.Thinking == ThinkingAdaptive:
-		return m.checkAdaptive()
 	}
-	return m.checkManual()
+	switch m.t.Thinking {
+	case catalog.ThinkingAdaptive:
+		return m.checkAdaptive()
+	case catalog.ThinkingManual:
+		return m.checkManual()
+	case catalog.ThinkingNone:
+		return &NotSupported{Reason: "the model does not think"}
+	}
+	// Not one of the two ways to ask is the model's: guessing one is a request the upstream refuses, or a budget it
+	// was never asked to spend.
+	return &NotSupported{Reason: "the spec does not say how the model is asked to think"}
 }
 
 func isSystem(role string) bool { return role == "system" || role == "developer" }
@@ -229,12 +237,16 @@ func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]by
 		next = msgs[i+1].Role
 	}
 	switch {
-	case !m.t.MidSystem:
+	case m.t.MidSystem == catalog.ClaimNo:
 		return nil, &NotSupported{Reason: "the model takes no system message after the conversation started"}
+	case m.t.MidSystem == catalog.ClaimUnset:
+		return nil, &NotSupported{Reason: "the spec does not say whether the model takes a system message after the conversation started"}
 	case prev != "user" && prev != "tool", next != "" && next != "assistant":
 		return nil, &NotSupported{Reason: "a system message where Anthropic does not allow one"}
-	case prev == "tool" && m.t.UntrustedSystemAfterTools:
+	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimYes:
 		return nil, &NotSupported{Reason: "the model does not trust a system message right after tool results"}
+	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimUnset:
+		return nil, &NotSupported{Reason: "the spec does not say whether the model trusts a system message right after tool results"}
 	}
 	return turn(out, "system", msgs[i])
 }
@@ -427,8 +439,10 @@ func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if forced && (m.thinkingOn || m.t.DefaultSamplingOnly) {
-		return nil, &NotSupported{Reason: "a forced tool choice the model refuses"}
+	if forced {
+		if err := m.samplingRefusal("a forced tool choice"); err != nil {
+			return nil, err
+		}
 	}
 	parallelOff := m.c.ParallelToolCalls != nil && !*m.c.ParallelToolCalls
 	if isNull(m.c.ToolChoice) && !parallelOff || len(m.c.Tools) == 0 {
@@ -464,7 +478,7 @@ func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 // thinking writes the thinking setting and output_config: the effort of an adaptive model, and the schema of a
 // structured reply.
 func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
-	adaptive := m.thinkingOn && m.t.Thinking == ThinkingAdaptive
+	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
 	switch {
 	case adaptive:
 		out = append(out, `,"thinking":{"type":"adaptive"}`...)
@@ -503,6 +517,19 @@ func (m *messagesWriter) replyFormat() (string, error) {
 	return `"format":{"type":"json_schema","schema":` + string(f.JSONSchema.Schema) + `}`, nil
 }
 
+// samplingRefusal is why the model cannot take what, a sampling other than the default or a forced tool choice, nil when
+// it can: thinking refuses it, a model whose spec says it takes the default only refuses it, and a spec that says
+// nothing leaves a request the upstream may refuse.
+func (m *messagesWriter) samplingRefusal(what string) error {
+	switch {
+	case m.thinkingOn || m.t.DefaultSamplingOnly == catalog.ClaimYes:
+		return &NotSupported{Reason: what + ", which the model refuses"}
+	case m.t.DefaultSamplingOnly == catalog.ClaimUnset:
+		return &NotSupported{Reason: what + ", and the spec does not say whether the model takes it"}
+	}
+	return nil
+}
+
 // sampling writes temperature, top_p, stop sequences and the service tier. A value other than the default is refused
 // where the model or thinking refuses it, and one outside Anthropic's 0 to 1.
 func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
@@ -514,8 +541,8 @@ func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
 		if numberIs(s.v, 1) {
 			continue
 		}
-		if m.t.DefaultSamplingOnly || m.thinkingOn {
-			return nil, &NotSupported{Reason: s.name + " other than the default, which the model refuses"}
+		if err := m.samplingRefusal(s.name + " other than the default"); err != nil {
+			return nil, err
 		}
 		if f, err := strconv.ParseFloat(string(s.v), 64); err != nil || f > 1 || f < 0 {
 			return nil, &NotSupported{Reason: s.name + " outside 0 to 1"}
