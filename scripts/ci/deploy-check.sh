@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI's deployment checks (ci.yml, job build): deploy this tree with `just up`, check the node runs it, upgrade a
+# CI's deployment checks (ci.yml, job deploy): deploy this tree with `just up`, check the node runs it, upgrade a
 # deployment from before the migration administrator in place, and always tear down with the database.
 #
 # The job owns its compose project, image tag and volumes, named from RUNNER_NAME and its workspace path

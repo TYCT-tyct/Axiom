@@ -38,6 +38,8 @@ QUEUE, HOTFIX, CONFLICT, FAILED = "queue", "hotfix", "train:conflict", "train:fa
 STATUS = "merge-train"  # required on main; posted on a PR head just before the train merges it. Not "train": that is
 # the name of the driver job's own check run, which a labelling run attaches to the PR it drives, so a required context of
 # that name made a PR block its own landing while the run was in progress, and keep blocking once it failed
+BUILD_JOB = "build"  # ci.yml's aggregator job, the required check; a failing part fails it too
+TEST_JOB = "go-test"  # ci.yml's job for `just test`, the only one whose log names a flaky Go test
 VERIFIED = "train/verified"  # on train/<base>/land: the prefix passed and may be landed
 FLAKY = ".github/flaky.toml"
 SUBJECT = re.compile(r"train: #(\d+) ([0-9a-f]{40})$")
@@ -46,7 +48,7 @@ STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")  # the timestamp on every line
 GREEN = {"success", "skipped", "neutral"}  # a skipped required check counts as passed on GitHub too
 SESSION_LINK = "https://claude.ai/code/session_"
 POLL_SECONDS = 60  # four parallel builds polled every minute stay far below GITHUB_TOKEN's 1000 requests an hour
-BUILD_MINUTES = 90  # a build normally takes 20-25 minutes; past this it is treated as lost and the train stops
+BUILD_MINUTES = 90  # a build takes minutes; past this it is treated as lost and the train stops
 IDENTITY = ["-c", "user.name=merge train", "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com"]
 
 
@@ -130,6 +132,17 @@ def covered(tests, unexplained, flaky):
     """Whether every failure is a listed flaky test; an entry names 'path/to/pkg.TestName' from the module root."""
     return bool(tests) and not unexplained and all(
         any(test == known or test.endswith("/" + known) for known in flaky) for test in tests)
+
+
+def test_job_failing(jobs):
+    """The job whose log names the failures when a build failed only because of the Go tests, or None. `go-test` runs
+    `just test`; the `build` aggregator reports its failure. A failure of any other job is a real problem no flaky entry
+    covers."""
+    failed = [job for job in jobs if job["conclusion"] == "failure"]
+    names = {job["name"] for job in failed}
+    if TEST_JOB not in names or names - {BUILD_JOB, TEST_JOB}:
+        return None
+    return next(job for job in failed if job["name"] == TEST_JOB)
 
 
 def parse_flaky(text):
@@ -390,11 +403,10 @@ class Train:
     def only_flaky(self, run, flaky):
         if not flaky:
             return False
-        jobs = self.api(f"actions/runs/{run}/jobs?per_page=100")["jobs"]
-        failed = [job for job in jobs if job["conclusion"] == "failure"]
-        if not failed or [job["name"] for job in failed] != ["build"]:
+        job = test_job_failing(self.api(f"actions/runs/{run}/jobs?per_page=100")["jobs"])
+        if job is None:
             return False
-        tests, unexplained = go_failures(sh("gh", "api", f"repos/{self.repo}/actions/jobs/{failed[0]['id']}/logs").stdout)
+        tests, unexplained = go_failures(sh("gh", "api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs").stdout)
         log(f"failed tests in {self.run_link(run)}: {tests or 'none parsed'}{'; unexplained: ' + str(unexplained) if unexplained else ''}")
         return covered(tests, unexplained, flaky)
 
