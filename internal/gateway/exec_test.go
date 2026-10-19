@@ -39,6 +39,9 @@ func checkStream(t *testing.T, h *harness) {
 	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "text/event-stream; charset=utf-8" {
 		t.Fatalf("status %d, headers %v", h.w.status, h.w.header)
 	}
+	if got := h.w.header.Get("X-Accel-Buffering"); got != "no" {
+		t.Errorf("X-Accel-Buffering is %q: an nginx in front would buffer the stream", got)
+	}
 	body := h.w.body()
 	for _, want := range []string{`"text": "Hello"`, `"text": "!"`, h.call.ID.String(), `"model": "claude-opus-5-5"`, `"cost":0.003703701,"cost_currency":"USD"`} {
 		if !strings.Contains(body, want) {

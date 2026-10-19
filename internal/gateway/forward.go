@@ -75,6 +75,7 @@ func (s *session) commit(a *attempt, out []byte) {
 	h := s.w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
 	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no") // an nginx in front would otherwise hold the events back until its buffer fills
 	s.w.WriteHeader(http.StatusOK)
 	if !s.put(out) {
 		return
