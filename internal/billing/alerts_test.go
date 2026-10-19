@@ -167,7 +167,7 @@ func TestCleanupCapsItsFailureReport(t *testing.T) {
 	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	failingBacklog(b, reportedFailures+2)
 	_, err := b.billing.Cleanup(t.Context(), reportedFailures+2)
-	if got := strings.Count(err.Error(), "billing: clean up"); got != reportedFailures || !strings.Contains(err.Error(), "2 more reservations failed") {
+	if got := strings.Count(err.Error(), "billing: clean up"); got != reportedFailures || !strings.Contains(err.Error(), "2 more failures not shown") {
 		t.Errorf("%d failures named in %v; want %d and a count of the other 2", got, err, reportedFailures)
 	}
 }

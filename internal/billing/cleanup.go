@@ -32,51 +32,70 @@ const reportedFailures = 5
 // reservation at rank r among the due ones past the cursor is reached within ceil(r/budget) calls. A call cut short by
 // ctx returns its error, done false and the count so far.
 func (b *Billing) cleanFrom(ctx context.Context, after uuid.UUID, budget int32) (changed int, next uuid.UUID, done bool, err error) {
-	var failed []error
-	failures, attempts := 0, int32(0)
+	var report failureReport
 	next = after
-	for attempts < budget {
+	for left := budget; left > 0; {
 		if ctx.Err() != nil {
-			failed = append(failed, fmt.Errorf("billing: cleanup stopped: %w", context.Cause(ctx)))
+			report.add(fmt.Errorf("billing: cleanup stopped: %w", context.Cause(ctx)))
 			break
 		}
 		var due []DueReservationsRow
-		limit := budget - attempts
 		if err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
-			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: next, Max: limit})
+			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: next, Max: left})
 			return err
 		}); err != nil {
-			failed = append(failed, fmt.Errorf("billing: find what cleanup owns: %w", err))
+			report.add(fmt.Errorf("billing: find what cleanup owns: %w", err))
 			break
 		}
-		for _, d := range due {
-			if ctx.Err() != nil {
-				break // the next turn of the outer loop reports it
-			}
-			attempts++
-			next = d.RequestID
-			if err := b.cleanOne(ctx, d); err != nil {
-				failures++
-				if len(failed) < reportedFailures {
-					failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
-				}
-				continue
-			}
-			changed++
+		n, last := b.cleanPage(ctx, due, &report)
+		changed += n
+		if last != (uuid.UUID{}) {
+			next = last
 		}
-		if int32(len(due)) < limit {
-			return changed, uuid.UUID{}, true, joinFailures(failed, failures)
+		if len(due) < int(left) && ctx.Err() == nil { // a short page held the end of the due set
+			return changed, uuid.UUID{}, true, report.err()
 		}
+		left -= int32(min(len(due), int(left))) //nolint:gosec // at most left, which is an int32
 	}
-	return changed, next, false, joinFailures(failed, failures)
+	return changed, next, false, report.err()
 }
 
-// joinFailures joins the kept errors, and says how many more failures were not kept.
-func joinFailures(kept []error, failures int) error {
-	if more := failures - reportedFailures; more > 0 {
-		kept = append(kept, fmt.Errorf("billing: %d more reservations failed to clean up", more))
+// cleanPage takes over the reservations of a page until ctx ends, and returns how many it changed and the last request
+// it tried (the zero id when none).
+func (b *Billing) cleanPage(ctx context.Context, due []DueReservationsRow, report *failureReport) (changed int, last uuid.UUID) {
+	for _, d := range due {
+		if ctx.Err() != nil {
+			break // cleanFrom reports it
+		}
+		last = d.RequestID
+		if err := b.cleanOne(ctx, d); err != nil {
+			report.add(fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+		} else {
+			changed++
+		}
 	}
-	return errors.Join(kept...)
+	return changed, last
+}
+
+// failureReport keeps the first reportedFailures errors and counts the rest.
+type failureReport struct {
+	kept   []error
+	others int
+}
+
+func (r *failureReport) add(err error) {
+	if len(r.kept) < reportedFailures {
+		r.kept = append(r.kept, err)
+	} else {
+		r.others++
+	}
+}
+
+func (r *failureReport) err() error {
+	if r.others > 0 {
+		return errors.Join(append(r.kept, fmt.Errorf("billing: %d more failures not shown", r.others))...)
+	}
+	return errors.Join(r.kept...)
 }
 
 // cleanOne takes over one due reservation in a transaction of its own, and logs what it released.
