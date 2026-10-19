@@ -12,7 +12,6 @@ import (
 	"uuid"
 
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
@@ -60,9 +59,6 @@ func NewHandler(d Deps) (*Handler, error) {
 	}
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
-	}
-	if d.Meter == nil {
-		d.Meter = noop.NewMeterProvider().Meter("gateway")
 	}
 	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {

@@ -29,6 +29,35 @@ func refusals(t *testing.T, tel *telemetry.Telemetry, cause string) string {
 	return "absent from:\n" + rec.Body.String()
 }
 
+// outageRig is a handler with nothing but the outage's state, its log and its metrics.
+type outageRig struct {
+	*Handler
+	tel  *telemetry.Telemetry
+	logs *bytes.Buffer
+}
+
+func newOutageRig(t *testing.T) outageRig {
+	t.Helper()
+	tel, err := telemetry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &bytes.Buffer{}
+	h := &Handler{}
+	h.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	h.outage = newOutage(h.Logger, tel.Metrics.Meter("axiom/gateway"))
+	return outageRig{h, tel, logs}
+}
+
+func (r outageRig) fail(t *testing.T, err error) int {
+	w := httptest.NewRecorder()
+	r.Handler.fail(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil), protocol.Messages, err)
+	return w.Code
+}
+
+func (r outageRig) lines() int { return strings.Count(r.logs.String(), "
+") }
+
 // TestAnOutageIsLoggedOnceNotPerRequest: however many requests an outage refuses, the log holds one line when it begins
 // and one when it ends, while the metric counts every request, and a failure that is not an outage is still logged
 // for each request.
@@ -43,42 +72,32 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			tel, err := telemetry.New()
-			if err != nil {
-				t.Fatal(err)
-			}
-			var logs bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&logs, nil))
-			h := &Handler{Deps: Deps{Logger: logger}, outage: newOutage(logger, tel.Metrics.Meter("axiom/gateway"))}
-			fail := func(err error) int {
-				w := httptest.NewRecorder()
-				h.fail(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil), protocol.Messages, err)
-				return w.Code
-			}
+			r := newOutageRig(t)
 			const n = 500
 			for range n {
-				if code := fail(tc.err); code != http.StatusServiceUnavailable {
+				if code := r.fail(t, tc.err); code != http.StatusServiceUnavailable {
 					t.Fatalf("an outage is answered %d, want 503", code)
 				}
 			}
-			if lines := strings.Count(logs.String(), "\n"); lines != 1 {
-				t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, lines, logs.String())
+			if r.lines() != 1 {
+				t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:
+%s", n, r.lines(), r.logs)
 			}
-			if got := refusals(t, tel, tc.cause); got != "500" {
+			if got := refusals(t, r.tel, tc.cause); got != "500" {
 				t.Errorf("the metric counts %s refusals, want %d", got, n)
 			}
-			h.outage.recovered()
-			h.outage.recovered() // a request after the end tells nothing more
-			ended := logs.String()[strings.Index(logs.String(), "\n")+1:]
-			if strings.Count(ended, "\n") != 1 || !strings.Contains(ended, "refused=500") {
-				t.Errorf("the end of the outage is not told once with its count:\n%s", ended)
+			r.outage.recovered()
+			r.outage.recovered() // a request after the end tells nothing more
+			if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused=500") {
+				t.Errorf("the end of the outage is not told once with its count:
+%s", r.logs)
 			}
-			logs.Reset()
+			r.logs.Reset()
 			for range 3 {
-				fail(errors.New("a bug"))
+				r.fail(t, errors.New("a bug"))
 			}
-			if lines := strings.Count(logs.String(), "\n"); lines != 3 {
-				t.Errorf("3 failures that are not an outage wrote %d lines, want 3", lines)
+			if r.lines() != 3 {
+				t.Errorf("3 failures that are not an outage wrote %d lines, want 3", r.lines())
 			}
 		})
 	}

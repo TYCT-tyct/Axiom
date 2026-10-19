@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
@@ -56,6 +57,9 @@ type outage struct {
 }
 
 func newOutage(logger *slog.Logger, meter metric.Meter) *outage {
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("gateway")
+	}
 	count, err := meter.Int64Counter("axiom.gateway.outage.refusals",
 		metric.WithDescription("Requests refused because a dependency was out, by cause (database, snapshot)."))
 	if err != nil {
