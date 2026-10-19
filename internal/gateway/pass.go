@@ -39,7 +39,8 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	}
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
-	return over, ended{reply: body, status: resp.StatusCode, held: held}
+	s.replyHeld = held
+	return over, ended{reply: body, status: resp.StatusCode}
 }
 
 // readWhole reads a reply whole within the node's memory budget, charging each growth of its buffer before it is made,

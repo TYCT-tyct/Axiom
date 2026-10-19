@@ -22,6 +22,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
 		ID: s.c.ID.String(), Model: s.c.Request.Model, Created: s.start.Unix(), Memory: s.x.Memory, Aggregate: s.aggregate,
 	})
+	s.live = relay
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()

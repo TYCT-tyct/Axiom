@@ -561,8 +561,8 @@ func (h *harness) start() <-chan struct{} {
 }
 
 // check waits for the call to give its slots back, which may be after Run returns, and checks what holds however it
-// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and no memory is
-// left charged.
+// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and the node's
+// memory is back to the byte, neither left charged nor given back twice.
 func (h *harness) check() {
 	h.t.Helper()
 	<-h.released
@@ -584,10 +584,9 @@ func (h *harness) check() {
 	if held := h.up.outstanding(); held != 0 {
 		h.t.Errorf("%d credentials still held", held)
 	}
-	if !h.memory.Charge(h.budget) {
-		h.t.Error("the node's memory budget was not given back whole")
+	if got := left(h.memory); got != h.budget {
+		h.t.Errorf("the node's memory budget has %d left of %d: not given back whole, or given back twice", got, h.budget)
 	}
-	h.memory.Refund(h.budget)
 }
 
 // ended is the last try of the settlement, or fails.
