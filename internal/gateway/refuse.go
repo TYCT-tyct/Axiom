@@ -46,7 +46,8 @@ var messages = map[string]string{
 	"generation_not_found": "No call with this ID is visible to this key.",
 }
 
-// errorTypes are the Messages `type` of a status; Chat's `type` uses the same words.
+// errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
+// same errors answered after an attempt are written with: TestARefusalIsAnErrorOfProtocol).
 var errorTypes = map[int]string{
 	http.StatusBadRequest: "invalid_request_error", http.StatusUnauthorized: "authentication_error",
 	http.StatusPaymentRequired: "billing_error", http.StatusNotFound: "not_found_error",
@@ -73,7 +74,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 		detail["type"], detail["message"] = typ, message
 		body = map[string]any{"type": "error", "error": detail}
 	} else {
-		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "code": r.Status, "metadata": detail}}
+		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
 	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()

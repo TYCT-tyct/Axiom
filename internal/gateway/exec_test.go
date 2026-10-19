@@ -146,6 +146,39 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 	}
 }
 
+// TestARefusedRequestIsAnsweredInTheUpstreamsWords: when the supplier refuses the request itself, the client reads what
+// the supplier said of it (Claude Code recovers from the text), in the shell of its format; with nothing said, the
+// error is ours.
+func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
+	messages := protocol.Messages
+	said := &protocol.Rejection{Message: "max_tokens: Input should be greater than 0", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
+	for _, tc := range []struct {
+		name      string
+		client    protocol.Format
+		rejection *protocol.Rejection
+		want      []string
+	}{
+		{"Chat", protocol.Chat, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+		{"Messages", protocol.Messages, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"error_type":"invalid_request"`}},
+		{"nothing said", protocol.Chat, nil, []string{`"message":"The request is not valid."`, `"code":"invalid_request"`}},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{client: tc.client, upstream: &messages})
+			f := failing(routing.ScopeRequest, true, suppliers.Failure{Rejection: tc.rejection})
+			h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, f }}
+			h.run()
+			if h.w.status != http.StatusBadRequest {
+				t.Errorf("%s: status %d:\n%s", tc.name, h.w.status, h.w.body())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(h.w.body(), want) {
+					t.Errorf("%s: no %s in %s", tc.name, want, h.w.body())
+				}
+			}
+		})
+	}
+}
+
 // TestAttemptsAreNumberedBoundAndRecorded: every attempt counts from the moment it is bound, with its number and the
 // entry it was priced as; the route's record gets each; and the most is the plan's (never more than three).
 func TestAttemptsAreNumberedBoundAndRecorded(t *testing.T) {

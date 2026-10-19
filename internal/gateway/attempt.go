@@ -284,8 +284,8 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	next := routing.Decide(routing.Failure{Scope: scope})
 	s.record(a, true, scope, next)
 	switch next {
-	case routing.ReturnToClient: // the supplier's own words are not kept in a Failure, so the client gets ours
-		return over, ended{err: protocol.Error{Type: protocol.InvalidRequest}}
+	case routing.ReturnToClient: // the request itself is refused: the client gets what the supplier said of it, cleaned of its name
+		return over, ended{err: protocol.Error{Type: protocol.InvalidRequest, Rejection: f.Rejection}}
 	case routing.OtherCredential:
 		return sameEntry, ended{}
 	case routing.NextEntry:

@@ -203,6 +203,9 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
 	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
 	f := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
+	if f.Scope == adapter.ScopeRequest {
+		f.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
+	}
 	a.rest(f)
 	return nil, &f
 }

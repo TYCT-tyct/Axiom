@@ -54,13 +54,16 @@ const (
 	ScopeSupplier                // everything at the supplier
 )
 
-// Failure is a failed attempt as the module's other parts see it. It carries no text from the supplier: what was
-// wrong is a variant of Cause with numbers and times only, so a response that echoes a credential cannot reach a log
-// or a table through it.
+// Failure is a failed attempt as the module's other parts see it. Cause carries no text from the supplier: what was
+// wrong is a variant with numbers and times only, so a response that echoes a credential cannot reach a log or a table
+// through it. The one place the supplier's words are kept is Rejection, which the shared call code fills for a request
+// the supplier refused (ScopeRequest), after taking out whatever names the supplier; it is for the client's reply
+// alone, never for a log or a table (docs/domains/gateway.md「错误」).
 type Failure struct {
-	Executed Execution
-	Scope    Scope
-	Cause    Cause
+	Executed  Execution
+	Scope     Scope
+	Cause     Cause
+	Rejection *protocol.Rejection
 }
 
 // Cause is what went wrong. The variants are closed: adding one makes every switch on Cause fail to compile or lint

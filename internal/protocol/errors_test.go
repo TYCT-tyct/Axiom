@@ -92,22 +92,21 @@ func chargedUsage(f protocol.Format) map[string]any {
 
 // wantError is what typedError should find in an error of type name in format f.
 func wantError(f protocol.Format, name, messages string, status int) map[string]any {
-	want := map[string]any{"error_type": name, "limit_source": "balance", "has_message": true}
-	if f == protocol.Messages {
-		want["type"] = messages
-	} else {
-		want["code"] = float64(status)
+	want := map[string]any{"error_type": name, "limit_source": "balance", "has_message": true, "type": messages}
+	if f != protocol.Messages {
+		want["code"], want["param"] = name, ""
 	}
 	return want
 }
 
-// typedError gathers what an error body says of its type: Messages' error object, or Chat's metadata with its code.
+// typedError gathers what an error body says of its type: Messages' error object, or Chat's type, param and code with
+// the members of its metadata.
 func typedError(body map[string]any) map[string]any {
 	e, _ := body["error"].(map[string]any)
 	got := map[string]any{"has_message": e["message"] != nil && e["message"] != ""}
 	src := e
 	if meta, ok := e["metadata"].(map[string]any); ok {
-		src, got["code"] = meta, e["code"]
+		src, got["type"], got["code"], got["param"] = meta, e["type"], e["code"], e["param"]
 	}
 	for k, v := range src {
 		if k != "message" {
@@ -115,6 +114,46 @@ func typedError(body map[string]any) map[string]any {
 		}
 	}
 	return got
+}
+
+// TestRenderRejection: what the upstream said of a request it refused reaches the client in its own words, with the
+// type, param and code it gave (null when it gave no code), in the shells that have them; Messages keeps its own type.
+func TestRenderRejection(t *testing.T) {
+	openAI := &protocol.Rejection{
+		Message: "Invalid value for 'max_tokens': expected a value above 0.", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value",
+	}
+	claude := &protocol.Rejection{Message: "max_tokens: Input should be greater than 0", Type: "invalid_request_error"}
+	for _, c := range []struct {
+		name   string
+		f      protocol.Format
+		r      *protocol.Rejection
+		wantIn []string
+	}{
+		{"OpenAI's error in Chat", protocol.Chat, openAI, []string{
+			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`,
+			`"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+		{"OpenAI's error before a Responses stream", protocol.Responses, openAI, []string{`"param":"max_tokens"`, `"code":"invalid_value"`}},
+		{"Anthropic's error in Chat", protocol.Chat, claude, []string{
+			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":null`}},
+		{"OpenAI's error in Messages", protocol.Messages, openAI, []string{
+			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`, `"error_type":"invalid_request"`}},
+		{"a type of the upstream's own in Messages", protocol.Messages, &protocol.Rejection{Message: "m", Type: "weird"}, []string{`"type":"invalid_request_error"`}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			status, body := protocol.RenderError(c.f, protocol.Error{Type: protocol.InvalidRequest, Rejection: c.r}, nil)
+			if status != 400 {
+				t.Errorf("status %d", status)
+			}
+			for _, want := range c.wantIn {
+				if !strings.Contains(string(body), want) {
+					t.Errorf("no %s in %s", want, body)
+				}
+			}
+			if c.f == protocol.Messages && strings.Contains(string(body), "param") {
+				t.Errorf("a param in Anthropic's shell: %s", body)
+			}
+		})
+	}
 }
 
 // TestRenderErrorCharges: no settlement, no axiom object; a pending settlement says so and gives no cost.

@@ -269,8 +269,7 @@ func newChatWriter(o RelayOptions, created string) chatWriter {
 // (docs/domains/gateway.md「错误」).
 func (s *chatWriter) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	data := s.chunk(`[{"index":0,"delta":{},"finish_reason":"error"}]`)
-	data = fmt.Appendf(data, `,"error":{"code":%d,"message":`, errorTypes[e.Type].status) // OpenRouter's chunk gives one
-	data = append(appendErrorType(append(appendQuoted(data, e.message()), `,"metadata":{`...), e), `}},"usage":`...)
+	data = append(appendOpenAIError(append(data, `,"error":`...), e), `,"usage":`...)
 	data = append(appendOpenAIUsage(data, chatNames, u, cost), '}')
 	return sse.AppendEvent(dst, "", data)
 }

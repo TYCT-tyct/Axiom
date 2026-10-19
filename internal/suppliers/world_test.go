@@ -45,13 +45,15 @@ func (fakeQuirks) ChargeRef(h http.Header) (adapter.ChargeRef, bool) {
 	return adapter.ChargeRef(v), v != ""
 }
 
-// Classify: 401 the key is refused, 403 its allowance is used up, 429 it is asked to wait, 5xx the supplier failed.
+// Classify: 400 the request is refused, 401 the key is refused, 403 its allowance is used up, 429 it is asked to wait, 5xx the supplier failed.
 func (fakeQuirks) Classify(status int, _ http.Header, _ []byte) adapter.Failure {
 	switch status {
 	case 401:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialRejected{}}
 	case 403:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialQuotaExhausted{}}
+	case 400:
+		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	case 429:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.RateLimited{RetryAfter: 3 * time.Second}}
 	case 500:
