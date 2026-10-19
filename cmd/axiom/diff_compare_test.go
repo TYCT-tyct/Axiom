@@ -46,7 +46,7 @@ func bodyLeaves(contentType, body string) []leaf {
 	case strings.HasPrefix(contentType, "text/event-stream"):
 		return nil // compared as events, by compareEvents
 	case json.Unmarshal([]byte(body), &doc) == nil:
-		return flatten("json", "json", doc)
+		return aliasReasoning(flatten("json", "json", doc))
 	default:
 		return []leaf{{"text", "text", body}}
 	}
@@ -258,76 +258,126 @@ func isChatStream(events []event) bool {
 	return ok && doc["object"] == "chat.completion.chunk"
 }
 
-// foldChat adds a Chat stream up: the members of every chunk's delta, their strings joined in order, the tool calls
-// joined by index, the last finish reason and the last usage.
+// foldChat adds a Chat stream up: the members of every chunk's delta, their strings decoded and joined in order, the
+// tool calls joined by index, the last finish reason and the last usage, and how the stream ends: exactly one [DONE],
+// after which nothing comes. A client stops reading at the first [DONE], so chunks after it are lost to it and are
+// counted, not folded; any other data that is not JSON is kept as it is.
 func foldChat(events []event) []leaf {
-	joined := map[string]string{}
-	var usage []leaf
-	set := func(path, at, value string) { joined[at+"\x00"+path] = value }
-	for _, e := range events {
-		chunk, ok := e.doc.(map[string]any)
-		if !ok {
-			set("chat.end", "chat.end", e.data) // [DONE]
-			continue
-		}
-		for k, v := range chunk {
-			switch k {
-			case "choices":
-				foldChoices(v, joined)
-			case "usage":
-				if v != nil {
-					usage = flatten("chat.usage", "chat.usage", v)
-				}
-			default:
-				set("chat."+k, "chat."+k, canonical(v))
-			}
+	f := chatFold{texts: map[leafKey]string{}, sets: map[leafKey]string{}}
+	done := slices.IndexFunc(events, func(e event) bool { return e.doc == nil && e.data == "[DONE]" })
+	body := events
+	if done >= 0 {
+		body = events[:done]
+	}
+	count := 0
+	for i, e := range events {
+		if e.doc == nil && e.data == "[DONE]" {
+			count++
+		} else if e.doc == nil {
+			f.sets[leafKey{"chat.stray", "chat.stray[" + strconv.Itoa(i) + "]"}] = canonical(e.data)
 		}
 	}
-	out := usage
-	for key, value := range joined {
-		at, path, _ := strings.Cut(key, "\x00")
-		out = append(out, leaf{path, at, value})
+	f.sets[leafKey{"chat.done.count", "chat.done.count"}] = strconv.Itoa(count)
+	f.sets[leafKey{"chat.done.after", "chat.done.after"}] = strconv.Itoa(max(0, len(events)-done-1) * min(1, count))
+	for _, e := range body {
+		if chunk, ok := e.doc.(map[string]any); ok {
+			f.chunk(chunk)
+		}
+	}
+	return f.leaves()
+}
+
+// leafKey is where a folded value lives: its path and its place.
+type leafKey struct{ path, at string }
+
+// chatFold is what the chunks of a Chat stream add up to: strings that are joined as decoded text, and values that
+// are set (the last chunk's wins).
+type chatFold struct {
+	texts, sets map[leafKey]string
+	usage       []leaf
+}
+
+func (f *chatFold) leaves() []leaf {
+	out := f.usage
+	for k, v := range f.sets {
+		out = append(out, leaf{k.path, k.at, v})
+	}
+	for k, v := range f.texts {
+		out = append(out, leaf{k.path, k.at, canonical(v)})
 	}
 	return out
 }
 
-func foldChoices(choices any, joined map[string]string) {
+func (f *chatFold) chunk(chunk map[string]any) {
+	for k, v := range chunk {
+		switch k {
+		case "choices":
+			f.choices(v)
+		case "usage":
+			if v != nil {
+				f.usage = flatten("chat.usage", "chat.usage", v)
+			}
+		default:
+			f.sets[leafKey{"chat." + k, "chat." + k}] = canonical(v)
+		}
+	}
+}
+
+func (f *chatFold) choices(choices any) {
 	list, _ := choices.([]any)
 	for _, c := range list {
 		choice, _ := c.(map[string]any)
 		at := "chat.choices[" + indexOf(choice) + "]"
 		if reason, ok := choice["finish_reason"].(string); ok {
-			joined[at+".finish_reason\x00chat.choices[].finish_reason"] = reason
+			f.sets[leafKey{"chat.choices[].finish_reason", at + ".finish_reason"}] = canonical(reason)
 		}
 		delta, _ := choice["delta"].(map[string]any)
 		for k, v := range delta {
 			switch x := v.(type) {
 			case string:
-				joined[at+".delta."+k+"\x00chat.choices[].delta."+k] += x
+				f.text(leafKey{"chat.choices[].delta." + k, at + ".delta." + k}, x)
+				if k == "reasoning" || k == "reasoning_content" {
+					f.text(leafKey{"chat.choices[].delta." + reasoningText, at + ".delta." + reasoningText}, x)
+				}
 			case []any:
-				foldList(at+".delta."+k, "chat.choices[].delta."+k, k, x, joined)
+				f.list(at+".delta."+k, "chat.choices[].delta."+k, k, x)
 			}
 		}
 	}
 }
 
-// foldList joins the elements of a delta's list: a tool call is added up with the others of its index, the rest are
-// listed in order.
-func foldList(at, path, key string, list []any, joined map[string]string) {
+func (f *chatFold) text(k leafKey, piece string) { f.texts[k] += piece }
+
+// reasoningText names the leaf that holds a reply's reasoning under either of its names, so that the text of
+// reasoning_content and of reasoning is compared even though the names differ.
+const reasoningText = "reasoning_text"
+
+// list joins the elements of a delta's list: a tool call is added up with the others of its index, with its arguments
+// decoded piece by piece and joined, the rest are listed in order.
+func (f *chatFold) list(at, path, key string, list []any) {
 	for _, item := range list {
 		call, ok := item.(map[string]any)
 		if !ok || key != "tool_calls" {
-			joined[at+"\x00"+path] += canonical(item)
+			f.text(leafKey{path, at}, canonical(item))
 			continue
 		}
-		for _, m := range flatten(path+"[]", at+"["+indexOf(call)+"]", call) {
-			switch {
-			case strings.HasSuffix(m.at, ".index"):
-			case strings.HasSuffix(m.at, ".function.arguments"): // the arguments come in pieces, the rest once
-				joined[m.at+"\x00"+m.path] += strings.Trim(m.value, `"`)
-			default:
-				joined[m.at+"\x00"+m.path] = m.value
+		callAt := at + "[" + indexOf(call) + "]"
+		for k, v := range call {
+			if fn, isFn := v.(map[string]any); isFn && k == "function" {
+				f.function(callAt+".function", path+"[].function", fn)
+			} else if k != "index" {
+				f.sets[leafKey{path + "[]." + k, callAt + "." + k}] = canonical(v)
 			}
+		}
+	}
+}
+
+func (f *chatFold) function(at, path string, fn map[string]any) {
+	for k, v := range fn {
+		if arguments, ok := v.(string); ok && k == "arguments" {
+			f.text(leafKey{path + ".arguments", at + ".arguments"}, arguments)
+		} else {
+			f.sets[leafKey{path + "." + k, at + "." + k}] = canonical(v)
 		}
 	}
 }
@@ -336,4 +386,16 @@ func foldList(at, path, key string, list []any, joined map[string]string) {
 func indexOf(m map[string]any) string {
 	n, _ := m["index"].(float64)
 	return strconv.Itoa(int(n))
+}
+
+// aliasReasoning adds, for the reasoning of a message in either of its names, a leaf under the one name
+// reasoningText, so that the text itself is compared.
+func aliasReasoning(leaves []leaf) []leaf {
+	for _, l := range leaves {
+		if strings.HasSuffix(l.path, ".message.reasoning") || strings.HasSuffix(l.path, ".message.reasoning_content") {
+			prefix, _, _ := strings.Cut(l.at, ".message.")
+			leaves = append(leaves, leaf{"json.choices[].message." + reasoningText, prefix + ".message." + reasoningText, l.value})
+		}
+	}
+	return leaves
 }

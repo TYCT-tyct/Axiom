@@ -57,12 +57,9 @@ func orKey(override, key string) string {
 func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
 	t.Helper()
 	line := fmt.Sprintf("%s: new-api %s, Axiom %s", d.at, d.newAPI, d.axiom)
-	for _, r := range rules {
-		if r.matches(name, d) {
-			r.hits++
-			t.Logf("%s [%s] %s", line, [...]string{"allowed", "open"}[r.status], r.reason)
-			return
-		}
+	if r := explain(rules, name, d); r != nil {
+		t.Logf("%s [%s] %s", line, [...]string{"allowed", "open"}[r.status], r.reason)
+		return
 	}
 	t.Errorf("%s [unexplained]", line)
 }
