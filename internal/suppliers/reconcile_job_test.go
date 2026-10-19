@@ -74,7 +74,11 @@ func (w *world) checkReconciled(verdict, alert, logs string) {
 	if err := w.svc.Reload(w.t.Context()); err != nil {
 		w.t.Fatal(err)
 	}
-	if routed := len(w.svc.Routable()) > 0; routed != (verdict != "under") {
+	routes, err := w.svc.Routable()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if routed := len(routes) > 0; routed != (verdict != "under") {
 		w.t.Fatalf("verdict %s: routable = %v", verdict, routed)
 	}
 	if alert == "" {
