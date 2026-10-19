@@ -168,7 +168,7 @@ func diffRules() []*diffRule {
 			"new-api's Responses-to-Chat conversion reports no reasoning tokens, Axiom passes the upstream's count on"),
 		rule(`json\.choices\[\]\.message\.tool_calls\[\]\.function\.arguments`, `chat-claude-tools-whole`, sameJSONText,
 			"Axiom builds a whole reply from the stream, so the arguments are the stream's text; new-api writes the object it was given again: the same document"),
-		rule(`chat\.choices\[\]\.delta\.reasoning_text`, `chat-claude-reasoning-stream`, newAPIAddsNewline,
+		rule(`chat\.choices\[\]\.delta\.reasoning_(text|content)`, `chat-claude-reasoning-stream`, newAPIAddsNewline,
 			"new-api ends the reasoning of a streamed thinking block with a newline"),
 		rule(`sse\[ping\]`, "", values(`{"type":"ping"}`, absent),
 			"nothing is sent before the first content, and a ping before it is dropped (gateway.md「保活」)"),

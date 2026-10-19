@@ -53,6 +53,7 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		{"ping before content", "messages-claude-text-stream", "sse[ping]", `{"type":"ping"}`, absent, true},
 		{"another event dropped", "messages-claude-text-stream", "sse[content_block_delta]", `{"type":"x"}`, absent, false},
 		{"reasoning with a newline more", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_text", `"abc\n"`, `"abc"`, true},
+		{"reasoning_content with a newline more", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_content", `"abc\n"`, `"abc"`, true},
 		{"reasoning changed", "chat-claude-reasoning-stream", "chat.choices[].delta.reasoning_text", `"abd\n"`, `"abc"`, false},
 		{"own error is not the upstream's refusal", "chat-claude-invalid-json", "json.error.type", `"new_api_error"`, `"invalid_request_error"`, true},
 		{"a refusal whose type differs", "chat-claude-400-whole", "json.error.type", `"invalid_request_error"`, `"api_error"`, false},
