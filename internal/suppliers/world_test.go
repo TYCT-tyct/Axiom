@@ -70,6 +70,7 @@ type world struct {
 	supplier, group, credential, endpoint, sc uuid.UUID
 	svc                                       *Service
 	clock                                     *testClock
+	second                                    bool // seed makes the second supplier
 }
 
 type testClock struct {
@@ -144,7 +145,7 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	version := int64(sealed.KeyVersion)
 	if w.supplier, err = q.InsertSupplier(ctx, tx, store.InsertSupplierParams{
 		OwnerScope: "platform", Name: "s", Kind: "fake",
-		Origin: "https://fake.example", UpstreamAccount: "me", NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: "direct",
+		Origin: w.origin(), UpstreamAccount: "me", NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: "direct",
 	}); err != nil {
 		return err
 	}
@@ -179,8 +180,23 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	if _, err = tx.Exec(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 2, 'test', 'seed')", w.supplier); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = 'maple' WHERE id = $1", w.group)
+	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = $2 WHERE id = $1", w.group, w.codename())
 	return err
+}
+
+// origin and codename are the first supplier's; a second one (addSupplier) gets its own, which the tables keep unique.
+func (w *world) origin() string {
+	if w.second {
+		return "https://second.example"
+	}
+	return "https://fake.example"
+}
+
+func (w *world) codename() string {
+	if w.second {
+		return "birch"
+	}
+	return "maple"
 }
 
 // tx runs fn in a platform transaction and fails the test on its error.

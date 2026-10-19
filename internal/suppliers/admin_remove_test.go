@@ -110,7 +110,7 @@ func TestRemoveErasesWhatItHolds(t *testing.T) {
 func TestARemovedSupplierLeavesRoutingAndItsAttemptsStillSettle(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
-	if got := len(w.svc.Routable()); got != 1 {
+	if got := len(w.routable()); got != 1 {
 		t.Fatalf("%d endpoints routable before the removal, want 1", got)
 	}
 	before := w.attempt(newRequest(), 1, "ref-before") // made with the credential before it is erased
@@ -118,7 +118,7 @@ func TestARemovedSupplierLeavesRoutingAndItsAttemptsStillSettle(t *testing.T) {
 	if err := w.svc.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(w.svc.Routable()); got != 0 {
+	if got := len(w.routable()); got != 0 {
 		t.Errorf("%d endpoints routable after the removal, want none", got)
 	}
 	w.record(before)
