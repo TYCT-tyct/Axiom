@@ -41,7 +41,9 @@ func newAdminFixture(t *testing.T) adminFixture {
 	t.Helper()
 	c, _ := ownerFixture.get(t, buildOwnerDatabase)
 	f := startAdminNode(c, &testClock{now: time.Now()})
-	f.addUser(ownerEmail, "admin")
+	if _, err := f.user("", "grant-platform", "--email", ownerEmail, "--role", "admin"); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 

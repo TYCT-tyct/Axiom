@@ -187,11 +187,9 @@ func newCallWorld(t *testing.T) *callWorld {
 	t.Helper()
 	c, seed := callWorldFixture.get(t, buildCallWorld)
 	w := &callWorld{commandLine: c, supplier: newFakeSupplier(t), site: seed.site, richKey: seed.richKey, noKey: seed.noKey, models: seed.models}
-	// The fixture's supplier names the fake relay it was built with; each test's world reaches its own.
-	if err := w.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET origin = $1", w.supplier.server.URL)
-		return err
-	}); err != nil {
+	// The fixture's supplier names the fake relay it was built with; each test's world reaches its own. The write is
+	// setup, so it runs as the superuser: the app role reads suppliers but may not change them.
+	if err := pgtest.Run(t.Context(), c.database.Superuser, "UPDATE suppliers.suppliers SET origin = '"+w.supplier.server.URL+"'"); err != nil {
 		t.Fatal(err)
 	}
 	return w
