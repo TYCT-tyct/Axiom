@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"sync"
@@ -50,6 +51,11 @@ type Config struct {
 	// CredentialCooldown is how long a credential the supplier refused rests; QuotaCooldown is how long one whose
 	// allowance is used up rests when the supplier does not say when it returns.
 	CredentialCooldown, QuotaCooldown time.Duration
+	// MaxStale is how long the snapshot may go without a successful Reload before Routable refuses it; zero is 30
+	// seconds, as the catalog's. A supplier disabled or removed while Reload keeps failing stops being routed to then.
+	MaxStale time.Duration
+	// Logger is told of the suppliers a Reload leaves out; nil is slog.Default.
+	Logger *slog.Logger
 }
 
 // Service is the call side of the suppliers module in one node: the endpoints it can call, the state of their
@@ -91,6 +97,12 @@ func New(cfg Config) (*Service, error) {
 	if cfg.QuotaCooldown <= 0 {
 		cfg.QuotaCooldown = 15 * time.Minute
 	}
+	if cfg.MaxStale <= 0 {
+		cfg.MaxStale = 30 * time.Second
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	s := &Service{
 		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
 	}
@@ -128,15 +140,23 @@ type credential struct {
 	rt      *credRuntime
 }
 
-type snapshot struct{ endpoints map[EndpointID]*endpoint }
+// snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
+// shows is never older than that; it is zero until the first Reload succeeds.
+type snapshot struct {
+	endpoints map[EndpointID]*endpoint
+	confirmed time.Time
+}
 
-// Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A key
-// that does not open, or a supplier of a kind with no adapter, fails the reload and leaves the old snapshot in place:
-// it is a configuration to fix, and half a snapshot would route around it silently. The new snapshot is built on its
-// own, with no lock the calls use, and replaces the old one in a single step.
+// Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A
+// supplier whose rows cannot be loaded (a key that does not open, a kind with no adapter, a schedule that does not parse)
+// is left out whole, set to needs_attention with a reason, and logged; every other supplier loads as usual, so one bad
+// row does not take the node down. A Reload that fails altogether (the database cannot be read) leaves the old snapshot
+// and its confirmation time in place, and Routable refuses the snapshot once that time is older than MaxStale. The new
+// snapshot is built on its own, with no lock the calls use, and replaces the old one in a single step.
 func (s *Service) Reload(ctx context.Context) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
+	asked := s.now()
 	var rows []store.ListRoutableRow
 	err := s.cfg.DB.ReadTx(ctx, s.cfg.Scope, func(tx pg.Tx) (err error) {
 		rows, err = store.New().ListRoutable(ctx, tx)
@@ -145,29 +165,68 @@ func (s *Service) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the endpoints: %w", err)
 	}
-	next := &snapshot{endpoints: map[EndpointID]*endpoint{}}
+	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked}
 	schedules := maps.Clone(*s.schedules.Load())
+	unloadable := map[uuid.UUID]error{}
 	for _, r := range rows {
-		ep, err := s.endpointOf(next, schedules, r)
-		if err != nil {
-			return err
+		if _, left := unloadable[r.SupplierID]; left {
+			continue
 		}
-		c, err := s.credentialOf(r)
-		if err != nil {
-			return err
+		if err := s.load(next, schedules, r); err != nil {
+			unloadable[r.SupplierID] = err
 		}
-		ep.creds = append(ep.creds, c)
+	}
+	for id, ep := range next.endpoints {
+		if _, left := unloadable[ep.supplier]; left {
+			delete(next.endpoints, id)
+		}
 	}
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.snap.Store(next)
+	s.pause(ctx, unloadable)
 	return nil
+}
+
+// load adds the endpoint a row belongs to, if it is not in next yet, and the row's credential to it.
+func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) error {
+	ep, err := s.endpointOf(next, schedules, r)
+	if err != nil {
+		return err
+	}
+	c, err := s.credentialOf(r)
+	if err != nil {
+		return err
+	}
+	ep.creds = append(ep.creds, c)
+	return nil
+}
+
+// pause sets each supplier a Reload left out to needs_attention, so that every node stops routing to it and the admin
+// shows it; the status_reason is a code, and the cause is in the log. Failing to write it is only logged: this node has
+// left the supplier out already, and the next Reload tries again since the row is still routable.
+func (s *Service) pause(ctx context.Context, unloadable map[uuid.UUID]error) {
+	for id, cause := range unloadable {
+		s.cfg.Logger.Error("suppliers: a supplier could not be loaded and is left out of the snapshot; it needs attention",
+			"supplier", id, "err", cause)
+		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
+			_, err := store.New().PauseSupplierUnloadable(ctx, tx, store.PauseSupplierUnloadableParams{Reason: unloadableReason, ID: id})
+			return err
+		})
+		if err != nil && ctx.Err() == nil {
+			s.cfg.Logger.Error("suppliers: the supplier left out could not be set to needs attention", "supplier", id, "err", err)
+		}
+	}
 }
 
 // Routable returns the snapshot's endpoints in id order: those ListRoutable holds, which are the endpoints a call may be
 // routed to. A Reload replaces the set whole, so a caller that builds a routing snapshot from this sees one moment of
-// the database, never half of a reload.
-func (s *Service) Routable() []Routable {
+// the database, never half of a reload. It returns ErrStale when no Reload has succeeded within MaxStale: the endpoints a
+// node cannot confirm are not ones it keeps calling.
+func (s *Service) Routable() ([]Routable, error) {
 	snap, schedules := s.snap.Load(), *s.schedules.Load() // the snapshot first: it never names a schedule the map lacks
+	if s.now().Sub(snap.confirmed) > s.cfg.MaxStale {
+		return nil, ErrStale
+	}
 	out := make([]Routable, 0, len(snap.endpoints))
 	for _, ep := range snap.endpoints {
 		policy := s.policy(ep)
@@ -177,7 +236,7 @@ func (s *Service) Routable() []Routable {
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
-	return out
+	return out, nil
 }
 
 func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) (*endpoint, error) {
@@ -266,4 +325,9 @@ func (s *Service) policy(ep *endpoint) adapter.CallPolicy {
 var (
 	ErrNoEndpoint = errors.New("suppliers: the endpoint is not in the snapshot")
 	ErrNoSlot     = errors.New("suppliers: no credential of the endpoint has a free slot")
+	// ErrStale is the snapshot's: no Reload has confirmed it within MaxStale.
+	ErrStale = errors.New("suppliers: the snapshot has not been confirmed lately")
 )
+
+// unloadableReason is the status_reason of a supplier a Reload left out.
+const unloadableReason = "unloadable"

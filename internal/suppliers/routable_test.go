@@ -37,7 +37,7 @@ func TestRoutableIsWhatListRoutableHolds(t *testing.T) {
 		return err
 	})
 
-	got := w.svc.Routable()
+	got := w.routable()
 	if len(got) != 1 || len(listed) != 1 {
 		t.Fatalf("Routable has %d endpoints and ListRoutable %d, want one of each", len(got), len(listed))
 	}
@@ -65,7 +65,7 @@ func TestOnlyAFundedSupplierIsRoutable(t *testing.T) {
 		if err := w.svc.Reload(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		if routes := len(w.svc.Routable()) == 1; routes != c.routes {
+		if routes := len(w.routable()) == 1; routes != c.routes {
 			t.Errorf("balance %s: routable %v, want %v", c.balance, routes, c.routes)
 		}
 	}

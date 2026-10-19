@@ -145,7 +145,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) *gateway.RouteDeps {
 	var once sync.Once
 	return &gateway.RouteDeps{
-		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable(), nil },
+		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:      d.catalog,
 		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
 		UnknownItems: unknownItems(d.db),
@@ -212,8 +212,9 @@ func (c callNode) Drain(ctx context.Context) {
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin
-// reaches routing within a period. A failed reload is logged and the previous snapshot stays, as the catalog's does:
-// the endpoints it could not read are the ones this node keeps calling.
+// reaches routing within a period. A failed reload is logged and the previous snapshot stays, as the catalog's does,
+// until it is older than the suppliers' MaxStale: then Routable refuses it and the node stops routing rather than
+// calling endpoints it can no longer confirm.
 func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Logger) {
 	tick := time.NewTicker(reloadEvery)
 	defer tick.Stop()
@@ -223,7 +224,7 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 			return
 		case <-tick.C:
 			if err := s.Reload(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("suppliers: the reload failed; the endpoints of the last one stay", "err", err)
+				logger.Error("suppliers: the reload failed; the endpoints of the last one stay until they are stale", "err", err)
 			}
 		}
 	}
