@@ -143,6 +143,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 		target.MaxOutput = out
 	}
 	return Entry{
+		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
 		Segmentable: segmentable,
 	}

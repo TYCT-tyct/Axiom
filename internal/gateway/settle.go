@@ -89,10 +89,14 @@ func permanent(err error) bool {
 // the two to the endpoint the attempt called, and billing writes them to suppliers with the ledger's cost. An attempt
 // known not to have run used nothing and cost nothing.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
+	receipt = receipt.WithExchange(a.entry.Exchange)
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Receipt, rec.FinishedAt = receipt, time.Now()
 	if rec.Result == billing.NotExecuted {
+		rec.CostKnown = true
+		rec.Estimate.Conversion = "not_executed"
+		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
 	rec.Segments = estimated(a.usage, a.seen, routing.DemandOf(&s.c.Request), a.entry.Limits, a.meter.OutputCap())
@@ -100,7 +104,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	c, credits, _, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+	c, credits, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
 		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that
@@ -109,6 +113,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		c.Flag = suppliers.CostUnpriced // zero for a failure is not a cost known to be zero
 	}
 	c.Flag = costFlag(rec.Segments, c.Flag)
+	rec.CostKnown = known && err == nil
 	rec.Cost, rec.Estimate = credits, c
 }
 

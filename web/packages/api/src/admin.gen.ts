@@ -687,6 +687,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/pricing/exchange-rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List current manual exchange rates */
+        get: operations["listExchangeRates"];
+        put?: never;
+        /**
+         * Append a manual exchange rate
+         * @description One base buys numerator/denominator quote. Both directions share a normalized history. Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold; correction bypasses only that relative check and requires an audited reason. The first value requires kind initial and expected_version 0; without a trusted reference a reversed first value cannot be detected automatically. A stale expected version returns 409.
+         */
+        post: operations["setExchangeRate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/pricing/exchange-rates/{base}/{quote}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a pair's immutable history */
+        get: operations["exchangeRateHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/pricing/rules": {
         parameters: {
             query?: never;
@@ -755,6 +793,36 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ExchangeRateInput: {
+            base: string;
+            quote: string;
+            /** @description Positive integer at most 10^18 */
+            numerator: string;
+            /** @description Positive integer at most 10^18 */
+            denominator: string;
+            /** Format: int64 */
+            expected_version: number;
+            kind: string;
+            reason: string;
+        };
+        ExchangeRate: {
+            id: components["schemas"]["Uuid"];
+            base: string;
+            quote: string;
+            numerator: string;
+            denominator: string;
+            /** Format: int64 */
+            version: number;
+            source: string;
+            kind: string;
+            reason: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ExchangeRateList: {
+            data: components["schemas"]["ExchangeRate"][];
+        };
         /** @description The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response. */
         Error: {
             error: components["schemas"]["ErrorDetail"];
@@ -2631,6 +2699,93 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listExchangeRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One current version per normalized pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRateList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setExchangeRate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeRateInput"];
+            };
+        };
+        responses: {
+            /** @description The appended normalized version */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exchangeRateHistory: {
+        parameters: {
+            query?: {
+                before_version?: number;
+            };
+            header?: never;
+            path: {
+                base: string;
+                quote: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 100 versions newest first; use the last version as before_version to continue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRateList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };

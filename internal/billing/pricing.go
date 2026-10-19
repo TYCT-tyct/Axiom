@@ -190,7 +190,7 @@ func (m Method) check(currency platform.Currency) error {
 			return err
 		}
 		if m.CurrencyConversion != "face" {
-			return &RuleError{"method/currency_conversion", "can only be face in this release: there are no exchange rates"}
+			return &RuleError{"method/currency_conversion", "can only be face in this release: exchange sale pricing needs reference selection and price versions"}
 		}
 		return nil
 	case "fixed":

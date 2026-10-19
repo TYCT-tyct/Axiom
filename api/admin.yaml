@@ -1231,6 +1231,92 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/exchange-rates:
+    get:
+      operationId: listExchangeRates
+      tags: [Pricing]
+      summary: List current manual exchange rates
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      responses:
+        "200":
+          description: One current version per normalized pair
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRateList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: setExchangeRate
+      tags: [Pricing]
+      summary: Append a manual exchange rate
+      description: >-
+        One base buys numerator/denominator quote. Both directions share a normalized history.
+        Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold;
+        correction bypasses only that relative check and requires an audited reason.
+        The first value requires kind initial and expected_version 0; without a trusted reference a reversed
+        first value cannot be detected automatically. A stale expected version returns 409.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExchangeRateInput"}
+      responses:
+        "201":
+          description: The appended normalized version
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRate"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/exchange-rates/{base}/{quote}:
+    get:
+      operationId: exchangeRateHistory
+      tags: [Pricing]
+      summary: Read a pair's immutable history
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      parameters:
+        - name: base
+          in: path
+          required: true
+          schema: {type: string}
+        - name: quote
+          in: path
+          required: true
+          schema: {type: string}
+        - name: before_version
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        "200":
+          description: At most 100 versions newest first; use the last version as before_version to continue
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRateList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/pricing/rules:
     get:
       operationId: listPricingRules
@@ -1476,6 +1562,42 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    ExchangeRateInput:
+      type: object
+      additionalProperties: false
+      required: [base, quote, numerator, denominator, expected_version, kind, reason]
+      properties:
+        base: {type: string, maxLength: 3}
+        quote: {type: string, maxLength: 3}
+        numerator: {type: string, maxLength: 19, description: Positive integer at most 10^18}
+        denominator: {type: string, maxLength: 19, description: Positive integer at most 10^18}
+        expected_version: {type: integer, format: int64}
+        kind: {type: string}
+        reason: {type: string, maxLength: 1000}
+    ExchangeRate:
+      type: object
+      additionalProperties: false
+      required: [id, base, quote, numerator, denominator, version, source, kind, reason, created_by, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        base: {type: string}
+        quote: {type: string}
+        numerator: {type: string}
+        denominator: {type: string}
+        version: {type: integer, format: int64}
+        source: {type: string}
+        kind: {type: string}
+        reason: {type: string}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+    ExchangeRateList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/ExchangeRate"}
     Error:
       type: object
       required: [error]

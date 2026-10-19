@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -18,8 +19,10 @@ import (
 // snapshot that merges them follows at the same pace (docs/domains/routing.md「快照从哪来」).
 const rebuildEvery = 5 * time.Second
 
-// RouteDeps are the sources of a routing snapshot and the router it is published to. Every one is required.
+// RouteDeps are the sources of a routing snapshot and the router it is published to.
 type RouteDeps struct {
+	// ExchangeRates reads once for the whole build. Nil means no configured pairs; production supplies the reader.
+	ExchangeRates func(context.Context) ([]platform.ExchangeRate, error)
 	// Endpoints are the endpoints suppliers can call now: *suppliers.Service's Routable, which reads the snapshot the
 	// last Reload built and never the database.
 	Endpoints func(context.Context) ([]suppliers.Routable, error)
@@ -62,6 +65,16 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
 // has to say.
 func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
+	// Start time bounds freshness even if reading a source stalls during the build.
+	builtAt := time.Now()
+	var rates []platform.ExchangeRate
+	if d.ExchangeRates != nil {
+		var err error
+		rates, err = d.ExchangeRates(ctx)
+		if err != nil {
+			return nil, Count{}, fmt.Errorf("gateway: exchange rates: %w", err)
+		}
+	}
 	catalogSnap, err := d.Catalog.Current()
 	if err != nil {
 		return nil, Count{}, fmt.Errorf("gateway: the catalog: %w", err)
@@ -91,10 +104,19 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 			continue
 		}
 		built = append(built, e)
+		if r.Currency != e.Price.Schedule.Currency() {
+			basis := platform.ExchangeRate{Base: r.Currency.String(), Quote: e.Price.Schedule.Currency().String()}
+			for _, rate := range rates {
+				if _, ok := rate.Between(r.Currency, e.Price.Schedule.Currency()); ok {
+					basis = rate
+					break
+				}
+			}
+			built[len(built)-1].Exchange = basis
+		}
 	}
 	d.report(left)
-	// Dated after the sources were read, so the snapshot is never older than the state it shows.
-	snap, err := d.Router.NewSnapshot(time.Now(), built, presets())
+	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
 	if err != nil {
 		return nil, Count{}, err
 	}

@@ -83,6 +83,7 @@ func (o Owner) visibleTo(a Admission) bool {
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
+	Exchange platform.ExchangeRate
 	ID       EndpointID
 	Supplier SupplierID
 	Model    catalog.ModelID

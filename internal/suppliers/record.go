@@ -33,9 +33,12 @@ func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "
 // priced with. It is not money: the amount is in the unit of the supplier (quota, dollars) and billing turns it into
 // money.
 type AttemptCost struct {
-	Native  platform.Exact
-	Flag    CostFlag
-	Missing catalog.ItemSet
+	// Conversion describes conversion of Native, independently of Flag's coverage of the supplier's usage.
+	Conversion string
+	Currency   platform.Currency
+	Native     platform.Exact
+	Flag       CostFlag
+	Missing    catalog.ItemSet
 	// Unknown is set when the supplier reported usage that has no billing item: it cannot be priced, so the estimate is
 	// not complete, and it is not the same as no usage.
 	Unknown bool
@@ -75,22 +78,33 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 	return cost, nil
 }
 
-// Credits is the attempt's Cost in billionths of a credit of currency: its native amount times the unit value the
-// attempt began with, rounded up once (docs/domains/billing.md「钱的表示」). known is false when that is not the whole
-// cost: the estimate leaves some usage out, the supplier is paid in another currency (there are no exchange rates yet),
-// or the amount is beyond what an amount holds. The priced part is still given when it can be told in currency. The
-// Cost it was converted from is returned with it, so that one pricing serves both.
+// Credits multiplies native cost, the attempt's unit value and the reservation's exchange rate, rounding up once to
+// billionths (docs/domains/billing.md「钱的表示」). known is false when usage cannot all be priced, the frozen pair is
+// missing, or the amount overflows. The priced part is still given when convertible; Cost serves native reconciliation.
 func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c AttemptCost, credits int64, known bool, err error) {
 	c, err = s.Cost(r, usage)
-	if err != nil || r.currency != currency {
+	c.Currency = currency
+	if err != nil {
+		c.Conversion = "unpriced"
 		return c, 0, false, err
 	}
 	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
+	c.Conversion = "same_currency"
+	if r.currency != currency {
+		rate, ok := r.exchange.Between(r.currency, currency)
+		if !ok {
+			c.Conversion = "missing_rate"
+			return c, 0, false, nil
+		}
+		money.Mul(money, rate)
+		c.Conversion = "converted"
+	}
 	q, m := new(big.Int).DivMod(new(big.Int).Mul(money.Num(), big.NewInt(1e9)), money.Denom(), new(big.Int))
 	if m.Sign() != 0 {
 		q.Add(q, big.NewInt(1))
 	}
 	if !q.IsInt64() {
+		c.Conversion = "overflow"
 		return c, 0, false, nil
 	}
 	return c, q.Int64(), c.Flag != CostUnpriced, nil
@@ -140,6 +154,18 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
 			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate,
+		}
+		if a.Receipt.unitValueID != (uuid.UUID{}) {
+			row.UnitValueID = &a.Receipt.unitValueID
+		}
+		if a.Receipt.currency != a.Cost.Currency {
+			if _, ok := a.Receipt.exchange.Between(a.Receipt.currency, a.Cost.Currency); ok {
+				row.ExchangeRateID = &a.Receipt.exchange.ID
+			}
+		}
+		if a.Cost.Conversion != "" {
+			from, to := a.Receipt.currency.String(), a.Cost.Currency.String()
+			row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &a.Cost.Conversion
 		}
 		if a.Receipt.ref != "" {
 			row.ChargeRef = &a.Receipt.ref
