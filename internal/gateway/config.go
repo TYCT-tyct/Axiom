@@ -45,7 +45,7 @@ type Config struct {
 	KeepAlive         time.Duration // a stream that has written nothing to the client for this long gets a keep-alive
 	WriteTimeout      time.Duration // one write to the client; a client that does not take it in time is treated as gone
 	ExtendWait        time.Duration // one extension of a reservation, gate included; then the stream is cut short
-	AdmissionBudget   time.Duration // gate, connection and transaction of an admission
+	AdmissionBudget   time.Duration // connection and transaction of an admission, from the moment it holds the account gate
 	LockTimeout       time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
 	StatementTimeout  time.Duration // the transaction's statement_timeout; likewise
 	HolderTTL         time.Duration // lifetime of a holder row that is not renewed
@@ -71,7 +71,7 @@ func DefaultConfig() Config {
 		BatchConnections:  2,
 		QueueMax:          256,
 		QueuePerKey:       16,
-		AccountGateWait:   200 * time.Millisecond,
+		AccountGateWait:   5 * time.Second,
 		QueueWait:         20 * time.Second,
 		StartBy:           120 * time.Second,
 		MaxCall:           60 * time.Minute,
@@ -136,6 +136,7 @@ func (b *Backpressure) KeyLookupSlot(ctx context.Context) (release func(), err e
 // Backpressure is the node's in-process limits, built from one validated Config.
 type Backpressure struct {
 	rateLimited metric.Int64Counter // the 429s answered, by Refusal.Reason
+	byReason    map[string]metric.AddOption
 	InFlight    *InFlight
 	Funds       *Funds
 	Pool        *Pool // for the connections that need no account gate: cold-key lookup, batch writers
@@ -159,16 +160,20 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
+	byReason := make(map[string]metric.AddOption, len(rateLimits))
+	for _, r := range rateLimits {
+		byReason[r.Reason] = metric.WithAttributes(attribute.String("reason", r.Reason))
+	}
 	pool := newPool(cfg.PoolSize, cfg.PoolReserve, cfg.BatchConnections)
 	return &Backpressure{
-		rateLimited: rateLimited,
-		InFlight:    &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
-		Funds:       &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool},
-		Pool:        pool,
-		Queue:       newQueue(cfg.QueueMax, cfg.QueuePerKey),
-		Rate:        NewRateCounter(cfg.RateWindow),
-		IPCalls:     NewLimiter(errIPInFlight),
-		cfg:         cfg,
+		rateLimited: rateLimited, byReason: byReason,
+		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
+		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
+		Pool:     pool,
+		Queue:    newQueue(cfg.QueueMax, cfg.QueuePerKey),
+		Rate:     NewRateCounter(cfg.RateWindow),
+		IPCalls:  NewLimiter(errIPInFlight),
+		cfg:      cfg,
 	}, nil
 }
 
@@ -176,6 +181,10 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 // a limit that was added and not told apart, which the counter makes visible as reason "".
 func (b *Backpressure) refused(ctx context.Context, r *Refusal) {
 	if r.Status == http.StatusTooManyRequests {
-		b.rateLimited.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", r.Reason)))
+		opt, ok := b.byReason[r.Reason]
+		if !ok { // a limit added without being listed in rateLimits: counted all the same, at the cost of an allocation
+			opt = metric.WithAttributes(attribute.String("reason", r.Reason))
+		}
+		b.rateLimited.Add(ctx, 1, opt)
 	}
 }

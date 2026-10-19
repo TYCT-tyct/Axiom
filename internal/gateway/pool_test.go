@@ -101,3 +101,11 @@ func TestPoolDeadContextKeepsNothing(t *testing.T) {
 		}
 	})
 }
+
+// admitFunds is an admission's wait for the gate and a connection, as a call that start can run.
+func admitFunds(ctx context.Context, f *Funds, account string) func() (func(), error) {
+	return func() (func(), error) {
+		_, release, err := f.Admit(ctx, account)
+		return release, err
+	}
+}

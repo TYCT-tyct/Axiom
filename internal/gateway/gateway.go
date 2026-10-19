@@ -70,3 +70,10 @@ func expired(parent context.Context, limit *Refusal) error {
 	}
 	return limit
 }
+
+// rateLimits are the 429 refusals above, which the counter's attribute sets are made for ahead of time, so that
+// counting one on the call path allocates nothing (internal/platform/README.md「遥测」).
+var rateLimits = []*Refusal{
+	errIPInFlight, errAccountInFlight, errKeyRate, errCountRate, errAccountGate,
+	errQueueFull, errQueueKeyFull, errQueueWait, errCredentialsBusy,
+}

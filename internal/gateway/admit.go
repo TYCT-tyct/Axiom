@@ -55,9 +55,7 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 func seconds(d time.Duration) int { return max(1, int((d+time.Second-1)/time.Second)) }
 
 func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := context.WithTimeout(ctx, h.Limits.cfg.AdmissionBudget)
-	defer cancel()
-	release, err := h.Limits.Funds.Admit(ctx, accountKey(c.caller))
+	ctx, release, err := h.Limits.Funds.Admit(ctx, accountKey(c.caller))
 	if err != nil {
 		return err
 	}

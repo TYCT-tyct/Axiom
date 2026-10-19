@@ -81,7 +81,7 @@ func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
 			if _, err := bp.Funds.Complete(ctx, "a"); err != nil {
 				return err
 			}
-			_, err := bp.Funds.Admit(ctx, "a") // waits AccountGateWait for the gate the completion holds
+			_, _, err := bp.Funds.Admit(ctx, "a") // waits AccountGateWait for the gate the completion holds
 			return err
 		},
 		"queue_key_full": func(t *testing.T, ctx context.Context, bp *Backpressure) error {

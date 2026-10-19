@@ -30,7 +30,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 3 | 有上限地读请求体，长度计入节点内存预算 | gateway | — | 2 分钟 | 413 / 408 / 503 |
 | 4 | `protocol.Inspect`；catalog 解析名字（含 `models`）；`routing.SessionKey` | protocol、catalog、routing | 0 | — | 400 / 404 |
 | 5 | 预检：限流计数加一（速率计数，不需释放），读会话粘性；只计数不判定 | gateway | M1 0；M2 1 C | 20ms | 保守计数、无粘性 |
-| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 9 DB | 合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
+| 6 | 账户闸 → 准入名额 → `accounts.Admit`，`fn`：判定限流 → `routing.Plan` → `billing.Reserve`；提交 | accounts、routing、billing | 9 DB | 闸 5s，之后连接加事务合计 1s | 429 / 402 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
 | 7 | 尝试：本地持有者检查 → `Acquire` → `Prepare` → `Bind` → `Send`；从读到第一个字节起计量，暂存开头事件到提交点 | suppliers、protocol、billing | 上游 | 见「超时与限额」 | 提交前按 `routing.Decide` 换条目 |
 | 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
 | 9 | 上游正常结束：`Settle` 提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 13 DB（一次尝试） | 2s × 重试 | 「结束与结算」 |
@@ -60,7 +60,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 | 7 | 准入循环（下文） | 见「错误出口」 |
 | 8 | 交给 `Run` | — |
 
-**准入循环**（`admit`）：取 `Queue.Epoch()`，再 `admitOnce`；`*routing.Wait` 时事务已回滚，在事务外 `Queue.Wait`（按 key 计），醒来只重做 `admitOnce`，不重读体、不重复计速率。排队期限 `QueueWait` 从这次调用第一次排队起算一次（`Queue.Wait` 收到的是绝对期限），被无关的唤醒叫醒再排队也共用剩余时间，到期 429。期限在 `Wait` 里先于 `Epoch` 快路径检查，所以别处不断释放名额也不能让过期的调用继续重试；期限过后至多再做正在进行的那一次准入。`admitOnce` 的 1s 期限（`AdmissionBudget`）从取账户闸开始，闸、连接、事务共用：`Funds.Admit` → `accounts.Admit`，`fn` 依次是速率判定（预检计数超过 `KeyRate` 回 429）→ `routing.Plan` → `billing.Reserve`。`Reserve` 返回的下标裁剪路线（`Call.Plan.Entries` 与 `Record.Route` 只留保留下来的条目），首选条目被删就是 402。`Input.Admission` 里 key 没有预设时用零 ID 的预设，路由快照必须有它；`Admission.Models()` 为 nil 是全部模型、空列表是一个都不行。`billing.Model` 由路由条目带来（`Entry.Limits`），与路由过滤用的是同一份。
+**准入循环**（`admit`）：取 `Queue.Epoch()`，再 `admitOnce`；`*routing.Wait` 时事务已回滚，在事务外 `Queue.Wait`（按 key 计），醒来只重做 `admitOnce`，不重读体、不重复计速率。排队期限 `QueueWait` 从这次调用第一次排队起算一次（`Queue.Wait` 收到的是绝对期限），被无关的唤醒叫醒再排队也共用剩余时间，到期 429。期限在 `Wait` 里先于 `Epoch` 快路径检查，所以别处不断释放名额也不能让过期的调用继续重试；期限过后至多再做正在进行的那一次准入。`admitOnce` 的 1s 期限（`AdmissionBudget`）从取得账户闸起算，连接和事务共用，等闸不计入（`Funds.Admit` 把带期限的 context 交回来）：`Funds.Admit` → `accounts.Admit`，`fn` 依次是速率判定（预检计数超过 `KeyRate` 回 429）→ `routing.Plan` → `billing.Reserve`。`Reserve` 返回的下标裁剪路线（`Call.Plan.Entries` 与 `Record.Route` 只留保留下来的条目），首选条目被删就是 402。`Input.Admission` 里 key 没有预设时用零 ID 的预设，路由快照必须有它；`Admission.Models()` 为 nil 是全部模型、空列表是一个都不行。`billing.Model` 由路由条目带来（`Entry.Limits`），与路由过滤用的是同一份。
 
 **提交确认丢失**：`fn` 写完预留后 `Admit` 仍返回错误（提交失败、确认丢失、期限到），无法区分已提交还是已回滚，一律按"可能已提交"处理：回 503，不发上游，名额不立即归还，后台 `settleOrphan` 调 `billing.SettleOrphan`（账户闸的完成类、2s 一次，库出错退避 50ms 到 2s 重试，到 `SettleBackground` 为止），成功或放弃后才 `Call.Done`。`Handler.Drain` 等它们，期限到则停止重试，剩下的归清理。
 
@@ -243,8 +243,8 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 |---|---|---|
 | key 未命中查库 | 1s | 503 |
 | 预检缓存（M2） | 20ms | 按缓存不可用 |
-| 账户闸等待 | 200ms | 429 |
-| 准入名额加事务 | 合计 1s（一个 context 期限，闸、连接和事务共用）；`lock_timeout` 500ms、`statement_timeout` 800ms 只校验、暂不下发（见「入口与准入」） | 503，回滚无副作用 |
+| 账户闸等待（`AccountGateWait`） | 5s，不计入下一行的 1s | 429 `rate_limited`，原因 `account_gate` |
+| 准入名额加事务 | 连接和事务合计 1s（一个 context 期限，从取得账户闸起算，不含等闸）；`lock_timeout` 500ms、`statement_timeout` 800ms 只校验、暂不下发（见「入口与准入」） | 503，回滚无副作用 |
 | 建连、TLS | 各 10s（egress） | 换条目 |
 | 等上游的响应头（`HeaderWait`） | 60s；`/responses/compact` 是 `CompactHeaderWait`，10 分钟 | 取消这次尝试，换条目 |
 | 上游没有新数据（`IdleTimeout`） | 180s | 提交前换条目，提交后以 `timeout` 结束 |
@@ -264,7 +264,8 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 
 - **入口**：按 IP 的在途数上限（[安全的「防攻击」](../../docs/security.md#防攻击)）在一切之前；认 key 只看头，失败立即 401，未认证的连接从不读体、不占业务名额。
 - **节点在途上限** 5000（含已断开、仍在读完的），超出 503 不排队；**按账户在途上限**默认节点名额的 10%（`InFlight.Acquire` 的 `accountMax` 为 0 时），可按账户调，超出 429；先取账户的，再取节点的，节点拒绝时账户的名额随即归还。按 IP 的连接数与在途数用同一个 `Limiter`（按键计数、到限即拒、不排队），数值是 G1 的后台配置。名额在请求执行期间和结算后台重试期间一直占着，只在两种情况下释放：`Settle` 提交；或交给清理（结算永久性错误，或到截止时间放弃重试），这时执行器已经停了上游、不会再重试结算，预留由清理按截止时间接管。待结算数因此受节点名额约束。
-- **账户闸**（进程内，按账户）：同一账户的资金事务（准入、追加、结算、`SettleOrphan`）一次一个。`Funds.Admit` 和 `Funds.Complete` 先排闸、再取同类的连接，所以排队的事务不占连接；闸释放时直接交给最老的等待者，完成类（追加、结算、`SettleOrphan`）先于准入类。准入等闸超过 200ms 回 429；完成类只受自己的 context 约束，因为它带的是已提交的钱。账户的表项只在闸被持有时存在，冷账户洪峰不留残余。等锁不再占连接，一个热点账户拖不垮其他租户；行锁仍是多核心下的最终保证。
+- **账户闸**（进程内，按账户）：同一账户的资金事务（准入、追加、结算、`SettleOrphan`）一次一个。`Funds.Admit` 和 `Funds.Complete` 先排闸、再取同类的连接，所以排队的事务不占连接；闸释放时直接交给最老的等待者，完成类（追加、结算、`SettleOrphan`）先于准入类。准入等闸超过 `AccountGateWait`（5s）回 429；完成类只受自己的 context 约束，因为它带的是已提交的钱。账户的表项只在闸被持有时存在，冷账户洪峰不留残余。等锁不再占连接，一个热点账户拖不垮其他租户；行锁仍是多核心下的最终保证。等闸的期限（`AccountGateWait`）决定一次突发里同一账户能排多长的队：闸每秒放行约 1 ÷ 持锁时间个准入，等 W 秒的队伍至多这个数乘 W。压测 #295 里持锁 50–100ms（共享的 CI 机器，比 `docs/performance.md` 估的 5ms 慢一个量级），200ms 只容 2–4 个，1 秒内每账户 20 个新请求就有六成回 429；5s 容 50–100 个，再多的由按账户在途上限（默认 500）截住。等闸的请求不占连接，只占在途名额和请求体的内存，客户端走了即退出。sub2api 对账号和用户并发名额也是有界等待加长期限（`maxConcurrencyWait` 30s），队列满或超时才回 429（`backend/internal/handler/gateway_helper.go`，2026-10-18）。
+- **429 的原因**：节点回的每个 429 都按原因计入指标 `axiom.gateway.rate_limited`（标签 `reason`，Prometheus 里是 `axiom_gateway_rate_limited_total`），客户端看到的错误码都是 `rate_limited`，原因不发给客户端。`ip_in_flight`（按地址在途）、`account_in_flight`（按账户在途）、`key_rate`（每 key 调用频率）、`count_rate`（每 key 计数频率）、`account_gate`（等账户闸超时）、`queue_full`（排队总数满）、`queue_key_full`（一个 key 的排队数满）、`queue_wait`（排队期限到）、`credentials_busy`（路线上的凭证并发都占满）。新增会回 429 的限制必须有自己的原因；原因为空的计数说明有限制没分开。
 - **内存**：每路 64 KiB 加节点预算 2 GiB，由 protocol 记账，请求体、转换（分配之前按上界申请，见「尝试与转发」）、暂存、聚合都计入。
 - **连接池** N（默认取 [platform 定的连接池上限](../platform/README.md#连接池)），所有入口都经分类的信号量 `Pool`：只有完成类（追加、结算、`SettleOrphan`）能用到最后 16 个，即池内在用的连接数达到 N − 16 之后，准入类（准入、冷 key 查找、只读 key 接口）和批量写都不再授予；冷 key 查找经 `accounts.Config.LookupSlot`（`Backpressure.KeyLookupSlot`）取准入类名额：名额由共享的那一次查库持有，等它的所有请求只占一个，发起的请求中途走了也不提前还；`NewHandler` 检查 accounts 配了名额（`Service.GatesLookups`），没配就不启动；调用记录的批量写最多持有 2 个。批量写也不动保留的 16 个：它是后台任务，让它侵蚀结算的保底得不偿失。各类内部先到先得，等待者不占连接，等待的期限就是调用者给的 context（准入事务合计 1s 是调用者的期限）。心跳与回收用池外的一条专用连接，不会被饿死。
 - **排队**：只在候选端点都满载时，在事务之外；全局最多 256、每 key 最多 16 个等待者，满了 429；FIFO，每释放一个名额调一次 `Queue.Wake`，唤醒一个。调用者在看负载之前先取 `Queue.Epoch()` 并传给 `Wait`：看负载和入队之间释放的名额没有等待者可唤醒，`Epoch` 会记下这种释放，`Wait` 见到就直接返回让调用者重做，不会睡到 20 秒期限；有人在排队时的释放归队首，不计入，新来的不会插队。醒来时 context 已结束的等待者把唤醒转给下一个。排队期限是 `QueueWait`，从调用第一次排队起算一次，之后再排队共用剩余时间，到期 429；调用者的 context 结束则返回它的错误，什么都不写。
@@ -362,6 +363,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | 重试预算按比例并保底，按供应商、按进程 | 低流量时一次故障不至于封死回退 | 纯比例 |
 | 一个连接池、按类分信号量，心跳用池外专用连接 | 准入不挤占完成类，心跳不被饿死 | 两个池：隔离需求只在心跳 |
 | 进程内账户闸，完成类优先 | 等锁不占连接、不拖别的租户 | 只靠行锁：等锁的事务占满准入名额 |
+| 账户闸等 5s 而不是 200ms，期限不并入准入的 1s | 一次突发在一个账户上排队的时间要由持锁时间乘队长决定，200ms 在持锁 50–100ms 时拒掉六成突发；等闸不占连接，长一点只多占在途名额 | 保持 200ms：热点账户的突发被拒；把闸并入 1s 并只调长闸：等闸超 1s 的变成 503 而不是 429 |
 | 连接分类按池内总在用数授予，批量写同准入类 | 保证最后 16 个只给完成类；若只按各类自己的数量限制，批量写加准入可以把保底吃到 16 以下 | 按类各自的上限 |
 | 排队用 `Epoch` 补上"看负载与入队之间的释放" | 没有它，那次释放无人可唤醒，请求睡满 20 秒还拿 429，而容量是空的 | 无等待者时的释放攒成许可：空闲时攒下的许可会让以后每个新来的白跑一遍 9 次往返的准入 |
 | 先认 key 再读请求体 | 认 key 只要头；未认证的慢速请求体不占业务名额 | 先读体 |
