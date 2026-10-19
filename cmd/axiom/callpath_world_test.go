@@ -172,9 +172,37 @@ type callWorld struct {
 	models         map[string]uuid.UUID // by slug
 }
 
+// callWorldSeed is what a copy of the world's database cannot carry in Go: the IDs and key texts written when it was
+// built. They name rows the copy has too, since CREATE DATABASE copied them.
+type callWorldSeed struct {
+	site           uuid.UUID
+	richKey, noKey string
+	models         map[string]uuid.UUID // by slug
+}
+
+// callWorldFixture is the world's database with its site, accounts, catalog and supplier, which each test copies.
+var callWorldFixture fixtureDatabase[callWorldSeed]
+
 func newCallWorld(t *testing.T) *callWorld {
 	t.Helper()
-	c := newCommandLine(t)
+	c, seed := callWorldFixture.get(t, buildCallWorld)
+	w := &callWorld{commandLine: c, supplier: newFakeSupplier(t), site: seed.site, richKey: seed.richKey, noKey: seed.noKey, models: seed.models}
+	// The fixture's supplier names the fake relay it was built with; each test's world reaches its own.
+	if err := w.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET origin = $1", w.supplier.server.URL)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// buildCallWorld makes the world's site, accounts, catalog and supplier once, for newCallWorld to copy.
+func buildCallWorld(t *testing.T) (pgtest.Database, callWorldSeed) {
+	t.Helper()
+	database := pgtest.New(t, modules()...)
+	c := openCommandLine(t, database)
+	defer c.db.Close()
 	if _, err := c.site(siteArgs...); err != nil {
 		t.Fatal(err)
 	}
@@ -183,13 +211,15 @@ func newCallWorld(t *testing.T) *callWorld {
 			t.Fatal(err)
 		}
 	}
-	w := &callWorld{commandLine: c, supplier: newFakeSupplier(t), models: map[string]uuid.UUID{}}
+	supplier := newFakeSupplier(t)
+	w := &callWorld{commandLine: c, supplier: supplier, models: map[string]uuid.UUID{}}
 	w.site = uuid.MustParse(c.text("SELECT id::text FROM accounts.sites"))
 	w.seedCatalog()
 	w.seedSupplier()
 	w.richKey = w.fundedKey("rich@example.com", 10_000_000_000)
 	w.noKey = w.fundedKey("broke@example.com", 0)
-	return w
+	supplier.server.Close()
+	return database, callWorldSeed{site: w.site, richKey: w.richKey, noKey: w.noKey, models: w.models}
 }
 
 // seedCatalog lists the two models of the samples, and a third that nothing serves, each with a spec and a reference

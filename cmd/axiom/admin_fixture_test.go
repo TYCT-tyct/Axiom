@@ -39,10 +39,7 @@ type adminFixture struct {
 // newAdminFixture is the main site with its admin domain and one operator, the owner, who holds the admin role.
 func newAdminFixture(t *testing.T) adminFixture {
 	t.Helper()
-	c := newCommandLine(t)
-	if _, err := c.site(siteArgs...); err != nil {
-		t.Fatal(err)
-	}
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
 	f := startAdminNode(c, &testClock{now: time.Now()})
 	f.addUser(ownerEmail, "admin")
 	return f

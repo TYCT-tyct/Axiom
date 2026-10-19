@@ -50,13 +50,7 @@ type consoleFixture struct {
 
 func newConsoleFixture(t *testing.T) consoleFixture {
 	t.Helper()
-	c := newCommandLine(t)
-	if _, err := c.site(siteArgs...); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.user(ownerPassword+"\n", "create", "--email", ownerEmail); err != nil {
-		t.Fatal(err)
-	}
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
 	return startNode(c, &testClock{now: time.Now()}, 0)
 }
 

@@ -45,12 +45,24 @@ type commandLine struct {
 
 func newCommandLine(t *testing.T) commandLine {
 	t.Helper()
-	database := pgtest.New(t, modules()...)
+	return commandLineAt(t, pgtest.New(t, modules()...))
+}
+
+// commandLineAt opens the command line's connection to a database, which it closes when the test ends.
+func commandLineAt(t *testing.T, database pgtest.Database) commandLine {
+	t.Helper()
+	c := openCommandLine(t, database)
+	t.Cleanup(c.db.Close)
+	return c
+}
+
+// openCommandLine is commandLineAt without the cleanup, for a fixture that closes its connection before its copies are made.
+func openCommandLine(t *testing.T, database pgtest.Database) commandLine {
+	t.Helper()
 	db, err := pg.Open(t.Context(), database.App)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(db.Close)
 	return commandLine{t, []string{"AXIOM_DATABASE_URL=" + database.App}, db, database}
 }
 
@@ -95,17 +107,29 @@ func (c commandLine) text(query string) string {
 
 var siteArgs = []string{"init", "--name", "Main", "--currency", "USD", "--console", consoleHost, "--api", "api.main.example", "--admin", "admin.main.example"}
 
+// ownerFixture is a database with the main site and its owner, which the console's and the admin's fixtures copy.
+var ownerFixture fixtureDatabase[struct{}]
+
 // withOwner is a command line whose site and first user exist, the user made as the README's order has it.
 func withOwner(t *testing.T) commandLine {
 	t.Helper()
-	c := newCommandLine(t)
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
+	return c
+}
+
+// buildOwnerDatabase makes the main site and its owner, the state every console and admin test starts from.
+func buildOwnerDatabase(t *testing.T) (pgtest.Database, struct{}) {
+	t.Helper()
+	database := pgtest.New(t, modules()...)
+	c := openCommandLine(t, database)
+	defer c.db.Close()
 	if _, err := c.site(siteArgs...); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.user("a first horse battery\n", "create", "--email", "Owner@Example.com"); err != nil {
+	if _, err := c.user(ownerPassword+"\n", "create", "--email", ownerEmail); err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return database, struct{}{}
 }
 
 // TestSiteInitAndUserCreate: the site is made with the currency and key prefix, and the user it makes, whose email is
