@@ -50,8 +50,8 @@
 | `GET /api/v1/models/user` | 按账户供应商偏好、隐私设置、护栏过滤后的模型 | api/models（OpenAPI `/models/user`） | 没有（但 `gw/admit.go:117-124` 有按 key 的可用模型名单，可作为数据来源） | `na:router/api-router.go:101`（`/user/self/models`） | 无 | 部分价值，可复用 key 的模型白名单 |
 | `GET /api/v1/providers` | 供应商列表及隐私政策链接 | api/providers/list-all-providers | 没有 | 无 | 无 | 对 Axiom 意义不同（供应商是号池，不对外） |
 | `GET /api/v1/endpoints/zdr` | ZDR 过滤影响预览 | api/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints | 没有 | 无 | 无 | 低优先 |
-| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加；缺失的目录变体 404） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 没有：任何带 `:` 的名字直接 `ErrModelNotFound`（`cat/snapshot.go:215`） | 无 | 无 | 见 §3 |
-| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 没有：`cat/snapshot.go:146-149` 有 `Floating`（供应商挪动版本），但名字里没有 `~` 解析 | 无 | 无 | 属于目录名字解析，归 #311 |
+| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加；缺失的目录变体 404） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 部分：`gw/variant.go` 的 `parseModelName` 在查目录之前读变体（调用、`models` 备选、`count_tokens` 共用），`:nitro/:floor` 生效，可叠加，最后一个排序变体生效；`:exacto/:online` 回 400；目录变体和不认识的后缀回 404（`cat/snapshot.go:215` 仍拒绝带 `:` 的名字，目录没有变体条目） | 无 | 无 | 目录变体要有条目才能服务，见各行 |
+| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 没有：`gw/variant.go` 认出 `~` 开头并回 400「暂不支持」（原来是 404）；目录没有别名表（名字只追加，公开名字不许 `~`、`-latest`，`cat/snapshot.go:146-149` 的 `Floating` 是供应商挪动版本，与别名无关） | 无 | 无 | 需要负责人定数据模型（别名表、审计、响应 `model` 的回显），方案写在 `docs/domains/gateway.md` 待定问题，归 #311 |
 | 官方 `models` 列表里不含 `:nitro` 等路由变体，客户端自己派生 | 路由变体不在目录里 | docs/guides/routing/model-variants/overview | 不适用 | 无 | 无 | 随后缀支持一起做 |
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
@@ -79,15 +79,15 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 部分：体内 `session_id`/`prompt_cache_key` 有（`rt/session.go:78`）；`x-session-id` 头没有；还会用首条消息哈希（`rt/session.go:80-85`） | 无 | 无 | 缺请求头形式；Embeddings/TTS 等端点要求用头分组 |
 | `models` 数组（备选模型，主模型失败/限流/审核时顺序尝试，按最终使用的模型计价） | 跨模型回退 | docs/guides/routing/model-fallbacks | 有：解析 `proto/grammar.go:148-157`（最多 8 个），逐个模型排端点 `rt/plan.go:45-58`；默认关闭跨模型，只有请求给出 `models` 才开 | 无 | 无 | 无 |
 | `route: "fallback"`（旧参数） | 老客户端会发 | spec `ChatRequest.route` | 部分：接受并丢弃（`proto/prepare.go:281`） | 无 | 无 | 丢弃而不报错，对旧参数是对的 |
-| `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价（`proto/grammar.go:57,76,363`，`proto/prepare.go:135-143`）；没有 `:nitro/:floor` 带来的层级准入 | 无 | 无 | 层级定义见 `docs/domains/catalog.md` |
-| 变体 `:nitro`（按吞吐排序并准入 priority 层） | 路由变体 | docs/guides/routing/model-variants/nitro | 没有：`:` 直接 404（`cat/snapshot.go:215`）；文档给的替代是 `provider.sort: throughput` | 无 | 无 | OpenRouter 客户端配置里常见；404 是硬失败 |
-| 变体 `:floor`（按价格排序并准入 flex 层） | 路由变体 | docs/guides/routing/model-variants/floor | 没有：同上 | 无 | 无 | 同上 |
-| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 没有：同上 | 无 | 无 | 同上 |
-| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 没有：同上；Axiom 没有免费层级；`bill/settle.go` 的免单规则是零输出不收费，与免费模型无关 | 无 | 无 | 产品是否要有「免费模型」待定，非阻断 |
+| `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价（`proto/grammar.go:57,76,363`，`proto/prepare.go:135-143`）；`:nitro/:floor` 只带来排序，没有它们说的层级准入（不写 `service_tier` 的请求本来可由 standard、priority 服务，`proto/inspect.go:141`；flex 要客户端自己写） | 无 | 无 | 层级定义见 `docs/domains/catalog.md`；为 `:floor` 准入 flex 要决定是否改写上游的 `service_tier`，见 `docs/domains/gateway.md` 待定问题 |
+| 变体 `:nitro`（按吞吐排序并准入 priority 层） | 路由变体 | docs/guides/routing/model-variants/nitro | 部分：等同 `provider.sort: throughput`（`gw/variant.go`，测试 `TestModelVariantsRoute`）；层级准入没有 | 无 | 无 | 排序一半做了；显式 `provider.sort` 优先于变体 |
+| 变体 `:floor`（按价格排序并准入 flex 层） | 路由变体 | docs/guides/routing/model-variants/floor | 部分：等同 `provider.sort: price`；层级准入没有 | 无 | 无 | 同上 |
+| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 没有：回 400 说明暂不支持（端点质量分和工具调用错误率还没有测量，`gw/route.go:220` 质量固定为 1）；有显式 `provider.sort` 或后面的排序变体时被替换，不报错 | 无 | 无 | 等 G10 的质量数据，之后接 `routing.BestQuality` |
+| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 没有：404 `model_not_found`，说明没有这个变体，也不落到付费的基础模型；Axiom 没有免费层级；`bill/settle.go` 的免单规则是零输出不收费，与免费模型无关 | 无 | 无 | 产品是否要有「免费模型」待定，非阻断 |
 | 变体 `:batch`（批量价条目） | 目录变体，配合 Batch API | docs/batch-quickstart | 没有（批量调用在「以后」） | 无 | 无 | 见 §16 |
-| 变体 `:online`（已弃用，等价于 `web` 插件） | 路由变体 | docs/guides/routing/model-variants/online | 没有 | 无 | 无 | 官方已弃用，不补 |
-| 变体 `:thinking`、`:extended`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking、extended | 没有 | 无 | 无 | 官方已弃用，不补 |
-| 后缀叠加（任意顺序，最后一个排序变体生效） | 规则 | docs/guides/routing/model-variants/overview | 没有 | 无 | 无 | 随 `:nitro/:floor` 做 |
+| 变体 `:online`（已弃用，等价于 `web` 插件） | 路由变体 | docs/guides/routing/model-variants/online | 没有：回 400 说明没有联网搜索插件（原来是 404） | 无 | 无 | 官方已弃用；`web` 插件本身见 §10 |
+| 变体 `:thinking`、`:extended`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking、extended | 没有：404 `model_not_found`，`:thinking` 的说明提示用 `reasoning` 参数（OpenRouter 的迁移建议） | 无 | 无 | 官方已弃用，不补 |
+| 后缀叠加（任意顺序，最后一个排序变体生效） | 规则 | docs/guides/routing/model-variants/overview | 有：`gw/variant.go`（`TestParseModelName`） | 无 | 无 | 无 |
 | 提供者透传头 `x-anthropic-beta` | 透传 Anthropic beta 特性 | docs/guides/routing/provider-selection | 有：`anthropic-beta` 白名单转发，不筛选值（`docs/domains/gateway.md:53`） | 有 | 有 | 无 |
 
 ## 4. 自动路由和其他路由器
@@ -273,7 +273,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 1. 【静默失效】`plugins`、`transforms`、`route`、`usage` 被丢弃且不报错：`web` 插件、`file-parser`、`response-healing`、`context-compression`/`middle-out`、`auto-router` 设置全部不生效，开发者拿到的是一个功能缺失的正常回答（`proto/prepare.go:281`）。至少先改成「认识的 id 才收、不认识的 400」，再逐个实现。→ #311
 2. 【静默失效】`openrouter:web_search` 等服务端工具类型不被识别（`proto/grammar.go:46,66`），Responses/Chat 里带这类工具的请求行为未定；联网搜索只有厂商原生的。→ #311
-3. 【硬失败】模型名后缀：`:nitro`、`:floor`、`:exacto`、`:free`、`:online`、`:thinking` 一律 404 `model_not_found`（`cat/snapshot.go:215`）；`~anthropic/claude-sonnet-latest` 这类别名和 `@preset/…`（文档说支持、代码没有）同样查不到。常见客户端配置里 `:nitro`/`:floor` 很多。→ #311（后缀与别名解析）；`@preset/` 前缀随预设一起归 #313
+3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`gw/variant.go`）；`:exacto`、`:online` 现在回 400 并说明原因，`:free`、`:thinking` 等目录变体回 404 并说明是哪个变体；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，要负责人先定别名的数据模型；`@preset/…`（文档说支持、代码没有）仍查不到。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
 4. 【硬失败】`provider.order/only/ignore` 写了供应商名就 400，`allow_fallbacks:false`、`require_parameters:true`、`quantizations`、`enforce_distillable_text`、`sort` 对象形式、百分位对象形式、`max_price.request/image` 也都 400（`gw/provider.go:51-70`）。→ #313（名字到供应商的映射可能要 #314 的用户供应商控制先落地）
 5. 【模型元数据】`GET /api/v1/models` 只有 `id/object/owned_by/created(恒0)/display_name`，没有 `pricing`、`context_length`、`architecture`、`supported_parameters`、`top_provider`、`reasoning`、`default_parameters`，也没有查询参数过滤和单模型详情；而 `docs/domains/gateway.md:25` 说有。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算都依赖这些。→ #311
 6. 【预设】`@preset/…`、`preset` 字段、`/api/v1/presets` 全部没有，但产品范围把预设列在第一版（`docs/product.md:93`）；`docs/domains/gateway.md:150` 与代码不符，先改文档或做功能。→ #313（预设属于路由配置）

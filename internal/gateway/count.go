@@ -77,7 +77,11 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	model, err := snap.ResolvePublic(req.Model)
+	name, ref := parseModelName(req.Model)
+	if ref != nil {
+		return 0, ref
+	}
+	model, err := snap.ResolvePublic(name.base)
 	if err != nil {
 		return 0, err
 	}

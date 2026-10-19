@@ -298,10 +298,11 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	models, err := resolve(snap, &req)
+	models, ranking, err := resolve(snap, &req, over.Sort)
 	if err != nil {
 		return err
 	}
+	over.Sort = ranking
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
 	if r.Header.Get("X-Claude-Code-Context-Compacted") != "" { // the cache it stuck for is gone: choose afresh
@@ -310,22 +311,6 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	c.sticky, _ = h.Router.Stuck(c.Session)
 	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
 	return nil
-}
-
-// resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an
-// alternate that does not is left out, as it could not be tried.
-func resolve(snap *catalog.Snapshot, req *protocol.Request) ([]catalog.ModelID, error) {
-	first, err := snap.ResolvePublic(req.Model)
-	if err != nil {
-		return nil, err
-	}
-	models := []catalog.ModelID{first.Model}
-	for _, name := range req.Models {
-		if m, err := snap.ResolvePublic(name); err == nil {
-			models = append(models, m.Model)
-		}
-	}
-	return models, nil
 }
 
 // fail answers a request that did not get through, unless its client has gone. A body that was too slow is answered
