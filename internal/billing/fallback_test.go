@@ -108,26 +108,34 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 
 // TestPriceSegmentsPricesATierTheListLacks: a schedule that prices the standard tier only still charges a call its
 // upstream served at priority, which it prices nowhere, at the fallback prices: tokens at the highest token price
-// anywhere in the schedule and the search at its site's default, marked estimated; a waiver keeps the search alone
+// anywhere in the schedule and the search at its site's default, marked estimated; a waiver keeps the search alone; and
+// each sampling is charged, not only the last, which search is what makes several of
 // (docs/domains/billing.md「定价」: 上游报告了列表之外的等级，那次调用的各项按兜底价收并标暂估).
 func TestPriceSegmentsPricesATierTheListLacks(t *testing.T) {
 	f := mustFallbacks(t, testFallbacks)
 	s := mustSchedule(t, `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`).Fill(f.perUse)
-	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1}, catalog.ServiceTierPriority, nil)
-	if err != nil {
-		t.Fatal(err)
+	usage := func(counts map[catalog.Item]int64) Segment {
+		t.Helper()
+		u, err := catalog.NewUsage(counts, catalog.ServiceTierPriority, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
 	}
+	tokens := usage(map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})
 	for _, tc := range []struct {
-		name   string
-		waived bool
-		want   int64
+		name     string
+		waived   bool
+		segments []Segment
+		want     int64
 	}{
-		{"tokens at the highest token price, the search at its default", false, 70 + 20},
-		{"waived: the tokens go, the search stays", true, 20},
+		{"tokens at the highest token price, the search at its default", false, []Segment{tokens}, 70 + 20},
+		{"waived: the tokens go, the search stays", true, []Segment{tokens}, 20},
+		{"two samplings, each charged", false, []Segment{usage(map[catalog.Item]int64{in: 50}), tokens}, 50 + 90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := priceSegments(s, f, []Segment{{Usage: u, Reported: ^catalog.ItemSet(0)}}, tc.waived)
+			p, err := priceSegments(s, f, tc.segments, tc.waived)
 			if err != nil || p.price != tc.want || !p.estimated {
 				t.Errorf("priceSegments = %+v, %v; want %d estimated", p, err, tc.want)
 			}

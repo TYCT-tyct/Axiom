@@ -56,10 +56,10 @@ func fetches(tb testing.TB, n string) Segment {
 		catalog.UnknownUsage{Field: "usage.server_tool_use.web_fetch_requests", Value: n})
 }
 
-// servedAt is segment with its usage reported at the given service tier.
-func servedAt(tb testing.TB, st catalog.ServiceTier, counts map[catalog.Item]int64) Segment {
+// servedAt is segment with its usage reported at priority, a tier no price list here prices.
+func servedAt(tb testing.TB, counts map[catalog.Item]int64) Segment {
 	tb.Helper()
-	u, err := catalog.NewUsage(counts, st, nil)
+	u, err := catalog.NewUsage(counts, catalog.ServiceTierPriority, nil)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -130,7 +130,8 @@ func fallbackDefault(t *testing.T) {
 // still charges a call its upstream served at priority — which no price list has, so Cost prices nothing — at the
 // fallback prices, estimated: 70 tokens at the highest token price 1 and the search at its default 20. Before, the call
 // was charged nothing but the flag (docs/domains/billing.md「定价」: an upstream that reports a tier the price list lacks
-// is charged the fallback prices and marked estimated). A waiver keeps the search alone.
+// is charged the fallback prices and marked estimated). A waiver keeps the search alone. Each sampling is charged, not
+// only the last: search is what makes several.
 func fallbackUnlistedTier(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -138,9 +139,12 @@ func fallbackUnlistedTier(t *testing.T) {
 		want int64
 	}{
 		{"50 input and 20 output at priority, one search", outcome(Committed, FinishStop,
-			servedAt(t, catalog.ServiceTierPriority, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 90},
+			servedAt(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 90},
 		{"waived: the tokens go, the search stays", outcome(Unknown, FinishNone,
-			servedAt(t, catalog.ServiceTierPriority, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 20},
+			servedAt(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})), 20},
+		{"two samplings at priority, each charged, not only the last", outcome(Committed, FinishStop,
+			servedAt(t, map[catalog.Item]int64{in: 50}),
+			servedAt(t, map[catalog.Item]int64{in: 10, catalog.ItemOutput: 20, webSearch: 1})), 100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := fallbackBank(t, 10_000, 0, fallbackBankConfig)

@@ -252,7 +252,9 @@ func zeroOutput(last AttemptResult) bool {
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
 
-// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」).
+// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
+// price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
+// (Unpriced). Adding an item here adds it to all three.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
 // priceSegments prices each sampling at its own band, sums them exactly and rounds up once; perUseOnly charges only
