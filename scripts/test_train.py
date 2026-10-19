@@ -290,24 +290,27 @@ class Decisions(unittest.TestCase):
         self.assertEqual([pr["number"] for pr in train.queue_order(prs)], [2, 3, 1])
 
     def test_unmet_checks(self):
-        runs = [{"name": "build", "status": "completed", "conclusion": "success"},
-                {"name": "docs", "status": "completed", "conclusion": "skipped"},
-                {"name": "pr", "status": "in_progress", "conclusion": None},
-                {"name": "secrets", "status": "completed", "conclusion": "failure"}]
+        runs = [{"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                {"id": 2, "name": "docs", "status": "completed", "conclusion": "skipped"},
+                {"id": 3, "name": "pr", "status": "in_progress", "conclusion": None},
+                {"id": 4, "name": "secrets", "status": "completed", "conclusion": "failure"}]
         statuses = [{"context": "merge-train", "state": "pending"}]
         required = ["build", "docs", "pr", "secrets", "review", "merge-train"]
         self.assertEqual(train.unmet_checks(required, runs, statuses), ["pr", "secrets", "review"])
 
     def test_unmet_checks_reads_the_last_run_of_a_check(self):
-        review = lambda started, conclusion: {"name": "review", "status": "completed", "conclusion": conclusion,
-                                              "started_at": started}
-        rerun = [review("2026-10-19T04:46:39Z", "success"), review("2026-10-19T04:45:05Z", "cancelled")]
-        self.assertEqual(train.unmet_checks(["review"], rerun, []), [])
-        failed_again = [review("2026-10-19T04:45:05Z", "success"), review("2026-10-19T04:46:39Z", "failure")]
-        self.assertEqual(train.unmet_checks(["review"], failed_again, []), ["review"])
-        pending = [review("2026-10-19T04:45:05Z", "success"),
-                   {"name": "review", "status": "queued", "conclusion": None, "started_at": None}]
-        self.assertEqual(train.unmet_checks(["review"], pending, []), ["review"])
+        review = lambda id, status, conclusion: {"id": id, "name": "review", "status": status, "conclusion": conclusion}
+        cases = {
+            "green rerun after a cancel": ([review(3, "completed", "success"), review(2, "completed", "cancelled")], []),
+            "failure after a success": ([review(2, "completed", "success"), review(5, "completed", "failure")],
+                                        ["review"]),
+            "queued rerun": ([review(2, "completed", "success"), review(7, "queued", None)], ["review"]),
+            "cancelled before it started, then green": ([review(9, "completed", "success"),
+                                                         review(4, "completed", "cancelled")], []),
+        }
+        for name, (runs, want) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(train.unmet_checks(["review"], runs, []), want)
 
     def test_migration_versions_are_per_directory(self):
         paths = ["internal/billing/migrations/00005_x.sql", "internal/accounts/migrations/5_y.sql",
