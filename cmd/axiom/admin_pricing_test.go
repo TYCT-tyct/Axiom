@@ -61,6 +61,7 @@ func (f pricingFixture) list() []adminapi.PricingRule {
 // TestCreatePricingRule: a rule is made as the request says, answered with its ID and rev 0, kept as its first version,
 // and audited with the reason.
 func TestCreatePricingRule(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	body := `{"enabled":true,"target":{"kind":"model","id":"` + f.model + `"},"audience":{"kind":"all"},"method":{"kind":"reference_multiplier","multiplier":"1.25","currency_conversion":"face"},"constraints":{"min_margin_ratio":"0.1"}}`
 	made := f.create(body)
@@ -89,6 +90,7 @@ func (f pricingFixture) store(targetKind, targetID, audienceKind, audienceID, me
 
 // TestPricingRulesAreListedInTheOrderTheyAreTried: the most specific target first, then the most specific audience.
 func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	model := `{"kind":"model","id":"` + f.model + `"}`
 	for _, rule := range []string{
@@ -114,6 +116,7 @@ func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 // TestUpdatePricingRule: a rule is replaced as of the rev it was read at, which goes up; disabling it keeps it; the old
 // version stays in the history.
 func TestUpdatePricingRule(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	made := f.create(ruleJSON(everything, everything, faced))
 	disabled := strings.Replace(ruleJSON(everything, everything, `{"kind":"reference_multiplier","multiplier":"1.5","currency_conversion":"face"}`), `"enabled":true`, `"enabled":false`, 1)
@@ -135,6 +138,7 @@ func TestUpdatePricingRule(t *testing.T) {
 // TestPricingRuleKeys: the same request again, after a lost response, answers the same and changes nothing; the key
 // of another request is refused.
 func TestPricingRuleKeys(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	key, body := newKey(), `{"rule":`+ruleJSON(everything, everything, faced)+`,"reason":"r"}`
 	rec := f.change(f.s, http.MethodPost, "/pricing/rules", body, key)
@@ -156,6 +160,7 @@ func TestPricingRuleKeys(t *testing.T) {
 // TestPricingRuleRefusals: a rule that breaks a rule of pricing rules is a 422 naming its member; a second rule of one
 // target and audience is a 409; a rule that is not there is a 404; none changes anything.
 func TestPricingRuleRefusals(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	f.create(ruleJSON(everything, everything, faced))
 	for _, c := range []struct{ name, rule, pointer string }{

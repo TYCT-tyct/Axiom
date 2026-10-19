@@ -62,6 +62,7 @@ func (f adminFixture) fiveUsers() (session, []string) {
 
 // TestListUsersInPages: users newest first, in pages that follow each other without a gap or a repeat.
 func TestListUsersInPages(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s, newestFirst := f.fiveUsers()
 	paged, pages := f.users(s, "limit=2")
@@ -76,6 +77,7 @@ func TestListUsersInPages(t *testing.T) {
 
 // TestListUsersFilters: by the start of the email, matched literally and without regard to case, and by site.
 func TestListUsersFilters(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s, newestFirst := f.fiveUsers()
 	for query, want := range map[string][]string{
@@ -99,6 +101,7 @@ func TestListUsersFilters(t *testing.T) {
 // TestListUsersFields: a user is listed with its account, site, tier, status, whether it has two-step verification and
 // when it was made.
 func TestListUsersFields(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s, _ := f.fiveUsers()
 	users, _ := f.users(s, "")
@@ -118,6 +121,7 @@ func TestListUsersFields(t *testing.T) {
 
 // TestListUsersRefusals: a cursor this API did not give out, a page size or a filter outside the contract is a 400.
 func TestListUsersRefusals(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	for _, query := range []string{"cursor=nonsense", "cursor=acct_00000000000000000000000000", "cursor=user_zzzzzzzzzzzzzzzzzzzzzzzzzz", "limit=0", "limit=201", "email_prefix=", "site_id=nonsense"} {
@@ -128,6 +132,7 @@ func TestListUsersRefusals(t *testing.T) {
 // TestGetAccount: an account with its tier, its owner and its balance in the site's currency; an ID that is not an
 // account's, or no account's, is a 404.
 func TestGetAccount(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	f.addUser("alice@example.com", "")
@@ -181,6 +186,7 @@ func (g grantee) balanceOf() string {
 // TestGrantCredit: a grant is a batch, a ledger entry that moves the gift to the balance, and an audit entry with the
 // reason, all of one transaction, answered with the balance after it.
 func TestGrantCredit(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	expires := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
 	rec := g.change(g.s, http.MethodPost, g.path, grantBody("5000000000", `"expires_at":"`+expires.Format(time.RFC3339)+`",`), newKey())
@@ -228,6 +234,7 @@ func (g grantee) expectGranted(batch string) {
 // TestGrantCreditReplay: the same request again, after a lost response, changes nothing and answers the same; a new
 // key is a new grant, and a grant that does not expire has no expiry.
 func TestGrantCreditReplay(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	body, key := grantBody("5000000000", ""), newKey()
 	var first, again adminapi.CreditGrant
@@ -253,6 +260,7 @@ func TestGrantCreditReplay(t *testing.T) {
 // TestGrantCreditKeyIsTheFirstRequests: a key is bound to the request, the account and the operator it was first used
 // with; another amount, another account or another operator's is refused and changes nothing.
 func TestGrantCreditKeyIsTheFirstRequests(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	body, key := grantBody("5000000000", ""), newKey()
 	expectAdmin(t, "the first request", g.change(g.s, http.MethodPost, g.path, body, key), http.StatusCreated, "")
@@ -268,6 +276,7 @@ func TestGrantCreditKeyIsTheFirstRequests(t *testing.T) {
 // TestGrantCreditRefusals: a grant that is not an amount of the account's currency is a 400, one that breaks a rule
 // of a grant a 422; none changes anything, and the key of a refused request is free for the corrected one.
 func TestGrantCreditRefusals(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	key := newKey()
 	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
@@ -302,6 +311,7 @@ func TestGrantCreditRefusals(t *testing.T) {
 
 // TestGrantCreditToNoAccount: an ID that is not an account's, or no account's, is a 404 and grants nothing.
 func TestGrantCreditToNoAccount(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	for _, id := range []string{"acct_00000000000000000000000000", "acct_zzzzzzzzzzzzzzzzzzzzzzzzzz", g.userOf("alice@example.com")} {
 		expectAdmin(t, "grantCredit to "+id, g.change(g.s, http.MethodPost, "/accounts/"+id+"/credit-grants", grantBody("1", ""), newKey()), http.StatusNotFound, codeNotFound)
@@ -314,6 +324,7 @@ func TestGrantCreditToNoAccount(t *testing.T) {
 // TestConcurrentGrantsWithOneKeyGrantOnce: requests with one key that arrive together wait on the claim; one grants and
 // the others get its answer.
 func TestConcurrentGrantsWithOneKeyGrantOnce(t *testing.T) {
+	t.Parallel()
 	g := newGrantee(t)
 	key := newKey()
 	const requests = 6

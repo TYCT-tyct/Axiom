@@ -89,6 +89,7 @@ func (f catalogFixture) setStatus(m adminapi.Model, status string) *httptest.Res
 // TestAuthorsThroughTheAPI: an author is made by its slug and renamed by it, listed by slug, and a slug that is none is
 // a 400.
 func TestAuthorsThroughTheAPI(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	for _, c := range []struct{ slug, name string }{{"zeta", "Zeta"}, {"acme", "Acme"}, {"acme", "Acme Corp"}} {
 		rec := f.change(f.s, http.MethodPut, "/authors/"+c.slug, `{"name":"`+c.name+`","reason":"the vendor"}`, newKey())
@@ -121,6 +122,7 @@ func isUSDBasic(p adminapi.ReferencePrice) bool {
 
 // TestModelDraft: a model is drafted, gets its name and its price, each change answered with the model as it is.
 func TestModelDraft(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	draft := f.create("acme/alpha")
 	if draft.Status != "draft" || draft.Rev != 0 || draft.Slug != "acme/alpha" || draft.Author != "acme" || len(draft.Names) != 0 || len(draft.Prices) != 0 {
@@ -150,6 +152,7 @@ func (f catalogFixture) onSale() (listed, retired adminapi.Model) {
 // TestModelOnSale: a model is put on sale and taken out of use, each change answered with the model as it is and its rev
 // one more.
 func TestModelOnSale(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	listed, retired := f.onSale()
 	if listed.Status != "listed" || listed.Rev != 1 || retired.Status != "retired" || retired.Rev != 2 {
@@ -159,6 +162,7 @@ func TestModelOnSale(t *testing.T) {
 
 // TestCatalogChangesAreAudited: every change is audited once, with the reason and who made it.
 func TestCatalogChangesAreAudited(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	f.create("acme/alpha")
 	listed, _ := f.onSale()
@@ -175,6 +179,7 @@ func TestCatalogChangesAreAudited(t *testing.T) {
 
 // TestModelRefusals: a change the catalog refuses is the contract's answer for it and changes nothing.
 func TestModelRefusals(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	m := f.create("acme/alpha")
 	f.addName(m, "acme/alpha", "public")
@@ -205,6 +210,7 @@ func TestModelRefusals(t *testing.T) {
 // TestPriceRules: a version is published on the head it was decided on, a schedule that loses a price is refused, and
 // the history is a chain of versions, the head being the current price.
 func TestPriceRules(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	m := f.ready("acme/alpha")
 	first := m.Prices[0].Id
@@ -231,6 +237,7 @@ func TestPriceRules(t *testing.T) {
 // TestSelectPriceSource: switching a model to another source publishes the new source's price in each currency and
 // withdraws the rest, in one change.
 func TestSelectPriceSource(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	m := f.publish(f.ready("acme/alpha"), cny, nil)
 	bases := `{"CNY":"` + m.Prices[0].Id + `","USD":"` + m.Prices[1].Id + `"}`
@@ -246,6 +253,7 @@ func TestSelectPriceSource(t *testing.T) {
 // TestModelPages: models by slug in pages, drafts included, filtered; a cursor this API did not give out is a 400, and
 // a model is read by its ID.
 func TestModelPages(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	for _, slug := range []string{"acme/alpha", "acme/beta", "zeta/gamma"} {
 		f.create(slug)
@@ -291,6 +299,7 @@ func TestModelPages(t *testing.T) {
 // after the model changed, and does nothing; the key of another kind of change, of another model or of another body is
 // refused, and so is the all-zero key, before anything is written.
 func TestCatalogKeys(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	key := newKey()
 	body := `{"slug":"acme/alpha","version_basis":"dated","price_source":"manual","spec":` + specBody + `,"reason":"r"}`
@@ -338,6 +347,7 @@ func TestCatalogKeys(t *testing.T) {
 // TestCatalogKeyUsedByTheCommandLine: a key the command line already used for a change of one model is refused for the
 // same kind of change of another, which stays as it was.
 func TestCatalogKeyUsedByTheCommandLine(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	a, b := f.create("acme/alpha"), f.create("acme/beta")
 	key := newKey()
@@ -360,6 +370,7 @@ func TestCatalogKeyUsedByTheCommandLine(t *testing.T) {
 
 // TestCatalogKeyRacing: the same request sent twice at once is one change, and both senders get its response.
 func TestCatalogKeyRacing(t *testing.T) {
+	t.Parallel()
 	f := newCatalogFixture(t)
 	f.saveAuthor("acme")
 	key := newKey()

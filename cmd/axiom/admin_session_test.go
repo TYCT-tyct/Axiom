@@ -26,6 +26,7 @@ func (f adminFixture) readSession(s session) adminapi.Session {
 // TestAdminSignInSetsTheCookie: signing in on the admin domain sets the session cookie, which a page cannot read and
 // only HTTPS carries, and the session says who it is.
 func TestAdminSignInSetsTheCookie(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"Owner@Example.com","password":"`+ownerPassword+`"}`)
 	expectAdmin(t, "sign-in", rec, http.StatusOK, "")
@@ -44,6 +45,7 @@ func TestAdminSignInSetsTheCookie(t *testing.T) {
 // TestAdminSessionPermissions: getSession tells what the session may do on the platform, which is the permissions of
 // the user's platform role, and of those only the ones the session's level allows.
 func TestAdminSessionPermissions(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	wantPassword := []string{
 		"api_keys.manage", "api_keys.view", "balance.view", "calls.view", "catalog.view", "pricing.view", "suppliers.view",
@@ -65,6 +67,7 @@ func TestAdminSessionPermissions(t *testing.T) {
 
 // TestAdminSignOut: signing out expires the cookie and ends the session.
 func TestAdminSignOut(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	rec := f.do(http.MethodPost, "/auth/sign-out", "", as(s))
@@ -78,6 +81,7 @@ func TestAdminSignOut(t *testing.T) {
 // TestAdminSessionOfAUserWithoutAGrant: anyone with an account on the main site may sign in at the admin domain, and
 // the session tells them they may do nothing there.
 func TestAdminSessionOfAUserWithoutAGrant(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("nobody@example.com", "")
 	s := f.verified("nobody@example.com")
@@ -93,6 +97,7 @@ func TestAdminSessionOfAUserWithoutAGrant(t *testing.T) {
 // TestAdminTwoStepVerification: the second factor is the same as the console's, on the admin's own sessions: a sign-in
 // with it waits for a code, a pending session may read itself and nothing else, and a TOTP code passes it.
 func TestAdminTwoStepVerification(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.signIn(ownerEmail)
 	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(s))
@@ -138,6 +143,7 @@ func TestAdminTwoStepVerification(t *testing.T) {
 // TestSessionsBelongToTheirSurface: the cookie of a console session opens nothing on the admin and the admin's opens
 // nothing on the console, though both are the same user's.
 func TestSessionsBelongToTheirSurface(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	admin := f.owner()
 	logger := slog.New(slog.DiscardHandler)
@@ -175,6 +181,7 @@ func TestSessionsBelongToTheirSurface(t *testing.T) {
 
 // TestAdminSessionsEnd: a session past its end, or idle for longer than the site allows, is no session.
 func TestAdminSessionsEnd(t *testing.T) {
+	t.Parallel()
 	for name, statement := range map[string]string{
 		"expired": `UPDATE accounts.sessions SET expires_at = now() - interval '1 minute'`,
 		"idle":    `UPDATE accounts.sessions SET last_seen_at = now() - interval '13 hours'`,
@@ -191,6 +198,7 @@ func TestAdminSessionsEnd(t *testing.T) {
 // TestAdminReadsMemberNamesExactly: the guard checks a body by the contract's exact names, so the handler must read it
 // by them too: a member named "EMAIL" beside "email" is one nobody asked for, not a second email that wins.
 func TestAdminReadsMemberNamesExactly(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	body := `{"email":"` + ownerEmail + `","EMAIL":"nobody@example.com","password":"` + ownerPassword + `"}`
 	expectAdmin(t, "sign-in with a member named in capitals", f.do(http.MethodPost, "/auth/sign-in", body), http.StatusOK, "")

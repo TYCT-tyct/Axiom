@@ -14,6 +14,7 @@ import (
 // per row; an unknown name or a missing file is a usage error. The operations are the two of the fallback prices and
 // the unknown items: closing a hold went with the correction window (docs/domains/billing.md「用量来源与暂估」).
 func TestBillingCommand(t *testing.T) {
+	t.Parallel()
 	environ := []string{"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App}
 	run := func(args ...string) (string, error) {
 		var out bytes.Buffer
@@ -57,6 +58,7 @@ func TestBillingCommand(t *testing.T) {
 // TestBillingCommandInANodeEnvironment: the command runs in a node's own environment (docker compose exec), where the
 // node's variables are set too: only an invalid variable it reads is a fault.
 func TestBillingCommandInANodeEnvironment(t *testing.T) {
+	t.Parallel()
 	database := "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App
 	run := func(extra ...string) error {
 		return billingCommand(t.Context(), append([]string{database}, extra...), []string{"unknown-items"}, &bytes.Buffer{})

@@ -25,6 +25,7 @@ func (f adminFixture) getSettings(s session, site string) adminapi.SiteSettingsV
 // site's own values whole, so what it leaves out falls back to the default; each change is audited with its reason, the
 // values it replaced and the values it set.
 func TestSiteSettings(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
@@ -94,6 +95,7 @@ func TestSiteSettings(t *testing.T) {
 // not there is refused as the contract says, with the part of the request named, and changes nothing; the key of a
 // refused request is free for the corrected one.
 func TestSiteSettingsRefusals(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
@@ -131,6 +133,7 @@ func TestSiteSettingsRefusals(t *testing.T) {
 // TestShorterSessionsEndOnTheNextRequest: a site that shortens its sessions shortens the ones already made, by their
 // idle time and by their age, from their next request on; it never lengthens one.
 func TestShorterSessionsEndOnTheNextRequest(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("idle@example.com", "viewer")
 	f.addUser("old@example.com", "viewer")
@@ -164,6 +167,7 @@ func TestShorterSessionsEndOnTheNextRequest(t *testing.T) {
 
 // TestTiers: a site's tiers by name, the main site's unless the request names one.
 func TestTiers(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	f.run(`INSERT INTO accounts.tiers (id, site_id, name) SELECT uuidv7(), id, 'Beta' FROM accounts.sites WHERE is_main`)
@@ -191,6 +195,7 @@ func TestTiers(t *testing.T) {
 // TestSiteSettingsLogAFailedReload: a change that is saved still succeeds when this node cannot reload the sites at
 // once, and the failure is logged for whoever looks into the old settings it keeps using.
 func TestSiteSettingsLogAFailedReload(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	f.run("ALTER TABLE accounts.roles RENAME TO roles_away")

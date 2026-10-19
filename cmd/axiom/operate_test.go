@@ -111,6 +111,7 @@ func withOwner(t *testing.T) commandLine {
 // TestSiteInitAndUserCreate: the site is made with the currency and key prefix, and the user it makes, whose email is
 // stored in lower case, has a balance row, which the command's wiring of billing.OpenBalance makes.
 func TestSiteInitAndUserCreate(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	site, err := c.site(siteArgs...)
 	if err != nil {
@@ -142,6 +143,7 @@ func TestSiteInitAndUserCreate(t *testing.T) {
 // TestUserVerbs: grant-platform, set-password and reset-mfa each report that they are done; the password
 // set-password read from standard input, less its line ending, is the one that signs in afterwards.
 func TestUserVerbs(t *testing.T) {
+	t.Parallel()
 	c := withOwner(t)
 	if done, err := c.user("", "grant-platform", "--email", "owner@example.com"); err != nil || done["done"] != "grant-platform" {
 		t.Errorf("grant-platform: %v, %v", done, err)
@@ -192,6 +194,7 @@ func masterKeys(t testing.TB) *secret.Keyring {
 
 // TestMainSiteIsInDollars: the main site's currency is USD, and a command that names another writes nothing.
 func TestMainSiteIsInDollars(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	if _, err := c.site("init", "--name", "N", "--currency", "EUR", "--console", "c.x.example", "--api", "a.x.example"); err == nil || !strings.Contains(err.Error(), "want USD") {
 		t.Errorf("a main site in euros: %v", err)
@@ -203,6 +206,7 @@ func TestMainSiteIsInDollars(t *testing.T) {
 
 // TestOperateCommandRefusals: what a command cannot do it says, and writes nothing.
 func TestOperateCommandRefusals(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	if _, err := c.user("a first horse battery", "create", "--email", "owner@example.com"); err == nil || !strings.Contains(err.Error(), "axiom site init") {
 		t.Errorf("a user before the site: %v", err)

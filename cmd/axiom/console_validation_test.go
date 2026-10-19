@@ -30,6 +30,7 @@ func pointersOf(t testing.TB, body []byte) []string {
 // TestKeyInputIsChecked: what the contract's schemas cannot say, a rule across members or one of the table, is a 400 that
 // names the members, before anything is written.
 func TestKeyInputIsChecked(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
@@ -64,6 +65,7 @@ func TestKeyInputIsChecked(t *testing.T) {
 // TestRefusalsAreTheContractsErrorBody: a validation failure through the whole stack is the contract's error body, and
 // repeats nothing the client sent.
 func TestRefusalsAreTheContractsErrorBody(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	const planted = "planted-secret-value"
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"ab","password":"`+planted+`"}`)
@@ -80,6 +82,7 @@ func TestRefusalsAreTheContractsErrorBody(t *testing.T) {
 // TestBodiesFollowTheJSONPolicy: a body the project's JSON policy refuses is a 400 before any parser that would read it
 // differently: a member name twice, bytes that are not UTF-8, nesting past the limit; nothing is made.
 func TestBodiesFollowTheJSONPolicy(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	deep := strings.Repeat("[", 300) + strings.Repeat("]", 300)
@@ -99,6 +102,7 @@ func TestBodiesFollowTheJSONPolicy(t *testing.T) {
 // names match exactly, case included. A member that differs from a declared one only in case is an unknown member,
 // ignored, so it can neither carry a value past the schema's bounds nor overwrite one that passed them.
 func TestMemberNamesMatchExactly(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	models := `["` + strings.Repeat(`a","`, 256) + `a"]` // 257 names, one past the bound

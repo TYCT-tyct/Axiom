@@ -13,6 +13,7 @@ import (
 // TestServeAdminListener: a node given AXIOM_ADMIN_ADDR serves the admin's API there and only there, behind the guard,
 // and logs the address; the public listener has no admin routes and the admin listener has no console routes.
 func TestServeAdminListener(t *testing.T) {
+	t.Parallel()
 	environ := func(extra ...string) []string {
 		return append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",

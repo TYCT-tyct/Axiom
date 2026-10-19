@@ -13,6 +13,7 @@ import (
 // mock's idea of the same request under one key cannot drift from the handlers': a login's secret is not part of it,
 // an origin is compared as normalised.
 func TestSameRequestUnderAKey(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../../internal/platform/idem/testdata/same-request.json")
 	if err != nil {
 		t.Fatal(err)

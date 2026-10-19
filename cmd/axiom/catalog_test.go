@@ -34,6 +34,7 @@ func catalogRunner(t *testing.T) func(operation, doc string) (map[string]any, er
 // TestCatalogCommand: the operations a file asks for run in the platform scope and are recorded, and a retry with the
 // same key gets the first result.
 func TestCatalogCommand(t *testing.T) {
+	t.Parallel()
 	run := catalogRunner(t)
 	const author = `{"op_key":"0198c0a8-0000-7000-8000-000000000001","reason":"first vendor","slug":"acme","name":"Acme"}`
 	first, err := run("save-author", author)
@@ -62,6 +63,7 @@ func TestCatalogCommand(t *testing.T) {
 
 // TestCatalogCommandRefusals: a member the request does not name, an unknown operation and a missing file are errors.
 func TestCatalogCommandRefusals(t *testing.T) {
+	t.Parallel()
 	run := catalogRunner(t)
 	for _, c := range []struct{ name, operation, doc, want string }{
 		{"an unknown member", "save-author", `{"op_key":"0198c0a8-0000-7000-8000-000000000009","reason":"r","slug":"x","name":"X","extra":1}`, "extra"},

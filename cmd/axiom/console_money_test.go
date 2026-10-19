@@ -66,6 +66,7 @@ func (f consoleFixture) balance(s session) consoleapi.Balance {
 // the account's workspaces were charged since the first of the month, once each, not the keys' copies of it and not
 // last month's.
 func TestBalance(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	zero := f.balance(s)
@@ -105,6 +106,7 @@ func TestBalance(t *testing.T) {
 // TestKeyLimitRemaining: what a key may still spend is its limit less what it has spent and holds reserved in the
 // window of its own reset; a key without a limit shows none.
 func TestKeyLimitRemaining(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	account, site := f.account(s)
@@ -197,6 +199,7 @@ func callIDs(list consoleapi.CallList) []string {
 
 // TestCallsPage: the list is the account's calls, newest first, in pages by cursor, each call as the contract gives it.
 func TestCallsPage(t *testing.T) {
+	t.Parallel()
 	c := newCallsFixture(t)
 	var page consoleapi.CallList
 	decode(t, c.f.do(http.MethodGet, "/calls?limit=2", "", as(c.s)), &page)
@@ -224,6 +227,7 @@ func TestCallsPage(t *testing.T) {
 
 // TestCallsFilters: the list can be cut by model, client application and time, and a rare filter finds what it matches.
 func TestCallsFilters(t *testing.T) {
+	t.Parallel()
 	c := newCallsFixture(t)
 	old, mid, recent := c.old.ID.String(), c.mid.ID.String(), c.recent.ID.String()
 	for _, tc := range []struct {
@@ -247,6 +251,7 @@ func TestCallsFilters(t *testing.T) {
 
 // TestGetCall: one call is read by its ID; another account's call, an unknown ID and a malformed one are the same 404.
 func TestGetCall(t *testing.T) {
+	t.Parallel()
 	c := newCallsFixture(t)
 	var one consoleapi.Call
 	rec := c.f.do(http.MethodGet, "/calls/"+c.mid.ID.String(), "", as(c.s))

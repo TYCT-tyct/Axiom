@@ -59,6 +59,7 @@ const (
 // compare a sale price with an endpoint's cost, and an endpoint has one from routing in M2 (m1-plan.md §4.2). No test
 // can show a row of either.
 func TestPreviewPricing(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	rows := f.preview(`{"model_ids":["` + f.model + `"]}`)
@@ -76,6 +77,7 @@ func TestPreviewPricing(t *testing.T) {
 // TestPreviewPricingTriesARule: a rule the request carries prices a model nothing stored prices, and leaves the stored
 // rule to the model it names.
 func TestPreviewPricingTriesARule(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	other := f.listed("acme/beta")
@@ -92,6 +94,7 @@ func TestPreviewPricingTriesARule(t *testing.T) {
 
 // TestPreviewPricingLeavesAModelUnpriced: a model no rule prices has no price at all, never its reference price.
 func TestPreviewPricingLeavesAModelUnpriced(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	other := f.listed("acme/beta")
@@ -104,6 +107,7 @@ func TestPreviewPricingLeavesAModelUnpriced(t *testing.T) {
 // TestPreviewPricingSubstitutesARule: the rule in the request takes the place of replaces_rule_id, so what a change
 // would do is shown before it is made.
 func TestPreviewPricingSubstitutesARule(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	made := f.create(ruleJSON(everything, everything, timesTwo))
 	body := `{"model_ids":["` + f.model + `"],"replaces_rule_id":"` + made.Id + `","rule":` +
@@ -120,6 +124,7 @@ func TestPreviewPricingSubstitutesARule(t *testing.T) {
 // TestPreviewPricingRefusals: a request that names a model the catalog does not hold, a tier or an account the site
 // lacks, or a rule that breaks a rule of rules, is refused and previews nothing.
 func TestPreviewPricingRefusals(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(everything, everything, timesTwo))
 	for _, c := range []struct {
@@ -144,6 +149,7 @@ func TestPreviewPricingRefusals(t *testing.T) {
 // TestPreviewPricingAudience: a rule for a tier or an account is shown only to those it prices, so the preview of one
 // tier does not show another tier's price, and a preview that names no audience shows the site's default tier's.
 func TestPreviewPricingAudience(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.run(`INSERT INTO accounts.tiers (id, site_id, name) SELECT uuidv7(), id, 'Beta' FROM accounts.sites WHERE is_main`)
 	rec := f.do(http.MethodGet, "/tiers", "", as(f.s))
@@ -187,6 +193,7 @@ func TestPreviewPricingAudience(t *testing.T) {
 // is, where its own target and audience put it, not where the rule it replaces stood: a rule for a model decides for
 // that model, and the rule for its author, which stood before the replaced rule, does not.
 func TestPreviewPricingPlacesAReplacementByItsTarget(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	other := f.listed("acme/beta")
 	f.create(ruleJSON(`{"kind":"author","id":"acme"}`, everything, timesTwo))
@@ -206,6 +213,7 @@ func TestPreviewPricingPlacesAReplacementByItsTarget(t *testing.T) {
 // as creating it would be, and a replacement that would tie another rule names replaces_rule_id, the member that
 // changes that rule instead.
 func TestPreviewPricingRefusesARuleThatCannotDecide(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(everything, everything, timesTwo))
 	mine := f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesThree))
@@ -237,6 +245,7 @@ func saleOf(row adminapi.PricingPreviewRow) string {
 // nothing is stored. Rules there already (a later release's, written straight into the table) still list and still price
 // a preview's audience.
 func TestPricingRulesForOneAudienceWait(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	made := f.create(ruleJSON(everything, everything, timesTwo))
 	for name, audience := range map[string]string{
