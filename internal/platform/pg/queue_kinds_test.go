@@ -68,8 +68,23 @@ func repoRoot(t *testing.T) string {
 // its own or the one it gets from an embedded type.
 func jobKinds(t *testing.T, root string) map[string]string {
 	t.Helper()
-	files := map[string][]string{} // directory -> its files without tests
-	consts := map[string]string{}  // the source's string constants, such as QueueMoney -> "money"
+	files := sourceFiles(t, root)
+	consts := map[string]string{} // the source's string constants, such as QueueMoney -> "money"
+	// Every constant first: a queue field in one package names a constant of platform/pg, which may be walked after it.
+	for _, dir := range slices.Sorted(maps.Keys(files)) {
+		readConstants(t, files[dir], consts)
+	}
+	found := map[string]string{}
+	for _, dir := range slices.Sorted(maps.Keys(files)) {
+		maps.Copy(found, packageJobKinds(t, files[dir], consts))
+	}
+	return found
+}
+
+// sourceFiles is every non-test .go file under internal/ and cmd/, by directory.
+func sourceFiles(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	files := map[string][]string{}
 	for _, tree := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, tree), func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
@@ -85,39 +100,44 @@ func jobKinds(t *testing.T, root string) map[string]string {
 			t.Fatal(err)
 		}
 	}
-	// Every constant first: a queue field in one package names a constant of platform/pg, which may be walked after it.
-	for _, dir := range slices.Sorted(maps.Keys(files)) {
-		readConstants(t, files[dir], consts)
+	return files
+}
+
+// parse is one file of the source, for its declarations.
+func parse(t *testing.T, path string) *ast.File {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
 	}
-	found := map[string]string{}
-	for _, dir := range slices.Sorted(maps.Keys(files)) {
-		for kind, queue := range packageJobKinds(t, files[dir], consts) {
-			found[kind] = queue
-		}
-	}
-	return found
+	return file
 }
 
 // readConstants records the string constants of one package's files, such as QueueMoney = "money".
 func readConstants(t *testing.T, files []string, consts map[string]string) {
 	t.Helper()
 	for _, path := range files {
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+		for _, spec := range constSpecs(parse(t, path)) {
+			constant(spec, consts)
 		}
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				if spec, ok := spec.(*ast.ValueSpec); ok {
-					constant(spec, consts)
-				}
+	}
+}
+
+// constSpecs is one file's constant declarations.
+func constSpecs(file *ast.File) []*ast.ValueSpec {
+	var specs []*ast.ValueSpec
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			if spec, ok := spec.(*ast.ValueSpec); ok {
+				specs = append(specs, spec)
 			}
 		}
 	}
+	return specs
 }
 
 // packageJobs is what one package's source says about its jobs.
@@ -132,33 +152,12 @@ func packageJobKinds(t *testing.T, files []string, consts map[string]string) map
 	t.Helper()
 	p := packageJobs{kinds: map[string]string{}, queues: map[string]string{}, embedded: map[string][]string{}}
 	for _, path := range files {
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
-		for _, decl := range file.Decls {
+		for _, decl := range parse(t, path).Decls {
 			switch decl := decl.(type) {
 			case *ast.FuncDecl:
-				if decl.Recv == nil || len(decl.Recv.List) != 1 || decl.Body == nil {
-					continue
-				}
-				typ := receiverName(decl.Recv.List[0].Type)
-				switch decl.Name.Name {
-				case "Kind":
-					if kind, ok := kindLiteral(decl); ok {
-						p.kinds[typ] = kind
-					}
-				case "InsertOpts":
-					if queue, ok := queueField(decl); ok {
-						p.queues[typ] = queue
-					}
-				}
+				p.readMethod(decl)
 			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					if spec, ok := spec.(*ast.TypeSpec); ok {
-						p.embed(spec)
-					}
-				}
+				p.readTypes(decl)
 			}
 		}
 	}
@@ -169,15 +168,36 @@ func packageJobKinds(t *testing.T, files []string, consts map[string]string) map
 	return found
 }
 
+// readMethod records a job args type's kind, or the queue its InsertOpts names.
+func (p packageJobs) readMethod(decl *ast.FuncDecl) {
+	if decl.Recv == nil || len(decl.Recv.List) != 1 || decl.Body == nil {
+		return
+	}
+	typ := receiverName(decl.Recv.List[0].Type)
+	switch decl.Name.Name {
+	case "Kind":
+		if kind, ok := kindLiteral(decl); ok {
+			p.kinds[typ] = kind
+		}
+	case "InsertOpts":
+		if queue, ok := queueField(decl); ok {
+			p.queues[typ] = queue
+		}
+	}
+}
+
+// readTypes records the types a struct type embeds.
+func (p packageJobs) readTypes(decl *ast.GenDecl) {
+	for _, spec := range decl.Specs {
+		if spec, ok := spec.(*ast.TypeSpec); ok {
+			p.embed(spec)
+		}
+	}
+}
+
 // kindLiteral is the string a Kind() method returns, if it has the river.JobArgs shape: no parameters, one string.
 func kindLiteral(fn *ast.FuncDecl) (string, bool) {
-	if fn.Type.Params != nil && len(fn.Type.Params.List) != 0 {
-		return "", false
-	}
-	if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
-		return "", false
-	}
-	if result, ok := fn.Type.Results.List[0].Type.(*ast.Ident); !ok || result.Name != "string" {
+	if !isKindSignature(fn.Type) {
 		return "", false
 	}
 	for _, stmt := range fn.Body.List {
@@ -185,17 +205,33 @@ func kindLiteral(fn *ast.FuncDecl) (string, bool) {
 		if !ok || len(ret.Results) != 1 {
 			continue
 		}
-		lit, ok := ret.Results[0].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			continue
+		if kind, ok := stringLiteral(ret.Results[0]); ok {
+			return kind, true
 		}
-		kind, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			return "", false
-		}
-		return kind, true
 	}
 	return "", false
+}
+
+// isKindSignature is whether a method takes nothing and returns one string, the shape of Kind().
+func isKindSignature(signature *ast.FuncType) bool {
+	if signature.Params != nil && len(signature.Params.List) != 0 {
+		return false
+	}
+	if signature.Results == nil || len(signature.Results.List) != 1 {
+		return false
+	}
+	result, ok := signature.Results.List[0].Type.(*ast.Ident)
+	return ok && result.Name == "string"
+}
+
+// stringLiteral is the text of a string literal, such as "money".
+func stringLiteral(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	text, err := strconv.Unquote(lit.Value)
+	return text, err == nil
 }
 
 // queueField is the queue an InsertOpts method names in its river.InsertOpts literal.
