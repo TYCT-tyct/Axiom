@@ -116,19 +116,19 @@ func TestDialect(t *testing.T) {
 		{
 			name: "every key, yes",
 			spec: `{"thinking":"adaptive","encrypted_reasoning":true,"mid_system":true,"untrusted_system_after_tools":true,
-				"default_sampling_only":true,"cache_breakpoints":true}`,
+				"default_sampling_only":true,"forced_tool_choice":true,"cache_breakpoints":true}`,
 			want: Dialect{
 				Thinking: ThinkingAdaptive, EncryptedReasoning: ClaimYes, MidSystem: ClaimYes, UntrustedSystemAfterTools: ClaimYes,
-				DefaultSamplingOnly: ClaimYes, CacheBreakpoints: ClaimYes,
+				DefaultSamplingOnly: ClaimYes, ForcedToolChoice: ClaimYes, CacheBreakpoints: ClaimYes,
 			},
 		},
 		{
 			name: "every key, no",
 			spec: `{"thinking":"none","encrypted_reasoning":false,"mid_system":false,"untrusted_system_after_tools":false,
-				"default_sampling_only":false,"cache_breakpoints":false}`,
+				"default_sampling_only":false,"forced_tool_choice":false,"cache_breakpoints":false}`,
 			want: Dialect{
 				Thinking: ThinkingNone, EncryptedReasoning: ClaimNo, MidSystem: ClaimNo, UntrustedSystemAfterTools: ClaimNo,
-				DefaultSamplingOnly: ClaimNo, CacheBreakpoints: ClaimNo,
+				DefaultSamplingOnly: ClaimNo, ForcedToolChoice: ClaimNo, CacheBreakpoints: ClaimNo,
 			},
 		},
 		{name: "manual thinking alone", spec: `{"thinking":"manual"}`, want: Dialect{Thinking: ThinkingManual}},

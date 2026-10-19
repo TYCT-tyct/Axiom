@@ -1,0 +1,119 @@
+{
+  "models": {
+    "anthropic/claude-fable-5.1": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": false
+    },
+    "anthropic/claude-fable-5": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-opus-5.5": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": false
+    },
+    "anthropic/claude-opus-5": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-opus-4.8": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-opus-4.7": {
+      "thinking": "adaptive",
+      "mid_system": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-opus-4.6": {
+      "thinking": "adaptive",
+      "mid_system": false,
+      "default_sampling_only": false,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-opus-4.5@20251101": {
+      "thinking": "manual",
+      "mid_system": false,
+      "default_sampling_only": false,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-sonnet-5.5": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": true,
+      "default_sampling_only": true,
+      "forced_tool_choice": false
+    },
+    "anthropic/claude-sonnet-5": {
+      "thinking": "adaptive",
+      "mid_system": false,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-sonnet-4.6": {
+      "thinking": "adaptive",
+      "mid_system": false,
+      "default_sampling_only": false,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-sonnet-4.5@20250929": {
+      "thinking": "manual",
+      "mid_system": false,
+      "default_sampling_only": false,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-haiku-5.5": {
+      "thinking": "adaptive",
+      "mid_system": true,
+      "untrusted_system_after_tools": true,
+      "default_sampling_only": true,
+      "forced_tool_choice": true
+    },
+    "anthropic/claude-haiku-4.5@20251001": {
+      "thinking": "manual",
+      "mid_system": false,
+      "default_sampling_only": false,
+      "forced_tool_choice": true
+    },
+    "openai/gpt-6-astra": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    },
+    "openai/gpt-6.1-sol": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    },
+    "openai/gpt-6-luna": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    },
+    "openai/gpt-5.6-sol": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    },
+    "openai/gpt-5.6-terra": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    },
+    "openai/gpt-5.6-luna": {
+      "encrypted_reasoning": true,
+      "cache_breakpoints": true
+    }
+  }
+}

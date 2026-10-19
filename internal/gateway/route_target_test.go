@@ -58,7 +58,6 @@ func TestAModelIsAskedToThinkAsItsSpecSays(t *testing.T) {
 	}{
 		{"manual", dialect(`"thinking":"manual",` + system), []string{`+"budget_tokens":8000`, "-adaptive"}},
 		{"adaptive", dialect(`"thinking":"adaptive",` + system), []string{`+"type":"adaptive"`, "-budget_tokens"}},
-		{"no thinking", dialect(`"thinking":"none",` + system), []string{"unsupported"}},
 		{"not said", dialect(system), []string{"unsupported"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -122,6 +122,10 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
+		if unsupported.Detail != "" {
+			s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
+				"supplier", entry.Supplier, "endpoint", entry.Endpoint)
+		}
 		if s.skips.unsupported == "" {
 			s.skips.unsupported = unsupported.Reason
 		}

@@ -128,7 +128,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | `send` | `Send`（带白名单头），`HeaderWait` 的计时器到点取消尝试 | 失败：`Executed` 定 `NotExecuted` 或 `Unknown`；`RateLimited` 通知 `Router.Throttled`；`routing.Decide`：换条目 / 同条目再来（再 `Acquire`，也算一次尝试）/ 400 `invalid_request` |
 | `stream` | `NewRelay`、读到结束 | 见下 |
 
-没有任何条目可试时（`exhausted`）：有过尝试是 502 `upstream_error`；否则有凭证名额被占的是 429（`Retry-After: 1`），有条目不在 suppliers 里的是 503，其余是 400 附 `NotSupported` 的原因。
+没有任何条目可试时（`exhausted`）：有过尝试是 502 `upstream_error`；否则有凭证名额被占的是 429（`Retry-After: 1`），有条目不在 suppliers 里的是 503，其余是 400 附 `NotSupported` 的原因。原因里「规格没说」的情形（`NotSupported.Detail` 非空）对客户端只说「模型暂不支持 X」，缺哪个键写进日志（warn，带供应商和端点），不出节点。
 
 **转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。
 

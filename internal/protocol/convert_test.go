@@ -88,7 +88,7 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 func claudeLike(to protocol.Format) protocol.Target {
 	return protocol.Target{
 		Format: to, Model: "up", Thinking: catalog.ThinkingAdaptive, MidSystem: catalog.ClaimYes,
-		UntrustedSystemAfterTools: catalog.ClaimNo, DefaultSamplingOnly: catalog.ClaimNo,
+		UntrustedSystemAfterTools: catalog.ClaimNo, DefaultSamplingOnly: catalog.ClaimNo, ForcedToolChoice: catalog.ClaimYes,
 		CacheBreakpoints: catalog.ClaimNo, EncryptedReasoning: catalog.ClaimNo,
 	}
 }
@@ -96,6 +96,7 @@ func claudeLike(to protocol.Format) protocol.Target {
 func manual(t *protocol.Target)         { t.Thinking = catalog.ThinkingManual }
 func breakpoints(t *protocol.Target)    { t.CacheBreakpoints = catalog.ClaimYes }
 func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = catalog.ClaimYes }
+func noForcedTool(t *protocol.Target)   { t.ForcedToolChoice = catalog.ClaimNo }
 func noMidSystem(t *protocol.Target)    { t.MidSystem = catalog.ClaimNo }
 func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = catalog.ClaimYes }
 func encrypting(t *protocol.Target)     { t.EncryptedReasoning = catalog.ClaimYes }
@@ -176,7 +177,7 @@ func TestConvertToMessages(t *testing.T) {
 		},
 		{"a strict schema outside the subset", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"integer","minimum":1}},"additionalProperties":false},"strict":true}}]`), nil, "unsupported"},
 		{"a forced tool while thinking", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required","reasoning_effort":"high"`), nil, "unsupported"},
-		{"a forced tool the model refuses", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), defaultsOnly, "unsupported"},
+		{"a forced tool the model refuses", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), noForcedTool, "unsupported"},
 		{
 			"adaptive effort", chatBody(`"messages":[` + userHi + `],"reasoning":{"effort":"high"}`), nil,
 			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`,

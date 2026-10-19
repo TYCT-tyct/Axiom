@@ -243,7 +243,7 @@ func targetOf(upstream string, streams bool, d catalog.Dialect) protocol.Target 
 	return protocol.Target{
 		Model: upstream, Streams: streams, Thinking: d.Thinking, EncryptedReasoning: d.EncryptedReasoning, MidSystem: d.MidSystem,
 		UntrustedSystemAfterTools: d.UntrustedSystemAfterTools, DefaultSamplingOnly: d.DefaultSamplingOnly,
-		CacheBreakpoints: d.CacheBreakpoints,
+		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints,
 	}
 }
 

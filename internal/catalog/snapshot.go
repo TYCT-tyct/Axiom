@@ -185,9 +185,11 @@ type Dialect struct {
 	// UntrustedSystemAfterTools is "untrusted_system_after_tools": the model reads a system message right after tool
 	// results as text it may not trust.
 	UntrustedSystemAfterTools Claim
-	// DefaultSamplingOnly is "default_sampling_only": the model refuses a temperature or top_p other than the default
-	// and a forced tool choice.
+	// DefaultSamplingOnly is "default_sampling_only": the model refuses a temperature or top_p other than the default.
 	DefaultSamplingOnly Claim
+	// ForcedToolChoice is "forced_tool_choice": the model takes a tool choice that forces a call, when it is not
+	// thinking. The vendor decides this apart from sampling (Claude Haiku 5.5 refuses the one and takes the other).
+	ForcedToolChoice Claim
 	// CacheBreakpoints is "cache_breakpoints": the model takes explicit cache breakpoints.
 	CacheBreakpoints Claim
 }

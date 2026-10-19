@@ -96,7 +96,7 @@ func (m *messagesWriter) checkThinking() error {
 	}
 	// Not one of the two ways to ask is the model's: guessing one is a request the upstream refuses, or a budget it
 	// was never asked to spend.
-	return &NotSupported{Reason: "the spec does not say how the model is asked to think"}
+	return unspecified("reasoning", "how the model is asked to think (thinking)")
 }
 
 func isSystem(role string) bool { return role == "system" || role == "developer" }
@@ -241,13 +241,13 @@ func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]by
 	case m.t.MidSystem == catalog.ClaimNo:
 		return nil, &NotSupported{Reason: "the model takes no system message after the conversation started"}
 	case m.t.MidSystem == catalog.ClaimUnset:
-		return nil, &NotSupported{Reason: "the spec does not say whether the model takes a system message after the conversation started"}
+		return nil, unspecified("a system message after the conversation started", "whether the model takes one (mid_system)")
 	case prev != "user" && prev != "tool", next != "" && next != "assistant":
 		return nil, &NotSupported{Reason: "a system message where Anthropic does not allow one"}
 	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimYes:
 		return nil, &NotSupported{Reason: "the model does not trust a system message right after tool results"}
 	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimUnset:
-		return nil, &NotSupported{Reason: "the spec does not say whether the model trusts a system message right after tool results"}
+		return nil, unspecified("a system message right after tool results", "whether the model trusts one (untrusted_system_after_tools)")
 	}
 	return turn(out, "system", msgs[i])
 }
@@ -433,15 +433,15 @@ func messagesTool(out []byte, tool canonTool) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// toolChoice maps tool_choice and parallel_tool_calls. Anthropic refuses a forced choice while thinking, and Claude
-// 5.5 models refuse one at all.
+// toolChoice maps tool_choice and parallel_tool_calls. Anthropic refuses a forced choice while thinking, and some
+// models (Claude Opus 5.5, Sonnet 5.5 and Fable 5.1) refuse one at all.
 func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
 	choice, forced, err := messagesChoice(m.c.ToolChoice)
 	if err != nil {
 		return nil, err
 	}
 	if forced {
-		if err := m.samplingRefusal("a forced tool choice"); err != nil {
+		if err := m.forcedRefusal(); err != nil {
 			return nil, err
 		}
 	}
@@ -518,15 +518,28 @@ func (m *messagesWriter) replyFormat() (string, error) {
 	return `"format":{"type":"json_schema","schema":` + string(f.JSONSchema.Schema) + `}`, nil
 }
 
-// samplingRefusal is why the model cannot take what, a sampling other than the default or a forced tool choice, nil when
-// it can: thinking refuses it, a model whose spec says it takes the default only refuses it, and a spec that says
-// nothing leaves a request the upstream may refuse.
+// samplingRefusal is why the model cannot take what, a sampling other than the default, nil when it can: thinking
+// refuses it, a model whose spec says it takes the default only refuses it, and a spec that says nothing leaves a
+// request the upstream may refuse.
 func (m *messagesWriter) samplingRefusal(what string) error {
 	switch {
 	case m.thinkingOn || m.t.DefaultSamplingOnly == catalog.ClaimYes:
 		return &NotSupported{Reason: what + ", which the model refuses"}
 	case m.t.DefaultSamplingOnly == catalog.ClaimUnset:
-		return &NotSupported{Reason: what + ", and the spec does not say whether the model takes it"}
+		return unspecified(what, "whether the model takes it (default_sampling_only)")
+	}
+	return nil
+}
+
+// forcedRefusal is why the model cannot take a tool choice that forces a call, nil when it can: thinking refuses it,
+// and so does a model whose spec says it takes none.
+func (m *messagesWriter) forcedRefusal() error {
+	const what = "a forced tool choice"
+	switch {
+	case m.thinkingOn || m.t.ForcedToolChoice == catalog.ClaimNo:
+		return &NotSupported{Reason: what + ", which the model refuses"}
+	case m.t.ForcedToolChoice == catalog.ClaimUnset:
+		return unspecified(what, "whether the model takes it (forced_tool_choice)")
 	}
 	return nil
 }

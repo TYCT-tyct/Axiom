@@ -43,9 +43,10 @@ type Target struct {
 	// UntrustedSystemAfterTools when it reads one right after tool results as text it may not trust (Anthropic
 	// 《Mid-conversation system messages》, read 2026-10-13).
 	MidSystem, UntrustedSystemAfterTools catalog.Claim
-	// DefaultSamplingOnly is yes when the model refuses a temperature or top_p other than the default and a forced
-	// tool choice, as Claude 5.5 models do.
-	DefaultSamplingOnly catalog.Claim
+	// DefaultSamplingOnly is yes when the model refuses a temperature or top_p other than the default, as Claude Opus
+	// 4.7 and later do. ForcedToolChoice is yes when it takes a tool choice that forces a call, which Claude Opus 5.5,
+	// Sonnet 5.5 and Fable 5.1 refuse; the vendor decides the two apart.
+	DefaultSamplingOnly, ForcedToolChoice catalog.Claim
 	// CacheBreakpoints is yes for a Responses model that takes explicit cache breakpoints, as OpenAI's from GPT-5.6
 	// on do (OpenAI《Prompt caching》, read 2026-10-16).
 	CacheBreakpoints catalog.Claim
@@ -89,8 +90,15 @@ type Upstream struct {
 
 // NotSupported reports an endpoint that cannot express the request, such as one of another format for a request
 // the conversion would change. The gateway skips the endpoint without counting an attempt; it is not the client's
-// error, which ErrInvalid is.
-type NotSupported struct{ Reason string }
+// error, which ErrInvalid is. Reason may reach the client, when no endpoint is left; Detail, if there is one, is why for
+// the operator only (the log), such as which spec key is missing, and never leaves the node.
+type NotSupported struct{ Reason, Detail string }
+
+// unspecified is an endpoint whose spec does not say whether the model takes what: the client is told only that the
+// model does not support it yet, and the key to fill in goes to the operator.
+func unspecified(what, detail string) *NotSupported {
+	return &NotSupported{Reason: "the model does not support " + what + " yet", Detail: "the spec does not say " + detail}
+}
 
 func (e *NotSupported) Error() string {
 	return "protocol: the endpoint cannot express the request: " + e.Reason

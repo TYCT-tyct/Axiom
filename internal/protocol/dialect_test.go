@@ -88,8 +88,8 @@ func TestAnUnsetClaimIsNeverAnAnswer(t *testing.T) {
 		},
 		{
 			"a forced tool", protocol.Chat, protocol.Messages, chatBody(`"messages":[` + userHi + `]` + forcedTool),
-			func(t *protocol.Target) *catalog.Claim { return &t.DefaultSamplingOnly },
-			"unsupported", "+" + `"type":"any"`, "unsupported",
+			func(t *protocol.Target) *catalog.Claim { return &t.ForcedToolChoice },
+			"+" + `"type":"any"`, "unsupported", "unsupported",
 		},
 		{
 			"no sampling at all", protocol.Chat, protocol.Messages, chatBody(`"messages":[` + userHi + `]`),
@@ -157,6 +157,53 @@ func TestAZeroTargetAnswersNothing(t *testing.T) {
 			checkOutcome(t, "unsupported", protocol.Chat, protocol.Messages, body, func(tg *protocol.Target) {
 				*tg = protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
 			})
+		})
+	}
+}
+
+// TestSamplingAndForcedToolAreDecidedApart: a model that refuses a temperature other than the default (Claude Haiku
+// 5.5) can still take a forced tool, and one that refuses a forced tool (Claude Opus 5.5) is no judge of the sampling.
+func TestSamplingAndForcedToolAreDecidedApart(t *testing.T) {
+	forced := chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`)
+	warm := chatBody(`"messages":[` + userHi + `],"temperature":0.5`)
+	checkOutcome(t, "+"+`"type":"any"`, protocol.Chat, protocol.Messages, forced, func(tg *protocol.Target) {
+		tg.DefaultSamplingOnly = catalog.ClaimYes
+	})
+	checkOutcome(t, "+"+`"temperature":0.5`, protocol.Chat, protocol.Messages, warm, func(tg *protocol.Target) {
+		tg.ForcedToolChoice = catalog.ClaimNo
+	})
+}
+
+// TestAnUnsetClaimIsTheOperatorsToKnow: the reason a refusal gives is what the client may be told, and says nothing of
+// the spec; which key is missing is in Detail, which only the log gets.
+func TestAnUnsetClaimIsTheOperatorsToKnow(t *testing.T) {
+	for name, body := range map[string]string{
+		"reasoning":  chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning":{"effort":"high"}`),
+		"mid-system": chatBody(`"messages":[` + userHi + `,{"role":"system","content":"x"}]`),
+		"after tool": chatBody(`"messages":[` + userHi + `,` + callTurn + `,{"role":"system","content":"x"}]`),
+		"sampling":   chatBody(`"messages":[` + userHi + `],"top_p":0.5`),
+		"forced":     chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, err := protocol.Inspect(protocol.Chat, []byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
+			if name == "after tool" {
+				target.MidSystem = catalog.ClaimYes
+			}
+			_, err = protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+			ns, _ := errors.AsType[*protocol.NotSupported](err)
+			if ns == nil {
+				t.Fatalf("got %v, want a refusal", err)
+			}
+			if !strings.HasSuffix(ns.Reason, " yet") || strings.Contains(ns.Reason, "spec") {
+				t.Errorf("Reason %q is not for the client", ns.Reason)
+			}
+			if !strings.Contains(ns.Detail, "the spec does not say") {
+				t.Errorf("Detail %q does not name the missing key", ns.Detail)
+			}
 		})
 	}
 }

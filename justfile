@@ -135,6 +135,20 @@ bench-compare base:
 diff: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
 
+# Show what writing deploy/catalog/dialects.json into the models of the database AXIOM_DATABASE_URL names would change, and
+# change nothing (docs/ops/release.md). Run it before catalog-dialect-apply.
+catalog-dialect-plan:
+    go run ./cmd/axiom catalog apply-dialect deploy/catalog/dialects.json
+
+# Write deploy/catalog/dialects.json into those models through the catalog's audited spec update; a second run changes nothing
+catalog-dialect-apply:
+    go run ./cmd/axiom catalog apply-dialect --apply deploy/catalog/dialects.json
+
+# The catalog's acceptance check against AXIOM_DATABASE_URL, read-only: every model has what a release needs of it
+# (internal/catalog/README.md「第一版验收的检查」); fails when it finds any problem
+catalog-check:
+    go run ./cmd/axiom catalog check
+
 compose := "docker compose -f deploy/compose.yaml"
 
 # Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to
