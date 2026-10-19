@@ -110,7 +110,7 @@ type quote struct {
 	output    platform.UnitPrice // the dearest price an output or reasoning token can have
 	search    platform.UnitPrice // a web search's dearest price, when the request enables web search
 	searches  int64              // the web searches fixed covers
-	resample  platform.UnitPrice // the input price of the samplings a search beyond them adds
+	resample  inputPrice         // the input price of the samplings a search beyond them adds
 	rereads   int64              // the input tokens those samplings may read: the context, twice with compaction
 	outputCap int64              // the most output tokens the upstream may produce
 	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
@@ -209,11 +209,13 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
-	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
+	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead|1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn|1<<catalog.ItemImageIn)
 	in.Add(catalog.ItemInput)
-	firstPrice, ok1 := e.Price.Ceiling(in, tiers, first)
-	restPrice, ok2 := e.Price.Ceiling(in, tiers, window)
-	outPrice, ok3 := e.Price.Ceiling(1<<catalog.ItemOutput|1<<catalog.ItemReasoning, tiers, longest)
+	firstPrice, ok1 := inputCeiling(e.Price, in, tiers, first)
+	restPrice, ok2 := inputCeiling(e.Price, in, tiers, window)
+	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
+		e.Model.Reports&(1<<catalog.ItemAudioOut)
+	outPrice, ok3 := e.Price.Ceiling(outItems, tiers, longest)
 	if !ok1 || !ok2 || !ok3 {
 		return q, ErrUnpriced
 	}
@@ -243,7 +245,7 @@ func checkEntry(e Quotable, s Segments) error {
 // search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
 // context at the input price of the later samplings, twice with compaction.
 func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
-	searchable bool, resample platform.UnitPrice,
+	searchable bool, resample inputPrice,
 ) error {
 	window := e.Model.ContextLength
 	for it, n := range uses {
@@ -268,6 +270,30 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		q.rereads = mul(window, 2)
 	}
 	return nil
+}
+
+// inputPrice bounds either disjoint input quantities or overlapping cache reads and writes. Keeping two unit
+// prices avoids overflowing the unit-price limit when their sum exceeds 1000; their products fit Exact.
+type inputPrice struct{ ordinary, read, write platform.UnitPrice }
+
+func (p inputPrice) Mul(n int64) platform.Exact {
+	ordinary, cached := p.ordinary.Mul(n), sum(p.read.Mul(n), p.write.Mul(n))
+	if cached.Cmp(ordinary) > 0 {
+		return cached
+	}
+	return ordinary
+}
+
+// The quote has reportable items, not the selected wire format. Covering overlap whenever both items are possible
+// also safely covers Chat converted to Messages, without guessing an endpoint's format from its model name.
+func inputCeiling(s catalog.Schedule, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64) (p inputPrice, ok bool) {
+	p.ordinary, ok = s.Ceiling(items, tiers, length)
+	if !ok || !items.Has(catalog.ItemCacheRead) || !items.Has(catalog.ItemCacheWrite) {
+		return p, ok
+	}
+	p.read, _ = s.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
+	p.write, _ = s.Ceiling(1<<catalog.ItemCacheWrite, tiers, length)
+	return p, true
 }
 
 // InputBound returns the most input tokens the first sampling of the request can have, and the most any sampling can

@@ -220,8 +220,13 @@ func (c costCase) cost() (*big.Rat, []catalog.Item) {
 	for _, it := range items {
 		n := c.usage[it]
 		p := price(it)
-		if p == nil && it == reasoning {
-			p = price(out)
+		if p == nil {
+			switch it {
+			case reasoning, imageOut:
+				p = price(out)
+			case imageIn:
+				p = price(in)
+			}
 		}
 		switch {
 		case p != nil:

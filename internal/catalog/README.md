@@ -60,35 +60,36 @@
 
 ### 计费项与用量
 
-`catalog.Item` 是封闭枚举，`ItemSet` 是它的位集合。各项互不重叠，同一个 token 只计一次；`protocol` 按下表把上游报告的用量折成 `Usage`：
+`catalog.Item` 是封闭枚举，`ItemSet` 是它的位集合。各项是计费数量；除 OpenAI 兼容上游的缓存读写可重叠外，模态项从总量中拆出，不重复收费；`protocol` 按下表把上游报告的用量折成 `Usage`：
 
 | Item | 单位 | OpenAI（Chat / Responses） | Anthropic Messages | Gemini |
 |---|---|---|---|---|
-| `input` | token | `prompt_tokens − cached_tokens − cache_write_tokens − audio_tokens`（缺的字段按 0） | `input_tokens`（含图片） | `promptTokenCount − cachedContentTokenCount` − 单独定价的模态 |
+| `input` | token | `max(总输入 − 缓存读 − 缓存写 − 正规化音频 − 正规化图片, 0)`（缺字段按 0） | `input_tokens`（含图片） | `promptTokenCount − cachedContentTokenCount` − 单独定价的模态 |
 | `cache_read` | token | `cached_tokens` | `cache_read_input_tokens` | `cachedContentTokenCount` |
 | `cache_write` | token | `cache_write_tokens` | `cache_creation.ephemeral_5m_input_tokens` | — |
 | `cache_write_1h` | token | — | `cache_creation.ephemeral_1h_input_tokens` | — |
-| `output` | token | `completion_tokens − reasoning_tokens − audio_tokens` | `output_tokens`（含思考，不单列） | `candidatesTokenCount` |
+| `output` | token | `completion_tokens − reasoning_tokens − audio_tokens − image_tokens` | `output_tokens`（含思考，不单列） | `candidatesTokenCount` |
 | `reasoning` | token | `reasoning_tokens` | 0 | `thoughtsTokenCount` |
 | `audio_in` / `audio_out` | token | 输入、输出详情里的 `audio_tokens` | — | `promptTokensDetails` 里模态为 `AUDIO` 的数量 / — |
-| `image_in` / `image_out` | token | — / 图片生成的输出 token | — | 单独定价时，`promptTokensDetails` 里模态为 `IMAGE`、`VIDEO` 的数量 / — |
+| `image_in` / `image_out` | token | 两侧 details 的 `image_tokens`；输入先扣缓存交集 | — | 单独定价时，`promptTokensDetails` 里模态为 `IMAGE`、`VIDEO` 的数量 / — |
 | `web_search` | 次 | 待核对 | `server_tool_use.web_search_requests` | 待核对 |
 | `code_execution` | 次 | 待核对 | `server_tool_use.code_execution_requests` | 待核对 |
 
-- 只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。视频没有自己的计费项，计入 `image_in`。例如 Gemini 2.5 Flash 的音频输入每百万 $1.00、文本 $0.30，Gemini 3.6 Flash 的图片和视频每百万 $1.00、文本 $0.75（Gemini 定价页，2026-10-14）。
-- 守恒：输入侧各项之和等于上游报告的提示词总量；输出侧各项之和等于上游报告的输出总量。测试断言这两条。Anthropic 没有单独的提示词总量字段，按 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 算（Anthropic《Prompt caching》）。
-- OpenAI 的总输入同时包含缓存读和缓存写，写入价替代普通输入价而不是叠加（OpenAI《Prompt caching》）。例：`input_tokens=12000, cached_tokens=0, cache_write_tokens=12000` → `input` 0、`cache_write` 12,000，分档门槛求和 12,000，费用只含写入价。没有写入计费的模型不报这个字段，按 0。
+- OpenAI 上游单独报告的图片直接折成图片项，不依赖价目表；缺图片价时按同侧普通价回落。其他格式只有上游单独报告、厂商单独定价的模态才折成自己的项；Anthropic 的图片按 token 计入 `input_tokens`、价格相同，就留在 `input`。视频没有自己的计费项，计入 `image_in`。例如 Gemini 2.5 Flash 的音频输入每百万 $1.00、文本 $0.30，Gemini 3.6 Flash 的图片和视频每百万 $1.00、文本 $0.75（Gemini 定价页，2026-10-14）。
+- **物理总数与计费数量分开**：OpenAI 的 `PhysicalInput()` 保留原始总数及存在性（显式 0 不等于缺失），客户端输入回显用 `InputTotal()`，不把重叠计费量重新相加。输入计费总和是 `max(物理总数, 缓存读 + 缓存写)`，输出各项之和仍等于上游输出总数。Messages 的输入、缓存读写继续互斥，物理提示词长度由它们相加得到。
+- **OpenAI 缓存重叠兼容口径**：每项都必须是 0 … 10¹⁰ 且不大于总数；缓存读、写各按报告量收费，普通输入取剩余量并夹到 0。`100/80/80` 的计费量是 `0/80/80`，物理输入和回显都是 100。这是经参考实现验证的兼容计费政策，不是对所有供应商交集语义的推断；供应商实际扣费仍须对账确认。没有写入计费的模型不报该字段，按 0。
+- **图片与缓存交叉统计**：输入的 `cached_tokens_details.image_tokens` 从图片量扣除；明细必须不超过图片和缓存读总量，缓存图片与文本明细之和不超过缓存读。再把模态限制到 `max(总数 − 缓存读 − 缓存写, 0)` 中，先音频、后图片；无交集明细时也只收这个余量内的图片，不能把全缓存图片再收一次图片价。`text_tokens` 是总量内的已知明细，只校验计数，不加入 `Unknown` 或额外收费。两种格式的 `input/prompt_tokens_details` 和 `output/completion_tokens_details` 别名均适用。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
-- 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（Chat 的缓存写入和两种格式的音频字段路径、图片输出和联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
+- 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
 - **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是按这些计法折算的近似值。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage` 的服务等级 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
-- 免单判断用 `Usage.OutputTotal()`（`output + reasoning`），只看 `output` 会把只有推理的回复误判为零输出。
+- **输出的三个口径**：`Usage.OutputTotal()` 是计量、预留的计费输出（普通、推理、音频、图片之和）；OpenAI 客户端总数也显式加这四项；billing 的免单判断单独检查普通、推理和图片，纯图片回复不免单，音频免单政策保持原状。不能由一个总数函数隐式决定所有政策。
 - Anthropic 联网搜索每千次 $10，搜索带回的内容按普通 token 计入输入（Anthropic Pricing 页，2026-10-14）。
 
 ### 条件
 
-价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`（概念名；代码里是价目表的字段 `basis`、`above` 和每档的价格），计法是整单按档：`TierBasis` 里各项用量之和严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
+价目表声明一个门槛口径 `TierBasis`（各档共用）和若干 `ContextTier{Above, Rates}`（概念名；代码里是价目表的字段 `basis`、`above` 和每档的价格），计法是整单按档：`TierBasis` 所选项的数量之和（有物理输入时不超过物理总数）严格大于 `Above` 时，`Rates` 列出的项换价，没列出的沿用基础价。门槛严格递增，取满足条件的最高一档；口径只有一个，所以用量越大，档位只会越高。完整输入口径用物理总数；部分口径仍只选它声明的项并以物理总数封顶，不能把只看缓存读的口径也改成整份提示词。`TierBasis` 按厂商原文的口径列出全部对应的计费项：从某个总量里拆出去单独计价的项（如 Gemini 从提示词里拆出的音频、图片和视频）仍属于那个总量。已知的两种：
 
 - Anthropic Haiku 5.5：超过 100,000 token，"prompt length counts all of its input tokens, including cache reads and cache writes"，`TierBasis` = {`input`, `cache_read`, `cache_write`, `cache_write_1h`}；Claude 4.6 及以后的其他模型 1M 内统一价（Anthropic Pricing 页，2026-10-14）。
 - Gemini：提示词超过 200k，`TierBasis` = {`input`, `cache_read`, `audio_in`, `image_in`}，输出和缓存价同时换档（Gemini 定价页，2026-10-14）。
@@ -96,7 +97,7 @@
 标准档以外的每个服务等级（如 flex、priority、快速模式）有自己的一整套单价，组合规则：
 
 - **先选服务等级，再选档位**：`Usage` 的服务等级 是标准档时用价目表顶层的基础价和 `ContextTier`，否则用该等级的 `Rates` 和 `ContextTiers`；档位按共用的 `TierBasis` 选，`Rates` 列出的项换价，没列出的沿用该等级的 `Rates`。
-- **不跨等级继承**：等级的 `Rates` 没列出的项就是这个等级没有价格，不沿用标准档。沿用会把 priority 下没录的缓存读按标准价悄悄少收；缺价能被报告，由计费按「价目表缺项」处理。`reasoning` 回退到同一等级、同一档的 `output`，这仍是唯一的回退。
+- **不跨等级继承**：等级的 `Rates` 没列出的项就是这个等级没有价格，不沿用标准档。沿用会把 priority 下没录的缓存读按标准价悄悄少收；缺价能被报告，由计费按「价目表缺项」处理。`reasoning` 回退到同一等级、同一档的 `output`，图片回退到同侧的普通价；细则见下文「图片有效价格」。
 - **门槛一致**：每个等级的 `ContextTiers` 的门槛必须与顶层的门槛逐个相同，不换价的档位写空的 `Rates`。否则 `ParseSchedule` 拒绝：等级漏写长上下文档时，长请求会按该等级的基础价算低。
 - 价目表没列出的等级就是没有它的价格。例：标准档输出 2、200k 以上 4，priority 输出 3、200k 以上 5，priority 的长请求输出按 5 计。
 
@@ -114,10 +115,13 @@
 - **`Ceiling` 给预留用的单价上界**：这些项在这些服务等级里、在基数合计不超过 `length` 的提示词可能落入的每一档中的最高单价，任一处缺价返回 false。档位只按基数里的项求和，提示词在基数内外怎么拆分都可能落到 `length` 以下的任一档，价格也不一定随档位上升，所以只看某一档或某一项都不是上界。
 - **能力不归这里**：模型根本不支持的功能（例如纯文本模型收到音频）由路由按端点能力过滤；本模块不在调用前按请求特征拒绝。本模块只把 `spec.abilities` 读成 `Serving.Abilities`（见「表」下 `spec` 一条），带不带能力位由 `protocol` 转，判断归路由。
 
+- **图片有效价格**：`Schedule.price` 是 `Cost`、`Missing`、`Ceiling` 共用的解析器；先查该服务等级、该上下文档的图片项（包括继承的基础图片价），仅缺项才回落到同档的 input/output。显式 0 是有效价格，不回落；不跨服务等级继承。路由门槛、预留、售价和供应商成本因而使用同一政策。同价回落是兼容默认值，不是保证保本，真实图片更贵时须录独立价。
+- **重叠的预留**：billing 在每次采样的物理输入上界 N 上，取 `N × max(输入侧最高价, 缓存读最高价 + 缓存写最高价)`，读写只有在都可能出现时合并；各最高价覆盖允许的服务等级和上下文档。后续采样及追加搜索的重读用同一上界。报价只有可能报告的计费项，没有端点格式，故对可能读写的 Messages 路线也保守预留；实际计费不变。两项分别相乘再比较精确金额，避免单价之和超出单价类型上限。
+
 ### 数值域
 
 - `platform.UnitPrice`：int64，单位 10⁻¹⁵ 个币种单位每计费单位，取值 0 … 10¹⁸（每单位最多 1000 个币种单位）。只有两种构造途径：录入的单价从十进制文本构造，超过 15 位小数或超出范围时拒绝保存；算出来的单价（`Schedule.Scaled`：成本计划里官方价乘分组倍率，售价里参考价乘站点倍率）从精确分数向上取整到 10⁻¹⁵，超出范围时拒绝（见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)）。
-- `Usage` 每项 0 … 10¹⁰，字段不导出，只能经 `NewUsage` 构造，负数或超限返回错误；零值是全零的合法用量。不变量由构造守住，`Cost` 不再校验。门槛求和最多 `NumItems` × 10¹⁰，int64 不会溢出。
+- `Usage` 每项 0 … 10¹⁰，字段不导出，只能经 `NewUsage` 构造，负数或超限返回错误；`WithPhysicalInput` 同样校验物理输入，`Recount` 替换计费数量时保留它；零值是全零的合法用量。不变量由构造守住，`Cost` 不再校验。门槛求和最多 `NumItems` × 10¹⁰，int64 不会溢出。
 - 单项乘积 ≤ 10²⁸，`NumItems`（少于 16）项之和 < 1.6 × 10²⁹，在 128 位有符号整数（约 1.7 × 10³⁸）之内。这个域里不可能溢出，仍逐步检查，溢出返回错误而不是截断。
 - `Cost` 返回 `platform.Exact`：128 位整数，单位 10⁻¹⁵，币种随价目表。汇率和加价倍率由 billing 转成 `math/big.Rat` 再乘，只在记账时取整一次；本模块不做币种换算。
 
@@ -221,7 +225,7 @@
 | 过期的取数者写不进数据 | 租约加代次，提交前校验；测试：A 取数期间租约被 B 接管，A 提交失败 |
 | 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序，经 `lock_models`）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
 | 单价精确、非负，计算不溢出 | 见「数值域」；性质测试对照 `math/big`，覆盖最小单价、最大乘积、负用量、门槛求和、转分数后取整 |
-| 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output` 是唯一的例外；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于参考计算的结果，参考计算用完整的用量选档、只对有价格的项求和（去掉缺价项的用量会改变档位）；用例：缺价的 `cache_read` 200,000 加有价的输入 1，输出按高档计 |
+| 用量不为零却没有价格的项一定被报告，不按零计 | `Cost` 返回缺价的项；`reasoning` 回退到 `output`，图片回退到同侧普通价；没有价格的服务等级让各项都缺价。表驱动测试：每个 Item 单独缺价时都被报告，包括 OpenAI 报了缓存写入而价目表没有写入价；性质测试：已定价部分的金额等于参考计算的结果，参考计算用完整的用量选档、只对有价格的项求和（去掉缺价项的用量会改变档位）；用例：缺价的 `cache_read` 200,000 加有价的输入 1，输出按高档计 |
 | 上游报告的用量不会被悄悄丢掉 | 映射表外的非零字段和认不出的服务等级进 `Usage.Unknown()`。已实现：`NewUsage` 保留调用方交入的未知用量，构造与读取都复制（`TestUsageUnknown`）。protocol 从 Anthropic Messages 的流里识别：`TestRelayUsage` 加虚构的用量字段、`server_tool_use` 计数和等级，都出现在 `Unknown()` 里。protocol 也从 OpenAI 两种格式里识别：`TestRelayOpenAIUsage` 含未知用量和未知等级的用例 |
 | 参考价有可复核的证据 | 发布时锁住页面行，检查证据引用当前快照、摘录逐字出现在正文里；自动发布记下条目原文（`fetch_id` 是设计，尚未实现）；测试：引用旧快照、摘录不在当前快照正文里，都被拒 |
 | 公开表里没有操作者、理由、证据 | 它们只在平台数据的 `change` 里；测试：查 `information_schema`，公开表没有 `actor`、`reason`、`evidence` 列；非平台范围读不到平台数据，读不到草稿模型和它的名字、参考价 |
@@ -241,6 +245,10 @@ type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Abo
 type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
+func (u Usage) InputTotal() int64
+func (u Usage) PhysicalInput() (int64, bool)
+func (u Usage) WithPhysicalInput(int64) (Usage, error)
+func (u Usage) Recount(map[Item]int64, []UnknownUsage) (Usage, error)
 func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲染客户端看到的用量，billing 的计量读已报告的数
 func (u Usage) ServiceTier() ServiceTier // 实际服务的等级，供应商记录扣费所报的等级
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本

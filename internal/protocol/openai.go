@@ -32,13 +32,23 @@ type openAIUsage struct {
 
 // openAIDetails breaks a total down. Prediction tokens are part of the output total and billed with it.
 type openAIDetails struct {
-	Cached     int64                     `json:"cached_tokens"`
-	CacheWrite int64                     `json:"cache_write_tokens"`
-	Audio      int64                     `json:"audio_tokens"`
-	Reasoning  int64                     `json:"reasoning_tokens"`
-	Accepted   jsontext.Value            `json:"accepted_prediction_tokens"`
-	Rejected   jsontext.Value            `json:"rejected_prediction_tokens"`
-	Unknown    map[string]jsontext.Value `json:",embed"`
+	Cached        int64                     `json:"cached_tokens"`
+	CacheWrite    int64                     `json:"cache_write_tokens"`
+	Audio         int64                     `json:"audio_tokens"`
+	Image         int64                     `json:"image_tokens"`
+	Text          int64                     `json:"text_tokens"`
+	CachedDetails *openAICachedDetails      `json:"cached_tokens_details"`
+	Reasoning     int64                     `json:"reasoning_tokens"`
+	Accepted      jsontext.Value            `json:"accepted_prediction_tokens"`
+	Rejected      jsontext.Value            `json:"rejected_prediction_tokens"`
+	Unknown       map[string]jsontext.Value `json:",embed"`
+}
+
+// Cached modality counts are intersections, not additional usage.
+type openAICachedDetails struct {
+	Image   int64                     `json:"image_tokens"`
+	Text    int64                     `json:"text_tokens"`
+	Unknown map[string]jsontext.Value `json:",embed"`
 }
 
 // items maps the usage as catalog README.md「计费项与用量」 tabulates, at the service tier the reply names, if any.
@@ -53,18 +63,24 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	}
 	if in != nil {
 		d := inDetails.orZero()
-		if err := r.split(*in, catalog.ItemInput, []catalog.Item{catalog.ItemCacheRead, catalog.ItemCacheWrite, catalog.ItemAudioIn},
-			[]int64{d.Cached, d.CacheWrite, d.Audio}); err != nil {
+		if err := r.openAIInput(*in, d); err != nil {
 			return r, err
 		}
 		unknownCounts(&r, "usage."+inName, d.Unknown)
+		if d.CachedDetails != nil {
+			unknownCounts(&r, "usage."+inName+".cached_tokens_details", d.CachedDetails.Unknown)
+		}
 	}
 	if out != nil {
 		d := outDetails.orZero()
-		if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut},
-			[]int64{d.Reasoning, d.Audio}); err != nil {
+		if !countOK(d.Text) || d.Text > *out {
+			return r, fmt.Errorf("usage: invalid output text count")
+		}
+		if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
+			[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 			return r, err
 		}
+		r.outputTotal = out
 		unknownCounts(&r, "usage."+outName, d.Unknown)
 	}
 	unknownCounts(&r, "usage", u.Unknown)
@@ -73,6 +89,36 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	}
 	r.sortUnknown()
 	return r, nil
+}
+
+// openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
+// uncached remainder: absent intersection detail cannot justify charging a cached image a second time.
+func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
+	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Text},
+		func(n int64) bool { return !countOK(n) || n > total }) {
+		return fmt.Errorf("usage: input or a part of it is not a count within its total %d", total)
+	}
+	image := d.Image
+	if c := d.CachedDetails; c != nil {
+		if !countOK(c.Image) || !countOK(c.Text) || c.Image > d.Image || c.Image+c.Text > d.Cached {
+			return fmt.Errorf("usage: cached modality counts exceed their totals")
+		}
+		image -= c.Image
+	}
+	left := max(total-d.Cached-d.CacheWrite, 0)
+	audio := min(d.Audio, left)
+	image = min(image, left-audio)
+	r.set(catalog.ItemInput, left-audio-image)
+	r.set(catalog.ItemCacheRead, d.Cached)
+	r.set(catalog.ItemCacheWrite, d.CacheWrite)
+	if d.Audio > 0 {
+		r.set(catalog.ItemAudioIn, audio)
+	}
+	if d.Image > 0 {
+		r.set(catalog.ItemImageIn, image)
+	}
+	r.physicalInput = &total
+	return nil
 }
 
 // split sets the parts of a total, and the rest of it as rest. The total and every part must be counts, checked
@@ -90,7 +136,7 @@ func (r *usageReport) split(total int64, rest catalog.Item, parts []catalog.Item
 		return fmt.Errorf("usage: the parts of %s add up to more than its total %d", rest, total)
 	}
 	for i, it := range parts {
-		if counts[i] > 0 || it != catalog.ItemAudioIn && it != catalog.ItemAudioOut {
+		if counts[i] > 0 || it != catalog.ItemAudioIn && it != catalog.ItemAudioOut && it != catalog.ItemImageOut {
 			r.set(it, counts[i])
 		}
 	}
@@ -131,9 +177,9 @@ var (
 // appendOpenAIUsage appends a usage object with u's counts in the format's names and cost, members each led by a
 // comma.
 func appendOpenAIUsage(dst []byte, n openAINames, u catalog.Usage, cost string) []byte {
-	in := u.Count(catalog.ItemInput) + u.Count(catalog.ItemCacheRead) + u.Count(catalog.ItemCacheWrite) +
-		u.Count(catalog.ItemCacheWrite1h) + u.Count(catalog.ItemAudioIn)
-	out := u.OutputTotal() + u.Count(catalog.ItemAudioOut)
+	in := u.InputTotal()
+	// The client total includes every output modality, independently of the waiver's policy.
+	out := u.Count(catalog.ItemOutput) + u.Count(catalog.ItemReasoning) + u.Count(catalog.ItemAudioOut) + u.Count(catalog.ItemImageOut)
 	return fmt.Appendf(dst, `{%q:%d,%q:{"cached_tokens":%d,"cache_write_tokens":%d},%q:%d,%q:{"reasoning_tokens":%d},`+
 		`"total_tokens":%d%s}`, n.input, in, n.inputDetails, u.Count(catalog.ItemCacheRead),
 		u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), n.output, out, n.outputDetails,

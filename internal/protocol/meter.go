@@ -11,11 +11,13 @@ import (
 // usageReport is a usage object mapped onto billing items (catalog README.md「计费项与用量」). tierSet tells a tier the
 // object reports from one it leaves out.
 type usageReport struct {
-	counts  [catalog.NumItems]int64
-	seen    catalog.ItemSet
-	tier    catalog.ServiceTier
-	tierSet bool
-	unknown []catalog.UnknownUsage
+	counts        [catalog.NumItems]int64
+	seen          catalog.ItemSet
+	tier          catalog.ServiceTier
+	tierSet       bool
+	unknown       []catalog.UnknownUsage
+	physicalInput *int64
+	outputTotal   *int64
 }
 
 // maxCount bounds a count as catalog.NewUsage does, checked before any arithmetic on counts, so none overflows.
@@ -35,7 +37,8 @@ func (r *usageReport) sortUnknown() {
 }
 
 // meter keeps the reply's usage as reported so far, merged field by field: what a report leaves out keeps its earlier
-// value, so a tier or an unknown count reported once stays. Counts only go up: a later 0 leaves the earlier count, as
+// value, so a tier or an unknown count reported once stays. Counts only go up, except normalized OpenAI breakdowns
+// are replaced together at a nondecreasing physical total. A later 0 total leaves the earlier snapshot, as
 // some relays clear the input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier
 // starts as the request's.
 type meter struct {
@@ -48,7 +51,7 @@ type meter struct {
 
 // finalOnSight are the items whose first report is final: the input is read before the reply starts.
 const finalOnSight = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite |
-	1<<catalog.ItemCacheWrite1h)
+	1<<catalog.ItemCacheWrite1h | 1<<catalog.ItemAudioIn | 1<<catalog.ItemImageIn)
 
 // The meter is kept through the settlement, so what it holds is bounded and charged up front as meterMemory: at most
 // maxUnknown unknown fields for the reply and as many over its compactions, each a field and a value of at most
@@ -114,7 +117,14 @@ func (m *meter) bound(r usageReport, compactions []usageReport) error {
 
 // takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid.
 func (m *meter) takeCounts(r usageReport) bool {
+	if !m.takeSide(r.physicalInput, &m.physicalInput, finalOnSight, r) ||
+		!m.takeSide(r.outputTotal, &m.outputTotal, outputSide, r) {
+		return false
+	}
 	for it := range catalog.NumItems {
+		if r.physicalInput != nil && finalOnSight.Has(it) || r.outputTotal != nil && outputSide.Has(it) {
+			continue // a normalized snapshot must not retain a stale remainder or modality count
+		}
 		n := r.counts[it]
 		switch {
 		case !r.seen.Has(it), n == 0 && m.counts[it] > 0:
@@ -123,6 +133,31 @@ func (m *meter) takeCounts(r usageReport) bool {
 			return false
 		default:
 			m.set(it, n)
+		}
+	}
+	return true
+}
+
+const outputSide = catalog.ItemSet(1<<catalog.ItemOutput | 1<<catalog.ItemReasoning | 1<<catalog.ItemAudioOut | 1<<catalog.ItemImageOut)
+
+// takeSide replaces an OpenAI breakdown together: later cache or image details can reduce ordinary tokens to zero
+// without reducing the physical total. Merging their maxima would charge those tokens twice.
+func (m *meter) takeSide(total *int64, kept **int64, side catalog.ItemSet, r usageReport) bool {
+	if total == nil {
+		return true
+	}
+	if *kept != nil && *total < **kept {
+		if *total == 0 {
+			return true // some relays clear totals in later events
+		}
+		m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", **kept, *total)
+		return false
+	}
+	*kept = total
+	m.seen = m.seen&^side | r.seen&side
+	for it := range catalog.NumItems {
+		if side.Has(it) {
+			m.counts[it] = r.counts[it]
 		}
 	}
 	return true
@@ -185,5 +220,9 @@ func (m *meter) usage(r usageReport) (catalog.Usage, error) {
 			m.scratch[it] = r.counts[it]
 		}
 	}
-	return catalog.NewUsage(m.scratch, r.tier, r.unknown)
+	u, err := catalog.NewUsage(m.scratch, r.tier, r.unknown)
+	if err == nil && r.physicalInput != nil {
+		u, err = u.WithPhysicalInput(*r.physicalInput)
+	}
+	return u, err
 }

@@ -238,7 +238,7 @@ func waivable(last AttemptResult) bool {
 	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
-// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning
+// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning and images
 // adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a default
 // zero, not a reported one, so it proves nothing.
 func zeroOutput(last AttemptResult) bool {
@@ -247,7 +247,8 @@ func zeroOutput(last AttemptResult) bool {
 		if !s.Reported.Has(catalog.ItemOutput) {
 			return false
 		}
-		output += s.Usage.OutputTotal()
+		// Image delivery is output even if the text count is zero. Audio retains its existing waiver policy.
+		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) + s.Usage.Count(catalog.ItemImageOut)
 	}
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
@@ -372,7 +373,7 @@ func costWithout(s catalog.Schedule, u catalog.Usage, items catalog.ItemSet) (pl
 			counts[it] = u.Count(it)
 		}
 	}
-	rest, err := catalog.NewUsage(counts, u.ServiceTier(), nil)
+	rest, err := u.Recount(counts, nil)
 	if err != nil {
 		return platform.Exact{}, err
 	}
@@ -448,10 +449,11 @@ func usages(segments []Segment) []catalog.Usage {
 // storedSegment is a segment as final_usage stores it: each item's count in item order, the service tier, the
 // reported items and the usage protocol could not map.
 type storedSegment struct {
-	Counts   []int64                `json:"counts"`
-	Tier     catalog.ServiceTier    `json:"tier"`
-	Reported catalog.ItemSet        `json:"reported"`
-	Unknown  []catalog.UnknownUsage `json:"unknown,omitzero"`
+	Counts        []int64                `json:"counts"`
+	Tier          catalog.ServiceTier    `json:"tier"`
+	Reported      catalog.ItemSet        `json:"reported"`
+	Unknown       []catalog.UnknownUsage `json:"unknown,omitzero"`
+	PhysicalInput *int64                 `json:"physical_input,omitzero"`
 }
 
 // encodeUsage is the segments as final_usage stores them, so a retried Settle returns the Final the first one gave.
@@ -463,6 +465,9 @@ func encodeUsage(segments []Segment) ([]byte, error) {
 			counts[it] = s.Usage.Count(it)
 		}
 		stored[i] = storedSegment{Counts: counts, Tier: s.Usage.ServiceTier(), Reported: s.Reported, Unknown: s.Usage.Unknown()}
+		if n, ok := s.Usage.PhysicalInput(); ok {
+			stored[i].PhysicalInput = &n
+		}
 	}
 	b, err := jsonx.MarshalCanonical(stored)
 	if err != nil {
@@ -483,6 +488,9 @@ func decodeUsage(b []byte) ([]Segment, error) {
 			counts[catalog.Item(it)] = n
 		}
 		u, err := catalog.NewUsage(counts, s.Tier, s.Unknown)
+		if err == nil && s.PhysicalInput != nil {
+			u, err = u.WithPhysicalInput(*s.PhysicalInput)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("billing: read the stored usage: %w", err)
 		}

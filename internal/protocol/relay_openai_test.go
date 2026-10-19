@@ -350,7 +350,11 @@ func TestRelayOpenAIUsage(t *testing.T) {
 			if c.invalid {
 				return
 			}
-			if diff := cmp.Diff([]protocol.Segment{segment(t, c.want, c.st, c.unknown)}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
+			want := segment(t, c.want, c.st, c.unknown)
+			if _, ok := decode(t, []byte(c.usage))["prompt_tokens"]; ok {
+				want.Usage = must(want.Usage.WithPhysicalInput(want.Usage.InputTotal()))
+			}
+			if diff := cmp.Diff([]protocol.Segment{want}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
 				t.Errorf("segments (-want +got):\n%s", diff)
 			}
 		})

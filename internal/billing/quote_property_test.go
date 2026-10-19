@@ -313,7 +313,16 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 		if !ok {
 			tb.Fatalf("no price for %v", items)
 		}
-		return p.Mul(1).Rat()
+		rate := p.Rat()
+		if items.Has(catalog.ItemCacheRead) && items.Has(cacheWrite) {
+			read, _ := c.e.Price.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
+			write, _ := c.e.Price.Ceiling(1<<cacheWrite, tiers, length)
+			combined := new(big.Rat).Add(read.Rat(), write.Rat())
+			if combined.Cmp(rate) > 0 {
+				rate = combined
+			}
+		}
+		return rate
 	}
 	total, counts := new(big.Rat), []*big.Int(nil)
 	term := func(p *big.Rat, n *big.Int) {
