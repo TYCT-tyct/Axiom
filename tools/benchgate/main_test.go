@@ -34,6 +34,17 @@ const events = `{"Action":"start","Package":"x"}
 {"Action":"pass","Package":"x"}
 `
 
+// benchmarkAll runs every benchmark of the probe module in dir, as the gate measures one side when the change reaches
+// every package.
+func benchmarkAll(t *testing.T, dir string) (measurements, error) {
+	t.Helper()
+	targets, err := benchmarkPackages(t.Context(), dir)
+	if err != nil {
+		return measurements{}, err
+	}
+	return benchmarks(t.Context(), dir, "the probe module", targets, make(chan struct{}, packages), new(sync.Mutex))
+}
+
 func TestParse(t *testing.T) {
 	run, err := parse(strings.NewReader(events))
 	if err != nil {
@@ -60,7 +71,7 @@ func TestBenchmarksRunPackagesInParallel(t *testing.T) {
 		"a/a_test.go": overlapBenchmark("a", "b"),
 		"b/b_test.go": overlapBenchmark("b", "a"),
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err != nil {
+	if _, err := benchmarkAll(t, dir); err != nil {
 		t.Fatalf("the packages did not run at the same time: %v", err)
 	}
 }
@@ -87,7 +98,7 @@ func BenchmarkBad(b *testing.B) {
 }
 `,
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "probe/bad") {
+	if _, err := benchmarkAll(t, dir); err == nil || !strings.Contains(err.Error(), "probe/bad") {
 		t.Fatalf("a failing package did not fail the gate: %v", err)
 	}
 }
@@ -103,8 +114,41 @@ func TestNothing(t *testing.T) {
 }
 `,
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "no package has a benchmark") {
+	if _, err := benchmarkAll(t, dir); err == nil || !strings.Contains(err.Error(), "no package has a benchmark") {
 		t.Fatalf("a tree without benchmarks was accepted: %v", err)
+	}
+}
+
+// TestClosure runs the go command: the test closure of a benchmark package is what cmd/go compiles into its test
+// binary, so it holds the package, what its own files import and what only its test files import, and nothing else.
+func TestClosure(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"lib/lib.go":             "package lib\n\nfunc F() {}\n",
+		"testonly/testonly.go":   "package testonly\n\nfunc H() {}\n",
+		"unrelated/unrelated.go": "package unrelated\n\nfunc U() {}\n",
+		"bench/bench.go":         "package bench\n\nimport \"probe/lib\"\n\nvar _ = lib.F\n",
+		"bench/bench_test.go": `package bench
+
+import (
+	"testing"
+
+	"probe/testonly"
+)
+
+func BenchmarkClosure(b *testing.B) {
+	testonly.H()
+	for b.Loop() {
+	}
+}
+`,
+	})
+	found, err := closures(t.Context(), dir, "the probe module", []string{"probe/bench"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bench", "lib", "testonly"}
+	if diff := cmp.Diff(want, found["probe/bench"].dirs); diff != "" {
+		t.Errorf("test closure (-want +got):\n%s", diff)
 	}
 }
 
@@ -130,7 +174,7 @@ func TestFails(t *testing.T) {
 }
 `,
 	})
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +211,7 @@ func BenchmarkLate(b *testing.B) {
 }
 `,
 	})
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +336,7 @@ func TestBenchmarksRunFixedIterations(t *testing.T) {
 	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n"+
 		"func BenchmarkIters(b *testing.B) {\n\tfor i := 0; i < b.N; i++ {\n\t\tsink = make([]byte, 8)\n\t}\n"+
 		"\tb.ReportMetric(float64(b.N), \"iters\")\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +355,7 @@ func TestBenchmarksQuietTheRuntime(t *testing.T) {
 		"\twas := debug.SetGCPercent(100)\n\tdebug.SetGCPercent(was)\n"+
 		"\tb.ReportMetric(float64(was), \"gcpercent\")\n"+
 		"\tb.ReportMetric(float64(runtime.GOMAXPROCS(0)), \"processors\")\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +392,7 @@ func TestBenchmarksSeeRealSkips(t *testing.T) {
 		"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n\n"+
 		"func BenchmarkLate(b *testing.B) {\n\tif b.N > 1 {\n\t\tb.Skip(\"cannot run the calibrated workload\")\n\t}\n"+
 		"\tfor range b.N {\n\t\tsink = make([]byte, 8)\n\t}\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +407,7 @@ func TestBenchmarksSeeRealSkips(t *testing.T) {
 
 func TestBenchmarksKeepCompileErrors(t *testing.T) {
 	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nfunc BenchmarkBroken(b *testing.B) { undefinedName() }\n")
-	_, err := benchmarks(t.Context(), dir, "the probe module")
+	_, err := benchmarkAll(t, dir)
 	if err == nil || !strings.Contains(err.Error(), "undefinedName") {
 		t.Fatalf("the compile error is lost: %v", err)
 	}
@@ -425,10 +469,137 @@ func TestListed(t *testing.T) {
 	}
 }
 
+// TestChangedFiles runs git: the change is the difference from the merge base to the working tree, so a commit on a
+// branch of its own is left out, a rename names both of its paths, and a path with a space stays whole.
+func TestChangedFiles(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q")
+	write := func(files map[string]string) {
+		t.Helper()
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	commit := func(message string) {
+		t.Helper()
+		git(t, root, "add", ".")
+		git(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+	}
+	write(map[string]string{"a.txt": "one", "b.txt": "one", "name with space.txt": "one"})
+	commit("base")
+	// The base passed in is this branch, not an ancestor: only what changed since the merge base is under test.
+	git(t, root, "checkout", "-q", "-b", "side")
+	write(map[string]string{"side.txt": "one"})
+	commit("side")
+	git(t, root, "checkout", "-q", "-")
+	git(t, root, "mv", "b.txt", "c.txt")
+	write(map[string]string{"a.txt": "two", "d.txt": "one"})
+	commit("change")
+	// The gate measures the working tree, so an uncommitted change counts too.
+	write(map[string]string{"name with space.txt": "two"})
+
+	change, err := changedFiles(t.Context(), root, "side")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a.txt", "b.txt", "c.txt", "d.txt", "name with space.txt"}
+	if diff := cmp.Diff(want, change.files); diff != "" {
+		t.Errorf("changed files (-want +got):\n%s", diff)
+	}
+}
+
 func TestParseRejectsUnreadableBenchmarkLines(t *testing.T) {
 	broken := `{"Action":"output","Output":"BenchmarkScan-8\t100\t10 ns/op\t9 allocs/op\ttrailing\n"}` + "\n"
 	if _, err := parse(strings.NewReader(broken)); err == nil {
 		t.Fatal("a benchmark line benchfmt cannot read was accepted")
+	}
+}
+
+// TestAffects is the decision the gate makes for every benchmark package: a changed file in a directory its test
+// binary compiles, or below it, can move the allocation counts, and so can a module file, which decides how every
+// package compiles. Everything else is skipped.
+func TestAffects(t *testing.T) {
+	routing := closure{dirs: []string{"internal/protocol", "internal/routing"}}
+	cases := []struct {
+		name     string
+		change   diff
+		closures []closure
+		want     bool
+	}{
+		{"a file of a package the test binary compiles", diff{files: []string{"internal/routing/plan.go"}}, []closure{routing}, true},
+		{"a test file", diff{files: []string{"internal/routing/session_test.go"}}, []closure{routing}, true},
+		{"a file below a package, such as its testdata", diff{files: []string{"internal/platform/typeid/testdata/many"}}, []closure{{dirs: []string{"internal/platform/typeid"}}}, true},
+		{"a file a package embeds, which lives in its directory", diff{files: []string{"internal/catalog/testdata/dataset.json"}}, []closure{{dirs: []string{"internal/catalog"}}}, true},
+		{"a file of a package the test binary does not compile", diff{files: []string{"internal/gateway/scan.go"}}, []closure{routing}, false},
+		{"a directory that only starts like one of the closure", diff{files: []string{"internal/routing2/plan.go"}}, []closure{routing}, false},
+		{"a package only the other side compiles", diff{files: []string{"internal/new/scan.go"}}, []closure{{}, {dirs: []string{"internal/new"}}}, true},
+		{"no change", diff{}, []closure{routing}, false},
+		{"go.mod", diff{files: []string{"go.mod"}}, []closure{routing}, true},
+		{"go.sum", diff{files: []string{"go.sum"}}, nil, true},
+		{"go.work", diff{files: []string{"go.work"}}, nil, true},
+		{"a module file of another module", diff{files: []string{"tools/go.mod"}}, nil, true},
+		{"the changed files could not be read", diff{all: true}, nil, true},
+		{"a file nobody compiles", diff{files: []string{"docs/performance.md"}}, []closure{routing}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.change.affects(c.closures...); got != c.want {
+				t.Errorf("affects(%v) = %v, want %v", c.change.files, got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlan keeps the decision per package, whichever side lists it: a package both sides have is measured on both or
+// left out of both, and a package only one side has stays there.
+func TestPlan(t *testing.T) {
+	routing, gateway := closure{dirs: []string{"internal/routing"}}, closure{dirs: []string{"internal/gateway"}}
+	cases := []struct {
+		name                            string
+		change                          diff
+		base, head                      []string
+		baseClosures, headClosures      map[string]closure
+		wantBase, wantHead, wantSkipped []string
+	}{
+		{
+			"a package the change cannot reach is left out of both sides",
+			diff{files: []string{"internal/routing/plan.go"}},
+			[]string{"internal/gateway", "internal/routing"}, []string{"internal/gateway", "internal/routing"},
+			map[string]closure{"internal/gateway": gateway, "internal/routing": routing},
+			map[string]closure{"internal/gateway": gateway, "internal/routing": routing},
+			[]string{"internal/routing"}, []string{"internal/routing"}, []string{"internal/gateway"},
+		},
+		{
+			"a package only one side has stays there",
+			diff{files: []string{"internal/new/x.go", "internal/routing/plan.go"}},
+			[]string{"internal/routing"}, []string{"internal/new", "internal/routing"},
+			map[string]closure{"internal/routing": routing},
+			map[string]closure{"internal/new": {dirs: []string{"internal/new"}}, "internal/routing": routing},
+			[]string{"internal/routing"}, []string{"internal/new", "internal/routing"}, nil,
+		},
+		{
+			"a module file runs every package",
+			diff{files: []string{"go.mod"}},
+			[]string{"internal/gateway"}, []string{"internal/gateway"},
+			nil, nil,
+			[]string{"internal/gateway"}, []string{"internal/gateway"}, nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base, head, skipped := plan(c.change, c.base, c.head, c.baseClosures, c.headClosures)
+			if diff := cmp.Diff(c.wantBase, base); diff != "" {
+				t.Errorf("base targets (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(c.wantHead, head); diff != "" {
+				t.Errorf("head targets (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(c.wantSkipped, skipped); diff != "" {
+				t.Errorf("skipped (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
