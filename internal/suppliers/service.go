@@ -199,7 +199,7 @@ func (s *Service) Reload(ctx context.Context) error {
 	}
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.snap.Store(next)
-	s.report(unloadable)
+	s.report(ctx, unloadable)
 	return nil
 }
 
@@ -219,11 +219,11 @@ func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule
 
 // report tells each supplier a Reload left out, for alerting: the error log carries a stable event name, and the counter
 // rises by one per Reload that leaves the supplier out, so an alert watches a rise.
-func (s *Service) report(unloadable map[uuid.UUID]error) {
+func (s *Service) report(ctx context.Context, unloadable map[uuid.UUID]error) {
 	for id, cause := range unloadable {
 		s.cfg.Logger.Error("suppliers: a supplier could not be loaded and is left out of this node's snapshot",
 			"event", unloadableEvent, "supplier", id, "err", cause)
-		s.unloadable.Add(context.Background(), 1, metric.WithAttributes(attribute.String("supplier", id.String())))
+		s.unloadable.Add(ctx, 1, metric.WithAttributes(attribute.String("supplier", id.String())))
 	}
 }
 
