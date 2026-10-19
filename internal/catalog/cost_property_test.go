@@ -196,15 +196,24 @@ func (p prices) json() map[string]string {
 	return m
 }
 
-// cost is the model: the exact cost of the priced items and, in enumeration order, the items with usage and no price.
-func (c costCase) cost() (*big.Rat, []catalog.Item) {
-	var length int64
+// sideFallback is the item whose price an item without its own takes.
+var sideFallback = map[catalog.Item]catalog.Item{reasoning: out, imageOut: out, imageIn: in}
+
+// basisSum is what a context tier's threshold is compared with: the basis items, and the images when the basis names
+// input but not image_in, since they were part of input before they were split out.
+func (c costCase) basisSum() (length int64) {
 	for _, it := range c.basis {
 		length += c.usage[it]
 	}
 	if slices.Contains(c.basis, in) && !slices.Contains(c.basis, imageIn) {
-		length += c.usage[imageIn] // images were part of input before they were split out
+		length += c.usage[imageIn]
 	}
+	return length
+}
+
+// cost is the model: the exact cost of the priced items and, in enumeration order, the items with usage and no price.
+func (c costCase) cost() (*big.Rat, []catalog.Item) {
+	length := c.basisSum()
 	l, offered := c.levels[c.tier]
 	tier := prices{}
 	for i, above := range c.above {
@@ -223,13 +232,8 @@ func (c costCase) cost() (*big.Rat, []catalog.Item) {
 	for _, it := range items {
 		n := c.usage[it]
 		p := price(it)
-		if p == nil {
-			switch it {
-			case reasoning, imageOut:
-				p = price(out)
-			case imageIn:
-				p = price(in)
-			}
+		if side, ok := sideFallback[it]; ok && p == nil {
+			p = price(side)
 		}
 		switch {
 		case p != nil:

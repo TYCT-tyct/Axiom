@@ -16,15 +16,7 @@ func TestConcurrentOverlapAndImageSettlements(t *testing.T) {
 	q.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000001","cache_write":"0.000000002","output":"0.000000001","image_out":"0.00000001"}}`)
 	q.Model.Reports = 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemImageOut
 	q.MaxOutput = 10
-	// What protocol makes of 100 input tokens, 80 of them read and 80 written, and 10 output tokens that are all images.
-	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, catalog.ItemImageOut: 10}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u, err = u.WithPhysicalInput(100); err != nil {
-		t.Fatal(err)
-	}
-	seg := Segment{Usage: u, Reported: 1<<in | 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemOutput | 1<<catalog.ItemReasoning | 1<<catalog.ItemImageOut}
+	seg := overlapSegment(t)
 	var wg sync.WaitGroup
 	errs := make(chan error, 6)
 	for _, finish := range []FinishReason{FinishStop, FinishError, FinishCancelled} {
@@ -36,12 +28,8 @@ func TestConcurrentOverlapAndImageSettlements(t *testing.T) {
 					errs <- err
 					return
 				}
-				if f.Charged != platform.AmountExact(340) || f.Waived || f.Estimated || len(f.Segments) != 1 {
-					errs <- fmt.Errorf("settled %+v, want 340 charged once without waiver or estimate", f)
-					return
-				}
-				if n, ok := f.Segments[0].Usage.PhysicalInput(); !ok || n != 100 {
-					errs <- fmt.Errorf("physical input = %d/%t", n, ok)
+				if err := checkOverlapFinal(f); err != nil {
+					errs <- err
 				}
 			})
 		}
@@ -58,4 +46,28 @@ func TestConcurrentOverlapAndImageSettlements(t *testing.T) {
 		t.Errorf("still reserved %d", held)
 	}
 	b.balanced()
+}
+
+// overlapSegment is what protocol makes of 100 input tokens, 80 of them read and 80 written, and 10 output tokens that
+// are all images.
+func overlapSegment(t *testing.T) Segment {
+	t.Helper()
+	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, catalog.ItemImageOut: 10}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, err = u.WithPhysicalInput(100); err != nil {
+		t.Fatal(err)
+	}
+	return Segment{Usage: u, Reported: 1<<in | 1<<catalog.ItemCacheRead | 1<<cacheWrite | 1<<catalog.ItemOutput | 1<<catalog.ItemReasoning | 1<<catalog.ItemImageOut}
+}
+
+func checkOverlapFinal(f Final) error {
+	if f.Charged != platform.AmountExact(340) || f.Waived || f.Estimated || len(f.Segments) != 1 {
+		return fmt.Errorf("settled %+v, want 340 charged once without waiver or estimate", f)
+	}
+	if n, ok := f.Segments[0].Usage.PhysicalInput(); !ok || n != 100 {
+		return fmt.Errorf("physical input = %d/%t", n, ok)
+	}
+	return nil
 }

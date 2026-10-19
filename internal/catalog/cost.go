@@ -69,10 +69,10 @@ func (s Schedule) price(st ServiceTier, band int, it Item) (platform.UnitPrice, 
 	if p, ok := l.rate(band, it); ok {
 		return p, ok
 	}
-	switch it {
-	case ItemImageIn:
+	if it == ItemImageIn {
 		return l.rate(band, ItemInput)
-	case ItemReasoning, ItemImageOut:
+	}
+	if it == ItemReasoning || it == ItemImageOut {
 		return l.rate(band, ItemOutput)
 	}
 	return platform.UnitPrice{}, false

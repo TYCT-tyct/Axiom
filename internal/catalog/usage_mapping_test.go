@@ -112,33 +112,41 @@ func TestImageEffectivePriceAtEveryTierAndBand(t *testing.T) {
 		}
 		for _, st := range []catalog.ServiceTier{catalog.ServiceTierStandard, catalog.ServiceTierPriority} {
 			for _, n := range []int64{100, 150, 151} {
-				pi, po := int64(1), int64(2)
-				if st == catalog.ServiceTierPriority {
-					pi, po = 3, 4
-				}
-				if n > 150 {
-					pi, po = pi+4, po+4
-				}
-				ii, io := pi, po
-				if own != "" {
-					ii, io = 9, 10
-					if own == `,"image_in":"0","image_out":"0"` {
-						ii, io = 0, 0
-					}
-				}
-				u := mustTierUsage(t, st, counts{in: n - 10, imageIn: 10, imageOut: 20})
-				cost, missing, err := s.Cost(u)
-				want := (n-10)*pi + 10*ii + 20*io
-				if err != nil || missing != 0 || cost.Rat().RatString() != fmt.Sprint(want) {
-					t.Fatalf("own=%s tier=%v input=%d: cost=%v want=%d missing=%v err=%v", own, st, n, cost.Rat(), want, missing, err)
-				}
-				for it, rate := range map[catalog.Item]int64{imageIn: ii, imageOut: io} {
-					ceiling, ok := s.Ceiling(1<<it, 1<<st, n)
-					if !ok || ceiling.Rat().RatString() != fmt.Sprint(rate) {
-						t.Fatalf("ceiling %s = %v/%t, want %d", it, ceiling.Rat(), ok, rate)
-					}
-				}
+				checkImageRates(t, s, own, st, n)
 			}
+		}
+	}
+}
+
+// checkImageRates: a prompt of n tokens, 10 of them images, and 20 image output tokens cost what the price list's
+// effective prices say, and so do the ceilings: the image's own price, or else its side's ordinary price in the same
+// service tier and band.
+func checkImageRates(t *testing.T, s catalog.Schedule, own string, st catalog.ServiceTier, n int64) {
+	t.Helper()
+	pi, po := int64(1), int64(2)
+	if st == catalog.ServiceTierPriority {
+		pi, po = 3, 4
+	}
+	if n > 150 {
+		pi, po = pi+4, po+4
+	}
+	ii, io := pi, po
+	switch own {
+	case `,"image_in":"0","image_out":"0"`:
+		ii, io = 0, 0
+	case "":
+	default:
+		ii, io = 9, 10
+	}
+	cost, missing, err := s.Cost(mustTierUsage(t, st, counts{in: n - 10, imageIn: 10, imageOut: 20}))
+	want := (n-10)*pi + 10*ii + 20*io
+	if err != nil || missing != 0 || cost.Rat().RatString() != fmt.Sprint(want) {
+		t.Fatalf("own=%s tier=%v input=%d: cost=%v want=%d missing=%v err=%v", own, st, n, cost.Rat(), want, missing, err)
+	}
+	for it, rate := range map[catalog.Item]int64{imageIn: ii, imageOut: io} {
+		ceiling, ok := s.Ceiling(1<<it, 1<<st, n)
+		if !ok || ceiling.Rat().RatString() != fmt.Sprint(rate) {
+			t.Fatalf("ceiling %s = %v/%t, want %d", it, ceiling.Rat(), ok, rate)
 		}
 	}
 }

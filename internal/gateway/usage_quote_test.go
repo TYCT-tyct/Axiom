@@ -22,61 +22,83 @@ func FuzzAcceptedOpenAIUsageFitsQuote(f *testing.F) {
 	f.Fuzz(func(t *testing.T, a, b uint64) {
 		r := rand.New(rand.NewPCG(a, b)) //nolint:gosec // test data
 		for range 30 {
-			price := randomOpenAIPrices(r)
-			s, err := catalog.ParseSchedule([]byte(price))
-			if err != nil {
-				t.Fatalf("%v: %s", err, price)
-			}
-			window := r.Int64N(4000) + 1
-			d := billing.Demand{TextBytes: r.Int64N(window + 1), Compaction: r.IntN(2) == 0}
-			d.InputItems.Add(catalog.ItemCacheWrite)
-			priority := strings.Contains(price, "priority") && r.IntN(2) == 0 // a request may be served at a tier the schedule prices
-			if priority {
-				d.ServiceTiers.Add(catalog.ServiceTierPriority)
-			}
-			m := billing.Model{ContextLength: window, OpenAIUsage: true,
-				Reports: 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite | 1<<catalog.ItemImageIn | 1<<catalog.ItemImageOut}
-			e := billing.Quotable{Price: s, Model: m, MaxOutput: r.Int64N(window) + 1}
-			quote, err := billing.Quote(d, []billing.Quotable{e}, billing.Segments{}, nil)
-			if err != nil {
-				t.Fatalf("%v: %s", err, price)
-			}
-			first, _ := billing.InputBound(d, m)
-			samplings := int64(1)
-			if d.Compaction {
-				samplings = 2
-			}
-			output := e.MaxOutput
-			var exact platform.Exact
-			for j := range samplings {
-				n := window
-				if j == 0 {
-					n = first
-				}
-				n = r.Int64N(n + 1)
-				out := r.Int64N(output + 1)
-				output -= out
-				body := fmt.Sprintf(`{"input_tokens":%d,"input_tokens_details":{"cached_tokens":%d,"cache_write_tokens":%d,"image_tokens":%d},`+
-					`"output_tokens":%d,"output_tokens_details":{"image_tokens":%d}}`,
-					n, r.Int64N(n+1), r.Int64N(n+1), r.Int64N(n+1), out, r.Int64N(out+1))
-				tier := catalog.ServiceTierStandard
-				if priority && r.IntN(2) == 0 {
-					tier = catalog.ServiceTierPriority
-				}
-				u := acceptedOpenAI(t, body, tier, j%2 == 0)
-				cost, missing, err := s.Cost(u)
-				if err != nil || missing != 0 {
-					t.Fatalf("cost of %s: missing %v, %v", body, missing, err)
-				}
-				if exact, err = exact.Add(cost); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if exact.Cmp(quote.Amount) > 0 {
-				t.Fatalf("exact cost %v exceeds the quote %v under %s", exact.Rat(), quote.Amount.Rat(), price)
-			}
+			checkAcceptedFitsQuote(t, r)
 		}
 	})
+}
+
+// checkAcceptedFitsQuote draws a schedule, a request and an upstream's reports for it, and holds the reports' exact
+// cost against the quote.
+func checkAcceptedFitsQuote(t *testing.T, r *rand.Rand) {
+	t.Helper()
+	price := randomOpenAIPrices(r)
+	s, err := catalog.ParseSchedule([]byte(price))
+	if err != nil {
+		t.Fatalf("%v: %s", err, price)
+	}
+	window := r.Int64N(4000) + 1
+	d := billing.Demand{TextBytes: r.Int64N(window + 1), Compaction: r.IntN(2) == 0}
+	d.InputItems.Add(catalog.ItemCacheWrite)
+	priority := strings.Contains(price, "priority") && r.IntN(2) == 0 // a request may be served at a tier the schedule prices
+	if priority {
+		d.ServiceTiers.Add(catalog.ServiceTierPriority)
+	}
+	m := billing.Model{
+		ContextLength: window, OpenAIUsage: true,
+		Reports: 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite | 1<<catalog.ItemImageIn | 1<<catalog.ItemImageOut,
+	}
+	e := billing.Quotable{Price: s, Model: m, MaxOutput: r.Int64N(window) + 1}
+	quote, err := billing.Quote(d, []billing.Quotable{e}, billing.Segments{}, nil)
+	if err != nil {
+		t.Fatalf("%v: %s", err, price)
+	}
+	if exact := reportedCost(t, r, e, d, priority); exact.Cmp(quote.Amount) > 0 {
+		t.Fatalf("exact cost %v exceeds the quote %v under %s", exact.Rat(), quote.Amount.Rat(), price)
+	}
+}
+
+// reportedCost is what the schedule charges for the upstream's reports of every sampling the request may make, each
+// accepted by protocol, together spending at most the entry's output limit.
+func reportedCost(t *testing.T, r *rand.Rand, e billing.Quotable, d billing.Demand, priority bool) (total platform.Exact) {
+	t.Helper()
+	first, _ := billing.InputBound(d, e.Model)
+	samplings := int64(1)
+	if d.Compaction {
+		samplings = 2
+	}
+	output := e.MaxOutput
+	for j := range samplings {
+		bound := e.Model.ContextLength
+		if j == 0 {
+			bound = first
+		}
+		var body string
+		body, output = randomOpenAIUsage(r, bound, output)
+		tier := catalog.ServiceTierStandard
+		if priority && r.IntN(2) == 0 {
+			tier = catalog.ServiceTierPriority
+		}
+		cost, missing, err := e.Price.Cost(acceptedOpenAI(t, body, tier, j%2 == 0))
+		if err != nil || missing != 0 {
+			t.Fatalf("cost of %s: missing %v, %v", body, missing, err)
+		}
+		if total, err = total.Add(cost); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return total
+}
+
+// randomOpenAIUsage is a usage object for a sampling of at most bound prompt tokens that spends some of the output
+// left; cache reads, cache writes and images are each drawn up to the prompt, so they may overlap. It returns the
+// output left after it.
+func randomOpenAIUsage(r *rand.Rand, bound, outputLeft int64) (body string, left int64) {
+	n := r.Int64N(bound + 1)
+	out := r.Int64N(outputLeft + 1)
+	body = fmt.Sprintf(`{"input_tokens":%d,"input_tokens_details":{"cached_tokens":%d,"cache_write_tokens":%d,"image_tokens":%d},`+
+		`"output_tokens":%d,"output_tokens_details":{"image_tokens":%d}}`,
+		n, r.Int64N(n+1), r.Int64N(n+1), r.Int64N(n+1), out, r.Int64N(out+1))
+	return body, outputLeft - out
 }
 
 // randomOpenAIPrices is a schedule with a context tier over a random basis, each tier overriding random prices, and

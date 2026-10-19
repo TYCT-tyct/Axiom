@@ -9,46 +9,59 @@ import (
 )
 
 func TestImageSaleReservationAndCostAgree(t *testing.T) {
+	reports := catalog.ItemSet(1<<in | 1<<catalog.ItemImageIn | 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut)
 	for _, own := range []string{"", `,"image_in":"0","image_out":"0"`, `,"image_in":"9","image_out":"10"`} {
-		body := fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":"1","output":"2"%s},
-			"context_tiers":{"basis":["input","image_in"],"method":"whole","tiers":[{"above":150,"rates":{"input":"5","output":"6"}}]},
-			"service_tiers":{"priority":{"rates":{"input":"3","output":"4"%s},"context_tiers":[{"above":150,"rates":{"input":"7","output":"8"}}]}}}`, own, own)
-		currency, err := platform.ParseCurrency("USD")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var rule Rule
-		rule.Method.Kind, rule.Method.Schedule = "fixed", []byte(body)
-		s, err := Sell(rule, catalog.ReferencePrice{}, currency)
-		if err != nil {
-			t.Fatal(err)
-		}
-		reports := catalog.ItemSet(1<<in | 1<<catalog.ItemImageIn | 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut)
+		s := soldImageSchedule(t, own)
 		if missing := Unpriced(s, catalog.Reportable{Items: reports, ServiceTiers: 1 << catalog.ServiceTierPriority}); missing != (catalog.Reportable{}) {
 			t.Fatalf("route rejected images: %+v", missing)
 		}
 		for _, tier := range []catalog.ServiceTier{catalog.ServiceTierStandard, catalog.ServiceTierPriority} {
 			for _, n := range []int64{100, 151} {
-				u, err := catalog.NewUsage(map[catalog.Item]int64{in: n - 10, catalog.ItemImageIn: 10, catalog.ItemImageOut: 20}, tier, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-				cost, missing, err := s.Cost(u) // The supplier cost path calls this same resolver.
-				if err != nil || missing != 0 {
-					t.Fatalf("cost: %v, missing %v", err, missing)
-				}
-				seg := Segment{Usage: u, Reported: reports}
-				p, err := priceSegments(s, fallbacks{}, []Segment{seg}, false)
-				if err != nil || p.estimated || p.price != cost.CeilAmount() {
-					t.Fatalf("sale %+v, cost %v, err %v", p, cost.Rat(), err)
-				}
-				e := Quotable{Price: s, Model: Model{ContextLength: 1000, Reports: reports, OpenAIUsage: true}, MaxOutput: 20}
-				q, err := quoteEntry(Demand{TextBytes: n, ServiceTiers: 1 << tier}, e, Segments{})
-				if err != nil || q.amount.Cmp(cost) < 0 {
-					t.Fatalf("quote %v below cost %v: %v", q.amount.Rat(), cost.Rat(), err)
-				}
+				checkImageCall(t, s, reports, tier, n)
 			}
 		}
+	}
+}
+
+// soldImageSchedule is the fixed sale price of the rule whose image prices are own, if any.
+func soldImageSchedule(t *testing.T, own string) catalog.Schedule {
+	t.Helper()
+	body := fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":"1","output":"2"%s},
+		"context_tiers":{"basis":["input","image_in"],"method":"whole","tiers":[{"above":150,"rates":{"input":"5","output":"6"}}]},
+		"service_tiers":{"priority":{"rates":{"input":"3","output":"4"%s},"context_tiers":[{"above":150,"rates":{"input":"7","output":"8"}}]}}}`, own, own)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rule Rule
+	rule.Method.Kind, rule.Method.Schedule = "fixed", []byte(body)
+	s, err := Sell(rule, catalog.ReferencePrice{}, currency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// checkImageCall: a call of n prompt tokens, 10 of them images, and 20 image output tokens is sold for what it costs,
+// and its reservation covers that cost.
+func checkImageCall(t *testing.T, s catalog.Schedule, reports catalog.ItemSet, tier catalog.ServiceTier, n int64) {
+	t.Helper()
+	u, err := catalog.NewUsage(map[catalog.Item]int64{in: n - 10, catalog.ItemImageIn: 10, catalog.ItemImageOut: 20}, tier, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, missing, err := s.Cost(u) // The supplier cost path calls this same resolver.
+	if err != nil || missing != 0 {
+		t.Fatalf("cost: %v, missing %v", err, missing)
+	}
+	p, err := priceSegments(s, fallbacks{}, []Segment{{Usage: u, Reported: reports}}, false)
+	if err != nil || p.estimated || p.price != cost.CeilAmount() {
+		t.Fatalf("sale %+v, cost %v, err %v", p, cost.Rat(), err)
+	}
+	e := Quotable{Price: s, Model: Model{ContextLength: 1000, Reports: reports, OpenAIUsage: true}, MaxOutput: 20}
+	q, err := quoteEntry(Demand{TextBytes: n, ServiceTiers: 1 << tier}, e, Segments{})
+	if err != nil || q.amount.Cmp(cost) < 0 {
+		t.Fatalf("quote %v below cost %v: %v", q.amount.Rat(), cost.Rat(), err)
 	}
 }
 
