@@ -97,7 +97,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 | 订单状态只按设计表里的边变化 | 转移表是代码里唯一的一份；测试枚举所有（从，到）组合，表外的全部被拒 |
 | 限额在锁内检查 | 账户级计数在账户的事务级咨询锁内读、插入；商户当天额度在用量计数行的行锁内读、加；并发测试：最后一点额度或最后一个待支付名额同时被 10 个请求抢，只有放得下的那些成功 |
 | 一笔订单的已冻结、发送中、待确认、成功的退款额度之和 ≤ 入账额度 | 退款在订单行锁下插入并检查；数据库 CHECK 管单行，合计由锁和性质测试守 |
-| 一笔订单的退款金额之和 ≤ 净付款额，退完时恰好相等 | 金额 = ⌊额度 × 净付款额 ÷ 入账额度⌋，让累计额度达到入账额度的那一笔取余数；在订单行锁下按退款记录算；性质测试：任意汇率序列（锁定、宽限期内、到账汇率）和任意部分退款拆分下，Σ退款 ≤ Σ实付 |
+| 一笔订单的退款金额之和 ≤ 净付款额，退完时恰好相等 | 金额 = ⌊额度 × 净付款额 ÷ 入账额度⌋，让累计额度达到入账额度的那一笔取余数；退不退手续费由第一笔退款定下、记在订单上（`refund_with_fee`），净付款额不随政策变；在订单行锁下按退款记录算；性质测试：任意汇率序列（锁定、宽限期内、到账汇率）和任意部分退款拆分下，Σ退款 ≤ Σ实付 |
 | 退款只按"已冻结 → 发送中 → 成功 / 失败 / 待确认 → 成功 / 失败"变化，转分录、解冻各在一个事务里 | 状态的条件更新与 billing 的调用同事务；"发送中"在调渠道之前单独提交；测试注入渠道超时、渠道失败、提交失败，不出现"扣了没退"或"退了没扣" |
 | 渠道不认退款单号时，结果未知的退款从不重发 | 只有 `Caps` 含 `RefundKey` 时，任务才对发送中、待确认的退款再调 `Refund`；测试：第一个事务后崩溃，退款恰好发一次；发送中崩溃，不认单号的渠道一次也不重发、进待处理；同一订单的第二笔退款在第一笔落定前被拒 |
 | 一个人不能把未知退款标为失败 | `Resolve` 标失败要求凭证和另一个人的批准；测试：同一人发起并批准被拒；渠道其实已退时，只按凭证落定为成功 |
@@ -114,15 +114,15 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
-| `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl`、`mode`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl` 在 1 分钟到 24 小时；`(site_id, sort)`；不删除，只停用 | 非密的站点数据：读 `in_any_scope()`（账户范围的充值页要读），查询一律带 `site_id`；写 `in_scope(site_id, NULL)`；主站行只有平台范围能改，由管理接口的控制面守卫 |
+| `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl`、`mode`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl` 在 1 分钟到 24 小时；`(site_id, sort)`；不删除，只停用 | 站点的公开配置（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读 `in_any_scope()`（账户范围的充值页要读），查询一律带 `site_id`；写 `in_scope(site_id, NULL)`；主站行只有平台范围能改，由管理接口的控制面守卫 |
 | `merchant_configs` | `merchant_id` 主键、`site_id`、`settings`（非密配置，规范 JSON，供后台展示）、`ciphertext`/`nonce`/`wrapped_dek`/`key_version`（密钥、轮换中的旧密钥、`settings` 的 SHA-256）、`rev` | 改 `settings` 必须同时重新封装 | 站点数据：`in_scope(site_id, NULL)` 读写，账户范围读不到 |
 | `merchant_methods` | `merchant_id`、`site_id`、`method`、`upstream`、`fee_ppm`、`fee_fixed`、`single_min`、`single_max`、`daily_limit`、`enabled` | 主键 `(merchant_id, method)`；`fee_ppm` 0…500000；`fee_fixed ≥ 0`；`single_min ≤ single_max`（都设了时）；后三项是付款币种的总额（最小单位） | 同 `merchants` |
-| `merchant_usage` | `merchant_id`、`site_id`、`day`（UTC 日）、`used`（付款币种的最小单位） | 主键 `(merchant_id, day)`；`used ≥ 0` | 例外：读写都是 `in_any_scope()`。账户范围的下单事务要锁它、加它，却读不到别的账户的订单；行里只有一个数字，没有租户的内容，错了最多让限额失准，每日对账按订单复算核对 |
+| `merchant_usage` | `merchant_id`、`site_id`、`day`（UTC 日）、`used`（付款币种的最小单位） | 主键 `(merchant_id, day)`；`used ≥ 0` | 共享计数（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读写都是 `in_any_scope()`，`axiom_app` 只能 UPDATE `used` 一列。账户范围的下单事务要锁它、加它，却读不到别的账户的订单 |
 | `settings` | `site_id` 主键，加「后台配置」表里站点级的各项 | 各项范围 CHECK；没有行就用代码里的默认值 | 同 `merchants` |
-| `orders` | `id`、`site_id`、`account_id`、`user_id`、`merchant_id`、`method`、`state`、`idem_key`、`fingerprint`、`credits`、`site_currency`、`pay_currency`、`total`、`fee`、`fee_ppm`、`fee_fixed`、`rate_id`、`ref_num`/`ref_den`、`applied_num`/`applied_den`、`arrival_rate_id`、`arrival_ref_num`/`arrival_ref_den`、`arrival_num`/`arrival_den`、`trade_no`（下单时网关给的，可空）、`checkout`（支付链接或二维码，不含 `ClientSecret`）、`expires_at`、`paid_total`、`paid_fee`、`credited`、`paid_at`、`next_query_at`（E1-5 加）、`client_ip`、`created_at`、`updated_at` | `credits > 0`；`total > 0`；`0 ≤ fee ≤ total`；`(rate_id IS NULL) = (pay_currency = site_currency)`；`arrival_*` 同空同非空；`state` 枚举；`state = 'paid' → paid_at, paid_total, paid_fee, credited` 非空、`credited > 0`、`0 ≤ paid_fee ≤ paid_total`；唯一 `(account_id, idem_key)`；`(merchant_id, trade_no)` 普通索引；部分索引 `(expires_at) WHERE state = 'pending'`；`(account_id, created_at DESC)`；`(merchant_id, created_at)` 供对账复算用量 | 账户数据：`in_scope(site_id, account_id)` |
+| `orders` | `id`、`site_id`、`account_id`、`user_id`、`merchant_id`、`method`、`state`、`idem_key`、`fingerprint`、`credits`、`site_currency`、`pay_currency`、`total`、`fee`、`fee_ppm`、`fee_fixed`、`rate_id`、`ref_num`/`ref_den`、`applied_num`/`applied_den`、`arrival_rate_id`、`arrival_ref_num`/`arrival_ref_den`、`arrival_num`/`arrival_den`、`trade_no`（下单时网关给的，可空）、`checkout`（支付链接或二维码，不含 `ClientSecret`）、`expires_at`、`paid_total`、`paid_fee`、`credited`、`paid_at`、`refund_with_fee`（第一笔退款定下，之后沿用，E1-6b 加）、`next_query_at`（E1-5 加）、`client_ip`、`created_at`、`updated_at` | `credits > 0`；`total > 0`；`0 ≤ fee ≤ total`；`(rate_id IS NULL) = (pay_currency = site_currency)`；`arrival_*` 同空同非空；`state` 枚举；`state = 'paid' → paid_at, paid_total, paid_fee, credited` 非空、`credited > 0`、`0 ≤ paid_fee ≤ paid_total`；唯一 `(account_id, idem_key)`；`(merchant_id, trade_no)` 普通索引；部分索引 `(expires_at) WHERE state = 'pending'`；`(account_id, created_at DESC)`；`(merchant_id, created_at)` 供对账复算用量 | 账户数据：`in_scope(site_id, account_id)` |
 | `order_payments` | `id`、`order_id`、`site_id`、`account_id`、`merchant_id`、`trade_no`、`amount`、`currency`、`source`（notify、query、admin）、`at` | 唯一 `(merchant_id, trade_no)`，冲突时进待处理记录、不报错；`amount > 0`；`(order_id)` | 账户数据 |
 | `order_events` | `id`、`order_id`、`site_id`、`account_id`、`at`、`source`（notify、query、user、admin、job）、`kind`、`from_state`、`to_state`、`trade_no`、`amount`、`raw`（截到 8 KiB） | 只插入：`axiom_app` 只有 INSERT、SELECT；`(order_id, at)` | 账户数据 |
-| `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、sending、pending、succeeded、failed）、`via`（channel、offline）、`credits`、`amount`、`with_fee`、`provider_ref`、`reason`、`evidence`、`requested_by`、`approved_by`、`idem_key`、`attempts`、`sent_at`、`next_query_at`、`created_at`、`finished_at` | `credits > 0`；`amount > 0`；`state IN ('sending','pending') → sent_at` 非空；唯一 `(order_id, idem_key)`；部分索引 `(next_query_at) WHERE state IN ('frozen','sending','pending')` | 账户数据 |
+| `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、sending、pending、succeeded、failed）、`via`（channel、offline）、`credits`、`amount`、`provider_ref`、`reason`、`evidence`、`requested_by`、`approved_by`、`idem_key`、`attempts`、`sent_at`、`next_query_at`、`created_at`、`finished_at` | `credits > 0`；`amount > 0`；`state IN ('sending','pending') → sent_at` 非空；唯一 `(order_id, idem_key)`；部分索引 `(next_query_at) WHERE state IN ('frozen','sending','pending')` | 账户数据 |
 | `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、multiple_payment、duplicate_payment、unmatched_payment、trade_no_conflict、statement、refund_unknown、ledger、usage）、`dedupe`（同一事实的键：网关订单号、退款 ID 或对账日期）、`detail`、`state`（open、resolved）、`resolution`、`evidence`、`resolved_by`、`approved_by`、`created_at`、`resolved_at` | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据 |
 
 - **对外 ID**：订单 ID 的对外写法就是发给渠道的商户订单号，`ord_` 加 26 个字符。
@@ -161,7 +161,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 ## 实现拆分
 
-按顺序；每个 PR 交付一件能单独评审、回滚的事，非生成代码不超过约 2000 行，超了按能力边界再拆。表的迁移随第一个用到它的 PR。E1-1（billing 的付费额度批次，`CreditPaid`）是 E1-2a 的前提；E1-2b 之后 E1-3、E1-4、E1-5 可以并行；E1-6a 改 billing 的写路径，不与其他改 billing 写路径的 PR 同时开，E1-6b 在它之后。
+按顺序；每个 PR 交付一件能单独评审、回滚的事，非生成代码不超过约 2000 行，超了按能力边界再拆：E1-2b 超了时，订单表、下单、取消、"我已付款"和不入账的过期留在 E1-2b，回调处理器、`order_payments`、`discrepancies`、入账和过期后到账拆成 E1-2c。表的迁移随第一个用到它的 PR。E1-1（billing 的付费额度批次，`CreditPaid`）是 E1-2a 的前提；E1-2b 之后 E1-3、E1-4、E1-5 可以并行；E1-6a 改 billing 的写路径，不与其他改 billing 写路径的 PR 同时开，E1-6b 在它之后。
 
 | PR | 内容 | 验收测试 |
 |---|---|---|
