@@ -96,14 +96,25 @@ func readSettings(environ []string) (nodeSettings, error) {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveVia(ctx, environ, logger, func(tel *telemetry.Telemetry) (*egress.Client, error) {
-		return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
-	})
+	return serveVia(ctx, environ, logger, directEgress)
+}
+
+// directEgress is the client a node reaches its suppliers through in production.
+func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
+	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 }
 
 // serveVia is serve with the client the node reaches its suppliers through: one pool of connections for the call path,
 // the console's admin and the suppliers' sync. A test gives one that may reach a supplier on loopback.
 func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error)) error {
+	return serveWith(ctx, environ, logger, outbound, startRecorder)
+}
+
+// serveWith is serveVia with the constructor of the call-record writer, which a test wraps to get the recorder this
+// call created.
+func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
 		return err
@@ -127,7 +138,7 @@ func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbou
 	if err != nil {
 		return err
 	}
-	recorder := startRecorder(ctx, db, tel, logger)
+	recorder := record(ctx, db, tel, logger)
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
