@@ -246,6 +246,31 @@ test.describe("pricing", () => {
     expect(state.rules.find((r) => !r.enabled && r.target.kind === "model")?.rev).toBe(3);
   });
 
+  test("limits are not applied yet: the inputs are disabled, a stored limit is told, and saving clears it", async ({
+    page,
+  }) => {
+    const state = await open(page, "/pricing");
+    await press(page, "pricing.rule.new").click();
+    for (const key of ["minMargin", "refMin", "refMax"]) {
+      await expect(dialog(page).getByLabel(words(`pricing.constraints.${key}`))).toBeDisabled();
+    }
+    await expect(dialog(page).getByText(zhText("pricing.constraints.stored"))).toHaveCount(0);
+    await close(page);
+
+    await page
+      .getByRole("button", { name: /修改“.*”规则/ })
+      .first()
+      .click();
+    await expect(dialog(page).getByLabel(words("pricing.constraints.minMargin"))).toBeDisabled();
+    await expect(dialog(page).getByText(zhText("pricing.constraints.stored"))).toBeVisible();
+    const sent = page.waitForRequest((request) => request.method() === "PUT");
+    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    await send(page);
+    expect((await sent).postDataJSON().rule.constraints).toEqual({});
+    await expect(done(page)).toBeVisible();
+    expect(state.rules[0]?.constraints).toEqual({});
+  });
+
   test("the preview prices chosen models for a tier and says what it cannot price", async ({ page }) => {
     await open(page, "/pricing");
     await page.getByLabel(words("pricing.preview.tier")).selectOption({ label: "Pro" });

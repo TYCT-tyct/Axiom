@@ -249,6 +249,13 @@ func TestPricingRuleConstraintsWait(t *testing.T) {
 			}
 		}
 	}
+	// The contract takes a member as a decimal or leaves it out: null and an empty text never reach the rule, so they
+	// are told as a malformed request, not mistaken for an absent limit.
+	for _, constraints := range []string{`null`, `{"min_margin_ratio":null}`, `{"min_margin_ratio":""}`} {
+		rule := ruleJSONWith(`{"kind":"author","id":"acme"}`, everything, faced, constraints)
+		rec := f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+rule+`}`, as(f.s))
+		expectAdmin(t, "previewing constraints "+constraints, rec, http.StatusBadRequest, codeInvalidRequest)
+	}
 	// Empty constraints are what every rule of this release has, and previewing one still accepts them.
 	rows := f.preview(`{"model_ids":["` + f.model + `"],"rule":` + ruleJSON(`{"kind":"author","id":"acme"}`, everything, faced) + `}`)
 	if len(rows) != 1 || rows[0].Status != adminapi.Priced {
