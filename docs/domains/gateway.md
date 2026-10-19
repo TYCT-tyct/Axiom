@@ -22,7 +22,7 @@
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
-- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 返回 OpenRouter 的模型列表格式（含价格、上下文长度等）。
+- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 要返回 OpenRouter 的模型列表格式（含价格、上下文长度等）；现在它和 `/v1/models` 是同一个列表，只有身份字段（[#311](https://github.com/TYCT-tyct/Axiom/issues/311)）。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
 - **`GET /v1/models`**：
   - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；
@@ -148,7 +148,7 @@
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；
   - 模型名后缀 `:floor`、`:nitro`：第一版不支持，带 `:` 的模型名返回"模型不存在"（见[模型目录的「名字解析」](catalog.md#名字解析)），同样的效果用 `provider.sort` 指定；
-  - `@preset/名称`；
+  - `@preset/名称`：尚未实现，现在按模型不存在处理（[#313](https://github.com/TYCT-tyct/Axiom/issues/313)）；
   - `session_id`、`prompt_cache_key`；
   - `user`：终端用户标识，用于防滥用和归因。
 
