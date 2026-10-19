@@ -21,48 +21,49 @@ import (
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
 	var failed []error
 	var after uuid.UUID
-	for changed < int(max) {
+	for changed < int(max) && ctx.Err() == nil {
 		var due []DueReservationsRow
 		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
 			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: after, Max: max})
 			return err
 		})
 		if err != nil {
-			return changed, errors.Join(append(failed, fmt.Errorf("billing: find what cleanup owns: %w", err))...)
+			failed = append(failed, fmt.Errorf("billing: find what cleanup owns: %w", err))
+			break
 		}
-		for _, d := range due {
-			after = d.RequestID
-			released, err := b.cleanOne(ctx, d)
-			if err != nil {
-				failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
-				if ctx.Err() != nil {
-					return changed, errors.Join(failed...) // the rest would fail for the same reason
-				}
-				continue
-			}
-			changed++
-			if released > 0 {
-				b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
-					"request", d.RequestID.String(), "released", released)
-			}
-			if changed >= int(max) {
-				break
-			}
-		}
+		n, errs := b.cleanPage(ctx, due, int(max)-changed)
+		changed += n
+		failed = append(failed, errs...)
 		if len(due) < int(max) {
 			break
 		}
+		after = due[len(due)-1].RequestID
 	}
 	return changed, errors.Join(failed...)
 }
 
-// cleanOne takes over one due reservation in a transaction of its own.
-func (b *Billing) cleanOne(ctx context.Context, d DueReservationsRow) (released int64, err error) {
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
-		released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
-		return err
-	})
-	return released, err
+// cleanPage takes over the reservations of one page until room are changed or ctx ends, each failure collected.
+func (b *Billing) cleanPage(ctx context.Context, due []DueReservationsRow, room int) (changed int, failed []error) {
+	for _, d := range due {
+		if changed >= room || ctx.Err() != nil { // the rest would fail for the same reason
+			break
+		}
+		var released int64
+		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+			released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+			return err
+		})
+		if err != nil {
+			failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+			continue
+		}
+		changed++
+		if released > 0 {
+			b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
+				"request", d.RequestID.String(), "released", released)
+		}
+	}
+	return changed, failed
 }
 
 // clean takes over one reservation, and returns how much it released, 0 when a Settle got there first.
