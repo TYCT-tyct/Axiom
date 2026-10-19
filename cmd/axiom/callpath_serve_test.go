@@ -41,6 +41,12 @@ func TestANodeServesModelCalls(t *testing.T) {
 	w.price()
 	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
 
+	// Both reconciliations run on the node's queue at startup, without waiting for their next interval.
+	waitUntil(t, 15*time.Second, func() bool {
+		return w.query(`SELECT count(DISTINCT kind)::text FROM river.river_job
+			WHERE kind IN ('billing.reconcile', 'suppliers.reconcile') AND state = 'completed'`) == "2"
+	})
+
 	w.checkMessages(n)
 	w.checkResponses(n)
 	w.checkChat(n)
@@ -164,9 +170,6 @@ func (w *callWorld) checkFreeReply(n runningNode) {
 	if got := w.query("SELECT charged::text || ' ' || waived::text FROM billing.reservations WHERE request_id::text = $1", id); got != "0 true" {
 		t.Errorf("the call was charged and waived as %q, want nothing charged and waived: its output was reported zero", got)
 	}
-	if got := w.query("SELECT count(*)::text FROM billing.waivers"); got != "0" {
-		t.Errorf("billing.waivers holds %s rows, want none: no cap counts a waiver", got)
-	}
 	var logged string
 	waitUntil(t, 5*time.Second, func() bool {
 		logged = w.query("SELECT free_of_charge::text || ' ' || price_nano::text || ' ' || finish_reason FROM observability.call_log WHERE id::text = $1", id)
@@ -227,6 +230,7 @@ func (w *callWorld) checkSecondNode(n runningNode) {
 // booking is what a settled call is expected to have left: the ledger's charge, the relay's request id on the supplier's
 // cost row with the endpoint that was called, and the usage the call log records.
 type booking struct {
+	attempts      int   // defaults to one; the last attempt delivered the recorded usage
 	charge, cost  int64 // what the user was charged and what the call cost the supplier, in billionths
 	ref, upstream string
 	input, output int
@@ -256,6 +260,12 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	}
 	w.checkSettled(r, want.charge)
 	w.checkBalanced()
+	if want.attempts == 0 {
+		want.attempts = 1
+	}
+	if got := w.query("SELECT count(*)::text FROM suppliers.attempt_costs WHERE request_id::text = $1", id); got != strconv.Itoa(want.attempts) {
+		w.t.Errorf("the supplier has %s attempt rows, want %d", got, want.attempts)
+	}
 	if want.tier == "" {
 		want.tier = "standard"
 	}
@@ -265,7 +275,7 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	}
 	if got := w.query(`SELECT count(*)::text || ' ' || coalesce(max(c.charge_ref), '') || ' ' || coalesce(max(e.upstream_name), '') || ' ' ||
 		coalesce(max(c.usage->>'tier'), '') || ' ' || coalesce(max(c.cost_flag), '')
-		FROM suppliers.attempt_costs c JOIN suppliers.endpoints e ON e.id = c.endpoint_id WHERE c.request_id::text = $1`, id); got != "1 "+want.ref+" "+want.upstream+" "+want.tier+" "+flag {
+		FROM suppliers.attempt_costs c JOIN suppliers.endpoints e ON e.id = c.endpoint_id WHERE c.request_id::text = $1 AND c.attempt_seq = $2`, id, want.attempts); got != "1 "+want.ref+" "+want.upstream+" "+want.tier+" "+flag {
 		w.t.Errorf("the supplier's rows are %q, want one with charge ref %q on the endpoint %q, served at %s, its cost %s", got, want.ref, want.upstream, want.tier, flag)
 	}
 	if got := w.query("SELECT estimated::text FROM billing.reservations WHERE request_id::text = $1", id); got != strconv.FormatBool(want.estimated) {

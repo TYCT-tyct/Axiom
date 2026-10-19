@@ -13,6 +13,9 @@ import (
 	"time"
 	"uuid"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"axiom/internal/platform/pg"
 )
 
@@ -36,6 +39,7 @@ type Config struct {
 	Lifetime  time.Duration // a reservation's deadline after admission: the longest call plus the settlement grace
 	Segments  Segments
 	Logger    *slog.Logger // where alerts go; default slog.Default()
+	Meter     metric.Meter // where the platform-borne counters go; nil for none
 }
 
 // heartbeatLimit is the longest period a heartbeat may have: one heartbeat missed must still leave the holder alive
@@ -51,6 +55,8 @@ type Billing struct {
 	suppliers Suppliers
 	logger    *slog.Logger
 	beat      atomic.Int64 // unix nanoseconds of the last time the holder's expiry was known to be pushed out
+	// borne counts the settlements the platform bore part of, and borneAmount what it bore, in billionths of a credit.
+	borne, borneAmount metric.Int64Counter
 }
 
 // holderMargin is how much of the holder's TTL Alive keeps back: a write that starts inside it may find the holder
@@ -77,6 +83,12 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
 		logger: cmp.Or(config.Logger, slog.Default()),
 	}
+	meter := config.Meter
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("billing")
+	}
+	b.borne = counter(meter, "axiom.billing.platform_borne", "Settlements whose price the account's floor kept it from paying in full.")
+	b.borneAmount = counter(meter, "axiom.billing.platform_borne.amount", "What the platform bore of those settlements, in billionths of a credit.")
 	registered := time.Now()
 	err := db.Tx(ctx, platform, func(tx pg.Tx) error {
 		if err := CheckFallbacks(ctx, tx); err != nil {
@@ -100,6 +112,29 @@ func (b *Billing) alert(seen []UnknownItem) {
 		b.logger.Error("billing: an unknown billing item appeared; the model takes no new requests until it is priced",
 			"model", u.Model.String(), "field", u.Field, "request", u.Request.String())
 	}
+}
+
+// counter makes a counter, whose name is a constant.
+func counter(m metric.Meter, name, description string) metric.Int64Counter {
+	c, err := m.Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		panic(err) // the instrument name is a constant
+	}
+	return c
+}
+
+// bear reports what the platform bore of a settlement that has committed: the part of the price the account's floor did
+// not let it pay (docs/domains/billing.md「红线」). It is the platform's loss and nobody else's signal, so it is logged at
+// error and counted; the amounts are in billionths of a credit.
+func (b *Billing) bear(ctx context.Context, request uuid.UUID, price, charged int64) {
+	if price <= charged {
+		return
+	}
+	borne := price - charged
+	b.logger.Error("billing: the platform bears part of a settlement; the account could not pay it in full",
+		"request", request.String(), "price", price, "charged", charged, "borne", borne)
+	b.borne.Add(ctx, 1)
+	b.borneAmount.Add(ctx, borne)
 }
 
 // Heartbeat extends the holder's life by the TTL from now, by the database's clock.
@@ -238,12 +273,13 @@ func (b *Billing) sweep(ctx context.Context) {
 	cleaned := 0
 	for range cleanupRounds {
 		n, err := b.Cleanup(ctx, cleanupBatch)
+		cleaned += n
 		if err != nil {
 			b.logger.Error("billing: the cleanup failed", "cleaned", cleaned, "err", err)
-			return
 		}
-		cleaned += n
-		if n < cleanupBatch {
+		// A round that cleaned nothing, or the last of the backlog, ends the sweep. A round that failed on some but
+		// cleaned others goes on: the failing ones come first again and the next batch reaches past them.
+		if n == 0 || err == nil && n < cleanupBatch {
 			return
 		}
 	}

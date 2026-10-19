@@ -13,7 +13,7 @@
 | `webui` | 提供嵌入程序的前端三个应用：缓存、预压缩、安全头、单页应用回退，见下文「前端文件」；`cmd/serveweb` 给端到端测试起同样的服务 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
-| `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」 |
+| `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」。生成的代码里内嵌的契约是 gzip 后的 base64，会被 gitleaks 的 `generic-api-key` 误报，所以仓库根的 `.gitleaks.toml` 只对这两个包的 `.gen.go` 放行，别处的密钥照常拦下 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
 | `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
@@ -191,6 +191,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
+  | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
 
   新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
@@ -255,7 +256,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 任务队列
 
-`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
+`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。节点只取自己有 worker 的任务种类：滚动发布期间旧节点碰到新版本登记的种类时不取，不消耗尝试次数也不退避，唯一任务因此不会被卡住（代价是领导节点的救援仍会丢弃它不认识的、已运行满 15 分钟的任务，所以新旧版本并存只应持续一次发布的时间）。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
 
 ### 查询（sqlc）
 

@@ -238,6 +238,7 @@ type clientWriter struct {
 	failFrom int       // writes from this one on fail; 0 never
 	stall    bool      // a write waits for its deadline and then fails, as one to a client that does not read
 	rate     int64     // bytes a second the client reads at; 0 as fast as it is given
+	onWrite  func()    // called at the start of every write, as a client that reads when it likes
 	deadlns  int
 }
 
@@ -259,6 +260,9 @@ func (w *clientWriter) WriteHeader(status int) {
 }
 
 func (w *clientWriter) Write(b []byte) (int, error) {
+	if w.onWrite != nil {
+		w.onWrite()
+	}
 	w.mu.Lock()
 	if w.status == 0 {
 		w.status = http.StatusOK

@@ -12,7 +12,6 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
-	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/reconcile"
 	"axiom/internal/suppliers/internal/store"
 )
@@ -279,13 +278,6 @@ func DefaultReconcileConfig() ReconcileConfig { return reconcile.DefaultConfig()
 // estimate was lower than the charge, and the charges lower than the estimate. Every change is an event for billing.
 func Reconcile(ctx context.Context, tx pg.Tx, now time.Time, cfg ReconcileConfig) (ReconcileReport, error) {
 	return reconcile.Run(ctx, tx, now, cfg)
-}
-
-// RecordCharges stores a page of the supplier's charge records, as the scan of its adapter read them, in the sync
-// engine's transaction. A record already stored stays as it was. A record not drawn on the wallet is stored and
-// otherwise ignored, and pauses the supplier; the number of them is returned for the engine to alert on.
-func RecordCharges(ctx context.Context, tx pg.Tx, supplier uuid.UUID, charges []adapter.Charge) (nonWallet int, err error) {
-	return reconcile.Ingest(ctx, tx, supplier, charges)
 }
 
 // AssignToLostRequest attributes a held charge to a lost request. It reports false when the charge is not held.

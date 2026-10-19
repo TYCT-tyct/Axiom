@@ -68,11 +68,12 @@ type rig struct {
 	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta
 	suppliers *suppliers.Service          // the real module, in a rig that has its tables
 
-	mu      sync.Mutex
-	admits  []*Call
-	hold    chan struct{} // when set, Run waits for it to close before it settles; see holdCalls
-	settled int
-	exec    *Executor // when set, Run is its Run
+	mu         sync.Mutex
+	admits     []*Call
+	hold       chan struct{} // when set, Run waits for it to close before it settles; see holdCalls
+	settled    int
+	exec       *Executor       // when set, Run is its Run
+	clientGone <-chan struct{} // closed when the server sees the client of the latest call that reached Run go
 }
 
 type rigOptions struct {
@@ -193,6 +194,7 @@ func (r *rig) warmConnections(n int) {
 func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	r.mu.Lock()
 	r.admits = append(r.admits, c)
+	r.clientGone = req.Context().Done()
 	hold, exec := r.hold, r.exec
 	r.mu.Unlock()
 	if exec != nil {

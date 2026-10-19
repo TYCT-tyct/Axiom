@@ -202,6 +202,14 @@ class E2ECache(unittest.TestCase):
         self.assertEqual((status, "cache miss" in out), (0, True))
         self.assertEqual((self.repo.root / "ran.log").read_text(encoding="utf-8").count("e2e"), 2)
 
+    def test_a_partial_pass_does_not_stand_for_the_full_suite(self):
+        script = ["-c", FAKE_E2E, str(self.repo.root)]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            for extra_args in (["admin-access"], []):
+                web_cache.e2e(self.repo.root, self.cache, "axiom test", [sys.executable, *script, *extra_args], "node 1 pnpm 1")
+        self.assertEqual(out.getvalue().count("cache miss"), 2)
+        self.assertEqual((self.repo.root / "ran.log").read_text(encoding="utf-8").count("e2e"), 2)
+
     def test_failure_is_not_cached(self):
         status, _ = self.e2e(exits=1)
         self.assertEqual(status, 1)

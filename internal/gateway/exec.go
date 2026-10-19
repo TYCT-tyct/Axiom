@@ -176,7 +176,7 @@ type session struct {
 
 	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
 	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
-	currency platform.Currency       // of the last attempt's price
+	currency platform.Currency       // of the last attempt's price, the site's until one is made
 	skips    skips
 	last     *attempt // the attempt in progress, or the last one made
 
@@ -199,7 +199,7 @@ type session struct {
 func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *session {
 	now := time.Now()
 	return &session{
-		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now,
+		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now, currency: c.site.Currency,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
 	}
@@ -211,7 +211,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending is out.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
-	o := billing.Outcome{Attempts: s.ends, Cancelled: s.isGone()}
+	o := billing.Outcome{Attempts: s.ends}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
@@ -245,8 +245,10 @@ func (s *session) conclude(ctx context.Context, e ended) {
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
 // aggregated, or the failure, which carries what was generated and the error for a Chat or Responses client and is the
 // error alone for a Messages one (docs/domains/gateway.md「错误」). Finish and Fail return the body and the status of a
-// relay that has not ended yet, which is always the case here.
+// relay that has not ended yet, which is always the case here. The body is the relay's buffers, so its share of the
+// node's budget stays charged until the body is written or given up on (Relay.Release), as answerReply's is.
 func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
+	defer e.relay.Release()
 	final := protocol.Final{Pending: err != nil}
 	if fin != nil {
 		final = *fin

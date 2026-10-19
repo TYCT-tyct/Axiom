@@ -224,7 +224,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: true,
       target: { kind: "model", id: uuid(5, 1) },
       audience: { kind: "tier", id: tierId(2) },
-      method: { kind: "cost_plus", margin_ratio: "0.3" },
+      method: { kind: "reference_multiplier", multiplier: "1.3", currency_conversion: "face" },
       constraints: { min_margin_ratio: "0.1" },
     },
     {
@@ -233,7 +233,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: true,
       target: { kind: "author", id: "anthropic" },
       audience: { kind: "all" },
-      method: { kind: "reference_multiplier", multiplier: "1.1", currency_conversion: "exchange" },
+      method: { kind: "reference_multiplier", multiplier: "1.1", currency_conversion: "face" },
     },
     {
       ...base,
@@ -241,7 +241,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: false,
       target: { kind: "all" },
       audience: { kind: "all" },
-      method: { kind: "cost_plus", markup_ratio: "0.2" },
+      method: { kind: "reference_multiplier", multiplier: "1.2", currency_conversion: "face" },
     },
   ];
 }

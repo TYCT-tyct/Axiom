@@ -153,7 +153,7 @@ func TestCreateSupplierRefusals(t *testing.T) {
 }
 
 // TestSupplierLifecycle: a supplier in use is paused and resumed, its unit value confirmed, its login replaced and
-// removal started, each answered with the supplier and audited once; a change the status does not allow is a conflict.
+// removed, each answered with the supplier and audited once; a change the status does not allow is a conflict.
 func TestSupplierLifecycle(t *testing.T) {
 	f := newSupplierFixture(t)
 	made := f.connect()
@@ -182,8 +182,8 @@ func TestSupplierLifecycle(t *testing.T) {
 		t.Errorf("the status after a new login: %s", s.Status)
 	}
 	rec := f.change(f.s, http.MethodPost, path+"/removal", `{"reason":"done with it"}`, newKey())
-	expectAdmin(t, "removeSupplier", rec, http.StatusAccepted, "")
-	expectAdmin(t, "pausing a supplier being removed", f.change(f.s, http.MethodPut, path+"/status", `{"status":"paused","reason":"r"}`, newKey()),
+	expectAdmin(t, "removeSupplier", rec, http.StatusOK, "")
+	expectAdmin(t, "pausing a removed supplier", f.change(f.s, http.MethodPut, path+"/status", `{"status":"paused","reason":"r"}`, newKey()),
 		http.StatusConflict, codeConflict)
 	for _, action := range []string{"supplier.pause", "supplier.resume", "supplier.unit_value", "supplier.replace_login", "supplier.remove"} {
 		if f.auditCount(action) != "1" {

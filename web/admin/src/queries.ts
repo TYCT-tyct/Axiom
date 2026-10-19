@@ -58,8 +58,8 @@ export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
     getNextPageParam: nextCursor,
   });
 
-// A supplier that is being connected or removed changes by itself, as the sync works through it: the page asks again
-// until it settles.
+// A supplier that is being connected changes by itself, as the sync works through it: the page asks again until it
+// settles.
 export const supplierQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "supplier", id],
@@ -67,7 +67,7 @@ export const supplierQuery = (id: string) =>
       unwrap(adminApi.GET(`${base}/suppliers/{supplier_id}`, { params: { path: { supplier_id: id } }, signal })),
     refetchInterval: ({ state }) => {
       const status = state.data?.supplier.status;
-      return status === "connecting" || status === "removing" ? 3000 : false;
+      return status === "connecting" ? 3000 : false;
     },
   });
 

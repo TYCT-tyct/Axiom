@@ -32,6 +32,28 @@ class NeedsBenchmark(unittest.TestCase):
         self.assertTrue(ci_skips.needs_benchmark(["web/a.ts", "docs/a.md"]))
 
 
+class NeedsDeployCheck(unittest.TestCase):
+    def test_anything_the_container_is_built_from_runs_it(self):
+        for path in ("deploy/compose.yaml", "deploy/postgres/roles.sh", "Dockerfile.dev", "go.mod", "go.sum",
+                     "cmd/axiom/serve.go", "cmd/axiom/healthcheck.go", "cmd/axiom/keysettings.go",
+                     "internal/platform/config/config.go", "internal/billing/migrations/00001_x.sql",
+                     "web/admin/vite.config.ts", "web/site/src/app.ts", "web/pnpm-lock.yaml", "justfile",
+                     "scripts/web_cache.py", "scripts/ci/deploy-check.sh", "scripts/deploy_name.py", "tools/go.mod"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_skips.needs_deploy_check([path]))
+        self.assertTrue(ci_skips.needs_deploy_check(["docs/a.md", "cmd/axiom/serve.go"]))
+        self.assertTrue(ci_skips.needs_deploy_check([]))
+
+    def test_only_clearly_irrelevant_files_skip_it(self):
+        for paths in (["docs/a.md"], ["README.md", "AGENTS.md"], ["internal/x/x_test.go"], ["cmd/axiom/admin_test.go"],
+                      ["internal/x/testdata/sample.sse"], [".github/workflows/ci.yml"],
+                      ["scripts/test_ci_skips.py", "scripts/ci_skips.py", "scripts/train.py", "scripts/check_scope.py",
+                       "scripts/workflow/check_docs.py", "scripts/ci/runner-host.sh"],
+                      ["web/e2e/admin-access.spec.ts", "web/playwright.config.ts"]):
+            with self.subTest(paths=paths):
+                self.assertFalse(ci_skips.needs_deploy_check(paths))
+
+
 class ExitCodes(unittest.TestCase):
     def main(self, action, paths):
         with mock.patch.object(ci_skips, "changed_paths", return_value=paths):
@@ -41,11 +63,16 @@ class ExitCodes(unittest.TestCase):
         self.assertEqual(self.main("bench-needed", ["docs/a.md"]), ci_skips.NOT_NEEDED)
         self.assertEqual(self.main("bench-needed", ["main.go"]), 0)
 
-    def test_a_failed_diff_runs_both_checks(self):
+    def test_deploy_needed_uses_the_same_code_for_not_needed(self):
+        self.assertEqual(self.main("deploy-needed", ["docs/a.md"]), ci_skips.NOT_NEEDED)
+        self.assertEqual(self.main("deploy-needed", ["deploy/compose.yaml"]), 0)
+
+    def test_a_failed_diff_runs_every_check(self):
         for error in (OSError("git missing"), subprocess.CalledProcessError(1, ["git"])):
             with self.subTest(error=error):
                 with mock.patch.object(ci_skips, "changed_paths", side_effect=error):
                     self.assertEqual(ci_skips.main(["bench-needed", "base"]), 0)
+                    self.assertEqual(ci_skips.main(["deploy-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["md-only", "base"]), 1)
 
     def test_md_only_codes(self):

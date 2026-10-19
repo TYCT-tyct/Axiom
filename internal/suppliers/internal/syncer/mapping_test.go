@@ -63,11 +63,6 @@ func TestMapUpstream(t *testing.T) {
 			if got := MapUpstream(c, tc.alias, tc.name); got != tc.want {
 				t.Errorf("MapUpstream(%q) = %+v, want %+v", tc.name, got, tc.want)
 			}
-			// what is not mapped is not routable
-			facts := EndpointFacts{Normal: true, Wallet: true, Balance: "10", Reserve: "1", GroupSelected: true, Mapped: MapUpstream(c, tc.alias, tc.name).Mapped, CostKnown: true, UsableCredentials: 1}
-			if got, want := facts.Check(), map[bool]Reason{true: Routable, false: Unmapped}[tc.want.Mapped]; got != want {
-				t.Errorf("Check = %q, want %q", got, want)
-			}
 		})
 	}
 }

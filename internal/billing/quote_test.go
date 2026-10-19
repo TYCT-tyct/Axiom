@@ -282,3 +282,24 @@ func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
 		}
 	}
 }
+
+// TestQuoteEntryNeedsSegments: a segmentable entry with no segment size or no overshoot configured is refused, not
+// quoted with a segment of 0 tokens, which reserves no output; the same entry whole needs neither.
+func TestQuoteEntryNeedsSegments(t *testing.T) {
+	d := Demand{TextBytes: 80}
+	for name, s := range map[string]Segments{
+		"no segment size": {Overshoot: time.Second},
+		"no overshoot":    {Output: 40},
+		"neither":         {},
+	} {
+		if got, err := quoteEntry(d, entry(t, true, 3), s); !errors.Is(err, errNoSegments) {
+			t.Errorf("%s: quote = %s, %v; want errNoSegments", name, units(t, got.amount), err)
+		}
+		if _, err := Quote(d, []Quotable{entry(t, true, 3)}, s, nil); !errors.Is(err, errNoSegments) {
+			t.Errorf("%s: Quote = %v; want errNoSegments", name, err)
+		}
+	}
+	if got, err := quoteEntry(d, entry(t, false, 3), Segments{}); err != nil || units(t, got.amount) != "5080" {
+		t.Errorf("a whole entry with no segments: quote = %s, %v; want 5080", units(t, got.amount), err)
+	}
+}

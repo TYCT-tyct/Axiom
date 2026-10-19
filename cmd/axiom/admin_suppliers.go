@@ -297,7 +297,7 @@ func (a adminAPI) SetSupplierStatus(ctx context.Context, request adminapi.SetSup
 	return adminapi.SetSupplierStatus200JSONResponse{Body: supplier, Headers: adminapi.SetSupplierStatus200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-// RemoveSupplier starts removing a supplier: the sync takes it out of the snapshot and goes on to the end.
+// RemoveSupplier removes a supplier: out of routing, its login deleted and its keys erased, in one transaction.
 func (a adminAPI) RemoveSupplier(ctx context.Context, request adminapi.RemoveSupplierRequestObject) (adminapi.RemoveSupplierResponseObject, error) {
 	id, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -305,13 +305,13 @@ func (a adminAPI) RemoveSupplier(ctx context.Context, request adminapi.RemoveSup
 	}
 	supplier, replayed, err := idempotently(ctx, a.db, "removeSupplier", request.Params.IdempotencyKey, []any{request.SupplierId, request.Body},
 		func(tx pg.Tx) (adminapi.Supplier, error) {
-			removing, err := a.suppliers.Remove(ctx, tx, actor(ctx), id, request.Body.Reason)
-			return supplierBody(removing), err
+			removed, err := a.suppliers.Remove(ctx, tx, actor(ctx), id, request.Body.Reason)
+			return supplierBody(removed), err
 		})
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.RemoveSupplier202JSONResponse{Body: supplier, Headers: adminapi.RemoveSupplier202ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+	return adminapi.RemoveSupplier200JSONResponse{Body: supplier, Headers: adminapi.RemoveSupplier200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 // ReplaceSupplierLogin seals a new login over the old one; the supplier is `connecting` again.

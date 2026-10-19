@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"uuid"
@@ -12,7 +13,9 @@ import (
 // Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), up to max reservations,
 // each in a transaction of its own under its balance row lock, and returns how many it changed. A pending reservation
 // past its deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged,
-// and the request is left with suppliers as a lost one, with its route.
+// and the request is left with suppliers as a lost one, with its route. One that fails does not stop the rest: its error
+// is joined into the one returned, and the reservations after it are still taken over, since the failing one is first in
+// line again on every sweep and would otherwise hold them all back.
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
 	var due []DueReservationsRow
 	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
@@ -22,24 +25,39 @@ func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err erro
 	if err != nil {
 		return 0, fmt.Errorf("billing: find what cleanup owns: %w", err)
 	}
+	var failed []error
 	for _, d := range due {
-		if err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error { return b.clean(ctx, tx, d.RequestID, d.AccountID) }); err != nil {
-			return changed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err)
+		var released int64
+		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+			released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+			return err
+		})
+		if err != nil {
+			failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+			if ctx.Err() != nil {
+				break // the rest would fail for the same reason
+			}
+			continue
 		}
 		changed++
+		if released > 0 {
+			b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
+				"request", d.RequestID.String(), "released", released)
+		}
 	}
-	return changed, nil
+	return changed, errors.Join(failed...)
 }
 
-func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) error {
+// clean takes over one reservation, and returns how much it released, 0 when a Settle got there first.
+func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (released int64, err error) {
 	c, err := b.lock(ctx, tx, id, accountID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if c.row.State == "pending" {
-		return c.takeOver(ctx, tx)
+	if c.row.State != "pending" {
+		return 0, nil // a Settle got there first
 	}
-	return nil // a Settle got there first
+	return c.row.Amount, c.takeOver(ctx, tx)
 }
 
 // lock locks the account's balance row and reads the reservation under it.

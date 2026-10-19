@@ -88,10 +88,10 @@ export default {
   remove: {
     open: "移除",
     title: "移除 {{name}}",
-    body: "移除不能撤销：它先退出路由，等进行中的调用结束，把账单记录读到最后，再删除登录信息。",
+    body: "移除不能撤销：它立即退出路由，并清除登录信息和所有 key 的密文；进行中的调用用手上的 key 结束。",
     action: "移除",
-    started: "已开始移除，状态为“移除中”，完成后变成“已移除”。",
-    keys: "M1 里 Axiom 不改动供应商那边，它在那边建过的 key 需要有人自己去撤销。",
+    started: "已移除。登录信息和 key 的密文都已清除。",
+    keys: "M1 里 Axiom 不改动供应商那边，它用过的 key 需要有人自己去撤销；key 的清单在审计记录里。",
   },
   unit: {
     open: "确认单位价值",
@@ -143,6 +143,7 @@ export default {
       quota_exhausted: "额度用尽",
       expired: "已过期",
       disabled: "已停用",
+      erased: "已清除",
     },
     empty: { title: "还没有绑定 key", body: "给被选用的分组绑定供应商那边已有的 key。" },
   },

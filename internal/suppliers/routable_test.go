@@ -37,7 +37,7 @@ func TestRoutableIsWhatListRoutableHolds(t *testing.T) {
 		return err
 	})
 
-	got := w.svc.Routable()
+	got := w.routable()
 	if len(got) != 1 || len(listed) != 1 {
 		t.Fatalf("Routable has %d endpoints and ListRoutable %d, want one of each", len(got), len(listed))
 	}
@@ -45,6 +45,28 @@ func TestRoutableIsWhatListRoutableHolds(t *testing.T) {
 	for _, id := range []uuid.UUID{off, unknown} {
 		if slices.ContainsFunc(got, func(r Routable) bool { return r.ID == id }) {
 			t.Errorf("Routable holds endpoint %s, which no call may be routed to", id)
+		}
+	}
+}
+
+// TestOnlyAFundedSupplierIsRoutable: a supplier whose balance was never read, or is zero or overdrawn, is out of the
+// routing snapshot; one above zero is in.
+func TestOnlyAFundedSupplierIsRoutable(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	for _, c := range []struct {
+		balance string
+		routes  bool
+	}{{"NULL", false}, {"0", false}, {"-13.5", false}, {"0.000001", true}, {"100", true}} {
+		w.tx(func(ctx context.Context, tx pg.Tx) error {
+			_, err := tx.Exec(ctx, "UPDATE suppliers.suppliers SET balance_native = "+c.balance+" WHERE id = $1", w.supplier)
+			return err
+		})
+		if err := w.svc.Reload(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if routes := len(w.routable()) == 1; routes != c.routes {
+			t.Errorf("balance %s: routable %v, want %v", c.balance, routes, c.routes)
 		}
 	}
 }

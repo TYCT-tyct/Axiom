@@ -8,6 +8,8 @@ import (
 	"time"
 	"uuid"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -45,8 +47,10 @@ type callDeps struct {
 	accounts *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
 	catalog  *catalog.Catalog
 	egress   *egress.Client
+	gate     gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records  *observability.Recorder // the call log, which the settlements write to
+	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
 }
 
@@ -66,15 +70,17 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
-	router, err := routing.New(routing.Config{})
+	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
+	// stamps it on every plan and the executor reads it from there, not from the configuration.
+	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy})
 	if err != nil {
 		return callNode{}, err
 	}
-	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress})
+	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress, Meter: d.meter})
 	if err != nil {
 		return callNode{}, err
 	}
-	ledger, err := startLedger(ctx, d.db, d.logger)
+	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -108,13 +114,12 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 }
 
 // startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
-func startLedger(ctx context.Context, db *pg.DB, logger *slog.Logger) (*billing.Billing, error) {
-	gate := gateway.DefaultConfig()
+func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger) (*billing.Billing, error) {
 	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger,
+		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger, Meter: meter,
 	}, suppliers.CallWrites{})
 }
 
@@ -140,7 +145,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) *gateway.RouteDeps {
 	var once sync.Once
 	return &gateway.RouteDeps{
-		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable(), nil },
+		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:      d.catalog,
 		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
 		UnknownItems: unknownItems(d.db),
@@ -207,8 +212,9 @@ func (c callNode) Drain(ctx context.Context) {
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin
-// reaches routing within a period. A failed reload is logged and the previous snapshot stays, as the catalog's does:
-// the endpoints it could not read are the ones this node keeps calling.
+// reaches routing within a period. A failed reload is logged and the previous snapshot stays, as the catalog's does,
+// until it is older than the suppliers' MaxStale: then Routable refuses it and the node stops routing rather than
+// calling endpoints it can no longer confirm.
 func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Logger) {
 	tick := time.NewTicker(reloadEvery)
 	defer tick.Stop()
@@ -218,7 +224,7 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 			return
 		case <-tick.C:
 			if err := s.Reload(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("suppliers: the reload failed; the endpoints of the last one stay", "err", err)
+				logger.Error("suppliers: the reload failed; the endpoints of the last one stay until they are stale", "err", err)
 			}
 		}
 	}

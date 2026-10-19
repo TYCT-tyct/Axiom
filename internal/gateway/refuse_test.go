@@ -119,22 +119,27 @@ func TestRefusalOfAnError(t *testing.T) {
 	}
 }
 
-// A client is told to write a limit only where its format has a field for one.
+// A client is told to write a limit only where its format has a field for one, and the tool is named as the client's
+// format calls it; a tool the refusal cannot name is "a server tool".
 func TestUnboundedSaysWhatToDo(t *testing.T) {
 	t.Parallel()
+	unnamed := &billing.UnboundedError{Item: catalog.ItemInput}
 	for name, tc := range map[string]struct {
 		format protocol.Format
-		item   catalog.Item
+		err    error
 		want   string
 	}{
-		"messages web_search":        {protocol.Messages, catalog.ItemWebSearch, "set max_uses"},
-		"messages code_execution":    {protocol.Messages, catalog.ItemCodeExecution, "code_execution tool is not supported yet"},
-		"responses web_search":       {protocol.Responses, catalog.ItemWebSearch, "set max_tool_calls"},
-		"responses code_interpreter": {protocol.Responses, catalog.ItemCodeExecution, "set max_tool_calls"},
-		"chat web_search":            {protocol.Chat, catalog.ItemWebSearch, "web_search tool is not supported yet"},
-		"chat code_interpreter":      {protocol.Chat, catalog.ItemCodeExecution, "code_execution tool is not supported yet"},
+		"messages web_search":         {protocol.Messages, &billing.UnboundedError{Item: catalog.ItemWebSearch}, "the web_search tool is enabled without a limit on its uses, and this model has no default one: set max_uses on the tool"},
+		"messages code_execution":     {protocol.Messages, &billing.UnboundedError{Item: catalog.ItemCodeExecution}, "the code_execution tool is not supported yet"},
+		"responses web_search":        {protocol.Responses, &billing.UnboundedError{Item: catalog.ItemWebSearch}, "the web_search tool is enabled without a limit on its uses, and this model has no default one: set max_tool_calls"},
+		"responses code_interpreter":  {protocol.Responses, &billing.UnboundedError{Item: catalog.ItemCodeExecution}, "the code_interpreter tool is enabled without a limit on its uses, and this model has no default one: set max_tool_calls"},
+		"chat web_search":             {protocol.Chat, &billing.UnboundedError{Item: catalog.ItemWebSearch}, "the web_search_options setting is not supported yet"},
+		"messages, no tool named":     {protocol.Messages, billing.ErrUnbounded, "a server tool is not supported yet"},
+		"responses, no tool named":    {protocol.Responses, billing.ErrUnbounded, "a server tool is enabled without a limit on its uses, and this model has no default one: set max_tool_calls"},
+		"chat, no tool named":         {protocol.Chat, billing.ErrUnbounded, "a server tool is not supported yet"},
+		"an item with no client name": {protocol.Responses, unnamed, "a server tool is enabled without a limit"},
 	} {
-		r, expected := refusal(tc.format, fmt.Errorf("entry 0: %w", &billing.UnboundedError{Item: tc.item}))
+		r, expected := refusal(tc.format, fmt.Errorf("entry 0: %w", tc.err))
 		if !expected || r.Status != http.StatusBadRequest || !strings.Contains(r.Message, tc.want) {
 			t.Errorf("%s: %d %q, want 400 containing %q", name, r.Status, r.Message, tc.want)
 		}

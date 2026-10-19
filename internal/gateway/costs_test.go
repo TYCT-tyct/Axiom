@@ -80,9 +80,6 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 // cover a ref).
 func (r *rig) checkTheSuppliersCost(id uuid.UUID) {
 	r.t.Helper()
-	if got := r.count("SELECT count(*) FROM billing.waivers"); got != 0 {
-		r.t.Errorf("billing.waivers holds %d rows, want none: no cap counts a waiver", got)
-	}
 	if got := r.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); got < knownCost || got >= saleForTheInput {
 		r.t.Errorf("the attempt cost the books %d, want the supplier's %d at least and well below the sale's %d", got, knownCost, saleForTheInput)
 	}
@@ -134,8 +131,8 @@ func (r *rig) seedSupplierWith(prices string) (suppliers.AttemptReceipt, uuid.UU
 		}{
 			{
 				`INSERT INTO suppliers.suppliers (id, owner_scope, name, kind, origin, upstream_account, native_unit,
-				settlement_currency, mgmt_egress_id, status)
-				VALUES ($1, 'platform', 'Costed', 'newapi', 'https://supplier.test', 'account', 'quota', 'USD', 'direct', 'active')`,
+				settlement_currency, mgmt_egress_id, status, balance_native)
+				VALUES ($1, 'platform', 'Costed', 'newapi', 'https://supplier.test', 'account', 'quota', 'USD', 'direct', 'active', 100)`,
 				[]any{supplier},
 			},
 			{`INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, selected, present, codename)

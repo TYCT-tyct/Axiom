@@ -38,8 +38,8 @@ type stateFormat1 struct {
 }
 
 // TestTheStoredStateIsWhatAnOlderNodeReads: the state this version writes has exactly the members format 1 has, so the
-// version before this one loads it, and the state that version wrote loads here. CatchUpNotified is not one of them: the
-// store derives it from the stored removal_slow event, rather than adding a member an older node cannot read.
+// version before this one loads it, and the state that version wrote loads here. The members of a removal are among them
+// although the engine no longer takes one: a stored state has them.
 func TestTheStoredStateIsWhatAnOlderNodeReads(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
@@ -58,8 +58,7 @@ func TestTheStoredStateIsWhatAnOlderNodeReads(t *testing.T) {
 		Confirmed: map[string]string{"m": "{}"},
 		Scan:      adapter.ScanState(`{"v":1}`),
 		ScanOpen:  true,
-		Removal:   syncer.StepFinalScan, GraceUntil: at, RescanFrom: at, RemovalAt: at, Through: at,
-		CatchUpNotified: true,
+		Removal:   syncer.RemovalStep(2), GraceUntil: at, RescanFrom: at, RemovalAt: at, Through: at,
 	}
 	b, err := jsonx.MarshalCanonical(st)
 	if err != nil {
@@ -78,9 +77,6 @@ func TestTheStoredStateIsWhatAnOlderNodeReads(t *testing.T) {
 	var back syncer.State
 	if err := jsonx.UnmarshalKnown(b, &back); err != nil {
 		t.Fatalf("this version refuses a state format 1 writes: %v", err)
-	}
-	if back.CatchUpNotified {
-		t.Error("CatchUpNotified is stored in the state; a store must derive it from the removal_slow event")
 	}
 	if back.Removal != st.Removal || !back.RemovalAt.Equal(st.RemovalAt) || !back.Through.Equal(st.Through) {
 		t.Errorf("the removal read back as step %v at %v through %v", back.Removal, back.RemovalAt, back.Through)

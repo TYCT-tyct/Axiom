@@ -7,7 +7,7 @@
 ## 代码结构
 
 ```
-internal/suppliers/                 公开接口：Module()、CheckAdapters()、Service（调用面）、RecordAttempts 等、Reconcile
+internal/suppliers/                 公开接口：Module()、CheckAdapters()、Service（调用面）、RecordAttempts 等、Reconcile、Admin 与 NewAdmin（管理接口）、RegisterSync（同步的调度）
 internal/suppliers/internal/
   adapter/       契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec
   registry/      注册表：唯一同时引用所有适配器的文件，一个适配器一行；按 kind 查找
@@ -22,19 +22,19 @@ internal/suppliers/internal/
   removable/     `just adapters-removable` 的程序
 ```
 
-`sub2api/`（适配器，`testdata/` 里是从 sub2api 0.2.16 录制并脱敏的样本）已有；后续 PR 增加其余适配器的包、`wire/`（与系统无关的路径和鉴权头）和挑凭证。
+`newapi/` 和 `sub2api/`（适配器，`testdata/` 里是录制并脱敏的样本）已有，`syncer/`（同步引擎）、`persist/`（引擎状态的持久化）、`schedule/`（任务调度）、`registry/`（适配器注册表）也有；与系统无关的路径和鉴权头（`wire`）是 `attempt.go` 里的一张表，不是包；挑凭证在 `Acquire`。
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值。迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
 | `suppliers` | 归属（`owner_scope` 与 `site_id`、`account_id` 由 CHECK 保持一致）、`kind`、`origin`（`https://host[:port]`，小写）、`upstream_account`、原生单位与结算币种、管理出口、状态、`config_gen`、带符号的有限余额（`numeric` 的 NaN 和无穷被 CHECK 排除，倍率、阈值同样） | `UNIQUE (origin, upstream_account)` |
 | `supplier_logins` | 账号凭证：`kind` 加一份加密值（密文、nonce、包裹的数据密钥、主密钥版本），`version` 供比较后再写 | PK `supplier_id` |
 | `supplier_groups` | 上游的分组：`upstream_ref`、倍率、原始事实（jsonb）、是否选中、代号、是否仍存在 | `UNIQUE (supplier_id, upstream_ref)`、`UNIQUE (id, supplier_id)`、代号全局唯一且设定后不变 |
-| `credentials` | 调用凭证：对方的 key ID、加密的 key、状态、冷却、并发上限、出口；状态为"绑定中"时还没读到 key | `UNIQUE (supplier_id, upstream_key_ref)` |
-| `supplier_models` | 分组里的上游模型名、映射到的目录模型（空为待映射）、格式 | PK `(supplier_group_id, upstream_name)` |
+| `credentials` | 调用凭证：对方的 key ID、加密的 key、状态、冷却、并发上限、出口；状态为"绑定中"时还没读到 key，"已清除"（`erased`）时 key 已在移除时清空，行保留，因为用它做过的尝试指向这一行 | `UNIQUE (supplier_id, upstream_key_ref)` |
+| `supplier_models` | 分组里的上游模型名、映射到的目录模型（空为待映射）、格式、首次列出的时间（待映射队列按它排） | PK `(supplier_group_id, upstream_name)` |
 | `supplier_aliases` | 供应商别名，分组可空（整个供应商有效） | `UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)` |
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
@@ -53,7 +53,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
 - **行级安全**：`suppliers` 的策略是 `platform.in_scope(site_id, account_id)`，平台的供应商只有平台范围看得见；其余各表不存归属列，只存 `supplier_id`，策略是"这个供应商对本事务可见"，所以插入也挡住"挂到看不见的供应商下"，也不会有与父对象不一致的标签。
 - **复合外键**：凡同时存 `supplier_id` 和 `supplier_group_id` 的表，用 `(supplier_group_id, supplier_id) → supplier_groups (id, supplier_id)`，分组与行不可能属于不同供应商。别名的分组可空，空表示整个供应商。
-- **授权**：应用角色对配置表没有 DELETE（移除供应商是状态，要删密文行的移除流程随它的代码加授权）；旧的对账日志还留着 DELETE，但没有代码用它（「没有对账日志」）；UPDATE 按列授予，不含 `id`、`supplier_id`、归属列、`kind`、`origin`、`upstream_account`：身份和凭证发往的地址不能改。
+- **授权**：应用角色对配置表没有 DELETE，只有 `supplier_logins` 有（移除供应商时删封存的登录，没有外键指向它，迁移 `00006`）；旧的对账日志还留着 DELETE，但没有代码用它（「没有对账日志」）；UPDATE 按列授予，不含 `id`、`supplier_id`、归属列、`kind`、`origin`、`upstream_account`：身份和凭证发往的地址不能改。
 - **密钥**：表里没有明文列。加密值写进 `ciphertext`、`nonce`、`wrapped_dek`、`key_version` 四列，数据库只检查字段齐全和长度（nonce 12 字节、密文不短于 16 字节、包裹的数据密钥非空、版本号合法），**不能**分辨密文和别的字节：任何满足长度的明文也写得进去。加密由写入边界保证（只把 `secret.Sealed` 交给查询），值是否真实、是否属于这一行由 `secret.Open` 验证。`secret.Location` 的行 ID 在加密前就要知道，所以 `credentials.id` 由调用方生成，不用默认值。
 - **跨模块引用**：`model_id` 是目录的 ID，没有外键；`endpoints.cost_schedule_id` 与 `cost_schedules` 用（成本计划，端点）复合外键。
 
@@ -77,7 +77,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **读取**：余额 `/api/v1/auth/me`，有生效订阅即资金来源不是钱包（`/subscriptions/active`）；分组 `/groups/available`、用户倍率 `/groups/rates`；每个分组用其中一把可用的 key 读 `/v1/models` 和 `/v1/sub2api/billing` 的 `resolved_rate_multiplier`（含高峰）；key 的余额为 0 时列不了模型，该组标 `ModelsUnread`，保留上次的模型。key 列表按 `/api/v1/keys` 分页，`KeySecret` 按 ID 取（ID 只许数字）。目录和 key 清单超过一个限速窗口时（例如 29 个有 key 的分组要 61 次面板请求，窗口上限 60）读不完一轮：适配器把已读的部分留在这个 Manager 上（10 分钟内有效），被限速后再调用同一个 Manager 从断点接着读，不从头来；测试用程序自己的限速器和假时钟验证。成功的响应缺 `data`、列表或页数时不是"空结果"，而是 `ErrUnrecognised`，任务停下、状态不变。
 - **价格**：默认安装里普通用户看不到价格，模型的成本一律是空（未知），不上架，直到人确认底价；`adapter.ScaleSchedule` 把目录官方价乘分组倍率做成草稿（币种写 `XXX`，单位是对方的美元），用的是 `catalog.Schedule.Scaled`，与售价同一个取整。能公布价格的 `channels/available` 尚未读取（实例里关着，没有样本）。
 - **调用面**：`anthropic` 分组服务 Messages，`openai` 分组服务 Responses 与 Chat；订阅分组、高峰分组、其他平台不服务。对账键是响应头 `X-Client-Request-Id` 加 `client:` 前缀，等于扣费记录的 `request_id`（实测）；对方自己生成，不读我们传的。`Classify` 只读错误代码，不留对方的文字；`Cancels` 为否（对方把上游读完并全额扣费，实测）。
-- **扣费记录的扫描**：位置（`scanState`）是适配器自己的，模块当作不透明的字节，每一页连同它存下；空位置是第一次扫描，只记下"从现在起"（水位），本次返回 Done；之后每遍从（水位 − 5 分钟）读到（现在 − 30 秒），每天再读一遍最近 24 小时（补扫，不动水位）。`/api/v1/usage` 只认日期，所以一遍按 key 逐把读，新的在前、按页翻；起止日取窗口两端的日期（跨午夜两天都读），每页 200 条（每条还带着 key、用户和分组，页太大会超响应上限），一把 key 在短页或最旧一条早于窗口起点时结束，全部 key 结束才算读完。记录的用量映射到不重叠的计费项（输入、输出、缓存读、5 分钟和 1 小时缓存写），**只有记录里写了的项算已报告**；非 token 计费（按次、图片）带 `UnknownUsage`；`billing_type` 不是 0 的不是钱包。记录里的 key 原文、用户、地址一概不读。移除的第二遍读取用 `Rescan(从何时起)` 开一个补扫。
+- **扣费记录的扫描**：位置（`scanState`）是适配器自己的，模块当作不透明的字节，每一页连同它存下；空位置是第一次扫描，只记下"从现在起"（水位），本次返回 Done；之后每遍从（水位 − 5 分钟）读到（现在 − 30 秒），每天再读一遍最近 24 小时（补扫，不动水位）。`/api/v1/usage` 只认日期，所以一遍按 key 逐把读，新的在前、按页翻；起止日取窗口两端的日期（跨午夜两天都读），每页 200 条（每条还带着 key、用户和分组，页太大会超响应上限），一把 key 在短页或最旧一条早于窗口起点时结束，全部 key 结束才算读完。记录的用量映射到不重叠的计费项（输入、输出、缓存读、5 分钟和 1 小时缓存写），**只有记录里写了的项算已报告**；非 token 计费（按次、图片）带 `UnknownUsage`；`billing_type` 不是 0 的不是钱包。记录里的 key 原文、用户、地址一概不读。
 - **未验证**：key 的重置时间字段（`reset_*_at`）没有样本；分页 `total` 是否精确；订阅分组的记录形态。
 
 ## 同步
@@ -88,8 +88,8 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **失败**：网络错误和 5xx 指数退避（1 分钟起、上限 30 分钟、可加抖动），期间不调用，别的任务照跑，成功即清零；桶不够（`ErrBucketsFull`）不算失败，到 `Blocked.Until` 再来；响应认不出（`ErrUnrecognised`）只停这个任务，什么也不写，发事件；**鉴权被拒（`ErrAuthRejected`）停掉这个供应商的全部轮询**，状态"需处理"，发一个事件，之后的轮次什么也不调用。
 - **变化即事件**：目录规范化后与上次比较，只把差异写成事件（组、模型的增减，倍率变化，成本计划新版本）；同样的响应读两次没有新事件、新计划。成本计划 = 对方公布的价，或人确认的底价乘当前倍率；指纹变了才写新版本。路由要用的变化都有事件：组的倍率、组的事实（平台、订阅类型、高峰、状态）、模型的格式和能力限制（`Without`，快照里完整保存，没读到的组也保留）、资金来源、余额越过预留线和回升到告警线之上；相同的响应不发事件。
 - **扣费记录**：位置是适配器自己的（见各适配器一节），引擎一概不读：第一次调用不带位置，每一页连同返回的位置在一次提交里存下，被限速、出错、重启后从这个位置接着读，适配器说 Done 即一遍读完；记录按对方的请求编号去重。资金来源不是钱包的记录让供应商进入"需处理"。
-- **可路由**：`EndpointFacts.Check` 逐条判断（这份清单是设计草稿 #25 的第 4 节，本文是它的落地处）：供应商正常、资金是钱包且余额减预留大于 0、分组被选中、模型已映射、成本已知、至少一个可用凭证；给出第一个不满足的原因。供应商状态决定的几条由 `State.Facts` 填，其余由分组、映射、凭证的表补。「模型已映射」由 `syncer.MapUpstream` 判定：先看供应商别名（调用方从 `supplier_aliases` 查出），再用目录快照的内部识别查公开和内部名字，映射到的模型必须是上架的，退役或目录不认识的名字、带 `:free` 这类后缀而没有别名的名字都是未映射，`EndpointFacts.Mapped` 为假，端点不进路由；不带日期的名字只是候选（`Mapping.Unverified`），要先过真伪检测。持久化的投影（见「持久化」）每一步都用它写 `supplier_models.model_id`，并据此决定生成哪些端点。余额低于告警线发一次 `BalanceLow`，回升后才会再发。
-- **移除**：`Remove` 是持久化的分步状态，每一步先提交再做下一步，可重复调用：离开快照（配置代次加一，记下重读的起点 = 开始移除的时间 − 宽限期）→ 等在途尝试结束（最多 5 分钟）→ 读扣费记录，一遍接一遍，直到适配器报告读到了开始移除的时间（`ChargePage.Through`；一遍可能只覆盖一个窗口，积压要读多遍。**没报告就不往下走**：零值当作没追上、继续读，所以忘填的适配器表现为这家供应商删不掉，而不是积压被当成读完；契约测试（`adaptertest.ScanProblem`）要求 Done 页报告它，所以只有没跑契约测试的适配器会忘。这次读的上界是两层 `MaxPages`：一次 `Remove` 最多读 `MaxPages` 遍、每遍最多 `MaxPages` 页（默认 50 × 50 = 2500 页），每页一次提交、每次提交续租；要读多少遍取决于一遍覆盖多长的窗口（new-api 1 分钟到 1 天自适应，sub2api 从水位读到现在减 30 秒）和对方的限速，所以读到起点要多久没有上界。从开始移除算起超过 `CatchUpAlert`（默认 30 分钟，含等在途尝试的 `DrainLimit`）还没读到起点，就在这一步写一次 `RemovalSlow` 事件告警，一次移除只发一次（「已发过」由 `sync_events` 里有没有 `removal_slow` 推出，不存进状态，旧版本才读得了新版本写的状态；宽限期后的补读不再告警，那时已经从起点读过）→ 等 30 分钟宽限 → 从起点重读一遍（Manager 实现了 `adapter.Rescanner` 就用 `Rescan(起点)`，否则接着 `Charges` 读）→ 删除加密凭证（`DeleteSecrets` 必须可重复执行）→ 完成。宽限期内才出现、时间戳在起点之后的记录都会被读到。完成时的事件列出这家供应商的 key，由人到对方后台吊销（M1 不对对方做写操作）。账号已被拒绝则跳过读取。
+- **可路由**：路由快照（`ListRoutable`）取的是：供应商 `active` 或 `low_balance` 且**余额大于 0**（余额没读到过的也不进来，与"单位价值确认之前不进路由"同一原则；新接入的供应商在第一次余额同步之前最多约 1 分钟不可路由，节点此时报"not ready"是预期的）、已确认单位价值、分组被选中、端点启用且成本已知、至少一个 `active` 且有密文的凭证。"模型已映射"由 `syncer.MapUpstream` 判定：先看供应商别名（调用方从 `supplier_aliases` 查出），再用目录快照的内部识别查公开和内部名字，映射到的模型必须是上架的，退役或目录不认识的名字、带 `:free` 这类后缀而没有别名的名字都是未映射（`Mapping.Mapped` 为假），端点不生成，不进路由；不带日期的名字只是候选（`Mapping.Unverified`），M1 没有真伪检测，候选的端点照常接流量。持久化的投影（见「持久化」）每一步都用它写 `supplier_models.model_id`，并据此决定生成哪些端点；端点被挡在外的原因（`syncer.Reason`）写在端点行上。资金是不是钱包不在这条线上：一笔不是从钱包扣的扣费记录会让供应商停为"需处理"。余额低于告警线发一次 `BalanceLow`，回升后才会再发；余额越过 0 发 `BalanceCrossed`，与上面的门槛同一条线。按请求的预估成本过滤、余额低时降权、余额不足的失败让整家歇着，都尚未做（M2）。
+- **移除**：`Admin.Remove` 当场完成，一个事务：状态直接是 `removed`、`config_gen` 加一（`ListRoutable` 不再取它，下一次 `Reload` 起不接新尝试，正在跑的一轮同步作废）；删 `supplier_logins` 的那一行；把它全部凭证的 `ciphertext`、`nonce`、`wrapped_dek`、`key_version` 置空并标为 `erased`（行保留：`attempt_costs` 的外键指向凭证）；要吊销的 key 的清单就是这些 `erased` 凭证行的 `upstream_key_ref`（`ListCredentialsOf` 不按状态过滤，后台详情里看得到），由人到对方后台吊销（M1 不对对方做写操作）；审计记录的 `detail` 只放 `keys_to_revoke_count`，不列 ID，因为 `audit_log.detail` 上限 8192 字节，一家供应商的 key 多了列出来会让移除的事务回滚、永远删不掉密文。不等在途尝试，它们手里有 `Reload` 时读进内存的 key，结算写成本用的外键行还在；不再读一次扣费记录，对账没有跑，读了也没人用。已 `removed` 的再移除返回现状；`removing`（早先的版本留下的）再移除就完成它。排队的同步任务取到租约后读到 `removed` 就结束（见「调度」），打开适配器之前不读登录。引擎不再带移除的步骤：`State` 里 `Removal`、`GraceUntil`、`RescanFrom`、`RemovalAt` 等成员留着，只为读得了已存的状态。
 - **尚未做**：按需的"无逐笔记录"判定、成本低估下架（随对账）。
 
 ## 持久化
@@ -97,17 +97,17 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 `persist/` 把引擎的 `Store` 和适配器的 `LoginStore` 接到数据库上。一个节点对一个供应商 `Acquire` 一次租约得到一个 `Session`，一轮同步（`Round`）用它的 `Store()`，登录令牌的比较后再写用它的 `Logins()`，轮后 `Release`。
 
 - **租约与栅栏**：取租约是一条 `INSERT … ON CONFLICT DO UPDATE … WHERE 租约已空或已过期`，每次取到 `lease_fence` 加一；租约还有效就取不到（`ErrLeaseHeld`，不是故障：另一个节点正在同步它）。每一次写（提交一步、`Swap`）在自己的事务开头先 `SELECT … FOR UPDATE` 锁住租约行，要求 `lease_fence = 手上的`，再锁供应商行（`FOR NO KEY UPDATE`，同 `UPDATE` 非键列的锁，不挡别的表往它上面写子行）并要求 `config_gen` 还是取租约时的，两者持到事务结束；任一不符返回 `ErrFenced`，整个事务回滚。接手租约和改 `config_gen` 都要等这个事务结束，所以通过的写排在接手或改动之前，不通过的绝不会落在它之后：租约过期后被接手的旧持有者，哪怕晚了很久才写、哪怕写到一半对方才来接手，也写不进去。只在语句里用快照读栅栏不行：`UPDATE … FROM` 只锁目标行，等锁期间别的事务接手，它仍会按旧栅栏写入。**锁的顺序**固定为租约行 → 供应商行 → 登录等依赖行；改凭证的代码要先加 `config_gen`（锁供应商行）再写登录，不能倒过来，否则会和 `Swap` 死锁。版本（`version = 读到的`）仍在 `UPDATE` 里比较。时钟只决定租约何时可以被接手，不决定写入放不放行，节点之间时钟差几秒只会让接手早一点或晚一点，不会让两个节点都写进去。每次提交把租约续到「提交时刻 + `LeaseTTL`」，一轮最多 50 页，每页一次提交，所以一轮可以比 `LeaseTTL` 长；停止提交的节点在 `LeaseTTL` 后失去租约。
-- **一步的提交是一个事务**：先 `hold`（上一条的两把锁），再写状态、这一步的事件（`sync_events`）和成本计划（`sync_plans`）、扣费记录（`RecordCharges` 同一个 `Ingest`）和对供应商的投影，要么全在要么全不在。栅栏挡住时（`ErrFenced`：租约被接手、配置代次变了、版本不符）没有写任何东西。配置代次变了就整步作废，包括因旧凭证被拒而要写的「需处理」，以免它把已经改好的供应商再次停在永不同步。事件按名字存（`Kind.String()`），不按常量的序号。
-- **状态的格式**：`state` 是引擎的 `State` 的规范 JSON，`format` 记它的格式号，读不认识的格式或多出来的成员就失败而不是猜。`CatchUpNotified` 不序列化：读时由 `sync_events` 里有没有 `removal_slow` 推出，所以新版本写的状态旧版本也读得了（滚动发布时两个版本同时运行）。`Task`、`Status`、`RemovalStep` 的常量只在末尾增加。第一次同步的供应商没有状态，读出来是零值的 `State`。
-- **投影**：每次提交把最后读到的余额和观察时间写到 `suppliers`，并按引擎的状态写 `status`：正常时 `connecting → active`、`active ↔ low_balance`，需处理写 `needs_attention`，移除写 `removing`、`removed`。人暂停的 `paused` 和对账暂停的 `needs_attention` 不被「正常」覆盖，移除不会被改回需处理。路由的快照看这个状态。配置代次（`config_gen`）不投影：引擎的代次只管它自己的轮次，`suppliers.config_gen` 由改凭证、暂停、移除的代码加一，`hold` 用它判断一轮是不是在凭证被换之前开始的。
+- **一步的提交是一个事务**：先 `hold`（上一条的两把锁），再写状态、这一步的事件（`sync_events`）和成本计划（`sync_plans`）、扣费记录（`reconcile.Ingest`）和对供应商的投影，要么全在要么全不在。栅栏挡住时（`ErrFenced`：租约被接手、配置代次变了、版本不符）没有写任何东西。配置代次变了就整步作废，包括因旧凭证被拒而要写的「需处理」，以免它把已经改好的供应商再次停在永不同步。事件按名字存（`Kind.String()`），不按常量的序号。
+- **状态的格式**：`state` 是引擎的 `State` 的规范 JSON，`format` 记它的格式号，读不认识的格式或多出来的成员就失败而不是猜。新版本写的状态旧版本也读得了，反过来也一样（滚动发布时两个版本同时运行），所以删掉不再用的成员会让已存的状态读不了：`Removal` 等移除的成员不删，`TestTheStoredStateIsWhatAnOlderNodeReads` 钉住成员的集合。`Task`、`Status`、`RemovalStep` 的常量只在末尾增加。第一次同步的供应商没有状态，读出来是零值的 `State`。
+- **投影**：每次提交把最后读到的余额和观察时间写到 `suppliers`，并按引擎的状态写 `status`：正常时 `connecting → active`、`active ↔ low_balance`，需处理写 `needs_attention`，引擎不再写 `removing`、`removed`：移除是管理操作写的状态（见「移除」）。人暂停的 `paused` 和对账暂停的 `needs_attention` 不被「正常」覆盖，移除不会被改回需处理。路由的快照看这个状态。配置代次（`config_gen`）不投影：引擎的代次只管它自己的轮次，`suppliers.config_gen` 由改凭证、暂停、移除的代码加一，`hold` 用它判断一轮是不是在凭证被换之前开始的。
 - **清单的投影**（`project.go`，与状态同一次提交）：引擎最后读到的分组和模型也落到表上，`routing` 与后台读的是这些行。同一步里先写 `supplier_groups`（名字、倍率、事实、`last_seen_at`），再写 `supplier_models`（每个上游名字，`model_id` 由 `MapUpstream` 按别名和目录定，映射不上就是 NULL，那就是待映射队列；别名是人或运营 agent 的决定，投影只读、不建），最后写 `endpoints` 和 `cost_schedules`。每条语句都先读同一事务里的行，一样就不写：同一份清单读两次，五张表一行都不动（`sync_events` 以外零写入，测试用 `xmin` 核对）；`first_seen_at` 只在插入时由数据库取、之后不改（待映射队列按它排序），`last_seen_at` 因此是"这个分组最后一次被改动"，不是"最后一次出现在清单里"。
   - **端点**：键是 `(supplier_group_id, model_id)`（`UNIQUE`，一个分组的同一个模型只有一个端点）。只有映射到上架目录模型的、且拿到了成本计划的模型才有端点，上游名字和格式跟着清单走；一个分组的两个名字指向同一个模型时，端点是带日期的那个（名字本身是版本的证据），都不带日期时取名字排序里的第一个，所以选谁与清单读到的顺序无关。`enabled` 只在插入时取默认的真，之后同步从不写它，人停用的端点不会被重新打开；`model_id` 也不改（改名在 `upstream_name` 里）。
   - **成本计划**：`sync_plans` 里按「分组/模型」和指纹存的版本，投影时按指纹取回计划本身（引擎的状态只存指纹），写进 `cost_schedules`（只追加，`UNIQUE (endpoint_id, fingerprint)` 让同一版只有一行），再把 `endpoints.cost_state` 置为 `known`、指向那一行。没有计划就没有端点；计划消失（模型不再公布价、或人撤回了确认）时端点是 `unknown` 加原因，行和 `enabled` 都留着，计划回来时还是同一个端点和同一行成本。`cost_state_reason` 是投影自己写的几种原因之一（未映射、未上架、不可调用、成本未知、清单不再提供）时照常改写，对账写的 `under_estimated`（估算偏低）不动，除非出现新的一版计划——新版本就是新估算。
   - **不删除**：清单里没有的分组和模型标 `present=false`，端点置为成本未知，原因 `the listing no longer offers the model`；回头时还是原来那些行，`first_seen_at` 不变，成本计划也是原来那一行。应用角色本来就没有 DELETE。
-- **`next_due`**：提交时从状态算出，是各任务到期时间和退避结束时间中最早的一个（已停的任务不算；状态不是正常，即需处理或移除中，算作永不），调度据此找到该同步的供应商。
+- **`next_due`**：提交时从状态算出，是各任务到期时间和退避结束时间中最早的一个（已停的任务不算；状态不是正常，即需处理，算作永不；已移除的供应商不在 `syncable` 里，扫描不选它），调度据此找到该同步的供应商。
 - **`LoginStore`**：`Load` 用供应商 ID 为位置打开密文（`suppliers.supplier_logins`、供应商 ID、`login`），整条记录挪到别处就打不开；`Swap` 封存新值后在一个事务里先 `hold`（租约栅栏还是手上的、`config_gen` 还是取租约时的），再要求版本没变地写入，任一不符返回 `ErrStaleLogin`，登录令牌不会被一个已失去租约的节点或一个在凭证被人换过之后才到的刷新覆盖。
 - **限速桶**：`rate_buckets` 的键是（谁，桶名）。适配器的 `BucketSpec.Per` 为按 IP 的，「谁」是 origin 加出口，同一站点的所有供应商共用；为按账号的，是供应商 ID。一个请求声明的桶在一个事务里计数：建桶和封桶都是 `INSERT … ON CONFLICT DO UPDATE`，按（谁，桶名）排序：新桶由插入持有，已有的桶由冲突时的更新持有，所以建桶这一步结束时已按键序持有声明的全部桶，之后的 `FOR UPDATE`（也按键序）不再取新的锁。若建桶用 `DO NOTHING`，请求会持着新桶去等别人持有的已有桶，而那个请求正要新桶，两条语句各自排序也躲不开这种死锁。所以两个请求以相反的顺序声明同样的桶，无论桶是否已存在，都只是互相等待；测试覆盖全部已有、全部新建、已有加新建三种状态；检查、再一起计数，所以全取或全不取；429 把所占的桶封到 `Retry-After` 对所有节点生效。代价：每个对外请求多一个数据库事务；管理面的请求每个供应商每分钟几十次，调用面的请求不走这里。窗口从第一个请求的节点的时钟开始，节点间几秒的时钟差对几十秒到几十分钟的窗口没有影响。
-- **尚未做**：事件的投递（`sync_events` 是出口，投递随后）；在发出会用掉一次性令牌的请求（sub2api 的刷新）之前先续一次租约以缩小窗口（设计草稿 #25 §4）：现在只靠 `Swap` 的栅栏拒绝失去租约的写回，令牌已经用掉时，下一个持有者读到的是旧版本，刷新被对方拒绝后改用密码重新登录；人把「需处理」的供应商恢复的管理操作（它要同时改 `suppliers.status` 和重置引擎的状态）；移除的触发和 `Hooks`（在途尝试数、删除密文）。
+- **尚未做**：事件的投递（`sync_events` 是出口，投递随后）；在发出会用掉一次性令牌的请求（sub2api 的刷新）之前先续一次租约以缩小窗口（设计草稿 #25 §4）：现在只靠 `Swap` 的栅栏拒绝失去租约的写回，令牌已经用掉时，下一个持有者读到的是旧版本，刷新被对方拒绝后改用密码重新登录；人把「需处理」的供应商恢复的管理操作（它要同时改 `suppliers.status` 和重置引擎的状态）。
 
 ## 调度
 
@@ -165,11 +165,11 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 对方的文字不进错误、日志和表 | sub2api 的失败路径只带状态码和白名单内的代码（`knownCodes`，不在表内的代码一律说"没有已知代码"，回显了凭证的 `reason`、`code` 也进不来）；测试让响应回显一个凭证，核对每个读取的错误里都没有它；录制样本里的令牌、key、邮箱、地址、请求编号都是占位符 |
 | 缺成员的成功响应不是空结果 | `open` 要求 `code` 为 0 且有 `data`，列表和页数缺失即 `ErrUnrecognised`；表驱动测试覆盖 `{"code":0}`、`null`、`{}`、缺 `pages` 等 |
 | 5xx 不会因为响应里的代码被当成"没执行" | `Classify` 先排除 5xx；契约测试（`adaptertest`）对已知拒绝代码的 5xx 也要求"可能执行了" |
-| 进宽限期之前，扣费记录已读到开始移除的时间 | 适配器在 `ChargePage.Through` 报告读到哪里，引擎读到它不早于开始移除的时间（容差 2 分钟）才进宽限期，不解析适配器的位置；Done 页没报告（零值）当作没追上，不放行，契约测试（`adaptertest.ScanProblem`）要求每个适配器在 Done 页报告它；真实 new-api 适配器的测试让积压跨多个窗口，把记录放在缺口里，断言删除凭证前已入库；假时钟的测试覆盖忘填时不进宽限期、超过 `CatchUpAlert` 只发一次 `RemovalSlow`、以及宽限期后的补读遇到限流或分页未完时不发这个告警 |
-| 引擎与适配器的扫描协议一致 | 位置是适配器自己的不透明字节，第一次调用不带位置；`adaptertest.RunScan` 对每个适配器检查（含结束一遍后的位置能再传回），新 API 和 sub2api 各有一个真实适配器经引擎读完一遍、并在移除时读到迟到记录的测试 |
+| 引擎与适配器的扫描协议一致 | 位置是适配器自己的不透明字节，第一次调用不带位置；`adaptertest.RunScan` 对每个适配器检查（含结束一遍后的位置能再传回），新 API 和 sub2api 各有一个真实适配器经引擎读完一遍的测试 |
 | 对方撤销账号后不再登录或轮询 | `ErrAuthRejected` 后适配器不再发登录，引擎把供应商置为"需处理"；测试数发出的请求 |
 | 同一个响应同步两次没有新事件 | 目录以规范化内容比较；测试 |
-| 一次移除的每一步都可重复，效果只有一次 | `Remove` 的步骤持久化；测试对每一次提交失败和每个钩子失败重跑，核对事件、代次 |
+| 移除之后库里没有这家供应商的密文，用它做过的尝试仍能结算 | `Admin.Remove` 一个事务：登录行删除、凭证的四个密文列清空且状态为 `erased`（表的 CHECK 拒绝"已清除却还有密文"），行保留；测试：移除后登录行为 0、凭证全部清空、审计记录列出 key 的 ID 而不含密文、下一次 `Reload` 后不在路由里、之后仍能写 `attempt_costs`、再移除一次不改代次也不重复审计 |
+| 没有余额的供应商不进路由 | `ListRoutable` 要求 `balance_native > 0`；测试：没读过、为 0、透支的不进，为正的进 |
 | 失败不带对方的文本，没把握不算免费 | `Cause` 的成员；`adaptertest` |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`；`just adapters-removable`（现在对 new-api 真实生效） |
 | 一个供应商同一时刻最多一个同步任务在排队或运行 | 任务按参数唯一，状态含运行；测试：入队两次只插入一个，完成后能再入队；扫描三次只为到期、没人持有的供应商入队一个任务 |
@@ -187,6 +187,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 没有成本计划的端点不进路由 | `ListRoutable` 要求 `cost_state = 'known'` 且连得上 `cost_schedules`，写入侧只在拿到计划后置 `known`；测试先读没有计划的清单、再读有计划的 |
 | 人停用的端点不会被同步重新打开 | `enabled` 只在插入时取默认值，投影的 UPDATE 不含它；测试停用后换一版计划再同步 |
 | `Routable()` 与 `ListRoutable` 是同一批端点 | 两者按同一套条件（启用、成本已知、分组选中、凭证可用），`Routable()` 取 `Reload` 时的快照；测试对比两边的 id、上游名字、模型、格式和成本计划 |
+| 一家供应商读不出来不拖垮其余，`Reload` 一直失败时不无限期沿用旧端点 | `Reload` 按供应商收集错误、整家排除并记日志、计数；快照带最后一次成功 `Reload` 的时间，`Routable()` 超过 `MaxStale` 返回 `ErrStale`；测试：一个凭证 key 打不开时另一家照常、这一家被排除、日志和计数有记录、库里状态不变且下次 `Reload` 仍成功；`Reload` 失败时在 `MaxStale` 内仍返回快照、超过后 `ErrStale`；失败期间被停用的供应商过了 `MaxStale` 不再被路由 |
 | 节点崩溃后从存下的位置接着读扣费记录 | 每页与位置同一次提交；测试让一个节点读到第三页失败且不还租约，租约过期后另一个节点从第三页开始，记录各存一次 |
 | 失去租约或凭证已被换过的节点不覆盖登录令牌 | `Swap` 和提交先锁住租约行与供应商行再比较栅栏和 `config_gen`；测试逐项，并在写被锁挡住时让接手、改凭证同时发生 |
 | 扣费水位只升不降，每条记录至少读到一次 | 前进遍的 `end` 大于水位、水位取最大值；新记录只出现在列表最前面；测试覆盖整页边界、扫描期间新增、迟到记录（重叠回扫和每日补扫） |
@@ -198,8 +199,8 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ```go
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
-func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；key 打不开或缺适配器就失败，旧快照不动
-func (s *Service) Routable() []Routable                        // 快照里的端点，按 id 排：routing 建快照用（见下）
+func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；读不了库才失败（旧快照和确认时间不动）；key 打不开或缺适配器的供应商整家不进本节点的快照（记日志、计数），其余照常
+func (s *Service) Routable() ([]Routable, error)                // 快照里的端点，按 id 排：routing 建快照用（见下）；最后一次成功的 Reload 超过 MaxStale（默认 30 秒）返回 ErrStale
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较交换；ErrNoEndpoint、ErrNoSlot
 func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Compact, Body, Header}
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
@@ -214,18 +215,20 @@ func RecordLostRequest(ctx, tx, request, site, account uuid.UUID, route []uuid.U
 func ResolveLostRequest(ctx, tx, request uuid.UUID) error      // 迟到的结算带着真实尝试回来
 func EndRequest(ctx, tx, id, site, account, at) error          // billing 在终结请求的事务里调用
 type CallWrites struct{}                                       // 上面四个写入作为 billing.Suppliers：无状态，请求用 uuid.UUID，零值交给 billing
-func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账，见下
+func Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账事务与人工归属，见下；Reconcile 由周期任务调用，归属接口供运营调用
+func RegisterReconcile(ReconcileJobConfig) error                            // 节点队列启动前注册逐条对账与告警
 ```
 
 与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`），`CallWrites` 把它们按 billing 要的形状（请求是 `uuid.UUID`）转发出去；`Cost` 没有时间参数，按回执里的成本计划计价；`Send` 的入参是 `Call{Format, Compact, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Compact` 选格式的压缩端点路径（`compactPaths` 表里，目前只有 Responses 的 `/v1/responses/compact`）：那个端点不是格式自己的路径，路径只在 `wire` 与 `compactPaths` 两张表里（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
 
+- **按供应商隔离**：`Reload` 里一家供应商的数据读不出来（凭证的 key 打不开、没有这个类型的适配器、成本计划或单位价值不合法），这一家的全部端点不进本节点的快照，其余供应商照常载入，这次 `Reload` 仍然成功。告警靠两样：错误日志带固定事件名 `suppliers.unloadable`（含供应商 ID 和原因），计数指标 `axiom.suppliers.unloadable` 按供应商（`supplier` 属性）每次 `Reload` 加一，看的是上升而不是总数（与队列的 `queue.job_discarded`、`axiom.pg.queue.discarded_jobs` 同一做法）；指标的 Meter 由 `Config.Meter` 给，nil 为不计。**不写库、不改供应商状态**：原因可能只在本节点（例如只有它缺一个 key 版本），写全局状态会让别的节点正常的供应商也停掉；`Reload` 里的写会与管理员刚做的修复竞争（没有 `config_gen` 比较时旧的读结果会盖掉新的修复），也会在等行锁时拿着 `reloadMu` 卡住整个刷新循环，让所有供应商一起过期。代价：状态页不显示这家出了问题，要靠告警发现；快照里缺它，其余节点是否也缺它各自独立。
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **`Acquire`**：在没有冷却、没有过期（按时钟，不靠数据库变更）、在途数低于上限的凭证里挑负载最低的，对在途数做一次比较交换；拿不到返回 `ErrNoSlot`，gateway 跳过这个条目，不算尝试。在途数和冷却时间按凭证 ID 存在快照之外，重建快照不清零。
-- **`Routable`** 是给 `routing` 建快照的投影，只含已经能调的端点（启用、成本已知、分组选中、有可用的凭证、供应商在正常状态）：`ID`、`Supplier`、`Model`（目录模型）、`Upstream`（发给上游的名字）、`Formats`（这个端点能用的调用格式，来自 `endpoints.formats`）、`Schedule`（成本计划，已按分组倍率缩放）、`Streams` 和 `Cancels`（适配器对这个供应商的说法）。它读的是 `Reload` 的快照，所以同一个快照里不会一半旧一半新；`ListRoutable` 是同一批行的查询，测试核对两边一致。模型的规格（上下文、输出上限、能力位）不在返回值里：那是目录的 `Model.Serving()`，`routing` 建快照时自己查。
+- **`Routable`** 是给 `routing` 建快照的投影，只含已经能调的端点（启用、成本已知、分组选中、有可用的凭证、供应商在正常状态）：`ID`、`Supplier`、`Model`（目录模型）、`Upstream`（发给上游的名字）、`Formats`（这个端点能用的调用格式，来自 `endpoints.formats`）、`Schedule`（成本计划，已按分组倍率缩放）、`Streams` 和 `Cancels`（适配器对这个供应商的说法）。它读的是 `Reload` 的快照，所以同一个快照里不会一半旧一半新；快照记着最后一次成功的 `Reload` 开始读库的时间，超过 `Config.MaxStale`（默认 30 秒，同目录）就返回 `ErrStale`，这样 `Reload` 一直失败时，期间被停用或移除的供应商不会无限期接流量（`gateway` 的重建因此失败，路由快照按自己的最长陈旧时间过期）；`ListRoutable` 是同一批行的查询，测试核对两边一致。模型的规格（上下文、输出上限、能力位）不在返回值里：那是目录的 `Model.Serving()`，`routing` 建快照时自己查。
 - **`Send`** 给每个失败标明上游是否执行过（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
-- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。`Correct` 按同一个值换算时，再给 `attempt_costs` 加 `unit_value_id` 列，是兼容的改动。
+- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执带行 id，但目前不落库：要按 id 复算已结算的尝试，需先给 `attempt_costs` 加 `unit_value_id` 列（兼容的改动）。
 - **`Credits`**（连同它换算前的 `Cost`，一次定价）= `Cost` 的原生金额 × 单位价值，精确相乘，转成十亿分之一时向上取整一次。只有结算币种就是要的币种时才能换算（还没有汇率）；币种不同、超出金额的范围时给 0 和"未知"，成本计划缺项时给已定价的部分和"未知"。gateway 把"未知"交给 billing，按 0 记成本：成本只进平台的账，不影响向用户收多少（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
@@ -241,7 +244,7 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 | `Detect` | 每次都先 `NormalizeOrigin` 再 `CheckOrigin`（探测没有重放）；按注册顺序问每个能被接入的适配器是否认得这个站点；站点要验证码时，只列不需要密码的登录成员；不存任何东西，每次探测最多 45 秒 | 同上两行；没有适配器能判断出站点答了没有（`ErrUnreachable`）；认不出不是错误，返回没有 `Kind` 的结果 |
 | `Connect` | 建供应商（`connecting`），来源须是 `NormalizeOrigin` 的结果、调用方已在同一次执行里 `CheckOrigin` 过；登录用 `master` 密钥封到 `Location{suppliers.supplier_logins, 供应商 ID, login}`；同一来源和账号只能接入一次 | `ErrNoAdapter`、`*LoginError`（缺成员，或给了这个类型不用的成员）、`ErrSupplierExists` |
 | `SetStatus` | 使用中或低余额的暂停，暂停的恢复；已经是要的状态则不动、不记审计、不升代次 | 其他状态（`ErrStatusLocked`）：`connecting`、`needs_attention` 由同步改，移除中和已移除不能回头 |
-| `Remove` | 从任何不是终点的状态开始移除，代次加一让正在跑的一轮同步作废；重复请求不动 | 已移除（`ErrStatusLocked`） |
+| `Remove` | 从任何状态当场移除（见「同步」的「移除」）：状态 `removed`，代次加一让正在跑的一轮同步作废，登录删除，凭证清空为 `erased`；已移除的再移除不动、不记审计 | 无：供应商不在是 `ErrNoSupplier` |
 | `ReplaceLogin` | 新登录封在旧的位置上，版本加一，供应商回到 `connecting`，代次加一 | 同 `Connect` 的登录检查；移除中和已移除 |
 | `ConfirmUnitValue` | 一单位余额值多少结算货币：大于 0、至多 1000、至多 15 位小数；只追加行，新的值从现在起生效，已算过的成本保留自己的 | `ErrUnitValue` |
 | `SelectGroup` | 选用或取消选用一个分组；第一次选用时给分组起代号（`g` 加 8 个 base32 字符），之后取消再选用不变 | `ErrNoGroup`、`ErrGroupGone`（选用已不在列表里的分组；取消不受限） |
@@ -255,15 +258,19 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 
 ## 对账
 
-`internal/suppliers/internal/reconcile`。**M1 只写不跑**：同步引擎在栅栏事务里经 `RecordCharges` 写入扣费记录（一条记录读两次只存一次），结算在它自己的事务里写入每次尝试的成本行（`attempt_costs`，含对账键），清理写入丢失的请求；`Reconcile`（匹配、判定、暂挂、事件）没有任何生产调用者，M1 不起周期任务，等真实的扣费记录有了再开（[M1 计划](https://github.com/TYCT-tyct/Axiom/issues/147)）。下面这一遍是它跑起来时的样子，代码与测试都在：
+`internal/suppliers/internal/reconcile`。同步引擎在栅栏事务里经 `reconcile.Ingest` 写入扣费记录（一条记录读两次只存一次），结算在自己的事务里写入 `attempt_costs`（含对账键），清理写入丢失的请求。节点在 `pg.Queue` 启动前调用 `RegisterReconcile`：River leader 每分钟投递 `suppliers.reconcile`，启动或换主也投递，任一节点的 worker 都可执行。相同参数的未完成任务去重；匹配、暂挂、摘牌、事件及下一页任务在同一平台范围事务提交，重复和迟到执行不改变已有归属或重复增加版本。
+
+选择独立周期任务，而非接在每家供应商同步之后：同步暂停、上游断线、尝试迟到时，已有扣费记录仍要继续对账。未匹配尝试的下一页游标随事务写入 River，换 worker 或重启不丢进度；周期任务仍从头检查，持续缺失的扣费记录会再次告警。匹配和暂挂超过每轮上限的积压留给下一轮。
+
+告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），后四项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
 
 1. **匹配**：一条语句，先占住只有这个对账键的那一个尝试，再把扣费记录归到它，尝试和扣费记录各有唯一约束，两个节点同时跑也只有一个成功。有两个以上尝试共用一个键时都不对上。已暂挂、已归到丢失请求或已确认未归属的扣费记录，尝试到了就改归到尝试，旧归属在同一条语句里撤销，所以归属的 CHECK 始终成立。
 2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：端点改回"成本未知"（原因 `under_estimated`），退出路由；偏低：只在报告里列出。
-3. **暂挂**：宽限（默认 30 分钟）内没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效。
+3. **暂挂**：过了宽限（默认 30 分钟）还没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效，不按冻结路线猜用户。
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）和等级，因为只有声明了的项才能校正暂估。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。
 6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表一批一批地列，`Config.After` 和报告里的 `Next`（按完成时间、请求、序号排序的游标）把它跨轮推进，列到末尾 `Next` 归零、下一遍从头开始，所以超过一批、始终对不上的尝试最终都会被报告一次。
-7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复；billing 按它幂等处理。没有消息队列时这张表就是事件的出口，billing 读它。
+7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复。billing 的事件消费与成本分录校正尚未接入（[#28](https://github.com/TYCT-tyct/Axiom/issues/28)）；本任务只做匹配、判定、暂挂、归属记录和告警，不修改用户收费。
 
 ## 没有对账日志
 
@@ -276,15 +283,16 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 - **尝试的成本行**（`attempt_costs`）：结算事务里写，与账本的 `supplier_cost` 分录同成同败，所以「这次尝试花了多少钱、对账键是什么、用的是哪个端点」不会只留在崩溃的进程里（[计费的「结算与账本」](../billing/README.md#结算与账本)）。
 - **丢失的请求**（`lost_requests`）：清理接管预留时写一行，带 `route_endpoint_ids`——预留冻结的路线里保留条目的端点（`billing.reservations.endpoints`，与 `prices` 等长同序）。没有尝试行时这是唯一可用的信息：这个请求可能被上游收过钱，钱最可能落在这些端点上。迟到的结算带着真实尝试回来时写 `lost_request_resolutions`。
 
-代价是崩溃前那一刻的尝试没有任何记账：进程没来得及结算，就只有丢失的请求，没有成本行。原来的日志只是把这个窗口从「整个请求」缩到「最近一次写入之后」，而这个写入本身也在请求路径之外；M1 用「不跑周期对账、崩溃的请求记成丢失」接受这个窗口（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
+代价是崩溃前那一刻的尝试没有任何记账：进程没来得及结算，就只有丢失的请求，没有成本行。原来的日志只是把这个窗口从「整个请求」缩到「最近一次写入之后」，而这个写入本身也在请求路径之外；M1 用「崩溃的请求记成丢失、对不上尝试的扣费暂挂后由人归属」接受这个窗口（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
 
-`ended_requests`（`EndRequest`）原先的读者是日志的清理 `PurgeJournal`，它删了以后这张表没有读者了：billing 仍在请求进入终态的事务里写它，但 M1 里没有代码读它（对账不跑，读它的查询也没有）。它同日志表一起在收缩的发布里删，连同 `EndRequest` 的调用（[Issue #213](https://github.com/TYCT-tyct/Axiom/issues/213)）；若在那之前有代码要读请求的结束时刻，就保留表，并在这里写明谁读。
+`ended_requests`（`EndRequest`）原先的读者是日志的清理 `PurgeJournal`，它删了以后这张表没有读者了：billing 仍在请求进入终态的事务里写它，但 M1 里没有代码读它（对账按尝试与扣费记录匹配，不读它）。它同日志表一起在收缩的发布里删，连同 `EndRequest` 的调用（[Issue #213](https://github.com/TYCT-tyct/Axiom/issues/213)）；若在那之前有代码要读请求的结束时刻，就保留表，并在这里写明谁读。
 
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
-| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
+| 独立 River 周期任务执行供应商逐条对账，估低摘牌；归属、事件与后续页同事务 | 即使同步暂停或尝试迟到，已有记录也要继续核对；重试不能重复加版本，下一页不能只留在某个 worker 内存里 | 只在同步成功后运行；每个节点各起计时器。参考源码（只读，2026-10-18）：[new-api `BillingSession.Settle`](https://github.com/QuantumNous/new-api/blob/6cf0d90b5ff27f901697dddd61e0c28aba8efefc/service/billing_session.go#L47) 根据本地算出的实际额度调整预扣，[`quota.go`](https://github.com/QuantumNous/new-api/blob/6cf0d90b5ff27f901697dddd61e0c28aba8efefc/service/quota.go#L250) 写消费日志；[sub2api `usageBillingRepository.Apply`](https://github.com/Wei-Shaw/sub2api/blob/b0a02a3304a0a78cdd003ddda1dd23ba02c03084/backend/internal/repository/usage_billing_repo.go#L22) 在事务内按请求号与 API key 去重并应用计费。这些结算路径没有拉取供应商扣费记录来做容差比较或估低摘牌，Axiom 沿用自己的[对账规则](../../docs/domains/billing.md#供应商成本) |
+| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照；id 目前只在内存回执里，复算已结算的尝试要先落库） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
 | 用周期扫描补任务，不让每个任务在结束时入队它的后继 | River 的唯一性必须含"运行"这一状态，任务结束前不能为同一个供应商插入后继；不唯一的后继链会在多入队一次后永远多一条。扫描没有状态，节点挂了、任务丢了都自愈，代价是到期后最多晚一个扫描间隔 | 后继链加扫描补漏：两套机制，还要防链增殖 |
 | 任务失败不由队列重试 | 重试的时间由引擎的退避决定，写在状态里，队列再重试一份会绕过它 | River 的重试：两份退避 |
 | 适配器的 `Open` 推迟到任务第一次用 | 登录失败成为那个任务的失败，进入引擎的处理（需处理、退避）；提前打开则一轮之前就失败，引擎看不到 | 轮前打开：登录被拒时引擎不知道，下一轮还会再登录，正是要避免的封号 |
@@ -293,6 +301,6 @@ func RecordCharges / Reconcile / AssignToLostRequest / AssignUnattributed(ctx, t
 | 限速桶放数据库里，每个请求一个事务 | 多节点共享一个出口地址时，各自在内存里计数会让合计超过对方的限速，被封号的是预付的账号；管理面请求少，一次事务的代价可忽略 | 把名额均分给各节点：节点数一变就要重分，空闲节点的名额浪费 |
 | 成本计划在 `sync_plans` 里按版本留全，投影时按指纹写进 `cost_schedules`，一处只存一份 | `sync_plans` 是版本的流水（引擎每步只提交差异，读起来便宜），`cost_schedules` 是端点在用的那一版，按 `(endpoint_id, fingerprint)` 唯一，同一版不会写两次；端点引用它，复算和审计看得到一次尝试当时按什么计价。投影按指纹回读计划本身，所以引擎的状态里只放指纹 | 只留 `sync_plans`、端点靠指纹去查：调用面每次要反查版本；只留 `cost_schedules`：引擎不知道哪一版是新的，也留不下没映射上名字的计划 |
 | 端点只在拿到成本计划后生成，计划消失时把成本置为未知而不是删行、也不动 `enabled` | 端点存在就等于"有东西可以按这个价调"，`ListRoutable` 的条件与写入侧一致；行留着，`attempt_costs` 引用的成本计划版本和人的开关都不丢，计划回来时是同一个端点 | 先生成端点为未知：后台多出一堆不可用的行；计划消失时改成禁用：分不清是人停的还是同步停的，人停用的语义被吞掉 |
-| 成本行写进 billing 的结算事务，不另起一份「进行中尝试」的日志 | 一个事务里成或不成，所以「这次尝试花了多少钱、对账键是什么、哪个端点」与账本同一次提交；崩溃后剩下的是丢失的请求（带预留冻结的路线），不需要第二张表、第二个写入线程和第二个连接池名额 | 进程内日志每秒批量落库：多一条写入路径、一类连接名额，而它只把崩溃窗口缩小一点，M1 又只写不跑对账 |
+| 成本行写进 billing 的结算事务，不另起一份「进行中尝试」的日志 | 一个事务里成或不成，所以「这次尝试花了多少钱、对账键是什么、哪个端点」与账本同一次提交；崩溃后剩下的是丢失的请求（带预留冻结的路线），不需要第二张表、第二个写入线程和第二个连接池名额 | 进程内日志每秒批量落库：多一条写入路径、一类连接名额，而它只把崩溃窗口缩小一点，仍无法自动确认崩溃前最后一次尝试的归属 |
 | 分组代号在第一次选用时随机生成，取消选用不收回 | 用户看到的是代号不是上游名字，换回来或重选不能让同一个分组换名字 | 由名字派生：名字泄露代号；每次选用重新生成：用户记下的代号失效 |
 | 管理接口里的并发限制默认 4 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；改它的接口以后再加 | 不设上限：新接入的供应商可能被打满 |
