@@ -294,8 +294,8 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with supplier syncing, charge reconciliation and the ledger's daily check. It reaches the
-// suppliers through exit, the client the whole node shares.
+// startSync starts the queue with supplier syncing, charge reconciliation, the ledger's daily check and the expiry of
+// credit. It reaches the suppliers through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
@@ -306,6 +306,12 @@ func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egres
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
 	// is registered here and not with the call path, which starts after the queue).
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return nil, err
+	}
+	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
+	if err := billing.RegisterExpire(billing.ExpireConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
 		return nil, err

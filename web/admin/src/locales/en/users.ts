@@ -36,13 +36,17 @@ export default {
     open: "Add credit",
     title: "Add credit for {{email}}",
     intro:
-      "The credit is recorded as a gift in the ledger and in the audit log. M1 has gifts only, and credit does not expire; credit paid for offline comes with the payments design.",
+      "The credit is recorded as a gift in the ledger and in the audit log. M1 has gifts only; credit paid for offline comes with the payments design.",
     amount: "Amount ({{currency}})",
     amountHint: "Up to 9 decimals, such as 12.5. One grant has a limit; more is refused.",
     amountInvalid: "Enter an amount above 0 with up to 9 decimals, such as 12.5.",
+    expires: "Expires",
+    expiresHint: "Leave empty for no expiry. What is left at expiry is written off.",
+    expiresInvalid: "The expiry must be in the future.",
     submit: "Add credit",
     granted: "Added {{amount}} to {{email}}.",
     balanceAfter: "Balance now {{balance}}; available {{available}}.",
     grantId: "Batch ID",
+    expiresOn: "Expires",
   },
 };

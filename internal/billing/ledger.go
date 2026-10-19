@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/audit"
@@ -18,6 +19,7 @@ const (
 	bookSupplierCost    = "supplier_cost"
 	bookSupplierPrepaid = "supplier_prepaid"
 	bookGiftExpense     = "gift_expense"
+	bookCreditExpired   = "credit_expired"
 )
 
 // event names one ledger transaction: its tenant and its idempotency key.
@@ -39,15 +41,12 @@ const lateRevision = -1
 
 // post writes the transaction and its entries once, moving the user's balance with them. A repeated event writes
 // nothing and reports false. Zero entries are left out, so an event that moves nothing is still recorded once.
+//
+// A transaction that moves the user's balance takes the account's balance row lock in the statement that makes it, so
+// its seq, which the allocation of credit batches replays by, is taken under the lock whether or not the caller holds it
+// already: no writer can number a movement and commit it after a later one.
 func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error) {
 	id := uuid.NewV7()
-	n, err := queries.InsertTransaction(ctx, tx, InsertTransactionParams{
-		ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request,
-		AttemptSeq: e.seq, Revision: e.revision,
-	})
-	if err != nil || n == 0 {
-		return false, wrapPost(e, err)
-	}
 	params := InsertEntriesParams{TransactionID: id, SiteID: e.site, AccountID: e.account}
 	var sum int64
 	for _, x := range entries {
@@ -62,11 +61,33 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 	if sum != 0 {
 		panic(fmt.Sprintf("billing: the %s entries of %s sum to %d", e.kind, e.request, sum))
 	}
+	n, err := putTransaction(ctx, tx, e, id, params.UserDebit != 0)
+	if err != nil || n == 0 {
+		return false, wrapPost(e, err)
+	}
 	if len(params.Books) == 0 {
 		return true, nil
 	}
 	err = queries.InsertEntries(ctx, tx, params)
 	return err == nil, wrapPost(e, err)
+}
+
+// putTransaction inserts the transaction row; locked takes the balance row lock with it. Of no row inserted, a
+// transaction that locks says whether the event was posted already or the account has no balance row to lock.
+func putTransaction(ctx context.Context, tx pg.Tx, e event, id uuid.UUID, locked bool) (int64, error) {
+	if !locked {
+		return queries.InsertTransaction(ctx, tx, InsertTransactionParams{
+			ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision,
+		})
+	}
+	n, err := queries.InsertLockedTransaction(ctx, tx, InsertLockedTransactionParams{
+		ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision,
+	})
+	if err != nil || n > 0 {
+		return n, err
+	}
+	_, err = lockAccount(ctx, tx, e.account)
+	return 0, err
 }
 
 func wrapPost(e event, err error) error {
@@ -86,13 +107,15 @@ func reversal(price, charged int64) []line {
 	return []line{{bookUserBalance, -charged}, {bookPlatformBorne, charged - price}, {bookRevenue, price}}
 }
 
-// Credit is a gift an administrator adds (docs/domains/billing.md「额度批次」). ID makes it idempotent. An offline
+// Credit is a gift an administrator adds (docs/domains/billing.md「额度批次」). ID makes it idempotent. ExpiresAt, when
+// set, is when what is left of the batch lapses (expire.go); the caller checks it lies ahead. An offline
 // payment is not taken yet: its cash must be booked at what was paid, in its currency at a locked rate, which comes
 // with payments.
 type Credit struct {
 	ID            uuid.UUID
 	Site, Account uuid.UUID
 	Amount        int64 // billionths of a credit, positive
+	ExpiresAt     *time.Time
 	Actor         audit.Actor
 	Reason        string
 }
@@ -112,12 +135,16 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		return err
 	}
 	if err := queries.InsertCreditBatch(ctx, tx, InsertCreditBatchParams{
-		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount,
+		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount, ExpiresAt: c.ExpiresAt,
 	}); err != nil {
 		return fmt.Errorf("billing: write the credit batch: %w", err)
 	}
+	detail := map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"}
+	if c.ExpiresAt != nil {
+		detail["expires_at"] = c.ExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: c.Actor, Action: "credit.add", Target: audit.Target{Module: "billing", Kind: "account", ID: c.Account.String()},
-		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"},
+		Reason: c.Reason, Detail: detail,
 	})
 }

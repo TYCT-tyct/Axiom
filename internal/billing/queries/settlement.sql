@@ -35,6 +35,17 @@ INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, att
 VALUES (@id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision)
 ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING;
 
+-- name: InsertLockedTransaction :execrows
+-- InsertTransaction for a transaction that moves the user's balance: the account's balance row is locked by the same
+-- statement before the row, and so its seq, is made, so the sequence numbers of one account's balance movements follow
+-- the order they commit, which the allocation replays by (internal/billing/README.md「额度批次的分配与到期」). The lock
+-- is taken again, without waiting, by a caller that holds it. 0 rows: the event was posted already, or the account has
+-- no balance row.
+WITH locked AS (SELECT 1 FROM billing.balances WHERE account_id = @account_id FOR UPDATE)
+INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
+SELECT @id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision FROM locked
+ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING;
+
 -- name: InsertEntries :exec
 -- One statement for a transaction's entries; the user's balance follows its book (user_debit, the entries' sum on
 -- user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/big"
+	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -130,22 +131,25 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 const maxGrant = 10_000 * 1_000_000_000
 
 // grantOf reads a grant request for an account whose site counts in currency. An amount that is not in that currency
-// cannot be read, a 400; one that is too small or too large, or an expiry, is a rule the grant breaks, a 422. An expiry
-// is refused because nothing would honour it: credit batches are not allocated or written off yet, so a batch given an
-// expiry would never expire (docs/domains/billing.md「额度批次」).
-func grantOf(b *adminapi.CreditGrantRequest, currency platform.Currency) (amount int64, err error) {
+// cannot be read, a 400; one that is too small or too large, or an expiry that has passed, is a rule the grant breaks,
+// a 422.
+func grantOf(b *adminapi.CreditGrantRequest, currency platform.Currency, now time.Time) (amount int64, expires *time.Time, err error) {
 	var p problems
 	amount, _ = moneyIn(b.Amount, currency, "/amount", &p)
 	if err := p.err(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if amount <= 0 || amount > maxGrant {
-		return 0, unprocessable("a grant is more than 0 and at most 10,000 units of the site's currency")
+		return 0, nil, unprocessable("a grant is more than 0 and at most 10,000 units of the site's currency")
 	}
 	if b.ExpiresAt != nil {
-		return 0, unprocessableFields("/expires_at", "credit expiry is not supported in this release")
+		if !b.ExpiresAt.After(now) {
+			return 0, nil, unprocessableFields("/expires_at", "expires_at must be in the future")
+		}
+		utc := b.ExpiresAt.UTC()
+		expires = &utc
 	}
-	return amount, nil
+	return amount, expires, nil
 }
 
 // GrantCredit gives an account a gift: a credit batch, its ledger entry and its audit entry, in one transaction.
@@ -164,13 +168,13 @@ func (a adminAPI) GrantCredit(ctx context.Context, request adminapi.GrantCreditR
 			if err != nil {
 				return adminapi.CreditGrant{}, err
 			}
-			amount, err := grantOf(request.Body, currency)
+			amount, expires, err := grantOf(request.Body, currency, time.Now())
 			if err != nil {
 				return adminapi.CreditGrant{}, err
 			}
 			batch := uuid.NewV7()
 			if err := billing.AddCredit(ctx, tx, billing.Credit{
-				ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Amount: amount,
+				ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Amount: amount, ExpiresAt: expires,
 				Actor: actor(ctx), Reason: request.Body.Reason,
 			}); err != nil {
 				return adminapi.CreditGrant{}, err

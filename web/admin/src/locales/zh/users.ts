@@ -34,14 +34,17 @@ export default {
   credit: {
     open: "手动加额度",
     title: "给 {{email}} 加额度",
-    intro:
-      "额度作为赠送入账，写进账本并记入审计日志。M1 只有赠送，且额度不会过期；线下收款的额度等支付设计完成后再做。",
+    intro: "额度作为赠送入账，写进账本并记入审计日志。M1 只有赠送；线下收款的额度等支付设计完成后再做。",
     amount: "金额（{{currency}}）",
     amountHint: "最多 9 位小数，例如 12.5。有单次上限，超过会被拒绝。",
     amountInvalid: "请输入大于 0 的金额，最多 9 位小数，例如 12.5。",
+    expires: "到期时间",
+    expiresHint: "留空表示不过期。到期后剩余的额度会被作废。",
+    expiresInvalid: "到期时间必须晚于现在。",
     submit: "加额度",
     granted: "已给 {{email}} 加 {{amount}}。",
     balanceAfter: "现在的余额：{{balance}}；可用：{{available}}。",
     grantId: "批次编号",
+    expiresOn: "到期时间",
   },
 };
