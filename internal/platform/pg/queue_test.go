@@ -25,7 +25,7 @@ func (ping) Kind() string { return "test.ping" }
 
 // InsertOpts makes a ping of one number unique, so that a second insert of it is skipped.
 func (ping) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}
+	return river.InsertOpts{Queue: pg.QueueMoney, UniqueOpts: river.UniqueOpts{ByArgs: true}}
 }
 
 type pinger struct {
@@ -220,6 +220,9 @@ type held struct{ N int }
 
 func (held) Kind() string { return "test.held" }
 
+// InsertOpts puts the held job on the money queue, where the test queue's workers fetch it.
+func (held) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: pg.QueueMoney} }
+
 type holder struct {
 	river.WorkerDefaults[held]
 	started chan struct{}
@@ -284,10 +287,11 @@ func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	older := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil) // a node from before test.ping existed
 	startDiscardQueue(t, older)
 	// The row is what the newer node's InsertManyTx leaves: a queue that has the worker would work the job at once, and
-	// River refuses to insert a kind its own workers do not cover.
+	// River refuses to insert a kind its own workers do not cover. It is on a queue the older node does work, so only
+	// FetchOnlyKnownKinds keeps it off the unknown kind.
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job (kind, args, state, queue, max_attempts)
-			VALUES ('test.ping', '{"n": 1}', 'available', 'default', 1)`)
+			VALUES ('test.ping', '{"n": 1}', 'available', $1, 1)`, pg.QueueMoney)
 		return err
 	})
 	if err != nil {
@@ -309,6 +313,25 @@ func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	eventually(t, "the job to be completed", func() bool { return jobState(t, db, "test.ping") == "completed" })
 	if _, attempt := jobStateAndAttempt(t, db, "test.ping"); attempt != 1 {
 		t.Errorf("the job took %d attempts, want 1: the node without its worker spent none", attempt)
+	}
+}
+
+// TestAJobLeftOnTheDefaultQueueIsFinished: an earlier version enqueued every kind on River's default queue, which no
+// kind names now. The queue keeps one worker there, so such a job finishes and its unique key stops covering the
+// periodic job that now names its own queue.
+func TestAJobLeftOnTheDefaultQueueIsFinished(t *testing.T) {
+	t.Parallel()
+	db, _, worked := startQueue(t)
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job (kind, args, state, queue, max_attempts)
+			VALUES ('test.ping', '{"n": 7}', 'available', 'default', 1)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := ran(t, worked); n != 7 {
+		t.Fatalf("job %d ran, want 7", n)
 	}
 }
 
@@ -367,4 +390,111 @@ func TestAJobRunningWhenTheNodeIsToldToStopIsLeftToFinish(t *testing.T) {
 			t.Fatal("the job was not cancelled after the deadline")
 		}
 	})
+}
+
+// blocked is a job on the syncs queue that runs until its test lets it go, reporting when it started.
+type blocked struct{ N int }
+
+// Kind implements river.JobArgs.
+func (blocked) Kind() string { return "test.blocked" }
+
+// InsertOpts puts the blocking job on the syncs queue, the budget a burst of supplier syncs shares.
+func (blocked) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: pg.QueueSyncs} }
+
+type blocker struct {
+	river.WorkerDefaults[blocked]
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blocker) Work(ctx context.Context, _ *river.Job[blocked]) error {
+	b.started <- struct{}{}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// paid is a job on the money queue; it only reports that it ran.
+type paid struct{ N int }
+
+// Kind implements river.JobArgs.
+func (paid) Kind() string { return "test.paid" }
+
+// InsertOpts puts it on the money queue, which a sync burst must not reach.
+func (paid) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: pg.QueueMoney} }
+
+type payer struct {
+	river.WorkerDefaults[paid]
+	ran chan int
+}
+
+func (p *payer) Work(_ context.Context, job *river.Job[paid]) error {
+	p.ran <- job.Args.N
+	return nil
+}
+
+// TestASaturatedSyncsQueueDoesNotDelayAMoneyJob: every worker the syncs queue has is held by a job that will not finish,
+// and a money job still runs on the money queue's own workers. With one queue and one budget the money job would wait
+// for a sync to finish (issue #321 E8-d): the test enqueues one more blocking job than every worker a node has, so one
+// queue would hold them all. The syncs count comes from the code default, so it fills what a node really runs.
+func TestASaturatedSyncsQueueDoesNotDelayAMoneyJob(t *testing.T) {
+	t.Parallel()
+	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	q := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
+	syncs := pg.QueueWorkers(pg.QueueSyncs)
+	// One more sync job than every worker the node has, so that if the queues were one, every worker would be held and
+	// the money job would wait behind these.
+	burst := pg.QueueWorkersTotal() + 1
+	b := &blocker{started: make(chan struct{}, burst), release: make(chan struct{})}
+	p := &payer{ran: make(chan int, 1)}
+	river.AddWorker(q.Workers(), b)
+	river.AddWorker(q.Workers(), p)
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		if err := q.Stop(ctx); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	// Fill every worker of the syncs queue, and wait until each holds one: the queue is then saturated for as long as
+	// the test keeps the jobs running.
+	saturate := make([]river.InsertManyParams, burst)
+	for i := range saturate {
+		saturate[i] = river.InsertManyParams{Args: blocked{N: i}}
+	}
+	enqueueJobs(t, db, q, saturate)
+	for range syncs {
+		select {
+		case <-b.started:
+		case <-time.After(20 * time.Second):
+			t.Fatal("a sync job did not start: the syncs queue is not saturated")
+		}
+	}
+	enqueueJobs(t, db, q, []river.InsertManyParams{{Args: paid{N: 1}}})
+	if n := ran(t, p.ran); n != 1 {
+		t.Fatalf("money job %d ran, want 1", n)
+	}
+	close(b.release)
+}
+
+// enqueueJobs inserts jobs in a transaction of their own, for a test that does not need to check the count.
+func enqueueJobs(t *testing.T, db *pg.DB, q *pg.Queue, jobs []river.InsertManyParams) {
+	t.Helper()
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := q.InsertManyTx(t.Context(), tx, jobs)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
