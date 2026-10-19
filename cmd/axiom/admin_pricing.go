@@ -160,9 +160,9 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	}
 	sold, unpriced := billing.SalePrices(rules, snap, models, site.Currency)
 	for _, err := range unpriced {
-		// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices;
-		// an administrator is told, since the rule has to change.
-		a.logger.Warn("a sale price the catalog cannot hold; the model is not sold", "err", err)
+		// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices; an
+		// administrator is told, since the rule has to change. The error names the rule and the model.
+		a.logger.Warn("a model has no sale price; it is not sold", "err", err)
 	}
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
 	for i, id := range request.Body.ModelIds {

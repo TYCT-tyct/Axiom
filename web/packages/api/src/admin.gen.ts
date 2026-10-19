@@ -1340,7 +1340,7 @@ export interface components {
             currency_conversion?: "exchange" | "face";
             schedule?: components["schemas"]["PriceSchedule"];
         };
-        /** @description Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep the price between those multiples of the reference price. */
+        /** @description Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and saving it without constraints clears them (#234). */
         PricingConstraints: {
             min_margin_ratio?: components["schemas"]["Decimal"];
             reference_min_ratio?: components["schemas"]["Decimal"];

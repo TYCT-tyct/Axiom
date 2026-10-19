@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 
-MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$).+")
+MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$|.*\.gen\.go$).+")
 COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 DOCS_HEADING = "## Docs / 文档影响"
