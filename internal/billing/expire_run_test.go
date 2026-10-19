@@ -62,10 +62,12 @@ func (b *bank) holdLock(account uuid.UUID) (release func()) {
 	<-locked
 	var once sync.Once
 	return func() {
-		once.Do(func() { close(stop) })
-		if err := <-done; err != nil {
-			b.t.Error(err)
-		}
+		once.Do(func() {
+			close(stop)
+			if err := <-done; err != nil {
+				b.t.Error(err)
+			}
+		})
 	}
 }
 
