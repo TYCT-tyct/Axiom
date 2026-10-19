@@ -278,6 +278,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	}
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
+	if r.Header.Get("X-Claude-Code-Context-Compacted") != "" { // the cache it stuck for is gone: choose afresh
+		h.Router.Forget(c.Session)
+	}
 	c.sticky, _ = h.Router.Stuck(c.Session)
 	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
 	return nil

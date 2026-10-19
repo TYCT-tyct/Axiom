@@ -211,6 +211,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending is out.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
+	s.stick()
 	o := billing.Outcome{Attempts: s.ends}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
@@ -239,6 +240,24 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.handedOff = s.x.settled(ctx, s, o, err)
 	if err == nil {
 		s.x.log(ctx, s.trail(), o, f, time.Now())
+	}
+}
+
+// stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
+// was not already there (docs/domains/routing.md「会话粘性」). A call that delivered nothing writes nothing and forgets
+// nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
+// ending, so the client's next request, which can follow the ending at once, finds the entry; while the table is in the
+// process it is one map write, not worth a goroutine (a table in the cache is written from the background, README.md「并发、背压与共享状态」).
+func (s *session) stick() {
+	if len(s.ends) == 0 {
+		return
+	}
+	last := len(s.ends) - 1
+	if r := s.ends[last].Result; r != billing.Committed && r != billing.Aggregated {
+		return
+	}
+	if ep := s.tries[last].entry.Endpoint; ep != s.c.sticky {
+		s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
 	}
 }
 
