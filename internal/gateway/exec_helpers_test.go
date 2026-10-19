@@ -399,7 +399,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if h.router, err = routing.New(o.routing); err != nil {
 		t.Fatal(err)
 	}
-	meter, refused := countingMeter(t)
+	meter, refused := countingMeter(ctx, t)
 	h.refused = refused
 	limits, err := New(h.cfg, meter.Meter("test"))
 	if err != nil {

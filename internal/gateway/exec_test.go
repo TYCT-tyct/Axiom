@@ -202,14 +202,15 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 		status     int
 		retryAfter string
 		reason     routing.Reason
+		refused    map[string]int64
 	}{
-		{"all taken", options{entries: 2, noSlot: []int{1, 2}}, 429, "1", routing.Full},
-		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full},
+		{"all taken", options{entries: 2, noSlot: []int{1, 2}}, 429, "1", routing.Full, map[string]int64{"credentials_busy": 1}},
+		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full, nil},
 		{"no endpoint can express it", options{entries: 2, mutate: func(c *Call) {
 			for i := range c.Plan.Entries {
 				c.Plan.Entries[i].Target.Format = protocol.Chat // a Messages request is not converted to Chat
 			}
-		}}, 400, "", routing.FormatNotServed},
+		}}, 400, "", routing.FormatNotServed, nil},
 	}
 	for _, tc := range cases {
 		run(t, func(t *testing.T, ctx context.Context) {
@@ -221,11 +222,7 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 			if s := h.ended(); len(s.outcome.Attempts) != 0 {
 				t.Errorf("%s: %d attempts", tc.name, len(s.outcome.Attempts))
 			}
-			want := map[string]int64{}
-			if tc.status == http.StatusTooManyRequests {
-				want["credentials_busy"] = 1
-			}
-			wantRefused(t, h.refused(), want)
+			wantRefused(t, h.refused(), tc.refused)
 			excluded := h.call.Plan.Record.Excluded
 			if len(excluded) == 0 || excluded[0].Reason != tc.reason {
 				t.Errorf("%s: the route's record: %+v", tc.name, excluded)

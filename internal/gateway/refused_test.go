@@ -16,31 +16,35 @@ import (
 )
 
 // countingMeter is a meter whose 429 counter the test can read: the count by reason.
-func countingMeter(t testing.TB) (*sdkmetric.MeterProvider, func() map[string]int64) {
+func countingMeter(ctx context.Context, t testing.TB) (*sdkmetric.MeterProvider, func() map[string]int64) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { _ = provider.Shutdown(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the test is over
+	t.Cleanup(func() { _ = provider.Shutdown(context.WithoutCancel(ctx)) }) //nolint:errcheck // the test is over
 	return provider, func() map[string]int64 {
 		var data metricdata.ResourceMetrics
-		if err := reader.Collect(t.Context(), &data); err != nil {
+		if err := reader.Collect(ctx, &data); err != nil {
 			t.Fatal(err)
 		}
-		counts := map[string]int64{}
-		for _, scope := range data.ScopeMetrics {
-			for _, m := range scope.Metrics {
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				if !ok || m.Name != "axiom.gateway.rate_limited" {
-					continue
-				}
-				for _, point := range sum.DataPoints {
-					reason, _ := point.Attributes.Value("reason")
-					counts[reason.AsString()] += point.Value
-				}
+		return rateLimitedByReason(data)
+	}
+}
+
+func rateLimitedByReason(data metricdata.ResourceMetrics) map[string]int64 {
+	counts := map[string]int64{}
+	for _, scope := range data.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || m.Name != "axiom.gateway.rate_limited" {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				reason, _ := point.Attributes.Value("reason")
+				counts[reason.AsString()] += point.Value
 			}
 		}
-		return counts
 	}
+	return counts
 }
 
 // wantRefused checks the count of 429s by reason: exactly these, none under another reason.
@@ -99,14 +103,15 @@ func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
 	} {
 		t.Run(reason, func(t *testing.T) {
 			run(t, func(t *testing.T, ctx context.Context) {
-				meter, counts := countingMeter(t)
+				meter, counts := countingMeter(ctx, t)
 				bp, err := New(cfg, meter.Meter("test"))
 				if err != nil {
 					t.Fatal(err)
 				}
-				h := &Handler{Deps: Deps{Limits: bp, Logger: slog.New(slog.DiscardHandler)}}
+				h := &Handler{}
+				h.Limits, h.Logger = bp, slog.New(slog.DiscardHandler)
 				rec := httptest.NewRecorder()
-				h.fail(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), protocol.Messages, produce(t, ctx, bp))
+				h.fail(rec, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/messages", nil), protocol.Messages, produce(t, ctx, bp))
 				if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), `"error_type":"rate_limited"`) {
 					t.Errorf("answered %d %s", rec.Code, rec.Body)
 				}

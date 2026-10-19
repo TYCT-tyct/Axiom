@@ -225,7 +225,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
 		}
-		s.answer(e, fin)
+		s.answer(ctx, e, fin)
 	case s.aggregate:
 		s.answerAggregate(e, fin, err)
 	case e.done:

@@ -131,7 +131,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.db.Close)
-	meter, refused := countingMeter(t)
+	meter, refused := countingMeter(t.Context(), t)
 	r.refused = refused
 	if r.limits, err = New(r.cfg, meter.Meter("test")); err != nil {
 		t.Fatal(err)
