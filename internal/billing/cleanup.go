@@ -14,38 +14,55 @@ import (
 // each in a transaction of its own under its balance row lock, and returns how many it changed. A pending reservation
 // past its deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged,
 // and the request is left with suppliers as a lost one, with its route. One that fails does not stop the rest: its error
-// is joined into the one returned, and the reservations after it are still taken over, since the failing one is first in
-// line again on every sweep and would otherwise hold them all back.
+// is joined into the one returned. The due ones are read in pages of max by request id, and the walk goes on past a
+// page that failed whole, to the end of the due set or until max are changed: a backlog of failures, which stay first in
+// line on every sweep, cannot hold back the ones behind them. So a return of fewer than max means the due set was walked
+// to its end.
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
-	var due []DueReservationsRow
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
-		due, err = queries.DueReservations(ctx, tx, max)
-		return err
-	})
-	if err != nil {
-		return 0, fmt.Errorf("billing: find what cleanup owns: %w", err)
-	}
 	var failed []error
-	for _, d := range due {
-		var released int64
+	var after uuid.UUID
+	for changed < int(max) {
+		var due []DueReservationsRow
 		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
-			released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: after, Max: max})
 			return err
 		})
 		if err != nil {
-			failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
-			if ctx.Err() != nil {
-				break // the rest would fail for the same reason
-			}
-			continue
+			return changed, errors.Join(append(failed, fmt.Errorf("billing: find what cleanup owns: %w", err))...)
 		}
-		changed++
-		if released > 0 {
-			b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
-				"request", d.RequestID.String(), "released", released)
+		for _, d := range due {
+			after = d.RequestID
+			released, err := b.cleanOne(ctx, d)
+			if err != nil {
+				failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+				if ctx.Err() != nil {
+					return changed, errors.Join(failed...) // the rest would fail for the same reason
+				}
+				continue
+			}
+			changed++
+			if released > 0 {
+				b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
+					"request", d.RequestID.String(), "released", released)
+			}
+			if changed >= int(max) {
+				break
+			}
+		}
+		if len(due) < int(max) {
+			break
 		}
 	}
 	return changed, errors.Join(failed...)
+}
+
+// cleanOne takes over one due reservation in a transaction of its own.
+func (b *Billing) cleanOne(ctx context.Context, d DueReservationsRow) (released int64, err error) {
+	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+		released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+		return err
+	})
+	return released, err
 }
 
 // clean takes over one reservation, and returns how much it released, 0 when a Settle got there first.

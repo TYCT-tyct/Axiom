@@ -277,9 +277,8 @@ func (b *Billing) sweep(ctx context.Context) {
 		if err != nil {
 			b.logger.Error("billing: the cleanup failed", "cleaned", cleaned, "err", err)
 		}
-		// A round that cleaned nothing, or the last of the backlog, ends the sweep. A round that failed on some but
-		// cleaned others goes on: the failing ones come first again and the next batch reaches past them.
-		if n == 0 || err == nil && n < cleanupBatch {
+		// A round that changed fewer than a batch walked the whole due set, failures included, so the sweep is done.
+		if n < cleanupBatch {
 			return
 		}
 	}
