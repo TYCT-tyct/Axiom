@@ -11,6 +11,9 @@ import (
 	"sync"
 	"uuid"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -35,6 +38,7 @@ type Deps struct {
 	Memory   *protocol.Memory // the node's budget for request bodies and streams
 	Run      Run
 	Logger   *slog.Logger
+	Meter    metric.Meter // where the handler's counters go; nil for none
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -45,6 +49,7 @@ type Handler struct {
 	models  modelList
 
 	background *background // settlements of lost admissions
+	outage     *outage     // the dependency outage being told, if any
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -56,7 +61,10 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground()}
+	if d.Meter == nil {
+		d.Meter = noop.NewMeterProvider().Meter("gateway")
+	}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -141,6 +149,7 @@ func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 			h.fail(w, r, format, err)
 			return
 		}
+		h.outage.recovered()
 		h.Run(w, r, c)
 	}
 }
@@ -310,6 +319,11 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		return
 	}
 	ref, expected := refusal(format, err)
+	if cause, reason, out := outageOf(err); out {
+		h.outage.refuse(r.Context(), cause, reason)
+		writeRefusal(w, format, ref)
+		return
+	}
 	switch {
 	case !expected:
 		h.Logger.Error("a request failed unexpectedly", "request_id", httpserver.RequestID(r.Context()), "err", err)
