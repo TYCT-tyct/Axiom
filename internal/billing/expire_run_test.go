@@ -108,7 +108,7 @@ func TestExpireScanGoesOn(t *testing.T) {
 		changed, failed int
 		second, third   int64
 	}{
-		{0, 1, 11, 11}, {1, 0, 1, 11}, {1, 0, 1, 1}, {0, 1, 1, 1}, // the fourth run starts again at the first
+		{0, 1, 11, 11}, {1, 0, 1, 11}, {1, 0, 1, 1}, {0, 0, 1, 1}, {0, 1, 1, 1}, // the fourth run finds the end and wraps; the fifth starts again at the first
 	} {
 		changed, failed, err := e.run(t.Context())
 		if err != nil || changed != tc.changed || failed != tc.failed || b.balanceOf(second.Account) != tc.second || b.balanceOf(third.Account) != tc.third {
@@ -124,7 +124,7 @@ func TestReplayPagesCrossTheirBoundary(t *testing.T) {
 	for _, page := range []int32{1, 4, 13, 14} {
 		t.Run(fmt.Sprint(page), func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})
-			b.creditBatch(100, longAgo)
+			b.creditBatch(1000, longAgo)
 			for range 6 {
 				b.charge(5)
 			}
@@ -133,8 +133,8 @@ func TestReplayPagesCrossTheirBoundary(t *testing.T) {
 			}
 			e := b.expirer()
 			e.movements = page
-			if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 70 {
-				t.Fatalf("expire = %d, %v; want 70 written off", written, err)
+			if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 970 {
+				t.Fatalf("expire = %d, %v; want 970 written off", written, err)
 			}
 			b.checkStored(b.admitted.Account)
 			if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire'"); n != 1 {

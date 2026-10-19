@@ -83,6 +83,73 @@ func (q *Queries) ExpiryCursor(ctx context.Context, db DBTX) (uuid.UUID, error) 
 	return after, err
 }
 
+const legacyMovements = `-- name: LegacyMovements :many
+WITH page AS (
+    SELECT t.id, t.created_at, t.kind, t.request_id
+    FROM billing.transactions t
+    WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) > ($2::timestamptz, $3::uuid)
+    ORDER BY t.created_at, t.id
+    LIMIT $4
+)
+SELECT 0::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
+    coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
+FROM page p
+ORDER BY p.created_at, p.id
+`
+
+type LegacyMovementsParams struct {
+	AccountID uuid.UUID
+	AfterAt   time.Time
+	AfterID   uuid.UUID
+	Max       int32
+}
+
+type LegacyMovementsRow struct {
+	Seq       int64
+	CreatedAt time.Time
+	ID        uuid.UUID
+	Kind      string
+	RequestID uuid.UUID
+	Debit     int64
+}
+
+// A page of the account's transactions from before the sequence (seq NULL), in the order of their time and ID, after the
+// place given, each with its net debit on the user's balance (positive takes from the user, 0 when it did not touch it)
+// and seq 0. They come first in the replay. Bounded first, by the index transactions_legacy_by_account, and only the
+// page has its entries summed, so what a page reads grows with the page and not with the history behind it. A
+// transaction that moved nothing still takes its place in the page, so the cursor passes it.
+func (q *Queries) LegacyMovements(ctx context.Context, db DBTX, arg LegacyMovementsParams) ([]LegacyMovementsRow, error) {
+	rows, err := db.Query(ctx, legacyMovements,
+		arg.AccountID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LegacyMovementsRow
+	for rows.Next() {
+		var i LegacyMovementsRow
+		if err := rows.Scan(
+			&i.Seq,
+			&i.CreatedAt,
+			&i.ID,
+			&i.Kind,
+			&i.RequestID,
+			&i.Debit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveBatches = `-- name: LiveBatches :many
 SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
@@ -141,24 +208,21 @@ func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID)
 
 const movements = `-- name: Movements :many
 WITH page AS (
-    SELECT t.id, t.created_at, coalesce(t.seq, 0)::bigint AS seq, t.kind, t.request_id
+    SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
     FROM billing.transactions t
-    WHERE t.account_id = $1
-        AND (coalesce(t.seq, 0), t.created_at, t.id) > ($2::bigint, $3::timestamptz, $4::uuid)
-    ORDER BY coalesce(t.seq, 0), t.created_at, t.id
-    LIMIT $5
+    WHERE t.account_id = $1 AND t.seq > $2::bigint
+    ORDER BY t.seq
+    LIMIT $3
 )
-SELECT p.seq, p.created_at, p.id, p.kind, p.request_id,
+SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
     coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
 FROM page p
-ORDER BY p.seq, p.created_at, p.id
+ORDER BY p.seq
 `
 
 type MovementsParams struct {
 	AccountID uuid.UUID
 	AfterSeq  int64
-	AfterAt   time.Time
-	AfterID   uuid.UUID
 	Max       int32
 }
 
@@ -171,19 +235,10 @@ type MovementsRow struct {
 	Debit     int64
 }
 
-// A page of the account's transactions after the key given, in the order the replay reads them, each with its net
-// debit on the user's balance (positive takes from the user, 0 when it did not touch it). The page is bounded first,
-// by the index transactions_by_account_order, and only its transactions have their entries summed, so what a page reads
-// grows with the page and not with the history behind it. A transaction that moved nothing still takes its place in the
-// page, so the cursor passes it.
+// A page of the account's numbered transactions after the seq given, in the order of seq, each with its net debit on
+// the user's balance as for LegacyMovements. Bounded by the index transactions_by_account_seq.
 func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) ([]MovementsRow, error) {
-	rows, err := db.Query(ctx, movements,
-		arg.AccountID,
-		arg.AfterSeq,
-		arg.AfterAt,
-		arg.AfterID,
-		arg.Max,
-	)
+	rows, err := db.Query(ctx, movements, arg.AccountID, arg.AfterSeq, arg.Max)
 	if err != nil {
 		return nil, err
 	}

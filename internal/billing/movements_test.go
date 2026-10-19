@@ -3,6 +3,7 @@ package billing
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,14 +62,12 @@ func (b *bank) postUnlocked(e event, posted chan<- error, release <-chan struct{
 	})
 }
 
-// movementsPlan runs the query of a page of the ledger under EXPLAIN (ANALYZE, BUFFERS) and returns the blocks it
-// touched and the plan.
-func (b *bank) movementsPlan(account uuid.UUID, after orderKey, size int32) (blocks int, plan string) {
+// plan runs a query of the ledger under EXPLAIN (ANALYZE, BUFFERS) and returns the blocks it touched and the plan.
+func (b *bank) plan(query string, args ...any) (blocks int, plan string) {
 	b.t.Helper()
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		var raw []byte
-		err := tx.QueryRow(b.t.Context(), "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+movements, account, after.seq, after.at, after.id, size).Scan(&raw)
-		if err != nil {
+		if err := tx.QueryRow(b.t.Context(), "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+query, args...).Scan(&raw); err != nil {
 			return err
 		}
 		var parsed []struct {
@@ -87,35 +86,84 @@ func (b *bank) movementsPlan(account uuid.UUID, after orderKey, size int32) (blo
 	return blocks, plan
 }
 
+// seedLedger adds n settlement transactions with two entries each to the account, numbered or, if legacy, as they were
+// before the sequence.
+func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
+	statements := []string{
+		fmt.Sprintf(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '%s', '%s', 'settle', gen_random_uuid() FROM generate_series(1, %d)`, site, account, n),
+		fmt.Sprintf(`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+			SELECT t.id, t.site_id, t.account_id, v.book, v.amount FROM billing.transactions t,
+			(VALUES ('user_balance', 5), ('revenue', -5)) AS v(book, amount) WHERE t.account_id = '%s'`, account),
+	}
+	if legacy {
+		statements = append(statements, fmt.Sprintf("UPDATE billing.transactions SET seq = NULL WHERE account_id = '%s'", account))
+	}
+	return statements
+}
+
 // TestMovementsReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
-// reads, from the index, not what the history behind or ahead of it holds. 30,000 transactions of the account and as
-// many of others are seeded and a page of 100 read from the start and from 25,000 in.
+// reads, from the index, not what the history behind or ahead of it holds. 30,000 numbered transactions of an account,
+// 12,000 from before the sequence of another, and as many of a third are seeded, and a page of 100 read from the start
+// and from deep in: the numbered ones at 25,000, the legacy ones at 10,000.
 func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
-	var statements []string
-	for _, account := range []uuid.UUID{b.admitted.Account, uuid.NewV7()} {
-		statements = append(statements,
-			fmt.Sprintf(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
-				SELECT gen_random_uuid(), '%s', '%s', 'settle', gen_random_uuid() FROM generate_series(1, 30000)`, b.admitted.Site, account),
-			fmt.Sprintf(`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
-				SELECT t.id, t.site_id, t.account_id, v.book, v.amount FROM billing.transactions t, (VALUES ('user_balance', 5), ('revenue', -5)) AS v(book, amount)
-				WHERE t.account_id = '%s'`, account))
-	}
+	legacy, noise := uuid.NewV7(), uuid.NewV7()
+	statements := slices.Concat(seedLedger(b.admitted.Site, b.admitted.Account, 30000, false), seedLedger(b.admitted.Site, noise, 30000, false),
+		seedLedger(b.admitted.Site, legacy, 12000, true))
 	b.sql(append(statements, "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
-	var far orderKey
+	var farSeq int64
+	var farAt time.Time
+	var farID uuid.UUID
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT coalesce(seq, 0), created_at, id FROM billing.transactions WHERE account_id = $1
-			ORDER BY coalesce(seq, 0), created_at, id OFFSET 25000 LIMIT 1`, b.admitted.Account).Scan(&far.seq, &far.at, &far.id)
+		if err := tx.QueryRow(t.Context(), "SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq OFFSET 25000 LIMIT 1", b.admitted.Account).Scan(&farSeq); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), "SELECT created_at, id FROM billing.transactions WHERE account_id = $1 ORDER BY created_at, id OFFSET 10000 LIMIT 1", legacy).Scan(&farAt, &farID)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	first, firstPlan := b.movementsPlan(b.admitted.Account, orderKey{at: epoch.Add(-100 * 365 * 24 * time.Hour)}, 100)
-	deep, deepPlan := b.movementsPlan(b.admitted.Account, far, 100)
-	t.Logf("blocks touched by a page of 100: from the start %d, from 25,000 in %d", first, deep)
-	if !strings.Contains(deepPlan, "transactions_by_account_order") || strings.Contains(deepPlan, "Seq Scan") {
-		t.Errorf("the page is not read from the index: %s", deepPlan)
+	long := epoch.Add(-100 * 365 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name, query, index string
+		first, deep        []any
+	}{
+		{"numbered", movements, "transactions_by_account_seq", []any{b.admitted.Account, int64(0), int32(100)}, []any{b.admitted.Account, farSeq, int32(100)}},
+		{"from before the sequence", legacyMovements, "transactions_legacy_by_account", []any{legacy, long, uuid.UUID{}, int32(100)}, []any{legacy, farAt, farID, int32(100)}},
+	} {
+		first, _ := b.plan(tc.query, tc.first...)
+		deep, deepPlan := b.plan(tc.query, tc.deep...)
+		t.Logf("%s: blocks touched by a page of 100: from the start %d, deep in %d", tc.name, first, deep)
+		if !strings.Contains(deepPlan, tc.index) || strings.Contains(deepPlan, "Seq Scan") {
+			t.Errorf("%s: the page is not read from the index %s: %s", tc.name, tc.index, deepPlan)
+		}
+		if deep > first+first/2+50 || deep > 1000 {
+			t.Errorf("%s: a page deep in the history touches %d blocks against %d at the start; the plan:\n%s", tc.name, deep, first, deepPlan)
+		}
 	}
-	if deep > 2*first+50 || deep > 2500 {
-		t.Errorf("a page 25,000 transactions in touches %d blocks against %d at the start; the plans:\n%s\n%s", deep, first, firstPlan, deepPlan)
+}
+
+// TestTransactionsFromBeforeTheSequenceReplayFirst: an account whose first transactions have no seq, as every account's
+// do on the day the migration runs, is replayed with those first, by their time, and then the numbered ones, whatever
+// the size of a page, so a page may hold the last of the old and the first of the new.
+func TestTransactionsFromBeforeTheSequenceReplayFirst(t *testing.T) {
+	for _, page := range []int32{1, 2, 5, 50} {
+		t.Run(fmt.Sprint(page), func(t *testing.T) {
+			b := newBank(t, 0, 0, Config{})
+			expiring := b.creditBatch(100, longAgo)
+			b.creditBatch(100, nil)
+			b.charge(30)
+			b.sql("UPDATE billing.transactions SET seq = NULL")
+			b.charge(10)
+			e := b.expirer()
+			e.movements = page
+			if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 60 {
+				t.Fatalf("expire = %d, %v; want 60 written off: 30 and 10 charged to the batch that expired", written, err)
+			}
+			b.checkStored(b.admitted.Account)
+			if n := b.batchLeft(expiring); n != 0 {
+				t.Errorf("the expired batch holds %d", n)
+			}
+		})
 	}
 }

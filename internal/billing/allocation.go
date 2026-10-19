@@ -240,21 +240,41 @@ func loadAllocation(ctx context.Context, tx pg.Tx, account uuid.UUID) (*allocati
 }
 
 // catchUpPage replays the next page of at most size transactions after the last one replayed, and reports whether
-// the page was full, so that there may be more. A page is bounded by the index, not by the history.
+// the page was full, so that there may be more. The transactions from before the sequence come first; the page that
+// ends them goes on into the numbered ones. A page is bounded by the index, not by the history.
 func (a *allocation) catchUpPage(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (full bool, err error) {
-	rows, err := queries.Movements(ctx, tx, MovementsParams{
-		AccountID: account, AfterSeq: a.at.seq, AfterAt: a.at.at, AfterID: a.at.id, Max: size,
-	})
+	if a.at.seq == 0 {
+		rows, err := queries.LegacyMovements(ctx, tx, LegacyMovementsParams{AccountID: account, AfterAt: a.at.at, AfterID: a.at.id, Max: size})
+		if err != nil {
+			return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
+		}
+		for _, r := range rows {
+			if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit); err != nil {
+				return false, err
+			}
+		}
+		if len(rows) == int(size) {
+			return true, nil
+		}
+	}
+	rows, err := queries.Movements(ctx, tx, MovementsParams{AccountID: account, AfterSeq: a.at.seq, Max: size})
 	if err != nil {
 		return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
 	}
 	for _, r := range rows {
-		m := movement{key: orderKey{seq: r.Seq, at: r.CreatedAt, id: r.ID}, kind: r.Kind, request: r.RequestID, debit: r.Debit}
-		if err := a.apply(m); err != nil {
-			return false, fmt.Errorf("billing: replay %s: %w", account, err)
+		if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit); err != nil {
+			return false, err
 		}
 	}
 	return len(rows) == int(size), nil
+}
+
+func (a *allocation) applyRow(account uuid.UUID, seq int64, at time.Time, id uuid.UUID, kind string, request uuid.UUID, debit int64) error {
+	m := movement{key: orderKey{seq: seq, at: at, id: id}, kind: kind, request: request, debit: debit}
+	if err := a.apply(m); err != nil {
+		return fmt.Errorf("billing: replay %s: %w", account, err)
+	}
+	return nil
 }
 
 // catchUp replays every transaction posted since the last one replayed.

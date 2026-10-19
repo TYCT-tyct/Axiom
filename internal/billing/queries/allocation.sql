@@ -13,24 +13,38 @@ FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
 WHERE b.account_id = @account_id AND (b.consumed > 0 OR b.consumed + b.expired < b.amount);
 
--- name: Movements :many
--- A page of the account's transactions after the key given, in the order the replay reads them, each with its net
--- debit on the user's balance (positive takes from the user, 0 when it did not touch it). The page is bounded first,
--- by the index transactions_by_account_order, and only its transactions have their entries summed, so what a page reads
--- grows with the page and not with the history behind it. A transaction that moved nothing still takes its place in the
--- page, so the cursor passes it.
+-- name: LegacyMovements :many
+-- A page of the account's transactions from before the sequence (seq NULL), in the order of their time and ID, after the
+-- place given, each with its net debit on the user's balance (positive takes from the user, 0 when it did not touch it)
+-- and seq 0. They come first in the replay. Bounded first, by the index transactions_legacy_by_account, and only the
+-- page has its entries summed, so what a page reads grows with the page and not with the history behind it. A
+-- transaction that moved nothing still takes its place in the page, so the cursor passes it.
 WITH page AS (
-    SELECT t.id, t.created_at, coalesce(t.seq, 0)::bigint AS seq, t.kind, t.request_id
+    SELECT t.id, t.created_at, t.kind, t.request_id
     FROM billing.transactions t
-    WHERE t.account_id = @account_id
-        AND (coalesce(t.seq, 0), t.created_at, t.id) > (@after_seq::bigint, @after_at::timestamptz, @after_id::uuid)
-    ORDER BY coalesce(t.seq, 0), t.created_at, t.id
+    WHERE t.account_id = @account_id AND t.seq IS NULL AND (t.created_at, t.id) > (@after_at::timestamptz, @after_id::uuid)
+    ORDER BY t.created_at, t.id
     LIMIT @max
 )
-SELECT p.seq, p.created_at, p.id, p.kind, p.request_id,
+SELECT 0::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
     coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
 FROM page p
-ORDER BY p.seq, p.created_at, p.id;
+ORDER BY p.created_at, p.id;
+
+-- name: Movements :many
+-- A page of the account's numbered transactions after the seq given, in the order of seq, each with its net debit on
+-- the user's balance as for LegacyMovements. Bounded by the index transactions_by_account_seq.
+WITH page AS (
+    SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
+    FROM billing.transactions t
+    WHERE t.account_id = @account_id AND t.seq > @after_seq::bigint
+    ORDER BY t.seq
+    LIMIT @max
+)
+SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
+    coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
+FROM page p
+ORDER BY p.seq;
 
 -- name: SaveBatches :exec
 UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired

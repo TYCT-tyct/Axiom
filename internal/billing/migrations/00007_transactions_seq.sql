@@ -22,7 +22,7 @@ ALTER SEQUENCE billing.transactions_seq OWNED BY billing.transactions.seq;
 GRANT USAGE ON SEQUENCE billing.transactions_seq TO axiom_app;
 
 -- A batch expiring is a ledger event of its own: the user's balance against the income of credit that lapsed. The
--- wider constraint is added NOT VALID, which checks new rows without scanning the table; 00015 validates it.
+-- wider constraint is added NOT VALID, which checks new rows without scanning the table; 00016 validates it.
 ALTER TABLE billing.transactions
     DROP CONSTRAINT transactions_kind_check,
     ADD CONSTRAINT transactions_kind_check CHECK (kind IN ('credit', 'settle', 'reverse', 'attempt_cost', 'cost_adjust',

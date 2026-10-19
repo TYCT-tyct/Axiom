@@ -3,7 +3,7 @@
 -- What the allocation has put on a batch: consumed by charges, expired by a write-off. Both start at zero, which is
 -- what a batch is before the allocation has replayed the account, so no row needs filling in, and a constant default
 -- does not rewrite the table. What is left of a batch is amount - consumed - expired. The constraints are added NOT
--- VALID and validated by 00015.
+-- VALID and validated by 00016.
 ALTER TABLE billing.credit_batches
     ADD COLUMN consumed bigint NOT NULL DEFAULT 0,
     ADD COLUMN expired bigint NOT NULL DEFAULT 0,
