@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { adminUrl } from "./apps.ts";
@@ -55,6 +55,32 @@ const connectDetails = scene(
   },
 );
 
+// A change dialog after an answer that did not settle the change: the server's answer to the first send is replaced, so
+// the dialog shows what it does next (change.tsx).
+const unsettled = (name: string, path: string, open: string, fill: (p: Page) => Promise<unknown>, answer: Answer) =>
+  scene(
+    name,
+    (p) => goto(p, path),
+    async (p) => {
+      await press(p, open);
+      const form = p.getByRole("dialog");
+      await fill(p);
+      await form.getByLabel(words("change.reason")).fill("because the owner asked");
+      await p.route(`**${answer.path}`, (route) => answer.reply(route), { times: 1 });
+      await form.locator("button[type=submit]").click();
+      await form
+        .getByRole("alert")
+        .getByText(words(`change.${answer.state}`))
+        .waitFor();
+    },
+  );
+
+type Answer = { path: string; state: string; reply: (route: Route) => Promise<void> };
+const refused = (code: string) => (route: Route) =>
+  route.fulfill({ status: 409, json: { error: { code, message: code } } });
+const amount = (p: Page) => p.getByRole("dialog").getByLabel(words("users.credit.amount")).fill("2.5");
+const grant = (state: string, reply: Answer["reply"]) => ({ path: "/credit-grants", state, reply });
+
 const scenes: Scene[] = [
   view("sign-in", "sign-in", false),
   view("users", "users"),
@@ -89,6 +115,25 @@ const scenes: Scene[] = [
   dialog("price-source", model(1), "models.prices.changeSource"),
   dialog("rule-new", "pricing", "pricing.rule.new"),
   dialog("settings-edit", "settings", "settings.edit"),
+  unsettled(
+    "change-unknown",
+    `accounts/${acct(1)}`,
+    "users.credit.open",
+    amount,
+    grant("unknown", (r) => r.abort()),
+  ),
+  unsettled(
+    "change-reused",
+    `accounts/${acct(1)}`,
+    "users.credit.open",
+    amount,
+    grant("reused", refused("idempotency_key_reused")),
+  ),
+  unsettled("change-stale", model(1), "models.spec.edit", async () => {}, {
+    path: "/spec",
+    state: "stale",
+    reply: refused("stale_revision"),
+  }),
 ];
 
 // A pending second step and a password that still needs a factor are signed out in the API's eyes, each in its own state.

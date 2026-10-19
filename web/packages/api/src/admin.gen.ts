@@ -373,8 +373,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start removing a supplier
-         * @description Takes the supplier out of the snapshot, waits for its calls in flight, reads its charge records to the end and deletes its credentials, in steps that can be repeated (docs: internal/suppliers README「同步」). It answers at once with the supplier in `removing`; it ends `removed`. Axiom does not write to the supplier in M1, so the keys it made there are listed for a person to revoke. Sending it again while removing returns the supplier as it is.
+         * Remove a supplier
+         * @description Takes the supplier out of routing at once and ends it `removed`, in one transaction: its login is deleted, the sealed key of each credential is cleared and the credential becomes `erased` (the row stays, because calls made with it point at it). Calls in flight end with the key they hold. Axiom does not write to the supplier in M1, so the keys it used there are not revoked: the credentials stay listed as `erased` with their `upstream_key_ref`, for a person to revoke at the supplier, and the audit entry records how many (`keys_to_revoke_count`). Sending it again returns the supplier as it is.
          */
         post: operations["removeSupplier"];
         delete?: never;
@@ -963,7 +963,7 @@ export interface components {
             balance_after: components["schemas"]["Balance"];
         };
         /**
-         * @description `connecting`: not yet read; `active`: syncing and routable; `low_balance`: syncing, balance under the alert line; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removing` and `removed`: see `removeSupplier`.
+         * @description `connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`: syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what a removal of an earlier version left behind, and removing again ends it.
          * @enum {string}
          */
         SupplierStatus: "connecting" | "active" | "low_balance" | "needs_attention" | "paused" | "removing" | "removed";
@@ -1073,7 +1073,7 @@ export interface components {
             group_id: components["schemas"]["Uuid"];
             upstream_key_ref: string;
             /** @enum {string} */
-            status: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled";
+            status: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled" | "erased";
             /** Format: date-time */
             cooldown_until?: string;
             /** Format: date-time */
@@ -2072,8 +2072,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Removing. */
-            202: {
+            /** @description The supplier, `removed`. */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;

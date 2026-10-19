@@ -258,7 +258,7 @@ func (c *cluster) enqueued(db *pg.DB) (ids []string) {
 }
 
 // TestADueSupplierIsSyncedByTheQueue: a supplier that was never synced is found by the sweep, enqueued, and a round of
-// the engine runs over its adapter: its state is stored, and its balance and status are written on the supplier. Once
+// the engine runs over its adapter: its state is stored, and its balance and status are written on the supplier, enough for routing to take it. Once
 // done it is not due, so no second round follows.
 func TestADueSupplierIsSyncedByTheQueue(t *testing.T) {
 	t.Parallel()
@@ -274,6 +274,13 @@ func TestADueSupplierIsSyncedByTheQueue(t *testing.T) {
 	c.row("SELECT balance_native::text, status FROM suppliers.suppliers WHERE id = $1", &balance, &status)
 	if balance != "100" || status != "active" {
 		t.Errorf("the supplier after its first round: balance %q, status %q, want 100 and active", balance, status)
+	}
+	// What ListRoutable asks of a supplier (the balance above zero, in use): a supplier whose first round left no balance
+	// would stay out of routing without any error. TestOnlyAFundedSupplierIsRoutable is the other half, that it asks.
+	var funded bool
+	c.row("SELECT balance_native > 0 AND status IN ('active', 'low_balance') FROM suppliers.suppliers WHERE id = $1", &funded)
+	if !funded {
+		t.Error("the first round left the supplier out of what routing takes")
 	}
 	time.Sleep(time.Second) // ten sweeps: the supplier is not due again for a minute
 	if got := s.accounts.Load(); got != 1 {

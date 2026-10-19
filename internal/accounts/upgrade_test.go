@@ -50,14 +50,14 @@ func TestUpgradeRegistersExistingTenants(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := s.DisableKey(t.Context(), tx, system, created.ID); err != nil {
+		if err := disableKey(t.Context(), tx, s, created.ID); err != nil {
 			return err
 		}
 		return s.DeleteKey(t.Context(), tx, system, accounts.KeyID(k1))
 	}); err != nil {
 		t.Fatalf("key changes in an account made before the upgrade: %v", err)
 	}
-	if got := texts(t, db, platform, "SELECT action FROM platform.audit_log ORDER BY id"); strings.Join(got, " ") != "api_key.create api_key.disable api_key.delete" {
+	if got := texts(t, db, platform, "SELECT action FROM platform.audit_log ORDER BY id"); strings.Join(got, " ") != "api_key.create api_key.update api_key.delete" {
 		t.Errorf("audit entries %v", got)
 	}
 }

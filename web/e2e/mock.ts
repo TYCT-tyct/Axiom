@@ -14,7 +14,7 @@ type Schemas = components["schemas"];
 export type ErrorCode = Schemas["ErrorCode"];
 type Level = "none" | "pending_mfa" | "password" | "mfa";
 
-type Stored = { operation: string; status: number; json: unknown };
+type Stored = { operation: string; fingerprint: string; status: number; json: unknown };
 
 // What every surface keeps about the person at the keyboard.
 export type AuthState = {
@@ -55,6 +55,8 @@ export type Needs = {
   permission?: string;
   // a change on the admin API: needs an Idempotency-Key and a reason
   change?: boolean;
+  // what the server compares a change by under one key, when that is not the whole body (cmd/axiom's handlers)
+  identity?: (body: unknown) => unknown;
 };
 
 export type Ctx<P, K extends keyof P, M extends Method, S> = {
@@ -136,9 +138,52 @@ function refusal(state: AuthState, needs: Needs, method: Method, headers: Record
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// A JSON number as it was written, so integers past 2^53 stay apart as they do on the server.
+class Literal {
+  constructor(readonly text: string) {}
+}
+
+// The body as sent, with each number kept as written (JSON.parse's source text access).
+function readExact(text: string): unknown {
+  return JSON.parse(text, (_name, value: unknown, context?: { source: string }) =>
+    typeof value === "number" && context ? new Literal(context.source) : value,
+  );
+}
+
+// canonical writes a value in RFC 8785 member order and spelling, except that integers stay as written, as
+// jsonx.MarshalCanonical does.
+function canonical(value: unknown): string {
+  if (value instanceof Literal) {
+    return /^-?\d+$/.test(value.text) ? value.text : JSON.stringify(Number(value.text));
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const members = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${members.map(([name, member]) => `${JSON.stringify(name)}:${canonical(member)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+// fingerprint is what the server compares a change by under one key (internal/platform/idem): the body as sent, or the
+// part of it the operation's identity takes. The path is in the operation, compared beside it. The cases of
+// internal/platform/idem/testdata/same-request.json hold it to the server's (fingerprint.spec.ts).
+export function fingerprint(raw: string | null, identity?: Needs["identity"]) {
+  const body = raw ? readExact(raw) : undefined;
+  return canonical(identity ? identity(body) : body);
+}
+
 // A change on the admin API carries an Idempotency-Key and a reason of 1 to 1000 characters. The reply to a key already
-// seen is the stored one, flagged; the same key for another operation is refused.
-function changeRefusal(state: AuthState, headers: Record<string, string>, body: unknown, operation: string) {
+// seen with the same request is the stored one, flagged; the same key for another operation or another request is
+// refused.
+function changeRefusal(
+  state: AuthState,
+  headers: Record<string, string>,
+  body: unknown,
+  operation: string,
+  print: string,
+) {
   const key = headers["idempotency-key"] ?? "";
   const reason = (body as { reason?: unknown } | undefined)?.reason;
   if (!uuid.test(key) || typeof reason !== "string" || reason.length < 1 || reason.length > 1000) {
@@ -148,7 +193,7 @@ function changeRefusal(state: AuthState, headers: Record<string, string>, body: 
   if (!seen) {
     return { key };
   }
-  if (seen.operation !== operation) {
+  if (seen.operation !== operation || seen.fingerprint !== print) {
     return { refused: fail(409, "idempotency_key_reused"), key };
   }
   return { refused: { status: seen.status, json: seen.json, headers: { "Idempotency-Replayed": "true" } }, key };
@@ -172,7 +217,8 @@ export async function mockApi<S extends AuthState>(page: Page, base: string, han
     const body = request.postDataJSON() ?? undefined;
     const operation = `${method} ${url.pathname}`;
     let refused = refusal(state, handler.needs, method, headers, url.origin) as AnyReply | undefined;
-    const change = refused || !handler.needs.change ? undefined : changeRefusal(state, headers, body, operation);
+    const print = fingerprint(request.postData(), handler.needs.identity);
+    const change = refused || !handler.needs.change ? undefined : changeRefusal(state, headers, body, operation, print);
     refused ??= change?.refused;
     const reply: AnyReply =
       refused ??
@@ -183,7 +229,12 @@ export async function mockApi<S extends AuthState>(page: Page, base: string, han
         state,
       });
     if (change && !refused && reply.status < 400) {
-      state.stored.set(change.key, { operation, status: reply.status, json: reply.json });
+      state.stored.set(change.key, {
+        operation,
+        fingerprint: print,
+        status: reply.status,
+        json: reply.json,
+      });
     }
     if (state.dropReplies > 0) {
       state.dropReplies -= 1;

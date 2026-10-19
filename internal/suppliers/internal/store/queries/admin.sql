@@ -50,6 +50,15 @@ UPDATE suppliers.supplier_logins SET kind = @kind, ciphertext = @ciphertext, non
     key_version = @key_version, version = version + 1, expires_at = sqlc.narg(expires_at)
 WHERE supplier_id = @supplier_id;
 
+-- name: DeleteSupplierLogin :exec
+-- Removing a supplier: the sealed login goes. Nothing refers to the row.
+DELETE FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;
+
+-- name: EraseCredentialsOf :exec
+-- Removing a supplier: the sealed keys go, and the rows stay, because attempts that were made with them point at the row.
+UPDATE suppliers.credentials SET ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL, status = 'erased'
+WHERE supplier_id = @supplier_id;
+
 -- name: InsertUnitValue :exec
 INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES (@supplier_id, @value::numeric, @actor, @reason);
 

@@ -78,6 +78,7 @@ const credentialTones = {
   quota_exhausted: "warn",
   expired: "bad",
   disabled: "warn",
+  erased: "neutral",
 } as const satisfies Record<AdminSchemas["SupplierCredential"]["status"], "neutral" | "good" | "warn" | "bad">;
 
 // The keys bound to groups: what Axiom sends each group's calls with.

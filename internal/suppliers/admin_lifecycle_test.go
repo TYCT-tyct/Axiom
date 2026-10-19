@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"uuid"
 
@@ -56,27 +57,34 @@ func TestSetStatusLocked(t *testing.T) {
 	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
 }
 
-// TestRemove: removal starts from any status but the end, once; asking again while it runs changes nothing; a removed
-// supplier cannot be removed, and the generation rises so a round of the sync that began before is discarded.
+// TestRemove: a supplier is removed from any status but removed, at once; asking again changes nothing, and the
+// generation rises once so a round of the sync that began before is discarded.
 func TestRemove(t *testing.T) {
 	t.Parallel()
 	a := newAdmins(t)
-	id := a.connect("https://api.example.com", "ops@example.com").ID
-	remove := func() (Supplier, error) {
-		return inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
-			return a.admin.Remove(ctx, tx, a.actor, id, "no longer needed")
-		})
+	for i, from := range []string{"connecting", "active", "low_balance", "needs_attention", "paused", "removing"} {
+		id := a.connect("https://api.example.com", fmt.Sprintf("ops%d@example.com", i)).ID
+		a.setStatus(id, from)
+		before := a.text(fmt.Sprintf(`SELECT config_gen::text FROM suppliers.suppliers WHERE id = '%s'`, id))
+		remove := func() (Supplier, error) {
+			return inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
+				return a.admin.Remove(ctx, tx, a.actor, id, "no longer needed")
+			})
+		}
+		for _, what := range []string{"removing from " + from, "removing again"} {
+			s, err := remove()
+			refuses(t, what, err, nil)
+			same(t, what, []any{Removed, "1", "1"}, []any{
+				s.Status,
+				a.text(fmt.Sprintf(`SELECT (config_gen - %s)::text FROM suppliers.suppliers WHERE id = '%s'`, before, id)),
+				a.text(fmt.Sprintf(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'supplier.remove' AND target_id = '%s'`, id)),
+			})
+		}
 	}
-	for _, what := range []string{"removing", "removing again"} {
-		s, err := remove()
-		refuses(t, what, err, nil)
-		same(t, what, []string{"removing", "1", "1"}, []string{
-			string(s.Status), a.generation(), a.text(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'supplier.remove'`),
-		})
-	}
-	a.setStatus(id, "removed")
-	_, err := remove()
-	refuses(t, "removing a removed supplier", err, ErrStatusLocked)
+	_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
+		return a.admin.Remove(ctx, tx, a.actor, uuid.NewV7(), "r")
+	})
+	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
 }
 
 // TestReplaceLogin: the new login is sealed over the old, its version goes up, and the supplier is `connecting` again

@@ -39,16 +39,6 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 			return fmt.Errorf("decode the state: %w", err)
 		}
 		out.Version = row.Version
-		if out.Removal == syncer.StepFinalScan {
-			// The state does not store whether the removal's alert was sent (an older node would refuse that member),
-			// so it is read back from the event the alert wrote. Only the first read of a removal alerts, so the rest
-			// of the polling path does not pay for this read.
-			alerted, err := store.HasSyncEvent(ctx, tx, st.s.Supplier.ID, syncer.RemovalSlow.String())
-			if err != nil {
-				return fmt.Errorf("read whether the removal has alerted: %w", err)
-			}
-			out.CatchUpNotified = alerted
-		}
 		return nil
 	})
 	if err != nil {

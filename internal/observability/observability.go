@@ -41,7 +41,8 @@ type EndUserHash struct{ sum [sha256.Size]byte }
 
 // HashEndUser is HMAC-SHA256 of id under key: without the key, an identifier cannot be recovered by trying guesses.
 // The key belongs to the site, and rotating it makes earlier hashes unmatchable, which is the point of keeping it
-// out of the database.
+// out of the database. Nothing calls it yet: the gateway names an end user to the call log when [Issue #29]
+// (https://github.com/TYCT-tyct/Axiom/issues/29) writes it, until then the column holds the zero value.
 func HashEndUser(key []byte, id string) EndUserHash {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(id)) // hash.Hash.Write never fails

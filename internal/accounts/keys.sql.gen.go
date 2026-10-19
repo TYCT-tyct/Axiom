@@ -127,35 +127,6 @@ func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) ([]Delet
 	return items, nil
 }
 
-const disableKey = `-- name: DisableKey :many
-UPDATE accounts.api_keys SET status = 'disabled' WHERE id = $1 AND status = 'active' RETURNING site_id, account_id
-`
-
-type DisableKeyRow struct {
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-}
-
-func (q *Queries) DisableKey(ctx context.Context, db DBTX, id uuid.UUID) ([]DisableKeyRow, error) {
-	rows, err := db.Query(ctx, disableKey, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DisableKeyRow
-	for rows.Next() {
-		var i DisableKeyRow
-		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getKey = `-- name: GetKey :many
 SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys WHERE id = $1 AND kind = 'call' AND deleted_at IS NULL

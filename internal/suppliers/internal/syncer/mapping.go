@@ -12,7 +12,7 @@ type Catalog interface {
 type Mapping struct {
 	Model catalog.ModelID
 	// Mapped is set when the name stands for a listed model. An endpoint of a name that is not mapped is not made, and
-	// never reaches routing (EndpointFacts.Mapped); the name waits in the queue of names to map.
+	// never reaches routing; the name waits in the queue of names to map.
 	Mapped bool
 	// Unverified is set when the name is only a candidate: the catalog says it is not evidence of the version, because
 	// the vendor may have moved it to a newer one. The endpoint is made but must pass the authenticity check before the

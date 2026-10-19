@@ -173,7 +173,7 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	if err = q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &w.sc}); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active' WHERE id = $1", w.supplier); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active', balance_native = 100 WHERE id = $1", w.supplier); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 2, 'test', 'seed')", w.supplier); err != nil {

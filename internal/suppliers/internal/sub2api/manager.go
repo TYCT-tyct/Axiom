@@ -35,10 +35,7 @@ type manager struct {
 	offer *offerProgress
 }
 
-var (
-	_ adapter.Manager   = (*manager)(nil)
-	_ adapter.Rescanner = (*manager)(nil)
-)
+var _ adapter.Manager = (*manager)(nil)
 
 func (m *manager) get(ctx context.Context, path string, buckets ...string) (adapter.Response, error) {
 	return m.s.authed(ctx, adapter.Request{Method: http.MethodGet, Path: path, Buckets: buckets})

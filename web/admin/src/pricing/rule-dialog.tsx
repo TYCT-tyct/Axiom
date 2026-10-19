@@ -4,7 +4,7 @@ import { Button } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChangeDialog, isProblem, type Problem } from "../change";
+import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
 import { useInvalid } from "../models/price-fields";
 import { listedModelsQuery } from "../queries";
 import { type PreviewRequest, PreviewResult } from "./preview";
@@ -76,12 +76,14 @@ function RulePreview({ replaces, existing }: { replaces?: PricingRule; existing?
 
 // A rule says what it prices, for whom, how, and within what limits. Two rules with the same target and audience cannot
 // both exist, so a rule is changed rather than added twice; it is never deleted, only turned off, so the history stays.
-export function RuleDialog({ rule, onClose }: { rule?: PricingRule; onClose: () => void }) {
+export function RuleDialog({ rule: live, onClose }: { rule?: PricingRule; onClose: () => void }) {
   const { t } = useTranslation();
   const words = useWords();
+  const [rule, reload] = useSnapshot(live);
   const read = (values: Record<string, string>): Rule | Problem => readRule(values, words, rule);
   return (
     <ChangeDialog
+      reload={reload}
       title={rule ? t("pricing.rule.editTitle") : t("pricing.rule.newTitle")}
       intro={<p>{t("pricing.rule.intro")}</p>}
       action={rule ? t("pricing.rule.save") : t("pricing.rule.create")}
