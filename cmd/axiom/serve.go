@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
@@ -62,6 +63,7 @@ type nodeSettings struct {
 	hashConcurrency                   int
 	hashWait                          time.Duration
 	trustedProxies                    []netip.Prefix
+	smtp                              mail.Config
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
@@ -85,7 +87,11 @@ func readSettings(environ []string) (nodeSettings, error) {
 		hashWait:        env.Duration(hashWaitVar, 0),
 		trustedProxies:  env.Prefixes(trustedProxiesVar),
 	}
-	if err := env.Err(); err != nil {
+	// Email is optional: none of its variables set means the node starts with email disabled, and a partly set
+	// configuration joins the problems above, so the node still reports everything wrong at once.
+	smtp, mailErr := mail.ReadConfig(env)
+	s.smtp = smtp
+	if err := errors.Join(env.Err(), mailErr); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
@@ -143,7 +149,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
-	queue, err := startSync(ctx, db, console.master, exit, tel, logger)
+	queue, err := startSync(ctx, db, cfg.smtp, console.master, exit, tel, logger)
 	if err != nil {
 		return err
 	}
@@ -307,8 +313,13 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 
 // startSync starts the queue with supplier syncing, charge reconciliation, the ledger's daily check and the expiry of
 // credit. It reaches the suppliers through exit, the client the whole node shares.
-func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
+	// Outbound email rides the queue's default queue. Registering here also reports at startup whether this node can
+	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
+	if _, err := mail.Register(ctx, queue, smtp, logger); err != nil {
+		return nil, err
+	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
