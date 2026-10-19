@@ -164,7 +164,8 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 - **不变量**：①重放到最新后，Σ（批次剩余）− `unfunded` = `balances.balance`；②每个批次已用 + 已作废 ≤ 金额；③`unfunded` > 0 时没有批次还剩额度；④作废不超过 `room`（余额 − 在途预留，不用底线；与结算收费的上限 `cap` 同一个函数，只是底线取 0），所以作废之前准入的预留都还收得下，也不制造欠款；⑤作废幂等：一轮作废后批次剩余为 0 或被 `room` 卡住，再跑一轮没有可作废的就什么也不写；⑥同一单位的扣费只落在一个批次上：重放在账户锁内串行落定，结算不写批次。
 - **一个账户的作废（`expirer.expire`）**：先在没有锁的短事务里，一页一个事务，把分配重放到接近最新（`advance`）：这样做是安全的，因为动用户余额的交易的序号在锁内取，任何快照读到的页都是锁下所见的前缀；存的时候用读到时的位置做比较，别的事务先动了就丢掉这次的结果（`errStale`）。读状态在读批次之前，是这个比较成立的前提。然后在一个事务里锁余额行（`writeOffAccount`）：读状态和批次 → 重放到最新 → 核对不变量①（对不上就报错，什么也不作废）→ 按到期先后对每个到期的、仍有剩余的批次作废 min(剩余, `room`)，记 `expire` 交易（借用户余额、贷 `credit_expired`；`request_id` 是批次 ID，版本号是作废前已作废的累计额）→ 再重放一次吃进自己写的交易 → 存下状态。到期的判断用数据库时钟。整个账户有 30 秒的预算，超了就失败。
 - **一轮（`expirer.run`）**：开始时读一次数据库时间和扫描的位置（`billing.expiry_cursor`），按账户 ID 分页取有到期批次的账户（部分索引 `credit_batches_due`，`expires_at` 用这一个时间做界），逐个账户作废；失败的账户计入 `axiom.billing.expire.failures`、记日志（一轮最多列 20 个）、继续下一个；一轮 5 分钟预算用完就把位置存下停下，扫到末尾位置归零。队列任务 `billing.expire_credit` 每分钟一次，只有队列的领导节点插入，同一时刻只有一个在排队或在跑；任务总是成功，原因见 billing.md「隔离与进度」。排障见 billing.md「排障」。
-- **以后的来源**：付费批次由支付设计加进 `credit_batches.source` 的检查约束和 `sourceRank`；退款在账户锁内先 `loadAllocation` 再 `catchUp` 再选批次。动用户余额的新交易种类，在 `apply` 里按借方正负归为扣费或冲回；需要指定批次的（退款、拒付）在那时单独处理。
+- **以后的来源**：付费批次由支付设计加进 `credit_batches.source` 的检查约束和 `sourceRank`（E1-1）。动用户余额的新交易种类，在 `apply` 里按借方正负归为扣费或冲回；需要指定批次的（退款、拒付）单独处理。
+- **冻结（E1-6a，设计见 [payments 的「实现拆分」](../payments/README.md#实现拆分)）**：`transactions.kind` 加 `freeze`、`unfreeze`、`refund`，都以批次 ID 为 `request_id`，版本号是写入后该批次这一类的累计额（冻结累计、解冻累计、退款累计，只增不减，所以同一批次的每笔都不重复）。`freeze`、`unfreeze` 是第一批没有分录的交易：余额不动，但序号同样经 `InsertLockedTransaction` 在余额行锁内取。`credit_batches` 存下这三个累计额，与 `consumed`、`expired` 一样是重放的状态；`apply` 遇到这三种时，额度 = 版本号 − 批次存下的同类累计；冻结中 = 冻结累计 − 解冻累计 − 退款累计。扣费只用批次的 剩余 − 冻结中；作废只作废 剩余 − 冻结中；`refund` 的借方从指名批次的冻结中扣，不分配给别的批次；`unfreeze` 让解冻的额度先还欠款（同 `credit`）。不变量随之改为：② 已用 + 已作废 + 退款累计 + 冻结中 ≤ 金额；③ `unfunded` > 0 时没有批次还剩未冻结的额度；新增 ⑦ 重放到最新后 Σ冻结中 = `balances.frozen`（准入在锁内直接读它，不等重放）。`FreezeRefund` 同 `writeOffAccount`：锁余额行 → `loadAllocation` → `catchUp` 到最新 → 算可退额度 → 写 `freeze` 并加 `balances.frozen` → 再重放吃进自己写的交易 → 存下状态。`SettleRefund` 写 `refund` 交易（借用户余额、贷现金，跨币种另记汇兑损益）并减 `balances.frozen`；`ReleaseRefund` 写 `unfreeze` 并减 `balances.frozen`。
 - **迁移**：`00007`–`00011` 各改一张表，各是一个短事务，不会一边拿着 `transactions` 的锁、一边等结算拿着的 `balances` 的锁；新列要么不带默认值，要么用常量默认值，都不重写表；加宽的检查约束先 `NOT VALID`，`00016` 再 `VALIDATE`；四个索引各在不带事务的文件里 `CREATE INDEX CONCURRENTLY`（`00012`–`00015`，失败会留下无效索引，重跑前先删掉）；`00016` 验证约束。
 
 ## 兜底价
@@ -222,6 +223,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 | 请求结算、余额、花费计数、预留终态；或只释放（终态时同事务写 `EndRequest`） | 结算 | billing、suppliers | `(request_id, 0, settle, 0)`；锁内按预留状态分支 |
 | 加额度 | 后台（平台范围） | billing | `(credit_id, 0, credit, 0)`；批次主键；审计日志同事务 |
 | 额度到期作废、批次的已用与已作废、分配的位置 | 到期任务（平台范围），重放的页一个事务，作废一个事务 | billing | `(batch_id, 0, expire, 作废前的累计作废额)`；作废在余额行锁内、重放核对余额；不加锁的页按位置做比较后再写 |
+| 冻结、解冻、退款（E1-6a） | 支付的退款事务 | billing | `(batch_id, 0, freeze / unfreeze / refund, 写入后该类的累计额)`；余额行锁内取序号；重复调用由 payments 对退款行的条件更新挡住 |
 | 清理释放、丢失的请求（带路线）、`EndRequest` | 清理任务（后台角色） | billing、suppliers | 预留比较后再写；`lost_requests` 主键 `request_id` |
 | 迟到补扣 / 补差 | 迟到结算 | billing + suppliers | `(request_id, 0, reverse / settle, -1)`；只对清理释放发生 |
 | 调用记录 | 异步批量 | observability | 主键 `request_id`，`ON CONFLICT DO NOTHING` |
