@@ -1,8 +1,8 @@
 data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
 
-data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"**Checking the weather**","reasoning_details":[{"type":"reasoning.summary","summary":"**Checking the weather**","id":"rs_1","format":"openai-responses-v1","index":0}]},"finish_reason":null}]}
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":"**Checking the weather**","reasoning_content":"**Checking the weather**","reasoning_details":[{"type":"reasoning.summary","summary":"**Checking the weather**","id":"rs_1","format":"openai-responses-v1","index":0}]},"finish_reason":null}]}
 
-data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":" in Paris with the tool.","reasoning_details":[{"type":"reasoning.summary","summary":" in Paris with the tool.","id":"rs_1","format":"openai-responses-v1","index":0}]},"finish_reason":null}]}
+data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning":" in Paris with the tool.","reasoning_content":" in Paris with the tool.","reasoning_details":[{"type":"reasoning.summary","summary":" in Paris with the tool.","id":"rs_1","format":"openai-responses-v1","index":0}]},"finish_reason":null}]}
 
 data: {"id":"gen-01","object":"chat.completion.chunk","created":1760000000,"model":"claude-client-name","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"gAAAAABo_encrypted_reasoning_1","id":"rs_1","format":"openai-responses-v1","index":1}]},"finish_reason":null}]}
 
