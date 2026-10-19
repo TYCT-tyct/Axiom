@@ -3,9 +3,9 @@
 version: "2"
 
 run:
-  # The differential test against new-api (`just diff`) is built only with this tag, and is linted like the rest.
-  build-tags:
-    - diff
+  # Tests built only with a tag are linted like the rest: cmd/axiom's load test (docs/performance.md「怎么验证」, `just
+  # load`) and the differential test against new-api (`just diff`).
+  build-tags: [load, diff]
 
 linters:
   default: none
