@@ -167,6 +167,7 @@ func TestSlots(t *testing.T) {
 	if resp, body := r.message(accounts[0], "acme/beta"); resp.StatusCode != http.StatusOK {
 		t.Errorf("after the calls ended: %d %s", resp.StatusCode, body)
 	}
+	wantRefused(t, r.refused(), map[string]int64{"account_in_flight": 1})
 }
 
 // TestIPLimits: a client address may have only so many requests in flight, however it spells itself with proxy
@@ -193,6 +194,7 @@ func TestIPLimits(t *testing.T) {
 		}
 	}, func() (reply, string) { return r.message(a, "acme/beta") }, func() (reply, string) { return r.message(c, "acme/beta") })
 	r.idle(1 << 30)
+	wantRefused(t, r.refused(), map[string]int64{"ip_in_flight": 1})
 }
 
 // TestIPKey: IPv4 addresses count one by one, IPv6 by their /64, and a v4 address in v6 clothes is the v4 address.

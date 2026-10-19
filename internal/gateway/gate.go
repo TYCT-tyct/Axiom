@@ -25,7 +25,7 @@ func newAccountGate(admissionWait time.Duration) *accountGate {
 	return &accountGate{admissionWait: admissionWait, accounts: map[string]*gateWaiters{}}
 }
 
-// enter takes the gate of account. An admission waits at most admissionWait and then gets ErrRateLimited, so a
+// enter takes the gate of account. An admission waits at most admissionWait and then gets errAccountGate, so a
 // client that hammers one account is refused rather than left holding a request open; a completion waits for as
 // long as ctx lets it, since it carries money that is already committed.
 func (g *accountGate) enter(parent context.Context, account string, class Class) (func(), error) {
@@ -50,11 +50,11 @@ func (g *accountGate) enter(parent context.Context, account string, class Class)
 	g.mu.Unlock()
 
 	if !wt.park(ctx, &g.mu) {
-		return nil, expired(parent)
+		return nil, expired(parent, errAccountGate)
 	}
 	if ctx.Err() != nil {
 		g.release(account)
-		return nil, expired(parent)
+		return nil, expired(parent, errAccountGate)
 	}
 	return g.releaser(account), nil
 }
@@ -76,33 +76,45 @@ func (g *accountGate) release(account string) {
 // Funds starts the transactions that move money: admission, extension, settlement and SettleOrphan. The order is
 // the account gate first and the connection second, so a transaction waiting for its account holds no connection.
 type Funds struct {
-	gate *accountGate
-	pool *Pool
+	gate   *accountGate
+	pool   *Pool
+	budget time.Duration // an admission's connection and transaction, counted from the moment it holds the gate
 }
 
-// Admit is for the admission transaction (class Admission).
-func (f *Funds) Admit(ctx context.Context, account string) (release func(), err error) {
-	return f.begin(ctx, account, Admission)
+// Admit is for the admission transaction (class Admission). The returned context carries its budget: the wait for the
+// gate is the gate's own limit and is not part of it, because that wait holds no database resource; the budget bounds
+// only what does.
+func (f *Funds) Admit(ctx context.Context, account string) (context.Context, func(), error) {
+	return f.begin(ctx, account, Admission, f.budget)
 }
 
 // Complete is for extension, settlement and SettleOrphan (class Completion): ahead of admissions at the gate, and
 // able to use the connections admissions may not.
 func (f *Funds) Complete(ctx context.Context, account string) (release func(), err error) {
-	return f.begin(ctx, account, Completion)
+	_, release, err = f.begin(ctx, account, Completion, 0)
+	return release, err
 }
 
-func (f *Funds) begin(ctx context.Context, account string, class Class) (func(), error) {
+// begin takes the gate, then a connection. A budget above zero bounds the connection wait and whatever the caller does
+// with the returned context, from the moment the gate is held.
+func (f *Funds) begin(ctx context.Context, account string, class Class, budget time.Duration) (context.Context, func(), error) {
 	releaseGate, err := f.gate.enter(ctx, account, class)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	cancel := func() {}
+	if budget > 0 {
+		ctx, cancel = context.WithTimeout(ctx, budget)
 	}
 	releaseConn, err := f.pool.Acquire(ctx, class)
 	if err != nil {
+		cancel()
 		releaseGate()
-		return nil, err
+		return nil, nil, err
 	}
-	return func() {
+	return ctx, func() {
 		releaseConn()
 		releaseGate()
+		cancel()
 	}, nil
 }

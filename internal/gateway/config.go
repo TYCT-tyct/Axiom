@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/platform/pg"
 )
@@ -40,7 +45,7 @@ type Config struct {
 	KeepAlive         time.Duration // a stream that has written nothing to the client for this long gets a keep-alive
 	WriteTimeout      time.Duration // one write to the client; a client that does not take it in time is treated as gone
 	ExtendWait        time.Duration // one extension of a reservation, gate included; then the stream is cut short
-	AdmissionBudget   time.Duration // gate, connection and transaction of an admission
+	AdmissionBudget   time.Duration // connection and transaction of an admission, from the moment it holds the account gate
 	LockTimeout       time.Duration // the transaction's lock_timeout; checked, not applied until pg.Tx batches (README「入口与准入」)
 	StatementTimeout  time.Duration // the transaction's statement_timeout; likewise
 	HolderTTL         time.Duration // lifetime of a holder row that is not renewed
@@ -66,7 +71,7 @@ func DefaultConfig() Config {
 		BatchConnections:  2,
 		QueueMax:          256,
 		QueuePerKey:       16,
-		AccountGateWait:   200 * time.Millisecond,
+		AccountGateWait:   5 * time.Second,
 		QueueWait:         20 * time.Second,
 		StartBy:           120 * time.Second,
 		MaxCall:           60 * time.Minute,
@@ -130,28 +135,56 @@ func (b *Backpressure) KeyLookupSlot(ctx context.Context) (release func(), err e
 
 // Backpressure is the node's in-process limits, built from one validated Config.
 type Backpressure struct {
-	InFlight *InFlight
-	Funds    *Funds
-	Pool     *Pool // for the connections that need no account gate: cold-key lookup, batch writers
-	Queue    *Queue
-	Rate     *RateCounter
-	IPCalls  *Limiter // requests in flight per client address
-	cfg      Config
+	rateLimited metric.Int64Counter           // the 429s answered, by Refusal.Reason
+	byReason    map[string][]metric.AddOption // one slice per reason, built once: options passed one by one make a slice for each call
+	InFlight    *InFlight
+	Funds       *Funds
+	Pool        *Pool // for the connections that need no account gate: cold-key lookup, batch writers
+	Queue       *Queue
+	Rate        *RateCounter
+	IPCalls     *Limiter // requests in flight per client address
+	cfg         Config
 }
 
-// New validates cfg and builds the limits; it is the only way to get them, so no limit runs on a bad relation.
-func New(cfg Config) (*Backpressure, error) {
+// New validates cfg and builds the limits; it is the only way to get them, so no limit runs on a bad relation. The
+// 429s the node answers are counted in meter; nil counts nowhere.
+func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("gateway config: %w", err)
 	}
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("gateway")
+	}
+	rateLimited, err := meter.Int64Counter("axiom.gateway.rate_limited",
+		metric.WithDescription("Requests answered 429, by the limit that turned them away (docs/domains/gateway.md「错误」)."))
+	if err != nil {
+		panic(err) // the instrument name is a constant
+	}
+	byReason := make(map[string][]metric.AddOption, len(rateLimits))
+	for _, r := range rateLimits {
+		byReason[r.Reason] = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
+	}
 	pool := newPool(cfg.PoolSize, cfg.PoolReserve, cfg.BatchConnections)
 	return &Backpressure{
-		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(ErrRateLimited), nodeMax: cfg.NodeInFlight},
-		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool},
+		rateLimited: rateLimited, byReason: byReason,
+		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
+		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
 		Pool:     pool,
 		Queue:    newQueue(cfg.QueueMax, cfg.QueuePerKey),
 		Rate:     NewRateCounter(cfg.RateWindow),
-		IPCalls:  NewLimiter(ErrRateLimited),
+		IPCalls:  NewLimiter(errIPInFlight),
 		cfg:      cfg,
 	}, nil
+}
+
+// refused counts a 429 about to be answered. Every 429 of the node goes through here, and a refusal without a reason is
+// a limit that was added and not told apart, which the counter makes visible as reason "".
+func (b *Backpressure) refused(ctx context.Context, r *Refusal) {
+	if r.Status == http.StatusTooManyRequests {
+		opts, ok := b.byReason[r.Reason]
+		if !ok { // a limit added without being listed in rateLimits: counted all the same, at the cost of an allocation
+			opts = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
+		}
+		b.rateLimited.Add(ctx, 1, opts...)
+	}
 }

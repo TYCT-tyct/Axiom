@@ -258,6 +258,7 @@ func TestCountRateIsItsOwn(t *testing.T) {
 	if got := status(called, true); got != http.StatusOK {
 		t.Errorf("a count after calls used up the calling allowance: %d", got)
 	}
+	wantRefused(t, r.refused(), map[string]int64{"count_rate": 1, "key_rate": 1})
 }
 
 // TestLegacyBalance: the OpenAI dashboard endpoints new-api reads give the same figures: the hard limit is the credits,

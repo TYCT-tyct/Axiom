@@ -333,6 +333,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		return
 	}
 	ref, expected := refusal(format, err)
+	h.Limits.refused(r.Context(), ref)
 	if dep, reason, out := outageOf(err); out {
 		h.outage.refuse(r.Context(), dep, reason)
 		writeRefusal(w, format, ref)

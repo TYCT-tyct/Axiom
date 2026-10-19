@@ -192,12 +192,15 @@ const (
 
 // answer writes the error a call that forwarded nothing ends with, in the client's own format, with what was charged
 // anyway when the settlement says so.
-func (s *session) answer(e ended, fin *protocol.Final) {
+func (s *session) answer(ctx context.Context, e ended, fin *protocol.Final) {
 	status, body := protocol.RenderError(s.c.Format, e.err, fin)
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.gone || s.started || s.req.Context().Err() != nil {
 		return
+	}
+	if status == http.StatusTooManyRequests { // the only 429 a call ends in after its admission: no credential had a slot
+		s.x.Limits.refused(ctx, errCredentialsBusy)
 	}
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
