@@ -280,7 +280,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	}
 	calls, err := startCallPath(ctx, callDeps{
 		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
-		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger,
+		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 	})
 	if err != nil {
 		return nodeRoutes{}, err

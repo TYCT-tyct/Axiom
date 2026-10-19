@@ -3,17 +3,15 @@ package gateway
 import (
 	"net/http"
 	"net/netip"
+
+	"axiom/internal/platform/clientip"
 )
 
-// clientIP is the address the connection came from. M1 trusts no proxy header: the node is reached directly or
-// through a CDN whose addresses AXIOM_TRUSTED_PROXIES will name when a deployment needs it (internal/accounts/README.md
-// 「登录前的资源」).
-func clientIP(r *http.Request) netip.Addr {
-	ap, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return ap.Addr().Unmap()
+// clientIP is the address the request came from, read through the reverse proxies the deployment trusts
+// (AXIOM_TRUSTED_PROXIES, internal/platform/clientip): the IP limit and the key's allow-list judge the client, not the
+// proxy in front of it.
+func (h *Handler) clientIP(r *http.Request) netip.Addr {
+	return clientip.Addr(r, h.Proxies)
 }
 
 // ipKey is what the per-address limits count by. An IPv6 customer holds a whole /64, so counting its addresses one by
