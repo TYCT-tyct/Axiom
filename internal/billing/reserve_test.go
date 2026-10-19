@@ -10,7 +10,6 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
-	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -68,18 +67,7 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 }
 
 // credit adds amount to the account as a gift, through the ledger, in the platform scope.
-func (b *bank) credit(amount int64) {
-	b.t.Helper()
-	a := b.admitted
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		return AddCredit(b.t.Context(), tx, Credit{
-			ID: uuid.NewV7(), Site: a.Site, Account: a.Account, Amount: amount,
-			Actor: audit.System("billing.test"), Reason: "test credit",
-		})
-	}); err != nil {
-		b.t.Fatal(err)
-	}
-}
+func (b *bank) credit(amount int64) { b.creditBatch(amount, nil) }
 
 // sql runs statements as the superuser, for what the application may not do, such as crediting a balance.
 func (b *bank) sql(statements ...string) {

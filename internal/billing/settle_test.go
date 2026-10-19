@@ -392,9 +392,10 @@ func TestCreditOnce(t *testing.T) {
 	b.balanced()
 }
 
-// TestLedgerProperty drives random sequences of credits, reservations, settlements with retries and crashes left to
-// cleanup, some with usage only a fallback price covers, and checks after every step that every transaction balances,
-// the balance equals its book, the counters equal the pending holds and the floor holds.
+// TestLedgerProperty drives random sequences of credits, some of them expiring, reservations, settlements with retries
+// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
+// after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
+// the floor holds, and the credit batches fund exactly the balance without any being over-spent.
 func TestLedgerProperty(t *testing.T) {
 	for seed := range uint64(3) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
@@ -404,6 +405,7 @@ func TestLedgerProperty(t *testing.T) {
 			for range 40 {
 				b.step(r, &holds)
 				b.balanced()
+				b.replayed(b.admitted.Account)
 			}
 		})
 	}
@@ -412,9 +414,11 @@ func TestLedgerProperty(t *testing.T) {
 func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	b.t.Helper()
 	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
-	switch n := r.IntN(6); {
+	switch n := r.IntN(8); {
 	case n == 0:
-		b.credit(r.Int64N(2000) + 1)
+		b.creditBatch(r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
+	case n == 6 || n == 7:
+		b.expire()
 	case n == 1 || len(*holds) == 0:
 		if h, err := b.tryHold(r.Int64N(1500)); err == nil {
 			*holds = append(*holds, h)

@@ -46,13 +46,13 @@ func TestQueueCaps(t *testing.T) {
 		wait(ctx, q, "a").mustWait(t)
 		wait(ctx, q, "a").mustWait(t)
 		overKey := wait(ctx, q, "a")
-		if !overKey.finished() || !errors.Is(overKey.err, ErrRateLimited) {
-			t.Fatalf("third waiter of one key: finished=%v err=%v, want ErrRateLimited", overKey.finished(), overKey.err)
+		if !overKey.finished() || !errors.Is(overKey.err, errQueueKeyFull) {
+			t.Fatalf("third waiter of one key: finished=%v err=%v, want errQueueKeyFull", overKey.finished(), overKey.err)
 		}
 		wait(ctx, q, "b").mustWait(t) // another key still fits: the total is 3
 		overTotal := wait(ctx, q, "c")
-		if !overTotal.finished() || !errors.Is(overTotal.err, ErrRateLimited) {
-			t.Fatalf("beyond the total: finished=%v err=%v, want ErrRateLimited", overTotal.finished(), overTotal.err)
+		if !overTotal.finished() || !errors.Is(overTotal.err, errQueueFull) {
+			t.Fatalf("beyond the total: finished=%v err=%v, want errQueueFull", overTotal.finished(), overTotal.err)
 		}
 	})
 }
@@ -84,8 +84,8 @@ func TestQueueWaitEndsAfterTheLimit(t *testing.T) {
 		time.Sleep(queueWait - time.Nanosecond)
 		w.mustWait(t)
 		time.Sleep(time.Nanosecond)
-		if !w.finished() || !errors.Is(w.err, ErrRateLimited) {
-			t.Fatalf("after the limit: finished=%v err=%v, want ErrRateLimited", w.finished(), w.err)
+		if !w.finished() || !errors.Is(w.err, errQueueWait) {
+			t.Fatalf("after the limit: finished=%v err=%v, want errQueueWait", w.finished(), w.err)
 		}
 		if q.waiting.len() != 0 {
 			t.Fatal("the timed-out waiter is still queued")
@@ -216,8 +216,8 @@ func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
 			t.Fatalf("with time left and a stale epoch: %v, want a retry", err)
 		}
 		for name, deadline := range map[string]time.Time{"now": time.Now(), "past": time.Now().Add(-time.Second)} {
-			if err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, ErrRateLimited) {
-				t.Errorf("a deadline that is %s, with a stale epoch: %v, want ErrRateLimited", name, err)
+			if err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, errQueueWait) {
+				t.Errorf("a deadline that is %s, with a stale epoch: %v, want errQueueWait", name, err)
 			}
 		}
 		if q.queued() != 0 {

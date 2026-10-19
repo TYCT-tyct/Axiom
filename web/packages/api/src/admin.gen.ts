@@ -266,7 +266,7 @@ export interface paths {
         put?: never;
         /**
          * Give an account credit
-         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A grant does not expire: `expires_at` is refused (422, pointing at `/expires_at`) until credit batches are written off at their expiry. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
+         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
          */
         post: operations["grantCredit"];
         delete?: never;
@@ -944,7 +944,7 @@ export interface components {
             amount: components["schemas"]["Money"];
             /**
              * Format: date-time
-             * @description Refused in this release (422): nothing writes off an expired batch yet. Leave it out; the credit does not expire.
+             * @description UTC, in the future. Absent: the credit does not expire.
              */
             expires_at?: string;
             reason: components["schemas"]["Reason"];
@@ -953,10 +953,7 @@ export interface components {
             id: components["schemas"]["Uuid"];
             account_id: components["schemas"]["AccountId"];
             amount: components["schemas"]["Money"];
-            /**
-             * Format: date-time
-             * @description Absent in this release: a grant does not expire.
-             */
+            /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */
             created_at: string;

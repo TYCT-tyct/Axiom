@@ -34,7 +34,7 @@ func (b *bank) readCredit(scope pg.Scope, id uuid.UUID) (batch CreditBatch, ok b
 	return batch, ok
 }
 
-// TestReadCredit: the batch a credit made is read back with its amount, no expiry (nothing sets one yet, #230) and the time it was made; a batch of
+// TestReadCredit: the batch a credit made is read back with its amount, no expiry (the credit set none) and the time it was made; a batch of
 // nobody's is not found.
 func TestReadCredit(t *testing.T) {
 	t.Parallel()

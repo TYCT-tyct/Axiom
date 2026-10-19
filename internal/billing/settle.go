@@ -512,8 +512,12 @@ func (c *locked) stored() (Final, error) {
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
 // the floor, less what is reserved apart from what this reservation still holds. It is computed exactly, as Reserve's
 // headroom is, and clamped to what an amount can hold.
-func (c *locked) cap(held int64) int64 {
-	b := c.balance
+func (c *locked) cap(held int64) int64 { return room(c.balance, held) }
+
+// room is how far the balance may fall without passing the floor, the reservations other than held kept covered. A
+// charge is capped by it (cap), and so is the write-off of expired credit (expire.go): both leave every reservation
+// admitted payable.
+func room(b LockBalanceRow, held int64) int64 {
 	left := sum(platform.AmountExact(b.Balance), platform.AmountExact(b.Floor).Neg(), platform.AmountExact(b.Reserved).Neg(),
 		platform.AmountExact(held))
 	if left.Cmp(platform.Exact{}) < 0 {

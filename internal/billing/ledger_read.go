@@ -14,7 +14,7 @@ import (
 // nothing still exists, with no entries.
 type LedgerTransaction struct {
 	ID         uuid.UUID
-	Kind       string // credit, settle, reverse, attempt_cost or cost_adjust
+	Kind       string // credit, settle, reverse, attempt_cost, cost_adjust or expire
 	AttemptSeq int32  // 0 for the request's own settlement; the attempt's number for its cost
 	Revision   int64
 	CreatedAt  time.Time

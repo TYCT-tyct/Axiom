@@ -112,8 +112,8 @@
 | 进行中的请求暂时占满了余额 | 402 同上，`limit_source` 为 `pending`，`Retry-After` 是最早释放的时间（待定：见「待定问题」；现在回 `balance`，与上一条相同） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
-| 限流；按 IP、按账户的在途上限；同一账户的资金操作排队超时 | 429 `rate_limited` | `rate_limit_error` | — |
-| 端点都满载、排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
+| 限流（每个 key 调用和计数的频率）；按 IP、按账户的在途上限；同一账户的资金操作排队超过 5 秒（一次突发在一个账户上排的队，见 [gateway 模块的「并发、背压与共享状态」](../../internal/gateway/README.md#并发背压与共享状态)） | 429 `rate_limited` | `rate_limit_error` | — |
+| 端点都满载，排队的人数满了或排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
 | 节点满载、准入超时、路由快照过旧、数据库不可用、本节点的持有者失效 | 503 `overloaded`，`Retry-After: 1` | `overloaded_error` | — |
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
 | 没有可用端点，永久性的：能力、上下文、格式、预设或请求覆盖过滤掉了全部端点，或没有售价 | 404 `no_endpoint`，附过滤原因 | `not_found_error` | — |
@@ -126,6 +126,7 @@
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `request_too_large` | `invalid_request_error`；`request_too_large` | — |
 
 - **`Retry-After`** 用整数秒，不超过 60 秒。Claude Code 对超过 60 秒的值不再重试。
+- **429 的原因只进指标**：上表所有 429 的错误码都是 `rate_limited`，客户端程序不必区分；节点按原因（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`）计入指标 `axiom.gateway.rate_limited`，运维凭它判断是哪一道限制在拒绝（逐项含义见 [gateway 模块](../../internal/gateway/README.md#并发背压与共享状态)）。原因不写进响应：OpenRouter 的 429 也只给统一的 `error_type`（`rate_limit_exceeded`），要等的时间放在 `Retry-After`，它对付费模型没有平台级的请求上限，只有免费模型的额度和防 DDoS（OpenRouter《Limits》《Errors and Debugging》，2026-10-18）；sub2api 把原因编进错误码是它自己的做法（`gateway_queue_full`、`gateway_concurrency_limit`，`backend/internal/handler/concurrency_error_response.go`）。
 - **供应商自己的 401、402、403、429** 只用来换凭证（同一端点另一把凭证，没有可用凭证时换下一个端点）或换端点，从不当作我们的认证或钱包错误返回给客户端。
 - **流中途出错**：状态码保持 200，按各格式的方式在流里报错，然后结束。结算已提交的结尾带用量和费用，没提交的只带用量：
   - Chat：一个带顶层 `error`、结束原因为 `error` 的数据块；

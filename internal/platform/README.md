@@ -189,6 +189,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_http_server_duration_seconds` | 直方图 | 同上 |
   | `axiom_accounts_key_cache_misses_total` | 计数 | 无：key 查找没命中缓存、去问了数据库的次数（#23；缓存命中时调用路径不查库，用它和请求数对照；测试：`TestKeyCacheMissesAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
+  | `axiom_gateway_rate_limited_total` | 计数 | `reason`：节点回 429 的次数，按拒绝的那道限制（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`，含义见 [gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)；#295；测试：`TestEachRateLimitIsCountedByItsReason` 等） |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |

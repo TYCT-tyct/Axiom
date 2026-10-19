@@ -130,7 +130,7 @@ func TestRefusalOfAnError(t *testing.T) {
 		code       string
 		unexpected bool
 	}{
-		"a refusal, wrapped":                     {wrapped(ErrRateLimited), 429, "rate_limited", false},
+		"a refusal, wrapped":                     {wrapped(errAccountGate), 429, "rate_limited", false},
 		"a balance too small":                    {wrapped(&billing.Insufficient{Source: billing.SourceBalance}), 402, "credits_insufficient", false},
 		"a model that is not there":              {catalog.ErrModelNotFound, 404, "model_not_found", false},
 		"a retired model":                        {catalog.ErrRetired, 404, "model_not_found", false},
