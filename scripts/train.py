@@ -35,7 +35,9 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 QUEUE, HOTFIX, CONFLICT, FAILED = "queue", "hotfix", "train:conflict", "train:failed"
-STATUS = "train"  # required on main; posted on a PR head just before the train merges it
+STATUS = "merge-train"  # required on main; posted on a PR head just before the train merges it. Not "train": that is
+# the name of the driver job's own check run, which a labelling run attaches to the PR it drives, so a required context of
+# that name made a PR block its own landing while the run was in progress, and keep blocking once it failed
 VERIFIED = "train/verified"  # on train/<base>/land: the prefix passed and may be landed
 FLAKY = ".github/flaky.toml"
 SUBJECT = re.compile(r"train: #(\d+) ([0-9a-f]{40})$")

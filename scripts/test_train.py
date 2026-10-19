@@ -294,8 +294,8 @@ class Decisions(unittest.TestCase):
                 {"name": "docs", "status": "completed", "conclusion": "skipped"},
                 {"name": "pr", "status": "in_progress", "conclusion": None},
                 {"name": "secrets", "status": "completed", "conclusion": "failure"}]
-        statuses = [{"context": "train", "state": "pending"}]
-        required = ["build", "docs", "pr", "secrets", "review", "train"]
+        statuses = [{"context": "merge-train", "state": "pending"}]
+        required = ["build", "docs", "pr", "secrets", "review", "merge-train"]
         self.assertEqual(train.unmet_checks(required, runs, statuses), ["pr", "secrets", "review"])
 
     def test_migration_versions_are_per_directory(self):
