@@ -307,6 +307,7 @@ type rewriter struct {
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
 	streamed                              bool            // the stream member seen
+	ending                                bool            // the event is the one that carries the final usage
 	capped                                bool            // max_output_tokens was given a value
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps

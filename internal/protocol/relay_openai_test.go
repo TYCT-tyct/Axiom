@@ -246,6 +246,28 @@ func TestRelayResponses(t *testing.T) {
 	}
 }
 
+// TestRelayResponsesKeepsANullUsage: the events before the response ends carry usage: null, as OpenAI writes them, and
+// the ending carries the usage object.
+func TestRelayResponsesKeepsANullUsage(t *testing.T) {
+	created := responsesEvent("response.created", 0, responsesObject)
+	progress := responsesEvent("response.in_progress", 1, responsesObject)
+	completed := responsesEvent("response.completed", 2, strings.Replace(responsesObject, `"usage":null`, `"usage":{"input_tokens":5,"output_tokens":3}`, 1))
+	got := relay(t, protocol.Responses, strings.NewReader(created+progress+completed), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	for i, e := range events(t, got.out) {
+		response, _ := e["response"].(map[string]any)
+		usage, has := response["usage"]
+		if wantNull := i < 2; wantNull && (!has || usage != nil) || !wantNull && usage == nil {
+			t.Errorf("%v: usage %v (present %t)", e["type"], usage, has)
+		}
+	}
+	if n := strings.Count(string(got.out), `"usage"`); n != 3 {
+		t.Errorf("%d usage members, want one in each event:\n%s", n, got.out)
+	}
+}
+
 // TestRelayResponsesContent: deltas count as they arrive, and an output item that completes counts only what it adds
 // to its deltas, so text is never counted twice and an item without deltas is still counted; a web search call
 // counts as a search.
