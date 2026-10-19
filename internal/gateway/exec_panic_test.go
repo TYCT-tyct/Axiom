@@ -115,8 +115,7 @@ func TestAPanicInTheSettlementOfACompactReplyGivesBackItsMemory(t *testing.T) {
 // already drawn on the budget.
 func TestAPanicInTheReadOfACompactReplyGivesBackItsMemory(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		var h *harness
-		h = newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
 			body := &panicBody{r: strings.NewReader(bigCompacted(200 << 10)), onPanic: func() {
 				if left(h.memory) >= h.budget {
@@ -134,16 +133,13 @@ func TestAPanicInTheReadOfACompactReplyGivesBackItsMemory(t *testing.T) {
 // attempt waits for its response headers. A relay of the next attempt is not touched by the letting go of an old one.
 func TestADiscardedRelayIsNotHeldBySession(t *testing.T) {
 	cases := []struct {
-		name string
-		do   func(s *session, old, next *protocol.Relay)
-		live func(old, next *protocol.Relay) *protocol.Relay // what the session holds afterwards
+		name      string
+		do        func(s *session, old, next *protocol.Relay)
+		keepsNext bool // the session still holds the next attempt's relay afterwards, not none
 	}{
-		{"the kept reply is let go", func(s *session, old, _ *protocol.Relay) { s.keep(old); s.let() },
-			func(_, _ *protocol.Relay) *protocol.Relay { return nil }},
-		{"a relay is dropped", func(s *session, old, _ *protocol.Relay) { s.drop(old) },
-			func(_, _ *protocol.Relay) *protocol.Relay { return nil }},
-		{"the next attempt's relay stays", func(s *session, old, next *protocol.Relay) { s.keep(old); s.live = next; s.let() },
-			func(_, next *protocol.Relay) *protocol.Relay { return next }},
+		{"the kept reply is let go", func(s *session, old, _ *protocol.Relay) { s.keep(old); s.let() }, false},
+		{"a relay is dropped", func(s *session, old, _ *protocol.Relay) { s.drop(old) }, false},
+		{"the next attempt's relay stays", func(s *session, old, next *protocol.Relay) { s.keep(old); s.live = next; s.let() }, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -157,7 +153,11 @@ func TestADiscardedRelayIsNotHeldBySession(t *testing.T) {
 				old, next := newRelay(), newRelay()
 				s.live = old
 				c.do(s, old, next)
-				if want := c.live(old, next); s.live != want {
+				want := (*protocol.Relay)(nil)
+				if c.keepsNext {
+					want = next
+				}
+				if s.live != want {
 					t.Errorf("the session holds %p, want %p", s.live, want)
 				}
 			})
