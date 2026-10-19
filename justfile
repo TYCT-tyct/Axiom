@@ -119,7 +119,7 @@ bench-compare base:
 # protocol samples, and fail on any difference docs/domains/gateway.md「与 new-api 的有意差异」 does not explain. It pulls
 # an image and starts a container, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> diff
 diff: web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^TestAxiomMatchesNewAPIOnTheWire$' ./cmd/axiom
+    go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
 
 compose := "docker compose -f deploy/compose.yaml"
 
