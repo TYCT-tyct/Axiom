@@ -91,6 +91,14 @@ test: web-embed
 bench-once: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
 
+# The load test of docs/performance.md「怎么验证」: 5000 streams, a burst and a mass cancel, megabyte requests, a hot account,
+# a cold-key flood and two database outages, on the shared PostgreSQL cluster, about 12 minutes at scale 1 and heavy on the
+# machine (without the race detector, which it would slow beyond meaning). It is not part of `check`; run it on the CI
+# server, never beside other work: bash ~/axiom-ops/remote-check.sh <worktree> load. A scale below 1 shrinks the counts and
+# the times to try it on a small machine, and `only` (a pattern such as ^1_) runs the scenarios whose names match. Prints the results table last.
+load scale="1" only="": web-embed
+    AXIOM_LOAD_SCALE={{ scale }} go run ./internal/platform/pgtest/cmd/withcluster go test -tags load -count=1 -timeout 35m -run '^TestLoad$/{{ only }}' -v ./cmd/axiom
+
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 

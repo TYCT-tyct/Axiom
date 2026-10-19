@@ -2,6 +2,10 @@
 # departures from the defaults, and thresholds are never loosened to make a change pass.
 version: "2"
 
+run:
+  # cmd/axiom's load test (docs/performance.md「怎么验证」) is built only with this tag; without it here nothing would lint it.
+  build-tags: [load]
+
 linters:
   default: none
   enable:
