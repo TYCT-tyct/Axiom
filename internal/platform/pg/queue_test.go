@@ -269,6 +269,62 @@ func runningHeldJob(t *testing.T) (q *pg.Queue, h *holder, endNode context.Cance
 	return q, h, endNode
 }
 
+// TestANodeWorksOnlyTheJobKindsItHasWorkersFor: during a rolling deploy an older node shares the queue with a kind it
+// has no worker for. It leaves that job available and spends no attempt on it, so the node that has the worker runs it;
+// River's default would fail it with an unknown-kind error, spend an attempt and back off, and a unique job in that
+// state keeps its twin from being enqueued.
+func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
+	t.Parallel()
+	db, err := pg.Open(t.Context(), pgtest.New(t).App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+
+	older := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil) // a node from before test.ping existed
+	startDiscardQueue(t, older)
+	// The row is what the newer node's InsertManyTx leaves: a queue that has the worker would work the job at once, and
+	// River refuses to insert a kind its own workers do not cover.
+	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job (kind, args, state, queue, max_attempts)
+			VALUES ('test.ping', '{"n": 1}', 'available', 'default', 1)`)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * time.Second) // three fetch intervals: the older node has had every chance to take the job
+	if state, attempt := jobStateAndAttempt(t, db, "test.ping"); state != "available" || attempt != 0 {
+		t.Fatalf("the job is %q after attempt %d on a node without its worker, want available and no attempt", state, attempt)
+	}
+
+	newer := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
+	worked := make(chan int, 1)
+	river.AddWorker(newer.Workers(), &pinger{ran: worked})
+	startDiscardQueue(t, newer)
+	if n := ran(t, worked); n != 1 {
+		t.Fatalf("job %d ran, want 1", n)
+	}
+	// The worker reports before the queue writes the job's final state.
+	eventually(t, "the job to be completed", func() bool { return jobState(t, db, "test.ping") == "completed" })
+	if _, attempt := jobStateAndAttempt(t, db, "test.ping"); attempt != 1 {
+		t.Errorf("the job took %d attempts, want 1: the node without its worker spent none", attempt)
+	}
+}
+
+// jobStateAndAttempt is the state and the attempt count of the latest job of kind.
+func jobStateAndAttempt(t *testing.T, db *pg.DB, kind string) (state string, attempt int16) {
+	t.Helper()
+	err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT state, attempt FROM river.river_job WHERE kind = $1 ORDER BY id DESC LIMIT 1", kind).
+			Scan(&state, &attempt)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, attempt
+}
+
 // TestAJobRunningWhenTheNodeIsToldToStopIsLeftToFinish: the context Start was given ending does not cancel the jobs
 // running. Stop waits for them until its own deadline: a job that finishes before it ends undisturbed, and one that
 // does not is cancelled by it, and only then.

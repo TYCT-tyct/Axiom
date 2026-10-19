@@ -93,6 +93,12 @@ func (q *Queue) Start(ctx context.Context) error {
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
 		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: -1, // the scan deletes them, after claiming them
 		Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: queueWorkers}},
+		// A node fetches only the kinds it has workers for: during a rolling deploy an older node would otherwise take a
+		// kind it does not know, spend an attempt on River's unknown-kind error and back off, and a unique job in that
+		// state lets no twin be enqueued. Every node registers the same workers within one version, so the mixed set
+		// lasts only as long as a deploy. This affects fetching alone: a leader's rescuer still discards stuck jobs of
+		// kinds it does not know, and only those that ran past rescueAfter.
+		FetchOnlyKnownKinds: true,
 	})
 	if err != nil {
 		return fmt.Errorf("queue: %w", err)

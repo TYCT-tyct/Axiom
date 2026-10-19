@@ -41,9 +41,10 @@ func TestANodeServesModelCalls(t *testing.T) {
 	w.price()
 	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
 
-	// The ledger's daily check is on the queue the node started: it runs once at once, so its job exists.
+	// Both reconciliations run on the node's queue at startup, without waiting for their next interval.
 	waitUntil(t, 15*time.Second, func() bool {
-		return w.query("SELECT count(*)::text FROM river.river_job WHERE kind = 'billing.reconcile'") != "0"
+		return w.query(`SELECT count(DISTINCT kind)::text FROM river.river_job
+			WHERE kind IN ('billing.reconcile', 'suppliers.reconcile') AND state = 'completed'`) == "2"
 	})
 
 	w.checkMessages(n)
