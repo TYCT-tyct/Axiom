@@ -410,8 +410,11 @@ func errorCodeIsStatus(r reply) error {
 			Code any `json:"code"`
 		} `json:"error"`
 	}
-	if r.status < http.StatusBadRequest || json.Unmarshal(r.body, &doc) != nil || doc.Error == nil {
+	if r.status < http.StatusBadRequest {
 		return nil
+	}
+	if err := json.Unmarshal(r.body, &doc); err != nil || doc.Error == nil {
+		return nil //nolint:nilerr // a body that is not a JSON error carries no error.code; the comparison reports it
 	}
 	if code, ok := doc.Error.Code.(float64); ok && int(code) != r.status {
 		return fmt.Errorf("error.code %v under HTTP status %d", code, r.status)
