@@ -23,7 +23,7 @@
 6. **本地检查**：`just check-all` 一条命令跑完格式化、lint、测试、生成检查和基准测试；只跑可缓存的部分用 `just check`（PR 上每个基准由 `just bench-compare` 跑）。
 7. **自审**：实现者按 /simplify 的四个视角（复用、简化、效率、层次）自审自己的改动，不另起 agent；再对照下文「代码质量标准」和「检查清单」逐条过；查空值、极值、并发、失败与重试、部分写入。前端改动按[前端](docs/frontend.md)的验收门槛截图自查：深浅色、极端品牌色、中英文、360px 到 2560px。挑 5–10 处最关键的行为做变异证明：把那段代码改坏、确认测试失败，并核对改动确实生效了；不必穷举。
 8. **评审**：见下文「评审」。
-9. **合并前后**：PR 用 `Closes #N` 时，合并前把那个 Issue 的验收项逐条附证据勾上（基础检查 `pr` 核对，没勾完不能合并）；要部署后才能验证的，写 `Refs #N`，验证后再勾选、关闭 Issue。合并后删除自己的本地分支和 worktree，`git fetch --prune`。合并要求分支基于最新 `main`（strict，取舍和测量值写在 `.github/project-workflow.toml`）；`main` 每次推送也跑完整 CI，它失败时最先修。放弃的 PR 写明原因后关闭，分支一并删除。
+9. **合并**：评审通过后给 PR 加 `queue` 标签，由[合并队列](docs/ops/merge-train.md)把它和排队的其他 PR 合在一起构建、通过后合并，代替 AGENTS.md 第 7 步的手动合并；`main` 要求 `train` 状态，不要求分支基于最新 `main`（取舍和测量值写在 `.github/project-workflow.toml`）。PR 用 `Closes #N` 时，加标签前把那个 Issue 的验收项逐条附证据勾上（基础检查 `pr` 核对，没勾完进不了队列）；要部署后才能验证的，写 `Refs #N`，验证后再勾选、关闭 Issue。合并后删除自己的本地分支和 worktree，`git fetch --prune`。列车落地后 `main` 上再跑一次完整 CI，它失败时最先修。放弃的 PR 写明原因后关闭，分支一并删除。
 
 ## 评审
 
