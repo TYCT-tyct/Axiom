@@ -30,6 +30,17 @@ type visibility struct {
 	router  *routing.Router
 }
 
+// modelRoutes adds the model list and the single model.
+func (h *Handler) modelRoutes(prefix string) {
+	h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+	// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
+	h.mux.HandleFunc("GET "+prefix+"/models/{model...}", h.retrieveModel)
+	// OpenRouter's other paths under /models are not served; without these the wildcard would take them for names.
+	for _, path := range []string{"/models/count", "/models/user", "/models/{author}/{slug}/endpoints"} {
+		h.mux.HandleFunc("GET "+prefix+path, notServed)
+	}
+}
+
 // listModels answers GET /v1/models in the shape of OpenAI's and of Anthropic's at once, so every client reads its own
 // members. A key sees the models it may call and that have an endpoint, by the permission a call is judged with, and a
 // model is listed by its catalog name and, when that name resolves to the same model, by its maker's own: Claude Code

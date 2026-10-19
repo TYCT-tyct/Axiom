@@ -151,22 +151,29 @@ func TestModelListKeepsModelsWhoseEndpointsAreBusy(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, func(o *rigOptions) { o.endpoints = func(_ string, e *routing.Endpoint) { tc.endpoint(e) } })
 			tc.busy(r)
-			a := r.newAccount(1e9)
-			want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}
-			if diff := cmp.Diff(want, r.listIDs(a, "/v1/models")); diff != "" {
-				t.Errorf("the list (-want +got):\n%s", diff)
-			}
-			if resp, body := r.do(http.MethodGet, "/v1/models/acme/alpha", a.key, nil); resp.StatusCode != http.StatusOK {
-				t.Errorf("a listed model asked for alone: %d %s", resp.StatusCode, body)
-			}
-			if tc.call != 0 {
-				if resp, body := r.message(a, "acme/alpha"); resp.StatusCode != tc.call {
-					t.Errorf("a call to a listed model: %d %s", resp.StatusCode, body)
-				}
-			}
-			r.idle(1 << 30)
+			checkStillListed(t, r, tc.call)
 		})
 	}
+}
+
+// checkStillListed: every model with an endpoint is in the list and answers asked for alone; a call to one is answered
+// call, unless that is 0.
+func checkStillListed(t *testing.T, r *rig, call int) {
+	t.Helper()
+	a := r.newAccount(1e9)
+	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}
+	if diff := cmp.Diff(want, r.listIDs(a, "/v1/models")); diff != "" {
+		t.Errorf("the list (-want +got):\n%s", diff)
+	}
+	if resp, body := r.do(http.MethodGet, "/v1/models/acme/alpha", a.key, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("a listed model asked for alone: %d %s", resp.StatusCode, body)
+	}
+	if call != 0 {
+		if resp, body := r.message(a, "acme/alpha"); resp.StatusCode != call {
+			t.Errorf("a call to a listed model: %d %s", resp.StatusCode, body)
+		}
+	}
+	r.idle(1 << 30)
 }
 
 // TestModelNothingServesIsNotListed: a model the catalog lists but no endpoint serves (the routing snapshot leaves out a
@@ -216,32 +223,58 @@ func (r *rig) attachEndpoint(m catalog.ModelID) {
 func TestModelListEdges(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	none := r.newAccount(1e9)
+	none, all := r.newAccount(1e9), r.newAccount(1e9)
 	restrict(r, none, "{}")
-	all := r.newAccount(1e9)
-	resp, body := r.do(http.MethodGet, "/v1/models", none.key, nil)
+	for name, tc := range map[string]struct {
+		method, path string
+		key          string
+		check        func(*testing.T, reply, string)
+	}{
+		"a key with no models":     {http.MethodGet, "/v1/models", none.key, checkEmptyList},
+		"the list is not cached":   {http.MethodGet, "/api/v1/models", all.key, checkNoStore},
+		"a model is not cached":    {http.MethodGet, "/v1/models/acme/alpha", all.key, checkNoStore},
+		"HEAD has no body":         {http.MethodHead, "/v1/models", all.key, checkHead},
+		"models/count":             {http.MethodGet, "/v1/models/count", all.key, checkNotFound},
+		"models/user":              {http.MethodGet, "/api/v1/models/user", all.key, checkNotFound},
+		"models/{a}/{s}/endpoints": {http.MethodGet, "/v1/models/acme/alpha/endpoints", all.key, checkNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := r.do(tc.method, tc.path, tc.key, nil)
+			tc.check(t, resp, body)
+		})
+	}
+}
+
+func checkEmptyList(t *testing.T, resp reply, body string) {
+	t.Helper()
 	var list map[string]any
 	if err := jsonx.Unmarshal([]byte(body), &list); err != nil {
 		t.Fatal(err)
 	}
 	if data, ok := list["data"].([]any); resp.StatusCode != http.StatusOK || !ok || len(data) != 0 || list["has_more"] != false ||
 		list["first_id"] != nil || list["last_id"] != nil || list["object"] != "list" {
-		t.Errorf("a key with no models: %d %s", resp.StatusCode, body)
+		t.Errorf("%d %s", resp.StatusCode, body)
 	}
-	for _, path := range []string{"/v1/models", "/v1/models/acme/alpha", "/api/v1/models"} {
-		if resp, body := r.do(http.MethodGet, path, all.key, nil); resp.Header.Get("Cache-Control") != "no-store" {
-			t.Errorf("%s: Cache-Control %q: %s", path, resp.Header.Get("Cache-Control"), body)
-		}
+}
+
+func checkNoStore(t *testing.T, resp reply, body string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("%d, Cache-Control %q: %s", resp.StatusCode, resp.Header.Get("Cache-Control"), body)
 	}
-	if resp, body := r.do(http.MethodHead, "/v1/models", all.key, nil); resp.StatusCode != http.StatusOK || body != "" ||
-		resp.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("HEAD: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+}
+
+func checkHead(t *testing.T, resp reply, body string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK || body != "" || resp.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("%d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
-	for _, path := range []string{"/v1/models/count", "/api/v1/models/user", "/v1/models/acme/alpha/endpoints"} {
-		resp, body := r.do(http.MethodGet, path, all.key, nil)
-		if code, typ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "not_found" || typ != "not_found_error" {
-			t.Errorf("%s: %d %s %s, want 404 not_found", path, resp.StatusCode, code, typ)
-		}
+}
+
+func checkNotFound(t *testing.T, resp reply, body string) {
+	t.Helper()
+	if code, typ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "not_found" || typ != "not_found_error" {
+		t.Errorf("%d %s %s, want 404 not_found not_found_error", resp.StatusCode, code, typ)
 	}
 }
 

@@ -74,13 +74,7 @@ func NewHandler(d Deps) (*Handler, error) {
 		}
 		h.mux.HandleFunc("POST "+prefix+"/responses/compact", h.call(protocol.Responses, true))
 		h.mux.HandleFunc("GET "+prefix+"/responses/compact", refuseUpgrade(protocol.Responses))
-		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
-		// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
-		h.mux.HandleFunc("GET "+prefix+"/models/{model...}", h.retrieveModel)
-		// OpenRouter's other paths under /models are not served; without these the wildcard would take them for names.
-		for _, path := range []string{"/models/count", "/models/user", "/models/{author}/{slug}/endpoints"} {
-			h.mux.HandleFunc("GET "+prefix+path, notServed)
-		}
+		h.modelRoutes(prefix)
 		h.auxRoutes(prefix)
 	}
 	return h, nil
