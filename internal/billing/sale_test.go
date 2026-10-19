@@ -128,6 +128,27 @@ func TestSellNeedsAReferencePrice(t *testing.T) {
 	}
 }
 
+// TestSellRefusesConstraints: a rule that carries a constraint is refused, whichever member it is and whether or not its
+// method would otherwise price: a sale price made from it would ignore the limit.
+func TestSellRefusesConstraints(t *testing.T) {
+	t.Parallel()
+	r := func(s string) *string { return &s }
+	ref := reference(t, uuid.NewV7(), `{"v":1,"currency":"USD","rates":{"input":"0.0000001"}}`)
+	for name, c := range map[string]Constraints{
+		"a minimum margin":    {MinMarginRatio: r("0.1")},
+		"a reference floor":   {ReferenceMinRatio: r("0.5")},
+		"a reference ceiling": {ReferenceMaxRatio: r("3")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rule := Rule{Enabled: true, Method: fixed(), ID: uuid.NewV7(), Rev: 1, Constraints: c}
+			if _, err := Sell(rule, ref, usd); !errors.Is(err, ErrRuleRefuses) {
+				t.Errorf("Sell of a rule with %s = %v, want ErrRuleRefuses", name, err)
+			}
+		})
+	}
+}
+
 // TestUnpriced: the gate that keeps a model off routing holds its sale price to what no default covers: a token item
 // or a service tier the model reports without a price is short, but a known per-use item is not, because admission fills
 // in its site's default for it (docs/domains/billing.md「定价」,「价目表缺项」).

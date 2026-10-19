@@ -46,7 +46,7 @@ type reader func(ctx context.Context, tx pg.Tx, a accounts.Admission, q url.Valu
 // reading serves a GET that shows the key's own account. Errors take Chat's shell, which OpenRouter's clients read.
 func (h *Handler) reading(serve reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+		release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
 		if err != nil {
 			h.fail(w, r, protocol.Chat, err)
 			return

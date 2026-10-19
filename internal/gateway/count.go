@@ -33,7 +33,7 @@ func countRateKey(c accounts.Caller) string { return "count:" + keyKey(c) }
 // address's limit, the key, the account's slot, the body's memory, the key's rate), then asks the database only whether
 // the key may be used and may use the model. Nothing is reserved, charged or recorded.
 func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
-	release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+	release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
 	if err != nil {
 		h.fail(w, r, protocol.Messages, err)
 		return

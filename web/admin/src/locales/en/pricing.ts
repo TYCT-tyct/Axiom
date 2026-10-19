@@ -64,7 +64,6 @@ export default {
       audience: "Say whom the rule is for.",
       ratio: "A markup or margin is a decimal number; 0.2 means 20%.",
       multiplier: "The multiplier is a decimal number, such as 1.1.",
-      constraint: "A limit is a decimal number, or empty.",
     },
   },
   method: {
@@ -84,7 +83,8 @@ export default {
   },
   constraints: {
     title: "Limits",
-    hint: "All optional. Ratios are decimals: 0.1 means 10%. The break-even floor always holds.",
+    hint: "This version does not apply these limits (see #234), so they cannot be filled in. The break-even floor always holds.",
+    stored: "This rule carries limits, so the models it matches are not sold now; saving clears the limits.",
     minMargin: "Lowest margin",
     refMin: "At least this multiple of the reference",
     refMax: "At most this multiple of the reference",

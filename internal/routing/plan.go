@@ -190,6 +190,8 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return NoPrice, true
 	case c.UnknownItem:
 		return UnknownItem, true
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown, true
 	case c.full():
 		return Full, true
 	}

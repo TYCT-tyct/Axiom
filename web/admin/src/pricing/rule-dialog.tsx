@@ -21,7 +21,6 @@ function useWords() {
     audience: t("pricing.rule.invalid.audience"),
     ratio: t("pricing.rule.invalid.ratio"),
     multiplier: t("pricing.rule.invalid.multiplier"),
-    constraint: t("pricing.rule.invalid.constraint"),
   };
 }
 

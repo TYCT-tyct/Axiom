@@ -17,7 +17,8 @@ type Config struct {
 	SessionPrefix int           // bytes of the body SessionKey reads; default 16 KiB
 	MaxAttempts   int           // attempts per request when the preset says nothing; default 4
 	AttemptWindow time.Duration // how long after admission a new attempt may start; default 2m
-	Recovery      time.Duration // how long a 429 weighs on an endpoint; default 1m
+	Recovery      time.Duration // how long a 429's weight damping takes to wear off; default 1m
+	Pause         time.Duration // how long Block pauses an endpoint or supplier whose failure states no wait; default 5s (sub2api's defaultRateLimit429CooldownSeconds)
 	ThrottleFloor float64       // the weight factor right after a 429; default 0.1
 	RetryRatio    float64       // retries a supplier may receive per request it received; default 0.2
 	RetryFloor    int64         // retries always allowed in a window, so a quiet supplier can be retried onto; default 3
@@ -48,7 +49,7 @@ func New(cfg Config) (*Router, error) {
 		return nil, err
 	}
 	return &Router{
-		cfg: cfg, state: &state{endpoints: map[EndpointID]*epState{}}, sticky: newSticky(cfg.StickyMax),
+		cfg: cfg, state: &state{endpoints: map[EndpointID]*epState{}, suppliers: map[SupplierID]*cooldown{}}, sticky: newSticky(cfg.StickyMax),
 		budget: newBudget(cfg.RetryRatio, cfg.RetryFloor, cfg.RetryWindow),
 	}, nil
 }
@@ -59,6 +60,7 @@ func (c *Config) setDefaults() {
 	c.StickyTTL = orDefault(c.StickyTTL, time.Hour)
 	c.AttemptWindow = orDefault(c.AttemptWindow, 2*time.Minute)
 	c.Recovery = orDefault(c.Recovery, time.Minute)
+	c.Pause = orDefault(c.Pause, 5*time.Second)
 	c.RetryWindow = orDefault(c.RetryWindow, time.Minute)
 	c.StickyMax = orDefault(c.StickyMax, 100000)
 	c.SessionPrefix = orDefault(c.SessionPrefix, 16<<10)
@@ -76,7 +78,7 @@ func (c *Config) setDefaults() {
 
 // validate refuses a negative limit or duration, which a default does not replace (only zero does).
 func (c *Config) validate() error {
-	for _, d := range []time.Duration{c.MaxStale, c.RetryAfter, c.StickyTTL, c.AttemptWindow, c.Recovery, c.RetryWindow} {
+	for _, d := range []time.Duration{c.MaxStale, c.RetryAfter, c.StickyTTL, c.AttemptWindow, c.Recovery, c.Pause, c.RetryWindow} {
 		if d < 0 {
 			return errors.New("routing: a duration is negative")
 		}
