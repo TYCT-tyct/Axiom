@@ -103,49 +103,9 @@ func TestDebtIsPaidByTheNextCredit(t *testing.T) {
 	}
 }
 
-// TestGiveBack: a charge given back pays the debt first, then goes back to the batches it was taken from, the last
-// taken first, so each keeps its own expiry: a batch that has expired holds the part given back until it is written
-// off again, and a reversal followed by the settlement that replaces it nets out.
-func TestGiveBack(t *testing.T) {
-	gift, lasting := batchRow(1, 100, "gift", after(time.Hour)), batchRow(2, 100, "gift", nil)
-	rows := []LiveBatchesRow{gift, lasting}
-	for _, tc := range []struct {
-		name  string
-		moves []movement
-		left  []int64 // by row
-		debt  int64
-	}{
-		{"debt first, then the batch", []movement{settled(3, "settle", 230), settled(4, "reverse", -50)}, []int64{0, 20}, 0},
-		{"the batch that never expires, which was taken last, first", []movement{settled(3, "settle", 130), settled(4, "reverse", -20)}, []int64{0, 90}, 0},
-		{"then the batch before it", []movement{settled(3, "settle", 130), settled(4, "reverse", -50)}, []int64{20, 100}, 0},
-		{"a reversal and the settlement that replaces it", []movement{settled(3, "settle", 60), settled(4, "reverse", -60), settled(5, "settle", 50)}, []int64{50, 100}, 0},
-		{"a batch written off holds what is given back until it is written off again", []movement{
-			settled(3, "settle", 40), {key: keyAt(4), kind: "expire", request: gift.ID, debit: 60}, settled(5, "reverse", -10),
-		}, []int64{10, 100}, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := newAllocation(stateAt(2), rows)
-			applyAll(t, a, tc.moves...)
-			if got := leftOf(a, rows); !slices.Equal(got, tc.left) || a.unfunded != tc.debt {
-				t.Errorf("left %v, unfunded %d; want %v, %d", got, a.unfunded, tc.left, tc.debt)
-			}
-		})
-	}
-}
-
-// TestGiveBackBeyondWhatWasCharged: a return larger than all that was charged is a ledger that cannot be, and stops
-// the replay.
-func TestGiveBackBeyondWhatWasCharged(t *testing.T) {
-	gift := batchRow(1, 100, "gift", nil)
-	a := newAllocation(stateAt(1), []LiveBatchesRow{gift})
-	applyAll(t, a, settled(2, "settle", 30))
-	if err := a.apply(settled(3, "reverse", -31)); err == nil {
-		t.Error("a return of 31 after a charge of 30 was replayed")
-	}
-}
-
 // TestApplyRefusesWhatTheLedgerCannotHold: a replay that meets a movement out of order, an expiry larger than what its
-// batch holds, or a credit that is not its batch stops instead of making up an allocation.
+// batch holds, a credit that is not its batch, or a return of what was charged, which is not allocated yet (#277), stops
+// instead of making up an allocation.
 func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 	gift := batchRow(1, 100, "gift", after(time.Hour))
 	for name, ms := range map[string][]movement{
@@ -154,6 +114,7 @@ func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 		"a credit unknown":     {{key: keyAt(1), kind: "credit", request: uuid.NewV7(), debit: -100}},
 		"an expiry too large":  {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 101}},
 		"an expiry of nothing": {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 0}},
+		"a return":             {creditOf(gift), settled(2, "settle", 30), settled(3, "reverse", -10)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{gift})
@@ -179,13 +140,13 @@ func TestLegacyTransactionsComeFirst(t *testing.T) {
 	}
 }
 
-// snapshot is what save stores of a, and the batches the next load finds: those that hold something, or were spent
-// from, or have not been credited yet.
+// snapshot is what save stores of a, and the batches the next load finds: those that hold something, which include the
+// ones not credited yet.
 func snapshot(a *allocation) (AllocationStateRow, []LiveBatchesRow) {
 	state := AllocationStateRow{AllocatedSeq: a.at.seq, AllocatedAt: a.at.at, AllocatedID: a.at.id, Unfunded: a.unfunded}
 	var rows []LiveBatchesRow
 	for _, b := range a.batches {
-		if b.consumed > 0 || b.remaining() > 0 {
+		if b.remaining() > 0 {
 			rows = append(rows, LiveBatchesRow{
 				ID: b.id, SiteID: b.site, Source: b.source, ExpiresAt: b.expiresAt, Amount: b.amount,
 				Consumed: b.consumed, Expired: b.expired, OpenedSeq: b.opened.seq, OpenedAt: b.opened.at, OpenedID: b.opened.id,
@@ -218,17 +179,7 @@ func randomBatches(r *rand.Rand) []LiveBatchesRow {
 	return rows
 }
 
-// charged is all that a return may give back: the debt and what the batches were charged.
-func charged(a *allocation) int64 {
-	total := a.unfunded
-	for _, b := range a.live {
-		total += b.consumed
-	}
-	return total
-}
-
-// randomMovement is the next movement of a run: a credit of the next batch, a write-off of part of an open batch, a
-// charge given back, or a charge.
+// randomMovement is the next movement of a run: a credit of the next batch, a write-off of part of an open batch, or a charge.
 func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next *int, seq int64) movement {
 	switch n := r.IntN(10); {
 	case n < 2 && *next < len(rows):
@@ -240,8 +191,6 @@ func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next 
 	case n < 4 && len(live.open) > 0:
 		b := live.open[r.IntN(len(live.open))]
 		return movement{key: keyAt(seq), kind: "expire", request: b.id, debit: 1 + r.Int64N(b.remaining())}
-	case n < 5 && charged(live) > 0:
-		return settled(seq, "reverse", -(1 + r.Int64N(min(80, charged(live)))))
 	default:
 		return settled(seq, "settle", 1+r.Int64N(120))
 	}
@@ -264,7 +213,7 @@ func checkInvariants(t *testing.T, live *allocation, balance int64, m movement) 
 	}
 }
 
-// TestReplayProperty: over random credits, charges, write-offs and returns, the allocation always funds exactly the
+// TestReplayProperty: over random credits, charges and write-offs, the allocation always funds exactly the
 // balance, never over-spends a batch, and holds debt only while no batch holds anything; and replaying from nothing,
 // or resuming from what was stored at several points, ends where the live replay did.
 func TestReplayProperty(t *testing.T) {
@@ -320,8 +269,8 @@ func sameAllocation(t *testing.T, name string, got, live *allocation) {
 	for id, b := range live.batches {
 		g, ok := got.batches[id]
 		switch {
-		case !ok && (b.remaining() != 0 || b.consumed != 0): // a batch that holds nothing and was never spent from is not loaded again
-			t.Errorf("%s: batch %s with %d left and %d consumed is gone", name, id, b.remaining(), b.consumed)
+		case !ok && b.remaining() != 0: // a batch that holds nothing is not loaded again
+			t.Errorf("%s: batch %s with %d left is gone", name, id, b.remaining())
 		case ok && (g.consumed != b.consumed || g.expired != b.expired):
 			t.Errorf("%s: batch %s consumed %d expired %d, live %d %d", name, id, g.consumed, g.expired, b.consumed, b.expired)
 		}

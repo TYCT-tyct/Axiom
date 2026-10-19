@@ -246,20 +246,25 @@ func TestExpireKeepsReservationsPayable(t *testing.T) {
 	}
 }
 
-// TestExpireTakesWhatAReturnGaveBack: a charge given back goes to the batch it was taken from, which has expired, so the
-// next run writes it off, and does not make the credit last.
-func TestExpireTakesWhatAReturnGaveBack(t *testing.T) {
+// TestExpireStopsAtAReturn: a charge given back is not allocated yet (#277), so the account whose ledger holds one is not
+// written off against: the run counts it as failed, loudly, writes nothing, and the other accounts are written off as
+// usual.
+func TestExpireStopsAtAReturn(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	b.charge(60)
-	b.reverse(60)
-	if got := b.expire(); got != 100 {
-		t.Errorf("written off %d, want the whole 100: the 60 given back belongs to the expired batch", got)
+	b.reverse(20)
+	other := b.accountWithCredit()
+	changed, failed, err := b.expirer().run(t.Context())
+	if err != nil || changed != 1 || failed != 1 {
+		t.Fatalf("run = %d changed, %d failed, %v; want the other account changed and this one failed", changed, failed, err)
 	}
-	if n := b.count("SELECT balance FROM billing.balances"); n != 0 {
-		t.Errorf("balance %d, want 0", n)
+	if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire' AND account_id = '" + b.admitted.Account.String() + "'"); n != 0 {
+		t.Errorf("%d expiry transactions written for the account with a return", n)
 	}
-	b.balanced()
+	if n := b.balanceOf(other.Account); n != 1 {
+		t.Errorf("the other account holds %d, want the 1 that does not expire", n)
+	}
 }
 
 // reverse gives n back to the account as the reversal of a charge does, under the account's lock.

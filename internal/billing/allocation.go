@@ -22,8 +22,11 @@ import (
 //   - funded() equals the user's balance once every movement is replayed: the batches' leftovers less what charges took
 //     beyond them;
 //   - a batch is never over-spent: consumed + expired <= amount, so leftovers are never negative;
-//   - unfunded > 0 only when no batch holds anything, since a credit pays it off before anything else and a return
-//     pays it off before any batch.
+//   - unfunded > 0 only when no batch holds anything, since a credit pays it off before anything else.
+//
+// A movement that gives the user's balance back, other than a credit, is not allocated: nothing in the ledger makes one
+// yet, and what the first will need is written in docs/domains/billing.md「额度批次」 (#277). The replay stops on it with
+// an error, so an account is never given an allocation it does not have.
 
 // orderKey is the place of a ledger transaction in the replay: its seq, which a transaction from before the sequence
 // does not have and reads as 0, then its time and ID, which for those transactions is a key that never changes.
@@ -82,8 +85,7 @@ type allocation struct {
 	at      orderKey // the last movement replayed
 	was     orderKey // where the stored state stood when it was loaded
 	batches map[uuid.UUID]*batchState
-	live    []*batchState // the credited batches loaded, in spendOrder: those that hold something, and those spent from
-	open    []*batchState // the batches of live that hold something, in spendOrder
+	open    []*batchState // the credited batches that hold something, in spendOrder
 	// unfunded is what charges took beyond every batch: the balance below zero.
 	unfunded int64
 	changed  bool // the place or the debt moved since it was loaded
@@ -108,17 +110,11 @@ func newAllocation(state AllocationStateRow, loaded []LiveBatchesRow) *allocatio
 		}
 		a.batches[b.id] = b
 		if b.opened.compare(at) <= 0 {
-			a.live = append(a.live, b)
+			a.open = append(a.open, b)
 		}
 	}
-	slices.SortFunc(a.live, spendOrder)
-	a.reopen()
+	slices.SortFunc(a.open, spendOrder)
 	return a
-}
-
-// reopen derives the batches that hold something from the live ones.
-func (a *allocation) reopen() {
-	a.open = slices.DeleteFunc(slices.Clone(a.live), func(b *batchState) bool { return b.remaining() == 0 })
 }
 
 // funded is what the batches hold, less the debt: the balance, if every movement is replayed.
@@ -144,7 +140,7 @@ func (a *allocation) apply(m movement) error {
 	case m.debit > 0:
 		a.spend(m.debit)
 	case m.debit < 0:
-		err = a.giveBack(-m.debit)
+		err = fmt.Errorf("billing: transaction %s (%s) gives %d back to the balance, which is not allocated yet", m.key.id, m.kind, -m.debit)
 	}
 	if err != nil {
 		return err
@@ -164,9 +160,10 @@ func (a *allocation) credit(m movement) error {
 	a.unfunded -= paid
 	b.consumed += paid
 	b.touched = b.touched || paid > 0
-	a.live = append(a.live, b)
-	slices.SortFunc(a.live, spendOrder)
-	a.reopen()
+	if b.remaining() > 0 {
+		a.open = append(a.open, b)
+		slices.SortFunc(a.open, spendOrder)
+	}
 	return nil
 }
 
@@ -194,26 +191,6 @@ func (a *allocation) spend(n int64) {
 	}
 	a.dropSpent()
 	a.unfunded += n
-}
-
-// giveBack takes n back from the debt first, then from what the batches were charged, in the reverse of the order
-// charges take them, so a batch keeps its own expiry: one that has expired holds the part given back until the next
-// write-off takes it. A return larger than all that was charged is a ledger that cannot be.
-func (a *allocation) giveBack(n int64) error {
-	paid := min(a.unfunded, n)
-	a.unfunded -= paid
-	n -= paid
-	for _, b := range slices.Backward(a.live) {
-		take := min(b.consumed, n)
-		b.consumed -= take
-		b.touched = b.touched || take > 0
-		n -= take
-	}
-	if n > 0 {
-		return fmt.Errorf("billing: %d given back beyond what was charged", n)
-	}
-	a.reopen()
-	return nil
 }
 
 func (a *allocation) dropSpent() {

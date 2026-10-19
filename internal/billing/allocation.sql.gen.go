@@ -155,7 +155,7 @@ SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
-WHERE b.account_id = $1 AND (b.consumed > 0 OR b.consumed + b.expired < b.amount)
+WHERE b.account_id = $1 AND b.consumed + b.expired < b.amount
 `
 
 type LiveBatchesRow struct {
@@ -171,8 +171,7 @@ type LiveBatchesRow struct {
 	OpenedID  uuid.UUID
 }
 
-// The batches the replay works on: those that hold something, and those spent from, which a return gives back to. Each
-// comes with the key of the credit transaction that opened it (seq 0 for one from before the sequence). consumed and
+// The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from before the sequence). consumed and
 // expired are what the allocation has stored: they trail the ledger until the account is replayed. Served by
 // credit_batches_by_account.
 func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]LiveBatchesRow, error) {
