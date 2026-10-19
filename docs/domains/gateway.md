@@ -169,6 +169,32 @@
 - **删除**：`DELETE /v1/responses/{id}` 立即删除；用户注销时按注销规则处理（见[账户与租户的「停用与注销」](accounts.md#停用与注销)）。
 - **续接方式**：由我们把历史拼回完整的输入再发给上游，不依赖上游自己保存状态，所以换端点也能续接。其中只有原上游才认的加密推理内容，按上文「转发规则」处理。
 
+### 与 new-api 的有意差异
+
+对外行为要和 new-api 对得上，靠差分测试保证：`just diff`（在 CI 服务器上：`remote-check.sh <worktree> diff`）用 new-api 的官方镜像（按摘要固定，v1.0.0-rc.45，2026-10-17）和一个 Axiom 节点接同一个假上游，上游回放 `internal/protocol/testdata` 的录制样本；同一组请求分别发给两边，比状态码、响应头、JSON 体、SSE 事件。它要拉镜像、起容器，所以不在 `just check` 里，也不在每个 PR 的 CI 里；升级镜像是一个决定：读发布说明、跑一遍、逐条处理新出现的差异。
+
+- **比什么**：Messages 和 Responses 客户端调用同格式的模型（透传），Chat 客户端调用 Messages 和 Responses 的模型（两边都做转换）；各自的文本、工具调用、推理、图片，流式和非流式，上游的 400、429、500，以及请求自己的错误（JSON 不合法、缺必填项、模型不存在、key 错）。每种格式让 new-api 的渠道和 Axiom 的端点说同一种格式，上游收到的是同样的路径，比的是怎么转发回复，不是谁选了哪种格式。Chat 同格式的端点 M1 不提供（见[转发规则](#转发规则)），所以没有 Chat 对 Chat 的比较。
+- **怎么比**：JSON 按成员比，不看顺序；数组按位置比；SSE 在 Messages 和 Responses 上按事件对齐后比，Chat 流按累加的结果比（文本、工具调用、结束原因、用量），因为切块是转换器自己的选择。非流式的上游回复是手写的、与录制流内容一致的官方形状（Responses 取流里 `response.completed` 的响应）；Responses 文本样本的增量被截短了，假上游把它补成与最终文本一致。
+- **规则**：每个差异要么被 `cmd/axiom/diff_rules_test.go` 里的一条规则解释（写明理由），要么用例失败；没有匹配任何差异的规则同样使测试失败，修好的差异必须从清单里删掉。规则不只看路径和用例名，还限定两边的值：状态码是具体的一对（new-api 429、Axiom 502），上游身份头必须在 Axiom 一侧缺失，调用编号必须是 UUID，工具参数按解码后的 JSON 比较，措辞必须是 Axiom 的统一说法；退化的值（429 变成 200、参数变成 `{}`、泄露上游头）不被放行，`TestDiffHarness*` 为此给每类规则配了反例。规则分两类：有意的差异（下表），和还没人拍板的（`open`，见「待定问题」）。
+- **Chat 流的结尾**：恰好一个 `[DONE]`，之后不能再有数据；提前的 `[DONE]`、重复的 `[DONE]`、`[DONE]` 之后的数据、其他非 JSON 的数据都是差异。工具参数的碎片先解码、再拼接、最后统一编码，所以切在转义字符中间的分块也算相同。
+
+| 差异 | 理由 |
+|---|---|
+| 响应里的 `id`（含流里 `message_start`、`response.*` 里的）是 Axiom 的调用编号；请求 ID 头不同 | 见「转发规则」的自己回显和「用量与费用」的调用编号 |
+| 用量里的 `cost`、`cost_currency`、`cost_estimated` | Axiom 每次调用都返回费用 |
+| Chat 用量里 new-api 加的 `billing_usage`、`usage_semantic`、`claude_cache_creation_*`、`input_tokens`、`output_tokens` 等；Axiom 的 `prompt_tokens_details.cache_write_tokens` | 前者不属于 Chat 格式；后者与 OpenRouter 一致 |
+| new-api 透传上游的 `cf-ray`、`openai-organization` 等头，Axiom 不放行 | 响应头按白名单放行，不暴露上游身份 |
+| 上游的 429、5xx，new-api 原样返回，Axiom 一律 502 `upstream_error` | 见「错误」：供应商自己的 429 只用来换凭证或换端点 |
+| 模型不存在：new-api 503，Axiom 404 `model_not_found` | 与 OpenRouter 一致，见「决策与理由」 |
+| Messages 的错误：Axiom 用 Anthropic 的外壳（顶层 `type: "error"`）和统一的 `error_type`，措辞也统一；new-api 的外壳没有顶层 `type` | 各格式使用自己原生的错误外壳 |
+| Chat、Responses 错误的措辞 | 统一的说法，见「错误」 |
+| 流式请求在上游失败时，new-api 用 `text/event-stream` 包一个 JSON 错误；Axiom 返回 JSON。SSE 的 `Content-Type` 带不带 `charset=utf-8` | Axiom 在流开始前出错就是普通的 JSON 错误 |
+| 第一块内容之前上游的 `ping`，Axiom 丢弃；Messages 的 `message_delta.usage` 里 new-api 重复 `input_tokens` | 开始转发内容之前不发任何东西（见「保活」）；Axiom 原样转发上游的用量 |
+| Chat 回复里 Axiom 写 `logprobs: null`、`message.refusal: null`，只有工具调用的消息 `content` 是 `null`，new-api 写空字符串，`created` 取调用时间，工具参数是流里的原文，Responses 转换成 Chat 时带上推理 token 数 | 与 OpenAI 的回复形状一致；new-api 的转换丢了这些 |
+| Chat 流里 Claude 思考块的推理文本，new-api 在末尾多一个换行 | new-api 的转换自己加的；非流式没有这个差异 |
+| `reasoning_details`（带签名和加密内容） | OpenRouter 的格式，后续请求要把它们带回去 |
+| 上游没有报用量时（Messages 的思考样本），两边各自估算 token 数 | 估算口径不同，见[计费的「用量来源与暂估」](billing.md#用量来源与暂估) |
+
 ### 版本与兼容
 
 - OpenAI、Anthropic 格式跟随它们的官方规范。
@@ -210,3 +236,10 @@
 - 上游因请求自身拒绝（4xx）时「保留原文」：suppliers 的 `Failure` 按设计不带上游的文字（对方的文字不进错误、日志和表），gateway 现在回 400 `invalid_request`，不带原文，也没有 `upstream_rejected`；要保留原文，得由适配器把一段筛过的原文放进 `Failure`，并重新评估“对方的文字不进日志和表”这条不变量
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做
+- 与 new-api 的差分测试（`just diff`）发现、还没有定论的差异（精确的差异见各用例的输出）：
+  - 上游因请求自身拒绝（4xx）时，new-api 把上游的原话带给客户端，Axiom 说"请求不合法"：同上一条「保留原文」；
+  - Chat、Responses 的错误外壳：new-api 与 OpenAI 一样，`error.code` 是字符串、有 `error.type`、`error.param`；Axiom 学 OpenRouter，`error.code` 是 HTTP 状态码，类型放在 `error.metadata.error_type`。读 `error.type` 或字符串 `code` 的客户端会读不到；
+  - Chat 的推理文本：new-api 用 `reasoning_content`（DeepSeek 的名字，不少国内客户端读它），Axiom 用 `reasoning`（OpenRouter 的名字）。可以两个都写；
+  - 事件流响应头 `X-Accel-Buffering: no`：new-api 每个流都带，Axiom 不带；前面是 nginx 时它决定流会不会被攒着；
+  - Responses 的 `response.created`、`response.in_progress` 里，OpenAI 写 `usage: null`，Axiom 省掉这个成员；
+  - 请求体不是合法 JSON 时，Axiom 的 400 把 JSON 读取库的原话（`jsontext: unexpected EOF ...`）给了客户端。
