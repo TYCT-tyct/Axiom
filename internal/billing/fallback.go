@@ -177,10 +177,16 @@ func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []s
 func unknownCost(s catalog.Schedule, f fallbacks, u catalog.UnknownUsage) (cost platform.Exact, tokens bool) {
 	n, err := strconv.ParseInt(u.Value, 10, 64)
 	if err == nil && n >= 0 && n <= maxUnknownCount && strings.HasSuffix(u.Field, "tokens") {
-		price, _ := s.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
-		return price.Mul(n), true
+		return tokenPrice(s).Mul(n), true
 	}
 	return f.highest().Mul(uses(u.Value)), false
+}
+
+// tokenPrice is one token at the highest price of any token item at any service tier and band: what a schedule that
+// prices a token nowhere near the price of the tier a call was served at still charges, 0 if it prices no token at all.
+func tokenPrice(s catalog.Schedule) platform.UnitPrice {
+	price, _ := s.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	return price
 }
 
 // uses is a count of uses from an unknown value: a plain decimal rounded up, at most maxUnknownCount, or else 1.

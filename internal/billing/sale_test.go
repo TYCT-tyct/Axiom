@@ -128,6 +128,34 @@ func TestSellNeedsAReferencePrice(t *testing.T) {
 	}
 }
 
+// TestUnpriced: the gate that keeps a model off routing holds its sale price to what no default covers: a token item
+// or a service tier the model reports without a price is short, but a known per-use item is not, because admission fills
+// in its site's default for it (docs/domains/billing.md「定价」,「价目表缺项」).
+func TestUnpriced(t *testing.T) {
+	t.Parallel()
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
+	for _, tc := range []struct {
+		name string
+		r    catalog.Reportable
+		want catalog.Reportable
+	}{
+		{"everything it reports, priced", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemOutput}, catalog.Reportable{}},
+		{"a token item it lacks", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemCacheRead}, catalog.Reportable{Items: 1 << catalog.ItemCacheRead}},
+		{"a per-use item it lacks is the site's default", catalog.Reportable{Items: 1<<in | 1<<webSearch | 1<<codeExec}, catalog.Reportable{}},
+		{"a service tier it does not offer", catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}, catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}},
+		{"reasoning falls back to output", catalog.Reportable{Items: 1 << catalog.ItemReasoning}, catalog.Reportable{}},
+		{
+			"both short",
+			catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex},
+			catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex},
+		},
+	} {
+		if got := Unpriced(s, tc.r); got != tc.want {
+			t.Errorf("%s: Unpriced = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestPriceVersion: a sale price's version changes with the rule's rev or the reference price's row, and never with
 // anything else, so a stored price is told from a new one by its version alone. A fixed price reads no reference price,
 // so a new row of it does not make a new version.
