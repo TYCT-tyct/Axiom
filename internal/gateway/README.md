@@ -45,7 +45,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 
 ## 入口与准入
 
-G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`，`GET /models`；四个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。`count_tokens` 和只读的账户接口见「辅助接口」。
+G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`，`GET /models`、`GET /models/{model}`；四个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。没有路由接的路径和方法也由错误出口按协议的外壳作答（404 `not_found`、405 `method_not_allowed`，保留 `Allow`）。`count_tokens` 和只读的账户接口见「辅助接口」。
 
 **一次请求的顺序**（任何一步失败都由错误出口作答，已取的名额和内存经 `Call.Done` 归还）：
 
@@ -69,6 +69,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 **错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的（`message`、`type`、`param`、`code`，`code` 是错误类型的名字，`metadata.error_type` 同它）；`type` 由状态码决定。`protocol.RenderError` 写同样的外壳（尝试之后的错误、流中途的错误），两个写入函数由 `TestARefusalIsAnErrorOfProtocol` 拴在一起：每种拒绝与 protocol 写的同一个错误逐字相同。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
 - 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。在途预留占满余额时同样报 `balance`：`Insufficient` 还没有区分它的来源，也没有所需金额，待 billing 报告。
 - `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
+- 没有路由接的路径和方法：`Handler.ServeHTTP` 先用 `mux.Handler` 看有没有路由，没有就让 mux 自己判 404 还是 405（连同 `Allow`），只丢掉它的纯文本响应体，再用 `writeRefusal` 按路径选外壳——`/v1/messages` 与 `/api/v1/messages` 下用 Messages 的，其余用 Chat 的；404 是 `not_found`，405 是 `method_not_allowed`。`refuseUpgrade` 的 405 同样走 `writeRefusal`，`Allow: POST` 保留。
 - 满载排队超时回 429，`Retry-After` 是 `Wait.RetryAfter` 取整。
 - 路由、目录、站点快照过旧，持有者失效（`billing.ErrTerminated`），准入期限到，提交确认丢失：503 `overloaded`。其余没预料到的错误同样回 503，并记 error 日志。
 - **依赖故障按状态变化记日志，不逐请求记**（#294）：数据库连不上（`pg.Unavailable`：连接失败、SQLSTATE 08 类、57P01 到 57P03、53300）和账户、目录、路由的快照过旧（各自的 `ErrStale`）都回 503 `overloaded`，但不走逐请求的日志。每个依赖（`database`、`accounts`、`catalog`、`routing`）各记各的：故障开始或原因（固定文本，不含主机和用户名）变了，记一条 error，原来的那条同时记一条 warn 结束；同一原因不重复记。成功用到该依赖的请求结束它的故障，记一条 warn（期间拒绝的请求数和时长）：通过准入事务的请求结束 `database`，认出站点的结束 `accounts`，取到目录快照的结束 `catalog`，路由出计划的结束 `routing`；不用路由的请求（如模型列表）不会结束路由故障。每个被拒的请求计入 `axiom_gateway_outage_refusals_total{dependency}`。实现和不变量见 `outage.go`；测试 `TestAnOutageIsLoggedOnceNotPerRequest`、`TestANewReasonIsTold`、`TestAHelperRequestEndsTheOutageItUsed`。
@@ -80,13 +81,13 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 **头白名单**：只转发 `Anthropic-Beta`、`Anthropic-Version`，值原样；其余一律不转发（含 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`Cookie`）。要加协议头只改 `forwarded` 这一处。
 
-**模型列表**：`GET /v1/models` 和 `/api/v1/models` 要认 key，并像准入一样判定它能否使用：取一个准入类连接名额（不过账户闸，不动钱），调 `accounts.Admit`，`fn` 为空，所以停用、过期、删除、管理类 key 和 IP 白名单都生效，缓存里的认出不算数。不占账户名额，只受 IP 在途上限约束。每个上架的模型列出目录里的名字（`Slug`），以及去掉作者前缀的名字——只在它是公开名字、解析到同一个模型时才列，所以 `claude` 开头的厂商原生名字能被 Claude Code 发现。每项带 OpenAI 的 `id`、`object`、`created`、`owned_by` 和 Anthropic 的 `type`、`display_name`、`created_at`；目录没有上架时间，`created` 恒为 0。列表按目录快照缓存。`/api/v1/models` 现在与 `/v1/models` 相同，OpenRouter 格式的价格、上下文长度等随售价接口加入。
+**模型列表与单个模型**：`GET /v1/models`、`/api/v1/models` 和 `GET /v1/models/{model}`（两套前缀相同）要认 key，并像准入一样判定它能否使用：取一个准入类连接名额（不过账户闸，不动钱），调 `accounts.Admit`，在同一个事务里读 `Admission.Models()`，所以停用、过期、删除、管理类 key 和 IP 白名单都生效，缓存里的认出不算数。不占账户名额，只受 IP 在途上限约束。key 的模型集合用 `allowedModels` 换算，和 `routingAdmission` 过滤路由是同一个函数（nil 是全部，空列表是一个都不行）：列表和单个模型只出现这个集合里的模型，别的名字和不存在、已下线的名字一样回 404 `model_not_found`，不是 403。列表的条件是目录的（在快照里、公开名字解析得到），不看路由的实时状态：端点满载、熔断或暂时没有规格/售价，模型仍在列表里（`TestModelListKeepsModelsWhoseEndpointsAreDown`），容量由调用自己排队或报错。每个模型列出目录里的名字（`Slug`），以及去掉作者前缀的名字——只在它是公开名字、解析到同一个模型时才列，所以 `claude` 开头的厂商原生名字能被 Claude Code 发现。`GET /v1/models/{model}` 用 `catalog.ResolvePublic` 按调用路径的方式解析别名，投影与列表里的同一项相同（`modelEntry`），`id` 是请求里的名字。每项带 OpenAI 的 `id`、`object`、`created`、`owned_by` 和 Anthropic 的 `type`、`display_name`、`created_at`；目录没有上架时间，`created` 恒为 0。不缓存：答案含 key 的可见集合，缓存键要带上这个维度，而每个 key 的集合不同，共享不了一份；每次请求本来就要过一次准入事务。响应带 `Cache-Control: no-store`（`writeJSON`），免得共享缓存把一把 key 的列表给另一把。`/api/v1/models` 现在与 `/v1/models` 相同（同样按 key 过滤），OpenRouter 格式的价格、上下文长度等随售价接口加入。
 
 ## 辅助接口
 
 G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）。两套前缀（`/v1`、`/api/v1`）下路由相同：`POST /messages/count_tokens`，`GET /key`、`/credits`、`/generation?id=`、`/dashboard/billing/subscription`、`/dashboard/billing/usage`。行为基线是 OpenRouter 的 `GET /api/v1/key`、`/credits`（OpenRouter《API Reference》，2026-10-16 读取；`generation` 的字段取自同一套文档的惯例，该页当日取不到）、Anthropic 的 `count_tokens` 和 OpenAI 旧版的两个余额接口（new-api 源码，2026-10）。
 
-**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——区别是 `fn` 在这个事务里读。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
+**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
 
 | 接口 | 内容 | 数据从哪来 |
 |---|---|---|
@@ -379,7 +380,9 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | 模型列表像准入一样查库判定 key | 缓存只说 key 存在；停用、过期、IP 白名单只有 `Admit` 知道，否则被停用的 key 仍能列模型 | 缓存里附带状态：多节点下不一致 |
 | 冷 key 查找的名额由共享的那次查库持有，在 accounts 里取 | 查库在 singleflight 的函数里、脱离发起请求运行；按等待者取名额会重复计，或在发起者走后提前还掉仍在用的连接 | 在 gateway 里包住 `AuthenticateKey`：每个等待者各取一个，与连接数对不上 |
 | 路由参数里无法兑现的成员回 400，包括 `sort: latency`（routing 的“最快”按吞吐排） | 静默当作没写，客户端以为排除了的供应商或超出的价格仍会被用；等供应商名称的映射有了再支持 | 先支持，名字映射用猜的 |
-| `/v1/models` 要认 key，M1 不带价格 | key 决定站点和域名；价格要等售价接口 | 匿名可读 |
+| `/v1/models` 要认 key、只列这把 key 能用的模型，M1 不带价格 | key 决定站点、域名和可见的模型；列出别的模型会让客户端选到必然 404 的名字，key 的模型限制也就无从发现；价格要等售价接口 | 列出全部模型：客户端选到不能用的模型；匿名可读 |
+| 模型列表不按路由的实时状态过滤（满载、熔断、暂时没有规格/售价） | 「可服务」的实时状态属于调用：列表拿它过滤会让模型随容量闪进闪出，调用自己会排队或回 503；目录的稳定条件（上架、公开名字解析得到）是列表能稳定判断的全部，有没有端点属于调用时的路由事实 | 用 `routing.Plan` 或路由快照过滤：要造一个假请求，且满载时模型从列表消失 |
+| 模型列表不缓存整份应答 | 答案含 key 的可见集合，缓存键要带上它；每个 key 的集合不同，共享不了一份，而请求本来就要过一次准入事务 | 只按目录快照缓存：一把 key 的列表会给另一把 |
 | 402 只报来源，暂时性的带 `Retry-After: 60` | billing 的 `Insufficient` 只有来源和是否会重置 | 在 gateway 里重算窗口：重复 billing 的规则 |
 | 尝试的新数据按“内容或事件在进展”算，完整但没有内容的事件不算 | 文档只说心跳、注释、重复快照不算；Messages 的 `message_start`、`content_block_start` 之后的几分钟静默若算新数据，空闲计时就永远不到；代价：提交前只发这类事件的上游 180s 后被换掉 | 任何事件都算：重复快照能把计时无限推后 |
 | 响应头等待用计时器取消尝试的 context，不是包住 `Send` 的短 context | 请求的 context 管着整个响应体的读取，短 context 会在响应头到了之后继续掐流 | 给 `Send` 一个带期限的 context |

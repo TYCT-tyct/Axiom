@@ -40,6 +40,8 @@ var messages = map[string]string{
 	"overloaded":           "The service is busy; retry shortly.",
 	"model_not_found":      "The model does not exist or is not available to this key.",
 	"no_endpoint":          "No endpoint can serve this request.",
+	"not_found":            "The path is not part of this API.",
+	"method_not_allowed":   "The method is not allowed on this path.",
 	"invalid_request":      "The request is not valid.",
 	"request_too_large":    "The request body is larger than the limit.",
 	"timeout":              "The request body was not received in time.",
@@ -53,6 +55,7 @@ var errorTypes = map[int]string{
 	http.StatusPaymentRequired: "billing_error", http.StatusNotFound: "not_found_error",
 	http.StatusRequestTimeout: "timeout_error", http.StatusRequestEntityTooLarge: "request_too_large",
 	http.StatusTooManyRequests: "rate_limit_error", http.StatusServiceUnavailable: "overloaded_error",
+	http.StatusMethodNotAllowed: "invalid_request_error",
 }
 
 // maxRetryAfter is the longest Retry-After sent: Claude Code does not retry after more than 60 seconds.

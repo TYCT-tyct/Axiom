@@ -45,7 +45,6 @@ type Handler struct {
 	Deps
 	mux     *http.ServeMux
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
-	models  modelList
 
 	background *background // settlements of lost admissions
 	outage     *outage     // the dependency outage being told, if any
@@ -71,6 +70,8 @@ func NewHandler(d Deps) (*Handler, error) {
 		h.mux.HandleFunc("POST "+prefix+"/responses/compact", h.call(protocol.Responses, true))
 		h.mux.HandleFunc("GET "+prefix+"/responses/compact", refuseUpgrade(protocol.Responses))
 		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+		// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
+		h.mux.HandleFunc("GET "+prefix+"/models/{model...}", h.retrieveModel)
 		h.auxRoutes(prefix)
 	}
 	return h, nil
@@ -81,7 +82,57 @@ func NewHandler(d Deps) (*Handler, error) {
 // routes that are not calls included.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
+	if _, pattern := h.mux.Handler(r); pattern == "" { // no route took it: the mux's own answer is plain text
+		h.refuseUnrouted(w, r)
+		return
+	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// refuseUnrouted answers a request no route took: 404, or 405 with the Allow header the mux would have sent, in the
+// error shell of the path's protocol. It asks the mux for the status and the methods it would allow instead of keeping
+// a second routing table, which would drift from the first, and drops only its plain-text body.
+func (h *Handler) refuseUnrouted(w http.ResponseWriter, r *http.Request) {
+	answer := &statusOnly{header: make(http.Header)}
+	h.mux.ServeHTTP(answer, r)
+	f := protocol.Chat
+	if isMessagesPath(r.URL.Path) {
+		f = protocol.Messages
+	}
+	switch answer.status {
+	case http.StatusNotFound:
+		writeRefusal(w, f, errNotFound)
+	case http.StatusMethodNotAllowed:
+		if allow := answer.header.Values("Allow"); len(allow) > 0 {
+			w.Header()["Allow"] = allow
+		}
+		writeRefusal(w, f, errMethodNotAllowed)
+	default: // the mux had something else to say, such as a redirect to the canonical path
+		h.mux.ServeHTTP(w, r)
+	}
+}
+
+// statusOnly keeps the status and the headers of an answer, not its body: the mux's answer to a request no route took,
+// whose body the protocol's error shell replaces.
+type statusOnly struct {
+	header http.Header
+	status int
+}
+
+func (s *statusOnly) Header() http.Header         { return s.header }
+func (s *statusOnly) Write(p []byte) (int, error) { return len(p), nil }
+
+func (s *statusOnly) WriteHeader(status int) {
+	if s.status == 0 {
+		s.status = status
+	}
+}
+
+// isMessagesPath says whether a path belongs to the Messages format, whose errors have their own shell: everything
+// under /messages in either prefix (docs/domains/gateway.md「错误」).
+func isMessagesPath(path string) bool {
+	path = strings.TrimPrefix(path, "/api")
+	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/")
 }
 
 // Call is a request that has been admitted: its reservation is committed and its route is cut to the entries that
@@ -151,12 +202,20 @@ func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 
 var errUpgrade = invalid("Protocol upgrades such as WebSocket are not supported.")
 
+// errNotFound and errMethodNotAllowed answer a path or a method no route takes, in the protocol's error shell like
+// every other refusal; the mux's own plain-text answer would be the only response not shaped by it
+// (docs/domains/gateway.md「错误」).
+var (
+	errNotFound         = &Refusal{Status: http.StatusNotFound, Code: "not_found"}
+	errMethodNotAllowed = &Refusal{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed"}
+)
+
 // refuseUpgrade answers the WebSocket handshake a client may try on a call path before it falls back to POST.
 func refuseUpgrade(format protocol.Format) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "" {
 			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			writeRefusal(w, format, errMethodNotAllowed)
 			return
 		}
 		writeRefusal(w, format, errUpgrade)
