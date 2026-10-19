@@ -40,7 +40,7 @@ jobs:
   # main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     outputs:
       docs_only: ${{ steps.decide.outputs.docs_only }}
       deploy: ${{ steps.decide.outputs.deploy }}
@@ -180,7 +180,7 @@ jobs:
   build:
     needs: [changes, static, go-test, web, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
