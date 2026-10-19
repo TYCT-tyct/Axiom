@@ -108,34 +108,88 @@ func TestCleanupGoesPastAReservationThatFails(t *testing.T) {
 	if n := b.count("SELECT count(*) FROM billing.reservations WHERE state = 'pending'"); n != 1 {
 		t.Errorf("%d reservations pending, want only the failing one", n)
 	}
-	b.billing.sweep(t.Context())
+	b.billing.sweep(t.Context(), uuid.UUID{})
 	if !strings.Contains(logs.String(), "the cleanup failed") || !strings.Contains(logs.String(), failing.id.String()) {
 		t.Errorf("the sweep did not report the failing cleanup:\n%s", logs.String())
 	}
 }
 
-// TestCleanupReachesPastABacklogOfFailures: more always-failing reservations than one batch must not hold back a
-// healthy one behind them in request order; the walk goes on past the batch by a keyset cursor, so one call takes it over.
-func TestCleanupReachesPastABacklogOfFailures(t *testing.T) {
-	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
-	const batch = 3
-	holds := make([]*Hold, batch+1)
+// pastDeadline puts every reservation's deadline in the past, so cleanup owns them without the test waiting for a clock.
+func (b *bank) pastDeadline() {
+	b.t.Helper()
+	b.sql("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour'")
+}
+
+// failingBacklog makes n reservations whose cleanup always fails and one healthy one last in request order, already due.
+func failingBacklog(b *bank, n int) (healthy *Hold) {
+	holds := make([]*Hold, n+1)
 	for i := range holds {
 		holds[i] = b.hold(1000)
 	}
 	slices.SortFunc(holds, func(a, c *Hold) int { return bytes.Compare(a.id[:], c.id[:]) })
-	healthy := holds[batch] // last in request order, behind a whole batch of failures
 	b.supplies.failLost = map[uuid.UUID]error{}
-	for _, h := range holds[:batch] {
+	for _, h := range holds[:n] {
 		b.supplies.failLost[h.id] = errors.New("the supplier's side is broken")
 	}
-	time.Sleep(5 * time.Millisecond) // past the reservations' deadline
-	n, err := b.billing.Cleanup(t.Context(), batch)
-	if n != 1 || err == nil {
-		t.Fatalf("Cleanup = %d, %v; want the healthy one cleaned and the failures reported", n, err)
+	b.pastDeadline()
+	return holds[n]
+}
+
+// TestCleanupReachesPastABacklogOfFailures: a call tries at most its budget, failures included, and carries a cursor
+// past them, so a healthy reservation behind a backlog larger than the budget is reached within ceil(rank/budget)
+// calls (here 4 failing + 1 healthy, budget 2: the third call), and a call after the scan's end starts over.
+func TestCleanupReachesPastABacklogOfFailures(t *testing.T) {
+	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	healthy := failingBacklog(b, 4)
+	var after uuid.UUID
+	for call, wantDone := range []bool{false, false, true} {
+		n, next, done, err := b.billing.cleanFrom(t.Context(), after, 2)
+		if done != wantDone || (call < 2) != (n == 0) {
+			t.Fatalf("call %d: changed %d, done %t; want done %t and the healthy one changed only on the last", call+1, n, done, wantDone)
+		}
+		if call < 2 {
+			if got := strings.Count(err.Error(), "billing: clean up"); got != 2 {
+				t.Errorf("call %d reported %d failures, want its budget of 2 attempts", call+1, got)
+			}
+		}
+		after = next
 	}
 	if !b.supplies.lostNow(healthy.id) {
-		t.Error("the healthy reservation behind a batch of failures was not taken over")
+		t.Error("the healthy reservation behind the backlog was not taken over")
+	}
+	if after != (uuid.UUID{}) {
+		t.Errorf("the cursor after the scan's end is %s, want the start", after)
+	}
+}
+
+// TestCleanupCapsItsFailureReport: the error of a call keeps the first failures and counts the rest.
+func TestCleanupCapsItsFailureReport(t *testing.T) {
+	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	failingBacklog(b, reportedFailures+2)
+	_, err := b.billing.Cleanup(t.Context(), reportedFailures+2)
+	if got := strings.Count(err.Error(), "billing: clean up"); got != reportedFailures || !strings.Contains(err.Error(), "2 more reservations failed") {
+		t.Errorf("%d failures named in %v; want %d and a count of the other 2", got, err, reportedFailures)
+	}
+}
+
+// TestCleanupSaysWhenItWasCut: a call whose ctx ended returns the cause, wrapped, and the count so far, whether the ctx
+// ended before the call or while a reservation was being taken over.
+func TestCleanupSaysWhenItWasCut(t *testing.T) {
+	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	b.hold(1000)
+	b.hold(1000)
+	b.pastDeadline()
+	before, cancel := context.WithCancel(t.Context())
+	cancel()
+	if n, _, done, err := b.billing.cleanFrom(before, uuid.UUID{}, 10); n != 0 || done || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled before: %d changed, done %t, %v; want 0, not done, context.Canceled", n, done, err)
+	}
+	during, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	b.supplies.stuck = make(chan struct{}) // recording a lost request waits here until the ctx ends
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if n, _, done, err := b.billing.cleanFrom(during, uuid.UUID{}, 10); n != 0 || done || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled during: %d changed, done %t, %v; want 0, not done, context.Canceled", n, done, err)
 	}
 }
 

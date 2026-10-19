@@ -10,60 +10,87 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), up to max reservations,
-// each in a transaction of its own under its balance row lock, and returns how many it changed. A pending reservation
-// past its deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged,
-// and the request is left with suppliers as a lost one, with its route. One that fails does not stop the rest: its error
-// is joined into the one returned. The due ones are read in pages of max by request id, and the walk goes on past a
-// page that failed whole, to the end of the due set or until max are changed: a backlog of failures, which stay first in
-// line on every sweep, cannot hold back the ones behind them. So a return of fewer than max means the due set was walked
-// to its end.
+// Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), trying at most max
+// reservations from the start of the due set, and returns how many it changed. See cleanFrom for the rules.
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
+	changed, _, _, err = b.cleanFrom(ctx, uuid.UUID{}, max)
+	return changed, err
+}
+
+// reportedFailures caps the failures one cleanFrom call keeps in its error; the rest are only counted.
+const reportedFailures = 5
+
+// cleanFrom tries at most budget due reservations in request order, those after the request id after, each in a
+// transaction of its own under its balance row lock, and returns how many it changed. A pending reservation past its
+// deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged, and the
+// request is left with suppliers as a lost one, with its route. One that fails does not stop the rest: it counts as an
+// attempt, and its error is joined into the one returned (the first reportedFailures, then a count).
+//
+// The budget bounds the work of a call, failures included. next is where the following call must start: a cursor that
+// moves forward past the failures, so a backlog of reservations that always fail, which stay first in line, cannot hold
+// back the ones behind them; done says the scan reached the end of the due set, and next is then the start again. A
+// reservation at rank r among the due ones past the cursor is reached within ceil(r/budget) calls. A call cut short by
+// ctx returns its error, done false and the count so far.
+func (b *Billing) cleanFrom(ctx context.Context, after uuid.UUID, budget int32) (changed int, next uuid.UUID, done bool, err error) {
 	var failed []error
-	var after uuid.UUID
-	for changed < int(max) && ctx.Err() == nil {
+	failures, attempts := 0, int32(0)
+	next = after
+	for attempts < budget {
+		if ctx.Err() != nil {
+			failed = append(failed, fmt.Errorf("billing: cleanup stopped: %w", context.Cause(ctx)))
+			break
+		}
 		var due []DueReservationsRow
-		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
-			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: after, Max: max})
+		limit := budget - attempts
+		if err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: next, Max: limit})
 			return err
-		})
-		if err != nil {
+		}); err != nil {
 			failed = append(failed, fmt.Errorf("billing: find what cleanup owns: %w", err))
 			break
 		}
-		n, errs := b.cleanPage(ctx, due, int(max)-changed)
-		changed += n
-		failed = append(failed, errs...)
-		if len(due) < int(max) {
-			break
+		for _, d := range due {
+			if ctx.Err() != nil {
+				break // the next turn of the outer loop reports it
+			}
+			attempts++
+			next = d.RequestID
+			if err := b.cleanOne(ctx, d); err != nil {
+				failures++
+				if len(failed) < reportedFailures {
+					failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+				}
+				continue
+			}
+			changed++
 		}
-		after = due[len(due)-1].RequestID
+		if int32(len(due)) < limit {
+			return changed, uuid.UUID{}, true, joinFailures(failed, failures)
+		}
 	}
-	return changed, errors.Join(failed...)
+	return changed, next, false, joinFailures(failed, failures)
 }
 
-// cleanPage takes over the reservations of one page until room are changed or ctx ends, each failure collected.
-func (b *Billing) cleanPage(ctx context.Context, due []DueReservationsRow, room int) (changed int, failed []error) {
-	for _, d := range due {
-		if changed >= room || ctx.Err() != nil { // the rest would fail for the same reason
-			break
-		}
-		var released int64
-		err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
-			released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
-			return err
-		})
-		if err != nil {
-			failed = append(failed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
-			continue
-		}
-		changed++
-		if released > 0 {
-			b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
-				"request", d.RequestID.String(), "released", released)
-		}
+// joinFailures joins the kept errors, and says how many more failures were not kept.
+func joinFailures(kept []error, failures int) error {
+	if more := failures - reportedFailures; more > 0 {
+		kept = append(kept, fmt.Errorf("billing: %d more reservations failed to clean up", more))
 	}
-	return changed, failed
+	return errors.Join(kept...)
+}
+
+// cleanOne takes over one due reservation in a transaction of its own, and logs what it released.
+func (b *Billing) cleanOne(ctx context.Context, d DueReservationsRow) error {
+	var released int64
+	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+		released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+		return err
+	})
+	if err == nil && released > 0 {
+		b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
+			"request", d.RequestID.String(), "released", released)
+	}
+	return err
 }
 
 // clean takes over one reservation, and returns how much it released, 0 when a Settle got there first.

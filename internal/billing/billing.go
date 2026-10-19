@@ -248,12 +248,14 @@ func (b *Billing) beats(ctx context.Context) error {
 	}
 }
 
-// sweeps runs a sweep at once, for the predecessor's leftovers, and then every cleanupEvery until ctx ends.
+// sweeps runs a sweep at once, for the predecessor's leftovers, and then every cleanupEvery until ctx ends. The cleanup's
+// cursor lives here: a sweep that did not reach the end of the due set goes on from where it stopped.
 func (b *Billing) sweeps(ctx context.Context) {
 	tick := time.NewTicker(cleanupEvery)
 	defer tick.Stop()
+	var after uuid.UUID
 	for {
-		b.sweep(ctx)
+		after = b.sweep(ctx, after)
 		select {
 		case <-ctx.Done():
 			return
@@ -262,9 +264,10 @@ func (b *Billing) sweeps(ctx context.Context) {
 	}
 }
 
-// sweep reaps the holders that expired, then takes over what no settlement will. The reap comes first, so a
-// reservation whose holder has just gone is cleaned in the same sweep.
-func (b *Billing) sweep(ctx context.Context) {
+// sweep reaps the holders that expired, then takes over what no settlement will, from the cursor after, and returns the
+// cursor for the next sweep. The reap comes first, so a reservation whose holder has just gone is cleaned in the same
+// sweep.
+func (b *Billing) sweep(ctx context.Context, after uuid.UUID) uuid.UUID {
 	if n, err := b.Reap(ctx); err != nil {
 		b.logger.Error("billing: reaping the holders failed", "err", err)
 	} else if n > 0 {
@@ -272,17 +275,18 @@ func (b *Billing) sweep(ctx context.Context) {
 	}
 	cleaned := 0
 	for range cleanupRounds {
-		n, err := b.Cleanup(ctx, cleanupBatch)
+		n, next, done, err := b.cleanFrom(ctx, after, cleanupBatch)
 		cleaned += n
+		after = next
 		if err != nil {
 			b.logger.Error("billing: the cleanup failed", "cleaned", cleaned, "err", err)
 		}
-		// A round that changed fewer than a batch walked the whole due set, failures included, so the sweep is done.
-		if n < cleanupBatch {
-			return
+		if done || ctx.Err() != nil {
+			return after
 		}
 	}
-	b.logger.Warn("billing: more reservations are due than one sweep takes over", "cleaned", cleaned)
+	b.logger.Warn("billing: more reservations are due than one sweep takes over; the next sweep goes on from here", "cleaned", cleaned)
+	return after
 }
 
 var queries = New()
