@@ -97,12 +97,6 @@ RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native;
 UPDATE suppliers.suppliers SET status = 'needs_attention', status_reason = 'funding_not_wallet', config_gen = config_gen + 1
 WHERE id = @id AND status IN ('connecting', 'active', 'low_balance');
 
--- name: PauseSupplierUnloadable :execrows
--- A supplier whose rows this node cannot load into a snapshot (a key that does not open, a kind with no adapter) stops
--- being routed to, here and on every node, until a person looks at it; the others are not held back by it.
-UPDATE suppliers.suppliers SET status = 'needs_attention', status_reason = @reason::text, config_gen = config_gen + 1
-WHERE id = @id AND status IN ('connecting', 'active', 'low_balance');
-
 -- name: AssignChargeToLostRequest :many
 UPDATE suppliers.charge_records SET state = 'assigned', attribution = 'lost_request', lost_request_id = @lost_request_id,
     revision = revision + 1

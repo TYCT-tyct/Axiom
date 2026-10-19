@@ -479,26 +479,6 @@ func (q *Queries) PauseSupplierForFunding(ctx context.Context, db DBTX, id uuid.
 	return result.RowsAffected(), nil
 }
 
-const pauseSupplierUnloadable = `-- name: PauseSupplierUnloadable :execrows
-UPDATE suppliers.suppliers SET status = 'needs_attention', status_reason = $1::text, config_gen = config_gen + 1
-WHERE id = $2 AND status IN ('connecting', 'active', 'low_balance')
-`
-
-type PauseSupplierUnloadableParams struct {
-	Reason string
-	ID     uuid.UUID
-}
-
-// A supplier whose rows this node cannot load into a snapshot (a key that does not open, a kind with no adapter) stops
-// being routed to, here and on every node, until a person looks at it; the others are not held back by it.
-func (q *Queries) PauseSupplierUnloadable(ctx context.Context, db DBTX, arg PauseSupplierUnloadableParams) (int64, error) {
-	result, err := db.Exec(ctx, pauseSupplierUnloadable, arg.Reason, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setEndpointCost = `-- name: SetEndpointCost :exec
 UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1, cost_state_reason = NULL
 WHERE id = $2

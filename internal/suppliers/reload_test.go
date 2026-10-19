@@ -1,11 +1,17 @@
 package suppliers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"axiom/internal/platform/pg"
 )
@@ -43,11 +49,20 @@ func (w *world) failedReload() {
 }
 
 // TestAnUnloadableSupplierIsLeftOutAndTheRestStillRoute: a credential whose key does not open (after a key rotation, a
-// key version this node does not hold) takes only its own supplier out of the snapshot, and the supplier is set to
-// needs_attention with a reason, here and for every other node; the Reload that found it still succeeds.
+// key version this node does not hold) takes only its own supplier out of this node's snapshot; the Reload that found
+// it still succeeds, tells the log under a stable event name and counts the supplier, and nothing is written to the
+// database, where the cause may be this node's alone.
 func TestAnUnloadableSupplierIsLeftOutAndTheRestStillRoute(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
+	var logs bytes.Buffer
+	reader := sdkmetric.NewManualReader()
+	w.svc.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	counter, err := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test").Int64Counter(unloadableMetric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.svc.unloadable = counter
 	bad, credential := w.addSupplier()
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		_, err := tx.Exec(ctx, "UPDATE suppliers.credentials SET key_version = 2 WHERE id = $1", credential)
@@ -60,13 +75,19 @@ func TestAnUnloadableSupplierIsLeftOutAndTheRestStillRoute(t *testing.T) {
 	if len(got) != 1 || got[0].ID != w.endpoint || got[0].Supplier != w.supplier {
 		t.Errorf("Routable = %v, want only the first supplier's endpoint %s", got, w.endpoint)
 	}
-	same(t, "the supplier left out is flagged", 1,
-		w.count("SELECT count(*) FROM suppliers.suppliers WHERE id = $1 AND status = 'needs_attention' AND status_reason = $2 AND config_gen = 1", bad, unloadableReason))
-	same(t, "the other supplier is untouched", 1,
-		w.count("SELECT count(*) FROM suppliers.suppliers WHERE id = $1 AND status = 'active' AND config_gen = 0", w.supplier))
-	if err := w.svc.Reload(t.Context()); err != nil || len(w.routable()) != 1 {
-		t.Errorf("the next Reload = %v with %d endpoints, want it to succeed with the one", err, len(w.routable()))
+	if out := logs.String(); !strings.Contains(out, "event="+unloadableEvent) || !strings.Contains(out, bad.String()) {
+		t.Errorf("the log does not name the event and the supplier %s:\n%s", bad, out)
 	}
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &data); err != nil {
+		t.Fatal(err)
+	}
+	sum, _ := data.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	if len(sum.DataPoints) != 1 || sum.DataPoints[0].Value != 1 {
+		t.Errorf("the counter holds %+v, want one point of 1 for the supplier left out", sum.DataPoints)
+	}
+	same(t, "no status is written", 2,
+		w.count("SELECT count(*) FROM suppliers.suppliers WHERE status = 'active' AND config_gen = 0"))
 }
 
 // TestASnapshotNoReloadConfirmsGoesStale: while Reload keeps failing the snapshot is used for MaxStale and then refused,

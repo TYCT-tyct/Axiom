@@ -187,7 +187,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 没有成本计划的端点不进路由 | `ListRoutable` 要求 `cost_state = 'known'` 且连得上 `cost_schedules`，写入侧只在拿到计划后置 `known`；测试先读没有计划的清单、再读有计划的 |
 | 人停用的端点不会被同步重新打开 | `enabled` 只在插入时取默认值，投影的 UPDATE 不含它；测试停用后换一版计划再同步 |
 | `Routable()` 与 `ListRoutable` 是同一批端点 | 两者按同一套条件（启用、成本已知、分组选中、凭证可用），`Routable()` 取 `Reload` 时的快照；测试对比两边的 id、上游名字、模型、格式和成本计划 |
-| 一家供应商读不出来不拖垮其余，`Reload` 一直失败时不无限期沿用旧端点 | `Reload` 按供应商收集错误、整家排除并置为需处理；快照带最后一次成功 `Reload` 的时间，`Routable()` 超过 `MaxStale` 返回 `ErrStale`；测试：一个凭证 key 打不开时另一家照常、这一家被置为需处理且下次 `Reload` 仍成功；`Reload` 失败时在 `MaxStale` 内仍返回快照、超过后 `ErrStale`；失败期间被停用的供应商过了 `MaxStale` 不再被路由 |
+| 一家供应商读不出来不拖垮其余，`Reload` 一直失败时不无限期沿用旧端点 | `Reload` 按供应商收集错误、整家排除并记日志、计数；快照带最后一次成功 `Reload` 的时间，`Routable()` 超过 `MaxStale` 返回 `ErrStale`；测试：一个凭证 key 打不开时另一家照常、这一家被排除、日志和计数有记录、库里状态不变且下次 `Reload` 仍成功；`Reload` 失败时在 `MaxStale` 内仍返回快照、超过后 `ErrStale`；失败期间被停用的供应商过了 `MaxStale` 不再被路由 |
 | 节点崩溃后从存下的位置接着读扣费记录 | 每页与位置同一次提交；测试让一个节点读到第三页失败且不还租约，租约过期后另一个节点从第三页开始，记录各存一次 |
 | 失去租约或凭证已被换过的节点不覆盖登录令牌 | `Swap` 和提交先锁住租约行与供应商行再比较栅栏和 `config_gen`；测试逐项，并在写被锁挡住时让接手、改凭证同时发生 |
 | 扣费水位只升不降，每条记录至少读到一次 | 前进遍的 `end` 大于水位、水位取最大值；新记录只出现在列表最前面；测试覆盖整页边界、扫描期间新增、迟到记录（重叠回扫和每日补扫） |
@@ -199,7 +199,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ```go
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
-func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；读不了库才失败（旧快照和确认时间不动）；key 打不开或缺适配器的供应商整家不进快照并置为需处理，其余照常
+func (s *Service) Reload(ctx context.Context) error            // 重建快照，在本节点内存里解密 key；读不了库才失败（旧快照和确认时间不动）；key 打不开或缺适配器的供应商整家不进本节点的快照（记日志、计数），其余照常
 func (s *Service) Routable() ([]Routable, error)                // 快照里的端点，按 id 排：routing 建快照用（见下）；最后一次成功的 Reload 超过 MaxStale（默认 30 秒）返回 ErrStale
 func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较交换；ErrNoEndpoint、ErrNoSlot
 func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Compact, Body, Header}
@@ -220,7 +220,7 @@ func Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       //
 
 与设计草图的差别：`RecordAttempts` 等是包级函数（不需要 `Service`），`CallWrites` 把它们按 billing 要的形状（请求是 `uuid.UUID`）转发出去；`Cost` 没有时间参数，按回执里的成本计划计价；`Send` 的入参是 `Call{Format, Compact, Body, Header}`，`protocol.Upstream` 合并后换成它。`Header` 是 gateway 的白名单头（`anthropic-beta`、`anthropic-version`），在默认头之上设置、再由凭证和内容类型盖过：客户端换不掉凭证，写了 `anthropic-version` 就用它的，没写才加默认的 `2023-06-01`。`Compact` 选格式的压缩端点路径（`compactPaths` 表里，目前只有 Responses 的 `/v1/responses/compact`）：那个端点不是格式自己的路径，路径只在 `wire` 与 `compactPaths` 两张表里（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。`Failure` 是 `adapter.Failure`。
 
-- **按供应商隔离**：`Reload` 里一家供应商的数据读不出来（凭证的 key 打不开、没有这个类型的适配器、成本计划或单位价值不合法），这一家的全部端点不进快照，供应商被置为 `needs_attention`（`status_reason` 为 `unloadable`，`config_gen` 加一，所以所有节点的下一次 `Reload` 都不再取它，在跑的同步作废），原因写在日志里；其余供应商照常载入，这次 `Reload` 仍然成功。写状态失败只记日志（本节点已经把它排除了，下一次 `Reload` 再写）。代价：只有本节点缺一个 key 版本时，也会把这家供应商在全局置为需处理，要人到后台恢复；这与 new-api 把出错的渠道自动停用、不拖垮整个系统是同一取舍。没有单独的计数指标，状态和日志是告警的依据。
+- **按供应商隔离**：`Reload` 里一家供应商的数据读不出来（凭证的 key 打不开、没有这个类型的适配器、成本计划或单位价值不合法），这一家的全部端点不进本节点的快照，其余供应商照常载入，这次 `Reload` 仍然成功。告警靠两样：错误日志带固定事件名 `suppliers.unloadable`（含供应商 ID 和原因），计数指标 `axiom.suppliers.unloadable` 按供应商（`supplier` 属性）每次 `Reload` 加一，看的是上升而不是总数（与队列的 `queue.job_discarded`、`axiom.pg.queue.discarded_jobs` 同一做法）；指标的 Meter 由 `Config.Meter` 给，nil 为不计。**不写库、不改供应商状态**：原因可能只在本节点（例如只有它缺一个 key 版本），写全局状态会让别的节点正常的供应商也停掉；`Reload` 里的写会与管理员刚做的修复竞争（没有 `config_gen` 比较时旧的读结果会盖掉新的修复），也会在等行锁时拿着 `reloadMu` 卡住整个刷新循环，让所有供应商一起过期。代价：状态页不显示这家出了问题，要靠告警发现；快照里缺它，其余节点是否也缺它各自独立。
 - **不等重建**：`Reload` 在自己的状态里解析成本计划、解密 key，建好后整体替换；调用路径只做一次原子读取，`Cost`、`Policy`、`Acquire` 不拿 `Reload` 用的锁。在途数和冷却按凭证 ID 保存，每把锁只在查表时短暂持有。
 - **`Acquire`**：在没有冷却、没有过期（按时钟，不靠数据库变更）、在途数低于上限的凭证里挑负载最低的，对在途数做一次比较交换；拿不到返回 `ErrNoSlot`，gateway 跳过这个条目，不算尝试。在途数和冷却时间按凭证 ID 存在快照之外，重建快照不清零。
 - **`Routable`** 是给 `routing` 建快照的投影，只含已经能调的端点（启用、成本已知、分组选中、有可用的凭证、供应商在正常状态）：`ID`、`Supplier`、`Model`（目录模型）、`Upstream`（发给上游的名字）、`Formats`（这个端点能用的调用格式，来自 `endpoints.formats`）、`Schedule`（成本计划，已按分组倍率缩放）、`Streams` 和 `Cancels`（适配器对这个供应商的说法）。它读的是 `Reload` 的快照，所以同一个快照里不会一半旧一半新；快照记着最后一次成功的 `Reload` 开始读库的时间，超过 `Config.MaxStale`（默认 30 秒，同目录）就返回 `ErrStale`，这样 `Reload` 一直失败时，期间被停用或移除的供应商不会无限期接流量（`gateway` 的重建因此失败，路由快照按自己的最长陈旧时间过期）；`ListRoutable` 是同一批行的查询，测试核对两边一致。模型的规格（上下文、输出上限、能力位）不在返回值里：那是目录的 `Model.Serving()`，`routing` 建快照时自己查。

@@ -50,7 +50,7 @@ type callDeps struct {
 	gate     gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records  *observability.Recorder // the call log, which the settlements write to
-	meter    metric.Meter            // where the ledger's counters go
+	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
 }
 
@@ -76,7 +76,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress})
+	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress, Meter: d.meter})
 	if err != nil {
 		return callNode{}, err
 	}

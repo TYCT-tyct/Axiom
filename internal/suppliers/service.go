@@ -12,6 +12,10 @@ import (
 	"time"
 	"uuid"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
@@ -56,15 +60,18 @@ type Config struct {
 	MaxStale time.Duration
 	// Logger is told of the suppliers a Reload leaves out; nil is slog.Default.
 	Logger *slog.Logger
+	// Meter is where the count of those suppliers goes; nil for none.
+	Meter metric.Meter
 }
 
 // Service is the call side of the suppliers module in one node: the endpoints it can call, the state of their
 // credentials, and the schedules costs are read from. It does not read the database to pick a credential or to price an
 // attempt.
 type Service struct {
-	cfg      Config
-	registry *registry.Registry
-	now      func() time.Time
+	cfg        Config
+	registry   *registry.Registry
+	now        func() time.Time
+	unloadable metric.Int64Counter
 
 	// The snapshot and the schedules are built apart from the calls and published whole; a call reads them with one
 	// atomic load and no lock. A receipt may name a schedule that is no longer an endpoint's, so schedules only grow.
@@ -103,8 +110,15 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Meter == nil {
+		cfg.Meter = noop.NewMeterProvider().Meter("suppliers")
+	}
+	counter, err := cfg.Meter.Int64Counter(unloadableMetric, metric.WithDescription("Suppliers a reload left out of the snapshot because their data could not be loaded, by supplier."))
+	if err != nil {
+		return nil, fmt.Errorf("meter: %w", err)
+	}
 	s := &Service{
-		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
+		unloadable: counter, cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
@@ -149,8 +163,10 @@ type snapshot struct {
 
 // Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A
 // supplier whose rows cannot be loaded (a key that does not open, a kind with no adapter, a schedule that does not parse)
-// is left out whole, set to needs_attention with a reason, and logged; every other supplier loads as usual, so one bad
-// row does not take the node down. A Reload that fails altogether (the database cannot be read) leaves the old snapshot
+// is left out of this node's snapshot whole, logged and counted (unloadableEvent, unloadableMetric); every other supplier
+// loads as usual, so one bad row does not take the node down. Nothing is written to the database: the cause may be this
+// node's alone (a key version only it lacks), and a status written from a reload could overwrite what an administrator
+// just fixed. A Reload that fails altogether (the database cannot be read) leaves the old snapshot
 // and its confirmation time in place, and Routable refuses the snapshot once that time is older than MaxStale. The new
 // snapshot is built on its own, with no lock the calls use, and replaces the old one in a single step.
 func (s *Service) Reload(ctx context.Context) error {
@@ -183,7 +199,7 @@ func (s *Service) Reload(ctx context.Context) error {
 	}
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.snap.Store(next)
-	s.pause(ctx, unloadable)
+	s.report(unloadable)
 	return nil
 }
 
@@ -201,20 +217,13 @@ func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule
 	return nil
 }
 
-// pause sets each supplier a Reload left out to needs_attention, so that every node stops routing to it and the admin
-// shows it; the status_reason is a code, and the cause is in the log. Failing to write it is only logged: this node has
-// left the supplier out already, and the next Reload tries again since the row is still routable.
-func (s *Service) pause(ctx context.Context, unloadable map[uuid.UUID]error) {
+// report tells each supplier a Reload left out, for alerting: the error log carries a stable event name, and the counter
+// rises by one per Reload that leaves the supplier out, so an alert watches a rise.
+func (s *Service) report(unloadable map[uuid.UUID]error) {
 	for id, cause := range unloadable {
-		s.cfg.Logger.Error("suppliers: a supplier could not be loaded and is left out of the snapshot; it needs attention",
-			"supplier", id, "err", cause)
-		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
-			_, err := store.New().PauseSupplierUnloadable(ctx, tx, store.PauseSupplierUnloadableParams{Reason: unloadableReason, ID: id})
-			return err
-		})
-		if err != nil && ctx.Err() == nil {
-			s.cfg.Logger.Error("suppliers: the supplier left out could not be set to needs attention", "supplier", id, "err", err)
-		}
+		s.cfg.Logger.Error("suppliers: a supplier could not be loaded and is left out of this node's snapshot",
+			"event", unloadableEvent, "supplier", id, "err", cause)
+		s.unloadable.Add(context.Background(), 1, metric.WithAttributes(attribute.String("supplier", id.String())))
 	}
 }
 
@@ -329,5 +338,9 @@ var (
 	ErrStale = errors.New("suppliers: the snapshot has not been confirmed lately")
 )
 
-// unloadableReason is the status_reason of a supplier a Reload left out.
-const unloadableReason = "unloadable"
+const (
+	// unloadableEvent is the stable name of the error log for a supplier left out of the snapshot, as the queue's
+	// discarded jobs have theirs (internal/platform/pg/queue.go).
+	unloadableEvent  = "suppliers.unloadable"
+	unloadableMetric = "axiom.suppliers.unloadable"
+)
