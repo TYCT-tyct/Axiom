@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
-	"sync"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -63,8 +63,7 @@ type callNode struct {
 	handler  *gateway.Handler
 	executor *gateway.Executor
 	stop     context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
-	ready    <-chan struct{}    // closed once a published snapshot can route
-	fresh    func() bool        // whether the routing snapshot is young enough to route with (routing.Router.Fresh)
+	ready    func() bool        // whether the node can route now: its latest snapshot can route and is fresh
 	reaped   <-chan error       // carries what billing.Run ended with, when it is not a shutdown
 }
 
@@ -99,8 +98,8 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err := d.catalog.Refresh(ctx); err != nil {
 		return callNode{}, err
 	}
-	ready := make(chan struct{})
-	routes := routeDeps(d, router, upstreams, ready)
+	var routable atomic.Bool
+	routes := routeDeps(d, router, upstreams, &routable)
 	snap, count, err := routes.Build(ctx)
 	if err != nil {
 		return callNode{}, err
@@ -113,7 +112,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}
 	// The loops outlive the signal that stops the node: the holder must keep beating until the settlements are written.
 	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
-	n.ready, n.fresh, n.reaped, n.stop = ready, router.Fresh, startLoops(loops, d, ledger, upstreams, routes), stop
+	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, ledger, upstreams, routes), stop
 	return n, nil
 }
 
@@ -145,9 +144,8 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	return callNode{handler: handler, executor: executor}, err
 }
 
-// routeDeps are the sources of the routing snapshot. ready is closed by the first published snapshot that can route.
-func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, ready chan struct{}) *gateway.RouteDeps {
-	var once sync.Once
+// routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
+func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, routable *atomic.Bool) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
 		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:      d.catalog,
@@ -159,11 +157,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 		// ready, because there is nothing to route and the console is how its first supplier is set up; a node whose
 		// suppliers offer endpoints that the catalog or the price list cannot describe is not, because every model call
 		// would answer 404 no_endpoint and the log is the only place that says why.
-		Built: func(c gateway.Count) {
-			if c.Routable() {
-				once.Do(func() { close(ready) })
-			}
-		},
+		Built: func(c gateway.Count) { routable.Store(c.Routable()) },
 	}
 }
 
@@ -187,32 +181,28 @@ func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstre
 	return reaped
 }
 
-// announceReady keeps the node's readiness equal to whether it can route. Readiness is a promise about routing, so it is
-// made only after a snapshot that can route is published, never at the moment the listeners open; and it is withdrawn
-// while the snapshot is stale (fresh false), which is when every call answers 503, so a load balancer stops sending
-// traffic here, and restored when a rebuild succeeds. The returned function ends the loop and returns once it has:
-// after it, nothing sets the node ready again, so a shutdown's not-ready stays.
-func announceReady(ctx context.Context, ready <-chan struct{}, fresh func() bool, every time.Duration, health *httpserver.Health, logger *slog.Logger) (stop func()) {
+// announceReady keeps the node's readiness equal to ready(): that the latest published snapshot can route and is fresh.
+// Readiness is a promise about routing, so it is made only after such a snapshot is published, never at the moment the
+// listeners open; it is withdrawn when every call would fail, with 503 while the snapshot is stale or 404 once every
+// endpoint is excluded, so a load balancer stops sending traffic here, and restored when a rebuild succeeds. The
+// returned function ends the loop and returns once it has: after it, nothing sets the node ready again, so a shutdown's
+// not-ready stays.
+func announceReady(ctx context.Context, ready func() bool, every time.Duration, health *httpserver.Health, logger *slog.Logger) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		select {
-		case <-ready:
-		case <-ctx.Done():
-			return
-		}
 		tick := time.NewTicker(every)
 		defer tick.Stop()
 		serving := false
 		for {
-			if now := fresh(); now != serving {
+			if now := ready(); now != serving {
 				serving = now
 				health.SetReady(now)
 				if now {
 					logger.Info("ready", "routing", "the snapshot has an endpoint")
 				} else {
-					logger.Error("not ready: the routing snapshot is stale, so every model call answers 503 until a rebuild succeeds")
+					logger.Error("not ready: the routing snapshot is stale or has no routable endpoint, so model calls fail until a rebuild fixes it")
 				}
 			}
 			select {
