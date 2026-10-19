@@ -145,7 +145,6 @@ func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 			h.fail(w, r, format, err)
 			return
 		}
-		h.outage.recovered()
 		h.Run(w, r, c)
 	}
 }
@@ -202,6 +201,24 @@ func (h *Handler) take(w http.ResponseWriter, r *http.Request, c *Call) error {
 	return h.admit(r.Context(), c)
 }
 
+// currentCatalog is the catalog's snapshot; getting one ends a catalog outage.
+func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
+	snap, err := h.Catalog.Current()
+	if err == nil {
+		h.outage.recovered(depCatalog)
+	}
+	return snap, err
+}
+
+// admitDB runs an admission transaction; one that commits ends a database outage.
+func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
+	err := h.admitTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
 // authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
 // host that is not an API domain and a key that is not known are all the same 401.
 func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
@@ -209,6 +226,7 @@ func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller,
 	if errors.Is(err, accounts.ErrStale) {
 		return accounts.Site{}, accounts.Caller{}, err
 	}
+	h.outage.recovered(depAccounts)
 	if err != nil || surface != accounts.API {
 		return accounts.Site{}, accounts.Caller{}, errUnauthorized
 	}
@@ -273,7 +291,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	snap, err := h.Catalog.Current()
+	snap, err := h.currentCatalog()
 	if err != nil {
 		return err
 	}
@@ -315,8 +333,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		return
 	}
 	ref, expected := refusal(format, err)
-	if cause, reason, out := outageOf(err); out {
-		h.outage.refuse(r.Context(), cause, reason)
+	if dep, reason, out := outageOf(err); out {
+		h.outage.refuse(r.Context(), dep, reason)
 		writeRefusal(w, format, ref)
 		return
 	}

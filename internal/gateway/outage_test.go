@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,13 +18,13 @@ import (
 	"axiom/internal/protocol"
 )
 
-// refusals is the scraped count of requests refused for cause.
-func refusals(t *testing.T, tel *telemetry.Telemetry, cause string) string {
+// refusals is the scraped count of requests refused because dep was out.
+func refusals(t *testing.T, tel *telemetry.Telemetry, dep string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	for line := range strings.Lines(rec.Body.String()) {
-		if value, ok := strings.CutPrefix(line, `axiom_gateway_outage_refusals_total{cause="`+cause+`"`); ok {
+		if value, ok := strings.CutPrefix(line, `axiom_gateway_outage_refusals_total{dependency="`+dep+`"`); ok {
 			return strings.TrimSpace(value[strings.LastIndex(value, " "):])
 		}
 	}
@@ -58,18 +59,18 @@ func (r outageRig) fail(t *testing.T, err error) int {
 
 func (r outageRig) lines() int { return strings.Count(r.logs.String(), "\n") }
 
-// expectTold checks the log and the metric after n requests were refused for cause: one line, the full count, and one
+// expectTold checks the log and the metric after n requests were refused because dep was out: one line, the full count, and one
 // line more when the outage ends.
-func (r outageRig) expectTold(t *testing.T, cause string, n int) {
+func (r outageRig) expectTold(t *testing.T, dep string, n int) {
 	t.Helper()
 	if r.lines() != 1 {
 		t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, r.lines(), r.logs)
 	}
-	if got := refusals(t, r.tel, cause); got != strconv.Itoa(n) {
+	if got := refusals(t, r.tel, dep); got != strconv.Itoa(n) {
 		t.Errorf("the metric counts %s refusals, want %d", got, n)
 	}
-	r.outage.recovered()
-	r.outage.recovered() // a request after the end tells nothing more
+	r.outage.recovered(dep)
+	r.outage.recovered(dep) // a request after the end tells nothing more
 	if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused="+strconv.Itoa(n)) {
 		t.Errorf("the end of the outage is not told once with its count:\n%s", r.logs)
 	}
@@ -80,11 +81,11 @@ func (r outageRig) expectTold(t *testing.T, cause string, n int) {
 func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, cause string
-		err         error
+		name, dep string
+		err       error
 	}{
-		{"stale snapshot", causeSnapshot, fmt.Errorf("authenticate: %w", accounts.ErrStale)},
-		{"database", causeDatabase, databaseDown(t)},
+		{"stale snapshot", depAccounts, fmt.Errorf("authenticate: %w", accounts.ErrStale)},
+		{"database", depDatabase, databaseDown(t)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -95,7 +96,7 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 					t.Fatalf("an outage is answered %d, want 503", code)
 				}
 			}
-			r.expectTold(t, tc.cause, n)
+			r.expectTold(t, tc.dep, n)
 		})
 	}
 }
@@ -126,4 +127,63 @@ func databaseDown(t *testing.T) error {
 		t.Fatalf("an unreachable database gave %v", err)
 	}
 	return err
+}
+
+// TestANewReasonIsTold: a dependency whose outage changes its reason is told again, one that repeats its reason is not,
+// and another dependency's outage is a line of its own.
+func TestANewReasonIsTold(t *testing.T) {
+	t.Parallel()
+	r := newOutageRig(t)
+	for _, step := range []struct {
+		dep, reason string
+		lines       int // the log's lines after the step
+	}{
+		{depDatabase, "cannot connect to the database", 1},
+		{depDatabase, "cannot connect to the database", 1},
+		{depDatabase, "the database has no connection left (SQLSTATE 53300)", 3}, // the old one ends, the new begins
+		{depDatabase, "the database has no connection left (SQLSTATE 53300)", 3},
+		{depAccounts, "the site snapshot is out of date", 4},
+		{depCatalog, "the catalog snapshot is stale", 5},
+	} {
+		r.outage.refuse(t.Context(), step.dep, step.reason)
+		if r.lines() != step.lines {
+			t.Fatalf("after %s: %s the log has %d lines, want %d:\n%s", step.dep, step.reason, r.lines(), step.lines, r.logs)
+		}
+	}
+}
+
+// TestAHelperRequestEndsTheOutageItUsed: through the real handler, a database outage that a model listing met ends when
+// a listing gets through, so the next outage is told as a new one; the listing does not use routing, so it leaves a
+// routing outage standing.
+func TestAHelperRequestEndsTheOutageItUsed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	var logs bytes.Buffer
+	r.handler.outage.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	r.handler.outage.refuse(t.Context(), depRouting, "the routing snapshot is out of date")
+	admit := r.handler.admitTx
+	down := databaseDown(t)
+	broken := func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error {
+		return down
+	}
+	list := func() int {
+		resp, _ := r.do(http.MethodGet, "/v1/models", a.key, nil)
+		return resp.StatusCode
+	}
+	for _, step := range []struct {
+		admit func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+		want  int
+	}{{broken, http.StatusServiceUnavailable}, {admit, http.StatusOK}, {broken, http.StatusServiceUnavailable}} {
+		r.handler.admitTx = step.admit
+		if got := list(); got != step.want {
+			t.Fatalf("a listing is answered %d, want %d", got, step.want)
+		}
+	}
+	if starts := strings.Count(logs.String(), "is unavailable"); starts != 3 { // the routing one, and the database's twice
+		t.Errorf("%d outages were told, want 3 (routing, then database twice):\n%s", starts, &logs)
+	}
+	if ends := strings.Count(logs.String(), "how=recovered"); ends != 1 {
+		t.Errorf("%d outages ended, want 1 (the first database one; routing was not used by a listing):\n%s", ends, &logs)
+	}
 }
