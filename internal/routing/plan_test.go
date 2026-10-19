@@ -354,6 +354,25 @@ func TestWait(t *testing.T) {
 	}
 }
 
+// TestServes: a model is served when the snapshot has an endpoint for it, whatever state the endpoint is in right now,
+// and however old the snapshot is; a model without one, or a router without a snapshot, serves nothing.
+func TestServes(t *testing.T) {
+	t.Parallel()
+	if mustRouter(t).Serves(model) {
+		t.Error("a router without a snapshot serves a model")
+	}
+	h := newHarness(t, routing.Config{}, openPreset(),
+		endpoint(t, 1, func(e *routing.Endpoint) { e.Enabled, e.BreakerOpen, e.MaxConcurrent = false, true, 1 }))
+	h.r.Begin(ep(1))
+	h.now = t0.Add(time.Hour) // far past MaxStale: Plan refuses, the list still knows the route
+	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
+		t.Fatalf("a snapshot an hour old: %v, want ErrStale", err)
+	}
+	if !h.r.Serves(model) || h.r.Serves(other) {
+		t.Errorf("served: model %v, other %v; want true, false", h.r.Serves(model), h.r.Serves(other))
+	}
+}
+
 // TestNoEndpointPermanence: a mix of permanent and temporary reasons is temporary, since waiting may cure it.
 func TestNoEndpointPermanence(t *testing.T) {
 	t.Parallel()
