@@ -1,7 +1,7 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { CheckField, SelectField } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
-import { ChangeDialog, isProblem, type Problem } from "../change";
+import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
 import { handSources } from "./catalog";
 import { PriceFields, readPrice, useInvalid } from "./price-fields";
 
@@ -17,7 +17,7 @@ function currentOf(model: Model, currency: string | undefined) {
 // Publishes a version of the model's reference price in one currency. Versions are never rewritten: a correction is
 // another version.
 export function PublishPriceDialog({
-  model,
+  model: live,
   currency,
   onClose,
 }: {
@@ -27,6 +27,7 @@ export function PublishPriceDialog({
 }) {
   const { t } = useTranslation();
   const invalid = useInvalid();
+  const [model, reload] = useSnapshot(live);
   const current = currentOf(model, currency);
   const read = (values: Record<string, string>): (Priced & { base?: string }) | Problem => {
     const priced = readPrice(values, current?.schedule, invalid);
@@ -38,6 +39,7 @@ export function PublishPriceDialog({
   };
   return (
     <ChangeDialog
+      reload={reload}
       title={t("models.prices.publishTitle", { slug: model.slug })}
       intro={<p>{t("models.prices.publishIntro", { source: t(`models.source.${model.price_source}`) })}</p>}
       action={t("models.prices.publishAction")}
@@ -66,9 +68,10 @@ export function PublishPriceDialog({
 
 // Switches the model to another source in one step: the new source's price in a currency is published and every other
 // currency's price is withdrawn, so all the current prices come from the new source. M1 takes one currency here.
-export function SourceDialog({ model, onClose }: { model: Model; onClose: () => void }) {
+export function SourceDialog({ model: live, onClose }: { model: Model; onClose: () => void }) {
   const { t } = useTranslation();
   const invalid = useInvalid();
+  const [model, reload] = useSnapshot(live);
   const kept = model.prices.find((price) => price.schedule !== undefined);
   const read = (values: Record<string, string>) => {
     const priced = readPrice(values, undefined, invalid);
@@ -81,6 +84,7 @@ export function SourceDialog({ model, onClose }: { model: Model; onClose: () => 
   };
   return (
     <ChangeDialog
+      reload={reload}
       title={t("models.prices.sourceTitle", { slug: model.slug })}
       intro={
         <>
