@@ -54,7 +54,7 @@ func TestARefusalIsAnErrorOfProtocol(t *testing.T) {
 	}{
 		{errUnauthorized, protocol.Authentication},
 		{&Refusal{Status: 402, Code: "credits_insufficient"}, protocol.CreditsInsufficient},
-		{ErrRateLimited, protocol.RateLimited},
+		{errKeyRate, protocol.RateLimited},
 		{ErrOverloaded, protocol.Overloaded},
 		{errNoModel, protocol.ModelNotFound},
 		{&Refusal{Status: 404, Code: "no_endpoint"}, protocol.NoEndpoint},
