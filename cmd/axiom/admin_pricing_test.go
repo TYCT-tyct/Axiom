@@ -225,7 +225,7 @@ func TestPricingRuleRefusals(t *testing.T) {
 // none is accepted.
 func TestPricingRuleConstraintsWait(t *testing.T) {
 	t.Parallel()
-	f := newPricingFixture(t)
+	f := newPreview(t)
 	made := f.create(ruleJSON(everything, everything, faced))
 	for _, c := range []struct {
 		name, constraints, pointer string
