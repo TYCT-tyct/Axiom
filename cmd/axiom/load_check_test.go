@@ -43,11 +43,21 @@ func (lw *loadWorld) pending() int {
 	return n
 }
 
-// awaitSettled waits for every reservation to leave pending, up to limit, and says how long it took and how many were left.
-func (lw *loadWorld) awaitSettled(limit time.Duration) (took time.Duration, left int) {
+// settleCap is the longest the harness waits for the settlements of a phase to land: the node retries a settlement in the
+// background for twenty minutes, which the run cannot afford, and on a machine that is shared a backlog can take minutes.
+const settleCap = 5 * time.Minute
+
+// awaitSettled waits for every reservation to leave pending and says how long it took and how many were left. It stops
+// waiting when the count has not fallen for stall (a settlement backlog that is draining is not a leak, one that is
+// stuck is), or at settleCap.
+func (lw *loadWorld) awaitSettled(stall time.Duration) (took time.Duration, left int) {
 	lw.t.Helper()
-	start := time.Now()
-	for left = lw.pending(); left > 0 && time.Since(start) < limit; left = lw.pending() {
+	start, lastFall := time.Now(), time.Now()
+	least := lw.pending()
+	for left = least; left > 0 && time.Since(lastFall) < stall && time.Since(start) < settleCap; left = lw.pending() {
+		if left < least {
+			least, lastFall = left, time.Now()
+		}
 		time.Sleep(250 * time.Millisecond)
 	}
 	return time.Since(start), left
@@ -59,9 +69,9 @@ func (lw *loadWorld) awaitSettled(limit time.Duration) (took time.Duration, left
 // reserved otherwise.
 func (lw *loadWorld) verify(name string, outs []outcome, before int64) {
 	lw.t.Helper()
-	took, left := lw.awaitSettled(90 * time.Second)
+	took, left := lw.awaitSettled(60 * time.Second)
 	if left > 0 {
-		lw.t.Errorf("%s: %d reservations are still pending %v after the calls ended: money the node did not give back", name, left, took.Round(time.Second))
+		lw.t.Errorf("%s: %d reservations are still pending %v after the calls ended and none was settled for a minute: money the node did not give back", name, left, took.Round(time.Second))
 	}
 	lw.checkBalanced()
 	low, high := chargeBounds(outs)
