@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"uuid"
 
 	"go.opentelemetry.io/otel/metric"
@@ -49,8 +50,9 @@ type Handler struct {
 	mux     *http.ServeMux
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 
-	background *background // settlements of lost admissions
-	outage     *outage     // the dependency outage being told, if any
+	background *background             // settlements of lost admissions
+	outage     *outage                 // the dependency outage being told, if any
+	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -75,6 +77,10 @@ func NewHandler(d Deps) (*Handler, error) {
 		h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
 		// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
 		h.mux.HandleFunc("GET "+prefix+"/models/{model...}", h.retrieveModel)
+		// OpenRouter's other paths under /models are not served; without these the wildcard would take them for names.
+		for _, path := range []string{"/models/count", "/models/user", "/models/{author}/{slug}/endpoints"} {
+			h.mux.HandleFunc("GET "+prefix+path, notServed)
+		}
 		h.auxRoutes(prefix)
 	}
 	return h, nil
@@ -191,9 +197,8 @@ func (c *Call) Done() {
 // call serves one of the call paths, or the Responses compact endpoint, which is passed through instead of relayed.
 func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
-		if err != nil {
-			h.fail(w, r, format, err)
+		release, ok := h.ipSlot(w, r, format)
+		if !ok {
 			return
 		}
 		defer release()
@@ -206,6 +211,17 @@ func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 	}
 }
 
+// ipSlot takes the in-flight slot of the client's address, the first limit every endpoint that needs a key is held to.
+// When there is none it has answered the request in format and ok is false; otherwise the caller gives release back.
+func (h *Handler) ipSlot(w http.ResponseWriter, r *http.Request, format protocol.Format) (release func(), ok bool) {
+	release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
+	if err != nil {
+		h.fail(w, r, format, err)
+		return nil, false
+	}
+	return release, true
+}
+
 var errUpgrade = invalid("Protocol upgrades such as WebSocket are not supported.")
 
 // errNotFound and errMethodNotAllowed answer a path or a method no route takes, in the protocol's error shell like
@@ -215,6 +231,10 @@ var (
 	errNotFound         = &Refusal{Status: http.StatusNotFound, Code: "not_found"}
 	errMethodNotAllowed = &Refusal{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed"}
 )
+
+// notServed answers a path that is registered only to keep a wildcard from taking it, as the mux answers a path nothing
+// serves.
+func notServed(w http.ResponseWriter, r *http.Request) { writeRefusal(w, formatFor(r), errNotFound) }
 
 // refuseUpgrade answers the WebSocket handshake a client may try on a call path before it falls back to POST.
 func refuseUpgrade(format protocol.Format) http.HandlerFunc {
