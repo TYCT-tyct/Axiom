@@ -51,7 +51,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 | 步 | 做什么 | 失败 |
 |---|---|---|
-| 1 | 按 IP 的在途上限（`Backpressure.IPCalls`）；不在 accept 时按 IP 限连接数：节点只绑本机、前面是反向代理，accept 时看到的是代理的地址，按它限连接会变成整个节点的连接上限，所以连接数由前置代理或 CDN 限制（[安全的「防攻击」](../../docs/security.md#防攻击)）。IP 只认 `RemoteAddr`（M1 不信任任何代理头），IPv6 按 /64 计 | 429 |
+| 1 | 按 IP 的在途上限（`Backpressure.IPCalls`）；不在 accept 时按 IP 限连接数：节点只绑本机、前面是反向代理，accept 时看到的是代理的地址，按它限连接会变成整个节点的连接上限，所以连接数由前置代理或 CDN 限制（[安全的「防攻击」](../../docs/security.md#防攻击)）。IP 取 `platform/clientip` 的 `Addr`：只认 `RemoteAddr`，`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，与控制台守卫是同一份；IPv6 按 /64 计 | 429 |
 | 2 | 带 `Upgrade` 头的请求 | 400 |
 | 3 | `SiteForHost(r.Host)`，必须是 API 域名；`Authorization: Bearer`（不分大小写）或 `x-api-key` 认 key（有 Bearer 用 Bearer）；未登记的域名、控制台域名、认不出的 key 都是同一个 401，带 `Connection: close`，体从不被读。key 不在缓存里时查库，查库在共享的一次任务里取一个准入类连接名额（`accounts.Config.LookupSlot`，见「并发、背压与共享状态」）；认出只表示 key 存在，能否使用由第 7 步的 `Admit` 判定 | 401；站点快照过旧、库不答、名额等不到 503 |
 | 4 | 账户在途名额，再节点名额（`InFlight.Acquire`） | 429 / 503 |
@@ -109,7 +109,7 @@ G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）
 - 逐条目：先查本地持有者（`billing.Alive`：上次心跳成功 + TTL − 5s 晚于现在），失效就不再发起尝试、按「结束与结算」收尾。`Acquire`（内存比较交换）→ `Prepare`；拿不到凭证或 `*NotSupported` 就跳过，不算尝试，写进路由记录。全部因 `*NotSupported` 跳过：`Settle` 只释放，400 附原因；全部因凭证名额跳过：`Settle` 只释放，429、`Retry-After: 1`。
 - **尝试的身份在进入 `Send` 时确定**：本模块按已有的尝试数分配序号（从 1 起，最多 `platform.MaxAttempts` = 3），`Hold.Bind(entry)` 把 `Meter` 绑到准入时报过价的条目（绑被删的条目会 panic：路线已按保留的条目裁剪，所以不会发生），开始时间（`priced_at`）在 `Acquire` 时记下。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「调用面」](../suppliers/README.md#调用面)。
 - 尝试结束时 `result` 把它的用量、成本、回执（供应商的请求 ID 所在的 `AttemptReceipt`）和结束时刻填进 `billing.AttemptResult`，结算一次写进 suppliers，与账本同一次提交；没有别的地方记「这次尝试到过供应商」（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)）。
-- 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
+- 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。端点或供应商范围的限流、供应商范围的失败（余额不足）由 `Router.Block` 暂停到上游给的时间（没给用 `Config.Pause`，默认 5 秒；最多两小时）；供应商范围的失败还让本次调用跳过该供应商剩下的全部条目。每个条目在 `Acquire` 前再查一次 `Router.Blocked`：规划之后别的请求可能已经暂停了它，这样跳过不算尝试、不花重试预算。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
 - 回退不追加预留：准入已按保留条目的最高报价预留。客户端断开后不再发起新尝试。
 
 ## 尝试与转发

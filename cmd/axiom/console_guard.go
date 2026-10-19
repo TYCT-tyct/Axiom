@@ -8,11 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"slices"
-	"strings"
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -173,7 +172,7 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 	if surface != g.surface() { // another surface's domain is no domain of this API, and no session of it serves here
 		return call{}, accounts.ErrUnknownHost
 	}
-	c := call{r: r, site: site, ip: clientIP(r, g.proxies)}
+	c := call{r: r, site: site, ip: clientip.Addr(r, g.proxies)}
 	switch {
 	case !rl.session && rl.changes:
 		return c, g.accounts.CheckOrigin(r)
@@ -219,42 +218,4 @@ func (g *guard) authenticate(r *http.Request, rl *rules) (accounts.Principal, er
 // errMFARequired is a session that has not passed two-step verification asking for what needs it.
 var errMFARequired = &apiError{
 	status: http.StatusForbidden, code: codeMfaRequired, message: "this needs a session that passed two-step verification",
-}
-
-// clientIP is the address a request came from. Only the connection's own address is believed, unless it is a trusted
-// proxy: then X-Forwarded-For is read from its right, past the proxies, to the first address that is not one (a
-// client can put anything at the left of the header, but not past the proxy that appends to it).
-func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
-	remote, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return netip.Addr{}
-	}
-	addr := remote.Addr().Unmap()
-	isTrusted := func(a netip.Addr) bool {
-		for _, p := range trusted {
-			if p.Contains(a) {
-				return true
-			}
-		}
-		return false
-	}
-	if !isTrusted(addr) {
-		return addr
-	}
-	var hops []string
-	for _, header := range r.Header.Values("X-Forwarded-For") {
-		for hop := range strings.SplitSeq(header, ",") {
-			hops = append(hops, strings.TrimSpace(hop))
-		}
-	}
-	for _, text := range slices.Backward(hops) {
-		hop, err := netip.ParseAddr(text)
-		if err != nil {
-			return addr // a header we cannot read is not believed
-		}
-		if hop = hop.Unmap(); !isTrusted(hop) {
-			return hop
-		}
-	}
-	return addr
 }

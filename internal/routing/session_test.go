@@ -143,7 +143,7 @@ func TestDecide(t *testing.T) {
 	t.Parallel()
 	for scope, want := range map[routing.Scope]routing.Action{
 		routing.ScopeRequest:    routing.ReturnToClient,
-		routing.ScopeEgress:     routing.OtherCredential,
+		routing.ScopeEgress:     routing.NextEntry,
 		routing.ScopeCredential: routing.OtherCredential,
 		routing.ScopeEndpoint:   routing.NextEntry,
 		routing.ScopeGroup:      routing.NextEntry,

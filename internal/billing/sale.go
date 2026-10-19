@@ -22,6 +22,25 @@ type Sold struct {
 	Schedule catalog.Schedule
 }
 
+// ErrRuleRefuses is a rule that matches a model but may not price it: its constraints are stored but not applied by this
+// release, so any sale price would silently drop them. Unlike ErrUnpriced, it ends the model's pricing instead of leaving
+// the model to the next rule.
+var ErrRuleRefuses = errors.New("billing: the rule's constraints are not enforced in this release, so it prices nothing")
+
+// RuleRefusal is a rule that matched a model and ended its pricing: the model has no sale price, and the later rules are
+// not tried. It names the rule and the model, so the reason is auditable wherever the pricing result is reported.
+type RuleRefusal struct {
+	Rule  uuid.UUID
+	Model catalog.ModelID
+}
+
+func (e *RuleRefusal) Error() string {
+	return fmt.Sprintf("billing: the rule %s refuses to price the model %s: its constraints are not enforced in this release", e.Rule, e.Model)
+}
+
+// Unwrap makes a refusal tell itself from a price the catalog cannot hold with errors.Is.
+func (*RuleRefusal) Unwrap() error { return ErrRuleRefuses }
+
 // Unpriced is the part of r the sale price s does not price, which keeps the model off routing: the listing threshold of
 // docs/domains/billing.md「定价」. The known per-use items are not part of it: every currency has a default price for each
 // of them, which admission fills in (docs/domains/billing.md「价目表缺项」), so a fixed price list that leaves one out still
@@ -42,7 +61,14 @@ func Unpriced(s catalog.Schedule, r catalog.Reportable) catalog.Reportable {
 // ErrUnpriced for cost_plus, which needs a supplier's cost (M2), for exchange, which needs exchange rates, and for a
 // rule that reads a reference price the model has none of (docs/domains/billing.md「定价」, #167, #185). A model without
 // a sale price has none: nothing is ever charged at its reference price by default.
+//
+// A rule that carries constraints is refused with ErrRuleRefuses: this release does not apply them (#234), so pricing it
+// would ignore a limit it names. That refusal ends the model's pricing rather than leaving it to a broader rule
+// (firstPrice).
 func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.Schedule, error) {
+	if r.Constraints != (Constraints{}) {
+		return catalog.Schedule{}, ErrRuleRefuses
+	}
 	switch r.Method.Kind {
 	case "reference_multiplier":
 		if r.Method.CurrencyConversion != "face" || r.Method.Multiplier == nil || ref.ID == uuid.Nil() || ref.Currency != site.String() {
@@ -69,11 +95,12 @@ func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.S
 // prices is left out: it has no sale price, so routing leaves its entries out (NoPrice) instead of selling them at the
 // reference price.
 //
-// A rule that does not leave a model to the next is one whose price cannot be made at all: a reference price whose
+// A rule that does not leave a model to the next is one whose price cannot be made at all: a rule with constraints this
+// release does not enforce, which refuses to price the model it matched (RuleRefusal), and a reference price whose
 // numbers the catalog cannot hold once multiplied, past a unit price's ceiling. That model is left out, as if no rule
 // priced it, and the reason comes back here for the caller to report: one model's price never takes the site's other
-// prices with it, and M1 cannot refuse such a rule at Check time, since whether it overflows depends on the reference
-// price of each model it applies to.
+// prices with it. Check cannot refuse the overflow before it happens, since the ceiling it passes depends on each model's
+// reference price.
 //
 // A target that is not a model, an author or everything does not price a model in M1: endpoints, groups, suppliers and
 // source types are chosen per endpoint, which routing's snapshot does not have yet.
@@ -81,7 +108,9 @@ func SalePrices(rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, 
 	sold := make(map[catalog.ModelID]Sold, len(models))
 	var unpriced []error
 	// A rule whose price is the same for every model is worked out for the first model it prices and sold alike to the
-	// rest: a fixed price list is parsed once however many models the rule prices.
+	// rest: a fixed price list is parsed once however many models the rule prices. Only a price is kept: a refusal is an
+	// error and never enters the map, and a rule's constraints do not change while one call runs, so the cache cannot let
+	// one model's outcome decide another's.
 	same := map[uuid.UUID]Sold{}
 	for _, id := range models {
 		m, ok := snap.Model(id)
@@ -102,7 +131,8 @@ func SalePrices(rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, 
 
 // firstPrice is the price the first rule that prices m gives it, with same holding what rules of one price for every
 // model gave already. A rule whose price cannot be made is an error and the model has no price; the later rules are not
-// tried, as SalePrices says.
+// tried, as SalePrices says. A rule with constraints refuses to price, which is that same end: the model is left without
+// a sale price rather than priced without the constraint or handed to a broader rule.
 func firstPrice(rules []Rule, m catalog.Model, ref catalog.ReferencePrice, currency platform.Currency, same map[uuid.UUID]Sold) (Sold, bool, error) {
 	for _, r := range rules {
 		if !r.Enabled || !pricesModel(r.Target, m) {
@@ -114,6 +144,9 @@ func firstPrice(rules []Rule, m catalog.Model, ref catalog.ReferencePrice, curre
 		s, err := Sell(r, ref, currency)
 		if errors.Is(err, ErrUnpriced) {
 			continue // a rule that sets no price in M1's ways leaves the model to the next
+		}
+		if errors.Is(err, ErrRuleRefuses) {
+			return Sold{}, false, &RuleRefusal{Rule: r.ID, Model: m.ID}
 		}
 		if err != nil {
 			return Sold{}, false, err

@@ -3,6 +3,7 @@ package billing
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -99,7 +100,8 @@ func TestRuleChecks(t *testing.T) {
 	}
 }
 
-// TestConstraintChecks: the limits a rule puts on its price are ratios that make sense together.
+// TestConstraintChecks: no constraint is applied by this release, so a rule that carries one is refused, naming the
+// member; a rule with none passes.
 func TestConstraintChecks(t *testing.T) {
 	t.Parallel()
 	r := func(s string) *string { return &s }
@@ -107,18 +109,27 @@ func TestConstraintChecks(t *testing.T) {
 		c     Constraints
 		field string
 	}{
-		"none":                          {Constraints{}, ""},
-		"a margin and a band":           {Constraints{MinMarginRatio: r("0.1"), ReferenceMinRatio: r("0.5"), ReferenceMaxRatio: r("3")}, ""},
-		"a band of one price":           {Constraints{ReferenceMinRatio: r("1"), ReferenceMaxRatio: r("1")}, ""},
-		"a margin of one":               {Constraints{MinMarginRatio: r("1")}, "constraints/min_margin_ratio"},
-		"a margin that is not a number": {Constraints{MinMarginRatio: r("x")}, "constraints/min_margin_ratio"},
-		"a floor of nothing":            {Constraints{ReferenceMinRatio: r("0")}, "constraints/reference_min_ratio"},
-		"a ceiling of nothing":          {Constraints{ReferenceMaxRatio: r("0")}, "constraints/reference_min_ratio"},
-		"a band turned around":          {Constraints{ReferenceMinRatio: r("2"), ReferenceMaxRatio: r("1")}, "constraints/reference_min_ratio"},
+		"none":                {Constraints{}, ""},
+		"a minimum margin":    {Constraints{MinMarginRatio: r("0.1")}, "constraints/min_margin_ratio"},
+		"a reference floor":   {Constraints{ReferenceMinRatio: r("0.5")}, "constraints/reference_min_ratio"},
+		"a reference ceiling": {Constraints{ReferenceMaxRatio: r("3")}, "constraints/reference_max_ratio"},
+		"a margin and a band": {
+			Constraints{MinMarginRatio: r("0.1"), ReferenceMinRatio: r("0.5"), ReferenceMaxRatio: r("3")},
+			"constraints/min_margin_ratio",
+		},
 	} {
 		err := RuleInput{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: faced("1"), Constraints: c.c}.Check(usd)
-		if refusal, ok := errors.AsType[*RuleError](err); c.field == "" && err != nil || c.field != "" && (!ok || refusal.Field != c.field) {
+		refusal, ok := errors.AsType[*RuleError](err)
+		if c.field == "" {
+			if err != nil {
+				t.Errorf("%s: %v, want no refusal", name, err)
+			}
+			continue
+		}
+		if !ok || refusal.Field != c.field {
 			t.Errorf("%s: %v, want a refusal of %q", name, err, c.field)
+		} else if !strings.Contains(refusal.Reason, "not supported yet") {
+			t.Errorf("%s: the refusal %q does not say the constraint is not supported yet", name, refusal.Reason)
 		}
 	}
 }

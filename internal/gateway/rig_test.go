@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -86,8 +87,9 @@ type rigOptions struct {
 	conns     int           // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration // how long Public gives a request to send its body; a minute when zero
 	segments  billing.Segments
-	suppliers bool          // the suppliers tables too, for a real suppliers service to price attempts
-	lifetime  time.Duration // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
+	suppliers bool           // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime  time.Duration  // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
+	proxies   []netip.Prefix // the reverse proxies the handler believes, none when empty
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -150,7 +152,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.memory = protocol.NewMemory(o.memory)
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
-		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)),
+		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Proxies: o.proxies,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -74,6 +74,38 @@ func TestPreviewPricing(t *testing.T) {
 	}
 }
 
+// TestPreviewPricingRefusesAStoredConstraint: a rule stored before this release with a constraint does not price the
+// model it matches: the model is unpriced instead of falling to the rule for everything, whichever order the models are
+// asked in, and the reason names the rule and the model in the log.
+func TestPreviewPricingRefusesAStoredConstraint(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	other := f.listed("acme/beta")
+	ruleID := f.storeRule("model", f.model, "all", "", timesTwo, `{"min_margin_ratio":"0.1"}`)
+	f.create(ruleJSON(everything, everything, timesFour))
+	want := map[string]adminapi.PricingPreviewRowStatus{f.model: adminapi.Unpriced, other.Id: adminapi.Priced}
+	for _, ids := range [][2]string{{f.model, other.Id}, {other.Id, f.model}} {
+		rows := f.preview(`{"model_ids":["` + ids[0] + `","` + ids[1] + `"]}`)
+		got, sale := map[string]adminapi.PricingPreviewRowStatus{}, ""
+		for _, row := range rows {
+			got[row.ModelId] = row.Status
+			if row.ModelId == other.Id {
+				sale = saleOf(row)
+			}
+		}
+		if !maps.Equal(got, want) || sale != "0.000004" {
+			t.Errorf("the preview of %v: %v at %q, want %v with the other model at 0.000004", ids, got, sale, want)
+		}
+	}
+	if logs := f.logs.String(); !strings.Contains(logs, ruleID) || !strings.Contains(logs, f.model) {
+		t.Errorf("the refusal was not logged with the rule and the model: %s", logs)
+	}
+	if got := f.text(`SELECT rev::text || ':' || enabled::text || ':' || (constraints->>'min_margin_ratio')
+		FROM billing.pricing_rules WHERE id = '` + ruleID + `'`); got != "0:true:0.1" {
+		t.Errorf("the stored rule after the previews is %s, want 0:true:0.1: it was neither rewritten nor disabled", got)
+	}
+}
+
 // TestPreviewPricingTriesARule: a rule the request carries prices a model nothing stored prices, and leaves the stored
 // rule to the model it names.
 func TestPreviewPricingTriesARule(t *testing.T) {

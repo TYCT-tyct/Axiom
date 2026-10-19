@@ -27,7 +27,7 @@ import (
 // releases the reservation's slots, and the handler does not touch it again.
 type Run func(w http.ResponseWriter, r *http.Request, c *Call)
 
-// Deps are the modules a Handler orchestrates. Every one is required.
+// Deps are the modules a Handler orchestrates, every one required, and the reverse proxies this deployment trusts.
 type Deps struct {
 	Accounts *accounts.Service
 	Catalog  *catalog.Catalog
@@ -38,6 +38,9 @@ type Deps struct {
 	Run      Run
 	Logger   *slog.Logger
 	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
+	// header, so a request is the address it came from.
+	Proxies []netip.Prefix
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -188,7 +191,7 @@ func (c *Call) Done() {
 // call serves one of the call paths, or the Responses compact endpoint, which is passed through instead of relayed.
 func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+		release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
 		if err != nil {
 			h.fail(w, r, format, err)
 			return
@@ -240,7 +243,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: clientIP(r)}
+	c := &Call{ID: id, Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()
