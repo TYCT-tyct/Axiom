@@ -142,3 +142,27 @@ func TestDiffHarnessToolArgumentsAddUp(t *testing.T) {
 		t.Error("arguments with a letter changed are not a difference")
 	}
 }
+
+// TestDiffHarnessErrorCodeIsStatus: the numeric error.code the error.code rule lets through must be the HTTP status.
+func TestDiffHarnessErrorCodeIsStatus(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		ok     bool
+	}{
+		{"the status", http.StatusBadGateway, `{"error":{"code":502,"message":"x"}}`, true},
+		{"another status", http.StatusBadGateway, `{"error":{"code":200,"message":"x"}}`, false},
+		{"a client error's", http.StatusTooManyRequests, `{"error":{"code":401}}`, false},
+		{"a string code is the open rule's", http.StatusBadRequest, `{"error":{"code":"invalid_value"}}`, true},
+		{"no error", http.StatusOK, `{"id":"x"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := errorCodeIsStatus(reply{status: tc.status, body: []byte(tc.body)}); (err == nil) != tc.ok {
+				t.Errorf("errorCodeIsStatus = %v, want ok %v", err, tc.ok)
+			}
+		})
+	}
+}

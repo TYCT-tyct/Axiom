@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json/v2" //nolint:depguard // reads what the two gateways answered; jsonx guards input from outside
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -398,4 +399,22 @@ func aliasReasoning(leaves []leaf) []leaf {
 		}
 	}
 	return leaves
+}
+
+// errorCodeIsStatus checks what the error.code rule leaves open (diff_rules_test.go): Axiom's Chat and Responses errors
+// carry the HTTP status as a numeric error.code (OpenRouter's convention, gateway.md「错误」), so a number that is not the
+// status is wrong whatever new-api answers.
+func errorCodeIsStatus(r reply) error {
+	var doc struct {
+		Error *struct {
+			Code any `json:"code"`
+		} `json:"error"`
+	}
+	if r.status < http.StatusBadRequest || json.Unmarshal(r.body, &doc) != nil || doc.Error == nil {
+		return nil
+	}
+	if code, ok := doc.Error.Code.(float64); ok && int(code) != r.status {
+		return fmt.Errorf("error.code %v under HTTP status %d", code, r.status)
+	}
+	return nil
 }
