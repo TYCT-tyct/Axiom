@@ -13,7 +13,7 @@
 ## 文档与代码不符的地方（本表建立时已在 gateway.md 改正）
 
 1. `docs/domains/gateway.md:25` 写 `GET /api/v1/models` 返回含价格、上下文长度的 OpenRouter 格式；代码 `gw/models.go:86-96` 只返回 `id/object/type/display_name/owned_by/created/created_at`，没有 `pricing`、`context_length`、`architecture`、`supported_parameters` 等任何 OpenRouter 的模型元数据。`gw/handler.go:73` 让 `/v1/models` 和 `/api/v1/models` 走同一个函数。
-2. `docs/domains/gateway.md:150` 写接受 `@preset/名称`；全仓库代码没有解析 `@preset` 的地方（`gw/route.go:265-270` 只有一个零号预设，注释说明预设还没有），目录名字解析遇到 `:` 就查不到（`cat/snapshot.go:215`）。
+2. `docs/domains/gateway.md:151` 写接受 `@preset/名称`；全仓库代码没有解析 `@preset` 的地方（`gw/route.go:270-272` 只有一个零号预设，注释说明 M1 只路由零号预设），目录名字解析遇到 `:` 就查不到（`cat/snapshot.go:215`）。
 
 ## 1. 三种调用格式
 
@@ -22,7 +22,7 @@
 | `POST /api/v1/chat/completions` | OpenAI Chat 格式，`choices` 恒为数组，流式用 `delta`；以 Chat 为基准格式 | docs/api_reference/overview | 有：`gw/handler.go:66-68` 注册 `/v1` 与 `/api/v1` 两个前缀 | `na:router/relay-router.go:105` | `s2:internal/server/routes/gateway.go:233` | 但 Chat 格式的上游端点 M1 不提供（Chat 客户端只能走 Messages/Responses 端点，`docs/domains/gateway.md` 转发规则「跨格式」），见 #301 |
 | `POST /api/v1/responses` | OpenAI Responses 格式，无状态 | docs/api_reference/responses/overview | 有：`gw/handler.go:66-68`；比 OpenRouter 多保存会话状态（文档偏离项） | `na:router/relay-router.go:110`（compact）及 `/responses` | `s2:internal/server/routes/gateway.go:214,221` | 无 |
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有：`gw/handler.go:66-68` | `na:router/relay-router.go:97` | `s2:internal/server/routes/gateway.go:192` | 无 |
-| Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与 `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 没有：`proto/prepare.go:281` 的丢弃名单和 Messages 语法里都没有 `fallbacks`，会原样转给上游，由上游报错或忽略 | 无 | 无 | Anthropic SDK 用户的备选模型写法不生效，也不报错 |
+| Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与 `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 没有：未映射到 `models`；`fallbacks` 不在 `proto/prepare.go:281` 的丢弃名单里，Messages 顶层对未知成员的处理未核实（待核实：原样转给上游，还是由 scanner 拒绝） | 无 | 无 | Anthropic SDK 用户的备选模型写法是否生效未核实 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有：`gw/handler.go` 经 `gw/readonly.go:35` | `na:router/relay-router.go:96`（已注释掉） | `s2:internal/server/routes/gateway.go:203` | Axiom 比 OpenRouter 多，非缺口 |
 | `POST /v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到 completions | docs/api_reference/streaming | 没有：只注册 chat/responses/messages（`gw/handler.go:66`） | `na:router/relay-router.go:102` | 无 | OpenRouter 自己现在也不列它，低优先 |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活 `proto/relay.go:429,598`，Chat 最后一块带 usage（`docs/domains/gateway.md:73`） | 有（ping，见差分规则） | 有 | 无 |
@@ -37,7 +37,7 @@
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | `GET /api/v1/models` 基本列表 | 返回 `data[]` 模型目录 | api/models/list-all-models-and-their-properties | 部分：`gw/models.go:60-96`，格式是 OpenAI+Anthropic 合并版，带 `has_more/first_id/last_id` | `na:controller/model.go:218` | `s2:internal/server/routes/gateway.go:207` | 不是 OpenRouter 的模型对象 |
-| 模型字段 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` | 模型身份与元信息 | spec `Model` | 部分：只有 `id`、`created`（恒为 1970-01-01，`gw/models.go:25`）；`name` 只在 `display_name` | 无（OpenAI 形） | 无 | 缺 `canonical_slug/name/description/…`；`created` 恒为 0 会让按时间排序的选择器失效 |
+| 模型字段 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` | 模型身份与元信息 | spec `Model` | 部分：只有 `id`、`created`（恒为 1970-01-01，`internal/gateway/models.go:28`）；`name` 只在 `display_name` | 无（OpenAI 形） | 无 | 缺 `canonical_slug/name/description/…`；`created` 恒为 0 会让按时间排序的选择器失效 |
 | `context_length`、`top_provider{context_length,max_completion_tokens,is_moderated}`、`per_request_limits` | 上下文与输出上限 | spec `Model`、`TopProviderInfo` | 没有（目录里有上限数据，但不在列表里输出） | 无 | 无 | SDK 和编码代理用它决定截断；缺失会让它们回落到默认值 |
 | `pricing{prompt,completion,request,image,image_output,image_token,audio,audio_output,input_audio_cache,input_cache_read,input_cache_write,input_cache_write_1h,internal_reasoning,web_search,discount,overrides}` | 每 token/每次的价格（字符串，美元） | spec `PublicPricing` | 没有：`gw/models.go` 不输出价格 | `na:controller/pricing.go:38`（`/api/pricing`，非 OpenAI 路径） | 无 | 价格页和成本估算工具读它；Axiom 有价格数据（`docs/domains/billing.md`）但没暴露 |
 | `architecture{modality,input_modalities,output_modalities,tokenizer,instruct_type}` | 模态 | spec `ModelArchitecture` | 没有 | 无 | 无 | 按模态筛选和视觉模型选择器依赖它 |
@@ -70,7 +70,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 没有：会 400 | 无 | 无 | Axiom 的上游是中转站，量化多半未知，归「待定」 |
 | `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 部分：`price`、`throughput` 有（`gw/provider.go:104-124`）；`latency` 400 | 无 | 无 | `latency` 要等路由有按延迟的排序 |
 | `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 没有：`readSort` 只读字符串，对象会 400 | 无 | 无 | 依赖 `models` 数组和排序维度 |
-| `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 部分：数字形式有（`gw/provider.go:56-60,149-161`，偏好语义与 OpenRouter 一致）；百分位对象会 400（`gw/provider.go:152` 报「percentile objects are not supported yet」） | 无 | 无 | 百分位对象形式要补 |
+| `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 部分：数字形式有（`gw/provider.go:56-60,149-161`，语义未逐条核对）；百分位对象会 400（`gw/provider.go:152` 报「percentile objects are not supported yet」） | 无 | 无 | 百分位对象形式要补 |
 | `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | 部分：`prompt`、`completion` 有（`gw/provider.go:171-190`）；`request`、`image` 会 400（`gw/provider.go:164-166`）；单位是站点记账单位而非美元 | 无 | 无 | 单位问题见 `docs/domains/gateway.md` 待定问题 |
 | `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
@@ -101,7 +101,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | Fusion 路由器 / Fusion 服务端工具（多模型审议） | 路由器模型 | docs/guides/routing/routers/fusion-router | 没有 | 无 | 无 | 低优先 |
 | Switchyard 路由器（在多个模型间切换以降成本） | 路由器模型 | docs/guides/routing/routers/switchyard-router | 没有 | 无 | 无 | 低优先 |
 | Jev 路由器 `typesafe/jev-router`（`jev-router` 插件，成本档和推理档） | 第三方决策模型选模型 | docs/guides/routing/routers/jev-router | 没有 | 无 | 无 | OpenRouter 的第三方集成，不建议跟 |
-| 路由元数据：请求头 `X-OpenRouter-Metadata: enabled` 后响应带 `openrouter_metadata`（attempts、pipeline、endpoints…） | 暴露路由决策 | docs/guides/features/router-metadata | 没有：Axiom 有意不对外暴露路由记录和供应商（`gw/readonly.go:155-158` 注释） | 无 | 无 | 若要做，另用 `axiom` 扩展对象设计，别照搬 |
+| 路由元数据：请求头 `X-OpenRouter-Metadata: enabled` 后响应带 `openrouter_metadata`（attempts、pipeline、endpoints…） | 暴露路由决策 | docs/guides/features/router-metadata | 没有：Axiom 有意不对外暴露路由记录和供应商（`docs/domains/gateway.md:198,224`） | 无 | 无 | 若要做，另用 `axiom` 扩展对象设计，别照搬 |
 
 ## 5. 调用记录查询 `GET /api/v1/generation`
 
@@ -110,7 +110,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | `GET /api/v1/generation?id=` | 按 `gen-…` ID 查调用详情 | api/generations/get-request-&-usage-metadata-for-a-generation | 部分：`gw/readonly.go:161-198`；ID 是 UUID 不是 `gen-` 前缀 | 无（用 `/api/log`） | `s2:internal/server/routes/gateway.go:210`（`/usage`，不同形） | 路径对，字段子集 |
 | 字段 `id`、`model`、`created_at`、`total_cost`、`latency`、`generation_time`、`finish_reason`、`tokens_prompt`、`tokens_completion` | 基本字段 | spec `GenerationResponse` | 有：`gw/readonly.go:178-195` | 无 | 无 | 缺 `streamed`、`cancelled` |
 | 字段 `native_tokens_prompt/completion/reasoning/cached/completion_images`、`num_media_prompt/completion`、`num_input_audio_prompt`、`num_search_results`、`num_fetches` | 原生 token 统计 | spec | 部分：有 `tokens_reasoning/tokens_cached` 和整个 `usage` 明细；`native_tokens_*` 名字没有 | 无 | 无 | 读 `native_tokens_*` 的工具会拿到空 |
-| 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 没有（有意不暴露供应商和成本，`gw/readonly.go:155-158`）；`app` 只能是 `claude-code`/`codex`（`gw/record.go:43-51`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
+| 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 没有（有意不暴露供应商和成本，`docs/domains/gateway.md:79,198,224`）；`app` 只能是 `claude-code`/`codex`（`gw/record.go:43-51`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
 | `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 没有（内容会保存，`docs/product.md:82`，但没有这个接口） | 无 | 无 | 归 #317 控制台调用详情 |
 | `POST /api/v1/generation/feedback` | 提交调用反馈 | api/generations/submit-feedback-for-a-generation | 没有 | 无 | 无 | 低优先 |
 | `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有：控制台有自己的 `/api/console/v1/calls`（`api/console.yaml:440,471`），形状不同、要会话登录 | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
@@ -196,7 +196,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | `usage.prompt_tokens_details.{cached_tokens,cache_write_tokens,audio_tokens,video_tokens}` | 明细 | spec `ChatUsage` | 部分：有 `cached_tokens`、`cache_write_tokens`；缺 audio/video | 部分 | 部分 | 无 |
 | `usage.server_tool_use_details` | 服务端工具调用次数 | spec `ChatUsage` | 部分：Messages 用量里有 `server_tool_use.web_search_requests`（`proto/errors.go:158`）；Chat 里没有 | 无 | 无 | 小 |
 | 响应 `cache_discount`（缓存省了多少） | 缓存折扣 | docs/guides/best-practices/prompt-caching | 没有 | 无 | 无 | 小 |
-| 响应 `model` 为实际使用的模型（回退/路由器后） | 返回实际模型 | docs/guides/routing/model-fallbacks | 不一致：Axiom 回显客户端请求的名字（`docs/domains/gateway.md:81`，`proto/chat.go:81` `ourModel`） | 回显请求名 | 回显 | 用了 `models` 回退的客户端分不清实际用了哪个；这是有意的（隐藏供应商），但对跨模型回退不利 |
+| 响应 `model` 为实际使用的模型（回退/路由器后） | 返回实际模型 | docs/guides/routing/model-fallbacks | 不一致：Axiom 回显客户端请求的名字（`docs/domains/gateway.md:68`，`proto/chat.go:81` `ourModel`） | 回显请求名 | 回显 | 用了 `models` 回退的客户端分不清实际用了哪个；这是有意的（隐藏供应商），但对跨模型回退不利 |
 | `stream_options.include_usage` | 开关 | spec `ChatStreamOptions` | 部分：总是返回用量（比 OpenRouter 多），参数被接受 | 有 | 有 | 无 |
 | 请求 `usage:{include:true}`（旧参数） | 旧开关 | spec | 部分：被丢弃，用量总是有（`proto/prepare.go:281`） | 无 | 无 | 行为兼容 |
 | 零补全保险：零输出且无结束原因/错误结束时不收费 | 自动 | docs/guides/features/zero-completion-insurance | 有：`bill/settle.go:241` `zeroOutput` + 免单规则 | 无 | 无 | 无 |
@@ -205,7 +205,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 错误体外壳 `{"error":{"code":<数字>,"message","metadata"}}`，HTTP 状态码与 `error.code` 相同 | 数字 code | docs/api_reference/errors-and-debugging | 不一致（有意）：Chat/Responses 用 `{"error":{"message","type","param","code":"字符串"}}`，Messages 用 Anthropic 外壳（`proto/errors.go:126-129`；决策 `docs/domains/gateway.md:225`） | OpenAI 外壳 | OpenAI/Anthropic 外壳 | 读 OpenRouter 数字 `error.code` 的客户端要改读状态行或 `error_type`；官方 OpenAI 客户端更适配 Axiom 的写法 |
+| 错误体外壳 `{"error":{"code":<数字>,"message","metadata"}}`，HTTP 状态码与 `error.code` 相同 | 数字 code | docs/api_reference/errors-and-debugging | 不一致（有意）：Chat/Responses 用 `{"error":{"message","type","param","code":"字符串"}}`，Messages 用 Anthropic 外壳（`proto/errors.go:126-129`；决策 `docs/domains/gateway.md:225`） | OpenAI 外壳 | OpenAI/Anthropic 外壳 | 读 OpenRouter 数字 `error.code` 的客户端要改读状态行或 `error_type` |
 | 状态码语义 400/401/402/403/408/429/502/503 | 见文档表 | 同上 | 部分：有 400/401/402/404/408/413/429/502/503（`proto/errors.go:38-49`）；**没有 403**（权限不足、护栏、审核） | 有 | 有 | 缺 403 |
 | `error_type` 类型化词表（约 30 个：`context_length_exceeded`、`max_tokens_exceeded`、`string_too_long`、`authentication`、`permission_denied`、`payment_required`、`rate_limit_exceeded`、`provider_overloaded`、`provider_unavailable`、`invalid_request`、`invalid_prompt`、`not_found`、`payload_too_large`、`unprocessable`、`content_policy_violation`、`refusal`、`invalid_image`、`image_too_large`、`image_not_found`、`image_download_failed`、`server`、`timeout`、`unmapped`…） | 稳定、可程序判断 | 同上（Typed error codes） | 部分：12 个类型（`authentication`、`credits_insufficient`、`billing_unavailable`、`rate_limited`、`overloaded`、`model_not_found`、`no_endpoint`、`invalid_request`、`request_too_large`、`upstream_error`、`timeout`，`proto/errors.go:14-49`），名字多数与 OpenRouter 不同，没有上下文超长、图片、内容策略等细分 | 无 | 无 | 按 `error_type` 分支的 OpenRouter 客户端会落到默认分支；上下文超长靠上游原话 |
 | `error_type` 的位置：Chat `error.metadata.error_type`；Messages `error.error_type`；Responses 顶层 | 三种外壳各自位置 | 同上 | 有：位置与 OpenRouter 一致（`docs/domains/gateway.md:93-95`） | 无 | 无 | 无 |
