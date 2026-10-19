@@ -37,19 +37,13 @@ func ExpireDue(ctx context.Context, db *pg.DB, platform pg.Scope, logger *slog.L
 			return changed, errors.Join(append(failed, fmt.Errorf("billing: find the credit that is due: %w", err))...)
 		}
 		for _, account := range due {
-			var written int64
-			err := db.Tx(ctx, platform, func(tx pg.Tx) (err error) {
-				written, err = ExpireAccount(ctx, tx, account)
-				return err
-			})
+			written, err := expireInTx(ctx, db, platform, account)
 			if err != nil {
-				failed = append(failed, fmt.Errorf("billing: expire the credit of %s: %w", account, err))
+				failed = append(failed, err)
 				if ctx.Err() != nil {
 					return changed, errors.Join(failed...) // the rest would fail for the same reason
 				}
-				continue
-			}
-			if written > 0 {
+			} else if written > 0 {
 				changed++
 				logger.Info("billing: credit expired", "account", account.String(), "amount", written)
 			}
@@ -59,6 +53,17 @@ func ExpireDue(ctx context.Context, db *pg.DB, platform pg.Scope, logger *slog.L
 		}
 		after = due[len(due)-1]
 	}
+}
+
+func expireInTx(ctx context.Context, db *pg.DB, platform pg.Scope, account uuid.UUID) (written int64, err error) {
+	err = db.Tx(ctx, platform, func(tx pg.Tx) (err error) {
+		written, err = ExpireAccount(ctx, tx, account)
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("billing: expire the credit of %s: %w", account, err)
+	}
+	return written, nil
 }
 
 // ExpireAccount writes off the expired part of the account's batches in tx, which must be in the platform scope, and
@@ -87,24 +92,8 @@ func ExpireAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (written in
 	if got := a.funded(); got != balance.Balance {
 		return 0, fmt.Errorf("billing: the allocation of %s funds %d of a balance of %d; nothing is written off", account, got, balance.Balance)
 	}
-	now, err := queries.Now(ctx, tx)
-	if err != nil {
-		return 0, fmt.Errorf("billing: read the clock: %w", err)
-	}
-	left := room(balance, 0)
-	for _, b := range a.open { // in expiry order, so a cap spares the batches that expire last
-		if b.expiresAt == nil || b.expiresAt.After(now) || left == 0 {
-			break
-		}
-		w := min(b.remaining(), left)
-		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
-		if posted, err := post(ctx, tx, e, line{bookUserBalance, w}, line{bookCreditExpired, -w}); err != nil {
-			return 0, err
-		} else if !posted {
-			return 0, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)
-		}
-		left -= w
-		written += w
+	if written, err = a.writeOffDue(ctx, tx, account, room(balance, 0)); err != nil {
+		return 0, err
 	}
 	if written > 0 {
 		if err := a.catchUp(ctx, tx, account); err != nil {
@@ -112,6 +101,30 @@ func ExpireAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (written in
 		}
 	}
 	return written, a.save(ctx, tx, account)
+}
+
+// writeOffDue posts an expiry for each open batch whose time has come, in expiry order so that a cap of limit
+// spares the batches that expire last, and returns the total. It does not replay what it posts.
+func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUID, limit int64) (written int64, err error) {
+	now, err := queries.Now(ctx, tx)
+	if err != nil {
+		return 0, fmt.Errorf("billing: read the clock: %w", err)
+	}
+	for _, b := range a.open {
+		if b.expiresAt == nil || b.expiresAt.After(now) || limit == 0 {
+			break
+		}
+		w := min(b.remaining(), limit)
+		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
+		if posted, err := post(ctx, tx, e, line{bookUserBalance, w}, line{bookCreditExpired, -w}); err != nil {
+			return 0, err
+		} else if !posted {
+			return 0, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)
+		}
+		limit -= w
+		written += w
+	}
+	return written, nil
 }
 
 // expireArgs is the job of one run.

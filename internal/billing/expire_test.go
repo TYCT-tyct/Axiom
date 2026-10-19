@@ -153,24 +153,30 @@ func TestExpire(t *testing.T) {
 			if got := b.expire(); got != 0 {
 				t.Errorf("a second run wrote off %d", got)
 			}
-			if n := b.count("SELECT balance FROM billing.balances"); n != 200-tc.charge-tc.want {
-				t.Errorf("balance %d, want %d", n, 200-tc.charge-tc.want)
-			}
-			if n := b.batchLeft(expiring); n != 0 {
-				t.Errorf("the expired batch holds %d", n)
-			}
-			if n := b.batchLeft(lasting); n != 100-max(tc.charge-100, 0) {
-				t.Errorf("the batch that never expires holds %d", n)
-			}
-			wantTx := boolInt(tc.want > 0)
-			if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire'"); n != wantTx {
-				t.Errorf("%d expiry transactions, want %d", n, wantTx)
-			}
-			if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'credit_expired'"); n != -tc.want {
-				t.Errorf("credit_expired holds %d, want %d", n, -tc.want)
-			}
+			b.wantExpired(tc.charge, tc.want, expiring, lasting)
 			b.balanced()
 		})
+	}
+}
+
+// wantExpired checks the books after a write-off of want from the batch expiring, once a charge had been made: the
+// balance, what each batch holds, and the expiry transaction and its entries.
+func (b *bank) wantExpired(charge, want int64, expiring, lasting uuid.UUID) {
+	b.t.Helper()
+	if n := b.count("SELECT balance FROM billing.balances"); n != 200-charge-want {
+		b.t.Errorf("balance %d, want %d", n, 200-charge-want)
+	}
+	if n := b.batchLeft(expiring); n != 0 {
+		b.t.Errorf("the expired batch holds %d", n)
+	}
+	if n := b.batchLeft(lasting); n != 100-max(charge-100, 0) {
+		b.t.Errorf("the batch that never expires holds %d", n)
+	}
+	if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire'"); n != boolInt(want > 0) {
+		b.t.Errorf("%d expiry transactions, want %d", n, boolInt(want > 0))
+	}
+	if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'credit_expired'"); n != -want {
+		b.t.Errorf("credit_expired holds %d, want %d", n, -want)
 	}
 }
 

@@ -138,8 +138,10 @@ func snapshot(a *allocation) (AllocationStateRow, []UnspentBatchesRow) {
 	var rows []UnspentBatchesRow
 	for _, b := range a.batches {
 		if b.remaining() > 0 {
-			rows = append(rows, UnspentBatchesRow{ID: b.id, SiteID: b.site, Source: b.source, ExpiresAt: b.expiresAt, Amount: b.amount,
-				Consumed: b.consumed, Expired: b.expired, Seq: b.opened})
+			rows = append(rows, UnspentBatchesRow{
+				ID: b.id, SiteID: b.site, Source: b.source, ExpiresAt: b.expiresAt, Amount: b.amount,
+				Consumed: b.consumed, Expired: b.expired, Seq: b.opened,
+			})
 		}
 	}
 	return state, rows
@@ -154,6 +156,56 @@ func pristine(rows []UnspentBatchesRow) []UnspentBatchesRow {
 	return out
 }
 
+// randomBatches are the batches a property run credits, not yet credited: their sequence numbers are set when the
+// credit is posted.
+func randomBatches(r *rand.Rand) []UnspentBatchesRow {
+	rows := make([]UnspentBatchesRow, 1+r.IntN(5))
+	for i := range rows {
+		var expires *time.Time
+		if r.IntN(3) > 0 {
+			expires = after(time.Duration(r.IntN(4)) * time.Hour)
+		}
+		rows[i] = batchRow(1<<40, 1+r.Int64N(200), []string{"gift", "paid"}[r.IntN(2)], expires)
+	}
+	return rows
+}
+
+// randomMovement is the next movement of a run: a credit of the next batch, a write-off of part of an open batch, a
+// charge given back, or a charge.
+func randomMovement(r *rand.Rand, live *allocation, rows []UnspentBatchesRow, next *int, seq int64) movement {
+	switch n := r.IntN(10); {
+	case n < 2 && *next < len(rows):
+		rows[*next].Seq = seq
+		live.batches[rows[*next].ID].opened = seq
+		*next++
+		return creditOf(rows[*next-1])
+	case n < 4 && len(live.open) > 0:
+		b := live.open[r.IntN(len(live.open))]
+		return movement{seq: seq, kind: "expire", request: b.id, debit: 1 + r.Int64N(b.remaining())}
+	case n < 5:
+		return movement{seq: seq, kind: "reverse", request: uuid.NewV7(), debit: -(1 + r.Int64N(80))}
+	default:
+		return movement{seq: seq, kind: "settle", request: uuid.NewV7(), debit: 1 + r.Int64N(120)}
+	}
+}
+
+// checkInvariants fails the test unless the allocation funds exactly the balance, no batch is over-spent, and debt is
+// held only while no batch holds anything.
+func checkInvariants(t *testing.T, live *allocation, balance int64, m movement) {
+	t.Helper()
+	if live.funded() != balance {
+		t.Fatalf("after %+v the allocation funds %d of a balance of %d", m, live.funded(), balance)
+	}
+	for _, b := range live.batches {
+		if b.consumed < 0 || b.expired < 0 || b.consumed+b.expired > b.amount {
+			t.Fatalf("batch %+v over-spent", *b)
+		}
+	}
+	if live.unfunded > 0 && (len(live.open) > 0 || live.unbatched > 0) {
+		t.Fatalf("debt %d with batches open (%d) or credit outside them (%d)", live.unfunded, len(live.open), live.unbatched)
+	}
+}
+
 // TestReplayProperty: over random credits, charges, write-offs and returns, the allocation always funds exactly the
 // balance, never over-spends a batch, and holds debt only while no batch holds anything; and replaying from nothing,
 // or resuming from what was stored at any point, ends where the live replay did.
@@ -161,51 +213,19 @@ func TestReplayProperty(t *testing.T) {
 	for seed := range uint64(200) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
-			var rows []UnspentBatchesRow
-			for i := range 1 + r.IntN(5) {
-				var expires *time.Time
-				if r.IntN(3) > 0 {
-					expires = after(time.Duration(r.IntN(4)) * time.Hour)
-				}
-				rows = append(rows, batchRow(0, 1+r.Int64N(200), []string{"gift", "paid"}[r.IntN(2)], expires))
-				rows[i].Seq = 1 << 40 // not credited yet; set below when the credit is posted
-			}
+			rows := randomBatches(r)
 			live := newAllocation(AllocationStateRow{}, pristine(rows))
 			var log []movement
 			var balance int64
 			next := 0
 			for seq := int64(1); seq <= 60; seq++ {
-				var m movement
-				switch n := r.IntN(10); {
-				case n < 2 && next < len(rows):
-					rows[next].Seq = seq
-					live.batches[rows[next].ID].opened = seq
-					m = creditOf(rows[next])
-					next++
-				case n < 4 && len(live.open) > 0: // a write-off of part of a batch, or all of it
-					b := live.open[r.IntN(len(live.open))]
-					m = movement{seq: seq, kind: "expire", request: b.id, debit: 1 + r.Int64N(b.remaining())}
-				case n < 5:
-					m = movement{seq: seq, kind: "reverse", request: uuid.NewV7(), debit: -(1 + r.Int64N(80))}
-				default:
-					m = movement{seq: seq, kind: "settle", request: uuid.NewV7(), debit: 1 + r.Int64N(120)}
-				}
+				m := randomMovement(r, live, rows, &next, seq)
 				if err := live.apply(m); err != nil {
 					t.Fatalf("movement %+v: %v", m, err)
 				}
 				log = append(log, m)
 				balance -= m.debit
-				if live.funded() != balance {
-					t.Fatalf("after %+v the allocation funds %d of a balance of %d", m, live.funded(), balance)
-				}
-				for _, b := range live.batches {
-					if b.consumed < 0 || b.expired < 0 || b.consumed+b.expired > b.amount {
-						t.Fatalf("batch %+v over-spent", *b)
-					}
-				}
-				if live.unfunded > 0 && (len(live.open) > 0 || live.unbatched > 0) {
-					t.Fatalf("debt %d with batches open (%d) or credit outside them (%d)", live.unfunded, len(live.open), live.unbatched)
-				}
+				checkInvariants(t, live, balance, m)
 			}
 			checkReplays(t, r, rows, log, live)
 		})
@@ -224,28 +244,28 @@ func checkReplays(t *testing.T, r *rand.Rand, rows []UnspentBatchesRow, log []mo
 			t.Fatal(err)
 		}
 		if i == stop {
-			state, stored := snapshot(resumed)
-			resumed = newAllocation(state, stored)
+			resumed = newAllocation(snapshot(resumed))
 		}
 		if err := resumed.apply(m); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for name, got := range map[string]*allocation{"from nothing": fresh, "resumed": resumed} {
-		if got.unfunded != live.unfunded || got.unbatched != live.unbatched || got.seq != live.seq {
-			t.Errorf("%s: unfunded %d unbatched %d seq %d, live %d %d %d", name, got.unfunded, got.unbatched, got.seq, live.unfunded, live.unbatched, live.seq)
-		}
-		for id, b := range live.batches {
-			g, ok := got.batches[id]
-			if !ok { // a batch spent before the stop is not loaded again
-				if b.remaining() != 0 {
-					t.Errorf("%s: batch %s with %d left is gone", name, id, b.remaining())
-				}
-				continue
-			}
-			if g.consumed != b.consumed || g.expired != b.expired {
-				t.Errorf("%s: batch %s consumed %d expired %d, live %d %d", name, id, g.consumed, g.expired, b.consumed, b.expired)
-			}
+	sameAllocation(t, "from nothing", fresh, live)
+	sameAllocation(t, "resumed", resumed, live)
+}
+
+func sameAllocation(t *testing.T, name string, got, live *allocation) {
+	t.Helper()
+	if got.unfunded != live.unfunded || got.unbatched != live.unbatched || got.seq != live.seq {
+		t.Errorf("%s: unfunded %d unbatched %d seq %d, live %d %d %d", name, got.unfunded, got.unbatched, got.seq, live.unfunded, live.unbatched, live.seq)
+	}
+	for id, b := range live.batches {
+		g, ok := got.batches[id]
+		switch {
+		case !ok && b.remaining() != 0: // a batch spent before the stop is not loaded again
+			t.Errorf("%s: batch %s with %d left is gone", name, id, b.remaining())
+		case ok && (g.consumed != b.consumed || g.expired != b.expired):
+			t.Errorf("%s: batch %s consumed %d expired %d, live %d %d", name, id, g.consumed, g.expired, b.consumed, b.expired)
 		}
 	}
 }
