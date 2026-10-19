@@ -49,7 +49,7 @@ func TestRenderError(t *testing.T) {
 				var got map[string]any
 				err := jsonx.Unmarshal(body, &got)
 				axiom, _ := got["axiom"].(map[string]any)
-				switch diff := cmp.Diff(wantError(f, row.name, row.messages, row.status), typedError(got)); {
+				switch diff := cmp.Diff(wantError(f, row.name, row.messages), typedError(got)); {
 				case err != nil || status != row.status:
 					t.Errorf("status %d, want %d; %v:\n%s", status, row.status, err, body)
 				case diff != "":
@@ -91,7 +91,7 @@ func chargedUsage(f protocol.Format) map[string]any {
 }
 
 // wantError is what typedError should find in an error of type name in format f.
-func wantError(f protocol.Format, name, messages string, status int) map[string]any {
+func wantError(f protocol.Format, name, messages string) map[string]any {
 	want := map[string]any{"error_type": name, "limit_source": "balance", "has_message": true, "type": messages}
 	if f != protocol.Messages {
 		want["code"], want["param"] = name, ""
@@ -131,14 +131,18 @@ func TestRenderRejection(t *testing.T) {
 	}{
 		{"OpenAI's error in Chat", protocol.Chat, openAI, []string{
 			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`,
-			`"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+			`"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`,
+		}},
 		{"OpenAI's error before a Responses stream", protocol.Responses, openAI, []string{`"param":"max_tokens"`, `"code":"invalid_value"`}},
 		{"Anthropic's error in Chat", protocol.Chat, claude, []string{
-			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":null`}},
+			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":null`,
+		}},
 		{"OpenAI's error in Messages", protocol.Messages, openAI, []string{
-			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`, `"error_type":"invalid_request"`}},
+			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`, `"error_type":"invalid_request"`,
+		}},
 		{"a type of the upstream's own in Chat", protocol.Chat, &protocol.Rejection{Message: "m", Type: "image_parse_error", Code: "bad_image"}, []string{
-			`"type":"image_parse_error"`, `"code":"bad_image"`}},
+			`"type":"image_parse_error"`, `"code":"bad_image"`,
+		}},
 		{"a type of the upstream's own in Messages", protocol.Messages, &protocol.Rejection{Message: "m", Type: "weird"}, []string{`"type":"invalid_request_error"`}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

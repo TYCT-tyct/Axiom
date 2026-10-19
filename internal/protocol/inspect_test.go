@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -504,7 +505,7 @@ func BenchmarkInspect(b *testing.B) {
 // TestAnInvalidBodyIsDescribedInOurWords: what the client reads of a body that cannot be read is a sentence of ours
 // (a decoder's text names offsets and Go types), and a value of the wrong type is named by its JSON pointer.
 func TestAnInvalidBodyIsDescribedInOurWords(t *testing.T) {
-	const leaks = "jsontext json: Go struct canon offset"
+	leaks := []string{"jsontext", "json:", "Go struct", "canon", "offset"}
 	for _, c := range []struct {
 		name, body, want string
 		inspect          bool // the fault is met by Inspect, otherwise by the conversion to another format
@@ -525,14 +526,13 @@ func TestAnInvalidBodyIsDescribedInOurWords(t *testing.T) {
 			if !errors.Is(err, protocol.ErrInvalid) {
 				t.Fatalf("got %v, want ErrInvalid", err)
 			}
-			if got := strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "); got != c.want {
-				t.Errorf("the client reads %q, want %q", got, c.want)
-			}
-			for _, word := range strings.Fields(leaks) {
-				if strings.Contains(err.Error(), word) {
-					t.Errorf("the error leaks %q: %v", word, err)
-				}
+			if got := strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "); got != c.want || containsAny(got, leaks) {
+				t.Errorf("the client reads %q, want %q without any of %q", got, c.want, leaks)
 			}
 		})
 	}
+}
+
+func containsAny(s string, words []string) bool {
+	return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(s, w) })
 }
