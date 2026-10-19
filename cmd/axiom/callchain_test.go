@@ -213,6 +213,7 @@ func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord 
 // billing reads the ledger, and the ledger's attempts and charge are the call's (Issue #29「从任意一条调用记录都能串起
 // 它的每次尝试、路由过程和账本交易」).
 func TestTraceReadsTheWholeChain(t *testing.T) {
+	t.Parallel()
 	f := newChainFixture(t)
 	c := makeChain(t, f)
 	checkAttempts(t, c.call.Attempts, c.first, c.second)
@@ -228,6 +229,7 @@ func TestTraceReadsTheWholeChain(t *testing.T) {
 // platform scope the caller's rule; an account scope still reads its own chain, supplier cost included. The test pins
 // that, so a future check and the documentation change together.
 func TestAccountScopeIsNotRefusedByTheChainReads(t *testing.T) {
+	t.Parallel()
 	f := newChainFixture(t)
 	c := makeChain(t, f) // makeChain reads GetTrace and LedgerOf under the account's scope
 	if c.call.ID != c.request || len(c.ledger) != 3 || c.call.CostNano != 12 {

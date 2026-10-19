@@ -97,6 +97,7 @@ func operationOf(c *contract, name string) *rules {
 // TestAdminOperationsAreTheContracts: each operation these tests exercise is the contract's, with the permission, the
 // idempotency key and the data change the tests assume of it, so no operation is assumed wrong.
 func TestAdminOperationsAreTheContracts(t *testing.T) {
+	t.Parallel()
 	c := loadedAdminContract(t)
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
 		found := operationOf(c, op.name)
@@ -120,6 +121,7 @@ func TestAdminOperationsAreTheContracts(t *testing.T) {
 // TestAdminTestsCoverTheContract: no operation of the contract is left out of the refusals below, which run over the
 // tables above.
 func TestAdminTestsCoverTheContract(t *testing.T) {
+	t.Parallel()
 	covered := map[string]bool{"getversion": true, "signin": true} // public: they need no session to refuse
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
 		covered[strings.ToLower(op.name)] = true
@@ -134,6 +136,7 @@ func TestAdminTestsCoverTheContract(t *testing.T) {
 // TestAdminOperationsNeedASession: every operation that names a session refuses a request without one, or with one
 // that was never issued, as unauthenticated, and says nothing about what it would have done.
 func TestAdminOperationsNeedASession(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	forged := session{cookie: &http.Cookie{Name: "__Host-axiom_session", Value: strings.Repeat("A", 43)}, csrf: "x"} // #nosec G124 -- a cookie only a test sends
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
@@ -149,6 +152,7 @@ func TestAdminOperationsNeedASession(t *testing.T) {
 // TestAdminOperationsNeedTwoStepVerification: a session that proved only the password is refused by every operation of
 // the platform with the code that says why, before the body is looked at.
 func TestAdminOperationsNeedTwoStepVerification(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.signIn(ownerEmail)
 	for _, op := range adminOperations {
@@ -164,6 +168,7 @@ func TestAdminOperationsNeedTwoStepVerification(t *testing.T) {
 // platform, or a role without the permission, is refused by every operation as forbidden, whether or not what it names
 // exists. The role with the permission is the pair of this test, in the tests of each operation.
 func TestAdminOperationsNeedTheirPermission(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("nobody@example.com", "")
 	f.addUser("member@example.com", "owner") // a role of accounts, with none of the admin's permissions
@@ -181,6 +186,7 @@ func TestAdminOperationsNeedTheirPermission(t *testing.T) {
 
 // TestAdminPermissionsAreOneToOne: a role holding only one permission passes exactly the operations that name it.
 func TestAdminPermissionsAreOneToOne(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("viewer@example.com", "viewer")
 	s := f.verified("viewer@example.com")
@@ -201,6 +207,7 @@ func TestAdminPermissionsAreOneToOne(t *testing.T) {
 // another or from "null", as something other than JSON, or without or with another CSRF token, is refused as
 // origin_rejected, by every operation, before it is looked at; a read needs none of these.
 func TestAdminChangesNeedTheOriginAsJSONWithTheToken(t *testing.T) {
+	t.Parallel()
 	refusals := map[string]mod{
 		"no origin":          func(r *http.Request) { r.Header.Del("Origin") },
 		"another origin":     header("Origin", "https://evil.example"),
@@ -251,6 +258,7 @@ func TestAdminChangesNeedTheOriginAsJSONWithTheToken(t *testing.T) {
 // is not a UUID in lower case, as a request that breaks the contract naming the header, after the session and its
 // permission are checked.
 func TestAdminWritesNeedAnIdempotencyKey(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	for _, op := range adminOperations {
@@ -275,6 +283,7 @@ func TestAdminWritesNeedAnIdempotencyKey(t *testing.T) {
 // TestAdminDomainsAreThePlace: the admin's routes answer on an admin domain only; a console domain, an unknown host or
 // the model API's domain is no admin and gets the same 404 whatever the operation.
 func TestAdminDomainsAreThePlace(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	for _, host := range []string{consoleHost, "api.main.example", "unknown.example"} {
@@ -287,6 +296,7 @@ func TestAdminDomainsAreThePlace(t *testing.T) {
 // TestAdminPermissionsAreCheckedEveryRequest: taking a permission from the role takes effect on the next request of a
 // node that has reloaded the roles, for exactly the operations that need it.
 func TestAdminPermissionsAreCheckedEveryRequest(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	expectAdmin(t, "listUsers before", f.do(http.MethodGet, "/users", "", as(s)), http.StatusOK, "")
@@ -301,6 +311,7 @@ func TestAdminPermissionsAreCheckedEveryRequest(t *testing.T) {
 // TestAGrantRevokedStopsTheNextRequest: the platform grants are read from the database on every request, so revoking
 // one ends the operator's access at once on every node.
 func TestAGrantRevokedStopsTheNextRequest(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	expectAdmin(t, "before", f.do(http.MethodGet, "/users", "", as(s)), http.StatusOK, "")

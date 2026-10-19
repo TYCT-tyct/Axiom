@@ -67,6 +67,7 @@ func (f consoleFixture) createKey(s session, body string) consoleapi.CreatedKey 
 // begins with the site's prefix, and ends with the last four characters the key shows, in the account's default
 // workspace.
 func TestCreateKey(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	plain := f.createKey(f.owner(), `{"name":"Plain"}`)
 	checkKey(t, "a key without settings", plain.Key, keyView{
@@ -83,6 +84,7 @@ func TestCreateKey(t *testing.T) {
 // TestCreateKeyWithSettings: settings are kept as sent: limit and reset, models, addresses (an address as its own network,
 // a network masked), an expiry; a limit with no reset never resets.
 func TestCreateKeyWithSettings(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	tomorrow := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
@@ -101,6 +103,7 @@ func TestCreateKeyWithSettings(t *testing.T) {
 
 // TestKeyReads: the list is newest first and pages by cursor, and one key is read by its ID.
 func TestKeyReads(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	var ids []string
@@ -143,6 +146,7 @@ func (f consoleFixture) assertNotFound(s session, path string) {
 // TestUpdateKey: the settings are replaced whole, so what the request leaves out is cleared; a key can be disabled and
 // enabled again; the expiry stays.
 func TestUpdateKey(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	tomorrow := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
@@ -165,6 +169,7 @@ func TestUpdateKey(t *testing.T) {
 
 // TestDeleteKey: a deleted key is gone from the list and the read, and cannot be deleted or changed again.
 func TestDeleteKey(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	key := f.createKey(s, `{"name":"Doomed"}`).Key
@@ -182,6 +187,7 @@ func TestDeleteKey(t *testing.T) {
 // TestKeysOfAnotherAccount: a user sees and changes only their own account's keys; another account's are as good as
 // absent.
 func TestKeysOfAnotherAccount(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	owner := f.owner()
 	theirs := f.createKey(owner, `{"name":"Theirs"}`).Key

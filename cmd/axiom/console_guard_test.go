@@ -46,6 +46,7 @@ var sessionOperations = []endpoint{
 // TestSessionOperationsNeedASession: every operation that names a session refuses a request without one, or with one
 // that was never issued, as unauthenticated, and says nothing about what it would have done.
 func TestSessionOperationsNeedASession(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	for _, op := range sessionOperations {
 		expect(t, op.method+" "+op.path+" without a session", f.do(op.method, op.path, op.body), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
@@ -77,6 +78,7 @@ var changing = []struct {
 // from another or from "null", as something other than JSON, or without or with another CSRF token, is refused as
 // origin_rejected and changes nothing; the same request done right works; a read needs none of these.
 func TestChangesNeedTheSitesOriginAsJSONWithTheToken(t *testing.T) {
+	t.Parallel()
 	refusals := map[string]mod{
 		"no origin":          func(r *http.Request) { r.Header.Del("Origin") },
 		"another origin":     header("Origin", "https://evil.example"),
@@ -106,6 +108,7 @@ func TestChangesNeedTheSitesOriginAsJSONWithTheToken(t *testing.T) {
 
 // TestChangesWorkWhenDoneRight pairs the test above: the same requests with everything in order change what they say.
 func TestChangesWorkWhenDoneRight(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	key := f.createKey(s, `{"name":"kept"}`).Key.Id
@@ -126,6 +129,7 @@ func TestChangesWorkWhenDoneRight(t *testing.T) {
 // TestReadsNeedNoOrigin: a GET works whatever Origin it carries, which a page of another site cannot read anyway
 // (the API sends no CORS headers), but a link or an image tag may fire.
 func TestReadsNeedNoOrigin(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	rec := f.do(http.MethodGet, "/session", "", as(s), header("Origin", "https://evil.example"))
@@ -140,6 +144,7 @@ func TestReadsNeedNoOrigin(t *testing.T) {
 // TestSignInAndRegisterNeedTheOrigin: the operations without a session are protected the same way, by the Origin and
 // the content type alone.
 func TestSignInAndRegisterNeedTheOrigin(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	body := `{"email":"` + ownerEmail + `","password":"` + ownerPassword + `"}`
 	for name, refusal := range map[string]mod{
@@ -156,6 +161,7 @@ func TestSignInAndRegisterNeedTheOrigin(t *testing.T) {
 // TestPermissionsAreCheckedEveryRequest: taking a permission from the role takes effect on the next request, for
 // exactly the operations that need it.
 func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	f.run(`ALTER TABLE accounts.roles NO FORCE ROW LEVEL SECURITY`,
@@ -191,6 +197,7 @@ func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
 
 // TestSessionsEnd: a session past its end, or idle for longer than the site allows, is no session.
 func TestSessionsEnd(t *testing.T) {
+	t.Parallel()
 	for name, statement := range map[string]string{
 		"expired": `UPDATE accounts.sessions SET expires_at = now() - interval '1 minute'`,
 		"idle":    `UPDATE accounts.sessions SET last_seen_at = now() - interval '30 days'`,
@@ -207,6 +214,7 @@ func TestSessionsEnd(t *testing.T) {
 // TestHostsOfNoConsole: a request is a console's only at a domain registered for the console of an active site. At any
 // other host, an admin's or an API's domain among them, every operation but the version is a 404.
 func TestHostsOfNoConsole(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	for _, host := range []string{"unknown.example", "admin.main.example", "api.main.example", "127.0.0.1:8080"} {
@@ -229,6 +237,7 @@ func TestHostsOfNoConsole(t *testing.T) {
 // order the guard declares, so a client without a session or at a host of no console learns nothing about its query or
 // body; a request that passes them all is told what is wrong with it.
 func TestAnswersFollowTheGuardsOrder(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	_, verified, _ := f.totpSetup(f.owner())
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
@@ -258,6 +267,7 @@ func TestAnswersFollowTheGuardsOrder(t *testing.T) {
 // TestInvalidRequestRepeatsNothing: the answer to a request the generated code could not read says that it could not,
 // and not what the parser saw, which can include what the client sent.
 func TestInvalidRequestRepeatsNothing(t *testing.T) {
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	invalidRequest(rec, nil, errors.New(`parsing "planted-value" as integer failed`))
 	expect(t, "an unreadable request", rec, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
@@ -293,6 +303,7 @@ func holdRow(t *testing.T, db *pg.DB, statement string) (free func(), freed <-ch
 // that says to check before retrying, and gives its connection back: nothing of the application is left waiting or open
 // in a transaction, and the node serves the next request.
 func TestRequestsHaveADeadline(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	key := f.createKey(s, `{"name":"held"}`).Key.Id
@@ -342,6 +353,7 @@ func TestRequestsHaveADeadline(t *testing.T) {
 // TestClientIP: only the connection's address is believed unless it is a trusted proxy, and then the header is read
 // from its right past the proxies; a header that cannot be read is not believed.
 func TestClientIP(t *testing.T) {
+	t.Parallel()
 	proxies := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.9/32")}
 	cases := []struct {
 		name, remote string

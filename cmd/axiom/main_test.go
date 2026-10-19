@@ -102,6 +102,7 @@ func TestMainExitCodes(t *testing.T) {
 // TestSecondSignalEndsTheNodeAtOnce: the first signal starts a graceful shutdown, which waits for the request in
 // flight; the second signal ends the process at once instead of waiting out the shutdown timeout.
 func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows cannot send os.Interrupt to another process")
 	}

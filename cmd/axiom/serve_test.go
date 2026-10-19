@@ -22,6 +22,7 @@ import (
 // TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
+	t.Parallel()
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
@@ -134,6 +135,7 @@ func checkMetrics(t *testing.T, addrs addresses) {
 // TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	orphaned := pgtest.New(t, modules()...)
 	if err := pgtest.Run(t.Context(), orphaned.Superuser, `INSERT INTO suppliers.suppliers (owner_scope, name, kind,
@@ -323,6 +325,7 @@ func getAccepting(t *testing.T, url, accept string) (response, error) {
 // TestStartupTimeoutCoversTheFallbackCheck: a node whose check of the fallback prices waits on a lock fails within
 // AXIOM_STARTUP_TIMEOUT, as one whose database does not answer, instead of hanging before its listeners open.
 func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	admin, err := pg.Open(t.Context(), database.Superuser)
 	if err != nil {
@@ -365,6 +368,7 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
 // address, closes it on the way out, so no writer goroutine outlives serve.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
+	t.Parallel()
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

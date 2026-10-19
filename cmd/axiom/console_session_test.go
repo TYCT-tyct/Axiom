@@ -15,6 +15,7 @@ import (
 
 // TestSessionCookie: signing in sets a session cookie a page cannot read and that only HTTPS carries.
 func TestSessionCookie(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"Owner@Example.com","password":"`+ownerPassword+`"}`)
 	expect(t, "sign-in", rec, http.StatusOK, "")
@@ -38,6 +39,7 @@ func TestSessionCookie(t *testing.T) {
 // TestSessionLifecycle: getSession tells the page who it is and what it may do, and signing out expires the cookie and
 // ends the session.
 func TestSessionLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	rec := f.do(http.MethodGet, "/session", "", as(s))
@@ -67,6 +69,7 @@ func TestSessionLifecycle(t *testing.T) {
 // TestSignInRefusals: the answer does not tell a wrong password from an unknown email, and the limit on failures per
 // email is a 429 that says how long to wait.
 func TestSignInRefusals(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	for _, email := range []string{ownerEmail, "nobody@example.com"} {
 		rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+email+`","password":"not the password"}`)
@@ -88,6 +91,7 @@ func TestSignInRefusals(t *testing.T) {
 // TestRegistration: a user registers with another's invite code, gets a balance row at once, signs in; the code,
 // the address and the password are each refused as the contract says.
 func TestRegistration(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	owner := f.owner()
 	var info consoleapi.Session
@@ -150,6 +154,7 @@ func (f consoleFixture) totpSetup(s session) (string, session, []string) {
 // permissions; the next sign-in waits for a code, and a pending session may read itself and nothing else; a recovery
 // code passes it once; recovery codes can be made again only by a session that passed verification, with a fresh code.
 func TestTwoStepVerification(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	old := f.owner()
 	secret, verified, codes := f.totpSetup(old)
@@ -186,6 +191,7 @@ func TestTwoStepVerification(t *testing.T) {
 // TestTwoStepVerificationStaysOn: once it is on, confirming another secret is a 409, as the contract says, and changes
 // nothing: the first secret and the recovery codes still work, and the session that asked is still the user's.
 func TestTwoStepVerificationStaysOn(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	secret, verified, codes := f.totpSetup(f.owner())
 	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(verified))
@@ -207,6 +213,7 @@ func TestTwoStepVerificationStaysOn(t *testing.T) {
 // TestLevelsAreEnforced: an operation that needs two-step verification refuses a session that proved only the
 // password, with the code that says why, before it looks at the body.
 func TestLevelsAreEnforced(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	rec := f.do(http.MethodPost, "/auth/recovery-codes", `{"code":"123456"}`, as(f.owner()))
 	expect(t, "regenerating with a password session", rec, http.StatusForbidden, consoleapi.ErrorCodeMfaRequired)

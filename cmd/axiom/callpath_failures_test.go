@@ -15,6 +15,7 @@ import (
 // The node permits three attempts. A refusal retries the same endpoint with another credential and, once every credential
 // of the group rests, moves to the next endpoint; a rate limit or server error moves to another endpoint. None delivered content to the client.
 func TestANodeFallsOverUpstreamFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		statuses []int
@@ -29,6 +30,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 		{"all fail", []int{401, 429, 503}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			w := newCallWorld(t)
 			w.seedFailover()
 			w.supplier.mu.Lock()

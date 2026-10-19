@@ -22,6 +22,7 @@ import (
 // ones the reserve promised. The node refuses to start and names the variable and both sizes, not the string; a pool
 // of exactly that size starts.
 func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
+	t.Parallel()
 	url := pgtest.New(t, modules()...).App
 	gate := gateway.DefaultConfig().PoolSize
 	base := []string{
@@ -71,6 +72,7 @@ func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
 // TestServeRefusesBadKeysAndSettings: the key files and the new settings are checked before the database is touched,
 // every problem named at once, and no value or path quoted.
 func TestServeRefusesBadKeysAndSettings(t *testing.T) {
+	t.Parallel()
 	// The database is never reached: every case fails first.
 	database := "AXIOM_DATABASE_URL=postgres://planted-value:planted-value@" + net.JoinHostPort("127.0.0.1", "1") + "/planted-value"
 	good := keyFile(t, 'g')

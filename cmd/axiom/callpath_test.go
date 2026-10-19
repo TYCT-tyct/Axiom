@@ -16,6 +16,7 @@ import (
 // have tried them — and its end is written too, with no attempt's cost row, since nothing settled it. The same
 // transaction is one commit, whichever module's rows it holds (docs/architecture.md 规则 5).
 func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
+	t.Parallel()
 	f := newChainFixtureWith(t, billing.Config{
 		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond,
 	}, suppliers.CallWrites{})

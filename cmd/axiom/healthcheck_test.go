@@ -44,6 +44,7 @@ func TestHealthcheck(t *testing.T) {
 // TestHealthcheckTrustsOnlyTheNode: a redirect to a page that answers 200 is not readiness, and a node that accepts
 // the connection but never answers fails the check within its own limit.
 func TestHealthcheckTrustsOnlyTheNode(t *testing.T) {
+	t.Parallel()
 	var followed atomic.Bool
 	mux := http.NewServeMux()
 	mux.Handle("/readyz", http.RedirectHandler("/elsewhere", http.StatusFound))

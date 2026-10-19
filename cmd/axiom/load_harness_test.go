@@ -19,6 +19,7 @@ import (
 // that miscounts, or paces a stream wrongly, would put wrong numbers in the report with nothing to show it.
 
 func TestLoadQuantile(t *testing.T) {
+	t.Parallel()
 	hundred := make(latencies, 100)
 	for i := range hundred {
 		hundred[100-1-i] = time.Duration(i+1) * time.Millisecond // shuffled in effect: descending
@@ -50,6 +51,7 @@ func TestLoadQuantile(t *testing.T) {
 // settle tail is the time from the upstream's last byte to the client's, and neither is taken from a call that lacks
 // the upstream's side.
 func TestSummarizeSortsCallsByWhatHappenedToThem(t *testing.T) {
+	t.Parallel()
 	t0 := time.Now()
 	reached := stamp{received: t0, firstWrite: t0.Add(30 * time.Millisecond), endWrite: t0.Add(500 * time.Millisecond), deltas: 4}
 	cut := reached
@@ -88,6 +90,7 @@ func TestSummarizeSortsCallsByWhatHappenedToThem(t *testing.T) {
 }
 
 func TestChargeBounds(t *testing.T) {
+	t.Parallel()
 	seen := outcome{status: 200, done: true, seen: true, up: stamp{deltas: 4}}
 	unfinished := outcome{status: 200, bodyBytes: 400}
 	owed := seen
@@ -104,6 +107,7 @@ func TestChargeBounds(t *testing.T) {
 // TestChargeMismatchesFindsWhatTheTotalHides: each completed call must have been charged its own price, a cost-pending
 // one included; a missing charge is not made up by another call's extra one, and a call with no row is wrong.
 func TestChargeMismatchesFindsWhatTheTotalHides(t *testing.T) {
+	t.Parallel()
 	call := func(id string, pending bool) outcome {
 		return outcome{request: id, status: 200, done: true, seen: true, pending: pending, up: stamp{deltas: 4}}
 	}
@@ -128,6 +132,7 @@ func TestChargeMismatchesFindsWhatTheTotalHides(t *testing.T) {
 // TestAnUnexpectedFailureFailsAcceptance: a 500 among calls that otherwise went well is a failed scenario, while a
 // refusal for lack of room, a cancel and a cut are not.
 func TestAnUnexpectedFailureFailsAcceptance(t *testing.T) {
+	t.Parallel()
 	reached := stamp{deltas: 4}
 	cut := reached
 	cut.cut = true
@@ -158,6 +163,7 @@ func charKind(c byte) string {
 }
 
 func TestUnknownKeyKeepsItsShape(t *testing.T) {
+	t.Parallel()
 	text := "aaaa-1111-aaaa-1111-AAAA-1111-aaaa-1111" // lower case, digits and capitals, in the places a key has them
 	got := unknownKey(text, func(n int) int { return n - 1 })
 	if got == text || len(got) != len(text) || got[:20] != text[:20] {
@@ -171,6 +177,7 @@ func TestUnknownKeyKeepsItsShape(t *testing.T) {
 }
 
 func TestLoadRowHasAsManyCellsAsTheHeader(t *testing.T) {
+	t.Parallel()
 	cells := func(line string) int { return strings.Count(strings.TrimSpace(line), "|") - 1 }
 	header, rule, _ := strings.Cut(loadHeader, "\n")
 	if cells(rule) != cells(header) {
@@ -190,6 +197,7 @@ func TestLoadRowHasAsManyCellsAsTheHeader(t *testing.T) {
 }
 
 func TestStatusBytes(t *testing.T) {
+	t.Parallel()
 	status := "Name:\tx\nVmHWM:\t  2048 kB\nVmRSS:\t   1024 kB\nVmSwap:\t0 MB\n"
 	for name, tc := range map[string]struct {
 		field   string
@@ -230,6 +238,7 @@ func post(t *testing.T, ctx context.Context, u *loadUpstream, id uint64) *http.R
 // token, and ends with a usage that counts them (the charge of a completed call is then known); the stamps order the
 // call's moments, and a stream told to end at an instant does not end before it.
 func TestLoadUpstreamPacesAndReportsCoherentUsage(t *testing.T) {
+	t.Parallel()
 	endAt := time.Now().Add(400 * time.Millisecond)
 	u := newLoadUpstream(t, streamShape{firstToken: 50 * time.Millisecond, every: 10 * time.Millisecond, length: 50 * time.Millisecond, endAt: endAt})
 	start := time.Now()
@@ -274,6 +283,7 @@ func checkStamp(t *testing.T, u *loadUpstream, endAt time.Time) {
 // TestLoadUpstreamCuts and TestLoadUpstreamSeesCancels: a stream the upstream breaks off ends in a read error and is stamped cut, and a
 // caller that goes away is counted cancelled, with the moment.
 func TestLoadUpstreamCuts(t *testing.T) {
+	t.Parallel()
 	cutting := newLoadUpstream(t, streamShape{every: time.Hour})
 	cutting.setShape(streamShape{every: 5 * time.Millisecond, length: 100 * time.Millisecond, cutRate: 1})
 	resp := post(t, t.Context(), cutting, 1)
@@ -287,6 +297,7 @@ func TestLoadUpstreamCuts(t *testing.T) {
 }
 
 func TestLoadUpstreamSeesCancels(t *testing.T) {
+	t.Parallel()
 	waiting := newLoadUpstream(t, streamShape{every: 20 * time.Millisecond, length: time.Minute})
 	ctx, cancel := context.WithCancel(t.Context())
 	resp := post(t, ctx, waiting, 2)
@@ -360,6 +371,7 @@ func dial(t *testing.T, addr string) net.Conn {
 }
 
 func TestFaultProxyCutsAndRestores(t *testing.T) {
+	t.Parallel()
 	p := newFaultProxy(t, echoServer(t))
 	live := dial(t, p.addr())
 	if err := roundTrip(live); err != nil {
@@ -380,6 +392,7 @@ func TestFaultProxyCutsAndRestores(t *testing.T) {
 }
 
 func TestCPUTicks(t *testing.T) {
+	t.Parallel()
 	busy, total, err := parseMachineTicks("cpu  100 0 50 800 40 5 5 0 0 0" + string(rune(10)) + "cpu0 1 2 3")
 	if err != nil || busy != 160 || total != 1000 { // user nice system idle iowait irq softirq steal: busy is all but idle and iowait
 		t.Errorf("machine ticks: busy %d, total %d, %v; want 160 of 1000", busy, total, err)

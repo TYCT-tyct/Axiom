@@ -30,6 +30,7 @@ const (
 // the priority tier, web searches reserved up to their limit, one whose reply is free, one refused for credit and one for
 // a model nothing serves, and a second node that leaves the first one's holder alone.
 func TestANodeServesModelCalls(t *testing.T) {
+	t.Parallel()
 	w := newCallWorld(t)
 	n := w.start()
 
@@ -314,6 +315,7 @@ func (w *callWorld) checkBalanced() {
 // not through its compressor, which gzips the large JSON answers it is given; everything else still reaches the
 // console. A large answer is what tells the two apart: the compressor leaves small ones alone.
 func TestModelCallsAreMountedBesideTheConsole(t *testing.T) {
+	t.Parallel()
 	big := []byte(`{"text":"` + strings.Repeat("x", 4096) + `"}`)
 	answering := func(who string) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -345,6 +347,7 @@ func TestModelCallsAreMountedBesideTheConsole(t *testing.T) {
 // any more, so its next heartbeat ends the node (with an error that says why) instead of leaving it to answer every
 // call with a failure. The process manager starts it again with a holder of its own.
 func TestANodeExitsWhenItsHolderIsReaped(t *testing.T) {
+	t.Parallel()
 	w := newCallWorld(t)
 	n := w.start()
 	if err := pgtest.Run(t.Context(), w.database.Superuser, "UPDATE billing.holders SET reaped_at = clock_timestamp() WHERE reaped_at IS NULL"); err != nil {

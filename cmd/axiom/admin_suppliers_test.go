@@ -59,6 +59,7 @@ func (f supplierFixture) group(supplier, ref string, present bool) string {
 // TestCreateSupplier: a supplier is connected `connecting`, with its origin as stored, and is listed and read back; the
 // login is nowhere in what comes back, in the audit entry or in the database as written.
 func TestCreateSupplier(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	made := f.connect()
 	want := adminapi.Supplier{
@@ -94,6 +95,7 @@ func TestCreateSupplier(t *testing.T) {
 // TestCreateSupplierKeys: the same request again, after a lost response, connects nothing more and answers the same;
 // the key of another request is refused; the same origin and account under a new key is a conflict.
 func TestCreateSupplierKeys(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	key := newKey()
 	rec := f.change(f.s, http.MethodPost, "/suppliers", createBody, key)
@@ -122,6 +124,7 @@ func TestCreateSupplierKeys(t *testing.T) {
 // TestCreateSupplierRefusals: an origin the outbound client refuses, a kind that cannot be connected, and a login of
 // members the kind does not take are refused, each as the contract says, and nothing is made.
 func TestCreateSupplierRefusals(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	for name, c := range map[string]struct {
 		change func(string) string
@@ -155,6 +158,7 @@ func TestCreateSupplierRefusals(t *testing.T) {
 // TestSupplierLifecycle: a supplier in use is paused and resumed, its unit value confirmed, its login replaced and
 // removed, each answered with the supplier and audited once; a change the status does not allow is a conflict.
 func TestSupplierLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	made := f.connect()
 	path := "/suppliers/" + made.Id
@@ -198,6 +202,7 @@ func TestSupplierLifecycle(t *testing.T) {
 // TestSupplierNotFound: an ID that is none, one that is not written the way the API writes it, and one the platform
 // lacks, are the same 404 in a path.
 func TestSupplierNotFound(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	for _, id := range []string{uuid.NewV7().String(), "not-an-id", strings.ToUpper(uuid.NewV7().String())} {
 		expectAdmin(t, "getSupplier "+id, f.do(http.MethodGet, "/suppliers/"+id, "", as(f.s)), http.StatusNotFound, codeNotFound)
@@ -208,6 +213,7 @@ func TestSupplierNotFound(t *testing.T) {
 // TestDetectSupplier: an address the outbound client refuses is a 422 and no probe is made; a session may ask ten times
 // a minute and the eleventh is a 429 that says when to come back.
 func TestDetectSupplier(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	post := func() *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, "/suppliers/detections", `{"origin":"https://10.0.0.1"}`, as(f.s))
@@ -224,6 +230,7 @@ func TestDetectSupplier(t *testing.T) {
 
 // TestWindowLimiter: n requests of a key in a window, the next refused with the time to wait, and the window slides.
 func TestWindowLimiter(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	l := newWindowLimiter(2, time.Minute, func() time.Time { return now })
 	a, b := uuid.NewV7(), uuid.NewV7()
@@ -255,6 +262,7 @@ func TestWindowLimiter(t *testing.T) {
 // TestCreateSupplierRetryAfterTheNetworkChanged: a connection that went through is answered again to its retry, though
 // the site's address would be refused now; a new request for it is refused.
 func TestCreateSupplierRetryAfterTheNetworkChanged(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	if _, err := c.site(siteArgs...); err != nil {
 		t.Fatal(err)

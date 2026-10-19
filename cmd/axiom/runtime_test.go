@@ -97,6 +97,7 @@ func TestMigrateConfiguration(t *testing.T) {
 // TestMigrateRuns: with valid settings migrate brings the database up and, as the database is already current, finds
 // nothing to do, and one against a server that never answers ends within the connect timeout.
 func TestMigrateRuns(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	if err := migrate(t.Context(), []string{"AXIOM_MIGRATE_DATABASE_URL=" + database.Migrator, "AXIOM_MIGRATE_TIMEOUT=2m", "AXIOM_MIGRATE_CONNECT_TIMEOUT=5s"}); err != nil {
 		t.Fatal(err)

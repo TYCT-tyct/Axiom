@@ -43,6 +43,7 @@ func answer(t *testing.T, request string) (rec *httptest.ResponseRecorder, logs 
 // TestPublicRoutesAnswerWithTheErrorBody: every failure of the generated code reaches the client as the contract's
 // error body, and a handler's error reaches the log but not the client.
 func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, request string
 		status        int
@@ -70,6 +71,7 @@ func TestPublicRoutesAnswerWithTheErrorBody(t *testing.T) {
 // TestHandlerErrorThroughARealRequest: a request the guard admits fails in the handler on a real database error; the
 // client gets the contract's bare 500, and the log has the query's error but the answer does not.
 func TestHandlerErrorThroughARealRequest(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	f.run(`ALTER TABLE accounts.api_keys RENAME TO api_keys_missing`)
@@ -163,6 +165,7 @@ func testFrontend(t *testing.T) *webui.Frontend {
 // TestPublicRoutesServePagesBesideTheAPI: the pages answer what the API does not claim, and an API path nothing claims
 // stays a 404 for the caller, even to a browser, not the website's entry page with a 200.
 func TestPublicRoutesServePagesBesideTheAPI(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, target, accept string
 		status               int
@@ -190,6 +193,7 @@ func TestPublicRoutesServePagesBesideTheAPI(t *testing.T) {
 // TestConsoleAnswersAreCompressed: a large answer of the console's API is gzipped for a client that accepts it, and a
 // small one is not.
 func TestConsoleAnswersAreCompressed(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		version, accept string
 		wantEncoding    string
@@ -214,6 +218,7 @@ func TestConsoleAnswersAreCompressed(t *testing.T) {
 // path takes, however a page would answer it, and a path no route has is a 404. Every answer outside the API, the
 // routing's own 405 and the redirect included, carries the security headers.
 func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		method, target, allow string
 		status                int
@@ -244,6 +249,7 @@ func TestPublicRoutesKeepTheAPIsMethodErrors(t *testing.T) {
 // TestPublicRoutesSecureEveryAnswer: the answer the router itself gives for a path it cleans, a redirect, carries the
 // security headers like any other, because they are set outside the router.
 func TestPublicRoutesSecureEveryAnswer(t *testing.T) {
+	t.Parallel()
 	routes := publicRoutes(consoleAPI{version: "v"}, &guard{contract: loadedContract(t)}, testFrontend(t), slog.New(slog.DiscardHandler))
 	rec := httptest.NewRecorder()
 	routes.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/console//keys", nil))
