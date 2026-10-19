@@ -57,6 +57,8 @@ trap 'exit 130' INT
 echo "== 1/9 write the environment file and clear a stack a killed run left behind"
 docker compose --project-name "$project" down --volumes --timeout 5 > /dev/null 2>&1 || true
 rm -f "$env_file"
+# Everything this script writes holds a password or a private key, so it is all owner-only by default; the one exception is
+# the binary below, whose mode is set after the build.
 umask 077
 s3_password=$(openssl rand -hex 16)
 cat > "$env_file" <<EOF
@@ -80,6 +82,9 @@ EOF
 echo "== 2/9 build the images just up builds, plus the backup job's"
 just web-embed
 CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
+# Under the umask above the binary is mode 0700, and the image runs it as another user: without this the container fails
+# at start with `exec: "/axiom": permission denied`.
+chmod 0755 deploy/bin/axiom
 compose --profile ops build
 
 echo "== 3/9 generate the two identities, and put their recipients in the environment file"
