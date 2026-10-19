@@ -378,6 +378,18 @@ class Flaky(unittest.TestCase):
             with self.subTest(tests=tests, unexplained=unexplained, flaky=flaky):
                 self.assertEqual(train.covered(tests, unexplained, flaky), expected)
 
+    def test_a_failed_build_offers_a_log_to_read_only_when_the_go_tests_failed(self):
+        job = lambda name, conclusion, id=1: {"id": id, "name": name, "conclusion": conclusion}
+        cases = [([job("go-test", "failure", 7), job("build", "failure")], 7),
+                 ([job("go-test", "failure", 7)], 7),
+                 ([job("build", "failure")], None),  # no test failed: nothing a flaky entry could excuse
+                 ([job("go-test", "failure"), job("web", "failure")], None),
+                 ([job("go-test", "success"), job("build", "success")], None)]
+        for jobs, expected in cases:
+            with self.subTest(jobs=[(j["name"], j["conclusion"]) for j in jobs]):
+                found = train.test_job_failing(jobs)
+                self.assertEqual(found and found["id"], expected)
+
     def test_the_repository_flaky_list_parses(self):
         train.parse_flaky((Path(__file__).parents[1] / train.FLAKY).read_text(encoding="utf-8"))
 

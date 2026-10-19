@@ -6,9 +6,14 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
-# Run every check the CI build job runs, except one run of each benchmark: `check-all` adds those. This is the local
-# pre-push gate, so it keeps `secrets` and `docs`, which CI's build leaves to workflow.yml (see `check-ci`)
-check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
+# Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
+# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to workflow.yml (see
+# `check-ci`)
+check: docs check-static test secrets web
+
+# The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
+# `script-tests`) plus `secrets` on a train or main
+check-static: modules adapters-removable scope api tidy generated lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -86,8 +91,8 @@ test: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
     go test -C tools -race ./...
 
-# Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a pull request runs
-# bench-compare instead, which compares allocations without -race.
+# Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
+# instead, which compares allocations without -race. A pull request runs neither.
 bench-once: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
 
@@ -102,9 +107,10 @@ load scale="1" only="": web-embed
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
-# What CI's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's required `secrets`
-# and `docs` jobs already run on every PR and main push. `script-tests` is the half of `docs` workflow.yml does not run.
-check-ci: script-tests modules adapters-removable scope api tidy generated lint deadcode test vuln web
+# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's
+# required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
+# `docs` workflow.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
+check-ci: script-tests check-static test web
 
 # The checks that read Markdown: the docs tests (including the pull request template), module boundaries, and the pg
 # module table. A Markdown-only PR runs this instead of the full build.
