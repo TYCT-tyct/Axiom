@@ -24,10 +24,10 @@
 
 ## 客户端与连接
 
-- **客户端**：[valkey-go](https://github.com/valkey-io/valkey-go) v1.0.78（2026-09-15），Apache-2.0，Valkey 项目自己维护；运行时只依赖 `golang.org/x/sys`。固定版本，升级前读变更说明。depguard 只许 `internal/platform/kv` 引用它；`billing`、`payments` 不得引用 `kv`（钱不进缓存，由 `tools/checkmodules` 拦）。选它而不是 go-redis 的理由见「决策与理由」。
+- **客户端**：[valkey-go](https://github.com/valkey-io/valkey-go) v1.0.78（2026-09-15），Apache-2.0，Valkey 项目自己维护；运行时只依赖 `golang.org/x/sys`。固定版本，升级前读变更说明。depguard 只许 `internal/platform/kv` 引用它；K1 另加一条 depguard 规则，禁止 `internal/billing`、`internal/payments` 引用 `kv`（钱不进缓存；`tools/checkmodules` 按模块判断，所有模块都能引用 platform，管不到它的子包）。选它而不是 go-redis 的理由见「决策与理由」。
 - **服务端**：`valkey/valkey:9.1.2-alpine`，部署和测试用同一个标签。
-- **连接**：自动流水线，并发的命令共用少量连接（默认每个实例 4 条），不用按并发数配连接池（sub2api 配 1024 条，`repository/redis.go:23`、`config.go:2241`）。关掉客户端缓存（`DisableCache`，不发 `CLIENT TRACKING`）和自动重试（`DisableRetry`：脚本会加计数，不能重发；一次失败只计一次，直接走兜底）。建连 1s；一条连接 1s 内收不到回复就关掉重连（`ConnWriteTimeout`，默认 10s 太长）。
-- **期限**：每次同步访问的期限是调用方 context 与 `kv.Timeout`（20ms，[路由的「容量感知」](../../../docs/domains/routing.md#容量感知)）中较早的一个。到期立即返回，连接不断：迟到的回复由客户端丢掉。登录也用同一个期限，Valkey 在同机房的正常往返在 1ms 以内，20ms 还没回就是它出了问题。
+- **连接**：总是流水线（`AlwaysPipelining`），并发的命令共用少量连接（默认每个实例 4 条），不用按并发数配连接池（sub2api 配 1024 条，`repository/redis.go:23`、`config.go:2241`）。不开它时，没有并发的命令走同步路径，期限一到就关掉连接（v1.0.78 `pipe.go` 的 `syncDo`），低流量时每次超时都要重连。关掉客户端缓存（`DisableCache`，不发 `CLIENT TRACKING`）和自动重试（`DisableRetry`：脚本会加计数，不能重发；一次失败只计一次，直接走兜底）。建连 1s；一条连接 1s 内收不到回复就关掉重连（`ConnWriteTimeout`，默认 10s 太长）。
+- **期限**：每次同步访问的期限是调用方 context 与 `kv.Timeout`（20ms，[路由的「容量感知」](../../../docs/domains/routing.md#容量感知)）中较早的一个。到期立即返回，连接不断：迟到的回复由客户端的一个 goroutine 收下丢掉（`pipe.go` 的 `abort`），它至多活到 `ConnWriteTimeout`（1s），熔断打开后不再产生。登录也用同一个期限，Valkey 在同机房的正常往返在 1ms 以内，20ms 还没回就是它出了问题。
 - **认证**：Valkey 的 ACL 用户 `axiom`，`default` 用户关闭。`AXIOM_VALKEY_URL` 写成 `valkey://axiom:<密码>@valkey:6379`；同一台机器上走 compose 的内部网络，不加 TLS（与数据库的 `sslmode=disable` 相同）；跨机器（M3）用 `valkeys://`，按系统根证书校验服务端，自签 CA 的变量随那个部署加入。其他写法（`redis://` 等）不接受，一种写法。密码只在这个变量里，错误只报变量名，不带取值。
 - **权限**：`axiom` 用户只能碰 `ax:*` 的键，命令只放行 `hello`、`auth`、`ping`、`client|setinfo`、`info`、`get`、`set`、`del`、`incr`、`pexpire`、`evalsha`、`eval`（脚本里执行的命令也按这个用户检查）。K1 的测试以这个用户跑完全部用法，出现 NOPERM 即失败；`FLUSHALL`、`KEYS`、`CONFIG` 和 `ax:*` 之外的键必须被拒。
 
@@ -126,7 +126,7 @@ compose 里 `maxmemory` 默认 256 MB、`maxmemory-policy allkeys-lru`，不持�
 
 | 不变量 | 靠什么保证 |
 |---|---|
-| 钱和授权状态不进 Valkey | depguard 与 `tools/checkmodules`：只有 `platform/kv` 引用客户端，`billing`、`payments` 不引用 `kv`；上文「放什么、不放什么」由评审核对 |
+| 钱和授权状态不进 Valkey | depguard：只有 `platform/kv` 引用客户端，`billing`、`payments` 不引用 `kv`（K1 加的规则）；上文「放什么、不放什么」由评审核对 |
 | 每个键都有到期时间 | 计数在同一个脚本里 `INCR` 加 `PEXPIRE`，桶用 `PXAT`，粘性用 `SET … PX`；没有不带到期的写入。测试：各用法跑完后 `SCAN` 全部键，`PTTL` 都大于 0 |
 | 一次模型调用至多一次同步往返，在准入之前；排队醒来为 0 | 只有预检发一批；测试按 `axiom.kv.calls` 数：一次调用 1，排队后醒来仍是 1 |
 | 同步访问至多等 `kv.Timeout`，熔断打开时不做 I/O | 期限由 `kv` 统一加，调用方给不了更长的；测试见上文「超时」 |
@@ -155,7 +155,7 @@ E4-2 的业务限额建立在 K1 的 `count` 脚本上，加维度、不加往�
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
-| Valkey 客户端用 valkey-go，固定 v1.0.78 | 期限到时立即返回且不断开连接，迟到的回复由客户端丢掉；20ms 期限在 Valkey 变慢时会大量触发，断连接只会把变慢放大成重连风暴。自动流水线让 5000 路并发共用几条连接，不用调连接池。Valkey 项目自己维护，运行时只依赖 `x/sys`；内置 Sentinel，M3 不换客户端。代价：new-api、sub2api 都用 go-redis，它们的代码不能逐行对照 | go-redis v9（v9.22.0 实读）：context 到期被当作坏连接关掉（`error.go` 的 `isBadConn`），context 期限要另开 `ContextTimeoutEnabled`；默认对每条新连接尝试 Redis Cloud 的维护通知（`maintnotifications` 默认 `ModeAuto`）；多 xxhash、xxh3、uber atomic 等依赖。redigo：没有自动流水线，要按并发数配连接池 |
+| Valkey 客户端用 valkey-go，固定 v1.0.78，总是流水线 | 流水线模式下期限到时立即返回且不断开连接，迟到的回复由客户端丢掉（同步路径会断开，所以开 `AlwaysPipelining`）；20ms 期限在 Valkey 变慢时会大量触发，断连接只会把变慢放大成重连风暴。自动流水线让 5000 路并发共用几条连接，不用调连接池。Valkey 项目自己维护，运行时只依赖 `x/sys`；内置 Sentinel，M3 不换客户端。代价：new-api、sub2api 都用 go-redis，它们的代码不能逐行对照 | go-redis v9（v9.22.0 实读）：context 到期被当作坏连接关掉（`error.go` 的 `isBadConn`），context 期限要另开 `ContextTimeoutEnabled`；默认对每条新连接尝试 Redis Cloud 的维护通知（`maintnotifications` 默认 `ModeAuto`）；多 xxhash、xxh3、uber atomic 等依赖。redigo：没有自动流水线，要按并发数配连接池 |
 | 不持久化，`allkeys-lru`，内存设上限 | 三种数据丢了都有界（各用途的「恢复」）；持久化只换来重启后少一次突发，却要卷和磁盘写。每个键都有到期时间，淘汰只是提前到期；按最近使用淘汰留下的是正在用的计数和被攻击的桶 | RDB 或 AOF：多一个卷和写盘，快照本身也是旧的；`volatile-ttl`：先淘汰到期最早的，正好是最该留的限流计数；`noeviction`：满了写入失败，全体走兜底 |
 | 核心节点数 N 是静态配置 `AXIOM_CORE_NODES` | 兜底要按 N 等分，「多核心没有 Valkey 不启动」也要知道 N；还没有节点登记，配置是最小的机制 | 在 Valkey 里登记存活的节点：Valkey 不可用时恰恰读不到，启动时连不上就不知道 N，还多一个后台循环；数 billing 的持有者：跨模块，持有者也不区分节点角色 |
 | 时间由节点传入脚本，不用 Valkey 的 `TIME` | 键名要在调用前算出（窗口序号），测试才能传入时间而不等待（[检查清单的「时序」](../../../CONTRIBUTING.md#检查清单)）；节点之间的时钟差是毫秒级，对一分钟的窗口、六秒一次的回填可以忽略 | 脚本里读 `TIME`：窗口序号在脚本里算出的键没有事先声明，测试只能等真实时间 |
