@@ -52,14 +52,8 @@ func rejectionOf(body []byte, origin, key string) *protocol.Rejection {
 	if jsonx.Unmarshal(body, &e) != nil || e.Error.Message == "" {
 		return nil
 	}
-	hide := []string{key}
-	if u, err := url.Parse(origin); err == nil {
-		hide = append(hide, u.Host, u.Hostname())
-		if _, parent, ok := strings.Cut(u.Hostname(), "."); ok && strings.Contains(parent, ".") && net.ParseIP(u.Hostname()) == nil {
-			hide = append(hide, parent) // the supplier's own domain: a message may name it without the subdomain
-		}
-	}
-	clean := func(s string) string { return cleanText(s, hide) }
+	hosts := hostNames(origin)
+	clean := func(s string) string { return cleanText(s, key, hosts) }
 	r := &protocol.Rejection{Message: clean(e.Error.Message), Param: clean(textOf(e.Error.Param))}
 	if typ := textOf(e.Error.Type); knownTypes[typ] {
 		r.Type = typ
@@ -84,18 +78,43 @@ func textOf(v any) string {
 	return ""
 }
 
-// cleanText takes out of s the request id, every address, the strings in hide (the credential, the supplier's host), the
-// name of the software behind the supplier and what looks like a credential, and cuts it to maxRejectionText.
-func cleanText(s string, hide []string) string {
+// hostNames are the names a message may call the supplier by: the host of its origin (with the port), the host, and the
+// domain names the host belongs to, longest first. Every suffix of two labels or more counts, so the supplier's own domain
+// is covered however many subdomains the origin has (api.us.relay.example hides us.relay.example and relay.example). The
+// public suffix list would name the registrable domain exactly, but golang.org/x/net is not a dependency, and the
+// suffixes it would add to this list (co.uk) are only over-masked, never leaked. An IP address has no parent domain.
+func hostNames(origin string) []string {
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return nil
+	}
+	names := []string{u.Host, u.Hostname()}
+	if net.ParseIP(u.Hostname()) == nil {
+		labels := strings.Split(u.Hostname(), ".")
+		for i := 1; i+1 < len(labels); i++ {
+			names = append(names, strings.Join(labels[i:], "."))
+		}
+	}
+	return names
+}
+
+// cleanText takes out of s the request id, the credential the call was made with, every address, the supplier's names,
+// what looks like another credential and the name of the software behind the supplier, in that order, and cuts it to
+// maxRejectionText. The credential goes first and whole: the patterns after it would otherwise cut it in pieces that
+// neither it nor they match any more.
+func cleanText(s, key string, hosts []string) string {
 	s = requestID.ReplaceAllString(s, "")
-	s = relayBrand.ReplaceAllString(s, "[hidden]")
+	if len(key) >= 4 {
+		s = replaceFold(s, key, "[hidden]")
+	}
 	s = addressPattern.ReplaceAllString(s, "[address]")
-	for _, h := range hide {
+	for _, h := range hosts {
 		if len(h) >= 4 { // a shorter string would cut words the client needs
 			s = replaceFold(s, h, "[hidden]")
 		}
 	}
 	s = secretPattern.ReplaceAllString(s, "[hidden]")
+	s = relayBrand.ReplaceAllString(s, "[hidden]")
 	if len(s) > maxRejectionText {
 		s = s[:maxRejectionText]
 		for !utf8.ValidString(s) {

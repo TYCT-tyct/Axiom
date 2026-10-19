@@ -81,3 +81,27 @@ func TestRejectionOfIsBounded(t *testing.T) {
 		t.Errorf("a message of %d bytes", len(long))
 	}
 }
+
+// TestRejectionOfHidesTheSupplierWhateverItsOrigin: the supplier's domain is hidden however many subdomains its origin has,
+// and the credential whole before any pattern can cut it.
+func TestRejectionOfHidesTheSupplierWhateverItsOrigin(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, origin, key, message, want string
+	}{
+		{"a parent of a deep subdomain", "https://api.us.relay.example", "x", "contact support@relay.example", "contact support@[hidden]"},
+		{"the middle of three", "https://api.us.relay.example", "x", "see us.relay.example", "see [hidden]"},
+		{"the host with a port", "https://api.relay.example:8443", "x", "api.relay.example:8443 said no", "[hidden] said no"},
+		{"a two-label host", "https://relay.example", "x", "write to ops@relay.example", "write to ops@[hidden]"},
+		{"an IP has no parent", "https://10.20.30.40:3000", "x", "20.30.40 is not 10.20.30.40", "20.30.40 is not [hidden]"},
+		{"a credential with the software's name in it", "https://relay.example", "sk-newapi-channel-secret", "bad key sk-newapi-channel-secret", "bad key [hidden]"},
+		{"a credential in a sentence with the name", "https://relay.example", "sk-newapi-channel-secret", "new-api rejected sk-newapi-channel-secret", "[hidden] rejected [hidden]"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := rejectionOf([]byte(`{"error":{"message":"`+c.message+`"}}`), c.origin, c.key)
+			if r == nil || r.Message != c.want {
+				t.Errorf("got %+v, want %q", r, c.want)
+			}
+		})
+	}
+}

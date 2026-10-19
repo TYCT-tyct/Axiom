@@ -171,7 +171,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 移除之后库里没有这家供应商的密文，用它做过的尝试仍能结算 | `Admin.Remove` 一个事务：登录行删除、凭证的四个密文列清空且状态为 `erased`（表的 CHECK 拒绝"已清除却还有密文"），行保留；测试：移除后登录行为 0、凭证全部清空、审计记录列出 key 的 ID 而不含密文、下一次 `Reload` 后不在路由里、之后仍能写 `attempt_costs`、再移除一次不改代次也不重复审计 |
 | 没有余额的供应商不进路由 | `ListRoutable` 要求 `balance_native > 0`；测试：没读过、为 0、透支的不进，为正的进 |
 | 失败不带对方的文本，没把握不算免费 | `Cause` 的成员；`adaptertest` |
-| 对方拒绝请求本身时，它的话只给这次回复用，且已去掉能指向对方的内容 | 只有 `Send` 在 `ScopeRequest` 的失败上填 `Failure.Rejection`（`rejectionOf`），适配器的 `Classify` 仍不留文字；去掉所有网址、本次用的凭证、对方的域名（含主域名）、形似凭证的串、`(request id: …)`、new-api / sub2api 的名字，`type` 只留 OpenAI、Anthropic 的通用取值，每项至多 2 KiB；`TestRejectionOfKeepsTheWordsAndNotTheSupplier`、`TestARefusedRequestKeepsWhatTheSupplierSaidOfIt` |
+| 对方拒绝请求本身时，它的话只给这次回复用，且已去掉能指向对方的内容 | 只有 `Send` 在 `ScopeRequest` 的失败上填 `Failure.Rejection`（`rejectionOf`），适配器的 `Classify` 仍不留文字；去掉所有网址、本次用的凭证、对方的域名及每一级上级域名（`hostNames`，两段以上）、先整串遮蔽的本次凭证、形似凭证的串、`(request id: …)`、new-api / sub2api 的名字，`type` 只留 OpenAI、Anthropic 的通用取值，每项至多 2 KiB；`TestRejectionOfKeepsTheWordsAndNotTheSupplier`、`TestARefusedRequestKeepsWhatTheSupplierSaidOfIt` |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`；`just adapters-removable`（现在对 new-api 真实生效） |
 | 一个供应商同一时刻最多一个同步任务在排队或运行 | 任务按参数唯一，状态含运行；测试：入队两次只插入一个，完成后能再入队；扫描三次只为到期、没人持有的供应商入队一个任务 |
 | 排队后被暂停或移除的供应商不被调用 | 取到租约后读状态，不在 `syncable` 里就结束；测试：入队后改为暂停、移除中、已移除、需处理，再跑任务，适配器没被打开、状态没动、租约已还 |

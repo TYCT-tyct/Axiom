@@ -95,7 +95,7 @@
   - `error_type` 的位置：Chat 在 `error.metadata.error_type`，Messages 在 `error.error_type`，Responses 在 `response.failed` 的顶层；Responses 在流开始之前出错时用 Chat 的外壳；Chat 流中途的出错块里的 `error` 也是同一个对象；
   - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字，我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
 - **上游拒绝请求本身（4xx）时，客户端读到上游的原话**：Claude Code 靠上游错误的原话自动恢复，例如推理签名被拒、`output_config.effort` 被拒，改写会让它们变成无法恢复的 400；new-api 也把上游的 `message`、`type`、`param`、`code` 原样交给客户端。我们交出上游错误对象里的这四项（OpenAI 和 Anthropic 的外壳都有 `error.message`，`type` 也同位置），去掉能指向供应商的内容后：
-  - **去掉的**：其中所有的网址（含文档链接）、本站调用它用的凭证、形似凭证的串（`sk-`、`ak-` 开头，`Bearer`，`api_key=`）、供应商自己的域名（含不带子域名的主域名）、new-api 附在文字后面的 `(request id: …)`、new-api、one-api、sub2api 这些软件的名字；每项最多 2 KiB；
+  - **去掉的**：其中所有的网址（含文档链接）、本站调用它用的凭证（先整串遮蔽，再处理其他模式，免得被切成碎片）、形似凭证的串（`sk-`、`ak-` 开头，`Bearer`，`api_key=`）、供应商自己的域名及它的每一级上级域名（两段以上，如 `api.us.relay.example` 连同 `us.relay.example`、`relay.example`；不引入公共后缀表，多遮蔽 `co.uk` 这类后缀只是多遮蔽，不会漏）、new-api 附在文字后面的 `(request id: …)`、new-api、one-api、sub2api 这些软件的名字；每项最多 2 KiB；
   - **`type` 只留通用的**：OpenAI、Anthropic 自己用的取值（`invalid_request_error`、`authentication_error`、`not_found_error` 等）；中转站软件自己的（new-api 的 `new_api_error`、sub2api 的 `scheduling_error`）不传，Chat、Responses 外壳改用统一的 `type`。名字里带软件名的 `code` 也不传；
   - **没有原话时**：上游的响应不是这种错误对象、或没有 `message`，用统一的说法；
   - **只用于这一次回复**：原话只进给客户端的响应，不进日志，也不进任何表（suppliers 的 `Failure` 只在这一处带它，`Cause` 仍不带任何文字）；
