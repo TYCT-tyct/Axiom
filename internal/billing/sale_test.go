@@ -144,8 +144,11 @@ func TestUnpriced(t *testing.T) {
 		{"a per-use item it lacks is the site's default", catalog.Reportable{Items: 1<<in | 1<<webSearch | 1<<codeExec}, catalog.Reportable{}},
 		{"a service tier it does not offer", catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}, catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}},
 		{"reasoning falls back to output", catalog.Reportable{Items: 1 << catalog.ItemReasoning}, catalog.Reportable{}},
-		{"both short", catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex},
-			catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex}},
+		{
+			"both short",
+			catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex},
+			catalog.Reportable{Items: 1 << catalog.ItemAudioIn, ServiceTiers: 1 << catalog.ServiceTierFlex},
+		},
 	} {
 		if got := Unpriced(s, tc.r); got != tc.want {
 			t.Errorf("%s: Unpriced = %+v, want %+v", tc.name, got, tc.want)
