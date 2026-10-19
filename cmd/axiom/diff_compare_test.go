@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json/v2" //nolint:depguard // reads what the two gateways answered; jsonx guards input from outside
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -46,7 +47,7 @@ func bodyLeaves(contentType, body string) []leaf {
 	case strings.HasPrefix(contentType, "text/event-stream"):
 		return nil // compared as events, by compareEvents
 	case json.Unmarshal([]byte(body), &doc) == nil:
-		return aliasReasoning(flatten("json", "json", doc))
+		return flatten("json", "json", doc)
 	default:
 		return []leaf{{"text", "text", body}}
 	}
@@ -336,9 +337,6 @@ func (f *chatFold) choices(choices any) {
 			switch x := v.(type) {
 			case string:
 				f.text(leafKey{"chat.choices[].delta." + k, at + ".delta." + k}, x)
-				if k == "reasoning_content" {
-					f.text(leafKey{"chat.choices[].delta." + reasoningText, at + ".delta." + reasoningText}, x)
-				}
 			case []any:
 				f.list(at+".delta."+k, "chat.choices[].delta."+k, k, x)
 			}
@@ -347,10 +345,6 @@ func (f *chatFold) choices(choices any) {
 }
 
 func (f *chatFold) text(k leafKey, piece string) { f.texts[k] += piece }
-
-// reasoningText names the leaf that holds a reply's reasoning_content, which the rule for new-api's newline in a streamed
-// thinking block is about.
-const reasoningText = "reasoning_text"
 
 // list joins the elements of a delta's list: a tool call is added up with the others of its index, with its arguments
 // decoded piece by piece and joined, the rest are listed in order.
@@ -388,15 +382,46 @@ func indexOf(m map[string]any) string {
 	return strconv.Itoa(int(n))
 }
 
-// aliasReasoning adds, for the reasoning_content of a message, a leaf under reasoningText, so that the text itself is
-// compared. Axiom writes the same text as reasoning too (gateway.md「转发规则」), which a rule excuses as the member new-api
-// lacks; counting it again here would double the text.
-func aliasReasoning(leaves []leaf) []leaf {
-	for _, l := range leaves {
-		if strings.HasSuffix(l.path, ".message.reasoning_content") {
-			prefix, _, _ := strings.Cut(l.at, ".message.")
-			leaves = append(leaves, leaf{"json.choices[].message." + reasoningText, prefix + ".message." + reasoningText, l.value})
+// reasoningNamesAgree checks what the reasoning_content rule leaves to Axiom (diff_rules_test.go): the reasoning of a Chat
+// reply is written under two names, and a client that reads only reasoning must get the text a client that reads only
+// reasoning_content gets. In a stream every delta is held to it, in a whole reply every message.
+func reasoningNamesAgree(r reply) error {
+	if strings.HasPrefix(r.header.Get("Content-Type"), "text/event-stream") {
+		for i, e := range parseEvents(string(r.body)) {
+			chunk, _ := e.doc.(map[string]any)
+			choices, _ := chunk["choices"].([]any)
+			for _, c := range choices {
+				choice, _ := c.(map[string]any)
+				if err := namesAgree(choice["delta"]); err != nil {
+					return fmt.Errorf("event %d: %w", i, err)
+				}
+			}
+		}
+		return nil
+	}
+	var doc struct {
+		Choices []struct {
+			Message any `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(r.body, &doc); err != nil {
+		return fmt.Errorf("a reply that is neither a stream nor JSON: %w", err)
+	}
+	for i, c := range doc.Choices {
+		if err := namesAgree(c.Message); err != nil {
+			return fmt.Errorf("choice %d: %w", i, err)
 		}
 	}
-	return leaves
+	return nil
+}
+
+// namesAgree holds when a message or delta has reasoning and reasoning_content with the same text, or neither.
+func namesAgree(v any) error {
+	m, _ := v.(map[string]any)
+	a, _ := m["reasoning"].(string)
+	b, _ := m["reasoning_content"].(string)
+	if a != b {
+		return fmt.Errorf("reasoning %q but reasoning_content %q", a, b)
+	}
+	return nil
 }

@@ -39,6 +39,9 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 			for _, d := range compareReplies(theirs, ours) {
 				explainOrFail(t, rules, c.name, d)
 			}
+			if err := reasoningNamesAgree(ours); err != nil {
+				t.Errorf("Axiom: %v", err)
+			}
 		})
 	}
 	for _, r := range rules {

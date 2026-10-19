@@ -134,7 +134,7 @@ func diffRules() []*diffRule {
 		rule(`json\.error\.(code|param|message)`, `(chat|responses|messages)-.*-missing-members`, axiomIs(missingMembersSaid),
 			"Axiom does not check that a request has its conversation: the supplier refuses it and the client reads the supplier's words (here the fake upstream's canned 400); new-api checks first and answers with its own"),
 		rule(`json\.choices\[\]\.message\.reasoning|chat\.choices\[\]\.delta\.reasoning`, "", newAPILacks,
-			"Axiom writes reasoning, OpenRouter's name, beside reasoning_content, new-api's and DeepSeek's, with the same text; the text itself is compared under reasoning_text (gateway.md「转发规则」)"),
+			"Axiom writes reasoning, OpenRouter's name, beside reasoning_content, new-api's and DeepSeek's, with the same text, which reasoningNamesAgree checks (gateway.md「转发规则」)"),
 
 		rule(`header\.(x-oneapi-request-id|x-new-api-version)`, "", axiomLacks,
 			"new-api names its request and its version; Axiom sends neither"),
@@ -168,7 +168,7 @@ func diffRules() []*diffRule {
 			"new-api's Responses-to-Chat conversion reports no reasoning tokens, Axiom passes the upstream's count on"),
 		rule(`json\.choices\[\]\.message\.tool_calls\[\]\.function\.arguments`, `chat-claude-tools-whole`, sameJSONText,
 			"Axiom builds a whole reply from the stream, so the arguments are the stream's text; new-api writes the object it was given again: the same document"),
-		rule(`chat\.choices\[\]\.delta\.reasoning_(text|content)`, `chat-claude-reasoning-stream`, newAPIAddsNewline,
+		rule(`chat\.choices\[\]\.delta\.reasoning_content`, `chat-claude-reasoning-stream`, newAPIAddsNewline,
 			"new-api ends the reasoning of a streamed thinking block with a newline"),
 		rule(`sse\[ping\]`, "", values(`{"type":"ping"}`, absent),
 			"nothing is sent before the first content, and a ping before it is dropped (gateway.md「保活」)"),
