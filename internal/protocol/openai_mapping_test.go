@@ -19,6 +19,7 @@ func TestOpenAIOverlapAndImages(t *testing.T) {
 				invalid                                     bool
 			}{
 				{name: "overlap", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80}}`, read: 80, write: 80},
+				{name: "overlap with audio", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80,"audio_tokens":10}}`, read: 80, write: 80},
 				{name: "disjoint", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30}}`, input: 50, read: 20, write: 30},
 				{name: "images and text", body: `{"input_tokens":100,"input_tokens_details":{"text_tokens":90,"image_tokens":10},"output_tokens":50,"output_tokens_details":{"text_tokens":30,"image_tokens":20}}`, input: 90, image: 10, output: 30, imageOut: 20},
 				{name: "fully cached images", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":100,"image_tokens":100,"cached_tokens_details":{"image_tokens":100}}}`, read: 100},

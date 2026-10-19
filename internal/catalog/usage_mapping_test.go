@@ -34,6 +34,19 @@ func TestPhysicalInputSelectsContextBand(t *testing.T) {
 	}
 }
 
+// A whole-prompt basis reads the physical total even when the summed quantities fall short of it.
+func TestPhysicalInputAboveSummedQuantities(t *testing.T) {
+	s := mustParse(t, `{"v":1,"currency":"USD","rates":{"cache_read":"1","cache_write":"1"},"context_tiers":{"basis":["input","cache_read","cache_write"],"method":"whole","tiers":[{"above":90,"rates":{"cache_write":"2"}}]}}`)
+	u, err := mustUsage(t, counts{cacheRead: 40, cacheWrite: 40}).WithPhysicalInput(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, missing, err := s.Cost(u)
+	if err != nil || missing != 0 || cost.Rat().RatString() != "120" {
+		t.Fatalf("cost %v, missing %v, %v; want 120", cost.Rat(), missing, err)
+	}
+}
+
 func TestPhysicalInputPresenceAndRecount(t *testing.T) {
 	u := mustUsage(t, counts{in: 10})
 	if _, ok := u.PhysicalInput(); ok {
