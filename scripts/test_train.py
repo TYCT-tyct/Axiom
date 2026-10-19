@@ -298,6 +298,17 @@ class Decisions(unittest.TestCase):
         required = ["build", "docs", "pr", "secrets", "review", "merge-train"]
         self.assertEqual(train.unmet_checks(required, runs, statuses), ["pr", "secrets", "review"])
 
+    def test_unmet_checks_reads_the_last_run_of_a_check(self):
+        review = lambda started, conclusion: {"name": "review", "status": "completed", "conclusion": conclusion,
+                                              "started_at": started}
+        rerun = [review("2026-10-19T04:46:39Z", "success"), review("2026-10-19T04:45:05Z", "cancelled")]
+        self.assertEqual(train.unmet_checks(["review"], rerun, []), [])
+        failed_again = [review("2026-10-19T04:45:05Z", "success"), review("2026-10-19T04:46:39Z", "failure")]
+        self.assertEqual(train.unmet_checks(["review"], failed_again, []), ["review"])
+        pending = [review("2026-10-19T04:45:05Z", "success"),
+                   {"name": "review", "status": "queued", "conclusion": None, "started_at": None}]
+        self.assertEqual(train.unmet_checks(["review"], pending, []), ["review"])
+
     def test_migration_versions_are_per_directory(self):
         paths = ["internal/billing/migrations/00005_x.sql", "internal/accounts/migrations/5_y.sql",
                  "internal/billing/migrations/README.md", "docs/migrations/00001_a.md"]
