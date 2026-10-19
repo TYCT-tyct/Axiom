@@ -4,6 +4,7 @@ package main
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -68,6 +69,7 @@ func (lw *loadWorld) verify(name string, outs []outcome, before int64) {
 	if charged < low || charged > high {
 		lw.t.Errorf("%s: the ledger charged %d, want between %d (the calls that finished) and %d (and what the others may have reserved)", name, charged, low, high)
 	}
+	lw.checkEachCharge(name, outs)
 	lw.note(name, "reservations back in %s; charged %d (finished calls %d, at most %d)", took.Round(100*time.Millisecond), charged, low, high)
 }
 
@@ -110,4 +112,31 @@ func (lw *loadWorld) probe() {
 	}
 	lw.awaitSettled(30 * time.Second)
 	lw.checkBalanced()
+}
+
+// checkEachCharge reads what the ledger charged each call that completed and compares it call by call.
+func (lw *loadWorld) checkEachCharge(name string, outs []outcome) {
+	lw.t.Helper()
+	var ids []string
+	for _, o := range outs {
+		if o.done && o.seen && o.request != "" {
+			ids = append(ids, o.request)
+		}
+	}
+	rows := lw.query(`SELECT coalesce(string_agg(request_id::text || '=' || charged, ','), '') FROM billing.reservations
+		WHERE request_id::text = ANY (string_to_array($1, ','))`, strings.Join(ids, ","))
+	charged := map[string]int64{}
+	for row := range strings.SplitSeq(rows, ",") {
+		id, amount, ok := strings.Cut(row, "=")
+		if n, err := strconv.ParseInt(amount, 10, 64); ok && err == nil {
+			charged[id] = n
+		}
+	}
+	wrong := chargeMismatches(outs, charged)
+	for _, w := range wrong[:min(len(wrong), 5)] {
+		lw.t.Errorf("%s: %s", name, w)
+	}
+	if len(wrong) > 5 {
+		lw.t.Errorf("%s: and %d more calls charged wrongly", name, len(wrong)-5)
+	}
 }

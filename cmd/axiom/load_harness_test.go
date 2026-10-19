@@ -91,13 +91,60 @@ func TestChargeBounds(t *testing.T) {
 	seen := outcome{status: 200, done: true, seen: true, up: stamp{deltas: 4}}
 	unfinished := outcome{status: 200, bodyBytes: 400}
 	owed := seen
-	owed.pending = true // ended without its cost: settled later, so not certain yet
+	owed.pending = true // ended without its cost, which has been settled by the time the ledger is read
 	low, high := chargeBounds([]outcome{seen, seen, unfinished, owed, {status: 429}})
-	if want := 2 * loadCharge(4); low != want {
-		t.Errorf("the lowest charge is %d, want exactly the two finished calls' %d", low, want)
+	if want := 3 * loadCharge(4); low != want {
+		t.Errorf("the lowest charge is %d, want exactly the three finished calls' %d, the cost-pending one's included", low, want)
 	}
-	if want := low + (101*inputNano + maxOutputTokens*outputNano) + (1*inputNano + maxOutputTokens*outputNano); high != want {
-		t.Errorf("the highest charge is %d, want %d: the unfinished and the cost-pending call may be charged up to a reservation, the refused one nothing", high, want)
+	if want := low + (101*inputNano + maxOutputTokens*outputNano); high != want {
+		t.Errorf("the highest charge is %d, want %d: the unfinished call may be charged up to its reservation, the refused one nothing", high, want)
+	}
+}
+
+// TestChargeMismatchesFindsWhatTheTotalHides: each completed call must have been charged its own price, a cost-pending
+// one included; a missing charge is not made up by another call's extra one, and a call with no row is wrong.
+func TestChargeMismatchesFindsWhatTheTotalHides(t *testing.T) {
+	call := func(id string, pending bool) outcome {
+		return outcome{request: id, status: 200, done: true, seen: true, pending: pending, up: stamp{deltas: 4}}
+	}
+	outs := []outcome{call("a", false), call("b", true), call("c", true), {request: "d", status: 200}} // d did not complete: not checked
+	price := loadCharge(4)
+	for name, tc := range map[string]struct {
+		charged map[string]int64
+		want    int
+	}{
+		"all right":                     {map[string]int64{"a": price, "b": price, "c": price}, 0},
+		"a pending call charged zero":   {map[string]int64{"a": price, "b": 0, "c": price}, 1},
+		"a double charge":               {map[string]int64{"a": price, "b": 2 * price, "c": price}, 1},
+		"one short, one over, same sum": {map[string]int64{"a": price, "b": 0, "c": 2 * price}, 2},
+		"no row":                        {map[string]int64{"a": price, "b": price}, 1},
+	} {
+		if got := chargeMismatches(outs, tc.charged); len(got) != tc.want {
+			t.Errorf("%s: %d mismatches %v, want %d", name, len(got), got, tc.want)
+		}
+	}
+}
+
+// TestAnUnexpectedFailureFailsAcceptance: a 500 among calls that otherwise went well is a failed scenario, while a
+// refusal for lack of room, a cancel and a cut are not.
+func TestAnUnexpectedFailureFailsAcceptance(t *testing.T) {
+	reached := stamp{deltas: 4}
+	cut := reached
+	cut.cut = true
+	expected := []outcome{
+		{status: 200, done: true, seen: true, up: reached},
+		{status: 429},
+		{status: 503},
+		{status: 200, cancelled: true, seen: true, up: reached},
+		{status: 200, seen: true, up: cut},
+	}
+	if err := summarize("s", expected).unexpected(expected); err != nil {
+		t.Errorf("expected endings failed the scenario: %v", err)
+	}
+	with500 := append(slices.Clone(expected), outcome{status: 500, err: "internal"})
+	err := summarize("s", with500).unexpected(with500)
+	if err == nil || !strings.Contains(err.Error(), "1 x status 500") {
+		t.Errorf("one 500 among the calls gave %v, want a failure that names it", err)
 	}
 }
 
@@ -224,9 +271,9 @@ func checkStamp(t *testing.T, u *loadUpstream, endAt time.Time) {
 	}
 }
 
-// TestLoadUpstreamCutsAndSeesCancels: a stream the upstream breaks off ends in a read error and is stamped cut, and a
+// TestLoadUpstreamCuts and TestLoadUpstreamSeesCancels: a stream the upstream breaks off ends in a read error and is stamped cut, and a
 // caller that goes away is counted cancelled, with the moment.
-func TestLoadUpstreamCutsAndSeesCancels(t *testing.T) {
+func TestLoadUpstreamCuts(t *testing.T) {
 	cutting := newLoadUpstream(t, streamShape{every: time.Hour})
 	cutting.setShape(streamShape{every: 5 * time.Millisecond, length: 100 * time.Millisecond, cutRate: 1})
 	resp := post(t, t.Context(), cutting, 1)
@@ -237,10 +284,12 @@ func TestLoadUpstreamCutsAndSeesCancels(t *testing.T) {
 	if s, _ := cutting.take(1); !s.cut {
 		t.Errorf("the cut stream is not stamped cut: %+v", s)
 	}
+}
 
+func TestLoadUpstreamSeesCancels(t *testing.T) {
 	waiting := newLoadUpstream(t, streamShape{every: 20 * time.Millisecond, length: time.Minute})
 	ctx, cancel := context.WithCancel(t.Context())
-	resp = post(t, ctx, waiting, 2)
+	resp := post(t, ctx, waiting, 2)
 	defer resp.Body.Close() //nolint:errcheck // a test client
 	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
 		t.Fatal(err)
@@ -249,12 +298,16 @@ func TestLoadUpstreamCutsAndSeesCancels(t *testing.T) {
 		t.Errorf("%d streams open, peak %d; want 1 and 1", waiting.active.Load(), waiting.peak.Load())
 	}
 	cancel()
-	deadline := time.Now().Add(5 * time.Second)
-	for waiting.cancelled.Load() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the upstream never saw the caller go")
+	select {
+	case id := <-waiting.cancels: // published after the stamp was written
+		if id != 2 {
+			t.Fatalf("the upstream saw call %d go, want 2", id)
 		}
-		time.Sleep(5 * time.Millisecond)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upstream never saw the caller go")
+	}
+	if waiting.cancelled.Load() != 1 {
+		t.Errorf("%d calls counted cancelled, want 1", waiting.cancelled.Load())
 	}
 	if s, _ := waiting.take(2); s.cancelled.IsZero() || !s.endWrite.IsZero() {
 		t.Errorf("the cancelled call's stamp is %+v; want the cancel noted and no ending written", s)

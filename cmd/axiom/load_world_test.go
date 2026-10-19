@@ -155,8 +155,8 @@ func (lw *loadWorld) record(name string, outs []outcome, peakMiB int64) {
 	row := summarize(name, outs)
 	row.PeakMiB = peakMiB
 	lw.addRow(row)
-	if f := failures(outs); f != "" {
-		lw.note(name, "failures: %s", f)
+	if err := row.unexpected(outs); err != nil {
+		lw.t.Errorf("%s: %v", name, err)
 	}
 }
 

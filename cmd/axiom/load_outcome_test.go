@@ -12,6 +12,7 @@ import (
 // upstream's are the same process's, so the two can be subtracted.
 type outcome struct {
 	id        uint64
+	request   string // the node's id for the call (X-Generation-Id), which is its reservation's
 	group     string // what the scenario tells its calls apart by, such as the size of the request
 	start     time.Time
 	status    int           // 0 when the request got no answer
@@ -129,7 +130,7 @@ func chargeBounds(outs []outcome) (low, high int64) {
 	var unfinished int64
 	for _, o := range outs {
 		switch {
-		case o.done && o.seen && !o.pending: // a call that ended without its cost is settled later, in the background
+		case o.done && o.seen: // by the time the ledger is checked, a pending cost has been settled as well
 			low += loadCharge(o.up.deltas)
 		case o.status == http.StatusOK:
 			unfinished += int64(o.bodyBytes/4+1)*inputNano + maxOutputTokens*outputNano
@@ -159,4 +160,32 @@ func unknownKey(key string, pick func(n int) int) string {
 		}
 	}
 	return string(b)
+}
+
+// chargeMismatches compares what the ledger charged each call, by the node's id for it, with what the call was worth, for
+// every call whose content completed with the usage the upstream reported, one that ended without its cost included:
+// its settlement landed in the background, and must have landed whole. A call with no row is a mismatch, as a zero and
+// a double charge are; per call, so that one call's missing charge cannot be made up by another's extra.
+func chargeMismatches(outs []outcome, charged map[string]int64) []string {
+	var wrong []string
+	for _, o := range outs {
+		if !o.done || !o.seen || o.request == "" {
+			continue
+		}
+		got, ok := charged[o.request]
+		if want := loadCharge(o.up.deltas); !ok || got != want {
+			wrong = append(wrong, fmt.Sprintf("call %s charged %d (row found: %v), want %d", o.request, got, ok, want))
+		}
+	}
+	return wrong
+}
+
+// unexpected is why a scenario's calls fail its acceptance: a call that ended in none of the ways a load expects. A call
+// the node refused for lack of room (429, 503), one the scenario cancelled and one the upstream cut are expected; an
+// answer of 500, a stream that stopped short for no reason given, a connection that failed are not.
+func (r loadRow) unexpected(outs []outcome) error {
+	if r.Failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d of %d calls failed in none of the expected ways: %s", r.Failed, r.Calls, failures(outs))
 }

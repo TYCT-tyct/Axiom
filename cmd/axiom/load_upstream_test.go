@@ -27,6 +27,9 @@ type loadUpstream struct {
 	stamps map[uint64]stamp
 
 	active, peak, cancelled atomic.Int64 // streams open now, the most there were at once, and calls cancelled by their caller
+	// cancels receives the id of each call cancelled by its caller, after its stamp is written: a test waits on it for a
+	// stamp that is whole. A full channel drops the id, so a load that nobody listens to never blocks the upstream.
+	cancels chan uint64
 }
 
 // streamShape is how the upstream answers the calls that arrive while it is set.
@@ -90,7 +93,7 @@ data: {"type":"message_stop"}
 
 func newLoadUpstream(t testing.TB, shape streamShape) *loadUpstream {
 	t.Helper()
-	u := &loadUpstream{stamps: map[uint64]stamp{}}
+	u := &loadUpstream{stamps: map[uint64]stamp{}, cancels: make(chan uint64, 64)}
 	u.shape.Store(&shape)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", u.serve)
@@ -150,8 +153,12 @@ func (u *loadUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.FormatUint(id, 10))
 	if !u.stream(w, r, id, shape) {
+		u.note(id, func(s *stamp) { s.cancelled = time.Now() }) // the stamp first: what is published below says it is whole
 		u.cancelled.Add(1)
-		u.note(id, func(s *stamp) { s.cancelled = time.Now() })
+		select {
+		case u.cancels <- id:
+		default:
+		}
 	}
 }
 

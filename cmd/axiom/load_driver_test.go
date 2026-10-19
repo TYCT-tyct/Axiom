@@ -102,6 +102,7 @@ func (d *loadDriver) run(ctx context.Context, c callSpec) outcome {
 	}
 	defer resp.Body.Close() //nolint:errcheck // everything wanted from the body is read
 	o.status = resp.StatusCode
+	o.request = resp.Header.Get("X-Generation-Id")
 	tail, err := readStream(resp.Body, &o)
 	o.eof = time.Now()
 	complete := errors.Is(err, io.EOF)
