@@ -23,10 +23,13 @@ type ExchangeInput struct {
 	ExpectedVersion                                   int64
 }
 
-// ExchangeError identifies an invalid input without echoing its value.
+// ExchangeError identifies an invalid input without echoing its value. An empty Field is a rule on the rate as a whole,
+// which two fields together break.
 type ExchangeError struct{ Field, Reason string }
 
-func (e *ExchangeError) Error() string { return "billing: exchange rate " + e.Field + " " + e.Reason }
+func (e *ExchangeError) Error() string {
+	return strings.TrimSpace("billing: exchange rate " + e.Field + " " + e.Reason)
+}
 
 // ErrStaleExchange refuses an adjustment decided against a superseded version.
 var ErrStaleExchange = errors.New("billing: the exchange rate changed since it was read")
@@ -78,7 +81,7 @@ func (in ExchangeInput) normalized() (platform.ExchangeRate, error) {
 	}
 	r := big.NewRat(n, d)
 	if r.Cmp(big.NewRat(1, 1e6)) < 0 || r.Cmp(big.NewRat(1e6, 1)) > 0 {
-		return platform.ExchangeRate{}, &ExchangeError{"numerator", "rate must be between 10^-6 and 10^6"}
+		return platform.ExchangeRate{}, &ExchangeError{"", "rate must be between 10^-6 and 10^6"}
 	}
 	if in.ExpectedVersion < 0 || in.ExpectedVersion == math.MaxInt64 {
 		return platform.ExchangeRate{}, &ExchangeError{"expected_version", "is out of range"}
@@ -107,7 +110,7 @@ func checkExchangeChange(in ExchangeInput, next platform.ExchangeRate, previous 
 		p := previous[0]
 		ratio := new(big.Rat).Quo(big.NewRat(next.Numerator, next.Denominator), big.NewRat(p.Numerator, p.Denominator))
 		if ratio.Cmp(big.NewRat(1, 5)) < 0 || ratio.Cmp(big.NewRat(5, 1)) > 0 {
-			return &ExchangeError{"numerator", "change exceeds fivefold; use correction with a reason"}
+			return &ExchangeError{"", "change exceeds fivefold; use correction with a reason"}
 		}
 	}
 	return nil

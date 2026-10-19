@@ -699,7 +699,7 @@ export interface paths {
         put?: never;
         /**
          * Append a manual exchange rate
-         * @description One base buys numerator/denominator quote. Both directions share a normalized history. Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold; correction bypasses only that relative check and requires an audited reason. The first value requires kind initial and expected_version 0; without a trusted reference a reversed first value cannot be detected automatically. A stale expected version returns 409.
+         * @description One base buys numerator/denominator quote. Both directions share a normalized history. Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold; correction bypasses only that relative check and requires an audited reason. The first value requires kind initial and expected_version 0; without a trusted reference a reversed first value cannot be detected automatically. A stale expected version returns 409. The range and the fivefold limit are rules on the numerator and denominator together, so their 422 points at the whole body (an empty pointer).
          */
         post: operations["setExchangeRate"];
         delete?: never;
@@ -1094,7 +1094,7 @@ export interface components {
             kind: string;
             origin: string;
             upstream_account: string;
-            /** @description The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it. */
+            /** @description The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it. It must be the site's currency or one the manual exchange rates support (USD, CNY, EUR, GBP, JPY, HKD, SGD, AUD, CAD, CHF), else 422 pointing at this member: a supplier in any other would have no rate to convert its costs with. */
             settlement_currency: string;
             login: components["schemas"]["SupplierLogin"];
             reason: components["schemas"]["Reason"];
@@ -2763,6 +2763,7 @@ export interface operations {
     exchangeRateHistory: {
         parameters: {
             query?: {
+                /** @description The version to continue from, exclusive; omit it to start from the newest. */
                 before_version?: number;
             };
             header?: never;

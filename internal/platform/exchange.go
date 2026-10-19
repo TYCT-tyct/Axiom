@@ -18,7 +18,7 @@ type ExchangeRate struct {
 
 // Between keeps the reciprocal exact; callers choose rounding only after all factors are multiplied.
 func (r ExchangeRate) Between(from, to Currency) (*big.Rat, bool) {
-	if r.ID == (uuid.UUID{}) || r.Numerator <= 0 || r.Denominator <= 0 {
+	if r.ID == (uuid.UUID{}) {
 		return nil, false
 	}
 	switch {

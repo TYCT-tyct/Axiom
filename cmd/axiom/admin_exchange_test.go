@@ -58,6 +58,7 @@ func TestAdminExchangeInvalidFields(t *testing.T) {
 		{`"USD"`, `"XXX"`, "/base"},
 		{`"CNY"`, `"USD"`, "/quote"},
 		{`"71"`, `"0"`, "/numerator"},
+		{`"71"`, `"99999999"`, ""}, // the ratio is out of range: no one field breaks it
 		{`"10"`, `"-1"`, "/denominator"},
 		{`"initial"`, `"unknown"`, "/kind"},
 		{`"verified direction"`, `" "`, "/reason"},
@@ -68,5 +69,14 @@ func TestAdminExchangeInvalidFields(t *testing.T) {
 		if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != tc.pointer {
 			t.Errorf("field: %+v want %s", fields, tc.pointer)
 		}
+	}
+}
+
+func TestAdminExchangeHistoryNamesTheParameter(t *testing.T) {
+	f := newPricingFixture(t)
+	rec := f.do(http.MethodGet, "/pricing/exchange-rates/ZZZ/CNY", "", as(f.s))
+	expectAdmin(t, "exchangeRateHistory", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+	if fields := errorDetailOf(t, rec).Fields; fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "base" {
+		t.Errorf("a path parameter is named without a slash: %+v", fields)
 	}
 }

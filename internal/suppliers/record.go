@@ -29,12 +29,32 @@ const (
 
 func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "no_usage"}[f] }
 
+// Conversion says how an attempt's native cost became money. The zero value is no conversion computed, which is how old
+// nodes' and legacy writes stay unknown. The names are what attempt_costs.conversion_state stores (its CHECK, migration
+// 00007).
+type Conversion uint8
+
+// The conversions.
+const (
+	ConversionUnset Conversion = iota
+	ConversionSame
+	ConversionConverted
+	ConversionMissingRate
+	ConversionOverflow
+	ConversionUnpriced
+	ConversionNotRun // the attempt is known not to have run: nothing to convert
+)
+
+func (c Conversion) String() string {
+	return [...]string{"", "same_currency", "converted", "missing_rate", "overflow", "unpriced", "not_executed"}[c]
+}
+
 // AttemptCost is the estimate of an attempt's cost to us, in the supplier's own unit, from the schedule the attempt was
 // priced with. It is not money: the amount is in the unit of the supplier (quota, dollars) and billing turns it into
 // money.
 type AttemptCost struct {
 	// Conversion describes conversion of Native, independently of Flag's coverage of the supplier's usage.
-	Conversion string
+	Conversion Conversion
 	Currency   platform.Currency
 	Native     platform.Exact
 	Flag       CostFlag
@@ -85,26 +105,26 @@ func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency plat
 	c, err = s.Cost(r, usage)
 	c.Currency = currency
 	if err != nil {
-		c.Conversion = "unpriced"
+		c.Conversion = ConversionUnpriced
 		return c, 0, false, err
 	}
 	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
-	c.Conversion = "same_currency"
+	c.Conversion = ConversionSame
 	if r.currency != currency {
 		rate, ok := r.exchange.Between(r.currency, currency)
 		if !ok {
-			c.Conversion = "missing_rate"
+			c.Conversion = ConversionMissingRate
 			return c, 0, false, nil
 		}
 		money.Mul(money, rate)
-		c.Conversion = "converted"
+		c.Conversion = ConversionConverted
 	}
 	q, m := new(big.Int).DivMod(new(big.Int).Mul(money.Num(), big.NewInt(1e9)), money.Denom(), new(big.Int))
 	if m.Sign() != 0 {
 		q.Add(q, big.NewInt(1))
 	}
 	if !q.IsInt64() {
-		c.Conversion = "overflow"
+		c.Conversion = ConversionOverflow
 		return c, 0, false, nil
 	}
 	return c, q.Int64(), c.Flag != CostUnpriced, nil
@@ -137,14 +157,14 @@ func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
 	if a.Receipt.unitValueID != (uuid.UUID{}) {
 		row.UnitValueID = &a.Receipt.unitValueID
 	}
-	if a.Receipt.currency != a.Cost.Currency {
-		if _, ok := a.Receipt.exchange.Between(a.Receipt.currency, a.Cost.Currency); ok {
-			row.ExchangeRateID = &a.Receipt.exchange.ID
-		}
+	// Only a conversion that reached the multiplication used the rate; a same-currency overflow used none.
+	used := a.Cost.Conversion == ConversionConverted || a.Cost.Conversion == ConversionOverflow
+	if used && a.Receipt.currency != a.Cost.Currency {
+		row.ExchangeRateID = &a.Receipt.exchange.ID
 	}
-	if a.Cost.Conversion != "" {
-		from, to := a.Receipt.currency.String(), a.Cost.Currency.String()
-		row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &a.Cost.Conversion
+	if a.Cost.Conversion != ConversionUnset {
+		from, to, state := a.Receipt.currency.String(), a.Cost.Currency.String(), a.Cost.Conversion.String()
+		row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &state
 	}
 }
 

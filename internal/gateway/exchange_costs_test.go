@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
@@ -38,16 +40,18 @@ func payInCNY(t *testing.T, r *rig) {
 	}
 }
 
-// republishRate commits a new rate and publishes a snapshot that routes new requests with it.
-func republishRate(ctx context.Context, r *rig, e routing.Endpoint, preset routing.Preset) error {
+// republishRate commits a new rate and publishes a snapshot of the endpoints that routes new requests with it.
+func republishRate(ctx context.Context, r *rig, preset routing.Preset, endpoints ...routing.Endpoint) error {
 	next, err := setExchange(ctx, r, billing.ExchangeInput{
 		Base: "CNY", Quote: "USD", Numerator: "20", Denominator: "71", Kind: "adjustment", ExpectedVersion: 1, Reason: "changed after reservation",
 	})
 	if err != nil {
 		return err
 	}
-	e.Exchange = next.Basis()
-	snap, err := r.router.NewSnapshot(time.Now(), []routing.Endpoint{e}, []routing.Preset{preset})
+	for i := range endpoints {
+		endpoints[i].Exchange = next.Basis()
+	}
+	snap, err := r.router.NewSnapshot(time.Now(), endpoints, []routing.Preset{preset})
 	if err != nil {
 		return err
 	}
@@ -128,7 +132,7 @@ func TestExchangeReservationReachesTheActualCostAndProfit(t *testing.T) {
 	var once sync.Once
 	// Admission has committed. Publish a new rate before the very first send.
 	up.beforeAcquire = func(suppliers.EndpointID) {
-		once.Do(func() { updated <- republishRate(t.Context(), r, e, preset) })
+		once.Do(func() { updated <- republishRate(t.Context(), r, preset, e) })
 	}
 	account := r.funded(1e12)
 	for i, want := range []int64{184, 367} {
@@ -165,5 +169,88 @@ func TestMissingExchangeMakesGatewayProfitUnknown(t *testing.T) {
 	}
 	if r.count("SELECT count(*) FROM suppliers.attempt_costs WHERE conversion_state='missing_rate' AND cost_flag='complete'") != 1 {
 		t.Fatal("conversion destroyed native completeness")
+	}
+}
+
+// A cost the usage did not fully support is an estimate, not a known cost, whatever it converted to: the call's profit
+// is unknown, as it is for a missing rate. A cost from reported usage has one (the test above).
+func TestEstimatedUsageMakesGatewayProfitUnknown(t *testing.T) {
+	smp, _ := sample(t, protocol.Messages)
+	start := strings.Replace(supplierStart(false), `{"input_tokens":`+strconv.Itoa(supplierInput)+`}`, `{}`, 1)
+	for name, tc := range map[string]struct {
+		script scripted
+		flag   string
+	}{
+		"an output never reported": {costedScript(smp, false), "unpriced"},
+		"no usage reported":        {serve(beat{data: start + events(smp, evBlock) + events(smp, evHello)}), "no_usage"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, receipt := costedRig(t)
+			up := withCosts(r, r.billing, r.suppliers)
+			up.setReceipt(receipt)
+			up.setScript(tc.script)
+			account := r.funded(1e12)
+			r.do("POST", "/v1/messages", account.key, strings.NewReader(stream("acme/alpha")))
+			id := r.lastCall().ID
+			if r.count("SELECT count(*) FROM billing.reservations WHERE request_id=$1 AND state='settled' AND profit IS NULL", id) != 1 {
+				t.Fatal("an estimated cost was booked as a known profit")
+			}
+			if r.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id=$1 AND cost_flag=$2", id, tc.flag) != 1 {
+				t.Fatalf("the supplier's row is not flagged %s", tc.flag)
+			}
+		})
+	}
+}
+
+// The fallback after a failed first attempt is costed with the rate the request reserved, though a new one was
+// published between the two attempts.
+func TestFallbackAttemptKeepsTheReservedRate(t *testing.T) {
+	r := newRig(t, func(o *rigOptions) { o.suppliers = true })
+	_, endpoint := r.seedSupplierCost()
+	payInCNY(t, r)
+	first, err := setExchange(t.Context(), r, billing.ExchangeInput{
+		Base: "CNY", Quote: "USD", Numerator: "10", Denominator: "71", Kind: "initial", Reason: "test reservation freeze",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := r.suppliers.Acquire(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := a.Done()
+	e1, e2 := r.endpoints["alpha-1"], r.endpoints["alpha-2"]
+	e1.Exchange, e2.Exchange = first.Basis(), first.Basis()
+	preset := routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}
+	r.install(preset, e1, e2)
+	up := withCosts(r, r.billing, r.suppliers)
+	up.setReceipt(receipt)
+	smp, _ := sample(t, protocol.Messages)
+	// alpha-1 is the cheaper entry, so it is tried first.
+	up.eps[uuid.UUID(e1.ID)].script = []scripted{failure(routing.ScopeEndpoint, false)}
+	up.eps[uuid.UUID(e2.ID)].script = []scripted{costedScript(smp, true)}
+	var acquired atomic.Int32
+	updated := make(chan error, 1)
+	up.beforeAcquire = func(suppliers.EndpointID) {
+		if acquired.Add(1) == 2 {
+			updated <- republishRate(t.Context(), r, preset, e1, e2)
+		}
+	}
+	account := r.funded(1e12)
+	r.do("POST", "/v1/messages", account.key, strings.NewReader(stream("acme/alpha")))
+	requireRepublished(t, updated)
+	id := r.lastCall().ID
+	if n := r.count("SELECT count(*) FROM billing.exchange_rates WHERE base='CNY' AND quote='USD'"); n != 2 {
+		t.Fatalf("%d rate versions: the rate never changed", n)
+	}
+	var rate uuid.UUID
+	var state string
+	if err := r.db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT exchange_rate_id, conversion_state FROM suppliers.attempt_costs WHERE request_id=$1 AND attempt_seq=2", id).Scan(&rate, &state)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rate != first.ID || state != "converted" {
+		t.Fatalf("the fallback attempt used rate %s (%s), want the reserved %s", rate, state, first.ID)
 	}
 }

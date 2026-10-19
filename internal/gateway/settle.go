@@ -95,7 +95,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	rec.Receipt, rec.FinishedAt = receipt, time.Now()
 	if rec.Result == billing.NotExecuted {
 		rec.CostKnown = true
-		rec.Estimate.Conversion = "not_executed"
+		rec.Estimate.Conversion = suppliers.ConversionNotRun
 		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
@@ -113,7 +113,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		c.Flag = suppliers.CostUnpriced // zero for a failure is not a cost known to be zero
 	}
 	c.Flag = costFlag(rec.Segments, c.Flag)
-	rec.CostKnown = known && err == nil
+	// Profit needs the whole cost: one the usage did not fully support (none reported, or a guessed or unpriced item) is
+	// not a cost known to be what the supplier charged, whatever it converted to.
+	rec.CostKnown = known && err == nil && c.Flag == suppliers.CostComplete
 	rec.Cost, rec.Estimate = credits, c
 }
 

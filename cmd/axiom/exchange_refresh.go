@@ -29,17 +29,9 @@ func exchangeRates(d callDeps) func(context.Context) ([]platform.ExchangeRate, e
 	}
 	missing := map[uuid.UUID]missingExchange{}
 	return func(ctx context.Context) ([]platform.ExchangeRate, error) {
-		site, ok := d.accounts.MainSite()
-		if !ok {
-			return nil, nil
-		}
 		var rates []billing.BillingExchangeRate
-		var enabled []suppliers.SupplierCurrency
 		err := d.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
 			rates, err = billing.ExchangeRates(ctx, tx)
-			if err == nil {
-				enabled, err = suppliers.EnabledCurrencies(ctx, tx)
-			}
 			return err
 		})
 		if err != nil {
@@ -49,11 +41,32 @@ func exchangeRates(d callDeps) func(context.Context) ([]platform.ExchangeRate, e
 		for i, r := range rates {
 			basis[i] = r.Basis()
 		}
-		next := missingExchanges(enabled, site.Currency, basis)
-		reportExchangeChanges(ctx, d.logger, changes, missing, next)
-		missing = next
+		// The alert serves the log and the metric only: not reading what it needs must not cost the build its rates.
+		if next, ok := d.missingNow(ctx, basis); ok {
+			reportExchangeChanges(ctx, d.logger, changes, missing, next)
+			missing = next
+		}
 		return basis, nil
 	}
+}
+
+// missingNow is the enabled suppliers that have no rate to the main site's currency; ok is false when that cannot be
+// told now (no main site yet, or the suppliers unreadable), which leaves the last answer standing.
+func (d callDeps) missingNow(ctx context.Context, rates []platform.ExchangeRate) (map[uuid.UUID]missingExchange, bool) {
+	site, ok := d.accounts.MainSite()
+	if !ok {
+		return nil, false
+	}
+	var enabled []suppliers.SupplierCurrency
+	err := d.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		enabled, err = suppliers.EnabledCurrencies(ctx, tx)
+		return err
+	})
+	if err != nil {
+		d.logger.Warn("billing.exchange_rate.alert_skipped", "err", err)
+		return nil, false
+	}
+	return missingExchanges(enabled, site.Currency, rates), true
 }
 
 func missingExchanges(enabled []suppliers.SupplierCurrency, site platform.Currency, rates []platform.ExchangeRate) map[uuid.UUID]missingExchange {

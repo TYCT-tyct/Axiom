@@ -414,4 +414,4 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 
 ## 成本汇率的传递
 
-`RouteDeps.ExchangeRates` 每次构建只读一次，不成功就不发布新快照，最长陈旧时间继续由 routing 的 `MaxStale` 判断。条目携带的值经 `quotables` 进入预留，保留条目的汇率集合持久化；`attempt.result` 把同一条目的冻结汇率附到回执后交给 `Credits`，不读取新的汇率。`known` 传入 `AttemptResult.CostKnown`，缺汇率不会改写原生对账所用的 `CostFlag`。`exchange_test.go` 覆盖首次发送前、回退之间和长请求多次刷新，及失败刷新不延长有效期。
+`RouteDeps.ExchangeRates` 每次构建只读一次，不成功就不发布新快照，最长陈旧时间继续由 routing 的 `MaxStale` 判断。条目携带的值经 `quotables` 进入预留，保留条目的汇率集合持久化；`attempt.result` 把同一条目的冻结汇率附到回执后交给 `Credits`，不读取新的汇率。`AttemptResult.CostKnown` 要求换算已知且最终的 `CostFlag` 为 `complete`：没有用量、用量靠暂估或有项目没有价格的成本是估计值，利润记未知（`NULL`）；缺汇率不会改写原生对账所用的 `CostFlag`。`exchange_test.go` 在 Plan 层证明条目的值副本在多次刷新后不变，及失败刷新不延长有效期；`exchange_costs_test.go` 端到端覆盖首次发送前改汇率，和第一次尝试失败、改汇率、回退到第二条目仍用预留时的汇率。

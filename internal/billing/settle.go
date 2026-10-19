@@ -138,7 +138,8 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	if len(o.Attempts) == 0 {
 		switch c.row.State {
 		case "pending":
-			return Final{}, c.release(ctx, tx, "released", c.row.Amount)
+			c.costKnown = true // nothing ran, so the cost is a known 0 and so is the profit
+			return Final{Profit: c.profit()}, c.release(ctx, tx, "released", c.row.Amount)
 		case "cleanup_released":
 			// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
 			// lost is answered, and no charge a supplier reports later is looked for in it.

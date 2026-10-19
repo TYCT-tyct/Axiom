@@ -138,6 +138,8 @@ func TestCreateSupplierRefusals(t *testing.T) {
 		"a member the kind lacks":     {func(b string) string { return strings.Replace(b, `"pat-secret"`, `"x","password":"pw"`, 1) }, 400, codeInvalidRequest, "/login/password"},
 		"a login without its token":   {func(b string) string { return strings.Replace(b, `{"access_token":"pat-secret"}`, `{}`, 1) }, 400, codeInvalidRequest, "/login/access_token"},
 		"a currency that is none":     {func(b string) string { return strings.Replace(b, `"USD"`, `"usd"`, 1) }, 400, codeInvalidRequest, ""},
+		"a currency no rate covers":   {func(b string) string { return strings.Replace(b, `"USD"`, `"KRW"`, 1) }, 422, codeUnprocessable, "/settlement_currency"},
+		"the placeholder currency":    {func(b string) string { return strings.Replace(b, `"USD"`, `"XXX"`, 1) }, 422, codeUnprocessable, "/settlement_currency"},
 		"an origin with a path":       {func(b string) string { return strings.Replace(b, publicOrigin, publicOrigin+"/x", 1) }, 400, codeInvalidRequest, ""},
 		"an origin that is not https": {func(b string) string { return strings.Replace(b, publicOrigin, "http://8.8.8.8", 1) }, 400, codeInvalidRequest, ""},
 	} {
@@ -283,4 +285,13 @@ func TestCreateSupplierRetryAfterTheNetworkChanged(t *testing.T) {
 	}
 	expectAdmin(t, "a new request", f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(body, "ops", "other", 1), newKey()),
 		http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+// TestCreateSupplierInACurrencyTheRatesCover: a supplier paid in a currency with exchange rates to the site's is
+// connected, which is what the refusals above keep the others from being.
+func TestCreateSupplierInACurrencyTheRatesCover(t *testing.T) {
+	t.Parallel()
+	f := newSupplierFixture(t)
+	rec := f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(createBody, `"USD"`, `"CNY"`, 1), newKey())
+	expectAdmin(t, "createSupplier in CNY", rec, http.StatusCreated, "")
 }

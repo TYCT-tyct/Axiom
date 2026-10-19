@@ -65,7 +65,7 @@ func TestExchangeCreditsExactAndReciprocal(t *testing.T) {
 	// The review's double-rounding counterexample is scaled up by 10^6 so rounding to an amount reveals it.
 	u := usageFor(t, catalog.ItemInput, 1000000)
 	c, got, known := creditsOf(t, s, r, u, "USD")
-	if !known || got != 10 || c.Conversion != "converted" {
+	if !known || got != 10 || c.Conversion != ConversionConverted {
 		t.Fatalf("one rounding: %d %v %+v", got, known, c)
 	}
 	forward, _ := rate.Between(currency(t, "CNY"), currency(t, "USD"))
@@ -98,7 +98,7 @@ func TestMissingExchangeDoesNotDisableNativeReconciliation(t *testing.T) {
 	a.Receipt.currency = currency(t, "CNY")
 	a.Receipt.unitValue = unitPrice(t, "2")
 	c, amount, known, err := w.svc.Credits(a.Receipt, a.Usage, currency(t, "USD"))
-	if err != nil || known || amount != 0 || c.Flag != CostComplete || c.Conversion != "missing_rate" {
+	if err != nil || known || amount != 0 || c.Flag != CostComplete || c.Conversion != ConversionMissingRate {
 		t.Fatalf("missing: %+v %d %v %v", c, amount, known, err)
 	}
 	a.Cost = c
@@ -182,11 +182,29 @@ func TestExchangeOverflowAndUnpricedStayUnknown(t *testing.T) {
 	r.exchange = platform.ExchangeRate{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Numerator: 1000000, Denominator: 1}
 	r.unitValue = unitPrice(t, "1000")
 	c, n, known := creditsOf(t, w.svc, r, usageFor(t, catalog.ItemOutput, 10000000000), "USD")
-	if known || n != 0 || c.Conversion != "overflow" || c.Flag != CostComplete {
+	if known || n != 0 || c.Conversion != ConversionOverflow || c.Flag != CostComplete {
 		t.Fatalf("overflow: %+v %d %v", c, n, known)
 	}
 	c, _, known = creditsOf(t, w.svc, r, usageFor(t, catalog.ItemCacheRead, 1), "USD")
-	if known || c.Flag != CostUnpriced || c.Conversion != "converted" {
+	if known || c.Flag != CostUnpriced || c.Conversion != ConversionConverted {
 		t.Fatalf("unpriced: %+v %v", c, known)
+	}
+}
+
+// Every conversion the code names passes the table's check (which repeats the names in SQL), and only one that reached
+// the multiplication keeps the rate's ID: an attempt that did not run, or had no rate, was converted with none.
+func TestConversionStatesAreStoredAndKeepTheRateOnlyWhenUsed(t *testing.T) {
+	w := newWorld(t, 1)
+	rate := platform.ExchangeRate{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Numerator: 10, Denominator: 71, Version: 1}
+	for c := ConversionSame; c <= ConversionNotRun; c++ {
+		a := w.attempt(newRequest(), 1, "")
+		a.Receipt.currency, a.Receipt.exchange = currency(t, "CNY"), rate
+		a.Cost.Currency, a.Cost.Conversion = currency(t, "USD"), c
+		w.record(a)
+		used := c == ConversionConverted || c == ConversionOverflow
+		if w.count(`SELECT count(*) FROM suppliers.attempt_costs
+			WHERE request_id=$1 AND conversion_state=$2 AND (exchange_rate_id IS NOT NULL) = $3`, uuid.UUID(a.Request), c.String(), used) != 1 {
+			t.Errorf("%s: not stored as itself, or the rate was kept %v", c, !used)
+		}
 	}
 }

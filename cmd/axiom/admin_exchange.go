@@ -11,9 +11,15 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func exchangeProblem(err error) error {
+// exchangeProblem is the 422 of a refused rate. A member of the body is pointed at by its JSON pointer, a path or query
+// parameter by its name, and a rule on the rate as a whole (no field) by the whole body.
+func exchangeProblem(err error, inBody bool) error {
 	if e, ok := errors.AsType[*billing.ExchangeError](err); ok {
-		return &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "invalid exchange rate", fields: []errorField{{Pointer: "/" + e.Field, Message: e.Reason}}}
+		pointer := e.Field
+		if inBody && pointer != "" {
+			pointer = "/" + pointer
+		}
+		return &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "invalid exchange rate", fields: []errorField{{Pointer: pointer, Message: e.Reason}}}
 	}
 	return err
 }
@@ -52,7 +58,7 @@ func (a adminAPI) ExchangeRateHistory(ctx context.Context, r adminapi.ExchangeRa
 		return err
 	})
 	if err != nil {
-		return nil, exchangeProblem(err)
+		return nil, exchangeProblem(err, false)
 	}
 	return adminapi.ExchangeRateHistory200JSONResponse(exchangeList(rows)), nil
 }
@@ -63,7 +69,7 @@ func (a adminAPI) SetExchangeRate(ctx context.Context, r adminapi.SetExchangeRat
 	in := billing.ExchangeInput{Base: b.Base, Quote: b.Quote, Numerator: b.Numerator, Denominator: b.Denominator, ExpectedVersion: b.ExpectedVersion, Kind: b.Kind, Reason: b.Reason}
 	body, replayed, err := idempotently(ctx, a.db, "setExchangeRate", r.Params.IdempotencyKey, b, func(tx pg.Tx) (adminapi.ExchangeRate, error) {
 		row, err := billing.SetExchangeRate(ctx, tx, actor(ctx), in)
-		return exchangeBody(row), exchangeProblem(err)
+		return exchangeBody(row), exchangeProblem(err, true)
 	})
 	if err != nil {
 		return nil, err
