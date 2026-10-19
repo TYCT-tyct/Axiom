@@ -23,6 +23,7 @@
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
+| `kv` | 设计中，随 K1 加入：Valkey 上的限流计数、登录前的尝试次数和会话粘性，期限、熔断与兜底，见 [kv 的 README](kv/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
