@@ -92,6 +92,7 @@ func (m *messagesWriter) checkThinking() error {
 		return m.checkManual()
 	case catalog.ThinkingNone:
 		return &NotSupported{Reason: "the model does not think"}
+	case catalog.ThinkingUnset:
 	}
 	// Not one of the two ways to ask is the model's: guessing one is a request the upstream refuses, or a budget it
 	// was never asked to spend.

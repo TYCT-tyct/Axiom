@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -46,39 +47,48 @@ func (f *routeFixture) prepared(model catalog.ModelID, from, to protocol.Format,
 
 // TestAModelIsAskedToThinkAsItsSpecSays: a Chat call that asks for reasoning is written for a Claude model the way its
 // spec says it thinks, and a model whose spec says nothing is not asked in one of the ways by default: the zero
-// Target asked every model to think adaptively, which a model with a thinking budget refuses.
+// Target asked every model to think adaptively, which a model with a thinking budget refuses. A want is "unsupported"
+// for a refusal, or a part the request has ("+") or has not ("-").
 func TestAModelIsAskedToThinkAsItsSpecSays(t *testing.T) {
 	f := newRouteFixture(t)
 	system := `"mid_system":true,"untrusted_system_after_tools":false,"default_sampling_only":false`
 	for _, c := range []struct {
 		name, spec string
-		contains   []string
-		lacks      []string
-		refused    bool
+		want       []string
 	}{
-		{"manual", dialect(`"thinking":"manual",` + system), []string{`"budget_tokens":8000`}, []string{"adaptive"}, false},
-		{"adaptive", dialect(`"thinking":"adaptive",` + system), []string{`"type":"adaptive"`}, []string{"budget_tokens"}, false},
-		{"no thinking", dialect(`"thinking":"none",` + system), nil, nil, true},
-		{"not said", dialect(system), nil, nil, true},
+		{"manual", dialect(`"thinking":"manual",` + system), []string{`+"budget_tokens":8000`, "-adaptive"}},
+		{"adaptive", dialect(`"thinking":"adaptive",` + system), []string{`+"type":"adaptive"`, "-budget_tokens"}},
+		{"no thinking", dialect(`"thinking":"none",` + system), []string{"unsupported"}},
+		{"not said", dialect(system), []string{"unsupported"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			model := f.pricedModel("acme/"+strings.ReplaceAll(c.name, " ", "-"), c.spec)
 			body, err := f.prepared(model, protocol.Chat, protocol.Messages, chatReasons)
-			if _, ok := errors.AsType[*protocol.NotSupported](err); ok != c.refused || (err != nil && !ok) {
-				t.Fatalf("got %s, %v; want the endpoint to refuse: %t", body, err, c.refused)
-			}
-			for _, s := range c.contains {
-				if !strings.Contains(body, s) {
-					t.Errorf("the supplier is sent %s, want %s in it", body, s)
-				}
-			}
-			for _, s := range c.lacks {
-				if strings.Contains(body, s) {
-					t.Errorf("the supplier is sent %s, want no %s in it", body, s)
+			for _, want := range c.want {
+				if complaint := missing(body, err, want); complaint != "" {
+					t.Error(complaint)
 				}
 			}
 		})
 	}
+}
+
+// missing says how the request the supplier is sent, or the refusal, differs from want; "" when it does not.
+func missing(body string, err error, want string) string {
+	refused, _ := errors.AsType[*protocol.NotSupported](err)
+	switch {
+	case want == "unsupported" && refused == nil:
+		return fmt.Sprintf("got %s, %v; want the endpoint to refuse the request", body, err)
+	case want == "unsupported":
+		return ""
+	case err != nil:
+		return fmt.Sprintf("got %v; want the request prepared", err)
+	case want[0] == '+' && !strings.Contains(body, want[1:]):
+		return fmt.Sprintf("the supplier is sent %s, want %s in it", body, want[1:])
+	case want[0] == '-' && strings.Contains(body, want[1:]):
+		return fmt.Sprintf("the supplier is sent %s, want no %s in it", body, want[1:])
+	}
+	return ""
 }
 
 // TestAResponsesCallThatStoresNothingAsksForEncryptedReasoning: the gateway sends every Responses call with store false,
