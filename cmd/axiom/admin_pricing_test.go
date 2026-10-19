@@ -74,8 +74,7 @@ func TestCreatePricingRule(t *testing.T) {
 	made := f.create(body)
 	if made.Rev != 0 || !made.Enabled || made.Target.Kind != "model" || *made.Target.Id != f.model || made.Audience.Id != nil ||
 		*made.Method.Multiplier != "1.25" || *made.Method.CurrencyConversion != "face" ||
-		made.Constraints.MinMarginRatio != nil || made.Constraints.ReferenceMinRatio != nil || made.Constraints.ReferenceMaxRatio != nil ||
-		time.Since(made.UpdatedAt) > time.Minute {
+		!cmp.Equal(made.Constraints, adminapi.PricingConstraints{}) || time.Since(made.UpdatedAt) > time.Minute {
 		t.Errorf("the rule: %+v", made)
 	}
 	if diff := cmp.Diff([]adminapi.PricingRule{made}, f.list()); diff != "" {

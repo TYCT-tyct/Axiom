@@ -152,24 +152,30 @@ func TestSalePricesRefusesAStoredConstraint(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			sold, unpriced := SalePrices(rules, f.snapshot(), models, usd)
-			if _, ok := sold[hit]; ok {
-				t.Error("the model the constrained rule names was sold")
-			}
-			if got, want := text(t, sold, other), `"input":"0.000002"`; !strings.Contains(got, want) {
-				t.Errorf("the other model sold as %s, want the global fixed price containing %s", got, want)
-			}
-			if len(unpriced) != 1 {
-				t.Fatalf("reported %v, want one refusal", unpriced)
-			}
-			refusal, ok := errors.AsType[*RuleRefusal](unpriced[0])
-			if !ok || refusal.Rule != constrained.ID || refusal.Model != hit {
-				t.Errorf("the refusal %v, want rule %s for model %s", unpriced[0], constrained.ID, hit)
-			}
-			if !errors.Is(unpriced[0], ErrRuleRefuses) {
-				t.Errorf("the refusal is not ErrRuleRefuses: %v", unpriced[0])
-			}
+			checkRefusal(t, rules, f.snapshot(), models, hit, other, constrained.ID)
 		})
+	}
+}
+
+// checkRefusal checks one model order for TestSalePricesRefusesAStoredConstraint.
+func checkRefusal(t *testing.T, rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, hit, other catalog.ModelID, ruleID uuid.UUID) {
+	t.Helper()
+	sold, unpriced := SalePrices(rules, snap, models, usd)
+	if _, ok := sold[hit]; ok {
+		t.Error("the model the constrained rule names was sold")
+	}
+	if got, want := text(t, sold, other), `"input":"0.000002"`; !strings.Contains(got, want) {
+		t.Errorf("the other model sold as %s, want the global fixed price containing %s", got, want)
+	}
+	if len(unpriced) != 1 {
+		t.Fatalf("reported %v, want one refusal", unpriced)
+	}
+	refusal, ok := errors.AsType[*RuleRefusal](unpriced[0])
+	if !ok || refusal.Rule != ruleID || refusal.Model != hit {
+		t.Errorf("the refusal %v, want rule %s for model %s", unpriced[0], ruleID, hit)
+	}
+	if !errors.Is(unpriced[0], ErrRuleRefuses) {
+		t.Errorf("the refusal is not ErrRuleRefuses: %v", unpriced[0])
 	}
 }
 

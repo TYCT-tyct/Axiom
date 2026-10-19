@@ -39,7 +39,7 @@ func (e *RuleRefusal) Error() string {
 }
 
 // Unwrap makes a refusal tell itself from a price the catalog cannot hold with errors.Is.
-func (e *RuleRefusal) Unwrap() error { return ErrRuleRefuses }
+func (*RuleRefusal) Unwrap() error { return ErrRuleRefuses }
 
 // Unpriced is the part of r the sale price s does not price, which keeps the model off routing: the listing threshold of
 // docs/domains/billing.md「定价」. The known per-use items are not part of it: every currency has a default price for each
