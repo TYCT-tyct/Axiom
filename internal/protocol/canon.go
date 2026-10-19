@@ -138,7 +138,7 @@ type canonFormat struct {
 func decodeCanon(body []byte) (*canon, error) {
 	c := &canon{}
 	if err := jsonx.Unmarshal(body, c); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err) //nolint:errorlint // the decoding error describes the body, not a cause to match
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	for i := range c.Messages {
 		if err := c.Messages[i].settle(); err != nil {
@@ -313,7 +313,7 @@ func (m *canonMessage) readParts() ([]canonPart, error) {
 	}
 	var parts []canonPart
 	if err := jsonx.Unmarshal(m.Content, &parts); err != nil {
-		return nil, fmt.Errorf("%w: a %s message's content: %v", ErrInvalid, m.Role, err) //nolint:errorlint // as in decodeCanon
+		return nil, fmt.Errorf("%w: a %s message's content: %s", ErrInvalid, m.Role, bodyFault(err))
 	}
 	return parts, nil
 }

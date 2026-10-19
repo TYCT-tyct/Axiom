@@ -500,3 +500,39 @@ func BenchmarkInspect(b *testing.B) {
 		}
 	}
 }
+
+// TestAnInvalidBodyIsDescribedInOurWords: what the client reads of a body that cannot be read is a sentence of ours
+// (a decoder's text names offsets and Go types), and a value of the wrong type is named by its JSON pointer.
+func TestAnInvalidBodyIsDescribedInOurWords(t *testing.T) {
+	const leaks = "jsontext json: Go struct canon offset"
+	for _, c := range []struct {
+		name, body, want string
+		inspect          bool // the fault is met by Inspect, otherwise by the conversion to another format
+	}{
+		{"cut short", `{"model":`, "Invalid request: invalid JSON request body", true},
+		{"data after the body", `{"model":"m"} {}`, "data after the request", true},
+		{"invalid UTF-8", "{\"model\":\"\xff\"}", "Invalid request: invalid JSON request body", true},
+		{"no model", `{"stream":true}`, "model is missing", true},
+		{"a role of the wrong type", `{"model":"m","messages":[{"role":1,"content":"x"}]}`, "the value at /messages/0/role is not of a type this member takes", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var err error
+			if c.inspect {
+				_, err = protocol.Inspect(protocol.Chat, []byte(c.body))
+			} else {
+				_, err = convertBody(protocol.Messages, c.body, nil)
+			}
+			if !errors.Is(err, protocol.ErrInvalid) {
+				t.Fatalf("got %v, want ErrInvalid", err)
+			}
+			if got := strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "); got != c.want {
+				t.Errorf("the client reads %q, want %q", got, c.want)
+			}
+			for _, word := range strings.Fields(leaks) {
+				if strings.Contains(err.Error(), word) {
+					t.Errorf("the error leaks %q: %v", word, err)
+				}
+			}
+		})
+	}
+}

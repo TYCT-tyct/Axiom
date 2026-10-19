@@ -160,7 +160,7 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	return p.out, nil
 }
