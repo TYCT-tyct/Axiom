@@ -28,7 +28,10 @@ type ExchangeInput struct {
 type ExchangeError struct{ Field, Reason string }
 
 func (e *ExchangeError) Error() string {
-	return strings.TrimSpace("billing: exchange rate " + e.Field + " " + e.Reason)
+	if e.Field == "" {
+		return "billing: exchange rate " + e.Reason
+	}
+	return "billing: exchange rate " + e.Field + " " + e.Reason
 }
 
 // ErrStaleExchange refuses an adjustment decided against a superseded version.
