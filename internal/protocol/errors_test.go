@@ -137,6 +137,8 @@ func TestRenderRejection(t *testing.T) {
 			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":null`}},
 		{"OpenAI's error in Messages", protocol.Messages, openAI, []string{
 			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`, `"error_type":"invalid_request"`}},
+		{"a type of the upstream's own in Chat", protocol.Chat, &protocol.Rejection{Message: "m", Type: "image_parse_error", Code: "bad_image"}, []string{
+			`"type":"image_parse_error"`, `"code":"bad_image"`}},
 		{"a type of the upstream's own in Messages", protocol.Messages, &protocol.Rejection{Message: "m", Type: "weird"}, []string{`"type":"invalid_request_error"`}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
