@@ -1,4 +1,4 @@
-package newapi
+package adapter_test
 
 import (
 	"net/http"
@@ -28,19 +28,17 @@ func TestRetryAfterFormsAndBounds(t *testing.T) {
 		{"zero", "0", 0},
 		{"fraction", "1.5", 0},
 		{"non-finite", "NaN", 0},
-		{"at cap", "7200", 2 * time.Hour},
-		{"over cap", "7201", 2 * time.Hour},
-		{"duration overflow", "9223372036854775807", 2 * time.Hour},
-		{"integer overflow", strings.Repeat("9", 100), 2 * time.Hour},
+		{"large seconds", "86400", 24 * time.Hour},
+		{"over bound", "86401", 24 * time.Hour},
+		{"duration overflow", "9223372036854775807", 24 * time.Hour},
+		{"integer overflow", strings.Repeat("9", 100), 24 * time.Hour},
 		{"malformed huge", strings.Repeat("9", 100) + "x", 0},
-		{"distant date", now.AddDate(100, 0, 0).Format(http.TimeFormat), 2 * time.Hour},
+		{"distant date", now.AddDate(100, 0, 0).Format(http.TimeFormat), 24 * time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				f := (quirks{}).Classify(http.StatusTooManyRequests, http.Header{"Retry-After": {tc.value}}, nil)
-				c, ok := f.Cause.(adapter.RateLimited)
-				if !ok || c.RetryAfter != tc.want || f.Scope != adapter.ScopeEndpoint {
-					t.Fatalf("Retry-After %q: %+v, want %v", tc.value, f, tc.want)
+				if got := adapter.RetryAfter(http.Header{"Retry-After": {tc.value}}); got != tc.want {
+					t.Fatalf("Retry-After %q: %v, want %v", tc.value, got, tc.want)
 				}
 			})
 		})

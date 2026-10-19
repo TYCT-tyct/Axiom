@@ -35,7 +35,7 @@ func TestSupplierFailureSkipsEveryRemainingEntryOfThatSupplier(t *testing.T) {
 	}
 }
 
-func TestSupplierPauseEndsAfterTheRecoveryTime(t *testing.T) {
+func TestSupplierPauseWithoutRetryTimeEndsAfterThePauseTime(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		now := time.Now()
 		h := failFirstEntry(t, ctx, suppliers.ScopeSupplier, &now)
@@ -44,7 +44,11 @@ func TestSupplierPauseEndsAfterTheRecoveryTime(t *testing.T) {
 				t.Fatal("supplier was not paused node-locally")
 			}
 		}
-		now = now.Add(time.Minute)
+		now = now.Add(5*time.Second - time.Nanosecond) // the default Config.Pause
+		if !h.router.Blocked(h.call.Plan.Entries[0]) {
+			t.Fatal("supplier was released early")
+		}
+		now = now.Add(time.Nanosecond)
 		if h.router.Blocked(h.call.Plan.Entries[0]) {
 			t.Fatal("supplier did not recover")
 		}
@@ -77,6 +81,7 @@ func TestRateLimitPausesOnlyTheNamedScope(t *testing.T) {
 		{"endpoint retry time", suppliers.ScopeEndpoint, 30 * time.Second},
 		{"endpoint default", suppliers.ScopeEndpoint, 0},
 		{"supplier retry time", suppliers.ScopeSupplier, 30 * time.Second},
+		{"supplier default", suppliers.ScopeSupplier, 0},
 		{"credential handled by acquire", suppliers.ScopeCredential, 30 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,21 +99,23 @@ type rateLimitCase struct {
 // check rate-limits the first of two alike endpoints and watches the pause hold until, and only until, its end.
 func (tc rateLimitCase) check(t *testing.T, ctx context.Context) {
 	now := time.Now()
-	h := newHarness(t, ctx, options{entries: 2, routing: routing.Config{MaxStale: time.Hour, Now: func() time.Time { return now }}})
+	h := newHarness(t, ctx, options{entries: 2, routing: routing.Config{MaxStale: time.Hour, Now: func() time.Time { return now }, Rand: func() float64 { return 0.5 }}})
 	firstChoice := twoAlikeEndpoints(t, h.router)
 	f := &suppliers.Failure{Scope: tc.scope, Cause: suppliers.RateLimited{RetryAfter: tc.after}}
 	h.up.endpoint(1).script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, f }, whole(h)}
 	h.up.endpoint(2).script = []scripted{whole(h)}
 	h.run()
-	after := cmp.Or(tc.after, time.Minute) // the default Recovery
+	after := cmp.Or(tc.after, 5*time.Second) // the default Config.Pause, not the minute of Recovery
 	now = now.Add(after - time.Nanosecond)
 	e := h.call.Plan.Entries[0]
 	blocked := tc.scope != suppliers.ScopeCredential
 	if h.router.Blocked(e) != blocked || h.router.Blocked(h.call.Plan.Entries[1]) {
 		t.Fatal("rate limit paused the wrong scope")
 	}
-	if blocked && firstChoice() != ep(2) {
-		t.Fatal("paused endpoint was still planned")
+	// A fixed random draw makes the damped (429) endpoint lose to its twin, paused or not, so even the credential scope
+	// that pauses nothing shows the throttle.
+	if firstChoice() != ep(2) {
+		t.Fatal("the rate-limited endpoint was still preferred")
 	}
 	now = now.Add(time.Nanosecond)
 	if h.router.Blocked(e) {

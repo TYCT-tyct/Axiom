@@ -145,7 +145,7 @@ const (
 	RetryBudget // a later entry at a supplier whose retry budget is used up
 	Full        // not a refusal: the endpoint would do if it had room
 	UnknownItem // billing met a usage field on the model that it cannot price, until an admin prices it
-	CoolingDown // the endpoint or its supplier is paused until its retry time
+	CoolingDown // the endpoint or its supplier is paused until its retry time, or this request already skipped the supplier after a supplier-scope failure
 )
 
 var reasonNames = [...]string{

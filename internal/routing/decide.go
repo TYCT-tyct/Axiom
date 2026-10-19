@@ -23,7 +23,7 @@ type Action uint8
 // The actions.
 const (
 	NextEntry       Action = iota // the next entry of the plan
-	OtherCredential               // the same endpoint with another credential or egress
+	OtherCredential               // the same endpoint with another credential
 	ReturnToClient                // the same on any endpoint: give the client the error
 )
 

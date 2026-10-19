@@ -79,13 +79,18 @@ func (r *Router) End(id EndpointID) { r.state.of(id).inflight.Add(-1) }
 // Throttled records a 429 from the endpoint: its weight drops at once and returns to normal over Config.Recovery.
 func (r *Router) Throttled(id EndpointID) { r.state.of(id).throttledAt.Store(r.cfg.Now().UnixNano()) }
 
-// Block excludes the failure's endpoint or supplier until its retry time. With no usable time, Recovery is the
-// bounded local probe interval. Credential pauses belong to suppliers, which selects and rests individual keys.
+// maxPause follows sub2api's generic 429 cooldown ceiling (ratelimit_service.go, maxRateLimit429CooldownSeconds): a
+// bad upstream clock or header must not park a route until the process restarts.
+const maxPause = 2 * time.Hour
+
+// Block excludes the failure's endpoint or supplier until its retry time, at most maxPause. With no stated wait,
+// Config.Pause is the short local probe interval. Credential pauses belong to suppliers, which selects and rests
+// individual keys.
 func (r *Router) Block(e Entry, scope Scope, after time.Duration) {
 	if after <= 0 {
-		after = r.cfg.Recovery
+		after = r.cfg.Pause
 	}
-	until := r.cfg.Now().Add(after)
+	until := r.cfg.Now().Add(min(after, maxPause))
 	switch scope {
 	case ScopeEndpoint:
 		r.state.of(e.Endpoint).blocked.block(until)

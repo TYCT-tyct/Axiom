@@ -289,7 +289,7 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	if limited || scope == routing.ScopeSupplier {
 		s.x.Router.Block(a.entry, scope, limit.RetryAfter)
 	}
-	if limited && scope == routing.ScopeEndpoint {
+	if limited {
 		s.x.Router.Throttled(a.entry.Endpoint)
 	}
 	if scope == routing.ScopeSupplier {

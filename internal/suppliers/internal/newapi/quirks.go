@@ -2,9 +2,6 @@ package newapi
 
 import (
 	"net/http"
-	"strconv"
-	"strings"
-	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -102,31 +99,10 @@ func ownFailure(status int, code string) (adapter.Failure, bool) {
 // channel's upstream or new-api's status mapping of a channel error may answer 429 after the request was run, so it
 // stays unknown and the cost is estimated and reconciled.
 func rateLimited(h http.Header) adapter.Failure {
-	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: retryAfter(h.Get("Retry-After"))}}
+	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: adapter.RetryAfter(h)}}
 }
 
 // refused is a failure by which new-api says it refused before running the request.
 func refused(scope adapter.Scope, cause adapter.Cause) adapter.Failure {
 	return adapter.Failure{Executed: adapter.NotExecuted, Scope: scope, Cause: cause}
-}
-
-// maxRetryAfter follows sub2api's generic 429 cooldown ceiling (ratelimit_service.go,
-// maxRateLimit429CooldownSeconds): a bad upstream clock or header must not park a route indefinitely.
-const maxRetryAfter = 2 * time.Hour
-
-// retryAfter accepts both HTTP forms. Bound seconds before converting to Duration so even an overflowing integer
-// cannot wrap into a short or negative pause. A past date, negative or malformed value states no wait.
-func retryAfter(v string) time.Duration {
-	v = strings.TrimSpace(v)
-	if v != "" && strings.IndexFunc(v, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil || n > uint64(maxRetryAfter/time.Second) {
-			return maxRetryAfter
-		}
-		return time.Duration(n) * time.Second
-	}
-	if at, err := http.ParseTime(v); err == nil {
-		return min(max(time.Until(at), 0), maxRetryAfter)
-	}
-	return 0
 }

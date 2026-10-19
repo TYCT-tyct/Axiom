@@ -178,9 +178,6 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 	if reason = c.unavailable(); reason != 0 {
 		return reason, true
 	}
-	if c.state.blocked.active(n.now) || c.supplier.active(n.now) {
-		return CoolingDown, true
-	}
 	if reason = c.unfit(n); reason != 0 {
 		return reason, true
 	}
@@ -193,6 +190,8 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return NoPrice, true
 	case c.UnknownItem:
 		return UnknownItem, true
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown, true
 	case c.full():
 		return Full, true
 	}
