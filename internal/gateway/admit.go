@@ -61,7 +61,7 @@ func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
 	}
 	defer release()
 	reserved := false
-	err = h.admitTx(ctx, c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}, func(tx pg.Tx, a accounts.Admission) error {
+	err = h.admitDB(ctx, c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}, func(tx pg.Tx, a accounts.Admission) error {
 		if err := h.reserve(ctx, tx, a, c); err != nil {
 			return err
 		}
@@ -97,6 +97,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 	if err != nil {
 		return err
 	}
+	h.outage.recovered(depRouting)
 	admitted := billingAdmitted(a, c)
 	hold, kept, err := h.Billing.Reserve(ctx, tx, admitted, c.ID, routing.DemandOf(&c.Request), quotables(plan.Entries))
 	if err != nil {

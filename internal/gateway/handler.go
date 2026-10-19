@@ -11,6 +11,8 @@ import (
 	"sync"
 	"uuid"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -35,6 +37,7 @@ type Deps struct {
 	Memory   *protocol.Memory // the node's budget for request bodies and streams
 	Run      Run
 	Logger   *slog.Logger
+	Meter    metric.Meter // where the handler's counters go; nil for none
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -45,6 +48,7 @@ type Handler struct {
 	models  modelList
 
 	background *background // settlements of lost admissions
+	outage     *outage     // the dependency outage being told, if any
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -56,7 +60,7 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground()}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -197,6 +201,24 @@ func (h *Handler) take(w http.ResponseWriter, r *http.Request, c *Call) error {
 	return h.admit(r.Context(), c)
 }
 
+// currentCatalog is the catalog's snapshot; getting one ends a catalog outage.
+func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
+	snap, err := h.Catalog.Current()
+	if err == nil {
+		h.outage.recovered(depCatalog)
+	}
+	return snap, err
+}
+
+// admitDB runs an admission transaction; one that commits ends a database outage.
+func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
+	err := h.admitTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
 // authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
 // host that is not an API domain and a key that is not known are all the same 401.
 func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
@@ -204,6 +226,7 @@ func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller,
 	if errors.Is(err, accounts.ErrStale) {
 		return accounts.Site{}, accounts.Caller{}, err
 	}
+	h.outage.recovered(depAccounts)
 	if err != nil || surface != accounts.API {
 		return accounts.Site{}, accounts.Caller{}, errUnauthorized
 	}
@@ -268,7 +291,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	snap, err := h.Catalog.Current()
+	snap, err := h.currentCatalog()
 	if err != nil {
 		return err
 	}
@@ -311,6 +334,11 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 	}
 	ref, expected := refusal(format, err)
 	h.Limits.refused(r.Context(), ref)
+	if dep, reason, out := outageOf(err); out {
+		h.outage.refuse(r.Context(), dep, reason)
+		writeRefusal(w, format, ref)
+		return
+	}
 	switch {
 	case !expected:
 		h.Logger.Error("a request failed unexpectedly", "request_id", httpserver.RequestID(r.Context()), "err", err)

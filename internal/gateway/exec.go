@@ -120,7 +120,7 @@ func (x *Executor) identity(account uuid.UUID) func(string) string {
 // ended is how the attempts ended the call. err answers it when nothing was written to the client yet; relay is the
 // stream the call ends in, nil when no attempt got as far as one that the call ends with; done says the upstream ended
 // normally. reply is the whole body of a call the upstream answered at once, the compact one, whose status passes
-// through with it and whose memory is given back once it is written.
+// through with it and whose memory is the session's replyHeld.
 type ended struct {
 	err    protocol.Error
 	after  int // Retry-After of the answer, in seconds
@@ -128,7 +128,6 @@ type ended struct {
 	done   bool
 	reply  []byte
 	status int
-	held   int64
 }
 
 // Run is Deps.Run: it takes the call from admission to the end of its answer, and settles it once however it ends.
@@ -143,7 +142,7 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 		}
 	}()
 	defer s.finish(nil) // whatever the way out, the keep-alive stops before the handler returns
-	defer s.let()       // a reply no answer was made of, as a panic leaves, is let go
+	defer s.release()   // the relays no answer released, as a panic leaves them, are let go
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
 	s.conclude(ctx, s.attempts(ctx))
@@ -182,6 +181,12 @@ type session struct {
 
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
+	// live is the relay the call must release however it ends, panic included: the one being read, then the one the
+	// call ends with. It is the backstop for a way out that skips the release; drop clears it once a relay is let go,
+	// so that a discarded relay's buffers are not kept reachable (and the budget they were charged against reused)
+	// while the next attempt waits on its upstream. A kept part is always the live one too.
+	live      *protocol.Relay
+	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -220,7 +225,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
-		s.answerReply(e)
+		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
@@ -265,9 +270,8 @@ func (s *session) stick() {
 // aggregated, or the failure, which carries what was generated and the error for a Chat or Responses client and is the
 // error alone for a Messages one (docs/domains/gateway.md「错误」). Finish and Fail return the body and the status of a
 // relay that has not ended yet, which is always the case here. The body is the relay's buffers, so its share of the
-// node's budget stays charged until the body is written or given up on (Relay.Release), as answerReply's is.
+// node's budget stays charged until the call is over (session.live), as the compact reply's is (replyHeld).
 func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
-	defer e.relay.Release()
 	final := protocol.Final{Pending: err != nil}
 	if fin != nil {
 		final = *fin
@@ -285,19 +289,29 @@ func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
 	s.respond(status, body)
 }
 
-// answerReply writes the body an upstream answered whole, as the compact endpoint does: it goes to the client as it came
-// (docs/domains/gateway.md「转发规则」), after the settlement, which nothing in it reports.
-func (s *session) answerReply(e ended) {
-	defer s.x.Memory.Refund(e.held)
-	s.respond(e.status, e.reply)
-}
-
 // let drops the aggregate reply kept for the answer, if there is one: the call is over, or another attempt replaced it.
 func (s *session) let() {
 	if s.part != nil {
-		drop(s.part)
+		s.drop(s.part)
 		s.part = nil
 	}
+}
+
+// release gives back what the call still holds of the node's budget: the kept reply, the live relay and the compact
+// reply.
+func (s *session) release() {
+	s.let()
+	s.dropReply()
+	if s.live != nil {
+		s.live.Release()
+		s.live = nil
+	}
+}
+
+// dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.
+func (s *session) dropReply() {
+	s.x.Memory.Refund(s.replyHeld)
+	s.replyHeld = 0
 }
 
 // final is what the ending reports of a settlement.

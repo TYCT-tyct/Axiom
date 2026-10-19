@@ -373,9 +373,15 @@ func TestSnapshotStaleness(t *testing.T) {
 	h.plan(input())
 	h.now = t0.Add(30 * time.Second)
 	h.plan(input()) // at the limit
+	if !h.r.Fresh() {
+		t.Error("at the limit: Fresh is false, but Plan uses the snapshot")
+	}
 	h.now = t0.Add(30*time.Second + time.Nanosecond)
 	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
 		t.Errorf("past the limit: %v", err)
+	}
+	if h.r.Fresh() {
+		t.Error("past the limit: Fresh is true, but Plan refuses the snapshot")
 	}
 	old, err := h.r.NewSnapshot(t0.Add(-time.Hour), nil, []routing.Preset{openPreset()})
 	if err != nil {
@@ -392,6 +398,9 @@ func TestSnapshotStaleness(t *testing.T) {
 	empty := mustRouter(t)
 	if _, _, err := empty.Plan(input()); !errors.Is(err, routing.ErrStale) {
 		t.Errorf("no snapshot: %v", err)
+	}
+	if empty.Fresh() {
+		t.Error("no snapshot: Fresh is true")
 	}
 }
 
