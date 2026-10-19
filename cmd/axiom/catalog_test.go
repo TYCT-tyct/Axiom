@@ -89,13 +89,13 @@ type dialectCatalog struct {
 
 func newDialectCatalog(t *testing.T) *dialectCatalog {
 	d := &dialectCatalog{t: t, environ: []string{"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App}}
-	for operation, doc := range map[string]string{
-		"save-author": `{"op_key":"0198c0a8-0000-7000-8000-000000000001","reason":"vendor","slug":"anthropic","name":"Anthropic"}`,
-		"create-model": `{"op_key":"0198c0a8-0000-7000-8000-000000000002","reason":"draft","slug":"anthropic/alpha","version_basis":"dated",
-			"price_source":"manual","spec":{"items":["input"],"tiers":[],"abilities":["reasoning"]}}`,
+	for _, step := range [][2]string{
+		{"save-author", `{"op_key":"0198c0a8-0000-7000-8000-000000000001","reason":"vendor","slug":"anthropic","name":"Anthropic"}`},
+		{"create-model", `{"op_key":"0198c0a8-0000-7000-8000-000000000002","reason":"draft","slug":"anthropic/alpha","version_basis":"dated",
+			"price_source":"manual","spec":{"items":["input"],"tiers":[],"abilities":["reasoning"]}}`},
 	} {
-		if _, err := d.run(operation, d.write(doc)); err != nil {
-			t.Fatalf("%s: %v", operation, err)
+		if _, err := d.run(step[0], d.write(step[1])); err != nil {
+			t.Fatalf("%s: %v", step[0], err)
 		}
 	}
 	return d
