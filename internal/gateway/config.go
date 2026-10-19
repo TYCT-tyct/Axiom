@@ -135,8 +135,8 @@ func (b *Backpressure) KeyLookupSlot(ctx context.Context) (release func(), err e
 
 // Backpressure is the node's in-process limits, built from one validated Config.
 type Backpressure struct {
-	rateLimited metric.Int64Counter // the 429s answered, by Refusal.Reason
-	byReason    map[string]metric.AddOption
+	rateLimited metric.Int64Counter           // the 429s answered, by Refusal.Reason
+	byReason    map[string][]metric.AddOption // one slice per reason, built once: options passed one by one make a slice for each call
 	InFlight    *InFlight
 	Funds       *Funds
 	Pool        *Pool // for the connections that need no account gate: cold-key lookup, batch writers
@@ -160,9 +160,9 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
-	byReason := make(map[string]metric.AddOption, len(rateLimits))
+	byReason := make(map[string][]metric.AddOption, len(rateLimits))
 	for _, r := range rateLimits {
-		byReason[r.Reason] = metric.WithAttributes(attribute.String("reason", r.Reason))
+		byReason[r.Reason] = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
 	}
 	pool := newPool(cfg.PoolSize, cfg.PoolReserve, cfg.BatchConnections)
 	return &Backpressure{
@@ -181,10 +181,10 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 // a limit that was added and not told apart, which the counter makes visible as reason "".
 func (b *Backpressure) refused(ctx context.Context, r *Refusal) {
 	if r.Status == http.StatusTooManyRequests {
-		opt, ok := b.byReason[r.Reason]
+		opts, ok := b.byReason[r.Reason]
 		if !ok { // a limit added without being listed in rateLimits: counted all the same, at the cost of an allocation
-			opt = metric.WithAttributes(attribute.String("reason", r.Reason))
+			opts = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
 		}
-		b.rateLimited.Add(ctx, 1, opt)
+		b.rateLimited.Add(ctx, 1, opts...)
 	}
 }
