@@ -140,7 +140,9 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
-| 收款渠道 | payment_channel | 充值用的收款插件，如支付宝、Stripe、USDT，见[支付](domains/payments.md) |
+| 收款渠道 | payment_channel（代码里 `payments.Kind`） | 一种收款协议的插件，如易支付、Stripe、支付宝官方；USDT 经易支付兼容的网关接入，见[支付的「收款渠道」](domains/payments.md#收款渠道) |
+| 商户账户 | merchant | 站点在某个收款渠道上配置的一个收款账号（商户号、密钥、网关地址），一个渠道可以有多个；二级站点用站长自己的 |
+| 付款方式 | payment_method | 用户充值时选的一项，如支付宝、微信、`usdt.tron`；一个商户账户可以支持多种 |
 | 订单 | order | 一次充值，记录充值金额、付款币种、渠道、手续费和锁定的汇率，见[支付](domains/payments.md#订单) |
 | 通知渠道 | notification_channel | 发送告警、审批、摘要的插件，如 Telegram、飞书、邮件、电话 |
 | 出口 | egress | 向上游发请求的位置：承担出口职责的节点，或外部代理 |
