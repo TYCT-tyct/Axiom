@@ -49,7 +49,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, format, err)
 		return
 	}
-	snap, err := h.Catalog.Current()
+	snap, err := h.currentCatalog()
 	if err != nil {
 		h.fail(w, r, format, err)
 		return
@@ -75,7 +75,7 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 		return err
 	}
 	defer release()
-	return h.admitTx(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
+	return h.admitDB(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
 }
 
 func (l *modelList) of(snap *catalog.Snapshot) ([]byte, error) {

@@ -27,7 +27,7 @@ type need struct {
 func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	now := r.cfg.Now()
 	snap := r.snap.Load()
-	if snap == nil || now.Sub(snap.built) > r.cfg.MaxStale {
+	if snap == nil || !r.fresh(snap, now) {
 		return Plan{}, nil, ErrStale
 	}
 	preset, ok := snap.presets[in.Admission.Preset]

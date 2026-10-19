@@ -71,6 +71,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 - `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
 - 满载排队超时回 429，`Retry-After` 是 `Wait.RetryAfter` 取整。
 - 路由、目录、站点快照过旧，持有者失效（`billing.ErrTerminated`），准入期限到，提交确认丢失：503 `overloaded`。其余没预料到的错误同样回 503，并记 error 日志。
+- **依赖故障按状态变化记日志，不逐请求记**（#294）：数据库连不上（`pg.Unavailable`：连接失败、SQLSTATE 08 类、57P01 到 57P03、53300）和账户、目录、路由的快照过旧（各自的 `ErrStale`）都回 503 `overloaded`，但不走逐请求的日志。每个依赖（`database`、`accounts`、`catalog`、`routing`）各记各的：故障开始或原因（固定文本，不含主机和用户名）变了，记一条 error，原来的那条同时记一条 warn 结束；同一原因不重复记。成功用到该依赖的请求结束它的故障，记一条 warn（期间拒绝的请求数和时长）：通过准入事务的请求结束 `database`，认出站点的结束 `accounts`，取到目录快照的结束 `catalog`，路由出计划的结束 `routing`；不用路由的请求（如模型列表）不会结束路由故障。每个被拒的请求计入 `axiom_gateway_outage_refusals_total{dependency}`。实现和不变量见 `outage.go`；测试 `TestAnOutageIsLoggedOnceNotPerRequest`、`TestANewReasonIsTold`、`TestAHelperRequestEndsTheOutageItUsed`。
 - 客户端已断开的请求不写响应，读体超时除外：net/http 在读期限到时会取消请求的 context，但连接还能写，所以 408 照写，并带 `Connection: close`（`TestSlowBodyIsAnswered408OverARealConnection` 用真实连接守住这一点；用模拟读失败的测试看不出）。
 
 **派生标识的长度**：`protocol.Rewrites.Identity` 返回的会话和用户标识（`Executor.identity` 等）须不超过 128 字节，`Prepare` 对超出的返回错误（`IdentityLen` 为 0 时的默认上限，#121）；G1、G3 自己不调 `Identity`；调用 `Prepare` 的尝试（G4）把客户端的值经 HMAC-SHA256（密钥 `ExecDeps.IdentitySecret`，加账户 ID）派生成 32 个十六进制字符，远在约束之内。
@@ -215,24 +216,25 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - 一个请求一个所有者 goroutine：只有它调 `Relay` 的方法，同一时刻至多一个 `Next` 在读；`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效，所有者写完才再调 `Next`。
 - 写客户端经一把写锁（`session.wmu`），写锁还守着“已开始”“客户端已走”“已收尾”三个标志：提交后的保活由计时器在写锁下写 `protocol.KeepAlive(format)` 的预生成字节，不碰 `Relay`；每次写都在写期限内并推迟保活，收尾时先停保活再写结尾，之后不再写。空闲计时到期只取消 `attemptCtx`。
 - 收尾顺序固定：取消 `attemptCtx` → 等 `Next` 返回 → 所有者调 `Settle` → `Finish` 或 `Fail`。
+- 不变量：调用拿到的每个 `Relay` 在每条退出路径上都归还节点预算，恰好一次，panic 也不例外。所有权从 `NewRelay` 起就在会话：`stream` 创建时记入 `session.live`（读到一半 panic 也找得到它），`part` 里留着的永远就是 `live`（下一次尝试在创建 `Relay` 之前先放掉它），所以 `left` 转交时 `part` 清空也不会漏，`Run` 退出时 `release` 统一 `Release`。`Relay.Release` 第二次起什么都不做；先行结束的路径（`Finish`、`Fail`）不必管 `live`，而确定丢弃一个 `Relay` 的路径一律经 `session.drop`（`Fail`、`Release` 做完才清 `live`）：丢弃的 `Relay` 缓冲不能因会话还指着它而一直可达，否则退还的预算被下一次尝试再用时（比如等响应头），旧缓冲仍占着内存而没有计数。`drop` 中途 panic 时 `live` 还在，由 `Run` 退出的 `release` 兜底，兜底只有这一条。compact 回复的 `held` 同理：`readWhole` 边读边记入 `session.replyHeld`（读到一半 panic 也找得到），读失败或客户端已走时 `dropReply` 立即退还，否则 `release` 一并归还。
 - 非流式客户端：`RelayOptions.Aggregate`，`Next` 不返回 `Out`，`Finish`、`Fail` 返回整个响应体，`Status()` 给它的状态码，没有内容时的失败是 `RenderError` 的答案，可以换端点（[protocol 的「非流式聚合」](../protocol/README.md#非流式聚合)）；每路输出预算 16 MiB；聚合内存申请不到（`ErrMemory`）是本地容量故障，按对外错误结束，不再回退。网关怎么用它见下文「非流式聚合与 compact」。
 
 ## 非流式聚合与 compact
 
-G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`、`answerReply`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
+G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`；compact 的回复在 `conclude` 里直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
 
 **不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真，`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`），不写响应头。
 
-- **可以换端点**：读到内容之后断流、空闲超时，把这次尝试的 `Relay` 留下来（`session.part`），按 `routing.Decide` 的 `NextEntry` 换下一条，下一次尝试开始时把上一条放掉，所以各次尝试的内容从不混在一起。没有条目可试、或 `mayStart` 不再放行时，`left` 把留下的那一个交回，由它作答：Chat、Responses 以 200 带上已生成的内容和错误，Messages 以 502 只带错误（`Relay.Fail` 按格式决定），尝试的结局记 `Aggregated`（内容随回复交到客户端）或 `FailedBeforeCommit`（Messages 的 502）。保留的那次尝试在 `Run` 退出时也一定放掉（`defer s.let()`，经 `drop` 调 `Fail` 再 `Release`），容量与节点预算随之归还。
+- **可以换端点**：读到内容之后断流、空闲超时，把这次尝试的 `Relay` 留下来（`session.part`），按 `routing.Decide` 的 `NextEntry` 换下一条，下一次尝试开始时把上一条放掉，所以各次尝试的内容从不混在一起。没有条目可试、或 `mayStart` 不再放行时，`left` 把留下的那一个交回，由它作答：Chat、Responses 以 200 带上已生成的内容和错误，Messages 以 502 只带错误（`Relay.Fail` 按格式决定），尝试的结局记 `Aggregated`（内容随回复交到客户端）或 `FailedBeforeCommit`（Messages 的 502）。保留的那次尝试在 `Run` 退出时也一定放掉（`defer s.release()`，经 `let` 调 `drop`，即 `Fail` 再 `Release`），容量与节点预算随之归还；`left` 交回作答的那一个由 `session.live` 接着管（见「Relay 的所有权」）。
 - **不换端点的失败**：截断（预留追加不到）、节点内存不够（`ErrMemory`）、单次调用最长、客户端已走：没有内容交给客户端，`conclude` 直接以错误作答（402 / 503 / 408 / 不写），这次尝试记 `FailedBeforeCommit`，不再换条目——分别因为钱、本地容量和期限。
-- **写出**：`answerAggregate` 在 `Settle` 之后调 `Finish` 或 `Fail`，拿到整个响应体和 `Status()`；答 200 时用 `respond` 按 64 KiB 一块写出，整个响应体就是 `Relay` 的缓冲，所以它占的节点预算在写完（或客户端已走、写不下去）之前不归还，`answerAggregate` 在写完后调 `Relay.Release` 归还一次，与 `answerReply` 归还 `held` 一样（每块重设写期限，整份另有总期限，见「超时与限额」；`Content-Type: application/json`，状态码取自 `Status()`）。结算写不进时照 `Final{Pending: true}` 走，响应体带 `axiom.billing_pending`、不带费用，与流式相同；失败且费用为零时与 `answer` 一样不带 `axiom` 对象。
+- **写出**：`answerAggregate` 在 `Settle` 之后调 `Finish` 或 `Fail`，拿到整个响应体和 `Status()`；答 200 时用 `respond` 按 64 KiB 一块写出，整个响应体就是 `Relay` 的缓冲，所以它占的节点预算在写完（或客户端已走、写不下去）之前不归还，`Run` 退出时经 `session.live` 的 `Relay.Release` 归还，`replyHeld` 归还 compact 回复的 `held` 与之一样（每块重设写期限，整份另有总期限，见「超时与限额」；`Content-Type: application/json`，状态码取自 `Status()`）。结算写不进时照 `Final{Pending: true}` 走，响应体带 `axiom.billing_pending`、不带费用，与流式相同；失败且费用为零时与 `answer` 一样不带 `axiom` 对象。
 - **16 MiB**：每个聚合的回复最多持有 `aggregateLimit`（protocol 的「非流式聚合」），超出或节点预算不够都以 `ErrMemory` 结束，不换端点。
 
 **`/responses/compact`**（`Call.Compact`）：上游不流式、回复原样透传、请求只做最小的同格式改写、一次预留足（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。
 
 - 准入：`routing.Input.NoSegments` 让条目不可分段，预留按输出上限一次报足；这类调用读的是整份答复，所以端点不必能流式（路由对此例外）。`NativeOnly` 已有（请求格式是 Responses）：只有原生支持 Responses 的端点能服务它。
 - 请求：`protocol.Prepare` 按 `Target.Compact` 只改必须改的成员——模型名换成端点的名字，`user`、`safety_identifier`、`prompt_cache_key` 换成派生值，路由参数删除——`store`、`include`、输出上限、`input` 既不补也不改（[protocol 的「同格式改写」](../protocol/README.md#同格式改写)）；路径由 `suppliers.Call.Compact` 选（`/v1/responses/compact`，在 suppliers 的路径表里），等响应头的期限是 `CompactHeaderWait`（10 分钟，[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。请求带 `stream: true` 的在准入前就回 400：这个端点只给整份回复。
-- 回复：`readWhole` 一次读完，边读边向节点预算申请（上限 `compactLimit`，与聚合的 16 MiB 相同；扩容时新旧两块缓冲同时在，峰值见函数注释），每次读到字节就重置空闲计时；读完用 `protocol.UsageOf` 读出顶层 `usage` 作为这次尝试的用量，上游没报告的部分由结算暂估。读成功、客户端还在，就是这次调用的答案：`Settle` 之后 `answerReply` 把上游的状态码和字节按 64 KiB 一块写出（每块一个写期限，整份的总期限见「超时与限额」）；客户端已走则不写，记 `FailedBeforeCommit`。客户端在结算之后、写出之前离开，或写到一半停读：不再写，结算与金额不变，只是调用记录仍按已读到的报告记 `Aggregated`（内容没送到，这类回复没有可报告的输出，不会因此免单）。读失败（断流、空闲、断开、内存）时什么都没写，按失败的作用范围换条目或直接以错误作答（`failedReply`，与流式提交前相同）。
+- 回复：`readWhole` 一次读完，边读边向节点预算申请（上限 `compactLimit`，与聚合的 16 MiB 相同；扩容时新旧两块缓冲同时在，峰值见函数注释），每次读到字节就重置空闲计时；读完用 `protocol.UsageOf` 读出顶层 `usage` 作为这次尝试的用量，上游没报告的部分由结算暂估。读成功、客户端还在，就是这次调用的答案：`Settle` 之后 `conclude` 把上游的状态码和字节按 64 KiB 一块写出（每块一个写期限，整份的总期限见「超时与限额」）；客户端已走则不写，记 `FailedBeforeCommit`。客户端在结算之后、写出之前离开，或写到一半停读：不再写，结算与金额不变，只是调用记录仍按已读到的报告记 `Aggregated`（内容没送到，这类回复没有可报告的输出，不会因此免单）。读失败（断流、空闲、断开、内存）时什么都没写，按失败的作用范围换条目或直接以错误作答（`failedReply`，与流式提交前相同）。
 - **费用**：透传的响应体里没有本站的费用字段，`Settle` 写不进时也不加 `axiom.billing_pending`（加了就不是原样）；费用只在调用记录里查。
 
 ## 超时与限额
