@@ -8,6 +8,7 @@
 |---|---|---|
 | Axiom 是什么 | [README.md](../README.md) | 第一次接触项目的人 |
 | 产品需求：做什么、给谁、和 OpenRouter 有何不同、售卖形式、端点属性、范围与待定问题 | [product.md](product.md) | 设计或开发任何功能之前 |
+| 与 OpenRouter 的能力对照：OpenRouter 的每个接口和行为、Axiom 现状、参考实现位置、缺口与归属 | [openrouter-parity.md](openrouter-parity.md) | 设计或改动任何对外接口、兼容行为之前；排 M2/M3 的先后时 |
 | 术语与核心概念：统一叫法、代码命名、概念之间的关系 | [glossary.md](glossary.md) | 写文档、写代码、给东西起名之前 |
 | 总体架构：模块划分、部署拓扑、调用链路、技术选型、工程原则、底线指标 | [architecture.md](architecture.md) | 新建模块、跨模块改动、选依赖、做部署之前 |
 | 性能：延迟预算、调用路径的规则、后台与数据、规模与扩展、基准测试与压测 | [performance.md](performance.md) | 改动调用路径、流式转发、格式转换或大表查询之前；压测和扩容之前 |
