@@ -55,8 +55,7 @@ func (r outageRig) fail(t *testing.T, err error) int {
 	return w.Code
 }
 
-func (r outageRig) lines() int { return strings.Count(r.logs.String(), "
-") }
+func (r outageRig) lines() int { return strings.Count(r.logs.String(), "\n") }
 
 // TestAnOutageIsLoggedOnceNotPerRequest: however many requests an outage refuses, the log holds one line when it begins
 // and one when it ends, while the metric counts every request, and a failure that is not an outage is still logged
@@ -80,8 +79,7 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 				}
 			}
 			if r.lines() != 1 {
-				t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:
-%s", n, r.lines(), r.logs)
+				t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, r.lines(), r.logs)
 			}
 			if got := refusals(t, r.tel, tc.cause); got != "500" {
 				t.Errorf("the metric counts %s refusals, want %d", got, n)
@@ -89,8 +87,7 @@ func TestAnOutageIsLoggedOnceNotPerRequest(t *testing.T) {
 			r.outage.recovered()
 			r.outage.recovered() // a request after the end tells nothing more
 			if r.lines() != 2 || !strings.Contains(r.logs.String(), "refused=500") {
-				t.Errorf("the end of the outage is not told once with its count:
-%s", r.logs)
+				t.Errorf("the end of the outage is not told once with its count:\n%s", r.logs)
 			}
 			r.logs.Reset()
 			for range 3 {
