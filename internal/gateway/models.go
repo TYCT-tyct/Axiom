@@ -35,7 +35,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Anthropic-Version") != "" {
 		format = protocol.Messages
 	}
-	release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
+	release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
 	if err != nil {
 		h.fail(w, r, format, err)
 		return
@@ -75,7 +75,7 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 		return err
 	}
 	defer release()
-	return h.admitDB(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
+	return h.admitDB(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: h.clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
 }
 
 func (l *modelList) of(snap *catalog.Snapshot) ([]byte, error) {
