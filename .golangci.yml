@@ -2,6 +2,11 @@
 # departures from the defaults, and thresholds are never loosened to make a change pass.
 version: "2"
 
+run:
+  # The differential test against new-api (`just diff`) is built only with this tag, and is linted like the rest.
+  build-tags:
+    - diff
+
 linters:
   default: none
   enable:
