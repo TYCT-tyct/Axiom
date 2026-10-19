@@ -1,0 +1,19 @@
+# The rehearsal's stand-in for the bucket (scripts/ops/rehearse.sh, docs/ops/backup-restore.md「恢复演练」): a local S3
+# server on the stack's own network, so nothing reaches a real bucket and the sets it holds are as disposable as the
+# stack. Not part of a deployment.
+services:
+  s3:
+    # MinIO's own images are no longer publicly available — its Docker Hub repository is gone and quay.io/minio/minio
+    # answers 401 — and this one is on Docker Hub with a tag per release. The rehearsal uses only what a backup uses:
+    # list, copy, purge, over the S3 API.
+    image: rustfs/rustfs:1.0.3
+    command: [server, /data]
+    restart: "no"
+    environment:
+      RUSTFS_ACCESS_KEY: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID:?deploy/.env.rehearsal holds it}
+      RUSTFS_SECRET_KEY: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY:?deploy/.env.rehearsal holds it}
+    volumes:
+      - s3:/data
+
+volumes:
+  s3:

@@ -1,0 +1,53 @@
+# The production edge: what terminates TLS in front of the program (docs/ops/backup-restore.md「生产入口」).
+#
+# It is a separate file so that a deployment without an edge — the deployment check in CI, a local `just up` — never
+# creates the network below: its subnet is pinned so that the program can be told exactly which address is its proxy, and
+# a pinned subnet can collide with another project's on a host that runs several.
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --wait
+#
+# start it, and deploy/ingress/Caddyfile is what it serves.
+services:
+  axiom:
+    networks:
+      edge:
+    environment:
+      # The edge's address and nothing else: the program reads a client address from X-Forwarded-For only when the request
+      # arrives from an address listed here (internal/platform/README.md「监听」). Requests through the host's published
+      # ports arrive from another network and are not trusted.
+      AXIOM_TRUSTED_PROXIES: ${AXIOM_EDGE_PROXY_ADDRESS:-172.28.0.10}/32
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
+    environment:
+      # Required here rather than defaulted: this file is only read when the edge is started, so a missing hostname stops
+      # the start with this message instead of a Caddyfile that cannot parse. `just up` never reads this file.
+      AXIOM_EDGE_PUBLIC_HOST: ${AXIOM_EDGE_PUBLIC_HOST:?set it in deploy/.env}
+      AXIOM_EDGE_ADMIN_HOST: ${AXIOM_EDGE_ADMIN_HOST:?set it in deploy/.env}
+      AXIOM_EDGE_ADMIN_ALLOW_CIDRS: ${AXIOM_EDGE_ADMIN_ALLOW_CIDRS:-127.0.0.1/32 ::1/128}
+      AXIOM_EDGE_CONSOLE_ALLOW_CIDRS: ${AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
+    ports:
+      - 80:80 # the ACME HTTP challenge, and the redirect to https
+      - 443:443 # TCP only: the Caddyfile serves HTTP/1.1 and HTTP/2
+    volumes:
+      - ./ingress/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates, and the key that signs the configuration: losing these means getting new certificates.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        ipv4_address: ${AXIOM_EDGE_PROXY_ADDRESS:-172.28.0.10}
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # The edge's own network, with a fixed address so that AXIOM_TRUSTED_PROXIES can name exactly the proxy. Only the
+  # program and the edge are on it, so the database is not reachable from the edge.
+  edge:
+    ipam:
+      config:
+        - subnet: ${AXIOM_EDGE_SUBNET:-172.28.0.0/24}
