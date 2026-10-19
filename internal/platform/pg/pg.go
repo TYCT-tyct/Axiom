@@ -304,3 +304,24 @@ func IsDataError(err error) bool {
 	code := SQLState(err)
 	return strings.HasPrefix(code, "22") || strings.HasPrefix(code, "23")
 }
+
+// Unavailable reports whether err says the database cannot be reached or is not taking connections now: a failed
+// connection, a connection exception (SQLSTATE class 08), a server shutting down or starting (57P01 to 57P03), or one
+// out of connections (53300). The reason is a fixed text, not err's own: pgx names the host, user and database in a
+// connection error, and a secret may sit in any of them (see redactConnect). A caller that tells a database outage
+// from a bug does so by this, without importing pgx.
+func Unavailable(err error) (reason string, ok bool) {
+	if errors.As(err, new(*pgconn.ConnectError)) {
+		return "cannot connect to the database", true
+	}
+	code := SQLState(err)
+	switch {
+	case strings.HasPrefix(code, "08"):
+		return "the connection to the database failed (SQLSTATE " + code + ")", true
+	case code == "57P01", code == "57P02", code == "57P03":
+		return "the database is shutting down or starting (SQLSTATE " + code + ")", true
+	case code == "53300":
+		return "the database has no connection left (SQLSTATE " + code + ")", true
+	}
+	return "", false
+}

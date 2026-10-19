@@ -209,7 +209,8 @@ func TestACompactReplyHoldsAtMostTheCap(t *testing.T) {
 		{"exactly the cap", compactLimit, true},
 		{"a byte past it", compactLimit + 1, false},
 	} {
-		body, held, err := readWhole(memory, io.LimitReader(zero{}, c.size), idle, time.Hour)
+		var held int64
+		body, err := readWhole(memory, io.LimitReader(zero{}, c.size), idle, time.Hour, &held)
 		if c.reply && (err != nil || int64(len(body)) != c.size) {
 			t.Errorf("%s: %d bytes, error %v", c.name, len(body), err)
 		}

@@ -77,7 +77,11 @@ def queue_order(prs):
 
 def unmet_checks(required, check_runs, statuses):
     """The required checks, other than train itself, that are not green on a head."""
-    state = {run["name"]: run["conclusion"] if run["status"] == "completed" else run["status"] for run in check_runs}
+    # filter=latest still returns one run per check suite, so a check that ran in several workflow runs (a review
+    # rerun after a comment cancels the one before) appears several times: the last created counts. Check run ids
+    # grow with creation; start times can't order them, since a run cancelled before it started has none.
+    runs = sorted(check_runs, key=lambda run: run["id"])
+    state = {run["name"]: run["conclusion"] if run["status"] == "completed" else run["status"] for run in runs}
     state.update({status["context"]: status["state"] for status in statuses})
     return [name for name in required if name != STATUS and state.get(name) not in GREEN]
 

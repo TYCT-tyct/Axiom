@@ -99,6 +99,15 @@ func orDefault[T int | int64 | float64 | time.Duration](v, fallback T) T {
 	return v
 }
 
+// Fresh reports whether Plan would use the current snapshot: there is one and it is not older than MaxStale. It is the
+// one staleness test, so a node that reports itself ready is a node whose calls are not all answered ErrStale.
+func (r *Router) Fresh() bool {
+	snap := r.snap.Load()
+	return snap != nil && r.fresh(snap, r.cfg.Now())
+}
+
+func (r *Router) fresh(s *Snapshot, now time.Time) bool { return now.Sub(s.built) <= r.cfg.MaxStale }
+
 // Replace makes s the snapshot Plan uses, if it is newer than the current one: a build that finishes late never
 // replaces a newer one.
 func (r *Router) Replace(s *Snapshot) {
