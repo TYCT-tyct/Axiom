@@ -148,11 +148,15 @@ func TestExchangeWritesAreSerializedAndAudited(t *testing.T) {
 
 func TestExchangeFirstDirectionsAndIdempotency(t *testing.T) {
 	r := newRules(t)
-	forward := fxInput("14", "100", "initial", 0)
-	reverse := fxInput("100", "14", "initial", 0)
-	reverse.Base, reverse.Quote = "CNY", "USD"
-	if errs := race(t, r, forward, reverse); !oneStale(errs[0], errs[1]) {
-		t.Fatalf("first directions: %v", errs)
+	// Each pair races once, as the overlap of two short transactions is not certain; CNY last, which the rest uses.
+	for _, quote := range []string{"EUR", "GBP", "JPY", "HKD", "SGD", "AUD", "CAD", "CHF", "CNY"} {
+		forward := fxInput("14", "100", "initial", 0)
+		forward.Quote = quote
+		reverse := fxInput("100", "14", "initial", 0)
+		reverse.Base, reverse.Quote = quote, "USD"
+		if errs := race(t, r, forward, reverse); !oneStale(errs[0], errs[1]) {
+			t.Fatalf("first directions of %s: %v", quote, errs)
+		}
 	}
 	in := fxInput("71", "10", "correction", 1)
 	fingerprint, err := idem.Fingerprint(in)
