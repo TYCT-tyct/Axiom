@@ -219,6 +219,20 @@ func TestPricingRuleRefusals(t *testing.T) {
 	}
 }
 
+// expectConstraintWaits checks one refusal of a constraint: 422 whose first field is the member and says it is not
+// supported yet.
+func expectConstraintWaits(t *testing.T, name string, rec *httptest.ResponseRecorder, pointer string) {
+	t.Helper()
+	expectAdmin(t, name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+	fields := errorDetailOf(t, rec).Fields
+	switch {
+	case fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != pointer:
+		t.Errorf("%s: fields %v, want %s", name, fields, pointer)
+	case !strings.Contains((*fields)[0].Message, "not supported yet"):
+		t.Errorf("%s: %q does not say the constraint is not supported yet", name, (*fields)[0].Message)
+	}
+}
+
 // TestPricingRuleConstraintsWait: this release does not apply a rule's constraints, so creating, changing or previewing
 // a rule that carries any of them is refused as 422 naming the member, and nothing is stored or changed; a rule with
 // none is accepted.
@@ -239,14 +253,7 @@ func TestPricingRuleConstraintsWait(t *testing.T) {
 			"changing":   f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+rule+`,"reason":"r"}`, newKey()),
 			"previewing": f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+rule+`}`, as(f.s)),
 		} {
-			expectAdmin(t, what+" a rule with "+c.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
-			fields := errorDetailOf(t, rec).Fields
-			switch {
-			case fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != c.pointer:
-				t.Errorf("%s a rule with %s: fields %v, want %s", what, c.name, fields, c.pointer)
-			case !strings.Contains((*fields)[0].Message, "not supported yet"):
-				t.Errorf("%s a rule with %s: %q does not say the constraint is not supported yet", what, c.name, (*fields)[0].Message)
-			}
+			expectConstraintWaits(t, what+" a rule with "+c.name, rec, c.pointer)
 		}
 	}
 	// The contract takes a member as a decimal or leaves it out: null and an empty text never reach the rule, so they
