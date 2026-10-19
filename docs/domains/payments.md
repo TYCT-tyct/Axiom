@@ -68,7 +68,7 @@
 - **订单号**：发给渠道的商户订单号就是订单 ID 的对外写法（`ord_` 加 26 个字符，30 个字符），只含字母、数字和下划线，满足易支付分支常见的 32 字符上限。偏离 sub2api 的"前缀 + 日期 + 8 位随机数、查重最多 5 次"（`service/payment_service.go:58-62`、`service/payment_order.go:238-251`）：ID 本身唯一，不需要查重。
 - **只认渠道**：到账以渠道的回调或我们主动向渠道查询的结果为准。用户付款后跳回的页面只用来展示，不作为到账依据。回调验签失败或密钥缺失时一律拒绝。
 - **有效期**：订单和锁定的汇率在有效期内有效，默认 30 分钟，按商户账户配置（sub2api `service/payment_config_service.go:47`）。
-- **每个账户的待支付订单最多 3 笔**，超过就拒绝新建（sub2api `service/payment_order.go:253-266`，默认值 `payment_config_service.go:48`）；取消次数也限流（`service/payment_order_lifecycle.go:37-97`），统计查询出错时拒绝新建，不像 sub2api 那样放行（`:50-52`）。
+- **每个账户的待支付订单最多 3 笔**，超过就拒绝新建（sub2api `service/payment_order.go:253-266`，默认值 `payment_config_service.go:48`）；取消次数也限流（`service/payment_order_lifecycle.go:37-97`），统计取消次数的查询出错时拒绝新建，不像 sub2api 那样放行（`payment_order_lifecycle.go:50-52`）。
 
 | 订单状态 | 代码 | 什么时候进入 |
 |---|---|---|

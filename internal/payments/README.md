@@ -72,7 +72,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 | 函数 | 用途 | 由谁实现 |
 |---|---|---|
-| `billing.TopUpRate(ctx, tx, from, to platform.Currency) (Rate, error)` | 当前参考汇率版本（ID、分子、分母）与充值方向的缓冲，订单据此锁定 | [#167](https://github.com/TYCT-tyct/Axiom/issues/167) 的汇率加上充值缓冲，E1-2 之前或之中 |
+| `billing.TopUpRate(ctx, tx, from, to platform.Currency) (Rate, error)` | 当前参考汇率版本（ID、分子、分母）与充值方向的缓冲，订单据此锁定 | E1-2：读 [#167](https://github.com/TYCT-tyct/Axiom/issues/167) 的参考汇率版本，加上充值缓冲（站点设置，在 billing）；#167 未合并时 E1-2 只开放同币种的付款方式 |
 | `billing.CreditPaid(ctx, tx, PaidCredit)` | 锁余额行，写付费额度批次（ID = 订单 ID）、"用户充值"分录和审计；同一 ID 重复无害 | E1-1 |
 | `billing.FreezeRefund(ctx, tx, Freeze) (int64, error)` | 锁余额行、补算分配、算可退额度并冻结；返回实际冻结的额度 | E1-6 |
 | `billing.SettleRefund(ctx, tx, refund)` / `ReleaseRefund(ctx, tx, refund)` | 冻结转成"退款"分录 / 解冻；以退款 ID 幂等 | E1-6 |
@@ -110,7 +110,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | `orders` | `id`、`site_id`、`account_id`、`user_id`、`merchant_id`、`method`、`state`、`idem_key`、`fingerprint`、`credits`、`site_currency`、`pay_currency`、`total`、`fee`、`fee_ppm`、`fee_fixed`、`rate_id`、`ref_num`/`ref_den`、`applied_num`/`applied_den`、`trade_no`、`checkout`、`expires_at`、`paid_total`、`credited`、`paid_at`、`client_ip`、`created_at`、`updated_at` | `credits > 0`；`total > 0`；`0 ≤ fee ≤ total`；`(rate_id IS NULL) = (pay_currency = site_currency)`；`state` 枚举；`state = 'paid' → paid_at, paid_total, credited` 非空；唯一 `(account_id, idem_key)`；唯一 `(merchant_id, trade_no)`（非空时）；部分索引 `(expires_at) WHERE state = 'pending'`；`(account_id, created_at DESC)`；`(merchant_id, created_at) WHERE state IN ('pending','paid','partially_refunded','refunded','review')` 供当天用量 | 账户数据：`in_scope(site_id, account_id)` |
 | `order_events` | `id`、`order_id`、`site_id`、`account_id`、`at`、`source`（notify、query、user、admin、job）、`kind`、`from_state`、`to_state`、`trade_no`、`amount`、`raw`（截到 8 KiB） | 只插入：`axiom_app` 只有 INSERT、SELECT；`(order_id, at)` | 账户数据 |
 | `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、pending、succeeded、failed）、`via`（channel、offline）、`credits`、`amount`、`with_fee`、`provider_ref`、`reason`、`requested_by`、`idem_key`、`attempts`、`next_query_at`、`created_at`、`finished_at` | `credits > 0`；`amount > 0`；唯一 `(order_id, idem_key)`；部分索引 `(next_query_at) WHERE state IN ('frozen','pending')` | 账户数据 |
-| `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、duplicate_payment、statement、refund_unknown、ledger）、`detail`、`state`（open、resolved）、`resolution`、`resolved_by`、`created_at`、`resolved_at` | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据 |
+| `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、duplicate_payment、statement、refund_unknown、ledger）、`dedupe`（同一事实的键：网关订单号、退款 ID 或对账日期）、`detail`、`state`（open、resolved）、`resolution`、`resolved_by`、`created_at`、`resolved_at` | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据 |
 
 - **对外 ID**：订单 ID 的对外写法就是发给渠道的商户订单号，`ord_` 加 26 个字符。
 - **账户删除**：订单、退款、订单事件与账本同寿命，不随账户删除（保留期与审计日志一起由负责人定）。
@@ -147,7 +147,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 | PR | 内容 | 验收测试 |
 |---|---|---|
-| E1-2 `feat(payments): persist orders and a channel interface` | 本文的表（对账单除外）和迁移；转移表；`Channel`、`Plugin`、登记；选商户账户；手续费与汇率锁定；下单、取消、"我已付款"、回调处理器、入账；过期（`payments.poll` 的第 2 步）；商户账户的保存与密钥封装；控制台与管理接口的契约；一个测试用的假渠道 | 转移表的全部（从，到）组合；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符进待处理、币种不符不入账；总额复算与手续费反推；选商户账户的单笔、当天额度（含待支付）、全被过滤和查用量出错都拒绝；坏签名不写库；查单失败返回 502；密钥不出现在日志、事件、审计和响应里；行级安全：账户只看到自己的订单，站长只看到本站的商户账户 |
+| E1-2 `feat(payments): persist orders and a channel interface` | 本文的表（对账单除外）和迁移；转移表；`Channel`、`Plugin`、登记；选商户账户；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；下单、取消、"我已付款"、回调处理器、入账；过期（`payments.poll` 的第 2 步）；商户账户的保存与密钥封装；控制台与管理接口的契约；一个测试用的假渠道 | 转移表的全部（从，到）组合；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符进待处理、币种不符不入账；总额复算与手续费反推；选商户账户的单笔、当天额度（含待支付）、全被过滤和查用量出错都拒绝；坏签名不写库；查单失败返回 502；密钥不出现在日志、事件、审计和响应里；行级安全：账户只看到自己的订单，站长只看到本站的商户账户 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全；退款响应是 HTML、空、字符串 `code`；全部经出站客户端；本机假网关的端到端；负责人提供商户后在真实网关小额实测 |
 | E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户保存失败 |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的补单与退款查询部分；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；过期宽限期内到账按锁定汇率、之后按到账时汇率；补单积压时游标推进、坏订单不挡后面；现金分录与订单不符时出现待处理记录并告警；同一差额重复上报只留一行 |
