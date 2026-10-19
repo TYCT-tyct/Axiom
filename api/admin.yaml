@@ -391,9 +391,9 @@ paths:
       description: >-
         Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense
         and audited with the reason. The amount is positive and within the limit for one grant (the money limits of
-        the control plane, docs/domains/operations.md), else 422. A grant does not expire: `expires_at` is refused (422,
-        pointing at `/expires_at`) until credit batches are written off at their expiry. Only gifts exist in M1; credit
-        that was paid for offline comes with the payments design.
+        the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what
+        is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid
+        for offline comes with the payments design.
       security:
         - session: []
           csrf: []
@@ -1760,7 +1760,7 @@ components:
       required: [amount, reason]
       properties:
         amount: {$ref: "#/components/schemas/Money"}
-        expires_at: {type: string, format: date-time, description: "Refused in this release (422): nothing writes off an expired batch yet. Leave it out; the credit does not expire."}
+        expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the credit does not expire."}
         reason: {$ref: "#/components/schemas/Reason"}
     CreditGrant:
       type: object
@@ -1769,7 +1769,7 @@ components:
         id: {$ref: "#/components/schemas/Uuid"}
         account_id: {$ref: "#/components/schemas/AccountId"}
         amount: {$ref: "#/components/schemas/Money"}
-        expires_at: {type: string, format: date-time, description: "Absent in this release: a grant does not expire."}
+        expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         balance_after: {$ref: "#/components/schemas/Balance"}
     SupplierStatus:

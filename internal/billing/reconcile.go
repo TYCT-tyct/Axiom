@@ -63,20 +63,23 @@ func RegisterReconcile(cfg ReconcileConfig) error {
 	return nil
 }
 
-// reconcileArgs is the job of one run. A run still waiting or working covers the next, so a node restarted over and
-// over does not stack them.
-type reconcileArgs struct{}
-
-// Kind implements river.JobArgs.
-func (reconcileArgs) Kind() string { return "billing.reconcile" }
+// singleRun is what the args of a periodic job share: a run still waiting or working covers the next, so a node
+// restarted over and over does not stack them.
+type singleRun struct{}
 
 // InsertOpts implements river.JobArgsWithInsertOpts.
-func (reconcileArgs) InsertOpts() river.InsertOpts {
+func (singleRun) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
 		rivertype.JobStateScheduled,
 	}}}
 }
+
+// reconcileArgs is the job of one run.
+type reconcileArgs struct{ singleRun }
+
+// Kind implements river.JobArgs.
+func (reconcileArgs) Kind() string { return "billing.reconcile" }
 
 type reconciler struct {
 	db       *pg.DB

@@ -2,7 +2,7 @@
 
 预留、计量、追加、结算与清理在代码层面的接口和规则。钱怎么算、收谁多少见[计费](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；这里只写调用路径上下游代码要依赖的部分，账本、额度批次的代码结构随实现补入本文。
 
-> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、账本、后台加额度 `AddCredit`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、售价 `Sell`／`SalePrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期是设计，尚未实现（[#230](https://github.com/TYCT-tyct/Axiom/issues/230)）。
+> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、账本、后台加额度 `AddCredit`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、售价 `Sell`／`SalePrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期 `ExpireAccount`、`ExpireDue`、`RegisterExpire` 也已实现（见「额度批次的分配与到期」）；付费来源、退款、拒付随支付设计。
 
 ## 接口（草图）
 
@@ -42,12 +42,15 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error)
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者
 func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：只有赠送；tx 须是平台范围（审计日志要求）
 func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 做的批次（金额、过期、创建时间），管理接口回答赠送时读
+func ExpireAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (int64, error) // 已实现：一个账户的到期作废，tx 须是平台范围；返回作废的金额
+func ExpireDue(ctx context.Context, db *pg.DB, platform pg.Scope, logger *slog.Logger) (int, error) // 已实现：对每个有到期批次的账户作废，一个账户一个事务；一个失败不拦住其余
+func RegisterExpire(cfg ExpireConfig) error // 已实现：登记为队列上的周期任务 billing.expire_credit，每分钟，在队列 Start 之前调用
 func Reconcile(ctx context.Context, db *pg.DB, platform pg.Scope) ([]string, error) // 已实现：每日自平，列出不平的交易和与账本不符的余额
 func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记为队列上的周期任务，在队列 Start 之前调用（cmd/axiom 的 startSync）
 func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；只从运营或管理的处理器调用，事务须是平台范围
 type Suppliers interface{ RecordAttempts; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
-func (b *Billing) Run(ctx context.Context) error // 已实现：心跳、回收、截止时间清理；额度到期随批次的分配（尚未实现）
+func (b *Billing) Run(ctx context.Context) error // 已实现：心跳、回收、截止时间清理
 type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported catalog.Usage; Final catalog.ItemSet } // 已实现；gateway 从 protocol.Progress 复制；Final：已是最终值的已报告项
 type Segment struct{ Usage catalog.Usage; Reported catalog.ItemSet } // 已实现；Reported 之外有用量的项是估的
 type Outcome struct{ Attempts []AttemptResult } // 已实现；收费的是最后一个；客户端是否离开记在收费那次尝试的 Finish（Cancelled）里，不在这里
@@ -135,9 +138,9 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 | 表 / 列 | 内容 | 谁能读写 |
 |---|---|---|
 | `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`charged_seq` 与 `entry`（收费的那次尝试和它的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`waived`（是否只收了按次项目）、`estimated`（收费是否基于上游没报告的用量或兜底价）、`final_usage`（收费所用的用量，含映射不了的，JSON，`Final` 从它读出） | 已释放、已结算的行不能再改 |
-| `transactions` | 一个事件一笔：租户、`kind`（credit、settle、reverse、attempt_cost）、`(request_id, attempt_seq, kind, revision)` 唯一 | 账户范围；只插入 |
-| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense）、`amount`（借正贷负，不为 0）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
-| `credit_batches` | 每次加额度一个批次：来源（目前只有赠送）、金额、过期时间 | 账户范围；只插入 |
+| `transactions` | 一个事件一笔：租户、`kind`（credit、settle、reverse、attempt_cost、expire）、`(request_id, attempt_seq, kind, revision)` 唯一 | 账户范围；只插入 |
+| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense、credit_expired）、`amount`（借正贷负，不为 0）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
+| `credit_batches` | 每次加额度一个批次：来源（目前只有赠送）、金额、过期时间；`consumed`、`expired` 是分配存下的已用和已作废（见「额度批次的分配与到期」） | 账户范围；插入，可改 `consumed`、`expired` |
 
 - **收缩**（迁移 `00006_drop_unused.sql`）：删了没有读写方的 `corrections`、`waivers` 两张表，`reservations` 的 `unpriced`、`correct_by` 两列和 `estimated_by_correct_by` 索引，状态约束收窄到下文「预留的状态」的五种（`pending`、`released`、`settled`、`cleanup_settled`、`cleanup_released`）；旧版本不读写它们，滚动发布不受影响。`fallbacks` 里的 `markup` 还在：行的解析不认没声明的成员，删它要先迁移改写 `body`（[#232](https://github.com/TYCT-tyct/Axiom/issues/232)）。
 - **每日自平**：`RegisterReconcile` 把 `Reconcile` 登记为队列上的周期任务 `billing.reconcile`（节点启动时先跑一次，之后每 24 小时；同一时刻只有一个在排队或在跑，多节点时只有队列的领导节点插入）。它只读，找出分录合计不为 0 的交易和与账本合计不符的余额；每个问题记一条 Error 日志（最多列 20 条，其余给总数）并计入 `axiom.billing.reconcile.problems`。队列先于 billing 启动，所以它不依赖 `*Billing`，只要数据库和平台范围。这是账本自己对平，与供应商逐条对账无关（[#227](https://github.com/TYCT-tyct/Axiom/issues/227)）。
@@ -151,6 +154,18 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 - **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。线下付款还不收：现金要按实付金额和锁定汇率记，随支付一起做。
 - **`Suppliers`**：billing 在自己的事务里写尝试（每个尝试的成本、用量、回执、供应商单位下的估算）、丢失的请求与其解决、请求的终结（`EndRequest`）；接口在 billing，参数直接用 suppliers 的类型，`suppliers.CallWrites` 是它的实现（无状态，转发 suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`），测试用替身。
 - **`EndRequest`**：预留进入终态（已结算、已释放、清理释放）的那个事务里调用，时间取写预留行时的数据库时钟，suppliers 据此知道请求已有定论。迟到的 `Settle` 只在预留行上补记，不改写请求的结束。`SettleOrphan` 释放或写墓碑时同样调用。
+
+## 额度批次的分配与到期
+
+[计费的「额度批次」](../../docs/domains/billing.md#额度批次)的实现。迁移 `migrations/00007_credit_expiry.sql`，查询 `queries/allocation.sql`，代码 `allocation.go`（重放，纯函数）、`expire.go`（读写和任务）。
+
+- **序号**：`transactions.seq` 取自序列，在 INSERT 时取。每笔动用户余额的交易都在账户的余额行锁内插入（`lockAccount`），所以同一账户的余额变动，序号按提交先后递增；时间戳和 UUID 给不出这个顺序（时钟会回拨，同一次结算的冲回和结算可以同一微秒）。`(account_id, seq)` 唯一。加这一列重写了表，已有行按存放顺序编一次号；这之前没有批次会到期，顺序不影响结果。**必须在余额行锁内插入动用户余额的交易**是这个顺序成立的前提；以后加新的这类交易，要守它。
+- **状态**：`credit_batches.consumed`、`expired`（剩余 = 金额 − 已用 − 已作废，建批次时为 0）；`balances.allocated_seq`（已重放到哪一笔）、`unfunded`（超出所有批次的扣费，即负余额）、`unbatched`（不属于任何批次的额度，如批次作废后又冲回的扣费）。没被重放过的账户全是 0。
+- **重放**（`allocation.apply`）：按序号读账户 `user_balance` 的净借方（每笔交易一行），逐笔：`credit` 开出批次并先还欠款；`expire` 从它指名的批次里扣掉作废额；其余借方为正是扣费，按「先到期、不过期的最后、同到期先赠送、再先进账」用批次，批次不够的计入 `unfunded`，`unbatched` 排在所有批次之后；借方为负是冲回，先抵 `unfunded`，余下计入 `unbatched`。已作废的批次不复活。结果只由账本决定：从头重放和接着上次存下的位置重放相同（`TestReplayProperty` 检查）。
+- **不变量**：①重放到最新后，Σ（批次剩余）+ `unbatched` − `unfunded` = `balances.balance`；②每个批次已用 + 已作废 ≤ 金额；③`unfunded` > 0 时没有批次还剩额度、`unbatched` 为 0；④到期作废不超过 `room`（余额 − 在途预留 − 底线，与结算收费的上限 `cap` 同一个函数），所以作废之前准入的预留都还收得下；⑤作废幂等：一轮作废后批次剩余为 0 或被 `room` 卡住，再跑一轮没有可作废的就什么也不写；⑥同一单位的扣费只落在一个批次上：重放在账户锁内串行进行，结算不写批次。
+- **`ExpireAccount`**：平台范围，一个事务。锁余额行 → 读状态和未用完的批次 → 重放到最新 → 核对不变量①（对不上就报错，什么也不作废）→ 按到期先后对每个到期的、仍有剩余的批次作废 min(剩余, 余额可降的量)，记 `expire` 交易（借用户余额、贷 `credit_expired`；`request_id` 是批次 ID，版本号是作废前已作废的累计额）→ 再重放一次吃进自己写的交易 → 存下状态。到期的判断用数据库时钟。
+- **`ExpireDue`**：按账户 ID 分页取有到期批次的账户（部分索引 `credit_batches_due`），一个账户一个事务；失败的合并报错，不拦住其余。队列任务 `billing.expire_credit` 每分钟一次，只有队列的领导节点插入，同一时刻只有一个在排队或在跑；账户作废失败只记 Error 日志、不让任务失败，因为任务重试会退避、并且重试中的任务会挡住下一轮的插入，一个坏账户会拖住所有账户。
+- **以后的来源**：付费批次由支付设计加进 `credit_batches.source` 的检查约束和 `sourceRank`；退款在账户锁内先 `loadAllocation` + `catchUp` 再选批次。动用户余额的新交易种类，在 `apply` 里按借方正负归为扣费或冲回，需要指定批次的（退款、拒付）在那时单独处理。
 
 ## 兜底价
 
@@ -206,6 +221,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 | 每次尝试的成本分录，以及供应商侧该尝试的成本行（用量、回执、供应商单位下的估算、结束时间） | 结算 | billing、suppliers | `(request_id, attempt_seq, attempt_cost)`；cost 分录与 `attempt_costs` 行同成同败；主键 `(request_id, attempt_seq)` |
 | 请求结算、余额、花费计数、预留终态；或只释放（终态时同事务写 `EndRequest`） | 结算 | billing、suppliers | `(request_id, 0, settle, 0)`；锁内按预留状态分支 |
 | 加额度 | 后台（平台范围） | billing | `(credit_id, 0, credit, 0)`；批次主键；审计日志同事务 |
+| 额度到期作废、批次的已用与已作废、分配的位置 | 到期任务（平台范围），一个账户一个事务 | billing | `(batch_id, 0, expire, 作废前的累计作废额)`；余额行锁；重放核对余额 |
 | 清理释放、丢失的请求（带路线）、`EndRequest` | 清理任务（后台角色） | billing、suppliers | 预留比较后再写；`lost_requests` 主键 `request_id` |
 | 迟到补扣 / 补差 | 迟到结算 | billing + suppliers | `(request_id, 0, reverse / settle, -1)`；只对清理释放发生 |
 | 调用记录 | 异步批量 | observability | 主键 `request_id`，`ON CONFLICT DO NOTHING` |

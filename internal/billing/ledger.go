@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/audit"
@@ -18,6 +19,7 @@ const (
 	bookSupplierCost    = "supplier_cost"
 	bookSupplierPrepaid = "supplier_prepaid"
 	bookGiftExpense     = "gift_expense"
+	bookCreditExpired   = "credit_expired"
 )
 
 // event names one ledger transaction: its tenant and its idempotency key.
@@ -86,13 +88,15 @@ func reversal(price, charged int64) []line {
 	return []line{{bookUserBalance, -charged}, {bookPlatformBorne, charged - price}, {bookRevenue, price}}
 }
 
-// Credit is a gift an administrator adds (docs/domains/billing.md「额度批次」). ID makes it idempotent. An offline
+// Credit is a gift an administrator adds (docs/domains/billing.md「额度批次」). ID makes it idempotent. ExpiresAt, when
+// set, is when what is left of the batch lapses (expire.go); the caller checks it lies ahead. An offline
 // payment is not taken yet: its cash must be booked at what was paid, in its currency at a locked rate, which comes
 // with payments.
 type Credit struct {
 	ID            uuid.UUID
 	Site, Account uuid.UUID
 	Amount        int64 // billionths of a credit, positive
+	ExpiresAt     *time.Time
 	Actor         audit.Actor
 	Reason        string
 }
@@ -112,12 +116,16 @@ func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error {
 		return err
 	}
 	if err := queries.InsertCreditBatch(ctx, tx, InsertCreditBatchParams{
-		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount,
+		ID: c.ID, SiteID: c.Site, AccountID: c.Account, Amount: c.Amount, ExpiresAt: c.ExpiresAt,
 	}); err != nil {
 		return fmt.Errorf("billing: write the credit batch: %w", err)
 	}
+	detail := map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"}
+	if c.ExpiresAt != nil {
+		detail["expires_at"] = c.ExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: c.Actor, Action: "credit.add", Target: audit.Target{Module: "billing", Kind: "account", ID: c.Account.String()},
-		Reason: c.Reason, Detail: map[string]any{"credit": c.ID.String(), "amount": c.Amount, "source": "gift"},
+		Reason: c.Reason, Detail: detail,
 	})
 }
