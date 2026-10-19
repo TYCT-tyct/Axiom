@@ -119,8 +119,11 @@ type statusOnly struct {
 	status int
 }
 
-func (s *statusOnly) Header() http.Header         { return s.header }
-func (s *statusOnly) Write(p []byte) (int, error) { return len(p), nil }
+func (s *statusOnly) Header() http.Header { return s.header }
+
+// Write keeps what the mux wrote out of the response: the status and the headers are the answer, and the body is the
+// one the caller writes. It reports len(p) so the writer that called it sees success.
+func (_ *statusOnly) Write(p []byte) (int, error) { return len(p), nil }
 
 func (s *statusOnly) WriteHeader(status int) {
 	if s.status == 0 {

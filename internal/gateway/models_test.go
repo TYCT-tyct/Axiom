@@ -73,23 +73,31 @@ func TestModelListIsScopedToTheKey(t *testing.T) {
 	restrict(r, alpha, "{acme/alpha}")
 	aliased := r.newAccount(1e9)
 	restrict(r, aliased, "{claude-test}") // the maker's name of anthropic/claude-test
+	checkListIsScoped(t, r, alpha, []string{"acme/alpha"})
+	checkListIsScoped(t, r, aliased, []string{"anthropic/claude-test", "claude-test"})
+	checkOneModel(t, r, alpha, aliased)
+	t.Run("an Anthropic client reads the same 404 in Messages' shell", func(t *testing.T) {
+		resp, body := r.do(http.MethodGet, "/v1/models/acme/beta", alpha.key, nil, "Anthropic-Version", "2023-06-01")
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "model_not_found" || !messagesShell(t, body) {
+			t.Errorf("an Anthropic client: %d %s", resp.StatusCode, body)
+		}
+	})
+}
 
-	for _, tc := range []struct {
-		name string
-		a    account
-		want []string
-	}{
-		{"the model it may call", alpha, []string{"acme/alpha"}},
-		{"every name of the model it may call", aliased, []string{"anthropic/claude-test", "claude-test"}},
-	} {
-		for _, path := range []string{"/v1/models", "/api/v1/models"} {
-			if diff := cmp.Diff(tc.want, r.listIDs(tc.a, path)); diff != "" {
-				t.Errorf("%s, %s (-want +got):\n%s", tc.name, path, diff)
-			}
+// checkListIsScoped: the key's list is exactly want, in both prefixes.
+func checkListIsScoped(t *testing.T, r *rig, a account, want []string) {
+	t.Helper()
+	for _, path := range []string{"/v1/models", "/api/v1/models"} {
+		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", path, diff)
 		}
 	}
+}
 
-	// The one model is the list's entry, under the name that was asked for.
+// checkOneModel: the one model is the list's entry, under the name that was asked for, and a model the key may not use,
+// one that does not exist and another key's model are the same 404.
+func checkOneModel(t *testing.T, r *rig, alpha, aliased account) {
+	t.Helper()
 	for _, tc := range []struct {
 		path               string
 		a                  account
@@ -106,7 +114,6 @@ func TestModelListIsScopedToTheKey(t *testing.T) {
 			t.Errorf("%s: %d %+v\n%s", tc.path, resp.StatusCode, m, body)
 		}
 	}
-
 	for _, tc := range []struct {
 		name, path string
 		a          account
@@ -119,12 +126,6 @@ func TestModelListIsScopedToTheKey(t *testing.T) {
 		if code, typ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "model_not_found" || typ != "not_found_error" {
 			t.Errorf("%s: %d %s %s, want 404 model_not_found not_found_error:\n%s", tc.name, resp.StatusCode, code, typ, body)
 		}
-	}
-
-	// An Anthropic client reads the same 404 in Messages' shell.
-	resp, body := r.do(http.MethodGet, "/v1/models/acme/beta", alpha.key, nil, "Anthropic-Version", "2023-06-01")
-	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "model_not_found" || !messagesShell(t, body) {
-		t.Errorf("an Anthropic client: %d %s", resp.StatusCode, body)
 	}
 }
 
