@@ -102,13 +102,13 @@ func TestExchangeRefreshFailureDoesNotExtendFreshness(t *testing.T) {
 	}
 }
 
-func (f *routeFixture) setCNYRate(version int64) error {
+func (f *routeFixture) setCNYRate(ctx context.Context, version int64) error {
 	kind := "adjustment"
 	if version == 0 {
 		kind = "initial"
 	}
-	return f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := billing.SetExchangeRate(f.t.Context(), tx, audit.System("gateway.test"), billing.ExchangeInput{
+	return f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := billing.SetExchangeRate(ctx, tx, audit.System("gateway.test"), billing.ExchangeInput{
 			Base: "CNY", Quote: "USD", Numerator: "10", Denominator: "71", Kind: kind,
 			ExpectedVersion: version, Reason: "commit during a routing build",
 		})
@@ -132,17 +132,17 @@ func TestRouteBuildKeepsTheRatesReadBeforeAConcurrentCommit(t *testing.T) {
 	e := routable(f.served, protocol.Messages)
 	e.Currency = exchangeCurrency(t, "CNY")
 	f.build([]suppliers.Routable{e})
-	if err := f.setCNYRate(0); err != nil {
+	if err := f.setCNYRate(t.Context(), 0); err != nil {
 		t.Fatal(err)
 	}
 	f.deps.ExchangeRates = f.currentRates
 	changed := false
-	f.deps.Prices = func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
+	f.deps.Prices = func(ctx context.Context) (map[catalog.ModelID]billing.Sold, error) {
 		if changed {
 			return f.prices, nil
 		}
 		changed = true
-		return f.prices, f.setCNYRate(1)
+		return f.prices, f.setCNYRate(ctx, 1)
 	}
 	for _, version := range []int64{1, 2} {
 		f.publish()

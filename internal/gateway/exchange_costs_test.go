@@ -55,6 +55,18 @@ func republishRate(ctx context.Context, r *rig, e routing.Endpoint, preset routi
 	return nil
 }
 
+func requireRepublished(t *testing.T, updated <-chan error) {
+	t.Helper()
+	select {
+	case err := <-updated:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("the request never attempted its reserved route")
+	}
+}
+
 type costBasis struct {
 	charged, recomputed int64
 	rate                uuid.UUID
@@ -122,14 +134,7 @@ func TestExchangeReservationReachesTheActualCostAndProfit(t *testing.T) {
 	for i, want := range []int64{184, 367} {
 		r.do("POST", "/v1/messages", account.key, strings.NewReader(stream("acme/alpha")))
 		if i == 0 {
-			select {
-			case err := <-updated:
-				if err != nil {
-					t.Fatal(err)
-				}
-			default:
-				t.Fatal("the request never attempted its reserved route")
-			}
+			requireRepublished(t, updated)
 		}
 		got := readCostBasis(t, r, r.lastCall().ID)
 		if got.charged != want || got.recomputed != got.charged || got.profit == nil || *got.profit != -want {
