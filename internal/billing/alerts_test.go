@@ -114,6 +114,31 @@ func TestCleanupGoesPastAReservationThatFails(t *testing.T) {
 	}
 }
 
+// TestCleanupReachesPastABacklogOfFailures: more always-failing reservations than one batch must not hold back a
+// healthy one behind them in request order; the walk goes on past the batch by a keyset cursor, so one call takes it over.
+func TestCleanupReachesPastABacklogOfFailures(t *testing.T) {
+	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
+	const batch = 3
+	holds := make([]*Hold, batch+1)
+	for i := range holds {
+		holds[i] = b.hold(1000)
+	}
+	slices.SortFunc(holds, func(a, c *Hold) int { return bytes.Compare(a.id[:], c.id[:]) })
+	healthy := holds[batch] // last in request order, behind a whole batch of failures
+	b.supplies.failLost = map[uuid.UUID]error{}
+	for _, h := range holds[:batch] {
+		b.supplies.failLost[h.id] = errors.New("the supplier's side is broken")
+	}
+	time.Sleep(5 * time.Millisecond) // past the reservations' deadline
+	n, err := b.billing.Cleanup(t.Context(), batch)
+	if n != 1 || err == nil {
+		t.Fatalf("Cleanup = %d, %v; want the healthy one cleaned and the failures reported", n, err)
+	}
+	if !b.supplies.lostNow(healthy.id) {
+		t.Error("the healthy reservation behind a batch of failures was not taken over")
+	}
+}
+
 // TestCleanupReportsWhatItReleases: a reservation cleanup gives back without a settlement is logged with its amount,
 // because any usage of the call is the platform's.
 func TestCleanupReportsWhatItReleases(t *testing.T) {
