@@ -417,7 +417,7 @@ func TestKeyringRewrapsModuleEnvelopes(t *testing.T) {
 
 	made := supplierFixture{node, passed}.connect()
 	login := "SELECT key_version::text || ':' || encode(ciphertext, 'hex') FROM suppliers.supplier_logins WHERE supplier_id = '" + made.Id + "'"
-	totp := "SELECT key_version::text || ':' || encode(totp_ciphertext, 'hex') FROM accounts.users WHERE email = 'module@example.com'"
+	totp := "SELECT totp_key_version::text || ':' || encode(totp_ciphertext, 'hex') FROM accounts.users WHERE email = 'module@example.com'"
 	beforeLogin, beforeTOTP := f.text(login), f.text(totp)
 
 	f.run("add", "--version", "2")
