@@ -125,7 +125,7 @@ function Snippet({ name, text, hint }: { name: string; text: string; hint?: stri
   );
 }
 
-// Shown while the key is on screen, and only then: every snippet carries it, and they all go away with this dialog.
+// The snippets leave the screen with the dialog that holds the plaintext key.
 function Guide({ apiBase, secret }: { apiBase: string; secret: string }) {
   const { t } = useTranslation();
   const guide = keyGuide(apiBase, secret);

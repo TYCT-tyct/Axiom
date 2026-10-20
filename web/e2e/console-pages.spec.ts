@@ -302,7 +302,15 @@ test.describe("API keys", () => {
     await expect(snippets.nth(4)).toContainText('base_url = "https://api.example.com/v1"');
     await expect(snippets.nth(4)).toContainText('env_key = "AXIOM_API_KEY"');
     await expect(snippets.nth(5)).toHaveText("https://api.example.com/v1");
-    await expect(secret.getByRole("button", { name: "复制 Claude Code" })).toBeVisible();
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    const copyNames = ["OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages", "Claude Code", "Codex", "Cursor"];
+    for (const [index, name] of copyNames.entries()) {
+      const copy = secret.getByRole("button", { name: `复制 ${name}`, exact: true });
+      await copy.focus();
+      await copy.press(index % 2 === 0 ? "Enter" : "Space");
+      const expected = await snippets.nth(index).innerText();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    }
     // Escape and a click outside do not close it; the user is the one to say the key is saved.
     await page.keyboard.press("Escape");
     await expect(secret).toBeVisible();

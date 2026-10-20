@@ -6,8 +6,7 @@ import zh from "./locales/zh";
 type AnyGuide = GuideProtocol | GuideClient;
 
 const apiBase = "https://api.tenant-317.example";
-// Split so the repository's secret scan does not read a made-up key as a leaked one.
-const secret = ["sk-ax-v1-", "0123456789abcdef"].join("");
+const secret = "fake-key";
 const guide = keyGuide(apiBase, secret);
 
 const textOf = (id: AnyGuide) =>
@@ -43,6 +42,28 @@ it.each(addresses)("$case points at the site's API domain, not one written here"
 
 it.each(carriesKey)("the %s snippet carries the key", (id) => {
   expect(textOf(id)).toContain(secret);
+});
+
+it.each(protocols)("the %s request sends JSON with a model and input", (id) => {
+  const text = textOf(id);
+  expect(text).toContain("Content-Type: application/json");
+  const payload = JSON.parse(text.split("  -d '")[1]?.slice(0, -1) ?? "{}");
+  expect(payload.model).toBe("<model>");
+  if (id === "responses") {
+    expect(payload.input).toBe("Hello");
+  } else {
+    expect(payload.messages).toEqual([{ role: "user", content: "Hello" }]);
+  }
+});
+
+it("sends the Anthropic version and token with a bounded output", () => {
+  expect(textOf("messages")).toContain(`x-api-key: ${secret}`);
+  expect(textOf("messages")).toContain("anthropic-version: 2023-06-01");
+  expect(textOf("messages")).toContain('"max_tokens":1024');
+});
+
+it.each(["chat", "responses"] as const)("the %s request authenticates with a bearer token", (id) => {
+  expect(textOf(id)).toContain(`Authorization: Bearer ${secret}`);
 });
 
 it("gives Claude Code the host alone, because the client appends /v1/messages itself", () => {

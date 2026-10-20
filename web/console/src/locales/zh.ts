@@ -114,7 +114,7 @@ export default {
         cursor: "Cursor",
       },
       hint: {
-        "claude-code": "三行写进 shell，或写进 ~/.claude/settings.json 的 env；之后用 /model 选站点提供的模型。",
+        "claude-code": "在 Bash 或 Zsh 中执行这三行，再用 /model 选站点提供的模型。",
         codex: "写进 ~/.codex/config.toml，再把 key 设成 AXIOM_API_KEY 环境变量。",
         cursor: "Settings → Models：Override OpenAI Base URL 填这个地址，OpenAI API Key 填上面那把 key。",
       },

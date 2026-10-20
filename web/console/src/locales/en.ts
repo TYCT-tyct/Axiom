@@ -116,8 +116,7 @@ export default {
         cursor: "Cursor",
       },
       hint: {
-        "claude-code":
-          "Add the three lines to your shell, or to env in ~/.claude/settings.json; then pick a model the site serves with /model.",
+        "claude-code": "Run these three lines in Bash or Zsh, then pick a model the site serves with /model.",
         codex: "Save this as ~/.codex/config.toml, then set the key as the AXIOM_API_KEY environment variable.",
         cursor: "Settings → Models: put this address in Override OpenAI Base URL, and the key above in OpenAI API Key.",
       },

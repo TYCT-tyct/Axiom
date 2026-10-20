@@ -11,29 +11,8 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// checkAPIBase checks the address the console shows a new key's owner: empty while the site registers no API domain, and
-// the smallest origin once it registers two, whatever order the query returns them in.
-func checkAPIBase(t *testing.T, s *accounts.Service, database pgtest.Database) {
-	t.Helper()
-	if site, _, err := s.SiteForHost("main.example"); err != nil || site.APIBase != "" {
-		t.Errorf("no API domain: %+v %v, want no address", site, err)
-	}
-	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO accounts.site_domains VALUES
-		('bbb.main.example', '`+s1.String()+`', 'api', 'https://bbb.main.example', NULL),
-		('aaa.main.example', '`+s1.String()+`', 'api', 'https://aaa.main.example', NULL)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if site, _, err := s.SiteForHost("bbb.main.example"); err != nil || site.APIBase != "https://aaa.main.example" {
-		t.Errorf("two API domains: %+v %v, want the smallest origin", site, err)
-	}
-}
-
-// TestSnapshot: a registered host names its site and surface whatever its case; an unknown one is refused; the site's
-// API base follows its API domain; a snapshot not reloaded for 90 seconds refuses everything until a reload succeeds; a
-// role holding a permission the program does not declare stops the start.
+// TestSnapshot: a registered host names its site and surface whatever its case; an unknown one is refused; a snapshot
+// not reloaded for 90 seconds refuses everything until a reload succeeds; an undeclared role permission stops the start.
 func TestSnapshot(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
@@ -47,7 +26,6 @@ func TestSnapshot(t *testing.T) {
 	if _, _, err := s.SiteForHost("other.example"); !errors.Is(err, accounts.ErrUnknownHost) {
 		t.Errorf("an unknown host: %v", err)
 	}
-	checkAPIBase(t, s, database)
 	mu.Lock()
 	now = now.Add(91 * time.Second)
 	mu.Unlock()
@@ -65,5 +43,41 @@ func TestSnapshot(t *testing.T) {
 	}
 	if err := s.Reload(t.Context()); err == nil || !strings.Contains(err.Error(), `role owner holds "keys.create"`) {
 		t.Errorf("a role with an unknown permission: %v", err)
+	}
+}
+
+func TestSnapshotAPIBase(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	s := node(t, db, hashKeys(t, 1), time.Now)
+	// Each step changes the same site's domains, so reload must also discard an address that has been disabled.
+	for _, tt := range []struct {
+		name, statement, want string
+	}{
+		{"no API domain", "SELECT 1", ""},
+		{"another site's API domain", `INSERT INTO accounts.site_domains VALUES
+			('other-api.example', '` + s2.String() + `', 'api', 'https://other-api.example', NULL)`, ""},
+		{"smallest origin", `INSERT INTO accounts.site_domains VALUES
+			('bbb.main.example', '` + s1.String() + `', 'api', 'https://bbb.main.example', NULL),
+			('aaa.main.example', '` + s1.String() + `', 'api', 'https://aaa.main.example', NULL)`, "https://aaa.main.example"},
+		{"disabled domain", `UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = 'aaa.main.example'`, "https://bbb.main.example"},
+		{"all API domains disabled", `UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = 'bbb.main.example'`, ""},
+		{"re-enabled domain", `UPDATE accounts.site_domains SET disabled_at = NULL WHERE domain = 'aaa.main.example'`, "https://aaa.main.example"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := pgtest.Run(t.Context(), database.Superuser, tt.statement); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Reload(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			site, _, err := s.SiteForHost("main.example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if site.APIBase != tt.want {
+				t.Errorf("API base = %q, want %q", site.APIBase, tt.want)
+			}
+		})
 	}
 }
