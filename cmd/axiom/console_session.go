@@ -18,12 +18,12 @@ func grant(issued accounts.Issued) consoleapi.SessionGrant {
 	return consoleapi.SessionGrant{Status: status, CsrfToken: issued.CSRFToken}
 }
 
-// GetSite tells the sign-in and registration pages whose they are.
+// GetSite tells the sign-in and registration pages whose they are, and where a key's calls go.
 func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
 	site := callOf(ctx).site
 	return consoleapi.GetSite200JSONResponse(consoleapi.Site{
 		Name: site.Name, Currency: site.Currency.String(), KeyPrefix: site.KeyPrefix,
-		Registration: consoleapi.SiteRegistration(site.Registration),
+		Registration: consoleapi.SiteRegistration(site.Registration), ApiBaseUrl: site.APIBase,
 	}), nil
 }
 

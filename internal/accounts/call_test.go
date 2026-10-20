@@ -526,11 +526,22 @@ func TestSnapshot(t *testing.T) {
 	now := time.Now()
 	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	s := node(t, db, hashKeys(t, 1), clock)
-	if site, surface, err := s.SiteForHost("MAIN.example"); err != nil || site.ID != accounts.SiteID(s1) || !site.Main || surface != accounts.Console {
+	if site, surface, err := s.SiteForHost("MAIN.example"); err != nil || site.ID != accounts.SiteID(s1) || !site.Main || surface != accounts.Console || site.APIBase != "https://"+apiDomain {
 		t.Errorf("main.example: %+v %s %v", site, surface, err)
 	}
 	if _, _, err := s.SiteForHost("other.example"); !errors.Is(err, accounts.ErrUnknownHost) {
 		t.Errorf("an unknown host: %v", err)
+	}
+	// A site may register more than one API domain; the address the console shows is the smallest origin, not whichever
+	// row the query happened to return last.
+	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO accounts.site_domains VALUES ('aaa.main.example', '`+s1.String()+`', 'api', 'https://aaa.main.example', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if site, _, err := s.SiteForHost("main.example"); err != nil || site.APIBase != "https://aaa.main.example" {
+		t.Errorf("two API domains: %+v %v, want the smallest origin", site, err)
 	}
 	mu.Lock()
 	now = now.Add(91 * time.Second)

@@ -775,12 +775,19 @@ components:
       description: "A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`."
     Site:
       type: object
-      required: [name, key_prefix, registration, currency]
+      required: [name, key_prefix, registration, currency, api_base_url]
       properties:
         name: {type: string}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
         logo_url: {type: string, description: "Absent when the site has no logo."}
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
+        api_base_url:
+          type: string
+          format: uri
+          example: https://api.example.com
+          description: >-
+            Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it
+            to the user because the console's own host is a different one; it is never built from the request's Host.
         registration:
           type: string
           enum: [invite, closed, open]

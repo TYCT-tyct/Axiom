@@ -224,7 +224,7 @@ func TestHostsOfNoConsole(t *testing.T) {
 	}
 	var site consoleapi.Site
 	decode(t, f.do(http.MethodGet, "/site", ""), &site)
-	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil {
+	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil || site.ApiBaseUrl != "https://api.main.example" {
 		t.Errorf("the site: %+v", site)
 	}
 	f.run(`UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '` + consoleHost + `'`)

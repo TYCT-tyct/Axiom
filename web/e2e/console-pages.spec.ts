@@ -290,6 +290,19 @@ test.describe("API keys", () => {
     await expect(secret).toBeVisible();
     const text = await secret.locator("code").innerText();
     expect(text).toMatch(/^sk-ax-v1-x{45}\d{4}$/);
+    // The guide sends every client to the site's API domain, taken from its own site config, and carries the key while
+    // this dialog is open: three request formats, then the three clients the docs name.
+    const snippets = secret.locator("pre");
+    await expect(snippets).toHaveCount(6);
+    await expect(snippets.nth(0)).toContainText("https://api.example.com/v1/chat/completions");
+    await expect(snippets.nth(1)).toContainText("https://api.example.com/v1/responses");
+    await expect(snippets.nth(2)).toContainText("https://api.example.com/v1/messages");
+    await expect(snippets.nth(3)).toContainText("export ANTHROPIC_BASE_URL=https://api.example.com");
+    await expect(snippets.nth(3)).toContainText(`export ANTHROPIC_AUTH_TOKEN=${text}`);
+    await expect(snippets.nth(4)).toContainText('base_url = "https://api.example.com/v1"');
+    await expect(snippets.nth(4)).toContainText('env_key = "AXIOM_API_KEY"');
+    await expect(snippets.nth(5)).toHaveText("https://api.example.com/v1");
+    await expect(secret.getByRole("button", { name: "复制 Claude Code" })).toBeVisible();
     // Escape and a click outside do not close it; the user is the one to say the key is saved.
     await page.keyboard.press("Escape");
     await expect(secret).toBeVisible();

@@ -38,6 +38,9 @@ type Site struct {
 	DefaultTier TierID
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit int64
+	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
+	// where to point a client rather than trusting the Host of the request (README.md「快照」).
+	APIBase string
 	sessions         map[Surface]lifetime
 	limits           limits
 }
@@ -171,6 +174,15 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	}
 	for _, r := range domains {
 		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
+		// A site's API base is the origin of its API domain: the host a key's calls are made to, which the console
+		// shows the user instead of a URL built from the request's Host (README.md「快照」). A site may register more
+		// than one, so the smallest origin is the one it shows: the query has no order, and the address must not change
+		// between reloads.
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
+			(site.APIBase == "" || r.Origin < site.APIBase) {
+			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
 	}
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {

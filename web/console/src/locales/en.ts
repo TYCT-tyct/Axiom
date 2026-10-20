@@ -100,6 +100,29 @@ export default {
       body: "The full key for “{{name}}” is shown only now and can’t be found again. Copy it and keep it safe.",
       done: "I’ve saved it",
     },
+    guide: {
+      title: "Connect",
+      protocols: "Request formats",
+      clients: "Clients",
+      model: "The examples leave <model> to fill in: use a name /v1/models lists, shaped vendor/model.",
+      protocol: {
+        chat: "OpenAI Chat Completions",
+        responses: "OpenAI Responses",
+        messages: "Anthropic Messages",
+      },
+      client: {
+        "claude-code": "Claude Code",
+        codex: "Codex",
+        cursor: "Cursor",
+      },
+      hint: {
+        "claude-code":
+          "Add the three lines to your shell, or to env in ~/.claude/settings.json; then pick a model the site serves with /model.",
+        codex: "Save this as ~/.codex/config.toml, then set the key as the AXIOM_API_KEY environment variable.",
+        cursor: "Settings → Models: put this address in Override OpenAI Base URL, and the key above in OpenAI API Key.",
+      },
+      copy: "Copy {{name}}",
+    },
   },
   calls: {
     description: "The result, usage and cost of each call. No conversation content.",
