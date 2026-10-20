@@ -64,6 +64,9 @@ func TestKeyringRetireRecoversAfterMetadataCommitted(t *testing.T) {
 	f.run("retire", "--version", "1")
 	// Reproduce a crash after the retirement commit but before the file replacement.
 	restoreKeyFile(t, f.path, both)
+	if _, _, err := f.r.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "still in the local file: [1]") {
+		t.Fatalf("a node still holding the retired version passed check: %v", err)
+	}
 	f.run("retire", "--version", "1")
 	if got := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action='keyring.retire'"); got != "1" {
 		t.Fatalf("retry recorded %s retirements, want one", got)
@@ -108,7 +111,7 @@ func TestKeyringRefusesCorruptBatchWithoutAdvancing(t *testing.T) {
 		"UPDATE accounts.users SET totp_ciphertext=set_byte(totp_ciphertext, 0, get_byte(totp_ciphertext, 0) # 1)"); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := f.r.RewrapBatch(t.Context(), 100); err == nil || count != 0 {
+	if count, _, err := f.r.RewrapBatch(t.Context(), secret.RewrapCursor{}, 100); err == nil || count != 0 {
 		t.Fatalf("corruption advanced a checkpoint: count=%d, err=%v", count, err)
 	}
 	if got := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "0" {

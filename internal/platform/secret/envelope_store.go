@@ -30,13 +30,13 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 	rows, err := tx.Query(ctx, `SELECT table_schema, table_name, column_name FROM information_schema.columns
 		WHERE column_name = 'wrapped_dek' OR column_name LIKE '%\_wrapped_dek' ESCAPE '\'`)
 	if err != nil {
-		return errors.New("keyring: cannot inspect envelope inventory")
+		return fmt.Errorf("keyring: cannot inspect envelope inventory: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var schema, table, column string
 		if err := rows.Scan(&schema, &table, &column); err != nil {
-			return errors.New("keyring: cannot read envelope inventory")
+			return fmt.Errorf("keyring: cannot read envelope inventory: %w", err)
 		}
 		if !slices.ContainsFunc(r.Stores, func(s EnvelopeStore) bool {
 			return s.Schema == schema && s.Table == table && s.Prefix == strings.TrimSuffix(column, "wrapped_dek")
@@ -45,7 +45,7 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 		}
 	}
 	if rows.Err() != nil {
-		return errors.New("keyring: cannot read envelope inventory")
+		return fmt.Errorf("keyring: cannot read envelope inventory: %w", rows.Err())
 	}
 	return nil
 }
@@ -66,21 +66,21 @@ func (s EnvelopeStore) checkReferences(ctx context.Context, tx pg.Tx, ring *Keyr
 	column := s.column("key_version")
 	rows, err := tx.Query(ctx, "SELECT DISTINCT "+column+" FROM "+s.table()+" WHERE "+column+" IS NOT NULL")
 	if err != nil {
-		return errors.New("keyring: cannot read envelope references")
+		return fmt.Errorf("keyring: cannot read envelope references: %w", err)
 	}
 	defer rows.Close()
 	var invalid []uint32
 	for rows.Next() {
 		var version uint32
 		if err := rows.Scan(&version); err != nil {
-			return errors.New("keyring: cannot read envelope version")
+			return fmt.Errorf("keyring: cannot read envelope version: %w", err)
 		}
 		if _, ok := ring.keys[version]; !ok || !slices.Contains(status.Readable, version) {
 			invalid = append(invalid, version)
 		}
 	}
 	if rows.Err() != nil {
-		return errors.New("keyring: cannot read envelope references")
+		return fmt.Errorf("keyring: cannot read envelope references: %w", rows.Err())
 	}
 	if len(invalid) != 0 {
 		slices.Sort(invalid)
@@ -99,7 +99,7 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 		var exists bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM "+store.table()+" WHERE "+store.column("key_version")+" = $1)",
 			int64(version)).Scan(&exists); err != nil {
-			return errors.New("keyring: cannot read envelope references")
+			return fmt.Errorf("keyring: cannot read envelope references: %w", err)
 		}
 		if exists {
 			return fmt.Errorf("keyring: version %d is still referenced", version)
@@ -108,19 +108,29 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 	return nil
 }
 
-// RewrapBatch commits at most limit envelopes from one store and its audit entry together. A zero result means
-// no store has a remaining old version. The stored version is the checkpoint, so interrupted runs need no cursor.
-func (r Rotation) RewrapBatch(ctx context.Context, limit int) (int, error) {
+// RewrapCursor is where one run of batches stopped: the store it was rewrapping and the last row it committed there.
+// It lives only in that command's memory; a new run starts from the zero value, which is still correct because the
+// stored key_version is the checkpoint and the rows before it were committed.
+type RewrapCursor struct {
+	store int
+	after string
+}
+
+// RewrapBatch commits at most limit envelopes from one store and its audit entry together, continuing after cursor. A
+// zero count means no store has a remaining old version. The stored version is the checkpoint, so an interrupted run
+// needs no durable cursor: starting it from the zero value is still correct.
+func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit int) (int, RewrapCursor, error) {
 	if limit < 1 || limit > 1000 {
-		return 0, errors.New("keyring: batch size must be between 1 and 1000")
+		return 0, RewrapCursor{}, errors.New("keyring: batch size must be between 1 and 1000")
 	}
 	var count int
+	var next RewrapCursor
 	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
 		ring, err := Load(r.Path)
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, ring)
+		status, err := checkVersions(ctx, tx, ring, 0)
 		if err != nil {
 			return err
 		}
@@ -128,29 +138,38 @@ func (r Rotation) RewrapBatch(ctx context.Context, limit int) (int, error) {
 			return err
 		}
 		ring.latest = status.Active
-		count, err = r.rewrapStores(ctx, tx, ring, limit)
+		count, next, err = r.rewrapStores(ctx, tx, ring, cursor, limit)
 		return err
 	})
 	if err != nil {
-		return 0, err
+		return 0, RewrapCursor{}, err
 	}
-	return count, nil
+	return count, next, nil
 }
 
 // rewrapStores takes the first store that still has an old envelope, so one batch touches one table and its audit entry
-// names the store it came from; an empty store is passed over.
-func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *Keyring, limit int) (int, error) {
-	for _, store := range r.Stores {
-		count, err := store.rewrap(ctx, tx, ring, limit)
+// names the store it came from. Stores before the cursor are exhausted; a store the cursor finished is passed over.
+func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *Keyring, cursor RewrapCursor, limit int) (int, RewrapCursor, error) {
+	for i := cursor.store; i < len(r.Stores); i++ {
+		store := r.Stores[i]
+		after := ""
+		if i == cursor.store {
+			after = cursor.after
+		}
+		count, last, err := store.rewrap(ctx, tx, ring, after, limit)
 		if err != nil {
-			return 0, err
+			return 0, RewrapCursor{}, err
 		}
 		if count == 0 {
 			continue
 		}
-		return count, rotationAudit(ctx, tx, "rewrap", ring.latest, map[string]any{"store": store.name(), "count": count})
+		next := RewrapCursor{store: i, after: last}
+		if count < limit {
+			next = RewrapCursor{store: i + 1}
+		}
+		return count, next, rotationAudit(ctx, tx, "rewrap", ring.latest, map[string]any{"store": store.name(), "count": count})
 	}
-	return 0, nil
+	return 0, RewrapCursor{store: len(r.Stores)}, nil
 }
 
 type storedEnvelope struct {
@@ -158,42 +177,54 @@ type storedEnvelope struct {
 	sealed Sealed
 }
 
-func (s EnvelopeStore) batch(ctx context.Context, tx pg.Tx, active uint32, limit int) ([]storedEnvelope, error) {
-	rows, err := tx.Query(ctx, "SELECT "+s.id()+"::text, "+s.column("ciphertext")+", "+s.column("nonce")+
-		", "+s.column("wrapped_dek")+", "+s.column("key_version")+" FROM "+s.table()+
-		" WHERE "+s.column("key_version")+" <> $1 ORDER BY "+s.id()+" LIMIT $2 FOR UPDATE", int64(active), limit)
+// batch reads the old envelopes after the cursor. The range is on the id column itself, so the primary key index
+// carries it instead of rescanning the rows every batch already committed.
+func (s EnvelopeStore) batch(ctx context.Context, tx pg.Tx, active uint32, after string, limit int) ([]storedEnvelope, error) {
+	query := "SELECT " + s.id() + "::text, " + s.column("ciphertext") + ", " + s.column("nonce") +
+		", " + s.column("wrapped_dek") + ", " + s.column("key_version") + " FROM " + s.table() +
+		" WHERE " + s.column("key_version") + " <> $1"
+	args := []any{int64(active), limit}
+	if after != "" {
+		query += " AND " + s.id() + " > $3"
+		args = append(args, after)
+	}
+	query += " ORDER BY " + s.id() + " LIMIT $2 FOR UPDATE"
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
-		return nil, errors.New("keyring: cannot read rewrap batch")
+		return nil, fmt.Errorf("keyring: cannot read rewrap batch: %w", err)
 	}
 	defer rows.Close()
 	var batch []storedEnvelope
 	for rows.Next() {
 		var row storedEnvelope
 		if err := rows.Scan(&row.id, &row.sealed.Ciphertext, &row.sealed.Nonce, &row.sealed.WrappedDEK, &row.sealed.KeyVersion); err != nil {
-			return nil, errors.New("keyring: cannot decode envelope")
+			return nil, fmt.Errorf("keyring: cannot decode envelope: %w", err)
 		}
 		batch = append(batch, row)
 	}
 	if rows.Err() != nil {
-		return nil, errors.New("keyring: cannot read rewrap batch")
+		return nil, fmt.Errorf("keyring: cannot read rewrap batch: %w", rows.Err())
 	}
 	return batch, nil
 }
 
-func (s EnvelopeStore) rewrap(ctx context.Context, tx pg.Tx, ring *Keyring, limit int) (int, error) {
-	batch, err := s.batch(ctx, tx, ring.latest, limit)
+func (s EnvelopeStore) rewrap(ctx context.Context, tx pg.Tx, ring *Keyring, after string, limit int) (int, string, error) {
+	batch, err := s.batch(ctx, tx, ring.latest, after, limit)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	for _, row := range batch {
 		sealed, err := ring.Rewrap(row.sealed, Location{Table: s.name(), RowID: row.id, Purpose: s.Purpose})
 		if err != nil {
-			return 0, fmt.Errorf("keyring: rewrap version %d: %w", row.sealed.KeyVersion, err)
+			return 0, "", fmt.Errorf("keyring: rewrap version %d: %w", row.sealed.KeyVersion, err)
 		}
 		if _, err := tx.Exec(ctx, "UPDATE "+s.table()+" SET "+s.column("wrapped_dek")+" = $1, "+
 			s.column("key_version")+" = $2 WHERE "+s.id()+" = $3", sealed.WrappedDEK, int64(sealed.KeyVersion), row.id); err != nil {
-			return 0, errors.New("keyring: cannot update envelope")
+			return 0, "", fmt.Errorf("keyring: cannot update envelope: %w", err)
 		}
 	}
-	return len(batch), nil
+	if len(batch) == 0 {
+		return 0, "", nil
+	}
+	return len(batch), batch[len(batch)-1].id, nil
 }

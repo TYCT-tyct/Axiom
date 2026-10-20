@@ -129,11 +129,13 @@ func rewrapCommand(ctx context.Context, r secret.Rotation, a keyringArgs, out io
 	if _, _, err := r.Check(ctx); err != nil {
 		return err
 	}
+	var cursor secret.RewrapCursor
 	for batch := 1; ; batch++ {
-		count, err := r.RewrapBatch(ctx, a.batchSize)
+		count, next, err := r.RewrapBatch(ctx, cursor, a.batchSize)
 		if err != nil {
 			return err
 		}
+		cursor = next
 		if count == 0 {
 			return writeLine(out, map[string]any{"done": "rewrap"})
 		}

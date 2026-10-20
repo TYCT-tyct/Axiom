@@ -275,10 +275,11 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 
 // consoleParts are what the node builds from its configuration before it touches the database: the secrets read from
 // protected files, whose errors name the variable and never the path or the contents, and the contract the guard
-// enforces.
+// enforces. The master key ring is not here: it is read once under the database check (openCheckedDatabase), which
+// gives it the write version the database chose.
 type consoleParts struct {
 	cfg           nodeSettings
-	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials
+	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials; set once the database is checked
 	hashes        *secret.MACKeys // keys API keys are hashed with
 	identity      []byte          // derives what replaces the client's identifiers upstream
 	contract      *contract
@@ -287,10 +288,6 @@ type consoleParts struct {
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
-	master, err := secret.Load(cfg.masterKeyFile)
-	if err != nil {
-		return consoleParts{}, err
-	}
 	hashes, err := secret.LoadMAC(cfg.keyHashFile)
 	if err != nil {
 		return consoleParts{}, err
@@ -308,7 +305,12 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	return consoleParts{cfg, master, hashes, identity, console, admin, frontend}, err
+	if err != nil {
+		return consoleParts{}, err
+	}
+	return consoleParts{
+		cfg: cfg, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+	}, nil
 }
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.

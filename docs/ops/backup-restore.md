@@ -76,6 +76,8 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
    所有节点通过后才能继续；命令不能证明你已经检查了所有节点，自动分发和确认留给 #322。
 4. 排空并停止所有 `serve` 实例及其他会写信封的进程，禁用自动重启。密钥环只在启动加载；
    advisory lock 只串行化轮换命令，不能阻止一个旧进程继续写旧版本。**维护窗口中保持停写，直到第 7 步。**
+   停写后至少等 30 秒再执行第 5 步：`activate` 和 `retire` 在同一事务里检查 `platform.nodes` 的最近心跳，
+   还有一个节点在 kv 的心跳窗口（30 秒，三次心跳）内写过就拒绝，不区分它是不是本机。
 5. 运行 `axiom keyring activate --version 2`，再运行
    `axiom keyring rewrap --batch-size 100`。每批成功输出一行；结束输出 `{"done":"rewrap"}`。
    可加 `--max-batches 10`，达到上限输出 `{"paused":"rewrap"}`，表示仍需继续，不表示完成。
@@ -84,7 +86,10 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 6. 运行 `axiom keyring retire --version 1`。写版本和任何存量引用都会拒绝退役；
    成功先提交退役墓碑及审计，再从本机文件移除旧行。文件删除失败时重复此命令，不能复用旧版本号或旧材料。
    文件替换与数据库提交跨两个存储：新增登记失败可能留下一把未登记密钥，退役删文件失败可能多留旧密钥，重试会恢复。
-   把退役后的文件再次分发至全部节点，逐节点运行 `axiom keyring check`。
+   把退役后的文件再次分发至全部节点，逐节点运行 `axiom keyring check`；文件里仍带已退役版本的节点会报
+   `retired versions still in the local file`（只报版本号），替换文件前不能启动。
+   **退役是单向门：** 此后任何仍引用旧版本的行都读不出，也不能用 `add` 把同一材料换一个新版本号登记（指纹墓碑拒绝）。
+   这类行只能靠恢复整套旧备份找回，即数据库和该 set 配套的密钥环一起恢复；没有只找回这些行的办法。
 7. 重启所有节点（启动前也会校验密钥版本），恢复备份调度并做新的完整 set。保留轮换前的加密备份直到其正常过期。
    审计 `keyring.initialize/add/activate/rewrap/retire` 在 `platform.audit_log`，只含版本、表名与数量。
 

@@ -3,6 +3,7 @@ package secret
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,9 @@ func replaceKeys(path string, keys map[uint32][32]byte) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%s: replacement requires a regular file, not a symlink", keyFileVariable)
 	}
+	if err := removeLeftovers(filepath.Dir(path)); err != nil {
+		return err
+	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".keyring-*")
 	if err != nil {
 		return fileError(keyFileVariable, "create replacement", err)
@@ -59,6 +63,22 @@ func replaceKeys(path string, keys map[uint32][32]byte) error {
 		return fileError(keyFileVariable, "replace", err)
 	}
 	return syncKeyDirectory(filepath.Dir(path))
+}
+
+// removeLeftovers deletes the temporary files an interrupted replacement left in the key directory. Each holds the whole
+// ring, so one left behind after a retirement would keep the old material on the node. The lifecycle lock is held by the
+// caller, so no other replacement is writing one of these names.
+func removeLeftovers(dir string) error {
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".keyring-*"))
+	if err != nil {
+		return fileError(keyFileVariable, "find leftover replacements", err)
+	}
+	for _, leftover := range leftovers {
+		if err := os.Remove(leftover); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fileError(keyFileVariable, "remove leftover replacement", err)
+		}
+	}
+	return nil
 }
 
 func writeKeys(file *os.File, keys map[uint32][32]byte, mode os.FileMode) (err error) {
