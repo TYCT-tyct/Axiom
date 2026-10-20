@@ -205,11 +205,12 @@ type conversation struct {
 }
 
 // TestSub2apiPinsTwoTurnsToOneAccount: two turns of one conversation are scheduled by sub2api to the same account of its
-// pool, an Anthropic call by the structure the gateway writes into metadata.user_id and a Codex call by the session header
-// it forwards, both of them the one derivation of the client's value that the gateway also puts in the body's cache key;
-// the client's own value never reaches the relay (docs/domains/gateway.md「转发规则」).
+// pool, an Anthropic call by the structure the gateway writes into metadata.user_id and an OpenAI one — Codex on Responses,
+// Chat on its own endpoints — by the session header it forwards, both of them the one derivation of the client's value
+// that the gateway also puts in the body's cache key; the client's own value never reaches the relay
+// (docs/domains/gateway.md「转发规则」).
 func TestSub2apiPinsTwoTurnsToOneAccount(t *testing.T) {
-	messages, responses := protocol.Messages, protocol.Responses
+	messages, responses, chat := protocol.Messages, protocol.Responses, protocol.Chat
 	cases := []conversation{
 		{
 			name:   "an Anthropic call, from metadata.user_id",
@@ -227,6 +228,16 @@ func TestSub2apiPinsTwoTurnsToOneAccount(t *testing.T) {
 			turns: []clientTurn{
 				{body: `{"model":"gpt-5.3-codex","stream":true,"input":"first","prompt_cache_key":"conv-1"}`, header: "session_id"},
 				{body: `{"model":"gpt-5.3-codex","stream":true,"input":"second","prompt_cache_key":"conv-1"}`, header: "session_id"},
+			},
+			want: derivedConv1,
+		},
+		{
+			name:   "a Chat call, from its session header",
+			format: chat,
+			turns: []clientTurn{
+				{body: `{"model":"client-model","stream":true,"messages":[{"role":"user","content":"first"}]}`, header: "X-Session-Id"},
+				{body: `{"model":"client-model","stream":true,"messages":[{"role":"user","content":"first"},` +
+					`{"role":"assistant","content":"ok"},{"role":"user","content":"second"}]}`, header: "X-Session-Id"},
 			},
 			want: derivedConv1,
 		},
