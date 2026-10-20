@@ -18,6 +18,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -42,6 +43,9 @@ type Deps struct {
 	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
 	// header, so a request is the address it came from.
 	Proxies []netip.Prefix
+	// KV is the shared cache the precheck counts in, and nil is single-core mode: the counts stay in this process, as
+	// they were before the cache (internal/platform/kv/README.md「配置与启动」).
+	KV *kv.Client
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -384,7 +388,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		h.Router.Forget(c.Session)
 	}
 	c.sticky, _ = h.Router.Stuck(c.Session)
-	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
+	c.rate = h.countRate(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller))
 	return nil
 }
 

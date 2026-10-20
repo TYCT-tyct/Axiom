@@ -425,7 +425,7 @@ func TestAllocs(t *testing.T) {
 			_, err := protocol.Inspect(f, b)
 			return err
 		}},
-		{"Prepare", protocol.Chat, prepareInspected()},
+		{"Prepare", protocol.Format(len(turns)), prepareInspected()},
 	} {
 		for f := range c.formats {
 			for _, lead := range []string{"", wideTurn} {
