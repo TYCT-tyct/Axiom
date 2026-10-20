@@ -33,6 +33,8 @@
 
 ## 2. 模型列表与模型端点
 
+模型对象、价格单位与查询参数于 2026-10-20 用 curl 复核：[模型列表文档](https://openrouter.ai/docs/api/api-reference/models/get-models)、[官方 OpenAPI](https://openrouter.ai/openapi.json)。旧的 `docs/api-reference/list-available-models` 当日返回 404；RSS 两个旧参数仍明确拒绝，不静默丢弃。
+
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | `GET /api/v1/models` 基本列表 | 返回 `data[]` 模型目录 | api/models/list-all-models-and-their-properties | 有：`gw/openrouter.go` 的 `listOpenRouterModels`，外壳是 OpenRouter 的 `data`/`links.next`/`total_count`；按 key 过滤，只列这把 key 能调用、路由快照里有端点且有售价的模型 | `na:controller/model.go:218` | `s2:internal/server/routes/gateway.go:207` | 价格取主站售价（标准服务等级、第一档），与路由快照同一次构建、一起发布：列表上的价格就是调用收费的价格；`/v1/models` 保持 OpenAI+Anthropic 合并形，两种客户端各读各的 |

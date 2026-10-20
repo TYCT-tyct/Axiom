@@ -101,7 +101,9 @@ func (r *rig) publish() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.models.publish(l)
+	r.models.mu.Lock()
+	r.models.last = l
+	r.models.mu.Unlock()
 }
 
 type rigOptions struct {

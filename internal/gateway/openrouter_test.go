@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"net/http"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
 )
@@ -446,10 +446,14 @@ func TestOpenRouterListIsTheBuilds(t *testing.T) {
 	if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000007" {
 		t.Errorf("the price after the build: %q, want the new one", got)
 	}
-	// A model listed after the snapshot changed is in the list of the build that serves it.
+	// A model listed after the snapshot changed is in the list of the build that serves it, and not before it: the request
+	// reads no catalog and no price of its own.
 	late := r.listed("acme/late", basicSpec, cheap)
 	if err := r.catalog.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if slices.Contains(r.orIDs(a), "acme/late") {
+		t.Errorf("a model the catalog lists but no build serves is in the list: %v", r.orIDs(a))
 	}
 	r.attachEndpoint(late)
 	if !slices.Contains(r.orIDs(a), "acme/late") {
@@ -465,7 +469,17 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 	r := goldenRig(t)
 	v := visibility{} // every model, and no router: the list answers for the build, as it does in a request
 	l := r.models.published()
-	both := l.encode(v, orQuery{limit: 2})
+	q := orQuery{limit: 2}
+	both := l.encode(v, q)
+	counted, resume := make(chan struct{}), make(chan struct{})
+	encoded := make(chan []byte, 1)
+	go func() {
+		matched, size := l.pageStats(v, q)
+		close(counted)
+		<-resume
+		encoded <- l.encodePage(v, q, matched, size)
+	}()
+	<-counted
 	// The route of the model on the second place goes, and its entry stays in the page the build made, with the total and
 	// the link that build's count gives.
 	var rest []routing.Endpoint
@@ -475,7 +489,8 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 		}
 	}
 	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, rest...)
-	if after := l.encode(v, orQuery{limit: 2}); string(after) != string(both) {
+	close(resume)
+	if after := <-encoded; string(after) != string(both) {
 		t.Errorf("one response of one build changed when the router did:\nbefore %s\nafter  %s", both, after)
 	}
 	// A page of one over that build still says how many it matched and links to the next, which is what the entries agree
@@ -491,36 +506,31 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 
 // TestOpenRouterPageBuffer: the buffer a page is encoded in is the page's, not the catalog's. A page of one model out of a
 // thousand, and a page past the end, cost what they hold; the matches a sorted page sorts are the one cost that grows with
-// the catalog, which is why the catalog's order is the list's own. It reads the process's allocation counter, so it is not
-// parallel: another test's allocations would be counted with its own.
+// the catalog, which is why the catalog's order is the list's own. Measurements run in an isolated test process.
 func TestOpenRouterPageBuffer(t *testing.T) {
-	const models, runs = 1000, 20
+	const models = 1000
 	l := orListing(t, models)
-	entries := 0
-	for i := range l.models {
-		entries += len(l.models[i].body)
-	}
-	for name, tc := range map[string]struct {
+	cases := []struct {
+		name string
 		q    orQuery
-		want uint64 // the most one encoding may allocate
+		want float64 // the most one encoding may allocate
 	}{
-		"a page of one":              {orQuery{limit: 1}, 32 << 10},
-		"a page past the end":        {orQuery{offset: models + 10}, 32 << 10},
-		"a sorted page of one":       {orQuery{limit: 1, sort: orCheapestFirst}, 64 << 10},
-		"a sorted page past the end": {orQuery{offset: models + 10, sort: orCheapestFirst}, 64 << 10},
-	} {
-		var before, after runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-		for range runs {
-			sink = l.encode(visibility{}, tc.q)
+		{"one", orQuery{limit: 1}, 4 << 10},
+		{"empty", orQuery{offset: models + 10}, 1 << 10},
+		{"sorted-one", orQuery{limit: 1, sort: orCheapestFirst}, 16 << 10},
+		{"sorted-empty", orQuery{offset: models + 10, sort: orCheapestFirst}, 12 << 10},
+	}
+	funcs := make([]alloctest.Function, 0, len(cases))
+	for _, tc := range cases {
+		funcs = append(funcs, alloctest.Function{Name: tc.name, F: func() { sink = l.encode(visibility{}, tc.q) }})
+	}
+	for name, got := range alloctest.Measure(t, funcs...) {
+		for _, tc := range cases {
+			if name == tc.name && got.Bytes > tc.want {
+				t.Errorf("%s allocates %.0f bytes, want at most %.0f", name, got.Bytes, tc.want)
+			}
 		}
-		runtime.ReadMemStats(&after)
-		got := (after.TotalAlloc - before.TotalAlloc) / runs
-		if got > tc.want {
-			t.Errorf("%s allocates %d bytes, want at most %d: the buffer is the page's, not the %d bytes of the catalog",
-				name, got, tc.want, entries)
-		}
+		t.Logf("%s: %.0f bytes, %.0f allocations", name, got.Bytes, got.Count)
 	}
 }
 

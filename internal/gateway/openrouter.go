@@ -5,13 +5,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/routing"
 )
 
 // The model list in OpenRouter's shape (docs/openrouter-parity.md §2): the models GET /v1/models lists, with the price
@@ -96,7 +97,9 @@ func (l *openRouterListing) entry(v visibility, name string) (orEntry, error) {
 // (RouteDeps.Publish), so the price a client reads is the price the snapshot routes at, and a build that fails publishes
 // neither. Nothing else fills it, and nothing reads the database or the catalog to fill it.
 type ModelList struct {
-	last atomic.Pointer[openRouterListing]
+	// Publication excludes both readers and route planning until both pointers have changed.
+	mu   sync.RWMutex
+	last *openRouterListing
 }
 
 // NewModelList is the empty list a node's route builder fills and its handler serves: before the first build it holds no
@@ -105,14 +108,21 @@ func NewModelList() *ModelList { return &ModelList{} }
 
 // published is the last list a build published, or the empty one before the first.
 func (m *ModelList) published() *openRouterListing {
-	if l := m.last.Load(); l != nil {
-		return l
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.last != nil {
+		return m.last
 	}
 	return &openRouterListing{}
 }
 
-// publish replaces the list the handler serves. It is called from RouteDeps.Publish, with the snapshot built beside it.
-func (m *ModelList) publish(l *openRouterListing) { m.last.Store(l) }
+// plan cannot observe the interval between the route and list stores in Publish. The lock covers memory work only,
+// never admission's database transaction or a list response's encoding.
+func (m *ModelList) plan(router *routing.Router, in routing.Input) (routing.Plan, *routing.Wait, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return router.Plan(in)
+}
 
 // openRouterListing is the models of one build in OpenRouter's shape, encoded once per model: what a request pays is
 // keeping the entries its key may see and its query keeps, and copying the page out. Its prices are the ones the routing
@@ -391,15 +401,14 @@ func (l *openRouterListing) encode(v visibility, q orQuery) []byte {
 	if q.sort != orCatalogOrder {
 		return l.encodeOrdered(v, q)
 	}
-	matched := 0
-	for i := range l.models {
-		if l.shows(v, l.models[i].model) && q.keeps(&l.models[i]) {
-			matched++
-		}
-	}
+	matched, size := l.pageStats(v, q)
+	return l.encodePage(v, q, matched, size)
+}
+
+func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size int) []byte {
 	first, last := q.page(matched)
 	next := q.next(last, matched)
-	buf := append(make([]byte, 0, orRoom+len(next)+l.pageSize(v, q, first, last)), `{"data":[`...)
+	buf := append(make([]byte, 0, orRoom+len(next)+size), `{"data":[`...)
 	seen, written := 0, 0
 	for i := range l.models {
 		e := &l.models[i]
@@ -445,20 +454,19 @@ func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 	return orFooter(buf, next, len(matches))
 }
 
-// pageSize is the bytes of the entries the page holds, from the first to the last match, which is what the buffer is
-// sized for: a page of one model costs one model, however many the query matched.
-func (l *openRouterListing) pageSize(v visibility, q orQuery, first, last int) int {
-	size := 0
-	for i, seen := 0, 0; i < len(l.models); i++ {
+// pageStats counts all matches but sizes only the page; subtraction avoids adding an unbounded offset to the limit.
+func (l *openRouterListing) pageStats(v visibility, q orQuery) (matched, size int) {
+	for i := range l.models {
 		e := &l.models[i]
 		if !l.shows(v, e.model) || !q.keeps(e) {
 			continue
 		}
-		if seen++; seen > first && seen <= last {
+		matched++
+		if matched > q.offset && (q.limit == 0 || matched-q.offset <= q.limit) {
 			size += len(e.body) + 1
 		}
 	}
-	return size
+	return matched, size
 }
 
 // orFooter writes the members after the data: the next page's link, null on the last page, and how many models the query

@@ -32,7 +32,7 @@ type RouteDeps struct {
 	// and the catalog's reference prices. One build's reading prices both the routing snapshot and the model list, so
 	// the price a client reads is the price a call is charged at.
 	Prices func(context.Context) (map[catalog.ModelID]billing.Sold, error)
-	// Models, when set, is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
+	// Models is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
 	// and it is built in the same build as the snapshot from the same reading (docs/domains/gateway.md「模型列表」).
 	Models *ModelList
 	// UnknownItems is billing.UnknownItems: the usage fields nothing prices, one of which takes its model out of
@@ -48,9 +48,6 @@ type RouteDeps struct {
 	Quality *quality.Monitor
 
 	told map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
-	// published is when the snapshot last handed to the router was built: an older build's list is refused with it, since
-	// nothing else publishes and the router therefore holds what this last published.
-	published time.Time
 }
 
 // Count is what one build made of the endpoints suppliers offer: how many are in the snapshot, and how many there were
@@ -166,14 +163,13 @@ func exchangeBasis(rates []platform.ExchangeRate, from, to platform.Currency) pl
 // (Router.Replace refuses the older one), and a list of that older reading standing beside it would quote prices no call is
 // charged. Only Publish hands snapshots to the router, so the newest it took is the newest published here.
 func (d *RouteDeps) Publish(s *routing.Snapshot, l *openRouterListing, c Count) {
-	if !l.built.After(d.published) {
+	d.Models.mu.Lock()
+	defer d.Models.mu.Unlock()
+	if old := d.Models.last; old != nil && !l.built.After(old.built) {
 		return
 	}
 	d.Router.Replace(s)
-	if d.Models != nil {
-		d.Models.publish(l)
-	}
-	d.published = l.built
+	d.Models.last = l
 	if d.Built != nil {
 		d.Built(c)
 	}

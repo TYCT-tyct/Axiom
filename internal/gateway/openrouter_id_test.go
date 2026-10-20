@@ -24,22 +24,15 @@ func TestOpenRouterVersionedModel(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"id":"acme/versioned"`) {
 		t.Errorf("the detail: %d %s", resp.StatusCode, body)
 	}
+	if resp, body := r.message(a, m.ID); resp.StatusCode != http.StatusOK {
+		t.Errorf("a call to the discovered id: %d %s", resp.StatusCode, body)
+	}
 	resp, body = r.do(http.MethodGet, orListPath+"/acme/versioned@20250929", a.key, nil)
 	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "model_not_found" {
 		t.Errorf("the internal slug as a detail: %d %s", resp.StatusCode, body)
 	}
-}
-
-// TestOpenRouterVersionedModelIsCalled: the id the list gives is the id a call goes through, and the internal slug it does
-// not give is not one a call finds.
-func TestOpenRouterVersionedModelIsCalled(t *testing.T) {
-	t.Parallel()
-	r, a := versionedRig(t)
 	if resp, body := r.message(a, "acme/versioned@20250929"); resp.StatusCode == http.StatusOK {
 		t.Errorf("a call to the internal slug was served: %d %s", resp.StatusCode, body)
-	}
-	if resp, body := r.message(a, "acme/versioned"); resp.StatusCode != http.StatusOK {
-		t.Errorf("a call to the public id: %d %s", resp.StatusCode, body)
 	}
 }
 
