@@ -132,13 +132,15 @@ edge_default=$(docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml
   sed -n 's/^ *AXIOM_EDGE_TLS_ISSUER: *//p')
 [ "$edge_default" = acme ] || die "with AXIOM_EDGE_TLS_ISSUER unset compose passes the edge '$edge_default', want acme"
 for issuer in internal "$edge_default"; do
+  # Absolute: docker reads a relative path with a separator in it as a named volume, and says so.
   docker run --rm --network none \
     -e AXIOM_EDGE_TLS_ISSUER="$issuer" \
     -e AXIOM_EDGE_CONSOLE_HOST=console.rehearsal.example \
     -e AXIOM_EDGE_API_HOST=api.rehearsal.example \
     -e AXIOM_EDGE_ADMIN_HOST=admin.rehearsal.example \
-    --volume "$(docker_path deploy/ingress/Caddyfile):/etc/caddy/Caddyfile:ro" \
-    caddy:2.11.7-alpine caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile || die "the Caddyfile does not parse with issuer $issuer"
+    --volume "$(docker_path "$PWD/deploy/ingress/Caddyfile"):/etc/caddy/Caddyfile:ro" \
+    caddy:2.11.7-alpine caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile ||
+    die "the Caddyfile does not parse with issuer $issuer"
 done
 just web-embed
 CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
