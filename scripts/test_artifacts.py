@@ -66,9 +66,10 @@ class Artifacts(unittest.TestCase):
         # the branch has a commit, and the worktree holds what the next one would take: staged, unstaged or untracked
         cases = [
             # name, files on origin/main, files this branch commits, files left in the worktree, staged, refused, why
-            ("a staged file over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
-             {"blob": "a" * (LIMIT + 1)}, True, "blob", "bytes is over the 1 MB limit"),
-            ("an unstaged change over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
+            ("a staged 2 MB file", {"note.txt": "kept\n"}, {"branch.txt": "committed\n"},
+             {"blob": "a" * (2 * LIMIT)}, True, "blob", "2097152 bytes is over the 1 MB limit"),
+            ("an unstaged change to a file untouched by the branch", {"note.txt": "kept\n"},
+             {"branch.txt": "committed\n"},
              {"note.txt": "a" * (LIMIT + 1)}, False, "note.txt", "bytes is over the 1 MB limit"),
             ("an untracked file over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
              {"blob": "a" * (LIMIT + 1)}, False, "blob", "bytes is over the 1 MB limit"),
