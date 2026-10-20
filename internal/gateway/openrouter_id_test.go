@@ -12,7 +12,13 @@ import (
 // name the API answers: a client that read it could neither fetch the model nor call it.
 func TestOpenRouterVersionedModel(t *testing.T) {
 	t.Parallel()
-	r, a := versionedRig(t)
+	r := newRig(t)
+	id := r.listed("acme/versioned@20250929", basicSpec, cheap)
+	if err := r.catalog.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r.attachEndpoint(id)
+	a := r.newAccount(1e9)
 	if ids := r.orIDs(a); !slices.Contains(ids, "acme/versioned") || slices.Contains(ids, "acme/versioned@20250929") {
 		t.Fatalf("the list: %v; want acme/versioned and no internal slug", ids)
 	}
@@ -34,17 +40,4 @@ func TestOpenRouterVersionedModel(t *testing.T) {
 	if resp, body := r.message(a, "acme/versioned@20250929"); resp.StatusCode == http.StatusOK {
 		t.Errorf("a call to the internal slug was served: %d %s", resp.StatusCode, body)
 	}
-}
-
-// versionedRig is a rig with a model the catalog keeps under a version slug, served by an endpoint, and a key that may call
-// it.
-func versionedRig(t *testing.T) (*rig, account) {
-	t.Helper()
-	r := newRig(t)
-	id := r.listed("acme/versioned@20250929", basicSpec, cheap)
-	if err := r.catalog.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	r.attachEndpoint(id)
-	return r, r.newAccount(1e9)
 }

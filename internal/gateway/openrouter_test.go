@@ -524,13 +524,13 @@ func TestOpenRouterPageBuffer(t *testing.T) {
 	for _, tc := range cases {
 		funcs = append(funcs, alloctest.Function{Name: tc.name, F: func() { sink = l.encode(visibility{}, tc.q) }})
 	}
-	for name, got := range alloctest.Measure(t, funcs...) {
-		for _, tc := range cases {
-			if name == tc.name && got.Bytes > tc.want {
-				t.Errorf("%s allocates %.0f bytes, want at most %.0f", name, got.Bytes, tc.want)
-			}
+	results := alloctest.Measure(t, funcs...)
+	for _, tc := range cases {
+		got := results[tc.name]
+		if got.Bytes > tc.want {
+			t.Errorf("%s allocates %.0f bytes, want at most %.0f", tc.name, got.Bytes, tc.want)
 		}
-		t.Logf("%s: %.0f bytes, %.0f allocations", name, got.Bytes, got.Count)
+		t.Logf("%s: %.0f bytes, %.0f allocations", tc.name, got.Bytes, got.Count)
 	}
 }
 
