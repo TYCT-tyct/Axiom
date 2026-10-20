@@ -88,59 +88,84 @@ func TestChatParallelToolsAreStreamedWithoutMixingArguments(t *testing.T) {
 	first := chatPiece(`{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`, "null")
 	second := chatPiece(`{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"g","arguments":"{\"y\":"}}]}`, "null")
 	finish := chatPiece(`{"tool_calls":[{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]}`, `"tool_calls"`) + ev("[DONE]")
-	for _, format := range formats[:2] {
-		t.Run(format.dir, func(t *testing.T) {
-			o := options
-			o.Memory = protocol.NewMemory(1 << 20)
-			r := protocol.NewRelay(format.f, protocol.Chat, strings.NewReader(first+second+finish), protocol.UsageContext{}, o)
-			defer r.Release()
-			step, err := r.Next()
-			if err != nil || step.Kind != protocol.StepCommit || !bytes.Contains(step.Out, []byte(`{\"x\":`)) {
-				t.Fatalf("first argument was not streamed: %v %+v", err, step)
-			}
-			stream := []byte(first + second + finish)
-			got := relayTo(t, format.f, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
-			if got.err != nil {
-				t.Fatal(got.err)
-			}
-			if err := format.check(bytes.NewReader(got.out)); err != nil {
-				t.Fatal(err)
-			}
-			whole := aggregate(t, format.f, protocol.Chat, bytes.NewReader(stream), protocol.NewMemory(1<<20), unsettled)
-			if whole.err != nil || whole.status != http.StatusOK {
-				t.Fatalf("%v: %s", whole.err, whole.body)
-			}
-			key, want := "content", `[{"type":"tool_use","id":"a","name":"f","input":{"x":1}},{"type":"tool_use","id":"b","name":"g","input":{"y":2}}]`
-			if format.f == protocol.Responses {
-				key, want = "output", `[{"id":"gen-01_0","type":"function_call","status":"completed","call_id":"a","name":"f","arguments":"{\"x\":1}"},{"id":"gen-01_1","type":"function_call","status":"completed","call_id":"b","name":"g","arguments":"{\"y\":2}"}]`
-			}
-			sameJSON(t, want, mustMarshal(t, member(t, whole.body, key)))
+	stream := []byte(first + second + finish)
+	for fi := range formats[:2] {
+		t.Run(formats[fi].dir, func(t *testing.T) {
+			checkFirstArgumentsStream(t, fi, stream)
+			checkParallelToolsAggregate(t, fi, stream)
 		})
 	}
 }
 
+// checkFirstArgumentsStream holds a tool call's arguments to the first committed step: waiting for its block to close
+// would keep the client from seeing the call's progress at all.
+func checkFirstArgumentsStream(t *testing.T, fi int, stream []byte) {
+	t.Helper()
+	format := formats[fi]
+	o := options
+	o.Memory = protocol.NewMemory(1 << 20)
+	r := protocol.NewRelay(format.f, protocol.Chat, strings.NewReader(string(stream)), protocol.UsageContext{}, o)
+	defer r.Release()
+	step, err := r.Next()
+	if err != nil || step.Kind != protocol.StepCommit || !bytes.Contains(step.Out, []byte(`{\"x\":`)) {
+		t.Fatalf("first argument was not streamed: %v %+v", err, step)
+	}
+	got := relayTo(t, format.f, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if err := format.check(bytes.NewReader(got.out)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkParallelToolsAggregate holds two calls apart in the aggregated reply: each keeps its own arguments.
+func checkParallelToolsAggregate(t *testing.T, fi int, stream []byte) {
+	t.Helper()
+	format := formats[fi]
+	whole := aggregate(t, format.f, protocol.Chat, bytes.NewReader(stream), protocol.NewMemory(1<<20), unsettled)
+	if whole.err != nil || whole.status != http.StatusOK {
+		t.Fatalf("%v: %s", whole.err, whole.body)
+	}
+	key, want := "content", `[{"type":"tool_use","id":"a","name":"f","input":{"x":1}},{"type":"tool_use","id":"b","name":"g","input":{"y":2}}]`
+	if format.f == protocol.Responses {
+		key, want = "output", `[{"id":"gen-01_0","type":"function_call","status":"completed","call_id":"a","name":"f","arguments":"{\"x\":1}"},{"id":"gen-01_1","type":"function_call","status":"completed","call_id":"b","name":"g","arguments":"{\"y\":2}"}]`
+	}
+	sameJSON(t, want, mustMarshal(t, member(t, whole.body, key)))
+}
+
 func TestChatToNativeStopReasons(t *testing.T) {
-	for _, format := range formats[:2] {
+	for fi := range formats[:2] {
 		for _, reason := range []string{"stop", "length", "content_filter", "tool_calls"} {
-			t.Run(format.dir+"/"+reason, func(t *testing.T) {
-				stream := chatPiece(`{"content":"hi"}`, `"`+reason+`"`) + ev("[DONE]")
-				got := relayTo(t, format.f, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
-				if got.err != nil || format.check(bytes.NewReader(got.out)) != nil {
-					t.Fatalf("%v\n%s", got.err, got.out)
-				}
-				want := map[string]string{"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal", "tool_calls": "tool_use"}[reason]
-				if format.f == protocol.Responses {
-					want = "response.completed"
-					if reason == "length" || reason == "content_filter" {
-						want = "response.incomplete"
-					}
-				}
-				if !bytes.Contains(got.out, []byte(want)) {
-					t.Fatalf("missing %s: %s", want, got.out)
-				}
-			})
+			t.Run(formats[fi].dir+"/"+reason, func(t *testing.T) { checkStopReason(t, fi, reason) })
 		}
 	}
+}
+
+func checkStopReason(t *testing.T, fi int, reason string) {
+	t.Helper()
+	format := formats[fi]
+	stream := chatPiece(`{"content":"hi"}`, `"`+reason+`"`) + ev("[DONE]")
+	got := relayTo(t, format.f, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
+	if got.err != nil || format.check(bytes.NewReader(got.out)) != nil {
+		t.Fatalf("%v\n%s", got.err, got.out)
+	}
+	if want := stopMarker(format.f, reason); !bytes.Contains(got.out, []byte(want)) {
+		t.Fatalf("missing %s: %s", want, got.out)
+	}
+}
+
+// stopMarker is what the client's format says about a Chat finish reason: Messages' stop reason, or the Responses event
+// that carries the end.
+func stopMarker(f protocol.Format, reason string) string {
+	stopReasons := map[string]string{"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal", "tool_calls": "tool_use"}
+	if f != protocol.Responses {
+		return stopReasons[reason]
+	}
+	if reason == "length" || reason == "content_filter" {
+		return "response.incomplete"
+	}
+	return "response.completed"
 }
 
 func TestChatConversionFailureBeforeClientPrelude(t *testing.T) {
@@ -247,25 +272,28 @@ func TestChatConversionUsesOneReasoningCopyAndWaitsForSettlement(t *testing.T) {
 
 func BenchmarkChatToNative(b *testing.B) {
 	stream := sample(b, "assembled/chat-tool-calls.sse")
-	for _, format := range formats[:2] {
-		b.Run(format.dir, func(b *testing.B) {
-			b.ReportAllocs()
-			b.SetBytes(int64(len(stream)))
-			for b.Loop() {
-				o := options
-				o.Memory = protocol.NewMemory(64 << 20)
-				r := protocol.NewRelay(format.f, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, o)
-				for {
-					step, err := r.Next()
-					if err != nil {
-						b.Fatal(err)
-					}
-					if step.Kind == protocol.StepUpstreamDone {
-						r.Finish(settled(r.Usage()))
-						break
-					}
-				}
+	for fi := range formats[:2] {
+		b.Run(formats[fi].dir, func(b *testing.B) { benchChatToNative(b, formats[fi].f, stream) })
+	}
+}
+
+func benchChatToNative(b *testing.B, f protocol.Format, stream []byte) {
+	b.Helper()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(stream)))
+	for b.Loop() {
+		o := options
+		o.Memory = protocol.NewMemory(64 << 20)
+		r := protocol.NewRelay(f, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, o)
+		for {
+			step, err := r.Next()
+			if err != nil {
+				b.Fatal(err)
 			}
-		})
+			if step.Kind == protocol.StepUpstreamDone {
+				r.Finish(settled(r.Usage()))
+				break
+			}
+		}
 	}
 }

@@ -142,8 +142,10 @@ func messagesFormatToChat(v jsontext.Value, dst requestObject) error {
 		return shapeError("output_config schema must be an object")
 	}
 	// Messages has no schema name; Chat requires one as an identifier, not a constraint.
-	dst["response_format"] = jsonValue(requestObject{"type": jsonValue("json_schema"),
-		"json_schema": jsonValue(requestObject{"name": jsonValue("response"), "schema": schema, "strict": jsonValue(true)})})
+	dst["response_format"] = jsonValue(requestObject{
+		"type":        jsonValue("json_schema"),
+		"json_schema": jsonValue(requestObject{"name": jsonValue("response"), "schema": schema, "strict": jsonValue(true)}),
+	})
 	return o.remaining()
 }
 
@@ -200,32 +202,50 @@ func (s *chatMessageBlocks) block(o requestObject) error {
 	kind := string(o.take("type"))
 	switch {
 	case kind == `"tool_result"` && s.role == "user":
-		s.flush()
-		result, err := messagesToolResult(o)
-		if err != nil {
-			return err
-		}
-		s.out = append(s.out, result)
+		return s.toolResult(o)
 	case kind == `"tool_use"` && s.role == "assistant":
-		input := o.take("input")
-		if input.Kind() != '{' {
-			return shapeError("tool input must be an object")
-		}
-		s.calls = append(s.calls, requestObject{"id": o.take("id"), "type": jsonValue("function"),
-			"function": jsonValue(requestObject{"name": o.take("name"), "arguments": jsonValue(string(input))})})
+		return s.toolCall(o)
 	case kind == `"thinking"` && s.role == "assistant":
-		o.take("signature") // only the originating provider can verify it; plaintext remains replayable
-		return s.reasoning.add(o.take("thinking"))
+		return s.thinking(o)
 	case kind == `"redacted_thinking"` && s.role == "assistant":
 		o.take("data") // follows the reverse converter's non-replayable reasoning drop policy
-	default:
-		part, err := nativePart(o, kind, Messages, s.role)
-		if err != nil {
-			return err
-		}
-		s.parts = append(s.parts, part)
+		return nil
 	}
+	part, err := nativePart(o, kind, Messages, s.role)
+	if err != nil {
+		return err
+	}
+	s.parts = append(s.parts, part)
 	return nil
+}
+
+// toolResult closes the turn so far: a Chat tool turn must follow the assistant turn it answers.
+func (s *chatMessageBlocks) toolResult(o requestObject) error {
+	s.flush()
+	result, err := messagesToolResult(o)
+	if err != nil {
+		return err
+	}
+	s.out = append(s.out, result)
+	return nil
+}
+
+func (s *chatMessageBlocks) toolCall(o requestObject) error {
+	input := o.take("input")
+	if input.Kind() != '{' {
+		return shapeError("tool input must be an object")
+	}
+	call := requestObject{"id": o.take("id"), "type": jsonValue("function")}
+	call["function"] = jsonValue(requestObject{"name": o.take("name"), "arguments": jsonValue(string(input))})
+	s.calls = append(s.calls, call)
+	return nil
+}
+
+// thinking replays the plaintext of an Anthropic thinking block as Chat reasoning; only the provider that signed it can
+// verify the signature, and the text alone is what a Chat endpoint reads.
+func (s *chatMessageBlocks) thinking(o requestObject) error {
+	o.take("signature")
+	return s.reasoning.add(o.take("thinking"))
 }
 
 func messagesToolResult(o requestObject) (requestObject, error) {

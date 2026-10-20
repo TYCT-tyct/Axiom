@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: preserve strings and schemas as written
 	"fmt"
 
@@ -124,6 +125,14 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) 
 	return rewrite(Chat, chat, t, w)
 }
 
+// nativeRequestCost is what a request converted to Chat may hold at once: the consumed input maps, the canonical Chat
+// encoding they are written into, and the structures validating it, all alive together; history sums one per item
+// (PrepareCost).
+func nativeRequestCost(body []byte) int64 {
+	return 32*int64(len(body)) + 8192*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
+		2048*int64(bytes.Count(body, []byte(":")))
+}
+
 func nativeTools(v jsontext.Value, f Format, dst requestObject) error {
 	tools, err := requestArray(v)
 	if err != nil || isNull(v) {
@@ -202,26 +211,44 @@ func nativeChoice(v jsontext.Value, f Format, dst requestObject) error {
 		return err
 	}
 	if f == Messages {
-		if parallel := o.take("disable_parallel_tool_use"); !isNull(parallel) {
-			var disabled bool
-			if err := jsonx.Unmarshal(parallel, &disabled); err != nil {
-				return shapeError("disable_parallel_tool_use must be boolean")
-			}
-			dst["parallel_tool_calls"] = jsonValue(!disabled)
-		}
-	}
-	switch {
-	case f == Messages && inverseName(choiceNames, kind) != "":
-		dst["tool_choice"] = jsonValue(inverseName(choiceNames, kind))
-	case f == Messages && kind == "tool", f == Responses && kind == "function":
-		name := o.take("name")
-		if _, err := requestString(name); err != nil {
+		if err := messagesParallel(o, dst); err != nil {
 			return err
 		}
-		dst["tool_choice"] = jsonValue(requestObject{"type": jsonValue("function"),
-			"function": jsonValue(requestObject{"name": name})})
-	default:
-		return &NotSupported{Reason: "tool_choice has no Chat counterpart"}
 	}
+	choice, err := nativeChoiceOf(o, f, kind)
+	if err != nil {
+		return err
+	}
+	dst["tool_choice"] = choice
 	return o.remaining()
+}
+
+// messagesParallel turns Anthropic's disable_parallel_tool_use into Chat's opposite member.
+func messagesParallel(o, dst requestObject) error {
+	parallel := o.take("disable_parallel_tool_use")
+	if isNull(parallel) {
+		return nil
+	}
+	var disabled bool
+	if err := jsonx.Unmarshal(parallel, &disabled); err != nil {
+		return shapeError("disable_parallel_tool_use must be boolean")
+	}
+	dst["parallel_tool_calls"] = jsonValue(!disabled)
+	return nil
+}
+
+// nativeChoiceOf is a tool choice in Chat's terms: one of the three scalar choices, or the function it names.
+func nativeChoiceOf(o requestObject, f Format, kind string) (jsontext.Value, error) {
+	if f == Messages && inverseName(choiceNames, kind) != "" {
+		return jsonValue(inverseName(choiceNames, kind)), nil
+	}
+	if f == Messages && kind == "tool" || f == Responses && kind == "function" {
+		name := o.take("name")
+		if _, err := requestString(name); err != nil {
+			return nil, err
+		}
+		named := requestObject{"name": name}
+		return jsonValue(requestObject{"type": jsonValue("function"), "function": jsonValue(named)}), nil
+	}
+	return nil, &NotSupported{Reason: "tool_choice has no Chat counterpart"}
 }

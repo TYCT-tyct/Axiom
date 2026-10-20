@@ -120,9 +120,10 @@ func (s *chatToNative) closeResponseItem(i int) error {
 		event[index] = jsonValue(0)
 	}
 	member := "text"
-	if it.kind == "tool_use" {
+	switch it.kind {
+	case "tool_use":
 		member = "arguments"
-	} else if it.kind == "refusal" {
+	case "refusal":
 		member = "refusal"
 	}
 	event[member] = quotedContents(it.text)

@@ -77,8 +77,10 @@ func newChatToResponses(u UsageContext, o RelayOptions, charge func(int) error) 
 func newChatToNative(f Format, u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	inner := newChatStreamReader(u, o, charge)
 	inner.converting = true
-	s := &chatToNative{client: f, o: o, inner: inner, active: -1,
-		tools: map[int64]int{}, toolIDs: map[string]bool{}}
+	s := &chatToNative{
+		client: f, o: o, inner: inner, active: -1,
+		tools: map[int64]int{}, toolIDs: map[string]bool{},
+	}
 	s.init(charge)
 	return s
 }
@@ -276,33 +278,49 @@ func (s *chatToNative) start() error {
 	return s.emit("response.created", requestObject{"response": s.response("in_progress", nil)})
 }
 
+// completeItems sends what the finish signals held back: every block or item still open, and the arguments of a tool
+// call that streamed none. Nothing is written here directly: the frames wait in out for the settlement, whose capacity
+// was charged as they were made.
 func (s *chatToNative) completeItems() error {
 	s.out = s.out[:0]
 	for i := range s.items {
-		it := &s.items[i]
-		if it.kind == "tool_use" {
-			if len(it.text) == 0 {
-				it.text = append(it.text, "{}"...)
-			}
-			if s.client == Messages {
-				if _, err := arguments(quotedContents(it.text)); err != nil {
-					return &faultError{fault: FaultToolInput, detail: err.Error()}
-				}
-			}
-		}
-		if s.client == Messages {
-			if err := s.messagesDelta(i); err != nil {
-				return err
-			}
-			if err := s.closeMessageBlock(i); err != nil {
-				return err
-			}
-		} else if err := s.closeResponseItem(i); err != nil {
+		if err := s.completeItem(i); err != nil {
 			return err
 		}
 	}
-	// Finish writes these frames only after settlement. Their capacity was charged
-	// above, including the complete Responses snapshot retained by the items.
+	return nil
+}
+
+func (s *chatToNative) completeItem(i int) error {
+	if err := s.completeTool(i); err != nil {
+		return err
+	}
+	if s.client != Messages {
+		return s.closeResponseItem(i)
+	}
+	if err := s.messagesDelta(i); err != nil {
+		return err
+	}
+	return s.closeMessageBlock(i)
+}
+
+// completeTool closes a tool call's arguments: an empty object when nothing streamed, and for Messages the check that
+// they parse as JSON, since Anthropic clients read the block's input as one.
+func (s *chatToNative) completeTool(i int) error {
+	it := &s.items[i]
+	if it.kind != "tool_use" {
+		return nil
+	}
+	if len(it.text) == 0 {
+		it.text = append(it.text, "{}"...)
+		return nil
+	}
+	if s.client != Messages {
+		return nil
+	}
+	if _, err := arguments(quotedContents(it.text)); err != nil {
+		return &faultError{fault: FaultToolInput, detail: err.Error()}
+	}
 	return nil
 }
 

@@ -170,8 +170,10 @@ func (s *chatInputItems) message(o requestObject) error {
 }
 
 func (s *chatInputItems) call(o requestObject) {
-	call := requestObject{"id": o.take("call_id"), "type": jsonValue("function"),
-		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": o.take("arguments")})}
+	call := requestObject{
+		"id": o.take("call_id"), "type": jsonValue("function"),
+		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": o.take("arguments")}),
+	}
 	if len(s.out) == 0 || string(s.out[len(s.out)-1]["role"]) != `"assistant"` {
 		s.out = append(s.out, requestObject{"role": jsonValue("assistant"), "content": jsonValue("")})
 	}

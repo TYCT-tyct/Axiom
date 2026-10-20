@@ -211,8 +211,6 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	}
 	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
 	if t.Format == Chat {
-		// Native input maps, their canonical Chat encoding and its validation coexist.
-		// This path also expands stored Responses items before rewriting identities.
 		cost := nativeRequestCost(body)
 		for _, item := range w.History {
 			cost += nativeRequestCost(item)
@@ -221,11 +219,6 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	}
 	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
 	return cost
-}
-
-func nativeRequestCost(body []byte) int64 {
-	return 32*int64(len(body)) + 8192*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
-		2048*int64(bytes.Count(body, []byte(":")))
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
