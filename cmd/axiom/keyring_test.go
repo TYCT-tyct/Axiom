@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"time"
 	"uuid"
 
-	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -415,16 +413,7 @@ func TestKeyringRewrapsModuleEnvelopes(t *testing.T) {
 	clock := &testClock{now: time.Now()}
 	node := startAdminNode(f.commandLine, clock)
 	node.addUser("module@example.com", "admin")
-	s := node.signIn("module@example.com")
-	rec := node.do(http.MethodPost, "/auth/totp/setup", "", as(s))
-	var setup adminapi.TotpSetup
-	decode(t, rec, &setup)
-	confirm := `{"secret":"` + setup.Secret + `","password":"` + ownerPassword + `","code":"` + totpCode(t, setup.Secret, clock.Now()) + `"}`
-	rec = node.do(http.MethodPost, "/auth/totp/confirm", confirm, as(s))
-	expectAdmin(t, "confirmTotpSetup", rec, http.StatusOK, "")
-	var changed adminapi.FactorChange
-	decode(t, rec, &changed)
-	passed := session{rec.Result().Cookies()[0], changed.CsrfToken}
+	passed := node.verified("module@example.com")
 
 	made := supplierFixture{node, passed}.connect()
 	login := "SELECT key_version::text || ':' || encode(ciphertext, 'hex') FROM suppliers.supplier_logins WHERE supplier_id = '" + made.Id + "'"
