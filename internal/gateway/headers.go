@@ -19,8 +19,8 @@ import (
 // prompt_cache_key of the body: both carry the same derived value, so either path pins one session. They go to every
 // OpenAI dialect — Responses and Chat — since that is what the relay reads them as. Anthropic has no session header:
 // there the session travels in metadata.user_id (internal/protocol/README.md「同格式改写」).
-// x-codex-turn-state is the vendor's own state, minted on an earlier turn and replayed by the client: it goes as it
-// came, since a derived one would be an invented one, and only the Responses endpoint mints it.
+// x-codex-turn-state is the vendor's own state, minted on an earlier turn and replayed by the client: on Responses it goes
+// as it came, since a derived one would be an invented one. No other format has one.
 var requestHeaders = [...][]headerRule{
 	protocol.Messages:  {{name: "Anthropic-Beta"}, {name: "Anthropic-Version"}},
 	protocol.Responses: slices.Concat(openAISessionHeaders, []headerRule{{name: stateHeader}}),
@@ -42,7 +42,7 @@ var openAISessionHeaders = []headerRule{
 // headerRule is one request header a format's endpoints take, and how its value is made.
 type headerRule struct {
 	name    string
-	session bool // the value is the tenant's derivation of the client's own, which is not what goes upstream
+	session bool // the client's value is not sent: the tenant's derivation of it is
 }
 
 // stateHeader is the one response header of an upstream that reaches the client: the turn state it mints, which the
