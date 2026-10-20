@@ -305,14 +305,22 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with supplier syncing on the syncs queue, and charge reconciliation, the ledger's daily
-// check and the expiry of credit on the money queue. Each queue has its own workers, so a burst of syncs cannot hold a
-// money job back (internal/platform/README.md「任务队列」). It reaches the suppliers through exit, the client the whole
-// node shares.
+// startSync starts the queue with supplier syncing and the price datasets' daily round on the syncs queue, and charge
+// reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
+// so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
+// the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+	}); err != nil {
+		return nil, err
+	}
+	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
+	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
+	if err := catalog.RegisterSync(catalog.SyncJobConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: catalog.NewFetcher(exit), Logger: logger,
+		Meter: tel.Metrics.Meter("axiom/catalog"),
 	}); err != nil {
 		return nil, err
 	}

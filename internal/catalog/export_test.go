@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"time"
 
 	"axiom/internal/platform/egress"
@@ -17,4 +18,13 @@ func NewTestFetcher(c *egress.Client, urls map[PriceSource]string) *Fetcher {
 	f := NewFetcher(c)
 	f.urls = urls
 	return f
+}
+
+// RunSyncRound runs one round of the scheduled sync, as the queue would, and returns its error.
+func RunSyncRound(ctx context.Context, cfg SyncJobConfig) error {
+	j, err := newSyncJob(cfg)
+	if err != nil {
+		return err
+	}
+	return j.work(ctx, nil)
 }

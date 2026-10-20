@@ -35,6 +35,7 @@ func TestVisibility(t *testing.T) {
 		{"reference_price", 2, 1, 0},
 		{"revision", 1, 1, 0},
 		{"change", 9, 0, 0},
+		{"sync_state", 1, 0, 0},
 	}
 	for _, c := range cases {
 		if got := [3]int{count(platformScope, c.table), count(siteScope, c.table), count(noScope, c.table)}; got != [3]int{c.platform, c.site, c.none} {
@@ -84,6 +85,7 @@ func TestGrants(t *testing.T) {
 		{"choose a model's id", "INSERT INTO catalog.model (id, author, slug, version_basis, price_source) VALUES (gen_random_uuid(), 'acme', 'acme/b', 'dated', 'manual')"},
 		{"backdate a price", "INSERT INTO catalog.reference_price (model_id, currency, source, published_at) VALUES ('" + id.String() + "', 'EUR', 'manual', now() - interval '1 day')"},
 		{"set the revision to anything but a column it may", "UPDATE catalog.revision SET singleton = false"},
+		{"set the sync state's identity", "UPDATE catalog.sync_state SET singleton = false"},
 	}
 	for _, c := range cases {
 		wantErr(t, s.exec(platformScope, c.sql), "permission denied")

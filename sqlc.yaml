@@ -68,6 +68,7 @@ sql:
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
           - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
           - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
           - {db_type: text, nullable: true, go_type: {type: string, pointer: true}}
   - engine: postgresql
     schema: [sqlc/schemas.sql, internal/suppliers/internal/store/migrations]
