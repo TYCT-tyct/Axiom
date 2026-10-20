@@ -63,7 +63,7 @@ const (
 	// QueueMoney is the queue of the jobs whose lateness costs money: the expiry of credit, and the reconciliation of
 	// charges and of the ledger.
 	QueueMoney = "money"
-	// QueueNotifications is the queue of email and alerts. No job kind registers on it yet; it has workers so that the
+	// QueueNotifications is the queue of email and alerts. Only mail.send registers on it so far; it has workers so that the
 	// first one takes its own budget rather than another queue's.
 	QueueNotifications = "notifications"
 	// QueueSyncs is the queue of the jobs that reach a supplier: a sweep, a round of one supplier, and the price syncs
