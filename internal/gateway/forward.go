@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 )
 
@@ -64,7 +65,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 // nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is written to once, at the
 // end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
-	a.content = true
+	a.content, a.obs.FirstToken = true, time.Now()
 	if s.isGone() {
 		return
 	}
@@ -248,6 +249,7 @@ func (s *session) isStarted() bool {
 // is ended where it is.
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
+	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
 	if failed, ok := errors.AsType[*extendFailed](context.Cause(ctx)); ok {
 		return a.truncate(relay, cut(failed.err))
 	}
@@ -353,6 +355,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	s := a.s
 	rec := &s.ends[a.i]
 	a.usage = relay.Usage()
+	a.obs.Done, a.obs.Empty = true, !a.content
 	if s.aggregate {
 		rec.Finish = billing.FinishStop
 		switch {
@@ -397,6 +400,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	s := a.s
 	a.cancel(errCut)
+	a.obs.Cut = quality.Ours
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
 	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
