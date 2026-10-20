@@ -25,6 +25,9 @@ func keyRotation(db *pg.DB, path string) secret.Rotation {
 	}}
 }
 
+// keyringVerbs are the subcommands, in the order the usage line lists them.
+var keyringVerbs = []string{"check", "add", "activate", "retire", "rewrap"}
+
 type keyringArgs struct {
 	verb                  string
 	version               uint32
@@ -33,32 +36,52 @@ type keyringArgs struct {
 
 func parseKeyringArgs(args []string) (keyringArgs, error) {
 	var a keyringArgs
-	if len(args) == 0 || !slices.Contains([]string{"check", "add", "activate", "retire", "rewrap"}, args[0]) {
+	if len(args) == 0 || !slices.Contains(keyringVerbs, args[0]) {
 		return a, errors.New(keyringUsage)
 	}
 	a.verb = args[0]
-	var version string
-	if err := flags("keyring", keyringUsage, args[1:], func(set *flag.FlagSet) {
-		if a.verb == "rewrap" {
-			set.IntVar(&a.batchSize, "batch-size", 100, "envelopes per transaction, 1 to 1000")
-			set.IntVar(&a.maxBatches, "max-batches", 0, "stop after this many committed batches; zero runs to completion")
-		} else if a.verb != "check" {
-			set.StringVar(&version, "version", "", "positive uint32 version")
-		}
-	}); err != nil {
+	version, err := keyringFlags(&a, args[1:])
+	if err != nil {
 		return a, err
 	}
-	if a.verb == "rewrap" && (a.batchSize < 1 || a.batchSize > 1000 || a.maxBatches < 0) {
-		return a, errors.New("keyring: batch size must be 1 to 1000 and max-batches nonnegative")
-	}
-	if a.verb != "rewrap" && a.verb != "check" {
-		n, err := strconv.ParseUint(version, 10, 32)
-		if err != nil || n == 0 || strconv.FormatUint(n, 10) != version {
-			return a, errors.New("keyring: --version must be a canonical positive uint32")
+	switch a.verb {
+	case "check":
+		return a, nil
+	case "rewrap":
+		if a.batchSize < 1 || a.batchSize > 1000 || a.maxBatches < 0 {
+			return a, errors.New("keyring: batch size must be 1 to 1000 and max-batches nonnegative")
 		}
-		a.version = uint32(n)
+		return a, nil
+	default:
+		a.version, err = parseVersion(version)
+		return a, err
 	}
-	return a, nil
+}
+
+// keyringFlags parses the flags of the verb, which differ: rewrap carries its batch limits and the lifecycle verbs
+// take the version. It returns the version as it was written, since only the caller's verb reads it.
+func keyringFlags(a *keyringArgs, args []string) (string, error) {
+	var version string
+	err := flags("keyring", keyringUsage, args, func(set *flag.FlagSet) {
+		switch a.verb {
+		case "rewrap":
+			set.IntVar(&a.batchSize, "batch-size", 100, "envelopes per transaction, 1 to 1000")
+			set.IntVar(&a.maxBatches, "max-batches", 0, "stop after this many committed batches; zero runs to completion")
+		case "check":
+		default:
+			set.StringVar(&version, "version", "", "positive uint32 version")
+		}
+	})
+	return version, err
+}
+
+// parseVersion accepts a version as a person writes it and refuses leading zeros, so one version has one spelling.
+func parseVersion(version string) (uint32, error) {
+	n, err := strconv.ParseUint(version, 10, 32)
+	if err != nil || n == 0 || strconv.FormatUint(n, 10) != version {
+		return 0, errors.New("keyring: --version must be a canonical positive uint32")
+	}
+	return uint32(n), nil
 }
 
 func keyringCommand(ctx context.Context, environ, args []string, out io.Writer) error {

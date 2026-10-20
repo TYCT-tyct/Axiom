@@ -137,20 +137,18 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-
 	exit, err := outbound(tel)
 	if err != nil {
 		return err
 	}
-	recorder := record(ctx, db, tel, logger)
+	queue, recorder, err := startBackground(ctx, db, console.master, exit, tel, logger, cfg.shutdownTimeout, record)
+	if err != nil {
+		return err
+	}
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
-	queue, err := startSync(ctx, db, console.master, exit, tel, logger)
-	if err != nil {
-		return err
-	}
 	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
 	// deadline, and a second Stop does nothing.
 	defer stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
@@ -168,14 +166,21 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
+	stopped := serveNode(ctx, servers, &health, routes.calls, logger)
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
+	return errors.Join(stopped, stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder))
+}
+
+// serveNode serves the listeners until ctx ends or one of them stops, announcing readiness from the moment the call path
+// can route. Its error is the reason serving ended; what the node started is stopped by the caller either way.
+func serveNode(ctx context.Context, servers []*listening, health *httpserver.Health, calls callNode, logger *slog.Logger) error {
 	served := startServing(servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
-	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
-	stopped := awaitEnd(ctx, served, routes.calls.reaped)
+	stopAnnouncing := announceReady(ctx, calls.ready, readinessEvery, health, logger)
+	stopped := awaitEnd(ctx, served, calls.reaped)
 	stopAnnouncing()
-	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	return errors.Join(stopped, stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder))
+	return stopped
 }
 
 // stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
@@ -373,6 +378,22 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 		return nil, err
 	}
 	return db, nil
+}
+
+// startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
+// closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
+// the recorder it had already started, since the caller has no defer of its own yet.
+func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry,
+	logger *slog.Logger, timeout time.Duration,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+) (*pg.Queue, *observability.Recorder, error) {
+	recorder := record(ctx, db, tel, logger)
+	queue, err := startSync(ctx, db, keys, exit, tel, logger)
+	if err != nil {
+		closeRecorder(ctx, recorder, timeout, logger)
+		return nil, nil, err
+	}
+	return queue, recorder, nil
 }
 
 // startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not

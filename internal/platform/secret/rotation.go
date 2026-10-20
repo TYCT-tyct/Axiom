@@ -52,7 +52,7 @@ func (r Rotation) Check(ctx context.Context) (*Keyring, KeyStatus, error) {
 		if err != nil {
 			return err
 		}
-		if err := r.bootstrap(ctx, tx, ring); err != nil {
+		if err := bootstrapRing(ctx, tx, ring); err != nil {
 			return err
 		}
 		status, err = checkVersions(ctx, tx, ring)
@@ -71,7 +71,9 @@ func (r Rotation) Check(ctx context.Context) (*Keyring, KeyStatus, error) {
 	return ring, status, nil
 }
 
-func (r Rotation) bootstrap(ctx context.Context, tx pg.Tx, ring *Keyring) error {
+// bootstrapRing seeds the metadata from the file the first time a database-backed node starts, so a ring that predates
+// the table keeps writing under the version its file says is the write version.
+func bootstrapRing(ctx context.Context, tx pg.Tx, ring *Keyring) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_versions)").Scan(&exists); err != nil {
 		return errors.New("keyring: cannot read version metadata")
@@ -219,39 +221,43 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 
 // Retire refuses an active or referenced version. The tombstone commits before the local file is pruned.
 func (r Rotation) Retire(ctx context.Context, version uint32) error {
-	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
-		ring, err := Load(r.Path)
-		if err != nil {
-			return err
-		}
-		if _, err := checkVersions(ctx, tx, ring); err != nil {
-			return err
-		}
-		state, err := versionState(ctx, tx, version)
-		if err != nil {
-			return err
-		}
-		if state == "" || state == "active" {
-			return fmt.Errorf("keyring: version %d is unknown or active", version)
-		}
-		if err := r.unreferenced(ctx, tx, version); err != nil {
-			return err
-		}
-		if state == "retired" {
-			return nil
-		}
-		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'retired' WHERE version = $1", int64(version)); err != nil {
-			return errors.New("keyring: cannot retire version")
-		}
-		return rotationAudit(ctx, tx, "retire", version, map[string]any{})
-	})
-	if err != nil {
+	if err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		return r.tombstone(ctx, tx, version)
+	}); err != nil {
 		return err
 	}
 	// File edits share the lifecycle lock too: pruning outside it could overwrite a concurrent add's file.
 	return r.transaction(ctx, func(_ context.Context, _ pg.Tx) error {
 		return removeKey(r.Path, version)
 	})
+}
+
+// tombstone records the retirement, or finds it already recorded by a run that stopped before pruning its file.
+func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error {
+	ring, err := Load(r.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := checkVersions(ctx, tx, ring); err != nil {
+		return err
+	}
+	state, err := versionState(ctx, tx, version)
+	if err != nil {
+		return err
+	}
+	if state == "" || state == "active" {
+		return fmt.Errorf("keyring: version %d is unknown or active", version)
+	}
+	if err := r.unreferenced(ctx, tx, version); err != nil {
+		return err
+	}
+	if state == "retired" {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'retired' WHERE version = $1", int64(version)); err != nil {
+		return errors.New("keyring: cannot retire version")
+	}
+	return rotationAudit(ctx, tx, "retire", version, map[string]any{})
 }
 
 func rotationAudit(ctx context.Context, tx pg.Tx, action string, version uint32, detail map[string]any) error {

@@ -128,21 +128,26 @@ func (r Rotation) RewrapBatch(ctx context.Context, limit int) (int, error) {
 			return err
 		}
 		ring.latest = status.Active
-		for _, store := range r.Stores {
-			count, err = store.rewrap(ctx, tx, ring, limit)
-			if err != nil {
-				return err
-			}
-			if count != 0 {
-				return rotationAudit(ctx, tx, "rewrap", ring.latest, map[string]any{"store": store.name(), "count": count})
-			}
-		}
-		return nil
+		count, err = r.rewrapStores(ctx, tx, ring, limit)
+		return err
 	})
 	if err != nil {
 		return 0, err
 	}
 	return count, nil
+}
+
+// rewrapStores takes the first store with an old envelope, so one batch touches one table and its audit entry names
+// the store it came from.
+func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *Keyring, limit int) (int, error) {
+	for _, store := range r.Stores {
+		count, err := store.rewrap(ctx, tx, ring, limit)
+		if err != nil || count == 0 {
+			return count, err
+		}
+		return count, rotationAudit(ctx, tx, "rewrap", ring.latest, map[string]any{"store": store.name(), "count": count})
+	}
+	return 0, nil
 }
 
 type storedEnvelope struct {
