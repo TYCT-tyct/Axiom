@@ -23,10 +23,10 @@ type adminAPI struct {
 	accounts *accounts.Service
 	catalog  *catalog.Catalog
 	db       *pg.DB
+	logger   *slog.Logger
 	// suppliers is what the admin does with suppliers; calls is the node's call path, which a test generation goes
 	// through, and detections and tests limit how often a session may ask a third party's site what it runs and may
 	// make it generate.
-	logger     *slog.Logger
 	suppliers  *suppliers.Admin
 	calls      *suppliers.Service
 	detections *windowLimiter
