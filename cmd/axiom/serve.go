@@ -20,6 +20,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
+	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
@@ -65,6 +66,7 @@ type nodeSettings struct {
 	hashWait                          time.Duration
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
+	smtp                              mail.Config
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
@@ -96,8 +98,12 @@ func readSettings(environ []string) (nodeSettings, error) {
 			NodeID:       env.String(kv.NodeIDVar, hostName()),
 		},
 	}
-	// The cache's own settings are judged with the rest, so a node that is wrong about them does not touch the database.
-	if err := errors.Join(env.Err(), s.valkey.Resolve()); err != nil {
+	// Email is optional: none of its variables set means the node starts with email disabled, and a partly set
+	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
+	// are judged with the rest, so a node that is wrong about them does not touch the database.
+	smtp, mailErr := mail.ReadConfig(env)
+	s.smtp = smtp
+	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve()); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
@@ -180,7 +186,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
-	queue, err := startSync(ctx, db, console.master, exit, tel, logger)
+	queue, err := startSync(ctx, db, cfg.smtp, console.master, exit, tel, logger)
 	if err != nil {
 		return err
 	}
@@ -365,8 +371,13 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 // check and the expiry of credit on the money queue. Each queue has its own workers, so a burst of syncs cannot hold a
 // money job back (internal/platform/README.md「任务队列」). It reaches the suppliers through exit, the client the whole
 // node shares.
-func startSync(ctx context.Context, db *pg.DB, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
+	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
+	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
+	if _, err := mail.Register(ctx, db, queue, smtp, logger); err != nil {
+		return nil, err
+	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {

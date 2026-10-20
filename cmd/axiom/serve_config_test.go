@@ -158,6 +158,15 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			},
 			[]string{"AXIOM_VALKEY_PASSWORD_FILE: open: file not found"},
 		},
+		{
+			// Email is optional, but setting one of its variables arms all of them (#321).
+			"half an email configuration",
+			[]string{
+				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
+				"AXIOM_SMTP_HOST=smtp.example.com", "AXIOM_SMTP_PASSWORD=planted-value",
+			},
+			[]string{"AXIOM_SMTP_FROM: required", "AXIOM_SMTP_USERNAME: required"},
+		},
 	}
 	if runtime.GOOS != "windows" { // Windows has no mode bits to read
 		cases = append(cases, struct {
