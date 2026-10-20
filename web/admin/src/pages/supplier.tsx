@@ -10,7 +10,6 @@ import { supplierQuery } from "../queries";
 import { Checklist } from "../suppliers/checklist";
 import {
   BindKeyDialog,
-  LimitsDialog,
   RemoveDialog,
   ReplaceLoginDialog,
   SelectGroupDialog,
@@ -85,7 +84,7 @@ function Body({ detail }: { detail: Detail }) {
         <Groups groups={detail.groups} onOpen={act} />
       </Panel>
       <Panel title={t("suppliers.credentials.title")}>
-        <Credentials credentials={detail.credentials} groups={detail.groups} onOpen={act} />
+        <Credentials credentials={detail.credentials} groups={detail.groups} />
       </Panel>
       <Panel title={t("suppliers.unbound.title")}>
         <UnboundKeys keys={detail.unbound_keys} onOpen={act} />
@@ -144,8 +143,6 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
           onClose={onClose}
         />
       );
-    case "limits":
-      return <LimitsDialog supplier={supplier} credential={open.credential} onClose={onClose} />;
     default:
       return null;
   }

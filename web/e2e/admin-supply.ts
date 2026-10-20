@@ -165,21 +165,6 @@ function bindKey({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier
   return { status: 201, json: credential } as const;
 }
 
-function setLimits({
-  body,
-  params,
-  state,
-}: Ctx<"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", "put">) {
-  const detail = find(state, params.supplier_id);
-  const credential = detail?.credentials.find((c) => c.id === params.credential_id);
-  if (!credential) {
-    return fail(404, "not_found");
-  }
-  credential.max_concurrency = body.max_concurrency;
-  credential.requests_per_minute = body.requests_per_minute ?? undefined;
-  return ok(credential);
-}
-
 function listPending({ query, state }: Ctx<"/api/admin/v1/pending-mappings", "get">) {
   const supplier = query.get("supplier_id");
   const page = paged(
@@ -223,12 +208,6 @@ export const supplyHandlers: Handler<AdminState>[] = [
   route("put", `${base}/suppliers/{supplier_id}/unit-value`, changes("suppliers.manage"), setUnitValue),
   route("put", `${base}/suppliers/{supplier_id}/groups/{group_id}`, changes("suppliers.manage"), selectGroup),
   route("post", `${base}/suppliers/{supplier_id}/credentials`, changes("suppliers.manage"), bindKey),
-  route(
-    "put",
-    `${base}/suppliers/{supplier_id}/credentials/{credential_id}/limits`,
-    changes("suppliers.manage"),
-    setLimits,
-  ),
   route("get", `${base}/pending-mappings`, reads("suppliers.view"), listPending),
   route("post", `${base}/suppliers/{supplier_id}/model-mappings`, changes("suppliers.manage"), mapModel),
 ];
