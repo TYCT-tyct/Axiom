@@ -63,7 +63,8 @@ func TestRouteBuildPricesTheListWithTheSnapshotsPrices(t *testing.T) {
 	f.checkPublishedPrice("the first build", previous)
 	// The next reading prices the model again: one build publishes the routing snapshot and the list from it, so the two
 	// changes are one, not two readings that drift apart between rebuilds.
-	raised, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000009","output":"0.000010"}}`))
+	raised, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{` +
+		`"input":"0.000009","output":"0.000010","cache_read":"0.000001","cache_write":"0.000012"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}

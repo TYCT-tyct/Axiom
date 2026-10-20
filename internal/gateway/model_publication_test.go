@@ -28,7 +28,7 @@ func TestModelPublicationExcludesReaders(t *testing.T) {
 	version := uuid.NewV7()
 	snap, err := router.NewSnapshot(list.built, []routing.Endpoint{{
 		ID: routing.EndpointID(uuid.NewV7()), Model: m.model, Enabled: true, BalanceOK: true, Egresses: 1,
-		Context: 200000, MaxOutput: 1000, ServiceTiers: 1 << catalog.ServiceTierStandard,
+		Context: 200000, MaxOutput: 1000, Streams: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
 		Native: routing.Of(protocol.Messages), Served: routing.Of(protocol.Messages),
 		Price: routing.PriceRef{Version: version, Schedule: price},
 	}}, presets())
