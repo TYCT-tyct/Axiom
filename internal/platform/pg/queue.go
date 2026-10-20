@@ -44,6 +44,12 @@ const (
 	// oldestWaitMetric is how long the oldest available job of each queue has waited, by queue: the measure of whether
 	// a queue's workers keep up. It rises while work waits, and is 0 for a queue with nothing waiting.
 	oldestWaitMetric = "axiom.pg.queue.oldest_job_wait"
+	// oldestWaitTimeout bounds the database work behind one collection of oldestWaitMetric: the wait for a pooled
+	// connection, the query, and the transaction's end. The Prometheus exporter collects with a context of its own that
+	// has no deadline, and the SDK holds the metric pipeline's lock while a callback runs, so an unbounded query here
+	// would hold back every metric of the process, not this gauge alone. A collection that runs out of time reports the
+	// error and no wait: the gauge keeps its last value, and the next collection asks again.
+	oldestWaitTimeout = 2 * time.Second
 	// defaultQueueWorkers is the one worker River's default queue gets, to finish the jobs an earlier version enqueued
 	// there before the split. No kind names it.
 	defaultQueueWorkers = 1
@@ -277,8 +283,12 @@ func (q *Queue) reportDiscarded(ctx context.Context, d discardedJob) {
 }
 
 // observeOldestWait reports every queue's oldest wait, 0 for a queue with nothing waiting: a scrape of an idle queue
-// then reads 0 instead of the last value it happened to have.
+// then reads 0 instead of the last value it happened to have. It reports nothing when the database does not answer
+// within oldestWaitTimeout, and says why: the last reported values stay in place, and a failed collection is visible
+// rather than read as a queue that caught up.
 func (q *Queue) observeOldestWait(ctx context.Context, o metric.Float64Observer) error {
+	ctx, cancel := context.WithTimeout(ctx, oldestWaitTimeout)
+	defer cancel()
 	waits, err := q.oldestWaits(ctx)
 	if err != nil {
 		return err

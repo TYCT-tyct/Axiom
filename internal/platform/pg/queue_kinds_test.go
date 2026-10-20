@@ -1,6 +1,7 @@
 package pg
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -51,6 +52,56 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	}
 }
 
+// TestTheKindScanFailsWhereItCannotSee: the two inputs a scan that stays quiet would let through (internal/platform/
+// README.md「任务队列」). A Kind() it cannot read is an error, not a skipped kind; and a type's own InsertOpts counts
+// even when it names no queue, since it shadows the one of an embedded type and the job lands on River's default queue.
+func TestTheKindScanFailsWhereItCannotSee(t *testing.T) {
+	t.Parallel()
+	const embedded = `package x
+import "github.com/riverqueue/river"
+type single struct{}
+func (single) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "money"} }
+`
+	tests := []struct {
+		name         string
+		source       string
+		wantProblems int
+		wantQueue    string // of kind "k"
+	}{
+		{"a literal kind and the embedded queue", embedded + `type a struct{ single }
+func (a) Kind() string { return "k" }`, 0, "money"},
+		{"a constant kind", embedded + `const kindK = "k"
+type a struct{ single }
+func (a) Kind() string { return kindK }`, 0, "money"},
+		{"a kind returned from a call", embedded + `type a struct{ single }
+func (a) Kind() string { return name() }`, 1, ""},
+		{"an own InsertOpts without a queue shadows the embedded one", embedded + `type a struct{ single }
+func (a) Kind() string { return "k" }
+func (a) InsertOpts() river.InsertOpts { return river.InsertOpts{} }`, 0, ""},
+		{"an own InsertOpts with a queue", embedded + `type a struct{ single }
+func (a) Kind() string { return "k" }
+func (a) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "syncs"} }`, 0, "syncs"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "x.go")
+			if err := os.WriteFile(path, []byte(tt.source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			consts := map[string]string{}
+			readConstants(t, []string{path}, consts)
+			kinds, problems := packageJobKinds(t, []string{path}, consts)
+			if len(problems) != tt.wantProblems {
+				t.Errorf("problems = %q, want %d", problems, tt.wantProblems)
+			}
+			if tt.wantProblems == 0 && kinds["k"] != tt.wantQueue {
+				t.Errorf("kind k is on queue %q, want %q", kinds["k"], tt.wantQueue)
+			}
+		})
+	}
+}
+
 // repoRoot is the repository root, three directories above this package.
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -76,7 +127,11 @@ func jobKinds(t *testing.T, root string) map[string]string {
 	}
 	found := map[string]string{}
 	for _, dir := range slices.Sorted(maps.Keys(files)) {
-		maps.Copy(found, packageJobKinds(t, files[dir], consts))
+		kinds, problems := packageJobKinds(t, files[dir], consts)
+		maps.Copy(found, kinds)
+		for _, problem := range problems {
+			t.Error(problem)
+		}
 	}
 	return found
 }
@@ -143,19 +198,21 @@ func constSpecs(file *ast.File) []*ast.ValueSpec {
 // packageJobs is what one package's source says about its jobs.
 type packageJobs struct {
 	kinds    map[string]string   // args type -> kind
+	problems []string            // Kind methods whose string the scan cannot read
 	queues   map[string]string   // args type -> the queue its InsertOpts names
 	embedded map[string][]string // args type -> its embedded types
 }
 
-// packageJobKinds reads one package's job kinds, resolving a queue field such as pg.QueueMoney through consts.
-func packageJobKinds(t *testing.T, files []string, consts map[string]string) map[string]string {
+// packageJobKinds reads one package's job kinds, resolving a queue field such as pg.QueueMoney through consts, and lists
+// the Kind methods it cannot resolve: a kind the scan skips would escape the table.
+func packageJobKinds(t *testing.T, files []string, consts map[string]string) (map[string]string, []string) {
 	t.Helper()
-	p := packageJobs{kinds: map[string]string{}, queues: map[string]string{}, embedded: map[string][]string{}}
+	p := &packageJobs{kinds: map[string]string{}, queues: map[string]string{}, embedded: map[string][]string{}}
 	for _, path := range files {
 		for _, decl := range parse(t, path).Decls {
 			switch decl := decl.(type) {
 			case *ast.FuncDecl:
-				p.readMethod(decl)
+				p.readMethod(decl, consts)
 			case *ast.GenDecl:
 				p.readTypes(decl)
 			}
@@ -165,29 +222,34 @@ func packageJobKinds(t *testing.T, files []string, consts map[string]string) map
 	for typ, kind := range p.kinds {
 		found[kind] = p.queueOf(typ, consts)
 	}
-	return found
+	return found, p.problems
 }
 
-// readMethod records a job args type's kind, or the queue its InsertOpts names.
-func (p packageJobs) readMethod(decl *ast.FuncDecl) {
+// readMethod records a job args type's kind, or whether its InsertOpts names a queue: an InsertOpts method of the type
+// itself is recorded even when it names none, since it shadows the one of an embedded type.
+func (p *packageJobs) readMethod(decl *ast.FuncDecl, consts map[string]string) {
 	if decl.Recv == nil || len(decl.Recv.List) != 1 || decl.Body == nil {
 		return
 	}
 	typ := receiverName(decl.Recv.List[0].Type)
 	switch decl.Name.Name {
 	case "Kind":
-		if kind, ok := kindLiteral(decl); ok {
+		if !isKindSignature(decl.Type) {
+			return
+		}
+		if kind, ok := kindValue(decl, consts); ok {
 			p.kinds[typ] = kind
+		} else {
+			p.problems = append(p.problems, fmt.Sprintf("the Kind method of %s returns something the table test cannot read: return a string literal or a constant", typ))
 		}
 	case "InsertOpts":
-		if queue, ok := queueField(decl); ok {
-			p.queues[typ] = queue
-		}
+		queue, _ := queueField(decl)
+		p.queues[typ] = queue
 	}
 }
 
 // readTypes records the types a struct type embeds.
-func (p packageJobs) readTypes(decl *ast.GenDecl) {
+func (p *packageJobs) readTypes(decl *ast.GenDecl) {
 	for _, spec := range decl.Specs {
 		if spec, ok := spec.(*ast.TypeSpec); ok {
 			p.embed(spec)
@@ -195,11 +257,8 @@ func (p packageJobs) readTypes(decl *ast.GenDecl) {
 	}
 }
 
-// kindLiteral is the string a Kind() method returns, if it has the river.JobArgs shape: no parameters, one string.
-func kindLiteral(fn *ast.FuncDecl) (string, bool) {
-	if !isKindSignature(fn.Type) {
-		return "", false
-	}
+// kindValue is the string a Kind() method returns, written as a literal or as a constant.
+func kindValue(fn *ast.FuncDecl, consts map[string]string) (string, bool) {
 	for _, stmt := range fn.Body.List {
 		ret, ok := stmt.(*ast.ReturnStmt)
 		if !ok || len(ret.Results) != 1 {
@@ -207,6 +266,10 @@ func kindLiteral(fn *ast.FuncDecl) (string, bool) {
 		}
 		if kind, ok := stringLiteral(ret.Results[0]); ok {
 			return kind, true
+		}
+		if name, ok := ret.Results[0].(*ast.Ident); ok {
+			kind, ok := consts[name.Name]
+			return kind, ok
 		}
 	}
 	return "", false
@@ -276,7 +339,7 @@ func queueName(expr ast.Expr) string {
 
 // embed records the types a struct embeds, so that a job args type inherits its InsertOpts the way the compiler makes
 // it inherit the method.
-func (p packageJobs) embed(spec *ast.TypeSpec) {
+func (p *packageJobs) embed(spec *ast.TypeSpec) {
 	structure, ok := spec.Type.(*ast.StructType)
 	if !ok {
 		return
