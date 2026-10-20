@@ -290,11 +290,13 @@ func checkOutboxIsInOneScope(t *testing.T, w *queueWorld, tenant Tenant) {
 }
 
 // TestEnqueueRefusesAnotherTenant: the policy's WITH CHECK refuses a row for a site outside the caller's scope, so a flow
-// cannot queue mail for another tenant.
+// cannot queue mail for another tenant. The queue runs, so nothing else could fail the transaction: what refuses the
+// write is the policy.
 func TestEnqueueRefusesAnotherTenant(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
 	mailer := w.register(t, startTLSServer(t, nil))
+	w.start(t)
 	own, other := uuid.NewV7(), uuid.NewV7()
 	err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{own}, nil), func(tx pg.Tx) error {
 		return mailer.Enqueue(t.Context(), tx, Tenant{Site: other}, welcome)
