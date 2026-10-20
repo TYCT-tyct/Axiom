@@ -316,29 +316,34 @@ func TestRestartRecovers(t *testing.T) {
 
 // TestDeferredChecksReportOnly: a start that could not reach the server owes the checks that need one; the first answer
 // runs them, and a server that would fail them is reported and not refused, because a node may not stop serving over a
-// mistake it already survived the start with (README「配置与启动」).
+// mistake it already survived the start with (README「配置与启动」). The client's deadline is kvtest's wide one, so the
+// count at the end asserts the server's answer and not how fast the machine was (CONTRIBUTING「时序」).
 func TestDeferredChecksReportOnly(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Policy("allkeys-lru"))
 	server.Stop(t)
 	clock, logs := &offsetClock{}, &lockedBuffer{}
 	client, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()),
-		kv.Deps{Now: clock.Now, Logger: slog.New(slog.NewTextHandler(logs, nil))})
+		kvtest.Deps(kv.Deps{Now: clock.Now, Logger: slog.New(slog.NewTextHandler(logs, nil))}))
 	if err != nil {
 		t.Fatalf("a node whose server is stopped refused to start: %v", err)
 	}
 	t.Cleanup(func() { closeQuietly(t, client) })
 	server.Start(t)
-	deadline := time.Now().Add(time.Minute)
-	for {
+	// The start's failed dial leaves a connection the client replaces at the access after it finds it dead, and a dial may
+	// find a server that has listened but not yet entered its loop: three accesses cover both. server.Start returns once
+	// the server accepts connections, and the jump passes the breaker's open period for each, so nothing here waits on the
+	// clock (CONTRIBUTING「时序」).
+	const accesses = 3
+	var missed error
+	for range accesses {
 		clock.jump(pastOpen)
-		if err := client.Measure(t.Context()); err == nil {
+		if missed = client.Measure(t.Context()); missed == nil {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the client never reached the server")
-		}
-		time.Sleep(100 * time.Millisecond)
+	}
+	if missed != nil {
+		t.Fatalf("the client never reached the server in %d accesses: %v", accesses, missed)
 	}
 	if !strings.Contains(logs.String(), "maxmemory_policy") {
 		t.Errorf("the policy the start would have refused was not reported: %s", logs.String())
@@ -371,7 +376,7 @@ func (b *lockedBuffer) String() string {
 func TestMemoryPolicyIsChecked(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Policy("allkeys-lru"))
-	_, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{})
+	_, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kvtest.Deps(kv.Deps{}))
 	if err == nil {
 		t.Fatal("a server whose policy would evict a key started")
 	}
