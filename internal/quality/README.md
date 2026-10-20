@@ -13,7 +13,7 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures
 ```
 
 - **谁调**：gateway 的尝试在 `close` 里调 `Observe`，每次尝试恰好一次，含流式阶段（`attempt.observe`）；`RouteDeps.Build` 每次重建快照时对每个端点调 `Measured`，填进 `routing.Endpoint` 的 `Health`、`Throughput`、`Latency`。两边用的是同一个 `Monitor`，由 `cmd/axiom` 建一个交给两边。
-- **`Observation` 是事实，不是结论**：适配器的 `*suppliers.Failure`（没有 2xx 时）、流读失败的 `protocol.Fault`、网关为什么取消了尝试（`Cut`：响应头超时、空闲超时、调用自己的原因）、客户端是否已走、是否正常结束、是否 200 无正文、预估输入 token（`billing.InputEstimate`）、输出 token（结算用的数，上游没报时是估算）、发出、首段内容、结束的时刻。判定只在本模块（`judge`），网关不预先下结论。
+- **`Observation` 是事实，不是结论**：适配器的 `*suppliers.Failure`（没有 2xx 时）、流读失败的 `protocol.Fault`、网关为什么取消了尝试（`Cut`：响应头超时、空闲超时、调用自己的原因）、客户端是否已走、首段内容是否在客户端还在时交付（`Delivered`）、是否正常结束、是否 200 无正文（compact 的空正文也是）、预估输入 token（`billing.InputEstimate`）、输出 token（结算用的数，上游没报时是估算）、发出、首段内容、结束的时刻；首段内容和结束（或失败）的时刻在读到时记下，不含网关自己随后的等待（追加预留、关闭、算成本）。判定只在本模块（`judge`），网关不预先下结论。
 - **`Measures`**：`Health` = 1 − 失败的加权平均（α 0.2，没有计入的结局时为 1）；`Latency`、`Throughput` 在"测过"（样本 ≥ 5 且最近一个在 30 分钟内）之前为 0，路由按 0 认作没测过。
 - **指标**：`axiom.quality.unclassified`（端点范围、状态码 < 500 的 `Unknown`）、`axiom.quality.suspected_block`（疑似出口拦截），都不带端点标签。
 
@@ -21,7 +21,7 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures
 
 | 不变量 | 怎么保证 |
 |---|---|
-| H-I4 只有判定表里"失败"的结局记为失败，"不计"的不进健康度 | `judge` 是唯一的判定；`TestJudge` 逐行覆盖：每个 `Cause` × 作用范围、客户端是否已离开、流内错误类别（`protocol.Fault` 的每个值）、预估输入是否超过阈值；`TestUncountedChangesNothing`：不计的结局不改变健康度（既不降、也不重置）；`TestEveryAttemptIsObservedOnce`：网关的每条尝试结束路径（5xx、429、响应头超时、200 无正文、提交前后断流、空闲、客户端提交前后离开、compact）恰好报一次、按表计 |
+| H-I4 只有判定表里"失败"的结局记为失败，"不计"的不进健康度 | `judge` 是唯一的判定；`TestJudge` 逐行覆盖：每个 `Cause` × 作用范围、客户端是否已离开、流内错误类别（`protocol.Fault` 的每个值）、预估输入是否超过阈值；`TestUncountedChangesNothing`：不计的结局不改变健康度（既不降、也不重置）；`TestEveryAttemptIsObservedOnce`：网关的每条尝试结束路径（5xx、429、响应头超时、200 无正文、提交前后断流、空闲、客户端提交前后离开、客户端离开后才来内容再断流、compact 与空的 compact）恰好报一次、按表计；`TestThroughputLeavesOutOurOwnWaits`：上游结束后还在等的追加不算进吞吐 |
 | `Observe` 不分配 | `BenchmarkObserve` 先建好端点的条目，再用 `testing.AllocsPerRun` 断言 0，否则失败 |
 | 共享状态有锁 | 端点表由 `RWMutex` 保护，每个端点的数由它自己的锁保护；`TestObserveConcurrently` 在竞态检测下并发 `Observe` 和 `Measured` |
 
@@ -39,4 +39,4 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures
 | 平均值的第一个样本直接作为平均值，错误率从 0 起 | 与 sub2api 相同（`openai_account_scheduler.go` 的 `report`：首字时间以 NaN 起、第一个样本直接写入；错误率以 0 起）：没有样本时健康度是 1，第一个延迟样本不被一个任意的初值拉偏 |
 | 阈值（4k、32k、50 token、5 个样本、30 分钟、α）是代码里的常量 | 设计说它们是后台配置、默认值在代码里；后台在 H3 才有，现在只有默认值 |
 | 吞吐只取正常结束、且判为成功的尝试 | 设计规定"正常结束"；断流的尝试的输出 token 是估算，结束时刻也不是生成结束的时刻 |
-| 判定按"客户端已走 → 调用自己的原因 → 适配器的失败 → 正常结束 → 空闲 → 流内类别"的顺序 | 前两项能解释它们之后的任何失败（取消引起的断流、我们的期限），先看它们才不会把取消算成端点的错；但已提交之后客户端离开是成功：端点当时在正常回答 |
+| 判定按"客户端已走 → 调用自己的原因 → 适配器的失败 → 正常结束 → 空闲 → 流内类别"的顺序 | 前两项能解释它们之后的任何失败（取消引起的断流、我们的期限），先看它们才不会把取消算成端点的错；但客户端离开前已交付首段内容（`Delivered`），或之后读到上游正常结束且有内容，是成功：端点在正常回答。只在客户端离开后才来的内容不算交付，之后断流是"客户端已走时的失败"，不计 |
