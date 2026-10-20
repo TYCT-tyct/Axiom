@@ -3,8 +3,12 @@
 SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances WHERE account_id = @account_id;
 
 -- name: ReplayThrough :one
--- Fix the unlocked replay's upper bound before reading batches. New transactions always have a seq; legacy rows
--- cannot arrive later. The account's maximum is served by transactions_by_account_seq.
+-- Fix the unlocked replay's upper bound before reading batches. Every transaction of an account takes its seq under that
+-- account's balance row lock (InsertLockedTransaction), in the order the lock is taken and released at commit, so by the
+-- time this reads B every transaction of the account with a seq at or below B has committed, and the batches read after
+-- it see theirs. A credit committed later gets a higher seq, and so stays out of this replay: the next one loads it
+-- along with its batch (#361). Rows from before the sequence cannot arrive later, so they need no bound of their own.
+-- The account's maximum is served by transactions_by_account_seq.
 SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = @account_id;
 
 -- name: LiveBatches :many
