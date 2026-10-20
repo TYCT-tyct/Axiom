@@ -22,7 +22,7 @@
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
-- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 要返回 OpenRouter 的模型列表格式（含价格、上下文长度等）；现在它和 `/v1/models` 是同一个列表，只有身份字段（[#311](https://github.com/TYCT-tyct/Axiom/issues/311)）。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
+- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 与 `GET /api/v1/models/{model}` 返回 OpenRouter 的模型对象（价格取主站售价，带 `context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`，外壳是 `data`/`links.next`/`total_count`），并读 OpenRouter 文档里的查询参数；`/v1/models` 仍是 OpenAI 与 Anthropic 的合并形，两种客户端各读各的。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
 - **`GET /v1/models` 与 `GET /v1/models/{model}`**：
   - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；只列这把 key 能调用、且有端点可走的模型，权限用的是与调用相同的判断，不能用的模型、没有端点的模型和不存在的模型一样回 404 `model_not_found`（不是 403）；
@@ -32,6 +32,11 @@
   - OpenRouter 在 `/models` 下的 `count`、`user`、`{author}/{slug}/endpoints` 不提供，回 404 `not_found`；
   - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
+- **`GET /api/v1/models` 与 `GET /api/v1/models/{model}`**：
+  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是目录名（`author/slug`），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取主站售价的标准服务等级、第一档（美元 / token，`web_search` 每次），售价表没有的单位（`image`、`image_output` 按图，`request` 按次，`discount`、`overrides`）省略而不是写 0；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。同一把 key 看到哪些模型与 `/v1/models` 一样：能调用、路由快照里有端点、有售价。
+  - 列表读 `offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`，`sort` 支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；OpenRouter 文档里有而 Axiom 没有数据的参数按名字回 400 并说明缺什么，文档之外的参数（缓存参数、`utm_*`）忽略。`links.next` 是同一个查询把 `offset` 往后挪一格，只在这页之后还有模型时给出。
+  - 单模型按调用路径的方式解析别名（`claude-live` 与 `anthropic/claude-live` 是同一个模型），返回 `{data: 模型对象}`，`id` 是目录名而不是请求里的名字：OpenRouter 的形状里一个模型只有一个 `id`。
+  - 列表按目录快照和售价读数编码一次并缓存，快照变了或读数旧过 `rebuildEvery`（与路由快照同一个节奏）就重建，所以列表上的价格不会和调用收费的价格不一致；请求只做过滤、排序和一次缓冲区拷贝（`BenchmarkOpenRouterList`）。
 - **token 计数**：
   - 没有这个接口时，Claude Code 只能按字符数粗估上下文用量；
   - 计数优先交给支持该接口的端点，没有时用本地估算；M1 只用本地估算，交给端点在 M2；

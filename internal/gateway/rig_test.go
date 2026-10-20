@@ -64,12 +64,13 @@ type rig struct {
 	server   *httptest.Server
 
 	cfg       Config
-	alpha     catalog.ModelID             // acme/alpha, served by two endpoints
-	beta      catalog.ModelID             // acme/beta, served by one
-	bare      catalog.ModelID             // anthropic/claude-test, listed with its maker's name too, and no endpoint
-	claude    catalog.ModelID             // anthropic/claude-live, listed with its maker's name too, served by one
-	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
-	suppliers *suppliers.Service          // the real module, in a rig that has its tables
+	alpha     catalog.ModelID                  // acme/alpha, served by two endpoints
+	beta      catalog.ModelID                  // acme/beta, served by one
+	bare      catalog.ModelID                  // anthropic/claude-test, listed with its maker's name too, and no endpoint
+	claude    catalog.ModelID                  // anthropic/claude-live, listed with its maker's name too, served by one
+	endpoints map[string]routing.Endpoint      // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
+	sold      map[catalog.ModelID]billing.Sold // the sale prices the OpenRouter list shows, by model
+	suppliers *suppliers.Service               // the real module, in a rig that has its tables
 
 	mu         sync.Mutex
 	admits     []*Call
@@ -108,7 +109,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 			f(&o)
 		}
 	}
-	r := &rig{t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}}
+	r := &rig{t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}, sold: map[catalog.ModelID]billing.Sold{}}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.
 	r.cfg.AdmissionBudget, r.cfg.KeyLookup = 30*time.Second, 30*time.Second
@@ -153,7 +154,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.memory = protocol.NewMemory(o.memory)
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
-		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Proxies: o.proxies,
+		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Prices: r.prices, Proxies: o.proxies,
 	}); err != nil {
 		t.Fatal(err)
 	}

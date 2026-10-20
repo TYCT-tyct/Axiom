@@ -39,6 +39,9 @@ type Deps struct {
 	Run      Run
 	Logger   *slog.Logger
 	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Prices is every model's sale price, as routing reads it for its snapshot (RouteDeps.Prices): the model list in
+	// OpenRouter's shape shows it, so a client's estimate and a call's charge come from one reading.
+	Prices func(context.Context) (map[catalog.ModelID]billing.Sold, error)
 	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
 	// header, so a request is the address it came from.
 	Proxies []netip.Prefix
@@ -50,15 +53,21 @@ type Handler struct {
 	mux     *http.ServeMux
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 
-	background *background             // settlements of lost admissions
-	outage     *outage                 // the dependency outage being told, if any
-	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
+	background *background                       // settlements of lost admissions
+	outage     *outage                           // the dependency outage being told, if any
+	listings   atomic.Pointer[listing]           // the model list, encoded for the catalog snapshot it was last asked for
+	openRouter atomic.Pointer[openRouterListing] // the same in OpenRouter's shape, with the sale prices it was built at
+}
+
+// complete reports whether every dependency is there.
+func (d Deps) complete() bool {
+	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
+		d.Run != nil && d.Logger != nil && d.Prices != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.
 func NewHandler(d Deps) (*Handler, error) {
-	if d.Accounts == nil || d.Catalog == nil || d.Router == nil || d.Billing == nil || d.Limits == nil || d.Memory == nil ||
-		d.Run == nil || d.Logger == nil {
+	if !d.complete() {
 		return nil, errors.New("gateway: the handler needs every dependency")
 	}
 	if !d.Accounts.GatesLookups() {

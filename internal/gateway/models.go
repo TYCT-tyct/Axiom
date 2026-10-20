@@ -30,11 +30,17 @@ type visibility struct {
 	router  *routing.Router
 }
 
-// modelRoutes adds the model list and the single model.
+// modelRoutes adds the model list and the single model. The list under /api/v1 is OpenRouter's shape and the one under /v1
+// is OpenAI's and Anthropic's (openrouter.go), so a client is not handed the other protocol's members; the single model
+// follows its prefix's list.
 func (h *Handler) modelRoutes(prefix string) {
-	h.mux.HandleFunc("GET "+prefix+"/models", h.listModels)
+	list, one := h.listModels, h.retrieveModel
+	if prefix == "/api/v1" {
+		list, one = h.listOpenRouterModels, h.retrieveOpenRouterModel
+	}
+	h.mux.HandleFunc("GET "+prefix+"/models", list)
 	// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
-	h.mux.HandleFunc("GET "+prefix+"/models/{model...}", h.retrieveModel)
+	h.mux.HandleFunc("GET "+prefix+"/models/{model...}", one)
 	// OpenRouter's other paths under /models are not served; without these the wildcard would take them for names.
 	for _, path := range []string{"/models/count", "/models/user", "/models/{author}/{slug}/endpoints"} {
 		h.mux.HandleFunc("GET "+prefix+path, notServed)

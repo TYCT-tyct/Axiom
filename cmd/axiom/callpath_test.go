@@ -29,7 +29,7 @@ func TestTheEndpointSourcePassesTheSnapshotsStaleness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := routeDeps(callDeps{}, router, upstreams, quality.New(nil), &atomic.Bool{})
+	deps := routeDeps(callDeps{}, router, upstreams, quality.New(nil), &atomic.Bool{}, nil)
 	if got, err := deps.Endpoints(t.Context()); !errors.Is(err, suppliers.ErrStale) || got != nil {
 		t.Errorf("the endpoint source = %v, %v; want no endpoint and suppliers.ErrStale", got, err)
 	}
