@@ -38,9 +38,10 @@ func TestSetCredentialLimits(t *testing.T) {
 		detail.Credentials[0].RequestsPerMinute == nil || *detail.Credentials[0].RequestsPerMinute != 600 {
 		t.Errorf("the supplier after the change: %+v", detail.Credentials)
 	}
-	f.send(http.MethodPut, limits, `{"max_concurrency":8,"requests_per_minute":null,"reason":"none"}`, http.StatusOK, &changed)
-	if changed.RequestsPerMinute != nil {
-		t.Errorf("the minute cleared is still %d", *changed.RequestsPerMinute)
+	var cleared adminapi.SupplierCredential
+	f.send(http.MethodPut, limits, `{"max_concurrency":8,"requests_per_minute":null,"reason":"none"}`, http.StatusOK, &cleared)
+	if cleared.RequestsPerMinute != nil {
+		t.Errorf("the minute cleared is still %d", *cleared.RequestsPerMinute)
 	}
 	if n := f.auditCount("credential.limits"); n != "2" {
 		t.Errorf("%s audit entries, want 2: the change and the clearing", n)
