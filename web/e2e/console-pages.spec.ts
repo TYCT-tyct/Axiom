@@ -303,7 +303,14 @@ test.describe("API keys", () => {
     await expect(snippets.nth(4)).toContainText('env_key = "AXIOM_API_KEY"');
     await expect(snippets.nth(5)).toHaveText("https://api.example.com/v1");
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-    const copyNames = ["OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages", "Claude Code", "Codex", "Cursor"];
+    const copyNames = [
+      "OpenAI Chat Completions",
+      "OpenAI Responses",
+      "Anthropic Messages",
+      "Claude Code",
+      "Codex",
+      "Cursor",
+    ];
     for (const [index, name] of copyNames.entries()) {
       const copy = secret.getByRole("button", { name: `复制 ${name}`, exact: true });
       await copy.focus();
