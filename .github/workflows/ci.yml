@@ -151,7 +151,7 @@ jobs:
           retention-days: 7
       # Job containers run as root; runners with different UIDs must be able to clean their next checkout.
       - if: always()
-        run: chown -R --reference="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+        run: chown -hR --reference="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
 
   # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
   # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
