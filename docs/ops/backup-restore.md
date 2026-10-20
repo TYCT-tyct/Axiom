@@ -93,7 +93,7 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 7. 重启所有节点（启动前也会校验密钥版本），恢复备份调度并做新的完整 set。保留轮换前的加密备份直到其正常过期。
    审计 `keyring.initialize/add/activate/rewrap/retire` 在 `platform.audit_log`，只含版本、表名与数量。
 
-重包裹只更新账户 TOTP、供应商登录和凭证的包裹 DEK 与主密钥版本，不改密文、nonce、登录版本、TOTP 因子版本或业务状态。
+重包裹只更新账户 TOTP、供应商登录和凭证、支付商户配置的包裹 DEK 与主密钥版本，不改密文、nonce、登录版本、TOTP 因子版本、商户配置修订或业务状态。
 新增存储信封的表必须加入 `cmd/axiom` 的清单；启动和命令遇到未登记的 `wrapped_dek` 列会拒绝继续，避免漏迁后退役。
 HMAC `hash` 和派生用的 `identity` 文件不在此命令范围，不能把它们当成 `master` 操作。
 
