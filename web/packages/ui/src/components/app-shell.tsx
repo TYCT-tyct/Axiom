@@ -129,18 +129,13 @@ export function focusPage({ fromLocation, pathChanged }: { fromLocation?: unknow
   }
 }
 
-// The router's pending state stands in for the page area while the page's chunk loads, so it carries the page's heading
-// too (docs/frontend.md「工程要求」): a page whose heading is missing while it waits is one a reader, and a check, cannot
-// tell apart from a page that never rendered (#363).
-const PageLoading = () => <LoadingState page />;
-
 // routerDefaults are the options every app's router starts from. A link's page loads as soon as the pointer or focus
 // is on the link; while the next page loads the current one stays, and past a short wait the layout stays and the page
 // area shows a skeleton, so navigating never blanks the screen.
 export const routerDefaults = {
   defaultPreload: "intent",
   defaultPendingMs: 150,
-  defaultPendingComponent: PageLoading,
+  defaultPendingComponent: LoadingState,
   defaultErrorComponent: PageFailedState,
   defaultNotFoundComponent: NotFoundState,
 } as const;

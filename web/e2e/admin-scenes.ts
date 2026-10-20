@@ -4,7 +4,6 @@ import { uuid } from "./admin-data.ts";
 import { adminUrl } from "./apps.ts";
 import type { MockData } from "./mock.ts";
 import { signedInAs } from "./mock-auth.ts";
-import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 import { words } from "./words.ts";
 
@@ -12,15 +11,9 @@ import { words } from "./words.ts";
 
 export const acct = (n: number) => `acct_${String(n).padStart(26, "0")}`;
 
-type SceneState = Awaited<ReturnType<typeof mockAdmin>>;
-
-// What the API was asked on each page, so the note a page that does not come up prints (page-heading.ts) can say
-// whether the page asked at all.
-const states = new WeakMap<Page, SceneState>();
-
 async function goto(page: Page, path: string) {
   await page.goto(adminUrl(path));
-  await pageHeading(page, path, () => states.get(page)?.log ?? []);
+  await page.getByRole("heading", { level: 1 }).waitFor();
 }
 
 const press = (page: Page, name: string, nth = 0) =>
@@ -150,7 +143,6 @@ const enroll: Scene = { name: "enroll", signedIn: false, open: (p) => goto(p, "e
 // prepare mocks the API for a scene on a page: with the data the scene is shown with, and the session it needs.
 async function prepare(p: Page, sceneToShow: Scene, data: MockData = "usual") {
   const state = await mockAdmin(p, data);
-  states.set(p, state);
   if (sceneToShow.name === "mfa") {
     state.level = "pending_mfa";
     state.csrf = "csrf-0";

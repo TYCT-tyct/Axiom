@@ -2,14 +2,15 @@ import type { Page } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import type { MockData } from "./mock.ts";
 import { knownPassword } from "./mock-auth.ts";
-import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 
 // The screens of the console M1.
 
+const pageHeading = (page: Page) => page.getByRole("heading", { level: 1 });
+
 async function goto(page: Page, path: string) {
   await page.goto(`/console/${path}`);
-  await pageHeading(page, `/console/${path}`);
+  await pageHeading(page).waitFor();
 }
 
 // A screen whose dialog opens after a click on the page.

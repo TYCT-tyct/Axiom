@@ -53,25 +53,14 @@ function StateFrame({
 
 const skeletonWidths = ["w-11/12", "w-4/5", "w-2/3", "w-1/2"];
 
-// Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
-type Placement = { compact?: boolean; page?: boolean };
-
-// Loading is a state of the page like any other: one that replaces the page gives it its heading, hidden here because
-// the bars already say the same thing to a reader who is looking, so a page waiting for its data is one a reader and a
-// check can still tell apart from a page that never rendered (#363). The heading sits outside the status the bars speak
-// in: it names the page, it is not news.
-export function LoadingState({ page }: Placement = {}) {
+export function LoadingState() {
   const { t } = useTranslation("common");
-  const label = t("state.loading");
   return (
-    <div className="p-6">
-      {page ? <h1 className="sr-only">{label}</h1> : null}
-      <div role="status" className="space-y-3">
-        <span className="sr-only">{label}</span>
-        {skeletonWidths.map((width) => (
-          <div key={width} className={cn("h-5 animate-pulse rounded-xs bg-s2", width)} />
-        ))}
-      </div>
+    <div role="status" className="space-y-3 p-6">
+      <span className="sr-only">{t("state.loading")}</span>
+      {skeletonWidths.map((width) => (
+        <div key={width} className={cn("h-5 animate-pulse rounded-xs bg-s2", width)} />
+      ))}
     </div>
   );
 }
@@ -80,19 +69,23 @@ export function EmptyState({
   title,
   children,
   action,
-  ...placement
+  compact,
 }: {
   title?: string;
   children?: ReactNode;
   action?: ReactNode;
-} & Placement) {
+  compact?: boolean;
+}) {
   const { t } = useTranslation("common");
   return (
-    <StateFrame icon="grid" title={title ?? t("state.emptyTitle")} action={action} {...placement}>
+    <StateFrame icon="grid" title={title ?? t("state.emptyTitle")} action={action} compact={compact}>
       {children}
     </StateFrame>
   );
 }
+
+// Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
+type Placement = { compact?: boolean; page?: boolean };
 
 function ForbiddenState(placement: Placement) {
   const { t } = useTranslation("common");
@@ -181,7 +174,7 @@ export function DataState<T>({
   children: (data: T) => ReactNode;
 } & Placement) {
   if (query.status === "pending") {
-    return <LoadingState page={placement.page} />;
+    return <LoadingState />;
   }
   if (query.status === "error" || query.data === undefined) {
     const status = isFailure(query.error) ? query.error.status : undefined;
@@ -201,7 +194,7 @@ export function DataState<T>({
     );
   }
   if (isEmpty?.(query.data)) {
-    return empty ?? <EmptyState {...placement} />;
+    return empty ?? <EmptyState />;
   }
   return children(query.data);
 }
