@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -297,6 +298,49 @@ func TestKeyringArgs(t *testing.T) {
 		if _, err := parseKeyringArgs(args); err == nil {
 			t.Errorf("accepted invalid arguments %v", args)
 		}
+	}
+}
+
+// TestKeyringCheckFitsTheStartupTimeout: the startup check reads every envelope store, so a lock held on one of them
+// ends the start within AXIOM_STARTUP_TIMEOUT instead of hanging before the listeners open.
+func TestKeyringCheckFitsTheStartupTimeout(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	admin, err := pg.Open(t.Context(), f.database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	locked, unlock, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- admin.Tx(context.WithoutCancel(t.Context()), pg.Scope{}, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE accounts.users IN ACCESS EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			close(locked)
+			<-unlock
+			return nil
+		})
+	}()
+	<-locked
+	environ := []string{
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
+		pg.DatabaseURLVar + "=" + f.database.App, masterKeyFileVar + "=" + f.path,
+		keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'),
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
+	select {
+	case err := <-served:
+		if !errors.Is(err, errNoAnswer) {
+			t.Errorf("serve = %v, want errNoAnswer", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("the keyring check kept the node from starting 10s past a startup timeout of 1s")
+	}
+	close(unlock)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
