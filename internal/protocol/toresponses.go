@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: an ID is decoded only to match it
 	"strconv"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 )
 
@@ -19,12 +20,12 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 		return nil, &NotSupported{Reason: "a reasoning budget has no Responses counterpart"}
 	}
 	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
-	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints)
+	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints == catalog.ClaimYes)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, `],"store":false`...)
-	if t.EncryptedReasoning {
+	if t.EncryptedReasoning == catalog.ClaimYes {
 		out = append(out, `,"include":["`+encrypted+`"]`...)
 	}
 	for _, write := range []func([]byte, *canon) ([]byte, error){responsesTools, responsesChoice, responsesText} {

@@ -40,10 +40,52 @@
 - `name` 上的 CHECK 只是兜底，上架审核时逐个确认可见性。改 `Normalize` 的规则要随迁移重算 `norm` 并重新检查唯一性。
 - 参考价的历史以 `supersedes` 串起；当前价是没有被替代的那一行，它是撤下行（`schedule` 为空）时这个币种没有当前价。更正也是发布新的一行。`source` 记下这一行来自哪个价格来源，证据在对应的 `change` 里。
 - `spec` 原地更新，旧值在 `change` 里。它包括目录基线的全部规格和计费要用的模型数据，其中 `items`、`tiers` 是上游可能报告的计费项和服务等级（见「上架门槛与缺项」）。
-- `spec` 里另外四个键是端点接请求的规格：`context_length`（一次请求最多的 token，输入加输出）、`max_output_tokens`（模型的输出上限，也是默认输出上限）、`streams`（厂商是否流式）、`abilities`（能力名字的列表：`tools`、`images`、`documents`、`reasoning`、`prompt_cache`、`structured_output`、`web_search`、`code_execution`）。`Model.Serving()`（`snapshot.go`）把它们读成 `Serving{Context, MaxOutput, Streams, Abilities}`；**四个键缺一个就返回 false，绝不补默认值**——没写清能吃多少上下文的端点不能进路由，猜一个 128000 会让它带着错的上限接流量。组装路由快照的代码对 `Serving()` 为假的端点不放进快照；万一漏了，`routing` 的 `candidate`（`internal/routing/snapshot.go:273`）也会因为上下文长度不是正数拒绝它，而不是让它接流量。`context_length` 或 `max_output_tokens` 不是正数、`abilities` 里有不认识的名字、同一项写两遍，都在解析时拒绝，不忽略。`Serving.Abilities` 是 `catalog.AbilitySet`（spec 里的名字），不是 `protocol.Capabilities`：依赖上 `catalog` 在 `protocol` 之下，能力名字换成能力位由 `protocol` 在建路由快照时做。
+- `spec` 里另外四个键是端点接请求的规格：`context_length`（一次请求最多的 token，输入加输出）、`max_output_tokens`（模型的输出上限，也是默认输出上限）、`streams`（厂商是否流式）、`abilities`（能力名字的列表：`tools`、`images`、`documents`、`reasoning`、`prompt_cache`、`structured_output`、`web_search`、`code_execution`）。`Model.Serving()`（`snapshot.go`）把它们读成 `Serving{Context, MaxOutput, Streams, Abilities}`；**四个键缺一个就返回 false，绝不补默认值**——没写清能吃多少上下文的端点不能进路由，猜一个 128000 会让它带着错的上限接流量。组装路由快照的代码对 `Serving()` 为假的端点不放进快照；万一漏了，`routing` 的 `candidate`（`internal/routing/snapshot.go:273`）也会因为上下文长度不是正数拒绝它，而不是让它接流量。`context_length` 或 `max_output_tokens` 不是正数、`abilities` 里有不认识的名字、同一项写两遍，都在解析时拒绝，不忽略。`spec` 里还有七个**可缺**的键，说请求怎么写给这个模型：`thinking`（`adaptive`、`manual`、`none`）、`encrypted_reasoning`、`mid_system`、`untrusted_system_after_tools`、`default_sampling_only`（不接受非默认的 `temperature`、`top_p`）、`forced_tool_choice`（不思考时接受强制调用工具的 `tool_choice`；厂商把这两件事分开定，Claude Haiku 5.5 拒绝前者、接受后者）、`cache_breakpoints`（后六个是布尔）。`Model.Dialect()` 把它们读成 `Dialect`；与上面四个键不同，缺了不影响进路由，也没有 ok：缺的键读成 `ClaimUnset` / `ThinkingUnset`，**未设置不是 no**（缺与 false 是两种说法，和 `Serving` 的缺键同理），谁用它谁决定，从不当成模型的默认。`thinking` 写 `none` 是说模型不思考（明确不支持），不写是没说。不认识的 `thinking` 名字、类型不对的值在保存规格时拒绝，保存时还拒绝自相矛盾的两种写法（`abilities` 有 `reasoning` 而 `thinking` 是 `none`；`thinking` 是 `adaptive` 或 `manual` 而 `abilities` 没有 `reasoning`；`abilities` 不写则无从判断，放过，「有 `reasoning` 而 `thinking` 没写」也不在这里拒绝，由 `axiom catalog check` 报告）。这个一致性检查只在保存时做（`UpdateSpec`、`CreateModel`），不在解析时做：解析还要读库里已有的行，一行旧数据不该让整个快照加载失败。已进目录的模型要写全这几个键，Chat 转 Messages 的推理、非默认采样、强制调用工具和对话中途的系统消息才不会被拒绝（`protocol` 对未设置的拒绝见其 README）；值怎么定、怎么写进去、缺了怎么发现，见下一节。`Serving.Abilities` 是 `catalog.AbilitySet`（spec 里的名字），不是 `protocol.Capabilities`：依赖上 `catalog` 在 `protocol` 之下，能力名字换成能力位由 `protocol` 在建路由快照时做。
 - `model.rev` 是改模型时的乐观并发令牌：`ListModel`、`Retire`、`UpdateSpec`、`SelectPriceSource` 带上审核时看到的 `rev`，锁模型行后比较，不同就拒绝，成功后加一。没有它，两个基于同一份规格的修改，后提交的会悄悄覆盖先提交的。测试：基于同一 `rev` 的两个 `UpdateSpec` 只成功一个。
 - `subject_key` 非空且稳定：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
 - `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:catalog.sync`），#23 定义操作者类型后替换。
+
+### 请求写法的键：值照厂商文档，不手填
+
+这些键的值来自厂商的官方文档，不是运维凭印象填的：值抄进数据文件 `deploy/catalog/dialects.json`（`DialectFile`，逐个写出模型的 slug，不按名字前缀推断，因为名字像不等于文档这么说），由 `axiom catalog apply-dialect` 经 `UpdateSpec` 写进规格——有 `change` 和审计、按读到的 `rev` 检查，其余的键原样保留。不带 `--apply` 只显示会改什么；已经相同的模型不动，所以重跑什么也不变；目录里没有的 slug 只报告不创建；一个模型被拒（例如规格没列 `reasoning` 却要写 `thinking`）不拦其他模型，命令最后以非零状态退出。`just catalog-dialect-plan`、`just catalog-dialect-apply`、`just catalog-check` 是它们的入口，发布前的步骤见 [发布前](../../docs/ops/release.md)。
+
+`axiom catalog check` 报告每个缺键的模型（作者是模型的一列，不是对名字的猜测）：`anthropic` 的模型要 `default_sampling_only`、`forced_tool_choice`、`mid_system`，`mid_system` 为 yes 时还要 `untrusted_system_after_tools`，有 `reasoning` 能力时还要 `thinking`；`openai` 的模型要 `cache_breakpoints`，有 `reasoning` 能力时还要 `encrypted_reasoning`。这些键只在 Chat 转 Messages 的转换（Anthropic 的模型）和发往 Responses 的请求（OpenAI 的模型）里被读；别家的模型在被 Messages 或 Responses 的端点服务之前不要求它们。`TestTheDialectFileAnswersWhatTheCheckAsks` 保证数据文件里的每个模型都带着 check 要的全部键。
+
+**Anthropic**（读于 2026-10-19）。`mid_system` 为 yes 的是厂商文档列出的那几个型号，没列的为 no；`untrusted_system_after_tools` 只有 Sonnet 5.5、Haiku 5.5 为 yes。
+
+| slug | thinking | mid_system | untrusted_system_after_tools | default_sampling_only | forced_tool_choice |
+|---|---|---|---|---|---|
+| `anthropic/claude-fable-5.1` | adaptive | yes | no | yes | no |
+| `anthropic/claude-fable-5` | adaptive | yes | no | yes | yes |
+| `anthropic/claude-opus-5.5` | adaptive | yes | no | yes | no |
+| `anthropic/claude-opus-5` | adaptive | yes | no | yes | yes |
+| `anthropic/claude-opus-4.8` | adaptive | yes | no | yes | yes |
+| `anthropic/claude-opus-4.7` | adaptive | no | — | yes | yes |
+| `anthropic/claude-opus-4.6` | adaptive | no | — | no | yes |
+| `anthropic/claude-opus-4.5@20251101` | manual | no | — | no | yes |
+| `anthropic/claude-sonnet-5.5` | adaptive | yes | yes | yes | no |
+| `anthropic/claude-sonnet-5` | adaptive | no | — | yes | yes |
+| `anthropic/claude-sonnet-4.6` | adaptive | no | — | no | yes |
+| `anthropic/claude-sonnet-4.5@20250929` | manual | no | — | no | yes |
+| `anthropic/claude-haiku-5.5` | adaptive | yes | yes | yes | yes |
+| `anthropic/claude-haiku-4.5@20251001` | manual | no | — | no | yes |
+
+- `thinking`：Anthropic《Thinking》「Configuring thinking」的各型号表（<https://platform.claude.com/docs/en/build-with-claude/thinking>，2026-10-19）：Opus 4.6 起的每个型号接受 `adaptive`（Opus 4.6、Sonnet 4.6 也接受已弃用的手动预算，取 adaptive）；Opus 4.5、Sonnet 4.5、Haiku 4.5 对 `adaptive` 返回 400，只接受 `enabled` 加 `budget_tokens`，即 manual；Opus 4.7 起手动预算返回 400。与 new-api `relaykit/relayconvert/reasoning/claude.go` 对过：4.6 起 adaptive，4.5 只有手动。
+- `mid_system`：Anthropic《Mid-conversation system messages》（<https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>，2026-10-19）：「available on Claude Fable 5.1, Mythos 5.1, Fable 5, Mythos 5, Opus 5.5, Opus 4.8, Opus 5, Sonnet 5.5, and Haiku 5.5 … not available on Claude Sonnet 5」；列表之外的型号为 no 是据这份列表推出，文档没有逐个写出。`untrusted_system_after_tools`：同页「On Claude Sonnet 5.5 and Claude Haiku 5.5 … can treat a system message placed right after a tool result as untrusted text」。
+- `default_sampling_only`：Anthropic《Claude Opus 5.5 migration guide》（<https://platform.claude.com/docs/en/models/opus-5-5/migration-guide>）：非默认的 `temperature`、`top_p`、`top_k`「on Claude Opus 4.7 and later models … returns a 400 error」，Sonnet 5 同样（同文「Migrating … from Claude Sonnet 5」）；Sonnet 5.5 迁移指南：「Sonnet 4.6 and earlier models and Claude Haiku 4.5 accept …, on Claude Sonnet 5.5 a non-default value returns a 400 error」；Haiku 5.5 迁移指南「Remove sampling parameters」。Fable 5、5.1 没有页面单独写这条，按 Fable 5.1 概览「same patterns as Claude Opus 5」归为 yes（过度拒绝的一侧，不会把上游拒绝的请求发出去），拿到实测样本后再确认。
+- `forced_tool_choice`：只有 Opus 5.5、Sonnet 5.5、Fable 5.1 拒绝（《Thinking》「Thinking with tool use」：adaptive 思考支持强制调用工具，「except on Claude Opus 5.5, Claude Sonnet 5.5, Claude Fable 5.1, and Claude Mythos 5.1」；各自的迁移指南「Forced tool use is not supported」）；Haiku 5.5 迁移指南明说接受。思考时 `protocol` 无论如何拒绝强制调用，这里只说不思考时。
+
+**OpenAI**（读于 2026-10-19）：
+
+| slug | encrypted_reasoning | cache_breakpoints |
+|---|---|---|
+| `openai/gpt-6-astra`、`openai/gpt-6.1-sol`、`openai/gpt-6-luna` | yes | yes |
+| `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra`、`openai/gpt-5.6-luna` | yes | yes |
+
+- `encrypted_reasoning`：OpenAI《Reasoning》（<https://developers.openai.com/api/docs/guides/reasoning>，2026-10-19）：`store` 为 `false` 或零数据保留时，推理项「include an `encrypted_content` property by default」，页内示例用 `gpt-6-astra`、`gpt-6.1-sol`；文档没有逐个型号列出支持者，上表是它举例或点名的推理模型，GPT-5.5 及更早的没有证据，不在文件里，check 会报，由人对着文档补。
+- `cache_breakpoints`：OpenAI《Prompt caching》（<https://developers.openai.com/api/docs/guides/prompt-caching>，2026-10-19）：显式断点「GPT-5.6 and later」支持，「GPT-5.5 and GPT-5.5 Pro」和更早的不支持（用 `prompt_cache_breakpoint: {"mode": "explicit"}`）。
+
+数据文件里没有的型号（别的厂商、更早的型号、新发布的型号）没有证据就不猜：`check` 报缺哪些键，对着文档补进数据文件再 `apply-dialect`；厂商改了行为也是改数据文件，用同一条路。
 
 ### 行级安全与权限
 
@@ -195,11 +237,11 @@
 - **证据**：现在只检查是非空的 JSON 对象，原样记进 `change`；引用页面快照、摘录逐字出现在正文里的检查随页面监测。
 - **`change` 之外是否另调 `audit.Record`**：调。`change` 是目录自己读回的领域数据（核对证据、靠 `op_key` 幂等），审计日志是所有模块共用的、运营检索与回放的一条线；改参考价和模型状态属于[审计日志](../platform/README.md#审计日志)要求留审计的后台数据改动，且两者在同一个事务里，不会一边有一边没有。`detail` 只放 `change_id`，改前改后在 `change` 里，所以不受 8 KiB 的限制。
 - **读取**（`read.go`，只读、平台范围、各一个一致的读，草稿也读）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、`slug` 前缀筛选，前缀按字面匹配，`slug` 键集分页，迁移 `00002_slug_prefix.sql` 的索引服务前缀）、`Model`（带名字和各币种当前参考价）。管理接口的 `Idempotency-Key` 就是 `Op.Key`，处理器在占键的事务里带着 `Op.Tx` 调用操作（`ModelIn` 在同一事务里读回模型），由平台的 `idem` 绑定操作者、操作、目标和内容，重发得到第一次的响应；键用在另一种操作上、或不经管理接口（命令行）已用过，报 `ErrOpKeyReused`。
-- **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`、`select-dataset-source`（命令取数）；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。另有两个不带文件的命令：`axiom catalog sync` 对两个数据集各跑一轮并发布（`audit.System("catalog.sync")`），每个模型一行；`axiom catalog check` 只读，见「第一版验收的检查」。操作者的身份随 #23。
+- **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`、`select-dataset-source`（命令取数）；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。另有两个不带文件的命令：`axiom catalog sync` 对两个数据集各跑一轮并发布（`audit.System("catalog.sync")`），每个模型一行；`axiom catalog check` 只读，见「第一版验收的检查」；`axiom catalog apply-dialect [--apply] <文件>` 把数据文件里的请求写法的键写进同 slug 的模型（见「请求写法的键」）。操作者的身份随 #23。
 
 ### 第一版验收的检查
 
-`axiom catalog check`，只读，对 `openai`、`anthropic`、`google`、`deepseek` 四家，每个模型一行 JSON：是否上架、公开名字、选定来源、有当前价的币种、问题（不是上架状态、没有公开名字、规格没有声明 `items` 与 `tiers`、没有当前价、某币种的价目表缺规格声明的项或服务等级）。再取两个数据集做演习：每个跟随它的模型，价格是否与条目一致（`unchanged`）、会不会被发布（`differs`）、为什么 held；以及 OpenRouter 列出而目录里没有名字能确认其版本的纯文本模型（`unrecognized`；只靠不带日期的名字对上的也列出，因为数据集可能已把它换到新版本）。有任何一条问题就以非零状态退出，最后一行是汇总。
+`axiom catalog check`，只读，对 `openai`、`anthropic`、`google`、`deepseek` 四家，每个模型一行 JSON：是否上架、公开名字、选定来源、有当前价的币种、问题（不是上架状态、没有公开名字、规格解析不了、规格没有写请求写法的哪些键（见「请求写法的键」）、规格没有声明 `items` 与 `tiers`、没有当前价、某币种的价目表缺规格声明的项或服务等级）。规格解析不了的行只记在它自己的问题里，检查接着看下一个模型，一次运行列出所有要改的行；快照加载遇到这样的行则整个失败（`readSnapshot`，`axiom serve` 启动即退出）——快照没有跳过单个模型的做法，启动时失败是对的层，发现靠这条检查。再取两个数据集做演习：每个跟随它的模型，价格是否与条目一致（`unchanged`）、会不会被发布（`differs`）、为什么 held；以及 OpenRouter 列出而目录里没有名字能确认其版本的纯文本模型（`unrecognized`；只靠不带日期的名字对上的也列出，因为数据集可能已把它换到新版本）。有任何一条问题就以非零状态退出，最后一行是汇总。
 
 它不知道四家现在卖哪些模型：那在厂商的价格页上，页面监测随后；OpenRouter 的列表是最接近的参考，选官方价格页或手填的模型，价格与来源是否一致由人对着页面看。OpenRouter 的条目要有目录里的名字才对得上：它的带日期名字（如 `anthropic/claude-4.5-sonnet-20250929`）与厂商原生名字（`claude-sonnet-4-5-20250929`）词序不同，归一化不会把两者合并，所以上架时要把 OpenRouter 的名字也加成这个模型的内部名字，`unrecognized` 会把漏掉的列出来。
 
