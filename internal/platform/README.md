@@ -244,9 +244,9 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 范围
 
-- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
-- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
-- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope` 构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
+- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts`、`axiom.scope_home` 四个事务级参数里，由 `platform.in_scope(site_id, account_id)` 和 `platform.sees_site(site_id)` 读取。`scope_home` 是账户范围所属的站点，只给「站点的公开配置」和「共享计数」（[安全的「租户隔离」](../../docs/security.md#租户隔离)）用：`sees_site` 是 `in_scope(site, NULL)` 加上这个站点，不放宽账户读写的任何其他行。它由 `pg.AccountScopeIn(站点, 账户)` 设定，站点来自认出这个账户的授权，而不是账户自己能写的行（例如它在 `platform.tenants` 里的登记）。
+- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；站点的公开配置和共享计数读用 `platform.sees_site(site_id)`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
+- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope`（带所属站点时用 `pg.AccountScopeIn`）构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
 - 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移
