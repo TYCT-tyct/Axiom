@@ -187,8 +187,9 @@ type orEntry struct {
 // dollars per token in the site's currency, which for the main site is the dollar, except web_search, which is per
 // search. image and image_output are per image, request is per request, input_audio_cache is per cached audio token, and
 // discount and overrides have no counterpart in a sale schedule, so the members Axiom cannot fill are left out rather
-// than written as zero, which would read as free. The prices are the standard service tier's below the first context
-// threshold: the price the shape means by a model's price under default conditions.
+// than written as zero, which would read as free. image_token and internal_reasoning are shown for the models that take
+// images or reason (newORPricing). The prices are the standard service tier's below the first context threshold: the
+// price the shape means by a model's price under default conditions.
 type orPricing struct {
 	Prompt            string `json:"prompt"`
 	Completion        string `json:"completion"`
@@ -244,7 +245,7 @@ func newORModel(id string, m catalog.Model, s catalog.Serving, p catalog.Schedul
 	d := m.Dialect()
 	reasons := reasons(d, s.Abilities)
 	entry := orEntry{
-		ID: id, CanonicalSlug: m.Slug, Name: nameOf(m.Slug), Created: createdUnix, Pricing: newORPricing(p),
+		ID: id, CanonicalSlug: m.Slug, Name: nameOf(m.Slug), Created: createdUnix, Pricing: newORPricing(p, s.Abilities),
 		ContextLength: s.Context, Architecture: newORArchitecture(s.Abilities),
 		TopProvider:         orTopProvider{ContextLength: s.Context, MaxCompletionTokens: s.MaxOutput},
 		SupportedParameters: orParameters(s, d, reasons), Links: orLinks{Details: orListPath + "/" + id},
@@ -294,21 +295,27 @@ func newORArchitecture(a catalog.AbilitySet) orArchitecture {
 	}
 }
 
-// newORPricing is the sale price as OpenRouter's price list. An item the schedule prices nowhere but the ordinary price
-// of its side covers (an image token, a reasoning token) is shown at that price: it is what the call is charged.
-func newORPricing(p catalog.Schedule) orPricing {
-	return orPricing{
+// newORPricing is the sale price as OpenRouter's price list. image_token and internal_reasoning are shown only for a
+// model that takes images or reasons: the schedule falls back to the input or the output price for those items, so a
+// text-only model would otherwise be listed with a price for something it cannot be charged for.
+func newORPricing(p catalog.Schedule, a catalog.AbilitySet) orPricing {
+	price := orPricing{
 		Prompt:            orPrice(p, catalog.ItemInput),
 		Completion:        orPrice(p, catalog.ItemOutput),
 		InputCacheRead:    orPrice(p, catalog.ItemCacheRead),
 		InputCacheWrite:   orPrice(p, catalog.ItemCacheWrite),
 		InputCacheWrite1h: orPrice(p, catalog.ItemCacheWrite1h),
-		InternalReasoning: orPrice(p, catalog.ItemReasoning),
-		ImageToken:        orPrice(p, catalog.ItemImageIn),
 		Audio:             orPrice(p, catalog.ItemAudioIn),
 		AudioOutput:       orPrice(p, catalog.ItemAudioOut),
 		WebSearch:         orPrice(p, catalog.ItemWebSearch),
 	}
+	if a.Has(catalog.AbilityImages) {
+		price.ImageToken = orPrice(p, catalog.ItemImageIn)
+	}
+	if a.Has(catalog.AbilityReasoning) {
+		price.InternalReasoning = orPrice(p, catalog.ItemReasoning)
+	}
+	return price
 }
 
 // orPrice is the item's price as OpenRouter writes prices, or "" for an item the schedule does not price. Code execution

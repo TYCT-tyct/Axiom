@@ -332,9 +332,9 @@ func TestOpenRouterListRefusals(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			resp, body := r.do(http.MethodGet, "/api/v1/models"+tc.query, a.key, nil)
-			if code, typ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid" ||
+			if code, typ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" ||
 				typ != "invalid_request_error" || !strings.Contains(body, tc.parameter) {
-				t.Errorf("%s: %d %s %s, want 400 invalid naming %q:\n%s", tc.query, resp.StatusCode, code, typ, tc.parameter, body)
+				t.Errorf("%s: %d %s %s, want 400 invalid_request naming %q:\n%s", tc.query, resp.StatusCode, code, typ, tc.parameter, body)
 			}
 		})
 	}
