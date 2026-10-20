@@ -115,33 +115,52 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 }
 
 const insertCreditBatch = `-- name: InsertCreditBatch :exec
-INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at)
-VALUES ($1, $2, $3, 'gift', $4, $5)
+INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at, currency, paid, fee, merchant_id,
+    offline_channel, rate_id)
+VALUES ($1, $2, $3, $4, $5, $6, nullif($7::text, ''), $8,
+    $9, $10, nullif($11::text, ''), $12)
 `
 
 type InsertCreditBatchParams struct {
-	ID        uuid.UUID
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-	Amount    int64
-	ExpiresAt *time.Time
+	ID             uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	Source         string
+	Amount         int64
+	ExpiresAt      *time.Time
+	Currency       string
+	Paid           *int64
+	Fee            *int64
+	MerchantID     *uuid.UUID
+	OfflineChannel string
+	RateID         *uuid.UUID
 }
 
+// A gift leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch sets them as
+// credit_batches_source_check requires.
 func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCreditBatchParams) error {
 	_, err := db.Exec(ctx, insertCreditBatch,
 		arg.ID,
 		arg.SiteID,
 		arg.AccountID,
+		arg.Source,
 		arg.Amount,
 		arg.ExpiresAt,
+		arg.Currency,
+		arg.Paid,
+		arg.Fee,
+		arg.MerchantID,
+		arg.OfflineChannel,
+		arg.RateID,
 	)
 	return err
 }
 
 const insertEntries = `-- name: InsertEntries :exec
 WITH entry AS (
-    INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
-    SELECT $3, $4, $2, unnest($5::text[]), unnest($6::bigint[])
+    INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency)
+    SELECT $3, $4, $2, unnest($5::text[]), unnest($6::bigint[]),
+        nullif(unnest($7::text[]), '')
 )
 UPDATE billing.balances b SET balance = b.balance - $1
 WHERE b.account_id = $2 AND $1::bigint <> 0
@@ -154,10 +173,12 @@ type InsertEntriesParams struct {
 	SiteID        uuid.UUID
 	Books         []string
 	Amounts       []int64
+	Currencies    []string
 }
 
 // One statement for a transaction's entries; the user's balance follows its book (user_debit, the entries' sum on
-// user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it.
+// user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it. currencies has an
+// empty string for an entry in the site's own credits, which is stored as NULL.
 func (q *Queries) InsertEntries(ctx context.Context, db DBTX, arg InsertEntriesParams) error {
 	_, err := db.Exec(ctx, insertEntries,
 		arg.UserDebit,
@@ -166,6 +187,7 @@ func (q *Queries) InsertEntries(ctx context.Context, db DBTX, arg InsertEntriesP
 		arg.SiteID,
 		arg.Books,
 		arg.Amounts,
+		arg.Currencies,
 	)
 	return err
 }
@@ -349,7 +371,7 @@ func (q *Queries) ReservationAccount(ctx context.Context, db DBTX, requestID uui
 
 const unbalanced = `-- name: Unbalanced :many
 WITH transactions AS (
-    SELECT e.transaction_id FROM billing.entries e GROUP BY e.transaction_id HAVING sum(e.amount) <> 0
+    SELECT DISTINCT e.transaction_id FROM billing.entries e GROUP BY e.transaction_id, e.currency HAVING sum(e.amount) <> 0
 ), books AS (
     SELECT e.account_id, sum(e.amount) AS amount FROM billing.entries e WHERE e.book = 'user_balance' GROUP BY e.account_id
 )
@@ -362,9 +384,10 @@ SELECT p.problem::text FROM (
 ORDER BY 1
 `
 
-// Daily reconciliation: transactions whose entries do not sum to zero, and balances that differ from their book. Each
-// side is aggregated once, by a grouped scan, rather than summed again per row; the user-balance book reads from its
-// own partial index.
+// Daily reconciliation: transactions whose entries do not sum to zero in some currency, and balances that differ from
+// their book. A transaction balances in each currency on its own (NULL, the site's credits, groups as one); each side is
+// aggregated once, by a grouped scan, rather than summed again per row; the user-balance book reads from its own
+// partial index.
 func (q *Queries) Unbalanced(ctx context.Context, db DBTX) ([]string, error) {
 	rows, err := db.Query(ctx, unbalanced)
 	if err != nil {

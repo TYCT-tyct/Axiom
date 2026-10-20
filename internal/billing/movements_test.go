@@ -40,7 +40,7 @@ func TestPostLocksTheBalanceRow(t *testing.T) {
 // postUnlocked posts e in a transaction that took no lock, reports on posted how that went, and keeps the transaction
 // open until release is closed; then it posts e again, and an event of an account with no balance row.
 func (b *bank) postUnlocked(e event, posted chan<- error, release <-chan struct{}) error {
-	lines := []line{{bookGiftExpense, 5}, {bookUserBalance, -5}}
+	lines := []line{{bookGiftExpense, 5, siteCredits}, {bookUserBalance, -5, siteCredits}}
 	return b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		ok, err := post(b.t.Context(), tx, e, lines...)
 		if err == nil && !ok {

@@ -15,6 +15,14 @@ func (db *DB) SessionScope(ctx context.Context) (string, error) {
 	return scope, err
 }
 
+// Setting is a session setting of the connection that holds the name. Nothing else may use that connection while the
+// checks run, so the test gives the hold a check period longer than itself.
+func (h *Hold) Setting(ctx context.Context, name string) (string, error) {
+	var value string
+	err := h.conn.QueryRow(ctx, `SELECT current_setting($1)`, name).Scan(&value)
+	return value, err
+}
+
 // LatestVersion is the newest of a module's migrations.
 func LatestVersion(m Module) (int64, error) { return latestVersion(m) }
 

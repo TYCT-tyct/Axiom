@@ -37,12 +37,16 @@ func (e *ExchangeError) Error() string {
 // ErrStaleExchange refuses an adjustment decided against a superseded version.
 var ErrStaleExchange = errors.New("billing: the exchange rate changed since it was read")
 
-var exchangeCurrencies = []string{"USD", "CNY", "EUR", "GBP", "JPY", "HKD", "SGD", "AUD", "CAD", "CHF"}
+// minorDigits is every currency an exchange rate can be kept for (the CHECK of billing.exchange_rates lists the same),
+// with the number of decimals of its minor unit (ISO 4217), which a payment in it is counted in.
+var minorDigits = map[string]int{
+	"USD": 2, "CNY": 2, "EUR": 2, "GBP": 2, "JPY": 0, "HKD": 2, "SGD": 2, "AUD": 2, "CAD": 2, "CHF": 2,
+}
 
 // ExchangePair canonicalizes both directions to one history and one serialization point.
 func ExchangePair(base, quote string) (string, string, error) {
 	for _, f := range []struct{ name, value string }{{"base", base}, {"quote", quote}} {
-		if !slices.Contains(exchangeCurrencies, f.value) {
+		if _, ok := minorDigits[f.value]; !ok {
 			return "", "", &ExchangeError{f.name, "is not a supported currency"}
 		}
 	}

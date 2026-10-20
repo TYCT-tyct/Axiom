@@ -365,3 +365,58 @@ func wantWithPrompt(t *testing.T, usage string, want protocol.Segment) protocol.
 	}
 	return want
 }
+
+// TestRelayChatWritesReasoningUnderBothNames: the reasoning of a delta reaches the client under reasoning and
+// reasoning_content whichever of them the upstream wrote (DeepSeek and vLLM, OpenRouter), once, in place of the null of
+// the other when it sent one; two names with text are left as they are, and a finish_reason edited in the same chunk
+// comes out right on either side of the delta (docs/domains/gateway.md「转发规则」).
+func TestRelayChatWritesReasoningUnderBothNames(t *testing.T) {
+	for _, c := range []struct {
+		name, choice string
+		want         map[string]any
+	}{
+		{"reasoning_content only", `{"index":0,"delta":{"reasoning_content":"a\"b"},"finish_reason":null}`, map[string]any{"reasoning_content": `a"b`, "reasoning": `a"b`}},
+		{"reasoning only", `{"index":0,"delta":{"reasoning":"x"},"finish_reason":null}`, map[string]any{"reasoning_content": "x", "reasoning": "x"}},
+		{"reasoning_content, null reasoning", `{"index":0,"delta":{"reasoning":null,"reasoning_content":"x"},"finish_reason":null}`, map[string]any{"reasoning_content": "x", "reasoning": "x"}},
+		{"reasoning, null reasoning_content", `{"index":0,"delta":{"reasoning":"x","reasoning_content":null,"content":"c"},"finish_reason":null}`, map[string]any{"reasoning_content": "x", "reasoning": "x", "content": "c"}},
+		{"the finish after the delta", `{"index":0,"delta":{"reasoning_content":"x"},"finish_reason":"stop"}`, map[string]any{"reasoning_content": "x", "reasoning": "x"}},
+		{"the finish before the delta", `{"finish_reason":"stop","index":0,"delta":{"reasoning_content":"x"}}`, map[string]any{"reasoning_content": "x", "reasoning": "x"}},
+		{"two texts", `{"index":0,"delta":{"reasoning":"a","reasoning_content":"b"},"finish_reason":null}`, map[string]any{"reasoning_content": "b", "reasoning": "a"}},
+		{"empty text", `{"index":0,"delta":{"reasoning_content":""},"finish_reason":null}`, map[string]any{"reasoning_content": "", "reasoning": ""}},
+		{"nulls only", `{"index":0,"delta":{"reasoning":null,"reasoning_content":null,"content":"c"},"finish_reason":null}`, map[string]any{"reasoning_content": nil, "reasoning": nil, "content": "c"}},
+		{"the answer after the reasoning", `{"index":0,"delta":{"content":"c","reasoning_content":null},"finish_reason":null}`, map[string]any{"reasoning_content": nil, "content": "c"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stop := chatStop
+			if strings.Contains(c.choice, `"stop"`) {
+				stop = ""
+			}
+			stream := chatRole + chatHead + `[` + c.choice + `]}` + "\n\n" + stop + chatDone
+			got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+			if got.err != nil {
+				t.Fatal(got.err)
+			}
+			if !slices.ContainsFunc(firstChoiceDeltas(t, got.out), func(d map[string]any) bool { return cmp.Equal(c.want, d) }) {
+				t.Errorf("no delta is %v:\n%s", c.want, got.out)
+			}
+			if err := streamcheck.Chat(bytes.NewReader(got.out)); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+// firstChoiceDeltas are the deltas of choice 0 in the chunks of a Chat stream.
+func firstChoiceDeltas(t *testing.T, stream []byte) (deltas []map[string]any) {
+	t.Helper()
+	for event := range strings.SplitSeq(string(stream), "\n\n") {
+		data, ok := strings.CutPrefix(event, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		if choices, _ := decode(t, []byte(data))["choices"].([]any); len(choices) > 0 {
+			deltas = append(deltas, obj(obj(choices[0])["delta"]))
+		}
+	}
+	return deltas
+}
