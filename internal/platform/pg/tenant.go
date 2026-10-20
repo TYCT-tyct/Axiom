@@ -57,7 +57,7 @@ func tenantLookup(lookup string) (string, error) {
 // lookTenant calls the lookup with the empty scope and, when it named a tenant, limits the rest of the transaction to
 // that tenant. The two columns come back as text, which reads the same whether or not the row has an account.
 func lookTenant(ctx context.Context, tx pgx.Tx, query string, key uuid.UUID) (bool, error) {
-	if _, err := tx.Exec(ctx, setScope, "", "", ""); err != nil {
+	if err := applyScope(ctx, tx, Scope{}); err != nil {
 		return false, fmt.Errorf("set the scope: %w", err)
 	}
 	var site, account string
@@ -82,17 +82,15 @@ func setTenantScope(ctx context.Context, tx pgx.Tx, site, account string) error 
 	if err != nil {
 		return fmt.Errorf("the lookup returned the site %q: %w", site, err)
 	}
-	var sites, accounts string
-	if account == "" {
-		sites = uuidArray([]uuid.UUID{siteID})
-	} else {
+	scope := Scope{sites: []uuid.UUID{siteID}}
+	if account != "" {
 		accountID, err := uuid.Parse(account)
 		if err != nil {
 			return fmt.Errorf("the lookup returned the account %q: %w", account, err)
 		}
-		accounts = uuidArray([]uuid.UUID{accountID})
+		scope = Scope{accounts: []uuid.UUID{accountID}}
 	}
-	if _, err := tx.Exec(ctx, setScope, "", sites, accounts); err != nil {
+	if err := applyScope(ctx, tx, scope); err != nil {
 		return fmt.Errorf("set the tenant's scope: %w", err)
 	}
 	return nil
