@@ -3,6 +3,7 @@ package billing
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -128,7 +129,7 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 		name, query, index string
 		first, deep        []any
 	}{
-		{"numbered", movements, "transactions_by_account_seq", []any{b.admitted.Account, int64(0), int32(100)}, []any{b.admitted.Account, farSeq, int32(100)}},
+		{"numbered", movements, "transactions_by_account_seq", []any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)}, []any{b.admitted.Account, farSeq, int64(math.MaxInt64), int32(100)}},
 		{"from before the sequence", legacyMovements, "transactions_legacy_by_account", []any{legacy, long, uuid.UUID{}, int32(100)}, []any{legacy, farAt, farID, int32(100)}},
 	} {
 		first, _ := b.plan(tc.query, tc.first...)

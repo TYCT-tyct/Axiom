@@ -180,13 +180,19 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 //
 // It is safe without the lock because a transaction that moves the user's balance takes its seq under the lock (post),
 // so any page it reads is a prefix of what the lock will see: nothing can commit later with a place before it.
+// Fix that prefix before loading batches: a later credit does not move the allocation's place, but its batch would
+// be missing from this replay (#361). The next replay loads it along with its batch.
 func (e *expirer) advance(ctx context.Context, account uuid.UUID) (more bool, err error) {
 	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) error {
+		through, err := queries.ReplayThrough(ctx, tx, account)
+		if err != nil {
+			return fmt.Errorf("billing: read the replay bound of %s: %w", account, err)
+		}
 		a, err := loadAllocation(ctx, tx, account)
 		if err != nil {
 			return err
 		}
-		if more, err = a.catchUpPage(ctx, tx, account, e.movements); err != nil {
+		if more, err = a.catchUpPage(ctx, tx, account, e.movements, through); err != nil {
 			return err
 		}
 		return a.save(ctx, tx, account)

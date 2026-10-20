@@ -2,6 +2,11 @@
 -- Where the allocation of an account stands: the key of the last transaction replayed, and the debt.
 SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances WHERE account_id = @account_id;
 
+-- name: ReplayThrough :one
+-- Fix the unlocked replay's upper bound before reading batches. New transactions always have a seq; legacy rows
+-- cannot arrive later. The account's maximum is served by transactions_by_account_seq.
+SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = @account_id;
+
 -- name: LiveBatches :many
 -- The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
 -- before the sequence). consumed and expired are what the allocation has stored: they trail the ledger until the
@@ -32,11 +37,11 @@ ORDER BY p.created_at, p.id;
 
 -- name: Movements :many
 -- A page of the account's numbered transactions after the seq given, in the order of seq, each with its net debit on
--- the user's balance as for LegacyMovements. Bounded by the index transactions_by_account_seq.
+-- the user's balance as for LegacyMovements, never past through_seq. Bounded by the index transactions_by_account_seq.
 WITH page AS (
     SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
     FROM billing.transactions t
-    WHERE t.account_id = @account_id AND t.seq > @after_seq::bigint
+    WHERE t.account_id = @account_id AND t.seq > @after_seq::bigint AND t.seq <= @through_seq::bigint
     ORDER BY t.seq
     LIMIT @max
 )
