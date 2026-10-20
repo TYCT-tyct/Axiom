@@ -36,11 +36,11 @@ func newRotationFixture(t *testing.T) rotationFixture {
 	path := keyFile(t, 'm')
 	f := rotationFixture{commandLine: c, path: path, r: keyRotation(c.db, path)}
 	f.environ = append(f.environ, masterKeyFileVar+"="+path)
-	f.seed()
+	f.before = f.seed()
 	return f
 }
 
-func (f rotationFixture) seed() {
+func (f rotationFixture) seed() []rotationEnvelope {
 	f.t.Helper()
 	ctx := f.t.Context()
 	keys := masterKeys(f.t)
@@ -85,6 +85,7 @@ func (f rotationFixture) seed() {
 	}); err != nil {
 		f.t.Fatal(err)
 	}
+	return f.before
 }
 
 func (f rotationFixture) run(args ...string) string {
