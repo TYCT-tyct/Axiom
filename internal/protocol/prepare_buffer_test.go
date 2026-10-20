@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -51,7 +52,15 @@ func TestPrepareBufferEscapes(t *testing.T) {
 		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`, 0},
 	} {
 		allocs := func(model, identity string) float64 {
-			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity) + c.wraps}
+			bound := len(identity)
+			if c.format == protocol.Messages {
+				encoded, err := jsonx.MarshalCanonical(identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bound = len(encoded) - 2
+			}
+			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: bound + c.wraps}
 			r := inspected(t, c.format, []byte(c.body))
 			return testing.AllocsPerRun(5, func() {
 				if _, err := protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: model}, w); err != nil {
@@ -68,7 +77,7 @@ func TestPrepareBufferEscapes(t *testing.T) {
 // TestPrepareBufferDefaultIdentityLen holds the room for derived values to the default bound when IdentityLen is not set:
 // a value as long as the bound, all of bytes that need escaping, replacing an original that needs none, fits in one
 // allocation; a longer one is refused as the gateway's error. The structure of metadata.user_id counts towards the bound,
-// so the Messages case gives Identity less room by its length.
+// so the Messages case also counts the inner escaping.
 func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 	for _, c := range []struct {
 		format protocol.Format
@@ -90,7 +99,11 @@ func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 			})
 			return allocs, err
 		}
-		long, err := prepareWith(128 - c.wraps)
+		n := 128 - c.wraps
+		if c.format == protocol.Messages {
+			n /= 2
+		} // A backslash takes two bytes in the inner object.
+		long, err := prepareWith(n)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,8 +114,8 @@ func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 		if long != short {
 			t.Errorf("format %d: %d allocations with 128 escaped bytes, %d with one", c.format, int(long), int(short))
 		}
-		if _, err := prepareWith(129 - c.wraps); err == nil || errors.Is(err, protocol.ErrInvalid) {
-			t.Errorf("format %d: got %v for 129 bytes, want the gateway's error", c.format, err)
+		if _, err := prepareWith(n + 1); err == nil || errors.Is(err, protocol.ErrInvalid) {
+			t.Errorf("format %d: got %v for an identifier over 128 bytes, want the gateway's error", c.format, err)
 		}
 	}
 }

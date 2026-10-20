@@ -22,12 +22,6 @@ func derive(s string) string { return "h(" + s + ")" }
 // rewrites are the gateway's values the protocol tests prepare with: an identity that tags what it derives, and a device.
 func rewrites() protocol.Rewrites { return protocol.Rewrites{Identity: derive, Device: "d"} }
 
-// testUserID is what Prepare writes in metadata.user_id for the client identifier s: the device of the test's Rewrites,
-// and the session derived from s, as a JSON string whose content is a JSON object.
-func testUserID(s string) string {
-	return `{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"` + derive(s) + `\"}`
-}
-
 // history is a stored chain: a user message and the compaction item the reply carried (OpenAI《Compaction》,
 // https://developers.openai.com/api/docs/guides/compaction, read 2026-10-14; the item's id and encrypted_content are
 // made up, as the guide shows none).
@@ -54,7 +48,7 @@ var prepareCases = []struct {
 		`{"provider":{"order":["a"]}, "model":"claude-opus-5-5","metadata":{"user_id":"u\u00e9","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}],"axiom":{}, "max_tokens":5}`,
-		`{ "model":"up","metadata":{"user_id":"` + testUserID("u\u00e9") + `","x":1},` +
+		`{ "model":"up","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(ué)\"}","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}], "max_tokens":5}`,
 	},

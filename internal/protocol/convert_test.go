@@ -225,7 +225,7 @@ func TestConvertToMessages(t *testing.T) {
 		{"a member not converted", chatBody(`"messages":[` + userHi + `],"prediction":{"type":"content","content":"x"}`), nil, "unsupported"},
 		{
 			"identity, routing and tier", chatBody(`"messages":[` + userHi + `],"user":"u1","prompt_cache_key":"k","provider":{"order":["x"]},"service_tier":"default"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"` + testUserID("u1") + `"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(u1)\"}"}}`,
 		},
 		{"priority", chatBody(`"messages":[` + userHi + `],"service_tier":"priority"`), nil, "unsupported"},
 		{"verbosity", chatBody(`"messages":[` + userHi + `],"verbosity":"low"`), nil, "unsupported"},

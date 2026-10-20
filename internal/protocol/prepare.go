@@ -63,9 +63,10 @@ type Rewrites struct {
 	// Device is the value that stands for the client's machine in Anthropic's metadata.user_id, whose session member is
 	// Identity's value for the same request: a relay of this deployment reads the session out of it to pin a
 	// conversation to one account (docs/domains/gateway.md「转发规则」). It is written into the object as it is, so it
-	// must be an opaque identifier, as the ones Identity returns are.
+	// must be an opaque identifier, as the ones Identity returns are. Both components are JSON-encoded.
 	Device string
-	// IdentityLen is the most bytes a value Identity or Device makes up may take, before JSON escaping; 0 means
+	// IdentityLen is the most bytes a derived identifier may take before outer JSON escaping; for metadata.user_id,
+	// this includes the inner JSON encoding of the structure and both components. 0 means
 	// defaultIdentityLen. It sizes the output, so that identifiers that are longer than the ones they replace, or need
 	// escaping, do not make Prepare copy the body again; a longer value is refused (errIdentity).
 	IdentityLen int
@@ -427,7 +428,14 @@ func (p *rewriter) userID() error {
 // (docs/domains/gateway.md「转发规则」). It is a JSON string whose content is JSON, which is the shape Claude Code sends,
 // so a reader that takes the member for a string and a reader that parses it both find what they expect.
 func metadataUserID(w Rewrites, v string) string {
-	return `{"device_id":"` + w.Device + `","account_uuid":"","session_id":"` + w.Identity(v) + `"}`
+	if strings.TrimSpace(v) == "" {
+		return "" // No declared session: let the relay fall back to conversation content.
+	}
+	session := w.Identity(v)
+	out := make([]byte, 0, len(`{"device_id":,"account_uuid":"","session_id":}`)+quoted(len(w.Device))+quoted(len(session)))
+	out = appendQuoted(append(out, `{"device_id":`...), w.Device)
+	out = appendQuoted(append(out, `,"account_uuid":"","session_id":`...), session)
+	return string(append(out, '}'))
 }
 
 // replaceDerived reads the string just read and writes derive's value of it in its place, refusing one longer than
