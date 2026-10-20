@@ -1,8 +1,6 @@
 package protocol_test
 
 import (
-	"errors"
-	"strings"
 	"testing"
 
 	"axiom/internal/protocol"
@@ -15,7 +13,7 @@ import (
 func TestPrepareAsksForAStream(t *testing.T) {
 	names := []string{"absent", "false", "null", "true"}
 	bodies := []string{`{"model":"m"}`, `{"model":"m","stream":false}`, `{"model":"m","stream":null}`, `{"model":"m","stream":true}`}
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		for i, body := range bodies {
 			checkStreamAsked(t, f, names[i], body)
 		}
@@ -82,16 +80,5 @@ func TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream(t *testing.T) {
 	}
 	if cost := protocol.PrepareCost(&r, []byte(body), target, w); cost < int64(cap(u.Body)) {
 		t.Errorf("the cost %d does not cover the %d bytes written", cost, cap(u.Body))
-	}
-}
-
-// TestPrepareRefusesChat: Chat's rewrites depend on the endpoint's dialect and are still to come, so a Chat endpoint
-// cannot express a request. The gateway passes the endpoint over (a *NotSupported) instead of failing the call.
-func TestPrepareRefusesChat(t *testing.T) {
-	_, err := protocol.Prepare(&protocol.Request{Format: protocol.Chat}, []byte(`{"model":"m"}`),
-		protocol.Target{Format: protocol.Chat, Model: "up"}, protocol.Rewrites{})
-	ns, ok := errors.AsType[*protocol.NotSupported](err)
-	if !ok || !strings.Contains(ns.Reason, "not rewritten") {
-		t.Fatalf("got %v, want a *NotSupported", err)
 	}
 }

@@ -247,7 +247,7 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 		}
 		w := min(b.remaining(), limit)
 		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
-		if posted, err := post(ctx, tx, e, line{bookUserBalance, w}, line{bookCreditExpired, -w}); err != nil {
+		if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
 			return 0, err
 		} else if !posted {
 			return 0, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)
