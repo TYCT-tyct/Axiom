@@ -1,0 +1,266 @@
+package secret
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"time"
+
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/pg"
+)
+
+// Rotation manages version metadata and stored envelopes, using the platform scope assembled by cmd/.
+// Nodes must be stopped for activation and retirement: an already loaded Keyring is immutable.
+type Rotation struct {
+	DB     *pg.DB
+	Scope  pg.Scope
+	Path   string
+	Stores []EnvelopeStore
+}
+
+// KeyStatus contains only version identifiers, never key material or fingerprints.
+type KeyStatus struct {
+	Active   uint32   `json:"active"`
+	Readable []uint32 `json:"readable"`
+	Retired  []uint32 `json:"retired"`
+}
+
+// transaction serializes lifecycle changes and each rewrap batch, and bounds lock waits and database work.
+func (r Rotation) transaction(ctx context.Context, fn func(context.Context, pg.Tx) error) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return r.DB.Tx(ctx, r.Scope, func(tx pg.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(321, 8)"); err != nil {
+			return errors.New("keyring: cannot acquire rotation lock")
+		}
+		return fn(ctx, tx)
+	})
+}
+
+// Check bootstraps legacy metadata once, checks every required version, and returns an immutable ring whose
+// write version comes from the database. Call it before starting any worker or accepting requests.
+func (r Rotation) Check(ctx context.Context) (*Keyring, KeyStatus, error) {
+	var ring *Keyring
+	var status KeyStatus
+	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		var err error
+		ring, err = Load(r.Path)
+		if err != nil {
+			return err
+		}
+		if err := r.bootstrap(ctx, tx, ring); err != nil {
+			return err
+		}
+		status, err = checkVersions(ctx, tx, ring)
+		if err != nil {
+			return err
+		}
+		if err := r.checkReferences(ctx, tx, ring, status); err != nil {
+			return err
+		}
+		ring.latest = status.Active
+		return nil
+	})
+	if err != nil {
+		return nil, KeyStatus{}, err
+	}
+	return ring, status, nil
+}
+
+func (r Rotation) bootstrap(ctx context.Context, tx pg.Tx, ring *Keyring) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_versions)").Scan(&exists); err != nil {
+		return errors.New("keyring: cannot read version metadata")
+	}
+	if exists {
+		return nil
+	}
+	for version, fingerprint := range ring.fingerprints {
+		state := "readable"
+		if version == ring.latest {
+			state = "active"
+		}
+		if err := insertVersion(ctx, tx, version, fingerprint, state); err != nil {
+			return err
+		}
+	}
+	return rotationAudit(ctx, tx, "initialize", ring.latest, map[string]any{"versions": len(ring.keys)})
+}
+
+func insertVersion(ctx context.Context, tx pg.Tx, version uint32, fingerprint [32]byte, state string) error {
+	if _, err := tx.Exec(ctx, "INSERT INTO platform.key_versions (version, fingerprint, state) VALUES ($1, $2, $3)",
+		int64(version), fingerprint[:], state); err != nil {
+		// A unique violation may include the digest in PostgreSQL's detail.
+		return fmt.Errorf("keyring: cannot register version %d", version)
+	}
+	return nil
+}
+
+func checkVersions(ctx context.Context, tx pg.Tx, ring *Keyring) (KeyStatus, error) {
+	rows, err := tx.Query(ctx, "SELECT version, fingerprint, state FROM platform.key_versions ORDER BY version")
+	if err != nil {
+		return KeyStatus{}, errors.New("keyring: cannot read versions")
+	}
+	defer rows.Close()
+	status := KeyStatus{Readable: []uint32{}, Retired: []uint32{}}
+	var missing, mismatched []uint32
+	for rows.Next() {
+		var version uint32
+		var fingerprint []byte
+		var state string
+		if err := rows.Scan(&version, &fingerprint, &state); err != nil {
+			return KeyStatus{}, errors.New("keyring: cannot decode versions")
+		}
+		if state == "retired" {
+			status.Retired = append(status.Retired, version)
+			continue
+		}
+		status.Readable = append(status.Readable, version)
+		if state == "active" {
+			status.Active = version
+		}
+		if local, ok := ring.fingerprints[version]; !ok {
+			missing = append(missing, version)
+		} else if !bytes.Equal(local[:], fingerprint) {
+			mismatched = append(mismatched, version)
+		}
+	}
+	if rows.Err() != nil {
+		return KeyStatus{}, errors.New("keyring: cannot read versions")
+	}
+	if len(missing)+len(mismatched) > 0 {
+		return KeyStatus{}, fmt.Errorf("keyring: missing versions %v; mismatched versions %v", missing, mismatched)
+	}
+	if status.Active == 0 {
+		return KeyStatus{}, errors.New("keyring: no active version")
+	}
+	return status, nil
+}
+
+// Add generates and durably stores a new readable key without changing the current write version.
+func (r Rotation) Add(ctx context.Context, version uint32) error {
+	if version == 0 {
+		return errors.New("keyring: version must be positive")
+	}
+	// Commit the legacy write version before touching the file. A crash must not make the new maximum active.
+	if _, _, err := r.Check(ctx); err != nil {
+		return err
+	}
+	return r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		state, err := versionState(ctx, tx, version)
+		if err != nil {
+			return err
+		}
+		if state == "retired" {
+			return fmt.Errorf("keyring: version %d is retired", version)
+		}
+		if state != "" {
+			return nil
+		}
+		if err := addKey(r.Path, version); err != nil {
+			return err
+		}
+		ring, err := Load(r.Path)
+		if err != nil {
+			return err
+		}
+		if err := insertVersion(ctx, tx, version, ring.fingerprints[version], "readable"); err != nil {
+			return err
+		}
+		return rotationAudit(ctx, tx, "add", version, map[string]any{})
+	})
+}
+
+func versionState(ctx context.Context, tx pg.Tx, version uint32) (string, error) {
+	var state string
+	err := tx.QueryRow(ctx, "SELECT state FROM platform.key_versions WHERE version = $1", int64(version)).Scan(&state)
+	if errors.Is(err, pg.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", errors.New("keyring: cannot read version state")
+	}
+	return state, nil
+}
+
+// Activate chooses a distributed readable version for subsequent node starts and rewrap batches.
+func (r Rotation) Activate(ctx context.Context, version uint32) error {
+	return r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		ring, err := Load(r.Path)
+		if err != nil {
+			return err
+		}
+		status, err := checkVersions(ctx, tx, ring)
+		if err != nil {
+			return err
+		}
+		if err := r.checkReferences(ctx, tx, ring, status); err != nil {
+			return err
+		}
+		if status.Active == version {
+			return nil
+		}
+		if !slices.Contains(status.Readable, version) {
+			return fmt.Errorf("keyring: version %d is not readable", version)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'readable' WHERE state = 'active'"); err != nil {
+			return errors.New("keyring: cannot deactivate write version")
+		}
+		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'active' WHERE version = $1", int64(version)); err != nil {
+			return errors.New("keyring: cannot activate write version")
+		}
+		return rotationAudit(ctx, tx, "activate", version, map[string]any{"previous": status.Active})
+	})
+}
+
+// Retire refuses an active or referenced version. The tombstone commits before the local file is pruned.
+func (r Rotation) Retire(ctx context.Context, version uint32) error {
+	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		ring, err := Load(r.Path)
+		if err != nil {
+			return err
+		}
+		if _, err := checkVersions(ctx, tx, ring); err != nil {
+			return err
+		}
+		state, err := versionState(ctx, tx, version)
+		if err != nil {
+			return err
+		}
+		if state == "" || state == "active" {
+			return fmt.Errorf("keyring: version %d is unknown or active", version)
+		}
+		if err := r.unreferenced(ctx, tx, version); err != nil {
+			return err
+		}
+		if state == "retired" {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'retired' WHERE version = $1", int64(version)); err != nil {
+			return errors.New("keyring: cannot retire version")
+		}
+		return rotationAudit(ctx, tx, "retire", version, map[string]any{})
+	})
+	if err != nil {
+		return err
+	}
+	// File edits share the lifecycle lock too: pruning outside it could overwrite a concurrent add's file.
+	return r.transaction(ctx, func(_ context.Context, _ pg.Tx) error {
+		return removeKey(r.Path, version)
+	})
+}
+
+func rotationAudit(ctx context.Context, tx pg.Tx, action string, version uint32, detail map[string]any) error {
+	if err := audit.Record(ctx, tx, audit.Event{
+		Actor: audit.System("platform.keyring"), Action: "keyring." + action,
+		Target: audit.Target{Module: "platform", Kind: "key_version", ID: strconv.FormatUint(uint64(version), 10)},
+		Detail: detail,
+	}); err != nil {
+		return errors.New("keyring: cannot record audit")
+	}
+	return nil
+}
