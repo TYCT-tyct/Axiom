@@ -59,10 +59,11 @@ type Error struct {
 	Rejection *Rejection
 }
 
-// Rejection is how an upstream said it refused a request (a 4xx), after the supplier's identity was taken out of it:
-// the words of its error and the members OpenAI's and new-api's error objects have besides, which a client branches on
-// (a code like context_length_exceeded). An empty member is one the upstream did not give (docs/domains/gateway.md
-// 「错误」).
+// Rejection is how an upstream said it refused a request: the words of its error and the members OpenAI's and
+// new-api's error objects have besides, which a client branches on (a code like context_length_exceeded). An empty
+// member is one the upstream did not give (docs/domains/gateway.md「错误」). A 4xx answer's comes cleaned, from
+// suppliers; an error event's is bounded here but still names the supplier, which suppliers' Sanitize then takes out
+// (README.md「转发」的上游出错一行).
 type Rejection struct{ Message, Type, Param, Code string }
 
 // message is what the error says: the caller's message, the upstream's words, or the type's own.
