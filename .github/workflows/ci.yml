@@ -137,6 +137,14 @@ jobs:
         with:
           playwright: "true"
       - run: just web
+      # A later checkout removes test-results on self-hosted runners; keep the failed page and its network evidence.
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
   # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
