@@ -18,7 +18,9 @@ import (
 type canon struct {
 	Messages            []canonMessage            `json:"messages"`
 	Tools               []canonTool               `json:"tools"`
+	Functions           []canonFunction           `json:"functions"` // legacy: upgradeLegacy makes them tools
 	ToolChoice          jsontext.Value            `json:"tool_choice"`
+	FunctionCall        jsontext.Value            `json:"function_call"` // legacy: upgradeLegacy makes it the choice
 	ParallelToolCalls   *bool                     `json:"parallel_tool_calls"`
 	MaxTokens           *int64                    `json:"max_tokens"`
 	MaxCompletionTokens *int64                    `json:"max_completion_tokens"`
@@ -55,6 +57,7 @@ type canonMessage struct {
 	Content          jsontext.Value            `json:"content"`
 	ToolCalls        []canonToolCall           `json:"tool_calls"`
 	ToolCallID       *string                   `json:"tool_call_id"`
+	FunctionCall     jsontext.Value            `json:"function_call"` // legacy: upgradeLegacy makes it a tool call
 	ReasoningDetails []canonReasoningDetail    `json:"reasoning_details"`
 	Unknown          map[string]jsontext.Value `json:",embed"`
 	// Name and Refusal go into Parts (settle). Reasoning in the other two members is read, not converted: it has no
@@ -139,6 +142,9 @@ func decodeCanon(body []byte) (*canon, error) {
 	c := &canon{}
 	if err := jsonx.Unmarshal(body, c); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	if err := c.upgradeLegacy(); err != nil {
+		return nil, err
 	}
 	for i := range c.Messages {
 		if err := c.Messages[i].settle(); err != nil {
@@ -376,8 +382,9 @@ func isDefault(name string, v jsontext.Value) bool {
 		return s == "1"
 	case "logprobs", "store":
 		return s == "false"
-	case "modalities":
-		return strings.ReplaceAll(s, " ", "") == `["text"]`
+	case "modalities": // the list it spells: an escape or a line break is the client's, not another list
+		var only []string
+		return jsonx.Unmarshal(v, &only) == nil && len(only) == 1 && only[0] == "text"
 	case "metadata", "logit_bias":
 		return strings.TrimSpace(strings.Trim(s, "{}")) == ""
 	}

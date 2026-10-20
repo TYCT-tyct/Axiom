@@ -229,8 +229,10 @@ var (
 		Messages: {
 			members: withRouting(map[string]rule{
 				"model": (*rewriter).model, "metadata": object(metadataRules), "stream": (*rewriter).stream,
+				"max_tokens": (*rewriter).outputCap,
 			}),
-			add: (*rewriter).addStream, identities: 1, room: len(addStream),
+			add: (*rewriter).addMessages, identities: 1,
+			room: len(addCap) + len(maxInt64) + len(addStream),
 		},
 		Responses: {
 			members: withRouting(map[string]rule{
@@ -307,8 +309,9 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
-	// addCap and addCompletionCap are the Chat members the output cap is written in (usesCompletionCap), addStreamOptions
-	// the option that makes the upstream report usage; forcedOptions stands for a null stream_options.
+	// addCap is max_tokens, the member Chat and Messages write their cap in; addCompletionCap is Chat's other member
+	// (usesCompletionCap), addStreamOptions the option that makes the upstream report usage; forcedOptions stands for a
+	// null stream_options.
 	addCap           = `,"max_tokens":`
 	addCompletionCap = `,"max_completion_tokens":`
 	addStreamOptions = `,"stream_options":` + forcedOptions
@@ -328,7 +331,7 @@ type rewriter struct {
 	continues, stored, included, hasInput bool            // the Responses members seen
 	streamed                              bool            // the stream member seen
 	ending                                bool            // the event is the one that carries the final usage
-	capped                                bool            // max_output_tokens was given a value
+	capped                                bool            // the output cap member was given a value
 	chatCap                               int64           // the smallest of Chat's output caps above 0, 0 for none
 	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
@@ -460,7 +463,8 @@ func (p *rewriter) store() error {
 	return err
 }
 
-// outputCap gives max_output_tokens the cap the request was quoted at when it is null, which stands for none.
+// outputCap gives the output cap member, max_tokens or max_output_tokens, the cap the request was quoted at when it is
+// null, which stands for none.
 func (p *rewriter) outputCap() error {
 	v, err := p.dec.ReadValue()
 	if err == nil && v.Kind() == 'n' && p.t.MaxOutput > 0 {
@@ -547,6 +551,15 @@ func (p *rewriter) addStream() error {
 		p.out = append(p.out, addStream...)
 	}
 	return nil
+}
+
+// addMessages appends what a Messages request lacks: the output cap it was quoted at, which Messages requires, when the
+// model's cap is known, and the stream (README.md「同格式改写」, docs/domains/gateway.md「转发规则」).
+func (p *rewriter) addMessages() error {
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addCap...), p.t.MaxOutput, 10)
+	}
+	return p.addStream()
 }
 
 // addResponses appends what a Responses request lacks.
