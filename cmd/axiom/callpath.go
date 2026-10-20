@@ -22,6 +22,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -91,7 +92,8 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	n, err := newCallNode(d, router, upstreams, ledger)
+	health := quality.New(d.meter) // the attempts report to it and the snapshot reads it, so it is one for both
+	n, err := newCallNode(d, router, upstreams, ledger, health)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -103,7 +105,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	var routable atomic.Bool
-	routes := routeDeps(d, router, upstreams, &routable)
+	routes := routeDeps(d, router, upstreams, health, &routable)
 	snap, count, err := routes.Build(ctx)
 	if err != nil {
 		return callNode{}, err
@@ -131,12 +133,12 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 }
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.
-func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing) (callNode, error) {
+func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor) (callNode, error) {
 	memory := protocol.NewMemory(nodeMemory)
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records,
+		Records: d.records, Quality: health,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -149,13 +151,14 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
-func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, routable *atomic.Bool) *gateway.RouteDeps {
+func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
 		ExchangeRates: exchangeRates(d),
 		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:       d.catalog,
 		Prices:        salePrices(d.db, d.accounts, d.catalog, d.logger),
 		UnknownItems:  unknownItems(d.db),
+		Quality:       health,
 		Router:        router,
 		Logger:        d.logger,
 		// Readiness is decided here, once the snapshot is the router's: a node whose suppliers offer no endpoint yet is

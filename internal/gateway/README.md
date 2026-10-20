@@ -157,10 +157,11 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 - `Alive` 是 `billing.Alive`，`Upstreams` 是 `NewUpstreams(*suppliers.Service)`，`Ledger` 是 `*billing.Billing`；billing 的 `Suppliers` 是 suppliers 自己的 `CallWrites`，节点直接把它交给 `billing.Start`：结算事务里的写入因此落进 suppliers 的表，与账本同成同败。
 - `Endpoint.Target` 由 `route.go` 的 `RouteDeps` 填：`Model` 是端点的 `upstream_name`，`Streams` 是规格与供应商策略的交集；其余改写项（思考、加密推理、对话中途的系统消息、采样、缓存断点）原样取自规格的 `Model.Dialect()`（`targetOf`），规格没写的键留作未设置，不在这里补默认，由 `protocol` 按请求是否要用来决定（见 protocol README 的「`Target` 里的模型数据」）。生产装配的验收是 `route_target_test.go`：真实目录、`Build`、`Plan` 和 `Prepare` 走一遍，不手工构造 `Target`。`ExecDeps.IdentitySecret` 由节点从 `AXIOM_IDENTITY_KEY_FILE` 读出，所有节点必须相同，否则会话的上游缓存换节点就断。
 - `ExecDeps.Records` 是调用记录（`*observability.Recorder`）：每次调用在结算写成之后入队一条，金额用账本实收的数，所以记录与账本一致；结算在后台重试的，成功时才记。记录是观测，入队不等写库，队列满了丢弃并计数，调用从不因它失败。是否免单取结算里已算好的 `Final.Waived`（只由三条免单规则决定），不是“实收为 0”；客户端应用在请求到达时从 `User-Agent` 认（Claude Code 记 `claude-code`，Codex 记 `codex`，其余为空）；来源类别一律 `relay`（`route.go` 给每个端点的类别）。网关不知道的字段（客户端自己的会话与子 agent 标识、语言、终端用户）留空不猜，用户协议版本写 `none`（还没有协议可记，见 observability 的「用户同意」）、类别一律 `chat`，首字时间还没有量。映射在 `record.go`。`Records` 为空时调用不记录，账本测试因此不需要记录器。
-- 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。quality 的观测在 G10。
+- 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。
+- `ExecDeps.Quality` 是 `*quality.Monitor`，与 `RouteDeps.Quality` 是同一个：每次尝试在 `close` 里把它怎么结束的（`quality.Observation`：适配器的失败、流读失败的 `protocol.Fault`、`cutOf` 从 context 原因读出的超时或我们自己的原因、客户端是否已走、是否正常结束或 200 无正文、预估输入、结算用的输出 token、发出和首段内容的时刻）报一次，判定在 quality（[internal/quality/README.md](../quality/README.md)）。
 - 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接；零输出这条规则本身没有上限，连续多少次都按它免。
 
-**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，没有售价或规格的模型整个排除并记一条带原因的日志），`Publish` 替换路由的快照并通知节点，`Run` 启动后每 5 秒重建一次。质量、置信度、健康度和吞吐是 1，只在 `endpointOf` 这一处赋，等 quality 有了数据再换。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
+**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，没有售价或规格的模型整个排除并记一条带原因的日志），`Publish` 替换路由的快照并通知节点，`Run` 启动后每 5 秒重建一次。健康度、吞吐和首字延迟取 `RouteDeps.Quality`（`quality.Monitor.Measured`，重建时的值，没测过的吞吐和延迟为 0），质量和置信度是 1，都只在 `endpointOf` 这一处赋。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
 
 ## 计量、追加与结算
 

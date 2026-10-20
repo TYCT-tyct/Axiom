@@ -92,7 +92,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
-		return event{}, fmt.Errorf("%w: an error chunk", ErrUpstream)
+		return event{}, s.errorEvent("an error chunk")
 	}
 	if len(s.held) > 0 {
 		s.held = append(s.held, "]}"...)
@@ -213,7 +213,14 @@ func (s *chatStream) finishReason() error {
 
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
-	return s.skip()
+	return errorObject(&s.reader, s, chatErrorFields)
+}
+
+// chatErrorFields are what an error chunk's error says of its class: OpenAI's type, and its code, which is the more
+// specific (context_length_exceeded comes with invalid_request_error).
+var chatErrorFields = map[string]func(*chatStream) error{
+	"type": func(s *chatStream) error { return s.class(&s.errClass) },
+	"code": func(s *chatStream) error { return s.class(&s.code) },
 }
 
 func (s *chatStream) rewritten() error {
