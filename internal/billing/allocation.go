@@ -100,8 +100,13 @@ type movement struct {
 	debit   int64
 }
 
+// placeOf is where a stored allocation stands: the last movement it replayed.
+func placeOf(state AllocationStateRow) orderKey {
+	return orderKey{seq: state.AllocatedSeq, at: state.AllocatedAt, id: state.AllocatedID}
+}
+
 func newAllocation(state AllocationStateRow, loaded []LiveBatchesRow) *allocation {
-	at := orderKey{seq: state.AllocatedSeq, at: state.AllocatedAt, id: state.AllocatedID}
+	at := placeOf(state)
 	a := &allocation{at: at, was: at, unfunded: state.Unfunded, batches: make(map[uuid.UUID]*batchState, len(loaded))}
 	for _, r := range loaded {
 		b := &batchState{
@@ -200,10 +205,13 @@ func (a *allocation) dropSpent() {
 // movementPage is how many transactions one read of the ledger takes.
 const movementPage = 5000
 
-// loadAllocation reads the stored state of an account: where the replay stood, then the batches. The state comes
-// first, so that a replay that another transaction moved between the two reads is dropped by save's check of the place
-// (the batches read later are never older than the place read earlier). A caller that holds the account's balance row
-// lock reads the latest state, and no other transaction can move it.
+// loadAllocation reads the stored state of an account: where the replay stood, then the batches, then the place again,
+// and returns errStale when it moved. The batches' consumed and expired are written only by save, in the transaction
+// that moves the place, and the place only moves forward; so a place that did not move across the batches' read means
+// they are the ones stored with it. A replay that started from batches newer than its place would miss a batch another
+// replay spent up in between, and fail on its credit, or on an expiry that no longer fits, before save's check of the
+// place could drop it (#357). A caller that holds the account's balance row lock reads the latest state, and no other
+// transaction can move it.
 func loadAllocation(ctx context.Context, tx pg.Tx, account uuid.UUID) (*allocation, error) {
 	state, err := queries.AllocationState(ctx, tx, account)
 	if err != nil {
@@ -212,6 +220,13 @@ func loadAllocation(ctx context.Context, tx pg.Tx, account uuid.UUID) (*allocati
 	loaded, err := queries.LiveBatches(ctx, tx, account)
 	if err != nil {
 		return nil, fmt.Errorf("billing: read the batches of %s: %w", account, err)
+	}
+	again, err := queries.AllocationState(ctx, tx, account)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the allocation of %s: %w", account, err)
+	}
+	if placeOf(again).compare(placeOf(state)) != 0 {
+		return nil, errStale
 	}
 	return newAllocation(state, loaded), nil
 }
