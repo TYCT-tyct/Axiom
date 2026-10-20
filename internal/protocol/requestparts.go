@@ -47,6 +47,9 @@ func nativePart(o requestObject, quotedKind string, f Format, role string) (requ
 	if err != nil {
 		return nil, err
 	}
+	if role == "tool" && chatKind != "text" {
+		return nil, &NotSupported{Reason: "Chat tool results accept only text"}
+	}
 	part := requestObject{"type": jsonValue(chatKind)}
 	switch chatKind {
 	case "text":

@@ -151,11 +151,13 @@ func TestNativeChatRejectsUnrepresentableMembers(t *testing.T) {
 		{protocol.Messages, `"messages":[],"tools":[{"type":"web_search_20250305","name":"web_search"}]`},
 		{protocol.Messages, `"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://example.test/f.pdf"}}]}]`},
 		{protocol.Messages, `"messages":[{"role":"user","content":[{"type":"text","text":"hi","citations":[{"x":1}]}]}]`},
+		{protocol.Messages, `"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":[{"type":"image","source":{"type":"url","url":"https://example.test/image.png"}}]}]}]`},
 		{protocol.Responses, `"input":"Hi","metadata":{"tenant":"private"}`},
 		{protocol.Responses, `"input":"Hi","reasoning":{"summary":"detailed"}`},
 		{protocol.Responses, `"input":"Hi","tools":[{"type":"web_search"}]`},
 		{protocol.Responses, `"input":"Hi","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"x":{"type":"string","default":"X"}}}}]`},
 		{protocol.Responses, `"input":[{"type":"item_reference","id":"remote"}]`},
+		{protocol.Responses, `"input":[{"type":"function_call_output","call_id":"c1","output":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]`},
 		{protocol.Responses, `"input":"Hi","text":{"format":{"type":"json_object","unknown":true}}`},
 	} {
 		t.Run(c.members, func(t *testing.T) {
