@@ -9,11 +9,15 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/platform/kv"
+	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pgtest"
 )
 
 // TestSiteAttemptLimits: a site's own limits hold sign-ins and registrations per IP and failed sign-ins per email;
-// waiting lifts them, a success does not count against the email, and other IPs and emails are not held up.
+// waiting lifts them, a success does not count against the email, and other IPs and emails are not held up. The same
+// with the counts in the shared store, in a namespace of its own: one node's worth of the site's limits, whatever holds
+// them (internal/platform/kv/README.md「登录前的尝试次数」).
 func TestSiteAttemptLimits(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -21,12 +25,29 @@ func TestSiteAttemptLimits(t *testing.T) {
 		(site_id, ip_attempt_burst, ip_attempts_per_minute, email_sign_in_failures) VALUES (:s1, 3, 1, 2)`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := x.s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
+	namespace := kvtest.Namespace()
+	server := kvtest.New(t)
+	for _, mode := range []struct {
+		name  string
+		cache *kv.Client
+	}{
+		{"this node's buckets", nil},
+		{"the shared store", server.OpenIn(t, namespace, kv.Deps{Now: clientClock(x.clock)})},
+	} {
+		s := x.s
+		if mode.cache != nil {
+			s = cachedNode(t, x.db, mode.cache, x.clock.Now)
+		}
+		t.Run(mode.name, func(t *testing.T) { attemptLimits(t, x.email, x.clock, s) })
 	}
+}
+
+// attemptLimits is the table of TestSiteAttemptLimits, over the service that holds the counts.
+func attemptLimits(t *testing.T, email string, clock *clock, s *accounts.Service) {
+	t.Helper()
 	ip := func(n byte) netip.Addr { return netip.AddrFrom4([4]byte{198, 51, 100, n}) }
 	signIn := func(from netip.Addr, email, pw string) error {
-		_, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: email, Password: pw, ClientIP: from})
+		_, err := s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: email, Password: pw, ClientIP: from})
 		return err
 	}
 	for i, c := range []struct {
@@ -37,29 +58,29 @@ func TestSiteAttemptLimits(t *testing.T) {
 		pw      string
 		want    error
 	}{
-		{"1st from an IP", 0, ip(1), x.email, password, nil},
-		{"2nd from the IP", 0, ip(1), x.email, password, nil},
-		{"3rd from the IP, a success not counted against the email", 0, ip(1), x.email, password, nil},
-		{"4th from the IP", 0, ip(1), x.email, password, accounts.ErrTooManyAttempts},
-		{"another IP", 0, ip(2), x.email, password, nil},
-		{"the IP a minute later", time.Minute, ip(1), x.email, password, nil},
-		{"a wrong password", 0, ip(3), x.email, "wrong password!", accounts.ErrBadCredentials},
-		{"a second wrong password", 0, ip(4), x.email, "wrong password!", accounts.ErrBadCredentials},
-		{"the right password after two failures", 0, ip(5), x.email, password, accounts.ErrTooManyAttempts},
+		{"1st from an IP", 0, ip(1), email, password, nil},
+		{"2nd from the IP", 0, ip(1), email, password, nil},
+		{"3rd from the IP, a success not counted against the email", 0, ip(1), email, password, nil},
+		{"4th from the IP", 0, ip(1), email, password, accounts.ErrTooManyAttempts},
+		{"another IP", 0, ip(2), email, password, nil},
+		{"the IP a minute later", time.Minute, ip(1), email, password, nil},
+		{"a wrong password", 0, ip(3), email, "wrong password!", accounts.ErrBadCredentials},
+		{"a second wrong password", 0, ip(4), email, "wrong password!", accounts.ErrBadCredentials},
+		{"the right password after two failures", 0, ip(5), email, password, accounts.ErrTooManyAttempts},
 		{"another email", 0, ip(5), "nobody@example.com", password, accounts.ErrBadCredentials},
-		{"the right password once one failure has refilled", emailWindowPerFailure(2), ip(6), x.email, password, nil},
-		{"1st from a fresh IP", 0, ip(7), x.email, password, nil},
-		{"2nd from that IP", 0, ip(7), x.email, password, nil},
-		{"3rd from that IP", 0, ip(7), x.email, password, nil},
+		{"the right password once one failure has refilled", emailWindowPerFailure(2), ip(6), email, password, nil},
+		{"1st from a fresh IP", 0, ip(7), email, password, nil},
+		{"2nd from that IP", 0, ip(7), email, password, nil},
+		{"3rd from that IP", 0, ip(7), email, password, nil},
 		{"a registration from that IP", 0, ip(7), "", "", accounts.ErrTooManyAttempts},
 	} {
-		x.clock.Advance(c.advance)
-		if err := x.s.Reload(t.Context()); err != nil { // as the reload loop keeps the snapshot fresh
+		clock.Advance(c.advance)
+		if err := s.Reload(t.Context()); err != nil { // as the reload loop keeps the snapshot fresh
 			t.Fatal(err)
 		}
 		var err error
 		if c.email == "" {
-			_, err = x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: "nosuchcode0000", Email: "new@example.com", Password: password, ClientIP: c.from})
+			_, err = s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: "nosuchcode0000", Email: "new@example.com", Password: password, ClientIP: c.from})
 		} else {
 			err = signIn(c.from, c.email, c.pw)
 		}

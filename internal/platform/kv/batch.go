@@ -23,21 +23,27 @@ var ErrUnavailable = errors.New("valkey unavailable")
 // Use is what a batch of commands is for: the label of the metrics and of the log line (README「指标与告警」).
 type Use string
 
-// The uses of a batch, as the metrics label them. K2 and K3 add theirs: login and the sticky write.
+// The uses of a batch, as the metrics label them.
 const (
 	Precheck Use = "precheck" // the precheck of a model call, before admission
+	// Login is what a sign-in spends and gives back: the attempts before it (README「每种用途」).
+	Login Use = "login"
 	// check is the client's own reading of the server: the startup checks and the loop's measurements.
 	check Use = "check"
 )
 
 // uses is every Use, in the order the metrics prebuild their options.
-var uses = [...]Use{Precheck, check}
+var uses = [...]Use{Precheck, Login, check}
 
-// Space is the purpose a key serves, its third field (README「键」). K2 and K3 add the login and the sticky ones.
+// Space is the purpose a key serves, its third field (README「键」). K3 adds the sticky one.
 type Space string
 
-// RateSpace is a rate counter's.
-const RateSpace Space = "rate"
+const (
+	// RateSpace is a rate counter's.
+	RateSpace Space = "rate"
+	// LoginSpace is an attempt before sign-in's.
+	LoginSpace Space = "login"
+)
 
 // Script is a module's Lua script. kv runs it and holds none of its rules: the keys are the module's, and so are the
 // arguments, which carry the time the module read from Now (README「接口」).

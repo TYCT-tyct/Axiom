@@ -93,11 +93,11 @@ func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 	if d.surface != Console && d.surface != Admin {
 		return Issued{}, ErrUnknownHost
 	}
-	if err := s.fromIP(d.site, r.ClientIP); err != nil {
+	if err := s.fromIP(ctx, d.site, r.ClientIP); err != nil {
 		return Issued{}, err
 	}
 	var issued Issued
-	err = failing(s, s.guards.emails, siteEmail{d.site, normalEmail(r.Email)}, snap.sites[d.site].limits.emailFailures, emailWindow, func() error {
+	err = failing(s, ctx, s.emailLimit(d.site, normalEmail(r.Email), snap.sites[d.site].limits), func() error {
 		issued, err = s.signIn(ctx, r, d, snap)
 		return err
 	})
