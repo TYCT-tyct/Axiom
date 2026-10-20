@@ -118,17 +118,22 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) 
 	}
 	dst["messages"] = jsonValue(messages)
 	chat := jsonValue(dst)
-	c, err := decodeCanon(chat)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.checkShape(); err != nil {
-		return nil, err
-	}
-	if err := c.checkCalls(); err != nil {
+	if err := checkNativeChat(chat); err != nil {
 		return nil, err
 	}
 	return rewrite(Chat, chat, t, w)
+}
+
+// checkNativeChat applies the shared Chat invariants to a constructed native request.
+func checkNativeChat(chat []byte) error {
+	c, err := decodeCanon(chat)
+	if err != nil {
+		return err
+	}
+	if err := c.checkShape(); err != nil {
+		return err
+	}
+	return c.checkCalls()
 }
 
 // nativeRequestCost is what a request converted to Chat may hold at once: the consumed input maps, the canonical Chat
