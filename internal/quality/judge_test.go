@@ -28,8 +28,10 @@ func TestJudge(t *testing.T) {
 		metric string // the counter it adds one to, if any
 	}{
 		{"normal end", Observation{Done: true, FirstToken: committed}, success, ""},
-		{"normal end, the client gone after the commit", Observation{Done: true, Gone: true, FirstToken: committed}, success, ""},
-		{"broken after the commit, the client gone", Observation{Fault: protocol.FaultBroken, Gone: true, FirstToken: committed}, success, ""},
+		{"normal end, the client gone after the commit", Observation{Done: true, Gone: true, FirstToken: committed, Delivered: true}, success, ""},
+		{"broken after the commit, the client gone", Observation{Fault: protocol.FaultBroken, Gone: true, FirstToken: committed, Delivered: true}, success, ""},
+		{"content after the client left, then broken", Observation{Fault: protocol.FaultBroken, Gone: true, FirstToken: committed}, uncounted, ""},
+		{"content after the client left, then a normal end", Observation{Done: true, Gone: true, FirstToken: committed}, success, ""},
 		{"compact reply read whole", Observation{Done: true}, success, ""},
 		{"5xx", Observation{Failure: &suppliers.Failure{Scope: endpoint, Cause: suppliers.UpstreamError{Status: 502}}}, failure, ""},
 		{"overloaded", Observation{Failure: &suppliers.Failure{Scope: endpoint, Cause: suppliers.Overloaded{}}}, failure, ""},
@@ -101,7 +103,7 @@ func TestUncountedChangesNothing(t *testing.T) {
 		{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.RateLimited{}}},
 		{Failure: &suppliers.Failure{Scope: suppliers.ScopeRequest, Cause: suppliers.BadRequest{}}},
 		{Fault: protocol.FaultToolInput},
-		{Done: true, Gone: true},
+		{Done: true, Empty: true, Gone: true},
 	} {
 		o.Endpoint, o.Ended = id, t0
 		m.Observe(t.Context(), o)

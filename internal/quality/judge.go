@@ -23,7 +23,7 @@ const (
 // any failure that follows them.
 func (m *Monitor) judge(ctx context.Context, o *Observation) verdict {
 	switch {
-	case o.Gone && o.committed(): // the endpoint was answering when the client left
+	case o.Gone && o.answered():
 		return success
 	case o.Gone, o.Cut == Ours:
 		return uncounted
@@ -33,13 +33,18 @@ func (m *Monitor) judge(ctx context.Context, o *Observation) verdict {
 		return failure
 	case o.Done:
 		return success
-	case o.Cut == Idle && o.committed():
+	case o.Cut == Idle && o.content():
 		return failure
 	case o.Cut == Idle:
 		return slow(o)
 	}
 	return byFault(o.Fault)
 }
+
+// answered reports whether the endpoint was answering a client that has since left: the client had its first content,
+// or the upstream, read on for its usage, ended normally with content. Content that came only after the client left was
+// never delivered, so a failure after it is one while the client was gone, which is not counted.
+func (o *Observation) answered() bool { return o.Delivered || o.Done && !o.Empty }
 
 // refused judges an attempt the supplier answered with a failure, or did not answer. Only the endpoint's scope can
 // count: a credential, a group or a supplier at fault is suppliers' and routing's to rest or pause, the route is H4's,

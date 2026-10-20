@@ -25,12 +25,13 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
 	body, err := readWhole(s.x.Memory, resp.Body, idle, idleFor, &s.replyHeld)
+	a.obs.Ended = time.Now()
 	if err != nil {
 		s.dropReply()
 		return s.failedReply(a, ctx, err)
 	}
 	a.usage = protocol.UsageOf(body)
-	a.obs.Done = true
+	a.obs.Done, a.obs.Empty = true, len(body) == 0
 	rec := &s.ends[a.i]
 	if s.isGone() { // the reply was read to the end for what it says it used, but nothing of it reaches the client
 		s.dropReply()

@@ -33,7 +33,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	// Once the upstream is no longer read, a write that blocks lets it generate nothing more on the call's account.
 	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
 	for {
-		st, err := relay.Next()
+		st, err := a.next(relay)
 		if err != nil {
 			return a.broke(ctx, relay, err)
 		}
@@ -61,14 +61,28 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	}
 }
 
+// next reads the relay's next step, dating the upstream's first content and its end or failure as they are read: the
+// meter may then wait for an extension, which is the gateway's time, not the upstream's (quality's measurements).
+func (a *attempt) next(relay *protocol.Relay) (protocol.Step, error) {
+	st, err := relay.Next()
+	switch {
+	case err != nil, st.Kind == protocol.StepUpstreamDone:
+		a.obs.Ended = time.Now()
+	case st.Kind == protocol.StepCommit:
+		a.obs.FirstToken = time.Now()
+	}
+	return st, err
+}
+
 // commit is the first content: from here the status is 200 and nothing is retried (I4). A client that is gone gets
 // nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is written to once, at the
 // end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
-	a.content, a.obs.FirstToken = true, time.Now()
+	a.content = true
 	if s.isGone() {
 		return
 	}
+	a.obs.Delivered = true
 	if s.aggregate {
 		return
 	}

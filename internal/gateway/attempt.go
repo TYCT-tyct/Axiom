@@ -257,7 +257,10 @@ func (a *attempt) close(ctx context.Context) {
 // it is charged for (docs/domains/quality.md「什么算一次失败」).
 func (a *attempt) observe(ctx context.Context) {
 	s, o := a.s, &a.obs
-	o.Gone, o.Ended = s.isGone(), time.Now()
+	o.Gone = s.isGone()
+	if o.Ended.IsZero() { // cut by us before the upstream said it was done
+		o.Ended = time.Now()
+	}
 	r := &s.c.Request
 	o.InputTokens = billing.InputEstimate(billing.Demand{TextBytes: r.TextBytes, Images: r.Images, Documents: r.Documents}, a.entry.Limits)
 	for _, seg := range s.ends[a.i].Segments {
@@ -290,7 +293,7 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
-		a.obs.Failure, a.obs.Cut = fail, cutOf(ctx)
+		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close

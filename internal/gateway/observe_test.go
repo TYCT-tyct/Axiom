@@ -4,9 +4,12 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -58,6 +61,12 @@ func TestEveryAttemptIsObservedOnce(t *testing.T) {
 			return hold(h.feed(evStart, evBlock, evHello), h.after(time.Hour, evBang))
 		}, time.Second, succeeded},
 		{"a compact reply", options{mutate: func(c *Call) { compact(t, c) }}, func(*harness) scripted { return wholeAnswer(compacted) }, 0, succeeded},
+		{"an empty compact reply", options{mutate: func(c *Call) { compact(t, c) }}, func(*harness) scripted { return wholeAnswer("") }, 0, failed},
+		// An endpoint that does not stop when the client does is read on for its usage: content that comes after the
+		// client left was never delivered, so the stream breaking then is a failure while the client was gone.
+		{"the client leaves, then content comes and the stream breaks", options{}, func(h *harness) scripted {
+			return serve(h.feed(evStart), h.after(10*time.Second, evBlock, evHello), beat{hangup: true})
+		}, time.Second, uncounted},
 	}
 	for _, tc := range cases {
 		run(t, func(t *testing.T, ctx context.Context) {
@@ -109,5 +118,35 @@ func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
 	}
 	if got := health.Measured(uuidOf(ep(1)), now); got.Latency != 2*time.Second || got.Throughput != 0 {
 		t.Errorf("measured %+v, want 2s to the first token and no speed (the answer is under 50 tokens)", got)
+	}
+}
+
+// TestThroughputLeavesOutOurOwnWaits: the upstream's end is dated when it is read, so an extension still in flight then,
+// which the attempt waits for before it closes, does not slow the measured speed: 100 tokens a second after the first
+// content, though the attempt closes half a second after the upstream ended.
+func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
+	health := quality.New(nil)
+	var now time.Time
+	for range 5 {
+		run(t, func(t *testing.T, ctx context.Context) {
+			var asked atomic.Int32
+			h := newHarness(t, ctx, segmented(options{health: health, extend: func(context.Context, billing.ExtendRequest) error {
+				if asked.Add(1) > 1 { // the first is asked for before the first content, and answered at once
+					time.Sleep(500 * time.Millisecond)
+				}
+				return nil
+			}}))
+			delta := strings.Replace(h.events[evMsgDelta], `"output_tokens": 15`, `"output_tokens": 100`, 1)
+			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart, evBlock, evHello),
+				beat{wait: time.Second, data: text(130) + events(h.events, evBlockStop) + delta + events(h.events, evMsgStop)})}
+			h.run()
+			if h.elapsed() != 1500*time.Millisecond {
+				t.Fatalf("the call took %v: no extension was waited for after the upstream's end", h.elapsed())
+			}
+			now = time.Now()
+		})
+	}
+	if got := health.Measured(uuidOf(ep(1)), now).Throughput; math.Abs(got-100) > 1e-9 {
+		t.Errorf("throughput %v, want 100 tokens a second", got)
 	}
 }

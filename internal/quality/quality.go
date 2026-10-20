@@ -47,17 +47,21 @@ type Observation struct {
 	Fault protocol.Fault
 	Cut   Cut
 	Gone  bool // the client had left
-	Done  bool // the upstream ended normally
-	Empty bool // it ended normally without content: a 200 with nothing in it
+	// Delivered is set when the commit point came while the client was still there: the first content was the
+	// client's. A client that left before it may still have its upstream read on, for the usage, without it.
+	Delivered bool
+	Done      bool // the upstream ended normally
+	Empty     bool // it ended normally without content: a 200 with nothing in it
 	// InputTokens is the request's input as estimated before it was sent (billing.InputEstimate).
 	InputTokens  int64
 	OutputTokens int64
-	// Sent is when the attempt was sent; FirstToken when its first content came, zero when none did; Ended when it
-	// ended, which dates the samples.
+	// Sent is when the attempt was sent; FirstToken when its first content came, zero when none did, whoever it went
+	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
+	// samples.
 	Sent, FirstToken, Ended time.Time
 }
 
-func (o *Observation) committed() bool { return !o.FirstToken.IsZero() }
+func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
 
 // Measures are what routing ranks an endpoint by: its health, 1 when nothing was counted, and its time to first token
 // and output speed, 0 while they are not measured (fewer than minSamples samples, or none for maxAge).
@@ -133,7 +137,7 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 // only for the counters, and may have ended.
 func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	v := m.judge(ctx, &o)
-	latency := o.committed() && o.InputTokens <= latencyMaxInput
+	latency := o.content() && o.InputTokens <= latencyMaxInput
 	if v == uncounted && !latency {
 		return
 	}
@@ -144,7 +148,7 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	if latency {
 		e.latency.add(o.FirstToken.Sub(o.Sent).Seconds(), o.Ended)
 	}
-	if v == success && o.Done && o.committed() && o.OutputTokens >= speedMinOutput && o.Ended.After(o.FirstToken) {
+	if v == success && o.Done && o.content() && o.OutputTokens >= speedMinOutput && o.Ended.After(o.FirstToken) {
 		e.speed.add(float64(o.OutputTokens)/o.Ended.Sub(o.FirstToken).Seconds(), o.Ended)
 	}
 }
