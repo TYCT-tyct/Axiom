@@ -20,12 +20,6 @@ type MerchantID uuid.UUID
 // TypeID writes the ID as the API shows it.
 func (id MerchantID) TypeID() string { return merchantPrefix.Encode(uuid.UUID(id)) }
 
-// ParseMerchantID reads what TypeID writes; anything else is typeid.ErrInvalid.
-func ParseMerchantID(s string) (MerchantID, error) {
-	id, err := merchantPrefix.Decode(s)
-	return MerchantID(id), err
-}
-
 // OrderID is an order's ID; its TypeID is the merchant order number sent to the channel.
 type OrderID uuid.UUID
 

@@ -269,4 +269,10 @@ func TestPricingUsesTheBufferedRate(t *testing.T) {
 	if err != nil || len(pr.rates) != 1 || pr.rates["CNY"].Applied.Cmp(big.NewRat(36*102, 5*100)) != 0 || pr.rates["CNY"].Reference.Version != 1 {
 		t.Fatalf("pricing = %+v, %v", pr, err)
 	}
+	// A site that set its buffer to 0 pays the reference rate.
+	w.exec(fmt.Sprintf("INSERT INTO billing.top_up_buffers VALUES ('%s', 0)", w.siteA))
+	pr, err = w.p.pricing(t.Context(), w.siteA, currency(t, "USD"), []string{"CNY"})
+	if err != nil || pr.rates["CNY"].Applied.Cmp(big.NewRat(36, 5)) != 0 || pr.rates["CNY"].BufferPPM != 0 {
+		t.Fatalf("pricing without a buffer = %+v, %v", pr, err)
+	}
 }

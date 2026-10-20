@@ -20,7 +20,7 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-const theKey = "sk_live_do_not_leak_0123456789"
+const theKey = "fake-merchant-key-0123456789"
 
 var admin = audit.System("payments.test")
 
