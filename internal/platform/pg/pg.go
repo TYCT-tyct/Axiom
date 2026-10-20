@@ -274,19 +274,24 @@ func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn 
 		span.End()
 	}()
 	return pgx.BeginTxFunc(ctx, db.pool, options, func(tx pgx.Tx) error {
-		platform := ""
-		if scope.platform {
-			platform = "on"
-		}
-		home := ""
-		if scope.home != (uuid.UUID{}) {
-			home = scope.home.String()
-		}
-		if _, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts), home); err != nil {
+		if err := applyScope(ctx, tx, scope); err != nil {
 			return fmt.Errorf("set the scope: %w", err)
 		}
 		return fn(Tx{tx})
 	})
+}
+
+// applyScope sets the settings of scope in tx; it is the one place that writes them.
+func applyScope(ctx context.Context, tx pgx.Tx, scope Scope) error {
+	platform, home := "", ""
+	if scope.platform {
+		platform = "on"
+	}
+	if scope.home != (uuid.UUID{}) {
+		home = scope.home.String()
+	}
+	_, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts), home)
+	return err
 }
 
 // uuidArray writes ids as a PostgreSQL array literal; no ids is the empty string, which in_scope reads as none.
