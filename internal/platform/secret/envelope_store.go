@@ -137,13 +137,16 @@ func (r Rotation) RewrapBatch(ctx context.Context, limit int) (int, error) {
 	return count, nil
 }
 
-// rewrapStores takes the first store with an old envelope, so one batch touches one table and its audit entry names
-// the store it came from.
+// rewrapStores takes the first store that still has an old envelope, so one batch touches one table and its audit entry
+// names the store it came from; an empty store is passed over.
 func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *Keyring, limit int) (int, error) {
 	for _, store := range r.Stores {
 		count, err := store.rewrap(ctx, tx, ring, limit)
-		if err != nil || count == 0 {
-			return count, err
+		if err != nil {
+			return 0, err
+		}
+		if count == 0 {
+			continue
 		}
 		return count, rotationAudit(ctx, tx, "rewrap", ring.latest, map[string]any{"store": store.name(), "count": count})
 	}
