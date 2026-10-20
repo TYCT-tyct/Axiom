@@ -20,9 +20,12 @@ require_readable "$AXIOM_DEPLOY_ENV_FILE" "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_
   die "AXIOM_BACKUP_DB_RECIPIENT and AXIOM_BACKUP_SECRETS_RECIPIENT must differ"
 case $AXIOM_BACKUP_KEEP_SETS in '' | *[!0-9]*) die "AXIOM_BACKUP_KEEP_SETS must be a number" ;; esac
 case $AXIOM_BACKUP_KEEP_DAYS in '' | *[!0-9]*) die "AXIOM_BACKUP_KEEP_DAYS must be a number" ;; esac
-# Keeping zero sets would delete every backup the moment it finished; retention prunes, it is not a way to stop backing
-# up (that is what the scheduler is for).
+# Both limits are at least 1. Keeping zero sets would delete every backup the moment it finished, and keeping zero days
+# would put the cutoff at this run's own second, which the age check below reads as "older than now" and drops the set it
+# has just uploaded. Retention prunes; it is not the way to stop backing up (the scheduler is) and there is no value that
+# means "keep forever": a number nobody reaches is how a deployment says that.
 [ "$AXIOM_BACKUP_KEEP_SETS" -ge 1 ] || die "AXIOM_BACKUP_KEEP_SETS must be at least 1"
+[ "$AXIOM_BACKUP_KEEP_DAYS" -ge 1 ] || die "AXIOM_BACKUP_KEEP_DAYS must be at least 1"
 
 # Set names sort in time order, so the retention compares them as strings; the C collation keeps that true whatever
 # locale the host passes in.
@@ -95,6 +98,9 @@ prune() {
   newest=$(printf '%s\n' "$complete_sets" | tail -n "$AXIOM_BACKUP_KEEP_SETS")
   cutoff=$(sql "SELECT to_char(now() at time zone 'utc' - interval '$AXIOM_BACKUP_KEEP_DAYS days', 'YYYYMMDDHH24MISS')")
   for name in $all_sets; do
+    # The set this run wrote is never dropped, whatever the two limits work out to: a run that deleted its own output
+    # would report success with nothing to restore.
+    [ "$name" != "$set_name" ] || continue
     if [[ $name < $cutoff ]]; then
       log "dropping $name: older than $AXIOM_BACKUP_KEEP_DAYS days"
     elif printf '%s\n' "$complete_sets" | grep -q -x -e "$name" &&

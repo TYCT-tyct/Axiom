@@ -22,17 +22,25 @@ services:
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
     environment:
       # Required here rather than defaulted: this file is only read when the edge is started, so a missing hostname stops
-      # the start with this message instead of a Caddyfile that cannot parse. `just up` never reads this file.
-      AXIOM_EDGE_PUBLIC_HOST: ${AXIOM_EDGE_PUBLIC_HOST:?set it in deploy/.env}
+      # the start with this message instead of a Caddyfile that cannot parse. `just up` never reads this file. The console
+      # and the API are two domains because a domain belongs to one surface (accounts.site_domains).
+      AXIOM_EDGE_CONSOLE_HOST: ${AXIOM_EDGE_CONSOLE_HOST:?set it in deploy/.env}
+      AXIOM_EDGE_API_HOST: ${AXIOM_EDGE_API_HOST:?set it in deploy/.env}
       AXIOM_EDGE_ADMIN_HOST: ${AXIOM_EDGE_ADMIN_HOST:?set it in deploy/.env}
+      # Empty is Caddy's default, public certificates; `internal` is its own CA, for a deployment with no public DNS.
+      AXIOM_EDGE_TLS_ISSUER: ${AXIOM_EDGE_TLS_ISSUER:-}
       AXIOM_EDGE_ADMIN_ALLOW_CIDRS: ${AXIOM_EDGE_ADMIN_ALLOW_CIDRS:-127.0.0.1/32 ::1/128}
       AXIOM_EDGE_CONSOLE_ALLOW_CIDRS: ${AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
     ports:
-      - 80:80 # the ACME HTTP challenge, and the redirect to https
-      - 443:443 # TCP only: the Caddyfile serves HTTP/1.1 and HTTP/2
+      # The ACME HTTP challenge and the redirect to https, then https itself. TCP only: the Caddyfile serves HTTP/1.1 and
+      # HTTP/2. An empty AXIOM_EDGE_HTTP_PORT or AXIOM_EDGE_HTTPS_PORT publishes a port the kernel picks, which is what the
+      # rehearsal uses so that it cannot take a real deployment's.
+      - ${AXIOM_EDGE_HTTP_PORT-80}:80
+      - ${AXIOM_EDGE_HTTPS_PORT-443}:443
     volumes:
       - ./ingress/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Certificates, and the key that signs the configuration: losing these means getting new certificates.
+      # Certificates, and the key that signs the configuration: losing these means getting new certificates, and with
+      # `tls internal` they are the CA a client has to trust (pki/authorities/local/root.crt).
       - caddy_data:/data
       - caddy_config:/config
     networks:

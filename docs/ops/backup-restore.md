@@ -35,6 +35,10 @@
 忙的一个月按份数收敛，闲的一个月仍按天数收敛。计数只数完整的 set，半组文件只受天数约束——这样一次失败的运行既不会挤掉
 一个好的 set，也不会毁掉另一台机器正在写的 set。
 
+两个都必须 ≥ 1，否则运行在拿锁、上传之前就退出 1：份数为 0 会删掉刚写完的 set，天数为 0 会把截止时间定在这次运行自己的那一
+秒，年龄判断于是把它也算成"更早"，同样删掉它；两种情况都只剩一句 `done`。没有"永不删除"的取值，要表达它就给一个大到用不到
+的天数。本次运行写出的那个 set 永远不在删除之列。
+
 ### 单实例
 
 一次运行在状态卷（`backup_state`）上的锁文件上拿 `flock`；拿到锁的那个才继续，第二个直接退出码 75（`EX_TEMPFAIL`），
@@ -84,7 +88,12 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 export AXIOM_RESTORE_DB_IDENTITY=/etc/axiom-backup/db.key
 export AXIOM_RESTORE_SECRETS_IDENTITY=/etc/axiom-backup/keys.key
 bash scripts/ops/restore.sh 20261019030017-4f8a1c
+
+# 带生产入口的部署：-f 传的就是它平时启动用的那组文件，程序才会回到入口需要的那张网络和那个代理地址上
+bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 20261019030017-4f8a1c
 ```
+
+`-f` 与 compose 的规则一致：给了就替换默认的 `deploy/compose.yaml`，不给就用它。
 
 脚本按顺序做六步，每步都有输出，失败即停：
 
@@ -96,7 +105,14 @@ bash scripts/ops/restore.sh 20261019030017-4f8a1c
    `pg_restore --single-transaction`：对象、属主、授权都来自 set。删而不是 `--clean`，是因为分区表的分区继承父表的约束，
    单独删一个继承来的约束会被拒绝。取 `keys.tar.age` 解开进密钥卷，属主 65532、权限 0400（程序启动时检查）。
 5. 再 `axiom migrate` 一次：set 比镜像旧时补上新的迁移，一致时是空操作。
-6. `compose up --wait` 启动程序，等它自己的启动检查通过，再打两个监听上的版本接口。
+6. `compose up --wait` 启动程序，等它自己的启动检查通过，再验一次请求：文件组合里有入口时，经入口按各自域名打控制台和模型
+   API（控制台域名上 `/api/console/v1/site` 是 200，API 域名上同一路径是 404，`/v1/models` 无 key 是 401），没有入口时才
+   打程序自己发布的两个回环端口。**只查回环端口是不够的**：入口连不上程序时那里照样 200，而外部请求全是 502。
+
+整个恢复过程固定使用启动时那一份桶的位置和凭证：脚本先问恢复容器自己解析出的 `AXIOM_BACKUP_*`、`RCLONE_CONFIG_AXIOM_*`
+是什么，再把它们导出成 compose 的同名变量。compose 的插值先看环境再看 `--env-file`，所以第 1 步装进来的 set 副本改不了它们；
+不固定的话，set 里的 `deploy/.env` 记的是备份那天的位置和凭证，可能已经轮换或搬走，第 4 步就会拿旧凭证去取转储——而那时库已经
+被换掉了。放环境里而不是当参数传，是因为参数会留在进程列表里，而它们是凭证。
 
 恢复完要做的：
 
@@ -109,21 +125,31 @@ bash scripts/ops/restore.sh 20261019030017-4f8a1c
 
 `scripts/ops/rehearse.sh`（`just backup-rehearsal`）把上面整条路走一遍，并且不碰任何真实部署：
 
-- 自己的 compose 项目 `axiom-rehearsal`、自己的 `deploy/.env.rehearsal`、内核分配的宿主机端口；
+- 自己的 compose 项目 `axiom-rehearsal`、自己的 `deploy/.env.rehearsal`、内核分配的宿主机端口（程序的和入口的都是）；
+- 开跑先把继承来的 `AXIOM_*`、`RCLONE_*`、`DEPLOY_*` 和 `COMPOSE_FILE` 一类变量清掉：compose 的插值优先取 Shell 环境，
+  操作者导出过的生产桶名和凭证会覆盖 `--env-file`，第一次备份就写进真桶、再按演练的保留策略删掉真实 set；
 - 本地 S3 容器（`deploy/compose.rehearsal.yaml` 里的 RustFS）代替桶，set 随栈一起销毁；
-- 种一个站点和一个用户，停程序，记录全库内容指纹、角色与成员关系、密钥环哈希、`deploy/.env`；
-- 备份；验证持锁时第二个运行退出 75；验证密钥环用库的身份解不开、用密钥环的身份解得开；
-- 删掉库卷和密钥卷（S3 容器留着，set 在它这里），删掉 `deploy/.env` 里的一行标记，再走一遍上面的恢复脚本；
-- 比对表清单与指纹（三类行除外，见下）、角色、密钥环、环境文件；
+- 上传和删除（备份、以及第 10 步的搬迁）先在容器里断言 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_PREFIX`、
+  `RCLONE_CONFIG_AXIOM_ENDPOINT`、`RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID` 确实是演练 S3 和它的专用桶、前缀，不是就退出；
+- 种一个站点和一个用户，停程序，记录全库内容指纹（含每张表的行数）、角色与成员关系、密钥环哈希、`deploy/.env`；种数验证
+  按名断言 `accounts.sites` 与 `accounts.users` 各有行——空表也有一行指纹，只数"有指纹的表"证明不了种子发生过；
+- 备份；验证保留为 0（份数和天数各一次）在写任何东西之前退出 1 且桶不变；验证持锁时第二个运行退出 75；验证密钥环用库的
+  身份解不开、用密钥环的身份解得开；
+- 删掉库卷和密钥卷（S3 容器留着，set 在它这里），删掉 `deploy/.env` 里的一行标记，再走一遍上面的恢复脚本，文件组合带上
+  `deploy/compose.edge.yaml`；
+- 比对表清单与指纹（三类行除外，见下）、角色、密钥环、环境文件，并经入口各打一次控制台域名和 API 域名；
 - 连续再备份两次，验证保留只留下最新两份、最早那份被删；
+- 轮换 S3 凭证（重建演练的 S3 容器，卷不动）并把整个前缀搬到 `axiom-moved`、把 `AXIOM_BACKUP_PREFIX` 改过去，再恢复一次：
+  这一遍只有"固定使用启动时的位置和凭证"才能走完，因为 set 里的配置写的是搬走之前的位置和已吊销的凭证；
 - 打印一行可直接粘到下表的记录，含 RTO（从执行恢复脚本到 `compose up --wait` 返回）。
 
 指纹比较按行内容，跳过三类会被程序自己改动的行：River 的队列表（库自己的迁移版本由程序的启动检查核对）、
 `billing.holders`（每次核心进程启动插一行，恢复后的库里既有 set 里的那行也有新的）、`billing.expiry_cursor`（到期任务每分钟
 更新自己扫到哪）。表本身少一张就失败，所以跳过的是行，不是表。
 
-它要 Docker、go、node、pnpm 和约十分钟，并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
-机器上只能跑一个。
+它要 Docker、go、node、pnpm 和约十五分钟，并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
+机器上只能跑一个。入口在演练里用 `AXIOM_EDGE_TLS_ISSUER=internal`（自己的 CA），域名是 `.example`，没有任何请求离开这台
+机器；网络换成 `172.29.0.0/24`，免得和这台机器上真在跑的入口抢。
 
 ### 恢复演练记录
 
@@ -144,9 +170,23 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。
 
-- **TLS**：Caddy 自己申请和续期证书（ACME HTTP-01，80 端口要能到达这个容器），证书与账号密钥放在 `caddy_data` 卷里；
-  失败原因看 `docker compose logs caddy`。
-- **HTTP/2**：`servers { protocols h1 h2 }`。只开 TCP：栈只发布 TCP 的 80/443，广告 HTTP/3 只会白费第一次 UDP 往返。
+**三个域名，不是两个。** `accounts.site_domains` 的域名是主键，一个域名只属于一种 surface（`console`、`api`、`admin`），
+所以控制台和模型 API 必须是两个域名：
+
+- `AXIOM_EDGE_CONSOLE_HOST`：站点的页面、控制台和控制台 API。`/api/console/v1/*` 在这里，`/v1/*` 不在这里。
+- `AXIOM_EDGE_API_HOST`：站点的模型 API（`/v1/*`、`/api/v1/*`，流式）。控制台的路由在这里一律 404。
+- `AXIOM_EDGE_ADMIN_HOST`：管理应用和管理 API。
+
+用同一个域名兼作两者做不到：程序自己就会拒绝。域名登记为 `console` 时，模型请求经 `internal/gateway/handler.go` 的
+`authenticate` 得到 401；登记为 `api` 时，控制台的路由经 `cmd/axiom/console_guard.go` 的 `admit` 得到 404（`ErrUnknownHost`）。
+两个站点的 `reverse_proxy` 都原样转发请求，Host 不变——程序就是按它找站点和 surface 的，所以域名必须与
+`axiom site init --console --api --admin` 登记的一致。
+
+- **TLS**：默认由 Caddy 自己申请和续期证书（ACME HTTP-01，80 端口要能到达这个容器），证书与账号密钥放在 `caddy_data` 卷里；
+  失败原因看 `docker compose logs caddy`。没有公网 DNS 的部署（演练、内网）设 `AXIOM_EDGE_TLS_ISSUER=internal`，改用 Caddy
+  自己的 CA，根证书在 `caddy_data` 卷的 `pki/authorities/local/root.crt`，客户端要信任它。
+- **HTTP/2**：`servers { protocols h1 h2 }`。只开 TCP：栈发布的是 TCP 的 80/443，广告 HTTP/3 只会白费第一次 UDP 往返。
+- **端口**：`AXIOM_EDGE_HTTP_PORT` / `AXIOM_EDGE_HTTPS_PORT` 默认 80/443；留空则由内核分配，给同机的第二套栈或演练用。
 - **X-Forwarded-For**：Caddy 是第一个 hop，默认忽略客户端自带的 `X-Forwarded-*`，按连接对端地址重写。程序只在请求来自
   可信地址时才读它，所以 `compose.edge.yaml` 把 `AXIOM_TRUSTED_PROXIES` 设成入口在这个网络里的固定地址
   （`${AXIOM_EDGE_PROXY_ADDRESS:-172.28.0.10}/32`）。经宿主发布端口进来的请求来自另一个网络，因此不被信任：伪造
@@ -156,11 +196,11 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   响应头，不是路径。
 - **超时**：`read_header 10s`、`read_body 2m`（与程序自己 2 分钟的请求体上限一致）、`write_idle 1h`（默认 1 分钟会把
   长时间没有新 token 的流掐掉）；不设总写超时——长回答不是故障，单次调用由程序自己限时。
-- **来源限制**：`/api/admin/v1/*` 在公开域名上一律 404；管理应用只在 `AXIOM_EDGE_ADMIN_HOST` 上回答，且只对
+- **来源限制**：`/api/admin/v1/*` 在控制台域名和 API 域名上都一律 404；管理应用只在 `AXIOM_EDGE_ADMIN_HOST` 上回答，且只对
   `AXIOM_EDGE_ADMIN_ALLOW_CIDRS`（默认只有本机，忘了配就是把入口关掉）。`/console/*` 与 `/api/console/v1/*` 对
-  `AXIOM_EDGE_CONSOLE_ALLOW_CIDRS` 开放，默认所有人：它是用户的控制台，私有部署可以把它关进内网。
-- 两个域名都要有指向这台机器的 DNS，且与注册站点时的 host 一致：程序按 `Host` 找站点，管理监听还要求它是该站点的管理
-  域名。
+  `AXIOM_EDGE_CONSOLE_ALLOW_CIDRS` 开放，默认所有人：它是用户的控制台，私有部署可以把它关进内网。API 域名不设来源限制：
+  它的调用方本来就是任意的机器。
+- 三个域名都要有指向这台机器的 DNS。
 - 前面再放 CDN 的话，给 `servers > trusted_proxies` 加 CDN 的网段、开 `trusted_proxies_strict`，并把 443 只对 CDN 开放，
   否则客户端可以自带 `X-Forwarded-For`。
 
@@ -177,14 +217,20 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   迁移建；恢复时先跑迁移（角色与 schema 由它建，这一步结束再整体删掉 schema），角色定义只有一份，口令在 `deploy/.env`
   里随库一起备份。
 - **仓库里的文件不进 set**：`deploy/compose.yaml`、`deploy/compose.edge.yaml`、`deploy/ingress/Caddyfile` 都在 git 里，
-  manifest 记下镜像标签就够了；只有不是代码的 `deploy/.env` 需要备份。
+  manifest 记下镜像标签就够了；只有不是代码的 `deploy/.env` 需要备份。恢复因此要显式拿到这套文件（`-f`）：set 里没有它们，
+  而缺了入口那一份，程序回来时就没有入口需要的网络和代理地址。
+- **入口分两个公开域名**：`accounts.site_domains` 的域名是主键，一个域名只属于一种 surface，所以控制台与模型 API 只能各用
+  一个域名。代价是每个部署要三份 DNS 与证书，注册站点时也要三个 host；换来的是每种 surface 的来源限制能分开设，程序自己
+  的拒绝逻辑不必改动。
 
 ## 待定
 
 - 定时归宿主（cron / systemd timer），镜像里没有调度器。要变成多机部署时，"同时只跑一个"得换成桶或数据库上的协调，锁的
   范围会失效。
-- 演练还没有进 CI 常跑：要 Docker、要建镜像、约十分钟，而且自带破坏性。要不要作为发布前的必跑项，等 CI 机器的余量定下来
+- 演练还没有进 CI 常跑：要 Docker、要建镜像、约十五分钟，而且自带破坏性。要不要作为发布前的必跑项，等 CI 机器的余量定下来
   再定。
+- 公网证书这条路没有在任何地方验过：演练用 `.example` 域名和 Caddy 自己的 CA，没有公网 DNS 也就没有 ACME。第一次真实部署时
+  才第一次走 HTTP-01，失败原因看 `docker compose logs caddy`。
 - 演练用的桶是 `rustfs/rustfs`，一个钉住版本的第三方 S3 实现。MinIO 自己已经拿不到公开镜像（Docker Hub 的仓库没了，
   quay.io 返回 401），而 `adobe/s3mock` 之类的替身并不真存对象，测不出保留和重取。桶的语义只用到对象读写和列举，换成别的
   实现时改 `deploy/compose.rehearsal.yaml` 的一个服务就够。

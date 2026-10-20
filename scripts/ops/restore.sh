@@ -3,13 +3,22 @@
 #
 #   AXIOM_RESTORE_DB_IDENTITY=/etc/axiom-backup/db.key \
 #   AXIOM_RESTORE_SECRETS_IDENTITY=/etc/axiom-backup/keys.key \
-#   scripts/ops/restore.sh <set>
+#   scripts/ops/restore.sh [-f deploy/compose.yaml -f deploy/compose.edge.yaml] [--env-file FILE] <set>
 #
 # The identities are this machine's paths to the age private keys; they are mounted read-only for the run and stay where
-# they are. --env-file names the compose variables and is the file the set's own copy replaces: the cluster is created
-# with the passwords of the set, not of the host, because a database created from other passwords would not accept them.
-# On a blank machine that file needs only the bucket's settings (deploy/.env.example); the three passwords are added here
-# as placeholders until step 1 installs the set's copy, and nothing is ever created with them.
+# they are. -f names the compose files the deployment runs, in the order it runs them; the default is
+# deploy/compose.yaml alone, and a deployment with the edge passes both, so that the program comes back on the network
+# and with the proxy address its edge needs.
+#
+# --env-file names the compose variables and is the file the set's own copy replaces: the cluster is created with the
+# passwords of the set, not of the host, because a database created from other passwords would not accept them. On a
+# blank machine that file needs only the bucket's settings (deploy/.env.example); the three passwords are added here as
+# placeholders until step 1 installs the set's copy, and nothing is ever created with them.
+#
+# The bucket's location and credentials, on the other hand, are read once at the start and exported for the whole run: the
+# file installed in step 1 carries the ones of the day the set was written, and those may have been rotated since, or the
+# sets moved to another bucket or prefix. Step 4 would then fail to fetch the database after step 1 had already replaced
+# the file this run started from.
 #
 # A blank environment is the supported one: no database. --overwrite starts that over by deleting the project's database
 # and key ring, which is what a retry after a failed restore needs.
@@ -21,8 +30,13 @@ set -euo pipefail
 env_file=deploy/.env
 overwrite=
 set_name=
+files=()
 while [ $# -gt 0 ]; do
   case $1 in
+  -f)
+    files+=("$2")
+    shift 2
+    ;;
   --env-file)
     env_file=$2
     shift 2
@@ -41,6 +55,8 @@ while [ $# -gt 0 ]; do
     ;;
   esac
 done
+# Compose's own rule: the -f flags replace the default, they do not add to it.
+[ ${#files[@]} -gt 0 ] || files=(deploy/compose.yaml)
 
 die() {
   printf 'restore: %s\n' "$*" >&2
@@ -53,7 +69,7 @@ docker_path() {
   if command -v cygpath > /dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
-[ -n "$set_name" ] || die "usage: scripts/ops/restore.sh [--env-file FILE] [--overwrite] <set>"
+[ -n "$set_name" ] || die "usage: scripts/ops/restore.sh [-f FILE]... [--env-file FILE] [--overwrite] <set>"
 [ -n "${AXIOM_RESTORE_DB_IDENTITY-}" ] ||
   die "AXIOM_RESTORE_DB_IDENTITY must name the age identity that opens the database's sets"
 [ -n "${AXIOM_RESTORE_SECRETS_IDENTITY-}" ] ||
@@ -72,7 +88,13 @@ done
 
 project=${COMPOSE_PROJECT_NAME:-axiom}
 export COMPOSE_PROJECT_NAME=$project
-compose() { docker compose -f deploy/compose.yaml --env-file "$env_file" "$@"; }
+compose_args=()
+for file in "${files[@]}"; do
+  [ -r "$file" ] || die "cannot read $file"
+  compose_args+=(-f "$file")
+done
+compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
+echo "== compose files: ${files[*]}"
 
 # Every image the restore uses has to be on this machine before anything is replaced, or a restore would stop halfway. They
 # are not pulled: two of them are built from this tree, and a newer one from a registry could carry migrations the set
@@ -82,6 +104,30 @@ for image in $(compose --profile ops config --images); do
   docker image inspect "$image" > /dev/null 2>&1 ||
     die "the image $image is not on this machine: build the deployment first (docs/ops/backup-restore.md「恢复」)"
 done
+
+# The bucket as this run found it: the endpoint, the bucket, the prefix and the credentials, read from the container that
+# will use them, so that they are the values compose resolved and not a second reading of the file. They are exported by
+# their compose names, because interpolation reads the environment before it reads the file: that is what keeps the
+# location and the credentials of this run for the whole run, when step 1 installs the set's own copy of the
+# deployment's file — which carries the credentials of the day the set was written, revoked since if they were rotated,
+# and the location the sets were in before anyone moved them. As the environment rather than as options of the two
+# steps, because a credential in a process list is readable by every user on the machine.
+resolved=$(compose run --rm -T --no-deps --entrypoint env restore | tr -d '\r')
+[ -n "$resolved" ] ||
+  die "cannot read the bucket's settings out of $env_file: does it have AXIOM_BACKUP_BUCKET (deploy/.env.example)?"
+pin() {
+  local line
+  line=$(printf '%s\n' "$resolved" | grep -m 1 "^$1=") || die "cannot read $1 from the restore service"
+  export "$2=${line#*=}"
+}
+pin AXIOM_BACKUP_BUCKET AXIOM_BACKUP_BUCKET
+pin AXIOM_BACKUP_PREFIX AXIOM_BACKUP_PREFIX
+pin RCLONE_CONFIG_AXIOM_ENDPOINT AXIOM_BACKUP_S3_ENDPOINT
+pin RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID AXIOM_BACKUP_S3_ACCESS_KEY_ID
+pin RCLONE_CONFIG_AXIOM_SECRET_ACCESS_KEY AXIOM_BACKUP_S3_SECRET_ACCESS_KEY
+pin RCLONE_CONFIG_AXIOM_REGION AXIOM_BACKUP_S3_REGION
+pin RCLONE_CONFIG_AXIOM_FORCE_PATH_STYLE AXIOM_BACKUP_S3_FORCE_PATH_STYLE
+[ -n "$AXIOM_BACKUP_BUCKET" ] || die "AXIOM_BACKUP_BUCKET is empty in $env_file: nothing says where the sets are"
 
 # Nothing may write to the database while it is replaced.
 [ -z "$(compose ps --quiet axiom)" ] ||
@@ -129,11 +175,59 @@ compose run --rm migrate
 echo "== 6/6 start the program and wait for its own startup checks"
 compose up --detach --wait --wait-timeout 180
 
-public=$(compose port axiom 8080)
-public=${public##*:}
-admin=$(compose port axiom 8082)
-admin=${admin##*:}
-echo "== console: $(curl -fsS "http://127.0.0.1:$public/api/console/v1/version")"
-echo "== admin: $(curl -fsS "http://127.0.0.1:$admin/api/admin/v1/version")"
+# Each answer is checked before it is printed: a curl inside an echo would report the echo's status, so a 500 or a refused
+# connection would still end with "restored".
+check() {
+  local body
+  body=$(curl --silent --show-error --fail --max-time 30 "$1") || die "no answer from $2: $1"
+  [ -n "$body" ] || die "$2 answered nothing: $1"
+  echo "== $2: $body"
+}
+
+# Through the edge when the file set has one, and otherwise on the program's own published ports. The edge is where a
+# deployment is reached, and it is the only check that proves the two are on a network together: the loopback ports answer
+# whether or not the edge can reach the program, which is how a restore could look finished while every request through
+# the edge got a 502.
+if compose config --services | grep -qx caddy; then
+  # The hostnames and the port come from the containers themselves: they live in the environment file the set has just
+  # replaced, and Caddy serves each surface under its own name.
+  console_host=$(compose exec -T caddy printenv AXIOM_EDGE_CONSOLE_HOST)
+  api_host=$(compose exec -T caddy printenv AXIOM_EDGE_API_HOST)
+  https=$(compose port caddy 443)
+  https=${https##*:}
+  # The certificate is the edge's own business (ACME, or a CA of its own), so it is not verified here; --resolve sends the
+  # right name to the published port without a DNS entry. Only a request that got no answer at all is retried: a fresh
+  # edge has no certificate for the name until it has got one, and that is a handshake that fails rather than a status.
+  # The status is kept, because the two surfaces are told apart by it: the version endpoint answers on every host, and the
+  # site's answers on a console domain only.
+  edge() {
+    local out tries=0
+    while :; do
+      out=$(curl --silent --show-error --insecure --max-time 30 --resolve "$1:$https:127.0.0.1" \
+        --write-out '\n%{http_code}' "https://$1:$https$2") && break
+      tries=$((tries + 1))
+      [ "$tries" -lt 15 ] || die "no answer from the edge for $1$2: is it up, and has it a certificate for $1?"
+      sleep 2
+    done
+    status=${out##*$'\n'}
+    body=${out%$'\n'*}
+  }
+  edge "$console_host" /api/console/v1/site
+  [ "$status" = 200 ] || die "the console's site answered $status through the edge, not 200: can the edge reach the program?"
+  echo "== console through the edge: $body"
+  edge "$api_host" /api/console/v1/site
+  [ "$status" = 404 ] ||
+    die "the API host answered a console path with $status, not 404: is it registered as the site's API domain?"
+  edge "$api_host" /v1/models
+  [ "$status" = 401 ] || die "the model API answered $status through the edge, not the 401 a request without a key gets"
+  echo "== model API through the edge: 401 without a key, which is the answer this endpoint gives one"
+else
+  public=$(compose port axiom 8080)
+  public=${public##*:}
+  admin=$(compose port axiom 8082)
+  admin=${admin##*:}
+  check "http://127.0.0.1:$public/api/console/v1/version" console
+  check "http://127.0.0.1:$admin/api/admin/v1/version" admin
+fi
 compose ps
 echo "== restored $set_name"

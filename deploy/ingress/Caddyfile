@@ -1,11 +1,17 @@
-# The production edge (deploy/compose.edge.yaml): TLS, HTTP/2, and the source restrictions of the two listeners that are
-# not for everyone. The runbook is docs/ops/backup-restore.md「生产入口」.
+# The production edge (deploy/compose.edge.yaml): TLS, HTTP/2, and the source restrictions of the listeners that are not
+# for everyone. The runbook is docs/ops/backup-restore.md「生产入口」.
 #
 # Every hostname and every range comes from the environment, so this file is the same in every deployment. An empty
 # hostname is a parse error at start, which is the right way round: the edge serves nothing rather than something
 # unexpected. Caddy gets and renews the certificates itself over the ACME HTTP challenge (port 80 must reach this
 # container) and keeps its account key in its data volume; `docker compose logs caddy` is where a failed challenge says
-# why.
+# why. A deployment with no public DNS — the rehearsal, a lab — sets AXIOM_EDGE_TLS_ISSUER=internal and gets the same
+# sites under Caddy's own CA (see the volume it keeps that in).
+#
+# The console and the model API are two hostnames, not one: a domain in accounts.site_domains belongs to one surface,
+# and the program refuses the other surface's paths under it (the console's guard answers 404, the gateway 401). Both
+# sites reverse_proxy with the request as it arrived, so the Host header the program resolves the site by is the one the
+# client sent.
 #
 # Indented with spaces like the rest of the repository, which `caddy fmt` would rewrite to tabs: it warns about that once
 # at start and loads the file as it is. Nothing else in the file departs from what `caddy fmt` produces.
@@ -36,8 +42,11 @@
   }
 }
 
-# The public hostname: the site's pages, its API (which streams), and the console.
-{$AXIOM_EDGE_PUBLIC_HOST} {
+# The console hostname: the site's pages, the console and its API. Without the argument, Caddy gets public certificates
+# by itself; `internal` makes its own CA, which is what a deployment with no public DNS uses.
+{$AXIOM_EDGE_CONSOLE_HOST} {
+  tls {$AXIOM_EDGE_TLS_ISSUER}
+
   # The program is served over https from here, so tell browsers not to try http again. Without includeSubDomains: only
   # this host is known to be https.
   header Strict-Transport-Security "max-age=31536000"
@@ -49,7 +58,7 @@
   }
 
   # The console and its API answer the configured ranges only, open by default: a private deployment can keep the console
-  # off the public internet while the site's pages and its API stay reachable.
+  # off the public internet while the site's pages stay reachable.
   @consoleOff {
     path /console/* /api/console/v1/*
     not remote_ip {$AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:0.0.0.0/0 ::/0}
@@ -59,7 +68,25 @@
   }
 
   handle {
-    # The Host header is passed through unchanged, which the program needs: it resolves the site by it.
+    # The Host header is passed through unchanged, which the program needs: it resolves the site, and the surface, by it.
+    reverse_proxy axiom:8080
+  }
+}
+
+# The API hostname: the site's model API, which streams. A domain belongs to one surface, so this is a domain of its own
+# in the site's registration (axiom site init --api); under it the program answers the console's paths with 404 and the
+# model API with 401 until a key is given.
+{$AXIOM_EDGE_API_HOST} {
+  tls {$AXIOM_EDGE_TLS_ISSUER}
+
+  header Strict-Transport-Security "max-age=31536000"
+
+  @adminAPI path /api/admin/v1/*
+  handle @adminAPI {
+    respond 404
+  }
+
+  handle {
     reverse_proxy axiom:8080
   }
 }
@@ -67,6 +94,8 @@
 # The admin hostname, answering 403 everywhere but the configured ranges. Their default is this machine alone, so a
 # forgotten variable closes the listener instead of publishing it.
 {$AXIOM_EDGE_ADMIN_HOST} {
+  tls {$AXIOM_EDGE_TLS_ISSUER}
+
   header Strict-Transport-Security "max-age=31536000"
 
   @offSite not remote_ip {$AXIOM_EDGE_ADMIN_ALLOW_CIDRS:127.0.0.1/32 ::1/128}
