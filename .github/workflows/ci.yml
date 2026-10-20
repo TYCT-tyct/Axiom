@@ -129,6 +129,10 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    # Chromium aborts connecting sockets when the host's other jobs change interface addresses (#363).
+    # Keep the browser and serveweb in one stable network namespace; match web/package.json's Playwright version.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,6 +149,9 @@ jobs:
           path: web/test-results/
           if-no-files-found: ignore
           retention-days: 7
+      # Job containers run as root; runners with different UIDs must be able to clean their next checkout.
+      - if: always()
+        run: chown -R --reference="$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
 
   # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
   # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
