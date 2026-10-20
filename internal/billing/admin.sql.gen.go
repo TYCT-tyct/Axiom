@@ -14,19 +14,29 @@ import (
 
 const readCreditBatch = `-- name: ReadCreditBatch :many
 
-SELECT id, site_id, account_id, amount, expires_at, created_at FROM billing.credit_batches WHERE id = $1
+SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce(currency, '')::text AS currency, paid, fee,
+    merchant_id, coalesce(offline_channel, '')::text AS offline_channel, rate_id
+FROM billing.credit_batches WHERE id = $1
 `
 
 type ReadCreditBatchRow struct {
-	ID        uuid.UUID
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-	Amount    int64
-	ExpiresAt *time.Time
-	CreatedAt time.Time
+	ID             uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	Source         string
+	Amount         int64
+	ExpiresAt      *time.Time
+	CreatedAt      time.Time
+	Currency       string
+	Paid           *int64
+	Fee            *int64
+	MerchantID     *uuid.UUID
+	OfflineChannel string
+	RateID         *uuid.UUID
 }
 
 // What the admin API reads of the ledger.
+// A gift's currency and offline channel read as empty.
 func (q *Queries) ReadCreditBatch(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadCreditBatchRow, error) {
 	rows, err := db.Query(ctx, readCreditBatch, id)
 	if err != nil {
@@ -40,9 +50,16 @@ func (q *Queries) ReadCreditBatch(ctx context.Context, db DBTX, id uuid.UUID) ([
 			&i.ID,
 			&i.SiteID,
 			&i.AccountID,
+			&i.Source,
 			&i.Amount,
 			&i.ExpiresAt,
 			&i.CreatedAt,
+			&i.Currency,
+			&i.Paid,
+			&i.Fee,
+			&i.MerchantID,
+			&i.OfflineChannel,
+			&i.RateID,
 		); err != nil {
 			return nil, err
 		}
