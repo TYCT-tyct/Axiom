@@ -228,6 +228,26 @@ func (q *Queries) LockSupplier(ctx context.Context, db DBTX, id uuid.UUID) (Lock
 	return i, err
 }
 
+const lockSyncState = `-- name: LockSyncState :one
+SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = $1 FOR UPDATE
+`
+
+type LockSyncStateRow struct {
+	Version int64
+	Format  int16
+	State   []byte
+}
+
+// The state of a supplier and the version it is stored at, held until the transaction ends. A person's change of the
+// credentials reads it so, before it takes the supplier's row: a step takes the two rows in that order as well
+// (HoldSyncLease, then LockSupplier), and the other order would close a cycle of waits between the two.
+func (q *Queries) LockSyncState(ctx context.Context, db DBTX, supplierID uuid.UUID) (LockSyncStateRow, error) {
+	row := db.QueryRow(ctx, lockSyncState, supplierID)
+	var i LockSyncStateRow
+	err := row.Scan(&i.Version, &i.Format, &i.State)
+	return i, err
+}
+
 const releaseSyncLease = `-- name: ReleaseSyncLease :exec
 UPDATE suppliers.sync_states SET lease_holder = NULL, lease_until = NULL
 WHERE supplier_id = $1 AND lease_fence = $2
@@ -240,6 +260,33 @@ type ReleaseSyncLeaseParams struct {
 
 func (q *Queries) ReleaseSyncLease(ctx context.Context, db DBTX, arg ReleaseSyncLeaseParams) error {
 	_, err := db.Exec(ctx, releaseSyncLease, arg.SupplierID, arg.LeaseFence)
+	return err
+}
+
+const resetSyncState = `-- name: ResetSyncState :exec
+UPDATE suppliers.sync_states
+SET version = $1, state = $2, next_due = $3, lease_holder = NULL, lease_until = NULL,
+    lease_fence = lease_fence + 1
+WHERE supplier_id = $4
+`
+
+type ResetSyncStateParams struct {
+	Version    int64
+	State      []byte
+	NextDue    time.Time
+	SupplierID uuid.UUID
+}
+
+// Puts the state of a supplier back in service with the one the caller made of it, and lets the lease go with its fence
+// raised, so that a node that held the lease writes neither a step nor a refreshed login. version is given for the same
+// reason: what a step began with is now behind the state. next_due is the caller's time — the supplier is due at once.
+func (q *Queries) ResetSyncState(ctx context.Context, db DBTX, arg ResetSyncStateParams) error {
+	_, err := db.Exec(ctx, resetSyncState,
+		arg.Version,
+		arg.State,
+		arg.NextDue,
+		arg.SupplierID,
+	)
 	return err
 }
 

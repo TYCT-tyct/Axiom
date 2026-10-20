@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -32,19 +33,66 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 		if err != nil {
 			return err
 		}
-		if row.Format != format {
-			return fmt.Errorf("the state is stored in format %d, which this program does not read", row.Format)
-		}
-		if err := jsonx.UnmarshalKnown(row.State, &out); err != nil {
-			return fmt.Errorf("decode the state: %w", err)
-		}
-		out.Version = row.Version
-		return nil
+		out, err = decode(row.Version, row.Format, row.State)
+		return err
 	})
 	if err != nil {
 		return syncer.State{}, fmt.Errorf("persist: load the state of supplier %s: %w", st.s.Supplier.ID, err)
 	}
 	return out, nil
+}
+
+// decode reads a stored state as this program keeps it. Its version is the row's, which the state's own member is not
+// read for: the row is what a Commit names.
+func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error) {
+	if storedFormat != format {
+		return syncer.State{}, fmt.Errorf("the state is stored in format %d, which this program does not read", storedFormat)
+	}
+	var out syncer.State
+	if err := jsonx.UnmarshalKnown(raw, &out); err != nil {
+		return syncer.State{}, fmt.Errorf("decode the state: %w", err)
+	}
+	out.Version = version
+	return out, nil
+}
+
+// Wake puts the sync of a supplier back to work, in the transaction of the change that replaced the login that had
+// stopped it: the engine polls again, every task is due at once with no failure counted against it, and the lease is let
+// go with its fence raised, so a node that held it writes nothing more. What the adapter had read stays as it was —
+// above all the position in the charge records, so that the history is not read again. The listing goes with the tasks:
+// until a round has read it again a commit projects none (readsListing), and nothing of it is taken for gone.
+//
+// It takes the state's row before the caller takes the supplier's, the order a step's write takes the two in (hold). The
+// other order — a step holding the lease and waiting for the supplier's row, this holding the supplier's and waiting for
+// the lease's — is a deadlock. A supplier that never synced has no state to wake, and none is made here: the first take
+// makes one that is already due.
+func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
+	q := store.New()
+	row, err := q.LockSyncState(ctx, tx, id)
+	if errors.Is(err, pg.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("persist: lock the state of supplier %s: %w", id, err)
+	}
+	woken, err := decode(row.Version, row.Format, row.State)
+	if err != nil {
+		return fmt.Errorf("persist: read the state of supplier %s: %w", id, err)
+	}
+	woken.Version++
+	woken.Status, woken.Reason = syncer.Normal, ""
+	clear(woken.Tasks[:]) // a task the engine halted is started again too: a person is the reset
+	encoded, err := jsonx.MarshalCanonical(woken)
+	if err != nil {
+		return fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)
+	}
+	err = q.ResetSyncState(ctx, tx, store.ResetSyncStateParams{
+		SupplierID: id, Version: woken.Version, State: encoded, NextDue: now,
+	})
+	if err != nil {
+		return fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
+	}
+	return nil
 }
 
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the

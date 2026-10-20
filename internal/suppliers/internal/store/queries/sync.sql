@@ -28,6 +28,21 @@ UPDATE suppliers.sync_states
 SET version = @version, format = @format, state = @state, next_due = @next_due, lease_until = @lease_until
 WHERE supplier_id = @supplier_id AND version = @expect;
 
+-- name: LockSyncState :one
+-- The state of a supplier and the version it is stored at, held until the transaction ends. A person's change of the
+-- credentials reads it so, before it takes the supplier's row: a step takes the two rows in that order as well
+-- (HoldSyncLease, then LockSupplier), and the other order would close a cycle of waits between the two.
+SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = @supplier_id FOR UPDATE;
+
+-- name: ResetSyncState :exec
+-- Puts the state of a supplier back in service with the one the caller made of it, and lets the lease go with its fence
+-- raised, so that a node that held the lease writes neither a step nor a refreshed login. version is given for the same
+-- reason: what a step began with is now behind the state. next_due is the caller's time — the supplier is due at once.
+UPDATE suppliers.sync_states
+SET version = @version, state = @state, next_due = @next_due, lease_holder = NULL, lease_until = NULL,
+    lease_fence = lease_fence + 1
+WHERE supplier_id = @supplier_id;
+
 -- name: GetSupplierForSync :one
 -- The supplier as a round needs it, and the configuration generation a write of its credentials must still find.
 SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = @id;
