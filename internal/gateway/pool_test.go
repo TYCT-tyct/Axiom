@@ -52,7 +52,7 @@ func TestPoolClassesDoNotConsumeEachOthersCapacity(t *testing.T) {
 	}
 }
 
-// A context that has ended never keeps a connection, whether it ended before or while the call waited.
+// A context that has already ended never keeps a connection.
 func TestPoolDeadContextKeepsNothing(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
@@ -69,12 +69,25 @@ func TestPoolDeadContextKeepsNothing(t *testing.T) {
 					t.Fatal("a cancelled context got a connection")
 				}
 			}
+			for range capacity {
+				mustAcquire(t, acquire(ctx, bp.Pool, Class(class)))
+			}
+		}
+	})
+}
+
+// Cancelling a queued caller must leave its class's full capacity available after the holders finish.
+func TestPoolCancelledWaiterReleasesCapacity(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		cfg := DefaultConfig()
+		pool := newPool(cfg.PoolSize, cfg.PoolReserve)
+		for class, capacity := range [classCount]int{Completion: cfg.PoolReserve, Admission: cfg.PoolSize - cfg.PoolReserve} {
 			var holders []func()
 			for range capacity {
-				holders = append(holders, mustAcquire(t, acquire(ctx, bp.Pool, Class(class))))
+				holders = append(holders, mustAcquire(t, acquire(ctx, pool, Class(class))))
 			}
 			waitingCtx, stop := context.WithCancel(ctx)
-			waiting := start(acquire(waitingCtx, bp.Pool, Class(class)))
+			waiting := start(acquire(waitingCtx, pool, Class(class)))
 			waiting.mustWait(t)
 			stop()
 			if !waiting.finished() || !errors.Is(waiting.err, context.Canceled) {
@@ -84,7 +97,7 @@ func TestPoolDeadContextKeepsNothing(t *testing.T) {
 				release()
 			}
 			for range capacity {
-				mustAcquire(t, acquire(ctx, bp.Pool, Class(class)))
+				mustAcquire(t, acquire(ctx, pool, Class(class)))
 			}
 		}
 	})
