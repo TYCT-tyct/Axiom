@@ -64,41 +64,11 @@ func (c *openAICachedDetails) within(d openAIDetails) bool {
 
 // items maps the usage as catalog README.md「计费项与用量」 tabulates, at the service tier the reply names, if any.
 func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
-	in, inDetails, inName := u.Input, u.InputDetails, "input_tokens_details"
-	if u.Prompt != nil {
-		in, inDetails, inName = u.Prompt, u.PromptDetails, "prompt_tokens_details"
+	if err := u.mapInput(&r); err != nil {
+		return r, err
 	}
-	out, outDetails, outName := u.Output, u.OutputDetails, "output_tokens_details"
-	if u.Completion != nil {
-		out, outDetails, outName = u.Completion, u.CompletionDetails, "completion_tokens_details"
-	}
-	if in != nil {
-		d := inDetails.orZero()
-		if err := r.openAIInput(*in, d); err != nil {
-			return r, err
-		}
-		r.inputDetailed = inDetails != nil
-		unknownCounts(&r, "usage."+inName, d.Unknown)
-		if d.CachedDetails != nil {
-			unknownCounts(&r, "usage."+inName+".cached_tokens_details", d.CachedDetails.Unknown)
-		}
-	}
-	if out != nil {
-		d := outDetails.orZero()
-		if !countOK(d.Text) || d.Text > *out {
-			return r, fmt.Errorf("usage: invalid output text count")
-		}
-		// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
-		// output total: checked, and billed with that total rather than again on its own.
-		if !countOK(d.Video) || d.Video > *out {
-			return r, fmt.Errorf("usage: invalid output video count")
-		}
-		if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
-			[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
-			return r, err
-		}
-		r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, outDetails != nil
-		unknownCounts(&r, "usage."+outName, d.Unknown)
+	if err := u.mapOutput(&r); err != nil {
+		return r, err
 	}
 	unknownCounts(&r, "usage", u.Unknown)
 	if tier != nil {
@@ -106,6 +76,56 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	}
 	r.sortUnknown()
 	return r, nil
+}
+
+// mapInput maps the input side as the reply reports it. Chat and Responses name the same counts differently, and those
+// names go into the unknown usage, so each side reads its own. A report without the side says nothing about its split,
+// so the meter takes none and keeps an earlier one.
+func (u *openAIUsage) mapInput(r *usageReport) error {
+	in, details, name := u.Input, u.InputDetails, "input_tokens_details"
+	if u.Prompt != nil {
+		in, details, name = u.Prompt, u.PromptDetails, "prompt_tokens_details"
+	}
+	if in == nil {
+		return nil
+	}
+	d := details.orZero()
+	if err := r.openAIInput(*in, d); err != nil {
+		return err
+	}
+	r.inputDetailed = details != nil
+	unknownCounts(r, "usage."+name, d.Unknown)
+	if d.CachedDetails != nil {
+		unknownCounts(r, "usage."+name+".cached_tokens_details", d.CachedDetails.Unknown)
+	}
+	return nil
+}
+
+// mapOutput maps the output side the same way, through the other format's names when the reply uses them.
+func (u *openAIUsage) mapOutput(r *usageReport) error {
+	out, details, name := u.Output, u.OutputDetails, "output_tokens_details"
+	if u.Completion != nil {
+		out, details, name = u.Completion, u.CompletionDetails, "completion_tokens_details"
+	}
+	if out == nil {
+		return nil
+	}
+	d := details.orZero()
+	if !countOK(d.Text) || d.Text > *out {
+		return fmt.Errorf("usage: invalid output text count")
+	}
+	// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
+	// output total: checked, and billed with that total rather than again on its own.
+	if !countOK(d.Video) || d.Video > *out {
+		return fmt.Errorf("usage: invalid output video count")
+	}
+	if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
+		[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
+		return err
+	}
+	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
+	unknownCounts(r, "usage."+name, d.Unknown)
+	return nil
 }
 
 // openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
