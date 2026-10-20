@@ -113,9 +113,14 @@ func (r rawSMTP) sender() (netmail.Address, error) {
 	if err != nil {
 		return netmail.Address{}, errFrom
 	}
-	// The envelope path and the From header are both written from this address, so what the envelope cannot carry is a
-	// configuration error: a node whose own address cannot be sent would fail at the first password reset.
-	if _, err := mailbox(*from); err != nil {
+	// The envelope path and the From header are both written from this address, so what neither can carry is a
+	// configuration error: a node whose own address cannot be sent would fail at the first password reset, and a
+	// display name no header line can fold would fail every message the node sends.
+	rendered, err := addressHeader(*from)
+	if err != nil {
+		return netmail.Address{}, errFrom
+	}
+	if err := checkHeaders([]header{{"From", rendered}}); err != nil {
 		return netmail.Address{}, errFrom
 	}
 	return *from, nil

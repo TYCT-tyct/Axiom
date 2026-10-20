@@ -30,6 +30,15 @@ const (
 	enabledEvent      = "email enabled"
 )
 
+// The errors a job hands River stand in for the error the send produced. River writes what it is given into
+// river.river_job.errors, a column no tenant policy covers, so the recipient, the subject, the bodies and the server's
+// reply — which quotes the recipient when it refuses one mailbox — stay out of it and live in the log line beside it
+// instead. What River needs is the kind of failure, and that is all these say.
+var (
+	errSendFailed  = errors.New("mail: the send failed and may pass on the next attempt")
+	errSendRefused = errors.New("mail: the send was refused for good")
+)
+
 // Mailer queues the delivery of one message per call and works those jobs. Registration happens for every node, so a
 // flow can call Enqueue wherever it runs; a node without SMTP settings says so once at startup and refuses at
 // enqueue time.
@@ -110,7 +119,10 @@ func (sendArgs) InsertOpts() river.InsertOpts {
 func (m *Mailer) work(ctx context.Context, job *river.Job[sendArgs]) error {
 	msg, found, err := m.queued(ctx, job.Args.ID)
 	if err != nil {
-		return fmt.Errorf("mail: read the queued message: %w", err)
+		// The database's error can name the row it failed on, so it stays in the log and River is told only that the
+		// attempt failed: an unreadable row is worth another attempt, unlike the message itself.
+		m.logger.WarnContext(ctx, failedEvent, "job_id", job.ID, "attempt", job.Attempt, "err", err)
+		return errSendFailed
 	}
 	if !found {
 		m.logger.InfoContext(ctx, goneEvent, "job_id", job.ID, "attempt", job.Attempt)
@@ -129,10 +141,10 @@ func (m *Mailer) work(ctx context.Context, job *river.Job[sendArgs]) error {
 	m.logger.WarnContext(ctx, failedEvent, "job_id", job.ID, "attempt", job.Attempt, "to", msg.To,
 		"message_id", id, "permanent", permanent, "err", err)
 	if !permanent {
-		return err
+		return errSendFailed
 	}
 	m.forget(ctx, job, msg.To)
-	return river.JobCancel(err)
+	return river.JobCancel(errSendRefused)
 }
 
 // queued reads the message the job carries the id of, in the scope of the tenant the outbox lookup names. A message

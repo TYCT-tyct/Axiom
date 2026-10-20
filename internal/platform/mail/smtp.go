@@ -89,8 +89,10 @@ func (s *sender) Send(ctx context.Context, msg Message) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The refusal carries no address: it reaches the caller, a log line and, through the job, a row no tenant policy
+	// covers, and every one of those already knows the recipient.
 	if !s.limiter.allow(to.Address) {
-		return "", fmt.Errorf("%w: %s", ErrRateLimited, to.Address)
+		return "", ErrRateLimited
 	}
 	c := compose{
 		from: s.cfg.From, to: *to, subject: msg.Subject, text: msg.Text, html: msg.HTML,

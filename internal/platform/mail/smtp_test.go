@@ -377,6 +377,8 @@ func TestSendRateLimitsRecipient(t *testing.T) {
 	}
 	if _, err := sd.Send(t.Context(), testMessage); !errors.Is(err, ErrRateLimited) {
 		t.Errorf("second Send() error = %v; want ErrRateLimited", err)
+	} else if strings.Contains(err.Error(), testMessage.To) {
+		t.Errorf("Send() error = %q; it quotes the recipient", err)
 	}
 	other := testMessage
 	other.To = "other@example.com"

@@ -240,8 +240,9 @@ func TestMessageValidation(t *testing.T) {
 	t.Parallel()
 	valid := Message{To: "user@example.com", Subject: "Welcome", Text: "Hello", HTML: "<p>Hello</p>"}
 	cases := []struct {
-		name string
-		edit func(*Message)
+		name  string
+		edit  func(*Message)
+		quiet string // a value the refusal must not quote
 	}{
 		{name: "an empty subject", edit: func(m *Message) { m.Subject = "" }},
 		{name: "a subject of spaces", edit: func(m *Message) { m.Subject = " \t" }},
@@ -250,16 +251,41 @@ func TestMessageValidation(t *testing.T) {
 		{name: "no text body", edit: func(m *Message) { m.Text = "" }},
 		{name: "no HTML body", edit: func(m *Message) { m.HTML = "" }},
 		{name: "no recipient", edit: func(m *Message) { m.To = "" }},
-		{name: "a recipient that is not an address", edit: func(m *Message) { m.To = "planted-recipient" }},
-		{name: "a recipient spanning lines", edit: func(m *Message) { m.To = "user@example.com\r\nBcc: other@example.com" }},
+		{
+			name: "a recipient that is not an address", edit: func(m *Message) { m.To = "planted-recipient" },
+			quiet: "planted-recipient",
+		},
+		{
+			name:  "a recipient spanning lines",
+			edit:  func(m *Message) { m.To = "user@example.com\r\nBcc: other@example.com" },
+			quiet: "Bcc: other@example.com",
+		},
+		// What the envelope cannot carry, and what no header line can: the send would refuse both, so the enqueue does.
+		{
+			name: "a recipient only SMTPUTF8 could carry", edit: func(m *Message) { m.To = "用户@example.com" },
+			quiet: "用户@example.com",
+		},
+		{
+			name: "a recipient past the path limit", edit: func(m *Message) { m.To = strings.Repeat("x", 250) + "@example.com" },
+		},
+		{name: "a subject no header line can carry", edit: func(m *Message) { m.Subject = strings.Repeat("x", 1000) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			msg := valid
 			c.edit(&msg)
-			if _, err := msg.validate(); !errors.Is(err, ErrInvalidMessage) {
-				t.Errorf("validate() error = %v; want ErrInvalidMessage", err)
+			_, err := msg.validate()
+			if !errors.Is(err, ErrInvalidMessage) {
+				t.Fatalf("validate() error = %v; want ErrInvalidMessage", err)
+			}
+			// The refusal names the fault and never the value: it reaches a caller, a log line and, from a job, a table
+			// no tenant policy covers.
+			if c.quiet != "" && strings.Contains(err.Error(), c.quiet) {
+				t.Errorf("validate() error = %q; it quotes the value", err)
+			}
+			if strings.Contains(err.Error(), msg.To) && msg.To != "" {
+				t.Errorf("validate() error = %q; it quotes the recipient", err)
 			}
 		})
 	}
@@ -347,8 +373,14 @@ func TestMailbox(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got, err := mailbox(c.addr); !errors.Is(err, ErrInvalidMessage) {
+			got, err := mailbox(c.addr)
+			if !errors.Is(err, ErrInvalidMessage) {
 				t.Errorf("mailbox() = %q, %v; want ErrInvalidMessage", got, err)
+			}
+			// The refusal is handed to a caller and, through a job, to a row no tenant policy covers: it names the
+			// fault and never the address.
+			if strings.Contains(err.Error(), c.addr.Address) {
+				t.Errorf("mailbox() error = %q; it quotes the address", err)
 			}
 		})
 	}

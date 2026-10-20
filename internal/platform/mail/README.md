@@ -14,7 +14,7 @@
 | `AXIOM_SMTP_PASSWORD` | — | 密码或服务商的应用专用密码；以 `secret.Secret` 保存，任何格式都不打印 |
 | `AXIOM_SMTP_FROM` | — | 发件人，一个地址，可带显示名：`Axiom <no-reply@example.com>` |
 
-没有设置任何一项时邮件关闭：启动日志写 `email disabled`，`Enqueue` 返回 `ErrNotConfigured`，节点的其他功能照常。设置了任意一项就要求整套配置，缺项或取值不合法时启动失败，并一次报出全部问题；错误只写变量名和期望的格式，不写取值。发件人同时出现在信封和 `From` 头里，所以两者写不出的地址在启动时就失败（只有 ASCII 能进信封路径，见「传输」）。发信域名的 SPF、DKIM、DMARC 仍待配置（[accounts 的「待定问题」](../../../docs/domains/accounts.md#待定问题)）。
+没有设置任何一项时邮件关闭：启动日志写 `email disabled`，`Enqueue` 返回 `ErrNotConfigured`，节点的其他功能照常。设置了任意一项就要求整套配置，缺项或取值不合法时启动失败，并一次报出全部问题；错误只写变量名和期望的格式，不写取值。发件人同时出现在信封和 `From` 头里，所以两者都要在启动时写得出来：信封放不下的地址，以及带显示名时整行折不进 998 字符的 `From` 头，都在这里失败（只有 ASCII 能进信封路径，见「传输」）。发信域名的 SPF、DKIM、DMARC 仍待配置（[accounts 的「待定问题」](../../../docs/domains/accounts.md#待定问题)）。
 
 ## 传输
 
@@ -30,11 +30,11 @@
 
 - `From`、`To`、`Subject`、`Date`（RFC 1123Z，UTC）、`Message-ID`（随机串 `@` 发件域）、`MIME-Version`、`Content-Type`；
 - 主题和显示名是可打印 ASCII 就原样写，否则按 RFC 2047 编成 UTF-8 的 encoded-word，每个不超过 75 字符，多字节字符不在词中间切断；
-- 头部在空格处折行，续行以那个空格开头（RFC 5322 §2.2.3），展开后与原文一致；行宽 78 字符，超过 998 字符的值拒绝（§2.1.1）。没有空格可折的超长词写不出，发送前报 `ErrInvalidMessage`；
+- 头部在空格处折行，续行以那个空格开头（RFC 5322 §2.2.3），展开后与原文一致；行宽 78 字符，超过 998 字符的值拒绝（§2.1.1）。没有空格可折的超长词写不出，入队时就报 `ErrInvalidMessage`；
 - 两份正文是 `multipart/alternative` 的两个部分，quoted-printable 编码，中文和长行都不会被中继改写；
 - 所有换行都是 CRLF（RFC 5322 §2.3）。
 
-主题为空或含控制字符、收件人不是单个地址或含控制字符、任一正文为空都在入队时拒绝（`ErrInvalidMessage`）：头部里的换行会让调用方注入自己的头，空正文发出去也没有意义。
+主题为空或含控制字符、收件人不是单个地址或含控制字符、任一正文为空都在入队时拒绝（`ErrInvalidMessage`）：头部里的换行会让调用方注入自己的头，空正文发出去也没有意义。收件人和主题还必须是发送时写得出来的：`Enqueue` 用与 `Send` 同一个渲染函数试写 `To` 和 `Subject`，信封放不下的地址、折不进 998 字符的值在这里就返回 `ErrInvalidMessage`，不留 outbox 行也不排任务——否则这封信会以同样的原因被取消，收件人那一行还会被删掉。
 
 ## 队列与重试
 
@@ -45,8 +45,9 @@
 工作进程手里只有 id，没有租户，所以先用 `platform.mail_tenant(id)` 查到这一行的 `site_id`、`account_id`，再在该租户的作用域里读正文——这个函数是 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用，只返回这两个租户列，而这个角色只被授予 `id`、`site_id`、`account_id` 三列（`id` 是函数按它匹配的那一列，不能少；与 accounts 模块的登录前查找同一套做法，见 [accounts 的迁移](../../accounts/migrations/00002_lookup.sql)）。`pg.TenantTx` 先以空作用域查一次，再换成查到的租户，`fn` 在其中运行。
 
 - 任务开始时就查不到这一行，说明已经发过或已被删除：记 `mail skipped: the queued message is gone`，任务完成。
-- 网络错误、超时、4xx 回复原样返回，由 River 重试，**消息留在表里**，重试时照样读得到；5xx 回复（`*textproto.Error` 500–599）用 `river.JobCancel` 结束，同样的消息再发一次也会被同样拒绝。
-- 参数本身不合法（地址写不进信封、头部写不下）同样取消，不重试。
+- 网络错误、超时、4xx 回复由 River 重试，**消息留在表里**，重试时照样读得到；5xx 回复（`*textproto.Error` 500–599）用 `river.JobCancel` 结束，同样的消息再发一次也会被同样拒绝。读 outbox 行本身失败（数据库连不上、语句超时）也算可重试。
+- 参数本身不合法（地址写不进信封、头部写不下）同样取消，不重试。这两类现在都在入队时挡住，走到工作进程的只剩被改过或旧版本留下的行。
+- 交给 River 的错误只说明类别（`errSendFailed`、`errSendRefused`），不带收件人、主题、正文，也不带服务器的回复：River 把它原样写进 `river.river_job.errors`（jsonb 数组，每次尝试一项），而任务行和这一列不属于任何租户，没有策略覆盖。原文——包括回复里被拒绝的那个地址——只进工作进程的日志行。
 - 发出或被永久拒绝后，这一行在同一租户的作用域里删除；删除失败只记 `mail not deleted from the outbox`，任务结果不变——邮件已经发了，重试只会再发一次。
 - 至少一次：任务在邮件已被服务器接受、但还没标成完成时节点崩溃，会再发一次；调用方的流程要能容忍重复的邮件。被丢弃的任务（5 次都失败）不删这一行，供运维排查，清理策略待定。
 
@@ -56,9 +57,9 @@
 
 ## 投递结果
 
-发出去记 `mail sent`（`job_id`、`attempt`、`to`、`message_id`），失败记 `mail send failed`（另加 `permanent` 和 `err`）。正文、主题和密码从不进日志；收件人地址进，因为运维要靠它和发信服务商的日志对上。
+发出去记 `mail sent`（`job_id`、`attempt`、`to`、`message_id`），失败记 `mail send failed`（另加 `permanent` 和 `err`）。正文、主题和密码从不进日志；收件人地址进，因为运维要靠它和发信服务商的日志对上。日志不属于任何一张表，所以这里是唯一记得下原文的地方。
 
-持久记录是 River 的任务行（状态、尝试次数、最后错误）加上 `platform.mail_outbox` 里的那一行：任务行说这次投递怎么样，outbox 行说发的是什么、属于哪个租户，两者用任务参数里的 id 相连。正文随发随删（见上一节），不长期留在库里。
+持久记录是 River 的任务行（状态、尝试次数、最后错误）加上 `platform.mail_outbox` 里的那一行：任务行说这次投递怎么样，outbox 行说发的是什么、属于哪个租户，两者用任务参数里的 id 相连。正文随发随删（见上一节），不长期留在库里。任务行里的「最后错误」是上面那两个不带值的类别，不是服务器的回复：运维要的地址和 Message-ID 在日志行里。
 
 ## 不变量
 
@@ -71,7 +72,8 @@
 | 同一收件人一分钟最多一封 | `limiter`；限流的任务 snooze，不耗尝试次数 |
 | 5xx 不重试 | `wrapRejected` 把 500–599 包成 `ErrRejected`，工作函数转成 `JobCancel` |
 | 信封和头部写的是同一个地址 | `mailbox` 同时给 `MAIL FROM`、`RCPT TO` 和 `From`、`To` 用 |
-| 密码和正文不进日志和错误 | `secret.Secret` 的脱敏；错误只带主机名、步骤和服务器回复 |
+| 写给 River 的错误不带租户数据 | 工作函数只返回 `errSendFailed`、`errSendRefused` 和 `JobSnooze`；`mailbox`、`validate`、找不到地址时的限流错误都不引用取值 |
+| 密码和正文不进日志和错误 | `secret.Secret` 的脱敏；错误只带主机名、步骤和服务器回复（服务器回复只进日志，不进 River） |
 
 ## 与参考实现的差异
 
@@ -80,4 +82,4 @@
 | new-api `common/email.go` | 465 用隐式 TLS；账号和密码都设才认证；`Date`、`Message-ID` 头 | new-api 的 STARTTLS 是开关、可以关掉校验、正文只有一段 HTML；这里强制加密、没有跳过校验的开关、纯文本和 HTML 两段 |
 | sub2api `email_service.go` | 587 默认；拨号 10 秒；TLS 1.2 起；每收件人一分钟冷却 | 进程内 channel 换成 River 队列；整次发送 30 秒统一期限；正文放租户表而不是任务参数 |
 
-测试用进程内的假 SMTP 服务器（成功、认证失败 535、六个步骤各自的 451/550、缺 STARTTLS、隐式 TLS、超时、对着可控连接的期限先后、信封地址的引号和转义），消息用 `testdata/` 里的 golden 文件逐字节比对，头部用「解析回来的值与写入的一致」检查，配置用表驱动，队列用 `pgtest` 对着真实的 PostgreSQL 跑（含另一个站点和空作用域读不到正文、替别的租户入队被拒），`go test -update` 重写 golden。
+测试用进程内的假 SMTP 服务器（成功、认证失败 535、六个步骤各自的 451/550、缺 STARTTLS、隐式 TLS、超时、对着可控连接的期限先后、信封地址的引号和转义），消息用 `testdata/` 里的 golden 文件逐字节比对，头部用「解析回来的值与写入的一致」检查，配置用表驱动，队列用 `pgtest` 对着真实的 PostgreSQL 跑（含另一个站点和空作用域读不到正文、替别的租户入队被拒、发不出的收件人和主题在入队时被拒、任务参数和 `errors` 列里都没有地址、主题和正文），`go test -update` 重写 golden。

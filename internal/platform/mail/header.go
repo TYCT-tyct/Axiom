@@ -38,11 +38,19 @@ func writeHeaders(b *bytes.Buffer, headers []header) error {
 	return nil
 }
 
+// checkHeaders reports whether a header section can be written at all, keeping nothing it wrote. Both boundaries ask it
+// — the configured sender at startup, the recipient and the subject at enqueue — so a value the send would refuse is
+// refused before it is stored, and one renderer answers for all of them.
+func checkHeaders(headers []header) error {
+	return writeHeaders(new(bytes.Buffer), headers)
+}
+
 // writeHeader writes one field and folds it at its spaces: the line ends before a space and the next line begins with
 // it, so unfolding — dropping the CRLF and keeping the space — gives the value back unchanged (RFC 5322 section 2.2.3).
 // A first word that does not fit beside the field's name starts the next line, after the colon alone, with the same
 // one space before it. A word no line can carry is refused rather than sent, because a line past 998 characters breaks
-// a MUST NOT and a receiver may drop the message.
+// a MUST NOT and a receiver may drop the message. The refusal names the header and never the value, which is what lets
+// a job pass it on.
 func writeHeader(b *bytes.Buffer, name, value string) error {
 	b.WriteString(name)
 	b.WriteByte(':')
@@ -110,24 +118,27 @@ func quotePhrase(name string) string {
 // quoted-string with the quote and the backslash escaped, and the domain unchanged (RFC 5321 section 4.1.2). net/smtp
 // adds the angle brackets, in MAIL FROM and RCPT TO alike. Only printable ASCII fits: this node never offers SMTPUTF8,
 // so an address whose local part or domain is not ASCII is refused here rather than mangled on the way.
+//
+// A refusal names the fault and not the address: the value belongs to one tenant, and this error reaches a caller, a log
+// line and — through the job — a table no tenant policy covers.
 func mailbox(a netmail.Address) (string, error) {
 	at := strings.LastIndexByte(a.Address, '@')
 	if at <= 0 || at == len(a.Address)-1 {
-		return "", invalid("the address " + a.Address + " has no local part or no domain")
+		return "", invalid("the address has no local part or no domain")
 	}
 	local, domain := a.Address[:at], a.Address[at+1:]
 	if !isDotAtom(local) {
 		quoted, ok := quoteLocal(local)
 		if !ok {
-			return "", invalid("the address " + a.Address + " holds a character only SMTPUTF8 could carry")
+			return "", invalid("the local part holds a character only SMTPUTF8 could carry")
 		}
 		local = quoted
 	}
 	if !isPrintableASCII(domain) {
-		return "", invalid("the domain of " + a.Address + " holds a character only SMTPUTF8 could carry")
+		return "", invalid("the domain holds a character only SMTPUTF8 could carry")
 	}
 	if len(local)+len(domain)+3 > pathMax {
-		return "", invalid("the address " + a.Address + " is longer than SMTP allows")
+		return "", invalid("the address is longer than SMTP allows")
 	}
 	return local + "@" + domain, nil
 }

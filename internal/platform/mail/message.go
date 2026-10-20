@@ -27,7 +27,11 @@ func invalid(reason string) error {
 
 // validate parses the recipient and refuses what must not reach a header or an empty message. A line break in a header
 // would let the caller add headers of its own (RFC 5322 header injection), and the other control characters have no
-// place in a header at all.
+// place in a header at all. The last check is the one the send makes: a recipient or subject no header line can carry is
+// refused here, before the message is stored, rather than by the job that would find it later.
+//
+// No refusal quotes the value it refuses. This error reaches the caller, a log line and — from a job — a table no tenant
+// policy covers, and the recipient, the subject and the body belong to one tenant.
 func (m Message) validate() (*netmail.Address, error) {
 	switch {
 	case strings.TrimSpace(m.Subject) == "" || hasControl(m.Subject):
@@ -37,9 +41,17 @@ func (m Message) validate() (*netmail.Address, error) {
 	case hasControl(m.To):
 		return nil, invalid("the recipient address spans lines")
 	}
+	// The parser's own message can quote the address it refused, so the reason is spelled here instead.
 	to, err := netmail.ParseAddress(m.To)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the recipient is not one address: %w", ErrInvalidMessage, err)
+		return nil, invalid("the recipient is not one address")
+	}
+	recipient, err := addressHeader(*to)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkHeaders([]header{{"To", recipient}, {"Subject", textHeader(m.Subject)}}); err != nil {
+		return nil, err
 	}
 	return to, nil
 }

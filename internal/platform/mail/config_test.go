@@ -121,6 +121,16 @@ func TestReadConfigProblems(t *testing.T) {
 			want:    []string{"AXIOM_SMTP_FROM: want one address"},
 		},
 		{
+			// The envelope carries the address and the From header carries the name beside it. A name past the line
+			// limit would fail every message this node sends, so the node does not start.
+			name: "a sender whose name no header line can carry",
+			environ: []string{
+				"AXIOM_SMTP_HOST=smtp.example.com",
+				"AXIOM_SMTP_FROM=" + strings.Repeat("a", 1000) + " <no-reply@example.com>",
+			},
+			want: []string{"AXIOM_SMTP_FROM: want one address"},
+		},
+		{
 			name:    "a host with a scheme",
 			environ: []string{"AXIOM_SMTP_HOST=planted://smtp.example.com", "AXIOM_SMTP_FROM=no-reply@example.com"},
 			want:    []string{"AXIOM_SMTP_HOST: want a host name"},

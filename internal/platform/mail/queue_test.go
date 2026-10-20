@@ -97,6 +97,21 @@ func (w *queueWorld) job(t *testing.T) (state string, attempt int, args string) 
 	return state, attempt, args
 }
 
+// jobErrors is what river.river_job.errors holds for the node's most recent mail job: the error text River recorded for
+// each attempt, in a table no tenant policy covers.
+func (w *queueWorld) jobErrors(t *testing.T) string {
+	t.Helper()
+	var errs string
+	err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT coalesce(errors::text, '') FROM river.river_job
+			WHERE kind = $1 ORDER BY id DESC LIMIT 1`, jobKind).Scan(&errs)
+	})
+	if err != nil {
+		t.Fatalf("read the mail job's recorded errors: %v", err)
+	}
+	return errs
+}
+
 // waitForJob waits until the node's latest mail job reaches one of the given states, and returns how many attempts it
 // took. River leaves a job that is to be retried as retryable, or scheduled when the retry is nearer than its scheduler's
 // run, so a retried job is either.
@@ -193,7 +208,12 @@ func TestMailerRetriesTransientFailure(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
 	// 451 is a temporary server failure (RFC 5321 section 4.2.1): the job goes back to scheduled and River retries it.
-	server := startTLSServer(t, func(s *fakeServer) { s.rejectStep, s.rejectCode = "rcpt", 451 })
+	// The reply quotes the mailbox it refused, as a real server's does.
+	const reply = "try again later"
+	server := startTLSServer(t, func(s *fakeServer) {
+		s.rejectStep, s.rejectCode = "rcpt", 451
+		s.rejectText = "4.2.1 <" + welcome.To + ">: " + reply
+	})
 	mailer := w.register(t, server)
 	w.start(t)
 
@@ -209,13 +229,18 @@ func TestMailerRetriesTransientFailure(t *testing.T) {
 	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 1 {
 		t.Errorf("the outbox holds %v; want the message kept for the retry", got)
 	}
+	checkJobKeepsTheMessageOut(t, w, reply)
 }
 
 func TestMailerCancelsPermanentFailure(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
 	// 550 is a permanent mailbox failure: another attempt sends the same message to the same refusal.
-	server := startTLSServer(t, func(s *fakeServer) { s.rejectStep, s.rejectCode = "rcpt", 550 })
+	const reply = "no such user here"
+	server := startTLSServer(t, func(s *fakeServer) {
+		s.rejectStep, s.rejectCode = "rcpt", 550
+		s.rejectText = "5.1.1 <" + welcome.To + ">: " + reply
+	})
 	mailer := w.register(t, server)
 	w.start(t)
 
@@ -230,6 +255,32 @@ func TestMailerCancelsPermanentFailure(t *testing.T) {
 	}
 	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
 		t.Errorf("the outbox still holds %v after a permanent refusal", got)
+	}
+	checkJobKeepsTheMessageOut(t, w, reply)
+}
+
+// checkJobKeepsTheMessageOut checks the job row against the message it delivers. The row is the one place the queue
+// writes that no tenant policy covers, so neither the arguments nor the recorded error may quote the recipient, the
+// subject or a body, and the server's own reply — which names the mailbox it refused — must stay in the worker's log
+// rather than in the column every scope can read.
+func checkJobKeepsTheMessageOut(t *testing.T, w *queueWorld, reply string) {
+	t.Helper()
+	_, _, args := w.job(t)
+	errs := w.jobErrors(t)
+	if errs == "" {
+		t.Error("the job recorded no error; want the failure the worker classified")
+	}
+	for _, value := range []string{welcome.To, welcome.Subject, welcome.Text, welcome.HTML, reply} {
+		if strings.Contains(args, value) {
+			t.Errorf("the job's arguments hold %q:\n%s", value, args)
+		}
+		if strings.Contains(errs, value) {
+			t.Errorf("the job's recorded error holds %q:\n%s", value, errs)
+		}
+	}
+	// The recipient is still recorded, where the tenant's own operator reads it.
+	if !strings.Contains(w.logs.String(), welcome.To) {
+		t.Errorf("the log does not name the recipient:\n%s", w.logs.String())
 	}
 }
 
@@ -325,29 +376,51 @@ func TestRegisterWithoutSettings(t *testing.T) {
 	}
 }
 
+// TestEnqueueRejectsInvalidMessage: a message the send would refuse is refused here, before the outbox row and the job
+// exist, so a caller learns at the call it got wrong instead of from a job cancelled later. The recipient and the
+// subject that no header line can carry are part of this: they are decided by the same renderer the message goes
+// through, so what Enqueue accepts is what Send can write.
 func TestEnqueueRejectsInvalidMessage(t *testing.T) {
 	t.Parallel()
-	w := newQueueWorld(t)
-	mailer := w.register(t, startTLSServer(t, nil))
+	cases := []struct {
+		name string
+		edit func(*Message)
+	}{
+		{name: "an empty subject", edit: func(m *Message) { m.Subject = "" }},
+		// A local part and a domain SMTPUTF8 would carry, which this node never offers.
+		{name: "a recipient SMTP cannot carry", edit: func(m *Message) { m.To = "用户@example.com" }},
+		{name: "a recipient no header line can carry", edit: func(m *Message) {
+			m.To = strings.Repeat("x", 250) + "@example.com"
+		}},
+		{name: "a subject no header line can carry", edit: func(m *Message) { m.Subject = strings.Repeat("x", 1000) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newQueueWorld(t)
+			mailer := w.register(t, startTLSServer(t, nil))
 
-	invalid := welcome
-	invalid.Subject = ""
-	tenant := Tenant{Site: uuid.NewV7()}
-	if err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{tenant.Site}, nil), func(tx pg.Tx) error {
-		return mailer.Enqueue(t.Context(), tx, tenant, invalid)
-	}); !errors.Is(err, ErrInvalidMessage) {
-		t.Errorf("Enqueue() error = %v; want ErrInvalidMessage", err)
-	}
-	var jobs int
-	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*) FROM river.river_job WHERE kind = $1`, jobKind).Scan(&jobs)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if jobs != 0 {
-		t.Errorf("an invalid message queued %d jobs", jobs)
-	}
-	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
-		t.Errorf("an invalid message left %v in the outbox", got)
+			msg := welcome
+			c.edit(&msg)
+			tenant := Tenant{Site: uuid.NewV7()}
+			err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{tenant.Site}, nil), func(tx pg.Tx) error {
+				return mailer.Enqueue(t.Context(), tx, tenant, msg)
+			})
+			if !errors.Is(err, ErrInvalidMessage) {
+				t.Errorf("Enqueue() error = %v; want ErrInvalidMessage", err)
+			}
+			var jobs int
+			if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
+				return tx.QueryRow(t.Context(), `SELECT count(*) FROM river.river_job WHERE kind = $1`, jobKind).Scan(&jobs)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if jobs != 0 {
+				t.Errorf("an invalid message queued %d jobs", jobs)
+			}
+			if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
+				t.Errorf("an invalid message left %v in the outbox", got)
+			}
+		})
 	}
 }

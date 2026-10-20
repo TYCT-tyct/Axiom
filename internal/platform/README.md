@@ -265,6 +265,8 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略写 `platform.in_scope(site_id, account_id)`，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](../mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
 
+worker 返回的错误也一样：River 把它的文本写进 `river.river_job.errors`（jsonb 数组，每次尝试一项），这一列和参数一样没有策略覆盖。所以 worker 交给 River 的只能是分类：成功、snooze，和「可重试」「永久失败」两种通用错误；收件人、正文和服务器回复只进日志行，日志本来就不属于任何租户。
+
 ### 查询（sqlc）
 
 模块的 SQL 写在自己目录的 `queries/*.sql`，由 [sqlc](https://sqlc.dev) 生成类型化的 Go 代码，不用 ORM（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）。
@@ -328,7 +330,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 全量校验 DNS 结果后按 IP 拨号，连接池仍按原主机复用 | 混合公网/内网结果整体拒绝，DNS 后续变化不能替换已经选择的连接目标；保留 TLS 证书校验和长连接 | 只在 URL 保存时校验或让 Transport 再解析：存在 DNS 重绑定窗口 |
 | 私有测试能力值，只能在测试进程构造 | 类型和未导出字段阻止伪造，测试开关不能在生产启用 | 导出 AllowPrivate、任意 Resolver/Dialer：生产调用方能绕过 SSRF 边界 |
 | RoundTrip 返回第一个响应 | 重定向既不请求也不解析，畸形 Location 也不能把凭证带进重定向错误 | 默认 http.Client：默认跟随重定向；拒绝回调前仍可能解析 Location |
-| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开；要带租户数据的任务把数据放模块自己的表、参数只放 id，`pg.TenantTx` 用模块的查找函数换到那个租户的作用域 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围；把租户数据放进任务参数：任务行没有策略，谁也管不住它 |
+| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开；要带租户数据的任务把数据放模块自己的表、参数只放 id，`pg.TenantTx` 用模块的查找函数换到那个租户的作用域；worker 返回给 River 的错误同样只写分类，`errors` 列也属于没有策略的表 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围；把租户数据放进任务参数或错误：任务行和 `errors` 列都没有策略，谁也管不住它们 |
 | River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |

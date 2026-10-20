@@ -43,6 +43,7 @@ type fakeServer struct {
 	user, pass string           // empty serves without authentication
 	rejectStep string           // "hello", "starttls", "auth", "mail", "rcpt" or "data": the step answered with rejectCode
 	rejectCode int
+	rejectText string // what that reply says after the code; empty uses a fixed sentence
 	messages   chan delivery
 
 	mu     sync.Mutex
@@ -318,8 +319,12 @@ func (s *session) data() bool {
 	return true
 }
 
-// rejection is the reply of the step the test configured the server to refuse.
+// rejection is the reply of the step the test configured the server to refuse. rejectText lets a test speak like a real
+// server, which quotes the mailbox it refuses.
 func (s *fakeServer) rejection() string {
+	if s.rejectText != "" {
+		return fmt.Sprintf("%d %s", s.rejectCode, s.rejectText)
+	}
 	return fmt.Sprintf("%d refused by the test server", s.rejectCode)
 }
 
