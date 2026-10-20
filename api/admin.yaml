@@ -542,6 +542,52 @@ paths:
         "422": {$ref: "#/components/responses/Unprocessable"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/endpoint-tests:
+    post:
+      operationId: testSupplierEndpoint
+      tags: [Suppliers]
+      summary: Test one of a supplier's endpoints with a real generation
+      description: >-
+        Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no
+        reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect
+        bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit,
+        with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate
+        is never compared with the supplier's charge, so no test can move the endpoint's cost state.
+
+
+        `passed`: a 2xx answer read to its end. `failed`: a failure the endpoint is at fault for. `inconclusive`:
+        anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the
+        request itself — says nothing about the endpoint.
+
+
+        Limits: 10 a minute per session, because each test is a generation the platform pays for.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EndpointTestRequest"}
+      responses:
+        "201":
+          description: What the test found, and what it was booked at.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EndpointTest"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}:
     parameters:
       - name: supplier_id
@@ -2074,6 +2120,82 @@ components:
     ModelFormat:
       type: string
       enum: [messages, responses, chat]
+    EndpointTestRequest:
+      type: object
+      required: [endpoint_id, format, reason]
+      properties:
+        endpoint_id: {$ref: "#/components/schemas/Uuid"}
+        format:
+          allOf: [{$ref: "#/components/schemas/ModelFormat"}]
+          description: The format to test it in; it must be one the endpoint serves.
+        reason: {$ref: "#/components/schemas/Reason"}
+    EndpointTestOutcome:
+      type: string
+      enum: [passed, failed, inconclusive]
+      description: >-
+        `passed`: a 2xx read to its end. `failed`: a failure the endpoint is at fault for, or a stream that broke.
+        `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the
+        endpoint can be judged by.
+    EndpointTestCause:
+      type: string
+      enum:
+        - timeout
+        - memory
+        - stream_broken
+        - upstream_error
+        - overloaded
+        - rate_limited
+        - context_too_long
+        - content_rejected
+        - bad_request
+        - model_not_found
+        - not_permitted
+        - credential_rejected
+        - credential_quota_exhausted
+        - supplier_balance_low
+        - transport
+        - tool_input
+        - unknown
+      description: Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+    EndpointTestProblem:
+      type: object
+      required: [cause]
+      properties:
+        cause: {$ref: "#/components/schemas/EndpointTestCause"}
+        scope:
+          type: string
+          enum: [request, egress, endpoint, credential, group, supplier]
+          description: >-
+            Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to
+            the supplier. Absent when the test's own limit ended it.
+    EndpointTest:
+      type: object
+      required: [request_id, endpoint_id, model_id, upstream_model, format, outcome, total_ms, estimated_native, native_unit]
+      properties:
+        request_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The platform's own ID of the test, which its cost row and its audit entry are keyed by.
+        endpoint_id: {$ref: "#/components/schemas/Uuid"}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_model: {type: string, description: "The model's name at the supplier, which the call sent."}
+        format: {$ref: "#/components/schemas/ModelFormat"}
+        outcome: {$ref: "#/components/schemas/EndpointTestOutcome"}
+        problem: {$ref: "#/components/schemas/EndpointTestProblem"}
+        upstream_status: {type: integer, minimum: 0, description: "The supplier's HTTP status; 0 when it answered nothing."}
+        upstream_request_id:
+          type: string
+          description: "The supplier's own ID of the call, when it gave one: the key its charge carries."
+        first_token_ms: {type: integer, minimum: 0, description: "Absent when no content came."}
+        total_ms: {type: integer, minimum: 0, description: "The whole test: waiting for the answer and reading it."}
+        estimated_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: >-
+            What the test is booked at: the highest price of the prompt's tokens and of the 16-token cap over every
+            context band, in the supplier's unit. A definite upper bound, never what the supplier reported.
+        native_unit:
+          type: string
+          enum: [quota, usd]
+          description: The unit the supplier counts its balance in, which the estimate is in.
     PendingMapping:
       type: object
       required: [supplier_id, group_id, upstream_name, formats]

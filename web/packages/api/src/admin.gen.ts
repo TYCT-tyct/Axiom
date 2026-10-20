@@ -321,6 +321,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/endpoint-tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test one of a supplier's endpoints with a real generation
+         * @description Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit, with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate is never compared with the supplier's charge, so no test can move the endpoint's cost state.
+         *
+         *     `passed`: a 2xx answer read to its end. `failed`: a failure the endpoint is at fault for. `inconclusive`: anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the request itself — says nothing about the endpoint.
+         *
+         *     Limits: 10 a minute per session, because each test is a generation the platform pays for.
+         */
+        post: operations["testSupplierEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/suppliers/{supplier_id}": {
         parameters: {
             query?: never;
@@ -1166,6 +1190,56 @@ export interface components {
         };
         /** @enum {string} */
         ModelFormat: "messages" | "responses" | "chat";
+        EndpointTestRequest: {
+            endpoint_id: components["schemas"]["Uuid"];
+            /** @description The format to test it in; it must be one the endpoint serves. */
+            format: components["schemas"]["ModelFormat"];
+            reason: components["schemas"]["Reason"];
+        };
+        /**
+         * @description `passed`: a 2xx read to its end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+         * @enum {string}
+         */
+        EndpointTestOutcome: "passed" | "failed" | "inconclusive";
+        /**
+         * @description Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+         * @enum {string}
+         */
+        EndpointTestCause: "timeout" | "memory" | "stream_broken" | "upstream_error" | "overloaded" | "rate_limited" | "context_too_long" | "content_rejected" | "bad_request" | "model_not_found" | "not_permitted" | "credential_rejected" | "credential_quota_exhausted" | "supplier_balance_low" | "transport" | "tool_input" | "unknown";
+        EndpointTestProblem: {
+            cause: components["schemas"]["EndpointTestCause"];
+            /**
+             * @description Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to the supplier. Absent when the test's own limit ended it.
+             * @enum {string}
+             */
+            scope?: "request" | "egress" | "endpoint" | "credential" | "group" | "supplier";
+        };
+        EndpointTest: {
+            /** @description The platform's own ID of the test, which its cost row and its audit entry are keyed by. */
+            request_id: components["schemas"]["Uuid"];
+            endpoint_id: components["schemas"]["Uuid"];
+            model_id: components["schemas"]["Uuid"];
+            /** @description The model's name at the supplier, which the call sent. */
+            upstream_model: string;
+            format: components["schemas"]["ModelFormat"];
+            outcome: components["schemas"]["EndpointTestOutcome"];
+            problem?: components["schemas"]["EndpointTestProblem"];
+            /** @description The supplier's HTTP status; 0 when it answered nothing. */
+            upstream_status?: number;
+            /** @description The supplier's own ID of the call, when it gave one: the key its charge carries. */
+            upstream_request_id?: string;
+            /** @description Absent when no content came. */
+            first_token_ms?: number;
+            /** @description The whole test: waiting for the answer and reading it. */
+            total_ms: number;
+            /** @description What the test is booked at: the highest price of the prompt's tokens and of the 16-token cap over every context band, in the supplier's unit. A definite upper bound, never what the supplier reported. */
+            estimated_native: components["schemas"]["Decimal"];
+            /**
+             * @description The unit the supplier counts its balance in, which the estimate is in.
+             * @enum {string}
+             */
+            native_unit: "quota" | "usd";
+        };
         PendingMapping: {
             supplier_id: components["schemas"]["Uuid"];
             group_id: components["schemas"]["Uuid"];
@@ -2052,6 +2126,41 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testSupplierEndpoint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EndpointTestRequest"];
+            };
+        };
+        responses: {
+            /** @description What the test found, and what it was booked at. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointTest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];

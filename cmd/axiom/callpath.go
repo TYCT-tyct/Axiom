@@ -65,9 +65,12 @@ type callDeps struct {
 type callNode struct {
 	handler  *gateway.Handler
 	executor *gateway.Executor
-	stop     context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
-	ready    func() bool        // whether the node can route now: its latest snapshot can route and is fresh
-	reaped   <-chan error       // carries what billing.Run ended with, when it is not a shutdown
+	// upstreams is the path's suppliers, which the admin also tests an endpoint through: a test must go through the
+	// snapshot and the credentials the calls use, not a second view of the database.
+	upstreams *suppliers.Service
+	stop      context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
+	ready     func() bool        // whether the node can route now: its latest snapshot can route and is fresh
+	reaped    <-chan error       // carries what billing.Run ended with, when it is not a shutdown
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -145,7 +148,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Proxies: d.proxies,
 	})
-	return callNode{handler: handler, executor: executor}, err
+	return callNode{handler: handler, executor: executor, upstreams: upstreams}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
