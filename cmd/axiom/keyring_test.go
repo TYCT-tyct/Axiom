@@ -138,8 +138,17 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 		t.Fatalf("retirement status: %+v, %v", status, err)
 	}
 	f.verifyRotated(ring)
-	if err := f.r.Add(t.Context(), 1); err == nil {
-		t.Fatal("reused a retired version")
+	// A retired version is refused by its state, before any material is written for it: the tombstone in the database
+	// would refuse the insert too, but only after the file had grown a key for a version it considers dead.
+	before, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.Add(t.Context(), 1); err == nil || !strings.Contains(err.Error(), "is retired") {
+		t.Fatalf("reused a retired version: %v", err)
+	}
+	if after, err := os.ReadFile(f.path); err != nil || !bytes.Equal(before, after) {
+		t.Fatal("a refused addition rewrote the key file")
 	}
 }
 
