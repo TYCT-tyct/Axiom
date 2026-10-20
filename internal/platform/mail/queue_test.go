@@ -239,33 +239,45 @@ func TestMailerCancelsPermanentFailure(t *testing.T) {
 func TestOutboxKeepsMailFromOtherTenants(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
-	mailer := w.register(t, startTLSServer(t, nil))
-	// The queue is not started: the message and the job stay as the flow left them.
+	// 451 keeps the queued message for the retry, so the row is still there once the attempt has finished.
+	server := startTLSServer(t, func(s *fakeServer) { s.rejectStep, s.rejectCode = "rcpt", 451 })
+	mailer := w.register(t, server)
+	w.start(t)
+
 	tenant := Tenant{Site: uuid.NewV7()}
 	w.enqueue(t, mailer, tenant, welcome)
+	w.waitForJob(t, "retryable", "scheduled")
+	checkJobCarriesOnlyTheID(t, w)
+	checkOutboxIsInOneScope(t, w, tenant)
+}
 
-	// What the queue stores: the row's id, and no part of the message.
+// checkJobCarriesOnlyTheID checks that the job's arguments hold the outbox row's id and no part of the message: the job
+// row belongs to no tenant, so no policy keeps another tenant's mail out of it.
+func checkJobCarriesOnlyTheID(t *testing.T, w *queueWorld) {
+	t.Helper()
 	_, _, args := w.job(t)
 	for _, secret := range []string{welcome.To, welcome.Subject, welcome.Text, welcome.HTML} {
 		if strings.Contains(args, secret) {
 			t.Errorf("the job's arguments hold %q:\n%s", secret, args)
 		}
 	}
-	own := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil))
-	if len(own) != 1 || !strings.Contains(args, "id") {
-		t.Fatalf("the tenant's scope reads %v and the job's arguments are %q; want one message and its id", own, args)
-	}
-	// The id is what the queue carries, and the only thing it carries.
 	var id uuid.UUID
-	if err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{tenant.Site}, nil), func(tx pg.Tx) error {
+	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT id FROM platform.mail_outbox`).Scan(&id)
 	}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("read the outbox: %v", err)
 	}
 	if !strings.Contains(args, id.String()) {
 		t.Errorf("the job's arguments are %q; want them to hold the outbox id %s", args, id)
 	}
+}
 
+// checkOutboxIsInOneScope checks that the queued message is readable in its own tenant's scope and in no other.
+func checkOutboxIsInOneScope(t *testing.T, w *queueWorld, tenant Tenant) {
+	t.Helper()
+	if own := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(own) != 1 {
+		t.Errorf("the tenant's scope reads %v; want its one queued message", own)
+	}
 	for name, scope := range map[string]pg.Scope{
 		"another site":    pg.NewScope(false, []uuid.UUID{uuid.NewV7()}, nil),
 		"another account": pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()}),
