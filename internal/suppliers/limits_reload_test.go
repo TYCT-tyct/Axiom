@@ -53,19 +53,15 @@ func TestReloadedLimitsKeepExistingUsage(t *testing.T) {
 	if err := w.svc.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	var held []*Attempt
 	for range 3 {
 		a, err := w.svc.Acquire(w.endpoint)
 		if err != nil {
 			t.Fatalf("cleared RPM and raised concurrency: %v", err)
 		}
-		held = append(held, a)
+		defer a.Done()
 	}
 	if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoSlot) {
 		t.Fatalf("raised concurrency admitted a fourth call: %v", err)
-	}
-	for _, a := range held {
-		a.Done()
 	}
 }
 
