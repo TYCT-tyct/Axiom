@@ -372,23 +372,30 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 	}
 	rule := (req.TextBytes + billing.InputBytesPerToken - 1) / billing.InputBytesPerToken
 	d := billing.Demand{TextBytes: req.TextBytes}
-	cl100k := billing.Model{ContextLength: 100000, Tokenizer: billing.TokenizerCl100k}
-	counted := textTokens(protocol.Messages, body, d, cl100k)
+	cl100k := billing.Model{ContextLength: 100000}
+	counted, err := textTokens(protocol.Messages, body, d, cl100k, billing.TokenizerCl100k)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if counted <= rule {
 		t.Errorf("counted %d, no more than the bytes rule's %d, on text the rule undercounts", counted, rule)
 	}
 	for _, tc := range []struct {
 		name  string
 		model billing.Model
+		tok   billing.Tokenizer
 		want  int64
 	}{
-		{"cl100k's own count", cl100k, counted},
-		{"a window below the count", billing.Model{ContextLength: 3000, Tokenizer: billing.TokenizerCl100k}, 3000},
-		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, rule},
+		{"cl100k's own count", cl100k, billing.TokenizerCl100k, counted},
+		{"a window below the count", billing.Model{ContextLength: 3000}, billing.TokenizerCl100k, 3000},
+		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, billing.TokenizerNone, rule},
 	} {
 		d := d
-		d.TextTokens = textTokens(protocol.Messages, body, d, tc.model)
-		if tc.model.Tokenizer == billing.TokenizerNone && d.TextTokens != 0 {
+		d.TextTokens, err = textTokens(protocol.Messages, body, d, tc.model, tc.tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.tok == billing.TokenizerNone && d.TextTokens != 0 {
 			t.Errorf("%s: counted %d with no tokenizer", tc.name, d.TextTokens)
 		}
 		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64)

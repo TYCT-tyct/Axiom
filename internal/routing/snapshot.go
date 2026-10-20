@@ -282,9 +282,6 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	c := &candidate{Endpoint: e, state: r.state.of(e.ID), supplierPause: r.state.supplier(e.Supplier), model: billing.Model{
 		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
-		// The tokenizer counts the estimate when the upstream reports no input usage, so it is read once here from the
-		// name the endpoint calls the model by, not per request.
-		Tokenizer: billing.TokenizerOf(e.Target.Model),
 	}}
 	if e.Price.Version == (uuid.UUID{}) {
 		return c, nil

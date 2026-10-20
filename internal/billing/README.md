@@ -17,7 +17,7 @@ type Demand struct { // gateway 由 protocol.Request 填写；只放请求里的
 }
 type ServerTool struct{ Item catalog.Item; MaxUses int64 } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数
 type Quotable struct{ Price catalog.Schedule; Model Model; MaxOutput int64; Segmentable bool; Endpoint uuid.UUID } // 已实现；Endpoint：预留作为丢失的请求的路线记下的端点；价格版本 `PriceRef` 在 routing 的条目里，不在这里
-type Model struct{ ID catalog.ModelID; ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet; Tokenizer Tokenizer } // 调用方从目录快照填；ImageTokens、PageTokens、FilePages 为 0 表示不知道，报价按上下文长度；Tokenizer 是模型族的分词器，从条目对模型的名字读出，TokenizerNone 表示没有公开的
+type Model struct{ ID catalog.ModelID; ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet } // 调用方从目录快照填；ImageTokens、PageTokens、FilePages 为 0 表示不知道，报价按上下文长度
 type Segments struct{ Output int64; Overshoot time.Duration } // 站点设置：每段输出 token；追加等待加取消生效的延迟上限
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) // 已实现，纯函数；Reserve 在锁下调用它
 type Reservation struct{ Amount platform.Exact; Kept []int }

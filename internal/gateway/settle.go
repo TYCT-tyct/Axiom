@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"axiom/internal/billing"
@@ -148,7 +149,11 @@ func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.C
 func (a *attempt) demand() billing.Demand {
 	d := routing.DemandOf(&a.s.c.Request)
 	if !inputReported(a.usage) {
-		d.TextTokens = textTokens(a.s.c.Format, a.s.c.Body, d, a.entry.Limits)
+		var err error
+		d.TextTokens, err = textTokens(a.s.c.Format, a.s.c.Body, d, a.entry.Limits, billing.TokenizerOf(a.entry.Target.Model))
+		if err != nil {
+			a.s.logger.Warn("input token count failed; using byte estimate", "err", err)
+		}
 	}
 	return d
 }
@@ -162,13 +167,13 @@ func inputReported(u protocol.Usage) bool {
 // it: the context, which clips it anyway, and never more than the text's bytes, which the estimate's bound holds. It
 // is 0, keeping the bytes-per-token rule, when the family has no tokenizer, when the body cannot be walked again, or
 // when the text is empty.
-func textTokens(f protocol.Format, body []byte, d billing.Demand, m billing.Model) int64 {
-	c := billing.NewTextCount(m.Tokenizer, min(m.ContextLength, d.TextBytes))
+func textTokens(f protocol.Format, body []byte, d billing.Demand, m billing.Model, tok billing.Tokenizer) (int64, error) {
+	c := billing.NewTextCount(tok, min(m.ContextLength, d.TextBytes))
 	if c == nil {
-		return 0
+		return 0, nil
 	}
 	if err := protocol.Text(f, body, c.Add); err != nil {
-		return 0 // the body was inspected before it was sent, so it walks here too; a failure keeps the byte rule
+		return 0, fmt.Errorf("extract input text: %w", err)
 	}
 	return c.Total()
 }

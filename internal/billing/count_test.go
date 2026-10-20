@@ -22,6 +22,7 @@ func TestTokenizerOf(t *testing.T) {
 		{"openai/gpt-4o-mini", TokenizerO200k},
 		{"openai/gpt-4o:free", TokenizerO200k}, // a relay's variant of the model
 		{"gpt-4.1-nano", TokenizerO200k},
+		{"gpt-4.5-preview", TokenizerO200k},
 		{"gpt-5.1", TokenizerO200k},
 		{"o1-mini", TokenizerO200k},
 		{"o3", TokenizerO200k},
@@ -87,6 +88,9 @@ func TestTextCount(t *testing.T) {
 		{"Chinese, long", strings.Repeat("今天天气很好，我们一起去公园散步。", 500), false},
 		{"emoji", strings.Repeat("🙂🙃 ", 100), true},
 		{"emoji, long", strings.Repeat("🙂🙃 ", 400), false},
+		{"Korean", "안녕하세요 세계", true},
+		{"mixed", "Hello 你好 お誕生日 🙂 func f() {}", true},
+		{"invalid UTF-8", string([]byte{0xff, 0xc0, 0x80}), true},
 		{"code", strings.Repeat("func f() error {\n\treturn nil\n}\n", 40), false},
 	} {
 		for _, tok := range []Tokenizer{TokenizerO200k, TokenizerCl100k} {
@@ -109,14 +113,14 @@ func checkCount(t *testing.T, tok Tokenizer, name, text string, exact bool) {
 		t.Fatalf("%s: no counter for %d", name, tok)
 	}
 	c.Add([]byte(text))
-	got := c.Total()
+	got := countTotal(t, c)
 	if off := got - want; off < -tolerance || off > tolerance {
 		t.Errorf("%s in %d: counted %d, the tokenizer says %d", name, tok, got, want)
 	}
 	again := NewTextCount(tok, math.MaxInt64)
 	again.Add([]byte(text))
-	if again.Total() != got {
-		t.Errorf("%s in %d: counted %d and then %d", name, tok, got, again.Total())
+	if countTotal(t, again) != got {
+		t.Errorf("%s in %d: counted %d and then %d", name, tok, got, countTotal(t, again))
 	}
 }
 
@@ -129,15 +133,15 @@ func TestTextCountStopsAtItsLimit(t *testing.T) {
 	if c.Add(text) {
 		t.Error("the walk was told to go on past the limit")
 	}
-	if got := c.Total(); got < 1000 || got > 1000+maxRunBytes {
-		t.Errorf("counted %d, want the limit and no more than the run it stopped in", got)
+	if got := countTotal(t, c); got != 1000 {
+		t.Errorf("counted %d, want exactly the limit", got)
 	}
-	before := c.Total()
+	before := countTotal(t, c)
 	if c.Add(text) {
 		t.Error("the walk was told to go on after the limit")
 	}
-	if c.Total() != before {
-		t.Errorf("counted on to %d past the limit at %d", c.Total(), before)
+	if countTotal(t, c) != before {
+		t.Errorf("counted on to %d past the limit at %d", countTotal(t, c), before)
 	}
 }
 
@@ -161,12 +165,15 @@ func BenchmarkTextCount(b *testing.B) {
 	for _, tc := range []struct{ name, text string }{
 		{"english", strings.Repeat("The quick brown fox jumps over the lazy dog. ", 40)},
 		{"chinese", strings.Repeat("今天天气很好，我们一起去公园散步。", 200)},
+		{"unbroken", strings.Repeat("中文", 1707)},
+		{"code", strings.Repeat("func f() error {\n\treturn nil\n}\n", 64)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			text := []byte(tc.text)
 			c := NewTextCount(TokenizerO200k, math.MaxInt64)
 			b.SetBytes(int64(len(text)))
 			b.ReportAllocs()
+			b.ResetTimer()
 			for range b.N {
 				c.total = 0 // the same counter, as one request's does not outlive its own text
 				c.Add(text)

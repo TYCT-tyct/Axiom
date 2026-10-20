@@ -54,9 +54,6 @@ type Model struct {
 	// endpoint offers, but only at those, so the quote needs the schedule to price only those. Empty means unknown, and
 	// the request's own tiers all count.
 	ServiceTiers catalog.ServiceTierSet
-	// Tokenizer counts the request's text for the estimate when the upstream reports no input usage, as the entry's
-	// own model family counts it (TokenizerOf); TokenizerNone keeps the bytes-per-token rule.
-	Tokenizer Tokenizer
 }
 
 // Quotable is one route entry as billing quotes it: its locked price schedule, its model, the output limit that

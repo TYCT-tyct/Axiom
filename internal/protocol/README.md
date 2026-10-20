@@ -38,6 +38,8 @@
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
 
+`Text(f, body, callback)` 用同一个扫描器给暂估提供 `TextBytes` 对应的原始字节：去掉图片和文件数据，保留 JSON 外壳和转义。只在缺输入用量的结算路径使用，不建立完整请求对象；扫描时记录媒体范围，计数回调返回 false 后停止提供字节。回调消费原请求缓冲区的切片，不应保留它。此接口用于暂估，不声称还原供应商的消息框架 token。
+
 ## 同格式改写
 
 `Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写见下表之后的「Chat 的改写」：模型方言的成员（推理参数、`cache_control`、回传的 `reasoning_content`）不改写，由端点按它自己的方言处理（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
