@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"strings"
 	"time"
 	"uuid"
@@ -43,7 +42,9 @@ func (r *rig) model(slug string, names ...string) catalog.ModelID {
 	return r.listed(slug, basicSpec, cheap, names...)
 }
 
-// listed is model with its own spec and price schedule, which is also the sale price the OpenRouter list shows.
+// listed is model with its own spec and price schedule, which is also the sale price the OpenRouter list shows. The
+// model's public name is its standard ID — the slug without an internal @version suffix, which the catalog refuses as a
+// public name — and the other names given.
 func (r *rig) listed(slug, spec, price string, names ...string) catalog.ModelID {
 	r.t.Helper()
 	ctx := r.t.Context()
@@ -51,6 +52,7 @@ func (r *rig) listed(slug, spec, price string, names ...string) catalog.ModelID 
 		return catalog.Op{Actor: audit.System("gateway.test"), Key: uuid.NewV7(), Reason: "test"}
 	}
 	author, _, _ := strings.Cut(slug, "/")
+	standard, _, _ := strings.Cut(slug, "@")
 	must := func(res catalog.Result, err error) catalog.Result {
 		r.t.Helper()
 		if err != nil {
@@ -67,7 +69,7 @@ func (r *rig) listed(slug, spec, price string, names ...string) catalog.ModelID 
 		r.t.Fatal(err)
 	}
 	model := catalog.ModelID(id)
-	for _, name := range append([]string{slug}, names...) {
+	for _, name := range append([]string{standard}, names...) {
 		must(r.catalog.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: model, Name: name, Visibility: catalog.VisibilityPublic}))
 	}
 	must(r.catalog.PublishPrice(ctx, catalog.PublishPriceRequest{
@@ -89,7 +91,7 @@ func (r *rig) listed(slug, spec, price string, names ...string) catalog.ModelID 
 }
 
 // prices is the sale prices the model list in OpenRouter's shape shows: each model at the schedule its test published.
-func (r *rig) prices(context.Context) (map[catalog.ModelID]billing.Sold, error) { return r.sold, nil }
+func (r *rig) prices() map[catalog.ModelID]billing.Sold { return r.sold }
 
 // seedRouting installs a routing snapshot: alpha is served by alpha-1 and by alpha-2, which charges twice the output
 // price, beta by beta-1 and claude by claude-1; bare by none. The preset the keys have none of, the zero one, puts the cheapest first.
@@ -130,7 +132,7 @@ func (r *rig) seedRouting(o rigOptions) {
 	r.install(preset, endpoints...)
 }
 
-// install replaces the routing snapshot.
+// install replaces the routing snapshot, and publishes the model list a build would publish with it.
 func (r *rig) install(preset routing.Preset, endpoints ...routing.Endpoint) {
 	r.t.Helper()
 	snap, err := r.router.NewSnapshot(time.Now(), endpoints, []routing.Preset{preset})
@@ -138,4 +140,5 @@ func (r *rig) install(preset routing.Preset, endpoints ...routing.Endpoint) {
 		r.t.Fatal(err)
 	}
 	r.router.Replace(snap)
+	r.publish()
 }

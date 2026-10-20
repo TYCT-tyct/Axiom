@@ -109,11 +109,17 @@ var orRefused = map[string]string{
 	"use_rss_chat_links":     "the list is JSON, not an RSS feed",
 }
 
-// readORQuery reads the list's query parameters. A parameter OpenRouter documents that Axiom cannot keep is refused by
-// name, never ignored. A name OpenRouter does not document is ignored: a cache buster or a tracker in the URL must not
-// turn a list request into an error.
+// readORQuery reads the list's query parameters. A query string the standard library cannot decode is refused rather than
+// half-read: url.Values drops an undecodable pair and a pair after a ';', so a filter written that way would vanish and the
+// answer would be the whole list. A parameter OpenRouter documents that Axiom cannot keep is refused by name, never
+// ignored. A name OpenRouter does not document is ignored: a cache buster or a tracker in the URL must not turn a list
+// request into an error.
 func readORQuery(r *http.Request) (orQuery, error) {
-	q := orQuery{values: r.URL.Query()}
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return orQuery{}, invalid("The query string is not valid: " + err.Error())
+	}
+	q := orQuery{values: values}
 	for _, name := range slices.Sorted(maps.Keys(q.values)) { // in a fixed order, so a request with two faults is told the same one
 		value, written, err := orValue(name, q.values)
 		if err != nil {
@@ -361,7 +367,8 @@ func (q *orQuery) next(last, matched int) string {
 	if last >= matched {
 		return ""
 	}
-	values := maps.Clone(q.values)
+	values := url.Values{} // the request's own query, with the offset moved; a query read from a request always has one
+	maps.Copy(values, q.values)
 	values.Set("offset", strconv.Itoa(last))
 	return orListPath + "?" + values.Encode()
 }

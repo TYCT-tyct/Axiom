@@ -18,6 +18,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -58,6 +59,7 @@ type callDeps struct {
 	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
 	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv       *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -91,10 +93,10 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	health := quality.New(d.meter) // the attempts report to it and the snapshot reads it, so it is one for both
-	// One reading of the sale prices serves the routing snapshot and the model list in OpenRouter's shape: the two must
-	// not disagree about a price, and each rebuilds on its own cadence from the same function.
-	prices := salePrices(d.db, d.accounts, d.catalog, d.logger)
-	n, err := newCallNode(d, router, upstreams, ledger, health, prices)
+	// The list in OpenRouter's shape is built by the route builder with every snapshot it publishes, from the sale prices
+	// that snapshot was priced with, so a price a client reads is a price a call is charged at.
+	models := gateway.NewModelList()
+	n, err := newCallNode(d, router, upstreams, ledger, health, models)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -106,12 +108,12 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	var routable atomic.Bool
-	routes := routeDeps(d, router, upstreams, health, &routable, prices)
-	snap, count, err := routes.Build(ctx)
+	routes := routeDeps(d, router, upstreams, health, &routable, salePrices(d.db, d.accounts, d.catalog, d.logger), models)
+	snap, list, count, err := routes.Build(ctx)
 	if err != nil {
 		return callNode{}, err
 	}
-	routes.Publish(snap, count)
+	routes.Publish(snap, list, count)
 	if !count.Routable() {
 		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
 			"answers 404 no_endpoint until each model has a spec and a sale price",
@@ -135,7 +137,7 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.
 func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor,
-	prices func(context.Context) (map[catalog.ModelID]billing.Sold, error),
+	models *gateway.ModelList,
 ) (callNode, error) {
 	memory := protocol.NewMemory(nodeMemory)
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
@@ -148,20 +150,22 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Prices: prices, Proxies: d.proxies,
+		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 	})
 	return callNode{handler: handler, executor: executor}, err
 }
 
-// routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
+// routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
+// models collects the model list published with it.
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool,
-	prices func(context.Context) (map[catalog.ModelID]billing.Sold, error),
+	prices func(context.Context) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
 ) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
 		ExchangeRates: exchangeRates(d),
 		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:       d.catalog,
 		Prices:        prices,
+		Models:        models,
 		UnknownItems:  unknownItems(d.db),
 		Quality:       health,
 		Router:        router,

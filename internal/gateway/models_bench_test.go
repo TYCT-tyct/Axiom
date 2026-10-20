@@ -72,22 +72,15 @@ func BenchmarkModelList(b *testing.B) {
 	}
 }
 
-// benchOpenRouter is a listing of n models at the rig's cheap price, and a router whose snapshot has an endpoint for every
-// one.
-func benchOpenRouter(b *testing.B, n int) (*openRouterListing, *routing.Router, []catalog.ModelID) {
-	b.Helper()
-	router, err := routing.New(routing.Config{})
-	if err != nil {
-		b.Fatal(err)
-	}
+// orListing is a listing of n models at the rig's cheap price, and the models it serves: the set a route build records.
+func orListing(tb testing.TB, n int) *openRouterListing {
+	tb.Helper()
 	schedule, err := catalog.ParseSchedule([]byte(cheap))
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	abilities := catalog.AbilitySet(1<<catalog.AbilityTools | 1<<catalog.AbilityReasoning | 1<<catalog.AbilityImages)
-	l := &openRouterListing{}
-	ids := make([]catalog.ModelID, 0, n)
-	endpoints := make([]routing.Endpoint, 0, n)
+	l := &openRouterListing{served: make(map[catalog.ModelID]struct{}, n)}
 	for i := range n {
 		id := catalog.ModelID(uuid.NewV7())
 		author := fmt.Sprintf("vendor%d", i%20)
@@ -95,34 +88,37 @@ func benchOpenRouter(b *testing.B, n int) (*openRouterListing, *routing.Router, 
 		e, ok, err := newORModel(slug, catalog.Model{ID: id, Slug: slug, Author: author},
 			catalog.Serving{Context: 200000, MaxOutput: 64000, Streams: true, Abilities: abilities}, schedule)
 		if err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 		if !ok {
-			b.Fatal("the model has no prompt and completion price")
+			tb.Fatal("the model has no prompt and completion price")
 		}
 		l.models = append(l.models, e)
-		ids = append(ids, id)
-		endpoints = append(endpoints, routing.Endpoint{
-			ID: routing.EndpointID(uuid.NewV7()), Model: id, Context: 1, ServiceTiers: 1 << catalog.ServiceTierStandard,
-		})
+		l.served[id] = struct{}{}
 	}
-	snap, err := router.NewSnapshot(time.Now(), endpoints, nil)
-	if err != nil {
-		b.Fatal(err)
+	return l
+}
+
+// orIDsOf is the models of a listing in the order it holds them.
+func orIDsOf(l *openRouterListing) []catalog.ModelID {
+	ids := make([]catalog.ModelID, 0, len(l.models))
+	for i := range l.models {
+		ids = append(ids, l.models[i].model)
 	}
-	router.Replace(snap)
-	return l, router, ids
+	return ids
 }
 
 // BenchmarkOpenRouterList is what a request to GET /api/v1/models costs after its key is admitted and its query is read:
 // choosing the entries its key sees and its query keeps from the encoded list and copying them out, for keys that see
 // every model and keys that see every other one. The rule (docs/performance.md「调用路径上的规则」): one allocation, the
-// buffer, whatever the size of the catalog; a sorted page allocates the matches it sorts as well, which is why the
-// catalog's order is the list's own. The benchmark fails if either count grows, and bench-compare holds them after that.
+// buffer, whatever the size of the catalog, and that buffer is the page's (TestOpenRouterPageBuffer); a sorted page
+// allocates the matches it sorts as well, which is why the catalog's order is the list's own. The benchmark fails if
+// either count grows, and bench-compare holds them after that.
 func BenchmarkOpenRouterList(b *testing.B) {
 	for _, n := range []int{50, 300} {
-		l, router, ids := benchOpenRouter(b, n)
+		l := orListing(b, n)
 		half := map[catalog.ModelID]struct{}{}
+		ids := orIDsOf(l)
 		for i := 0; i < len(ids); i += 2 {
 			half[ids[i]] = struct{}{}
 		}
@@ -130,12 +126,11 @@ func BenchmarkOpenRouterList(b *testing.B) {
 			name    string
 			allowed map[catalog.ModelID]struct{}
 		}{{"all", nil}, {"half", half}} {
-			benchOREncode(b, fmt.Sprintf("models=%d/key=%s", n, key.name), l,
-				visibility{allowed: key.allowed, router: router}, orQuery{}, 1)
+			benchOREncode(b, fmt.Sprintf("models=%d/key=%s", n, key.name), l, visibility{allowed: key.allowed}, orQuery{}, 1)
 		}
 	}
-	l, router, _ := benchOpenRouter(b, 300)
-	benchOREncode(b, "models=300/sort=pricing-low-to-high", l, visibility{router: router}, orQuery{sort: orCheapestFirst}, 2)
+	l := orListing(b, 300)
+	benchOREncode(b, "models=300/sort=pricing-low-to-high", l, visibility{}, orQuery{sort: orCheapestFirst}, 2)
 }
 
 // benchOREncode runs the encoding of the list as the key with the query sees it, failing when it allocates more than want

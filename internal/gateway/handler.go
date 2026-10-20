@@ -18,6 +18,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -39,12 +40,15 @@ type Deps struct {
 	Run      Run
 	Logger   *slog.Logger
 	Meter    metric.Meter // where the handler's counters go; nil for none
-	// Prices is every model's sale price, as routing reads it for its snapshot (RouteDeps.Prices): the model list in
-	// OpenRouter's shape shows it, so a client's estimate and a call's charge come from one reading.
-	Prices func(context.Context) (map[catalog.ModelID]billing.Sold, error)
+	// Models is the model list in OpenRouter's shape, which the route builder fills with each snapshot it publishes: the
+	// handler serves it and reads no price of its own, so a client's estimate and a call's charge are one reading.
+	Models *ModelList
 	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
 	// header, so a request is the address it came from.
 	Proxies []netip.Prefix
+	// KV is the shared cache the precheck counts in, and nil is single-core mode: the counts stay in this process, as
+	// they were before the cache (internal/platform/kv/README.md「配置与启动」).
+	KV *kv.Client
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -53,16 +57,15 @@ type Handler struct {
 	mux     *http.ServeMux
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 
-	background *background                       // settlements of lost admissions
-	outage     *outage                           // the dependency outage being told, if any
-	listings   atomic.Pointer[listing]           // the model list, encoded for the catalog snapshot it was last asked for
-	openRouter atomic.Pointer[openRouterListing] // the same in OpenRouter's shape, with the sale prices it was built at
+	background *background             // settlements of lost admissions
+	outage     *outage                 // the dependency outage being told, if any
+	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
 // complete reports whether every dependency is there.
 func (d Deps) complete() bool {
 	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
-		d.Run != nil && d.Logger != nil && d.Prices != nil
+		d.Run != nil && d.Logger != nil && d.Models != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -393,7 +396,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		h.Router.Forget(c.Session)
 	}
 	c.sticky, _ = h.Router.Stuck(c.Session)
-	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
+	c.rate = h.countRate(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller))
 	return nil
 }
 

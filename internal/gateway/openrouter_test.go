@@ -2,10 +2,10 @@ package gateway
 
 import (
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
@@ -13,6 +13,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/routing"
 )
 
 // listedOR is a model of the list in OpenRouter's shape, as the tests read it: the members Axiom fills, and the required
@@ -340,6 +341,27 @@ func TestOpenRouterListRefusals(t *testing.T) {
 	}
 }
 
+// TestOpenRouterQueryNotParsed: a query string the standard library cannot decode is refused, not half-read. url.Values
+// drops an undecodable pair and everything after a ';' without reporting it, so the filter the client wrote would vanish
+// and the answer would be the whole list.
+func TestOpenRouterQueryNotParsed(t *testing.T) {
+	t.Parallel()
+	r := goldenRig(t)
+	a := r.newAccount(1e9)
+	for name, query := range map[string]string{
+		"an escape that is not one": "?max_price=1%ZZ",
+		"a semicolon separator":     "?max_price=1;limit=1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := r.do(http.MethodGet, "/api/v1/models"+query, a.key, nil)
+			if code, typ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" ||
+				typ != "invalid_request_error" {
+				t.Errorf("%s: %d %s %s, want 400 invalid_request:\n%s", query, resp.StatusCode, code, typ, body)
+			}
+		})
+	}
+}
+
 // idsOf is the ids of a list, in the order it serves them.
 func idsOf(list orResponse) []string {
 	ids := make([]string, 0, len(list.Data))
@@ -399,33 +421,32 @@ func TestOpenRouterRetrieveMissing(t *testing.T) {
 	}
 }
 
-// TestOpenRouterListFollowsThePrices: the list is rebuilt when the catalog snapshot changes, and when its prices reading
-// is as old as a routing snapshot's (rebuildEvery), so a price rule that changes without a catalog write is still what
-// the list shows: routing prices a call at the same reading, and the two must not disagree.
-func TestOpenRouterListFollowsThePrices(t *testing.T) {
+// TestOpenRouterListIsTheBuilds: the list a client reads is the last one a build published, never a price read at request
+// time. A sale price that changes without a build is not what a request shows, because the list has no reader of its own; a
+// price that changes with a build is. A model listed after the snapshot changed is in the list of the build that serves it.
+func TestOpenRouterListIsTheBuilds(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000001" {
 		t.Fatalf("the price at first: %q", got)
 	}
-	// The list as it is, aged past a routing snapshot's life, is rebuilt at the prices of the moment on the next request.
-	cached := r.handler.openRouter.Load()
-	stale, err := newOpenRouterListing(cached.snap, r.sold)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale.read = time.Now().Add(-2 * rebuildEvery)
-	r.handler.openRouter.Store(stale)
+	// A sale price that changes and is not built is not what the request shows: the list has no reader of its own, so a
+	// request cannot quote a price the routing snapshot was not built with.
 	next, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000007","output":"0.000009"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.sold[r.alpha] = billing.Sold{Version: uuid.NewV7(), Schedule: next}
-	if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000007" {
-		t.Errorf("the price after the reading aged: %q, want the new one", got)
+	if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000001" {
+		t.Errorf("the price a request read without a build: %q, want the one the list was built with", got)
 	}
-	// A new catalog snapshot replaces the list without waiting for the reading to age.
+	// The next build publishes it, and the list follows the build.
+	r.publish()
+	if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000007" {
+		t.Errorf("the price after the build: %q, want the new one", got)
+	}
+	// A model listed after the snapshot changed is in the list of the build that serves it.
 	late := r.listed("acme/late", basicSpec, cheap)
 	if err := r.catalog.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
@@ -435,6 +456,76 @@ func TestOpenRouterListFollowsThePrices(t *testing.T) {
 		t.Errorf("a model listed after the snapshot changed is not in the list: %v", r.orIDs(a))
 	}
 }
+
+// TestOpenRouterListIsOneBuild: the total, the page and the entries of one response come from the one build the request
+// read, so a route the router loses in between cannot make the total say two while the page holds one and its link says
+// there is no more.
+func TestOpenRouterListIsOneBuild(t *testing.T) {
+	t.Parallel()
+	r := goldenRig(t)
+	v := visibility{} // every model, and no router: the list answers for the build, as it does in a request
+	l := r.models.published()
+	both := l.encode(v, orQuery{limit: 2})
+	// The route of the model on the second place goes, and its entry stays in the page the build made, with the total and
+	// the link that build's count gives.
+	var rest []routing.Endpoint
+	for name, e := range r.endpoints {
+		if name != "beta-1" {
+			rest = append(rest, e)
+		}
+	}
+	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, rest...)
+	if after := l.encode(v, orQuery{limit: 2}); string(after) != string(both) {
+		t.Errorf("one response of one build changed when the router did:\nbefore %s\nafter  %s", both, after)
+	}
+	// A page of one over that build still says how many it matched and links to the next, which is what the entries agree
+	// with only if the count and the page are the same build's.
+	var page orResponse
+	if err := jsonx.Unmarshal(l.encode(v, orQuery{limit: 1}), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.TotalCount != 4 || len(page.Data) != 1 || page.Links.Next == nil {
+		t.Errorf("%d models, total %d, next %v; want one of four with a link", len(page.Data), page.TotalCount, page.Links.Next)
+	}
+}
+
+// TestOpenRouterPageBuffer: the buffer a page is encoded in is the page's, not the catalog's. A page of one model out of a
+// thousand, and a page past the end, cost what they hold; the matches a sorted page sorts are the one cost that grows with
+// the catalog, which is why the catalog's order is the list's own. It reads the process's allocation counter, so it is not
+// parallel: another test's allocations would be counted with its own.
+func TestOpenRouterPageBuffer(t *testing.T) {
+	const models, runs = 1000, 20
+	l := orListing(t, models)
+	entries := 0
+	for i := range l.models {
+		entries += len(l.models[i].body)
+	}
+	for name, tc := range map[string]struct {
+		q    orQuery
+		want uint64 // the most one encoding may allocate
+	}{
+		"a page of one":              {orQuery{limit: 1}, 32 << 10},
+		"a page past the end":        {orQuery{offset: models + 10}, 32 << 10},
+		"a sorted page of one":       {orQuery{limit: 1, sort: orCheapestFirst}, 64 << 10},
+		"a sorted page past the end": {orQuery{offset: models + 10, sort: orCheapestFirst}, 64 << 10},
+	} {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range runs {
+			sink = l.encode(visibility{}, tc.q)
+		}
+		runtime.ReadMemStats(&after)
+		got := (after.TotalAlloc - before.TotalAlloc) / runs
+		if got > tc.want {
+			t.Errorf("%s allocates %d bytes, want at most %d: the buffer is the page's, not the %d bytes of the catalog",
+				name, got, tc.want, entries)
+		}
+	}
+}
+
+// sink keeps the encoding of the page's buffer test from being optimized away.
+var sink []byte
 
 // TestOpenRouterEmptyList: a key that may call no model gets OpenRouter's empty list, with no next page and a total of
 // zero, encoded in the canonical order of its members.

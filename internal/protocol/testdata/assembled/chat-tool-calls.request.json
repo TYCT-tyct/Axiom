@@ -1,0 +1,16 @@
+{
+  "model": "client-model",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is the weather in Paris, and what time is it there?"}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "get_weather", "description": "Weather in a city", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}}},
+    {"type": "function", "function": {"name": "get_time", "description": "Time in a city", "parameters": {"type": "object", "properties": {}}}}
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "user": "end-user-42",
+  "provider": {"order": ["a"]},
+  "stream": false
+}

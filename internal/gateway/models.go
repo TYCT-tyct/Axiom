@@ -23,7 +23,8 @@ const (
 // visibility is what the model endpoints show: the catalog snapshot, the models this key may call (nil is every model)
 // and the router that says which models have a route. A model is shown when both agree. Capacity is not part of it: an
 // endpoint that is full, broken or out of budget must not make its model vanish from the list, because a call is what
-// waits for capacity and the list is not (routing.Router.Serves).
+// waits for capacity and the list is not (routing.Router.Serves). The list in OpenRouter's shape asks the router nothing:
+// the build that made it recorded which models it served, so one response is one build's (openRouterListing.shows).
 type visibility struct {
 	snap    *catalog.Snapshot
 	allowed map[catalog.ModelID]struct{} // nil: every model
@@ -127,9 +128,14 @@ func (h *Handler) visible(r *http.Request) (visibility, error) {
 }
 
 // shows says whether the model is for this key to see: it may call it, and a call has a route to take.
-func (v visibility) shows(m catalog.ModelID) bool {
+func (v visibility) shows(m catalog.ModelID) bool { return v.allows(m) && v.router.Serves(m) }
+
+// allows says whether this key may call the model, whatever routing holds now: the half of shows that the list in
+// OpenRouter's shape freezes at build (openRouterListing.shows), so that one response's total, page and entries are one
+// build's and a route that appears or goes while the response is written cannot make them disagree.
+func (v visibility) allows(m catalog.ModelID) bool {
 	_, ok := v.allowed[m]
-	return (v.allowed == nil || ok) && v.router.Serves(m)
+	return v.allowed == nil || ok
 }
 
 // authorise asks the database whether the key may be used now, as an admission does but with nothing to reserve: the
