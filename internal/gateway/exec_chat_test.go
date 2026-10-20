@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -20,6 +21,39 @@ func TestAChatCallToAChatEndpointIsForwardedAsChat(t *testing.T) {
 	no := false
 	checkChatCall(t, "streamed", options{client: protocol.Chat})
 	checkChatCall(t, "aggregated", options{client: protocol.Chat, stream: &no})
+}
+
+func TestNativeClientsUseChatEndpoints(t *testing.T) {
+	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		for _, stream := range []bool{true, false} {
+			run(t, func(t *testing.T, ctx context.Context) {
+				chat := protocol.Chat
+				h := newHarness(t, ctx, options{client: client, upstream: &chat, stream: &stream,
+					final: billing.Final{Charged: platform.AmountExact(3703701)}})
+				h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+				h.run()
+				if h.w.status != http.StatusOK {
+					t.Fatalf("client %v streaming %v: %d %s", client, stream, h.w.status, h.w.body())
+				}
+				call := h.up.endpoint(1).calls[0]
+				if call.Format != protocol.Chat {
+					t.Fatalf("called format %v", call.Format)
+				}
+				var body map[string]any
+				if err := jsonx.Unmarshal(call.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["stream"] != true || body["stream_options"].(map[string]any)["include_usage"] != true || body["messages"] == nil {
+					t.Fatalf("Chat request: %s", call.Body)
+				}
+				checkContains(t, "client reply", h.w.body(), h.call.ID.String(), "Hello", `"cost":0.003703701`)
+				before := h.ended().body
+				if strings.Contains(before, "message_stop") || strings.Contains(before, "response.completed") || strings.Contains(before, `"cost"`) {
+					t.Fatalf("success before settlement: %s", before)
+				}
+			})
+		}
+	}
 }
 
 func checkChatCall(t *testing.T, name string, o options) {

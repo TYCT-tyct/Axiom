@@ -317,6 +317,26 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	}
 }
 
+func TestRouteBuildConvertsNativeClientsToChat(t *testing.T) {
+	f := newRouteFixture(t)
+	f.build([]suppliers.Routable{routable(f.served, protocol.Chat)})
+	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		in := call(f.served, func(r *protocol.Request) { r.Format = client })
+		plan, _, err := f.router.Plan(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := plan.Entries
+		if len(entries) != 1 || entries[0].Target.Format != protocol.Chat || !entries[0].Limits.OpenAIUsage {
+			t.Fatalf("client %v: entries %+v", client, entries)
+		}
+		in.NativeOnly = true
+		if _, _, err := f.router.Plan(in); err == nil {
+			t.Fatalf("native-only client %v was converted", client)
+		}
+	}
+}
+
 // withStreams is the endpoint as a supplier whose policy passes no stream.
 func withStreams(r suppliers.Routable, streams bool) suppliers.Routable {
 	r.Streams = streams

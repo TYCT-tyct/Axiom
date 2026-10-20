@@ -240,6 +240,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if native.Has(protocol.Messages) || native.Has(protocol.Responses) {
 		served |= routing.Of(protocol.Chat) // a Chat request is converted to the first of those the endpoint speaks
 	}
+	if native.Has(protocol.Chat) {
+		served |= routing.Of(protocol.Messages, protocol.Responses)
+	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
 	// the gateway reads every answer as one, so an endpoint lacking either cannot serve a generation.
