@@ -68,23 +68,29 @@ func TestMetadataEncodedLength(t *testing.T) {
 		// Two backslashes need four inner bytes, so raw component lengths fit while the encoded object does not.
 		const encodedLen = userIDLen + 4
 		for _, limit := range []int{encodedLen - 1, encodedLen, encodedLen + 1, 0} {
-			body := metadataRequest(format, "conversation", "hello")
-			r := inspected(t, format, body)
-			w := protocol.Rewrites{Device: `\`, Identity: func(string) string { return `\` }, IdentityLen: limit}
-			u, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 10}, w)
-			if limit == encodedLen-1 {
-				if err == nil || errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), "IdentityLen") {
-					t.Fatalf("format %d, limit %d: want gateway length error, got %v", format, limit, err)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("format %d, limit %d: %v", format, limit, err)
-				}
-				device, session := metadataOf(t, u.Body)
-				if device != `\` || session != `\` {
-					t.Fatalf("decoded components changed: %q, %q", device, session)
-				}
-			}
+			checkMetadataLength(t, format, limit)
+		}
+	}
+}
+
+func checkMetadataLength(t *testing.T, format protocol.Format, limit int) {
+	t.Helper()
+	const encodedLen = userIDLen + 4
+	body := metadataRequest(format, "conversation", "hello")
+	r := inspected(t, format, body)
+	w := protocol.Rewrites{Device: `\`, Identity: func(string) string { return `\` }, IdentityLen: limit}
+	u, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 10}, w)
+	if limit == encodedLen-1 {
+		if err == nil || errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), "IdentityLen") {
+			t.Fatalf("format %d, limit %d: want gateway length error, got %v", format, limit, err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("format %d, limit %d: %v", format, limit, err)
+		}
+		device, session := metadataOf(t, u.Body)
+		if device != `\` || session != `\` {
+			t.Fatalf("decoded components changed: %q, %q", device, session)
 		}
 	}
 }
