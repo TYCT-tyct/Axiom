@@ -40,9 +40,9 @@ type Site struct {
 	NewKeyDailyLimit int64
 	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
 	// where to point a client rather than trusting the Host of the request (README.md「快照」).
-	APIBase string
-	sessions         map[Surface]lifetime
-	limits           limits
+	APIBase  string
+	sessions map[Surface]lifetime
+	limits   limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -172,18 +172,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range domains {
-		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
-		// A site's API base is the origin of its API domain: the host a key's calls are made to, which the console
-		// shows the user instead of a URL built from the request's Host (README.md「快照」). A site may register more
-		// than one, so the smallest origin is the one it shows: the query has no order, and the address must not change
-		// between reloads.
-		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
-			(site.APIBase == "" || r.Origin < site.APIBase) {
-			site.APIBase = r.Origin
-			next.sites[site.ID] = site
-		}
-	}
+	readDomains(next, domains)
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -199,6 +188,21 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		}
 	}
 	return next, nil
+}
+
+// readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
+// host a key's calls are made to, which the console shows the user instead of a URL built from the request's Host
+// (README.md「快照」). A site may register more than one, so the smallest origin is the one it shows: the query has no
+// order, and the address must not change between reloads.
+func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
+	for _, r := range domains {
+		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
+			(site.APIBase == "" || r.Origin < site.APIBase) {
+			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
+	}
 }
 
 // seconds is a session length in seconds as a duration, or fallback when it is unset (0).
