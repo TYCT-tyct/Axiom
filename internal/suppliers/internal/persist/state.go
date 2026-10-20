@@ -59,17 +59,23 @@ func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error)
 // Wake puts the sync of a supplier back to work, in the transaction of the change that replaced the login that had
 // stopped it: the engine polls again, every task is due at once with no failure counted against it, and the lease is let
 // go with its fence raised, so a node that held it writes nothing more. What the adapter had read stays as it was —
-// above all the position in the charge records, so that the history is not read again. The listing goes with the tasks:
-// until a round has read it again a commit projects none (readsListing), and nothing of it is taken for gone.
+// above all the position in the charge records, so that the history is not read again — and so does the last success of
+// each task: it is what tells a commit that a listing is stored (readsListing), so the listing this state holds keeps
+// being projected while the supplier waits for the round that reads the catalog again.
 //
-// It takes the state's row before the caller takes the supplier's, the order a step's write takes the two in (hold). The
-// other order — a step holding the lease and waiting for the supplier's row, this holding the supplier's and waiting for
-// the lease's — is a deadlock. A supplier that never synced has no state to wake, and none is made here: the first take
-// makes one that is already due.
+// It makes the state's row when the supplier has none, and holds it before the caller takes the supplier's, the order a
+// step's write takes the two in (hold). The other order — a step holding the lease and waiting for the supplier's row,
+// this holding the supplier's and waiting for the lease's — is a deadlock. Making the row is what closes the window the
+// other way round: a first round that takes the lease while the login is replaced waits at this row, and reads the state
+// this transaction leaves instead of writing a stopped one over it.
 func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
 	q := store.New()
+	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
+		return fmt.Errorf("persist: make the state of supplier %s: %w", id, err)
+	}
 	row, err := q.LockSyncState(ctx, tx, id)
 	if errors.Is(err, pg.ErrNoRows) {
+		// No supplier to wake: the caller's own read of it reports that, as it did before there was a state to wake.
 		return nil
 	}
 	if err != nil {
@@ -81,7 +87,11 @@ func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
 	}
 	woken.Version++
 	woken.Status, woken.Reason = syncer.Normal, ""
-	clear(woken.Tasks[:]) // a task the engine halted is started again too: a person is the reset
+	for i, t := range woken.Tasks {
+		// A task is due at once again, with no backoff, no failure counted and not halted: those were the old login's.
+		// LastOK stays — it says what the state has read, and the listing it names is still the one to project.
+		woken.Tasks[i] = syncer.TaskState{LastOK: t.LastOK}
+	}
 	encoded, err := jsonx.MarshalCanonical(woken)
 	if err != nil {
 		return fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)

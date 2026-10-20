@@ -28,10 +28,20 @@ UPDATE suppliers.sync_states
 SET version = @version, format = @format, state = @state, next_due = @next_due, lease_until = @lease_until
 WHERE supplier_id = @supplier_id AND version = @expect;
 
+-- name: EnsureSyncState :exec
+-- Makes the state of a supplier that has never taken a lease, holding its key until the transaction ends: a first take
+-- inserts the same key, so it waits here and reads the state this transaction leaves instead of writing one over it.
+-- A supplier that is not there makes no row, and the read that follows then reports it. next_due is the caller's time;
+-- the reset that follows writes it again.
+INSERT INTO suppliers.sync_states (supplier_id, next_due)
+SELECT id, @now FROM suppliers.suppliers WHERE id = @supplier_id
+ON CONFLICT (supplier_id) DO NOTHING;
+
 -- name: LockSyncState :one
 -- The state of a supplier and the version it is stored at, held until the transaction ends. A person's change of the
--- credentials reads it so, before it takes the supplier's row: a step takes the two rows in that order as well
--- (HoldSyncLease, then LockSupplier), and the other order would close a cycle of waits between the two.
+-- credentials reads it so — after EnsureSyncState has made it if the supplier never synced — before it takes the
+-- supplier's row: a step takes the two rows in that order as well (HoldSyncLease, then LockSupplier), and the other
+-- order would close a cycle of waits between the two.
 SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = @supplier_id FOR UPDATE;
 
 -- name: ResetSyncState :exec

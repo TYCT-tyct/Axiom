@@ -77,6 +77,26 @@ func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncSt
 	return result.RowsAffected(), nil
 }
 
+const ensureSyncState = `-- name: EnsureSyncState :exec
+INSERT INTO suppliers.sync_states (supplier_id, next_due)
+SELECT id, $1 FROM suppliers.suppliers WHERE id = $2
+ON CONFLICT (supplier_id) DO NOTHING
+`
+
+type EnsureSyncStateParams struct {
+	Now        time.Time
+	SupplierID uuid.UUID
+}
+
+// Makes the state of a supplier that has never taken a lease, holding its key until the transaction ends: a first take
+// inserts the same key, so it waits here and reads the state this transaction leaves instead of writing one over it.
+// A supplier that is not there makes no row, and the read that follows then reports it. next_due is the caller's time;
+// the reset that follows writes it again.
+func (q *Queries) EnsureSyncState(ctx context.Context, db DBTX, arg EnsureSyncStateParams) error {
+	_, err := db.Exec(ctx, ensureSyncState, arg.Now, arg.SupplierID)
+	return err
+}
+
 const getSupplierForSync = `-- name: GetSupplierForSync :one
 SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = $1
 `
@@ -239,8 +259,9 @@ type LockSyncStateRow struct {
 }
 
 // The state of a supplier and the version it is stored at, held until the transaction ends. A person's change of the
-// credentials reads it so, before it takes the supplier's row: a step takes the two rows in that order as well
-// (HoldSyncLease, then LockSupplier), and the other order would close a cycle of waits between the two.
+// credentials reads it so — after EnsureSyncState has made it if the supplier never synced — before it takes the
+// supplier's row: a step takes the two rows in that order as well (HoldSyncLease, then LockSupplier), and the other
+// order would close a cycle of waits between the two.
 func (q *Queries) LockSyncState(ctx context.Context, db DBTX, supplierID uuid.UUID) (LockSyncStateRow, error) {
 	row := db.QueryRow(ctx, lockSyncState, supplierID)
 	var i LockSyncStateRow
