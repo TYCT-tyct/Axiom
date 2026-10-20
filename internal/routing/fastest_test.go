@@ -39,6 +39,13 @@ func TestFastestRanksByMeasurement(t *testing.T) {
 	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{ep(2), ep(1)}) {
 		t.Errorf("route %v: the unmeasured endpoint is not after the measured one", got)
 	}
+	// A wish for more speed than an endpoint is measured at puts it behind one not measured at all, which is not known
+	// to miss it.
+	in := input()
+	in.Override.MinThroughput = 100
+	if got := endpoints(h.plan(in)); !slices.Equal(got, []routing.EndpointID{ep(1), ep(2)}) {
+		t.Errorf("route %v: the endpoint measured below the wish is not last", got)
+	}
 }
 
 // TestFastestUnmeasuredByPrice: unmeasured endpoints are ordered among themselves as Balanced orders them, by a

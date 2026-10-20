@@ -83,8 +83,7 @@ func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strat
 			break
 		}
 	}
-	s.slow = (n.over.MinThroughput > 0 && c.Throughput < n.over.MinThroughput) ||
-		(n.over.MaxLatency > 0 && c.Latency > n.over.MaxLatency)
+	s.slow = slow(c, n.over)
 	tools := 1.0
 	if n.req.Needs.Has(protocol.Tools) && strategy != Cheapest && strategy != Fastest {
 		tools = 1 - c.ToolErrorRate // rank by the tool-call error measured on real traffic
@@ -96,6 +95,13 @@ func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strat
 		s.key = math.Log(u) / math.Max(s.weight, math.SmallestNonzeroFloat64)
 	}
 	return s
+}
+
+// slow reports whether c misses a performance wish of the request. An unmeasured endpoint (0) misses neither: it is not
+// known to be slow, and it is to be measured.
+func slow(c *candidate, o *Override) bool {
+	return (o.MinThroughput > 0 && c.Throughput > 0 && c.Throughput < o.MinThroughput) ||
+		(o.MaxLatency > 0 && c.Latency > o.MaxLatency)
 }
 
 // weight is the chance a candidate is given: cheaper is more likely, scaled by how healthy and good it is, halved when
