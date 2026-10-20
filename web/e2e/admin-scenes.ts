@@ -14,40 +14,13 @@ export const acct = (n: number) => `acct_${String(n).padStart(26, "0")}`;
 
 type SceneState = Awaited<ReturnType<typeof mockAdmin>>;
 
-// What the API was asked on each page, so a heading that does not come can say whether the page asked at all.
+// What the API was asked on each page, so the note a page that does not come up prints (page-heading.ts) can say
+// whether the page asked at all.
 const states = new WeakMap<Page, SceneState>();
-
-// How long the page area is given to come up before the scene says what it showed instead. Not a bound: the check's
-// own timeout is what fails it, and this only says why. What it waits for is the page behind the heading that a
-// loading state carries (page-heading.ts), so the note names the document, what is on screen, and what the API was
-// asked, which #363 could only guess at.
-const explainAfter = 5_000;
-
-async function explain(page: Page, path: string) {
-  const shown: unknown = await page
-    .evaluate(() => ({
-      ready: document.readyState,
-      headings: [...document.querySelectorAll("h1")].map((node) => node.textContent?.trim() ?? ""),
-      loading: document.querySelectorAll("[role=status]").length,
-      alerts: [...document.querySelectorAll("[role=alert]")].map((node) => node.textContent?.trim().slice(0, 80) ?? ""),
-      main: document.querySelectorAll("main").length,
-      text: document.body.innerText.replace(/\s+/g, " ").slice(0, 120),
-    }))
-    .catch((error: unknown) => `page unavailable: ${String(error)}`);
-  console.warn(
-    `[e2e] ${path}: still not showing its page ${explainAfter} ms on, the document showed ${JSON.stringify(shown)}; ` +
-      `requests: ${JSON.stringify(states.get(page)?.log ?? [])}`,
-  );
-}
 
 async function goto(page: Page, path: string) {
   await page.goto(adminUrl(path));
-  const timer = setTimeout(() => void explain(page, path).catch(() => {}), explainAfter);
-  try {
-    await pageHeading(page);
-  } finally {
-    clearTimeout(timer);
-  }
+  await pageHeading(page, path, () => states.get(page)?.log ?? []);
 }
 
 const press = (page: Page, name: string, nth = 0) =>

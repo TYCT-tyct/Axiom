@@ -18,7 +18,7 @@ for (const app of apps) {
     const policy = response?.headers()["content-security-policy"];
     expect(policy).toBe(contentSecurityPolicy);
     expect(policy).not.toContain("unsafe-");
-    await pageHeading(page);
+    await pageHeading(page, app.name);
     expect(errors).toEqual([]);
   });
 

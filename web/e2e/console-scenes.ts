@@ -9,7 +9,7 @@ import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 
 async function goto(page: Page, path: string) {
   await page.goto(`/console/${path}`);
-  await pageHeading(page);
+  await pageHeading(page, `/console/${path}`);
 }
 
 // A screen whose dialog opens after a click on the page.
