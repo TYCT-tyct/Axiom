@@ -7,6 +7,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/store"
 )
 
 func TestReloadedLimitsKeepExistingUsage(t *testing.T) {
@@ -72,13 +73,27 @@ func TestEndpointsShareTheCredentialsMinute(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO suppliers.endpoints
-			(id, supplier_id, supplier_group_id, model_id, upstream_name, formats, cost_state, cost_schedule_id)
-			SELECT $1, supplier_id, supplier_group_id, $2, 'other', formats, cost_state, cost_schedule_id
-			FROM suppliers.endpoints WHERE id = $3`, uuid.NewV7(), uuid.NewV7(), w.endpoint)
-		return err
+		q := store.New()
+		id, err := q.InsertEndpoint(ctx, tx, store.InsertEndpointParams{
+			SupplierID: w.supplier, SupplierGroupID: w.group, ModelID: uuid.NewV7(),
+			UpstreamName: "other", Formats: []string{"chat"},
+		})
+		if err != nil {
+			return err
+		}
+		schedule, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
+			SupplierID: w.supplier, EndpointID: id, NativeUnit: "quota", Schedule: []byte(scheduleJSON),
+			Basis: "published", Fingerprint: "v1",
+		})
+		if err != nil {
+			return err
+		}
+		return q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: id, CostScheduleID: &schedule})
 	})
 	w.perMinute(w.credential, 1)
+	if got := len(w.svc.snap.Load().endpoints); got != 2 {
+		t.Fatalf("loaded %d endpoints, want 2", got)
+	}
 	first, err := w.svc.Acquire(w.endpoint)
 	if err != nil {
 		t.Fatal(err)
