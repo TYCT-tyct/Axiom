@@ -34,6 +34,7 @@ var adminRefusals = []refusal{
 	{billing.ErrRuleNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
 	{billing.ErrRuleExists, http.StatusConflict, codeConflict, "the site has a pricing rule for that target and audience"},
 	{billing.ErrStaleRule, http.StatusConflict, codeStaleRevision, "the pricing rule changed since it was read"},
+	{billing.ErrStaleExchange, http.StatusConflict, codeStaleRevision, "the exchange rate changed since it was read"},
 
 	{suppliers.ErrNoSupplier, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoGroup, http.StatusNotFound, codeNotFound, "no such resource"},

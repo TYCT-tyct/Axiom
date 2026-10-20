@@ -232,17 +232,28 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 
 ## 定价规则
 
-已实现存储、维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）与售价（`sale.go`）：规则怎么变成售价有了，`Sell`/`SalePrices` 把参考价乘成售价，管理接口的 `PreviewPricing` 用它试算；报价读的就是规则算出的售价：路由快照每次重建时（`cmd/axiom/callpath.go`）用 `SalePrices` 给每个模型算售价，条目带着它的价目表进预留（`Quotable.Price`）。成本侧（供应商单位价值、汇率、保本价）随后续 PR（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）。
+已实现存储、维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）与售价（`sale.go`）：规则怎么变成售价有了，`Sell`/`SalePrices` 把参考价乘成售价，管理接口的 `PreviewPricing` 用它试算；报价读的就是规则算出的售价：路由快照每次重建时（`cmd/axiom/callpath.go`）用 `SalePrices` 给每个模型算售价，条目带着它的价目表进预留（`Quotable.Price`）。成本侧单位价值与人工汇率已接入，见「汇率与成本依据」；保本价与按成本定价仍随后续 PR（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）。
 
 一条规则：目标（端点、分组、供应商、模型、厂商、来源类型或全部）、受众（账户、等级或全部）、方法（`cost_plus`：加成率或毛利率二选一、可附固定加价；`reference_multiplier`：参考价倍率；`fixed`：整张固定价格表）和约束（最低毛利率、相对参考价的上下限；M1 不生效）。同一站点里目标和受众相同的规则只能有一条（唯一约束），所以任意两条都能排出先后：`Rules` 按目标越具体越先、受众越具体越先、ID 排序；`Place` 把一条还没存的规则按同一顺序放进这个列表（试算用）。
 
 - **函数**：`Rules(ctx, tx, site)`、`CreateRule(ctx, tx, actor, site, currency, input, reason)`、`UpdateRule(..., id, rev, input, reason)`，都在调用方的平台范围事务里；`currency` 是站点的结算货币，固定价格必须是它。`RuleInput.Check` 检查契约的模式表达不了的部分：目标和受众的 ID 是对应种类的 ID，每种方法只带自己的成员，比率是不为负的十进制，毛利率小于 1，固定价格表合法且是站点的币种；约束（最低毛利率、相对参考价的上下限）不属于 M1，带任一成员的规则在这里被拒绝（`/rule/constraints/...`），保存、修改和试算都不接受。它还拒绝 M1 不生效的部分，而不是接受之后悄悄由更宽的规则定价：目标不是模型、厂商、全部（`/rule/target/kind`），方法是 `cost_plus`（`/rule/method/kind`），`reference_multiplier` 的换算方式不是 `face`（含缺省，`/rule/method/currency_conversion`），与受众只接受"全部"同理；存储形式和 `targetKinds` 的先后不动，以后放开只删这几处拒绝（`honouredTargets`）。已经存下的这类规则不受影响，照旧不生效。出错是 `*RuleError`，只带成员名与规则，不带值。
-- **售价 `Sell`**：纯函数，不碰数据库。`reference_multiplier` 把参考价的每个单价（各服务等级、各档位）乘 `Multiplier`，`currency_conversion` 为 `face` 时数字直接记入站点币种——只在参考价本来就是站点币种时成立（`face` 说的不是汇率，M1 也没有汇率），为 `exchange` 时要汇率，M1 没有（`ErrUnpriced`）；`fixed` 原样用规则里的价目表。`cost_plus` 要每端点成本，M1 没有（`ErrUnpriced`）。没有方法、方法不支持、没有参考价，都是 `ErrUnpriced`：**不会悄悄按参考价卖**。带约束的规则报 `ErrRuleRefuses`。四舍五入只发生一次，与供应商成本计划的 `Schedule.Scaled` 是同一段代码，所以同一个倍率在成本和售价两边得到同一个数。
+- **售价 `Sell`**：纯函数，不碰数据库。`reference_multiplier` 把参考价的每个单价（各服务等级、各档位）乘 `Multiplier`，`currency_conversion` 为 `face` 时数字直接记入站点币种——只在参考价本来就是站点币种时成立（`face` 说的不是汇率，M1 也没有汇率），为 `exchange` 时仍返回 `ErrUnpriced`：本次汇率只用于成本，售价还缺参考价选择和价格版本接线；`fixed` 原样用规则里的价目表。`cost_plus` 要每端点成本，M1 没有（`ErrUnpriced`）。没有方法、方法不支持、没有参考价，都是 `ErrUnpriced`：**不会悄悄按参考价卖**。带约束的规则报 `ErrRuleRefuses`。四舍五入只发生一次，与供应商成本计划的 `Schedule.Scaled` 是同一段代码，所以同一个倍率在成本和售价两边得到同一个数。
 - **`SalePrices`**：一份规则、一份目录快照和要问的那些模型，给出每个模型最具体的规则的售价（`map[catalog.ModelID]Sold`）；只算问到的模型，`fixed` 的价目表一个规则解析一次。`Sold.Version` 是规则 ID + `rev` + 参考价行的 SHA-256，取版本 8 的 UUID，同一份输入的版本不变，规则或参考价一改就变；固定价不读参考价，所以它的版本里参考价行是 `uuid.Nil`，发布参考价不会让固定价换版本。价格适用的模型按这个顺序看：端点、分组、供应商、模型、厂商、来源类型、全部；前面的种类 M1 没有对应的价格，所以今天只有模型、厂商、全部能命中，`RuleInput.Check` 拒绝其余的目标。规则的**约束**（最低毛利率、相对参考价的上下限）不在售价里（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）：`Sell` 遇到带约束的规则报 `ErrRuleRefuses`，`SalePrices` 让这个规则命中的模型没有售价、返回 `*RuleRefusal`（规则和模型），不落到更宽的规则；约束的执行随 M2 的成本侧一起接上，所以今天试算的 `cost` 和 `margin_ratio` 是空的。
 - **从不删除**：停用代替删除；每次修改把当时的整条规则存进 `pricing_rule_versions`（带操作者和原因，只追加），说明过去的价格是怎么来的。
 - **乐观令牌**：`rev` 从 0 起，修改必须带读到的 `rev`，不同报 `ErrStaleRule`（锁住行后比较）；目标和受众撞上另一条规则报 `ErrRuleExists`，找不到报 `ErrRuleNotFound`。
 - **审计**：`pricing_rule.create`、`pricing_rule.update` 带原因，`detail` 只放规则 ID 和 `rev`。
 - **范围**：两张表只有平台范围能读写；站点由调用方传入（管理接口按路径里的站点），表里的 `site_id` 不是租户隔离，是规则的归属。
+
+## 汇率与成本依据
+
+`exchange.go`、`queries/exchange.sql` 与迁移 `00017_exchange_rates.sql`。`SetExchangeRate`、`ExchangeRates`、`ExchangeRateHistory` 都接受调用方的平台事务；管理接口挂在 `/api/admin/v1/pricing/exchange-rates`，读需要 `pricing.view`，写需要 `pricing.manage`，沿用 MFA、CSRF、`Idempotency-Key` 和 422 字段指针。历史每页最多 100 行，`before_version` 为排他的版本游标。币种与数值边界见[领域文档的汇率](../../docs/domains/billing.md#汇率)。
+
+- 同一规范化货币对用事务级 advisory lock 串行。锁键是固定命名空间字节加六个币种 ASCII 字节，不哈希；第一次写正反方向也锁同一个键。锁内下一条语句读前版，核对 `expected_version`，检查绝对范围与普通调整的五倍阈值，再追加 `version + 1`，审计失败整笔回滚。幂等键由管理处理器在同一事务占用，丢失响应后重放原响应，不重新应用旧调整。
+- `billing.exchange_rates` 强制 RLS，平台范围 SELECT/INSERT；应用角色没有 UPDATE/DELETE。版本决定当前值，时间戳只用于展示。`platform.ExchangeRate` 是可复制的值类型，`Between` 返回精确分数或倒数；下层 suppliers 不依赖 billing。
+- 路由每次构建只读一次当前汇率，条目持有自己的值副本。`Reserve` 从保留的 `Quotable.Exchange` 去重，连缺失货币对一起写入 `reservations.exchange_rates`，同时保存售价与路线，不增加数据库往返。NULL 是旧节点/历史未知依据，`[]` 是新请求确定不需要汇率。冻结集合不补当天汇率；`reservations.exchange_rates` 目前只用于审计，没有读它的代码。
+- `AttemptResult.CostKnown` 由 gateway 给出：换算已知，且最终的 `CostFlag` 为 `complete`。结算将所有尝试的成本精确相加，每次尝试都已知时以实收减成本写 `reservations.profit`，否则保存 NULL；金额超界也保存 NULL。没有任何尝试就释放的预留没有成本，profit 写确定的 0。`Final.Profit` 从保存值恢复，重复结算不改；清理丢失请求没有可靠成本，保持 NULL。用户收费不因成本未知而改变。账本里换算未知的尝试仍按 0 记入 `supplier_cost`，行上没有「未知」标记：按账本汇总供应商成本时，要排除 `reservations.profit IS NULL` 的请求，或关联 `attempt_costs.conversion_state`。
+- 新尝试完整依据随成本行落库（suppliers 迁移 `00007_exchange_basis.sql` 和 `00008_validate_exchange_basis.sql`）。预留后、结算前崩溃只能恢复请求冻结的汇率与路线，不能凭它推断实际尝试、用量或单位价值；对账校正消费者仍未实现。
+- 测试见 `exchange_test.go`、`exchange_settle_test.go`，覆盖写入边界、正反向并发、幂等重放、审计回滚、应用角色权限、预留持久化、混合未知成本与重复结算。端到端传递与刷新测试在 gateway，精确乘法与原生对账测试在 suppliers。
 
 ## 决策与理由
 

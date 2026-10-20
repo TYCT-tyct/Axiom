@@ -95,6 +95,36 @@ func (q *Queries) DelistEndpoint(ctx context.Context, db DBTX, id uuid.UUID) (in
 	return result.RowsAffected(), nil
 }
 
+const enabledSupplierCurrencies = `-- name: EnabledSupplierCurrencies :many
+SELECT id, settlement_currency FROM suppliers.suppliers WHERE status IN ('active', 'low_balance')
+`
+
+type EnabledSupplierCurrenciesRow struct {
+	ID                 uuid.UUID
+	SettlementCurrency string
+}
+
+// Include enabled suppliers without a routable endpoint: configuration problems must be visible before a call.
+func (q *Queries) EnabledSupplierCurrencies(ctx context.Context, db DBTX) ([]EnabledSupplierCurrenciesRow, error) {
+	rows, err := db.Query(ctx, enabledSupplierCurrencies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnabledSupplierCurrenciesRow
+	for rows.Next() {
+		var i EnabledSupplierCurrenciesRow
+		if err := rows.Scan(&i.ID, &i.SettlementCurrency); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const holdOverdueCharges = `-- name: HoldOverdueCharges :many
 WITH due AS (
     SELECT c.id FROM suppliers.charge_records c

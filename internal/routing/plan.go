@@ -145,6 +145,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	limits := c.model
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
+		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
