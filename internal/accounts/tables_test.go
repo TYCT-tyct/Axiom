@@ -100,10 +100,13 @@ var seed = []string{
 	apiKey(":k1", ":s1", ":a1", ":w1", ":u1", "call"), apiKey(":k2", ":s2", ":a2", ":w2", ":u2", "call"),
 	session(":e1", ":s1", ":a1", ":u1"), session(":e2", ":s2", ":a2", ":u2"),
 	code(":c1", ":s1", ":a1", ":u1"), code(":c2", ":s2", ":a2", ":u2"),
-	`INSERT INTO accounts.security_events (site_id, account_id, user_id, kind, refused, reason, ip_hash)
-		VALUES (:s2, :a2, :u2, 'sign_in', true, 'bad_credentials', encode(sha256(convert_to('ip', 'UTF8')), 'hex'))`,
 	`INSERT INTO platform.tenants VALUES (:s1, :s1), (:s2, :s2), (:s1, :a1), (:s2, :a2), (:s1, :p)`,
 }
+
+// later is a row of a table a migration after 00003 adds, so it cannot be part of seed: the upgrade test starts a
+// database from before 00003, which has no such table yet.
+const later = `INSERT INTO accounts.security_events (site_id, account_id, user_id, kind, refused, reason, ip_hash)
+	VALUES (:s2, :a2, :u2, 'sign_in', true, 'bad_credentials', encode(sha256(convert_to('ip', 'UTF8')), 'hex'))`
 
 // Statements that create a row; newSite also creates its first tier, which the site's default tier must be.
 const (
@@ -117,7 +120,7 @@ const (
 func open(t testing.TB) (*pg.DB, pgtest.Database) {
 	t.Helper()
 	database := pgtest.New(t, accounts.Module())
-	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(strings.Join(seed, ";\n"))); err != nil {
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(strings.Join(slices.Concat(seed, []string{later}), ";\n"))); err != nil {
 		t.Fatal(err)
 	}
 	db, err := pg.Open(t.Context(), database.App)

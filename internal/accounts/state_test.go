@@ -22,7 +22,8 @@ func auditActions(t *testing.T, db *pg.DB) []string {
 // the change is audited, a second suspension writes nothing, and resuming the account admits the keys again.
 func TestSuspendingAnAccountRefusesItsKeys(t *testing.T) {
 	t.Parallel()
-	db, _, s, key := callSetup(t)
+	db, database, s, key := callSetup(t)
+	membered(t, database)
 	caller, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), key)
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +77,15 @@ func TestSuspendingAnAccountRefusesItsKeys(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// membered gives u1 a member row in a1, which the seed leaves out, because the detail a change answers with is the one
+// s.Account reads, and that needs a member.
+func membered(t *testing.T, database pgtest.Database) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(member(":s1", ":a1", "personal", ":u1", ":a1"))); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // keyFor makes a call key in p's own account and returns its text.

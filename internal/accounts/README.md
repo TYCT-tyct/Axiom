@@ -78,7 +78,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口的九个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006、00008 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`，和管理接口的九个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006、00008 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 登录前的查找
@@ -332,3 +332,5 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 | 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |
 | 每种 ID 各写 `TypeID` 和 `Parse…ID`，不用泛型 | 每种只多一个类型和两个短函数，类型名和报错直接是 `SiteID`；前缀在本模块，一眼能对上 | `ID[K]` 加每种一个标记类型：省不了几行，读的人要多绕一层 |
 | Valkey 不可用时登录前的次数退回进程内、按节点数等分，不拒绝登录 | Valkey 只放丢了也不影响正确性的数据（[总体架构](../../docs/architecture.md#技术选型)），它出故障就挡住所有人登录，正是[安全的「账户安全」](../../docs/security.md#账户安全)要避免的「把用户锁在门外」；进程内的桶按份额限制后，N 个节点合计的回填速度不超过设定、突发不超过 max(突发, N)，代价只是每次故障或重启至多多一次突发，argon2id 名额仍按节点限制猜测速度 | 失败即拒（sub2api 认证路由在 Redis 故障时一律 429，`routes/auth.go:34`；new-api 回 500，`middleware/rate-limit.go:119`）：缓存故障变成登录故障；兜底不等分：故障期间限额放大 N 倍 |
+| 认证尝试记在 accounts.security_events，不写审计日志 | 量级由登录前的限次决定，与管理员改动的审计不同；审计只记改动，读它的人和留存也跟着不同。每条都是自己的事务、写不下只加指标，所以登录的回答与事件无关 | 都写进 platform.audit_log：登录尝试的量级带上审计的保留期和读权限；另建一个通用事件模块：M1 只有 accounts 会写；在请求的事务里写：登录失败就把登录一起回滚 |
+| 客户端地址只存 HMAC，不存原文 | 负责人要求「审计不存原始个人信息」（Issue #315 的 E4-7）；同一地址的事件仍能认作一起，地址本身不落库，来源信息按站点策略另留。与 key 哈希同一组密钥、加用途前缀，轮换后新事件不再与旧的相认，而不是认错 | 存原文：违反要求，且事件表成了个人信息的库；不存来源：认不出同一地址的连续尝试 |
