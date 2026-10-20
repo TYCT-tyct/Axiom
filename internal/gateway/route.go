@@ -10,6 +10,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -39,6 +40,8 @@ type RouteDeps struct {
 	// Built, when set, is told what each published snapshot holds, after it is the router's. The node reports itself
 	// ready there and nowhere else, so readiness is never a promise made before a snapshot exists.
 	Built func(Count)
+	// Quality is what real traffic measured of each endpoint, the same Monitor the executor reports attempts to.
+	Quality *quality.Monitor
 
 	told map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
 }
@@ -93,8 +96,9 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 	}
 	built := make([]routing.Endpoint, 0, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
+	now := time.Now()
 	for _, r := range routable {
-		e, why := endpointOf(catalogSnap, prices, blocked, r)
+		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.Measured(r.ID, now))
 		if why != "" {
 			note(left, catalog.ModelID(r.Model), why)
 			continue
@@ -209,7 +213,9 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
 // ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec, or without a sale price,
 // has no routing entry at all.
-func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable) (routing.Endpoint, string) {
+func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
+	measured quality.Measures,
+) (routing.Endpoint, string) {
 	model, ok := snap.Model(catalog.ModelID(r.Model))
 	if !ok {
 		return routing.Endpoint{}, "the catalog has no such model"
@@ -249,9 +255,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset
 		// that requires no retention must not route to it on the strength of a value nobody set.
 		Class: routing.ClassRelay, Policy: routing.PolicyMayTrain,
-		// Nothing measures these yet (quality arrives with G10); one is the neutral value that neither favours nor
-		// penalizes an endpoint, assigned in this one place.
-		Quality: 1, Confidence: 1, Health: 1, Throughput: 1,
+		// Health, time to first token and speed are what real traffic measured, as of this build: the snapshot is at most
+		// one rebuild behind the attempts (docs/domains/quality.md「质量分、吞吐与延迟」). Nothing scores quality yet;
+		// one is the neutral value that neither favours nor penalizes an endpoint, assigned in this one place.
+		Quality: 1, Confidence: 1, Health: measured.Health, Throughput: measured.Throughput, Latency: measured.Latency,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
 		Caps:      capabilities(serving.Abilities),

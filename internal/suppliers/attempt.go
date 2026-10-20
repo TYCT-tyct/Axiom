@@ -142,9 +142,37 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 // value is unknown, and the cost is then estimated (README.md「调用面」).
 const NotExecuted = adapter.NotExecuted
 
-// RateLimited is the Cause of a supplier's answer that there were too many requests, which routing weighs the endpoint
-// down for. gateway cannot name the adapter's own types, so the two it needs are named here.
-type RateLimited = adapter.RateLimited
+// The causes of a Failure. gateway and quality cannot name the adapter's own types, so they are named here: gateway
+// weighs an endpoint down for RateLimited, and quality judges an endpoint's health by every cause
+// (docs/domains/quality.md「什么算一次失败」). Each is the adapter's type of the same name.
+type (
+	// RateLimited is adapter.RateLimited.
+	RateLimited = adapter.RateLimited
+	// Overloaded is adapter.Overloaded.
+	Overloaded = adapter.Overloaded
+	// UpstreamError is adapter.UpstreamError.
+	UpstreamError = adapter.UpstreamError
+	// SupplierBalanceLow is adapter.SupplierBalanceLow.
+	SupplierBalanceLow = adapter.SupplierBalanceLow
+	// CredentialQuotaExhausted is adapter.CredentialQuotaExhausted.
+	CredentialQuotaExhausted = adapter.CredentialQuotaExhausted
+	// CredentialRejected is adapter.CredentialRejected.
+	CredentialRejected = adapter.CredentialRejected
+	// NotPermitted is adapter.NotPermitted.
+	NotPermitted = adapter.NotPermitted
+	// ContextTooLong is adapter.ContextTooLong.
+	ContextTooLong = adapter.ContextTooLong
+	// BadRequest is adapter.BadRequest.
+	BadRequest = adapter.BadRequest
+	// ContentRejected is adapter.ContentRejected.
+	ContentRejected = adapter.ContentRejected
+	// ModelNotFound is adapter.ModelNotFound.
+	ModelNotFound = adapter.ModelNotFound
+	// Unknown is adapter.Unknown.
+	Unknown = adapter.Unknown
+	// Transport is adapter.Transport.
+	Transport = adapter.Transport
+)
 
 // Policy is how this attempt's endpoint behaves: the adapter's default, over which quality's measurement of
 // cancellation stands.
