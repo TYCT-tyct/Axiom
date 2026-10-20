@@ -93,6 +93,9 @@ services:
   # users out of their factors and keys and suppliers out of their credentials; losing the third would cost the
   # upstream's prompt caches. Each file is owned by the program's user and readable by it alone, which the program
   # requires.
+  # It also makes the shared cache's password, for the program in this volume, and the ACL file with the password's
+  # SHA-256 in a volume of its own for the cache (internal/platform/kv/README.md「部署」), so the cache cannot read the
+  # three keys above.
   keys:
     image: postgres:18.6-alpine # any image with a shell; this one is pulled for the database anyway
     user: root # only to make the files and hand them over
@@ -103,23 +106,77 @@ services:
         for name in master hash identity; do
           [ -f /keys/$$name ] || echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
         done
-        chown 65532:65532 /keys/master /keys/hash /keys/identity
+        # The cache's password is made once with its two copies: the program's, and the cache's with the ACL file that holds
+        # only its SHA-256. The root of this container can create and delete files but not read the ones it has handed
+        # over (it has only CHOWN), so nothing here reads a file after the chown: when the three exist, they stay.
+        if [ ! -f /keys/valkey-password ] || [ ! -f /cache/users.acl ]; then
+          rm -f /keys/valkey-password /cache/password /cache/users.acl
+          password="$$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+          printf '%s\n' "$$password" > /keys/valkey-password
+          printf '%s\n' "$$password" > /cache/password
+          printf 'user default off\nuser axiom on #%s ~ax:* +hello +auth +ping +client|setinfo +info +time +get +set +del +incr +pexpire +eval\n' \
+            "$$(printf '%s' "$$password" | sha256sum | cut -d' ' -f1)" > /cache/users.acl
+        fi
+        chown 65532:65532 /keys/master /keys/hash /keys/identity /keys/valkey-password
+        chown 999:1000 /cache/password /cache/users.acl
+        chmod 755 /cache
     volumes:
       - keys:/keys
+      - cache:/cache
     <<: *hardened
     cap_add: [CHOWN]
+
+  # The shared cache: the precheck's rate counts, and later login's attempt buckets and session stickiness
+  # (internal/platform/kv/README.md). Its data have no volume, so a restart empties it: everything in it is data whose
+  # loss costs a little allowance and no correctness. 999:1000 in `keys` above is this image's valkey user: the tag is
+  # pinned, so the ids are too (K1 checked them against the image).
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
+    restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
+    # The image's own user, as postgres runs as its own: the ACL file is readable by that user alone.
+    user: valkey
+    command:
+      - valkey-server
+      - --aclfile
+      - /etc/valkey/users.acl
+      - --save
+      - ''
+      - --appendonly
+      - 'no'
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - cache:/etc/valkey:ro
+    # 512 MB for the process while maxmemory is 256mb: the rest is fragmentation and output buffers
+    # (internal/platform/kv/README.md「内存」).
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /etc/valkey/password)" valkey-cli --user axiom -p 6379 ping | grep -q PONG']
+      interval: 10s
+      start_period: 10s
+      start_interval: 1s
+    depends_on:
+      keys: {condition: service_completed_successfully}
+    <<: *hardened
 
   axiom:
     build: .
     image: ${DEPLOY_IMAGE:-axiom:local}
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 90s # worst case: AXIOM_SHUTDOWN_TIMEOUT (30s by default) for the listeners, the drain of calls and settlements (15s + 5s), AXIOM_SHUTDOWN_TIMEOUT again for the queue and the recorder in parallel (80s), with a margin
+    stop_grace_period: 100s # worst case: AXIOM_SHUTDOWN_TIMEOUT (30s by default) for the listeners, the drain of calls and settlements (15s + 5s), AXIOM_SHUTDOWN_TIMEOUT again for the queue and the recorder in parallel (80s), the cache's heartbeat row (10s at most), with a margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
       AXIOM_IDENTITY_KEY_FILE: /keys/identity
+      # The shared cache, in this single-core deployment too: a rate count that survives this process is one more thing
+      # a restart does not take, and it is what `AXIOM_CORE_NODES` above 1 will need (internal/platform/kv/README.md
+      # 「配置与启动」). The password is the file, never this environment.
+      AXIOM_VALKEY_URL: valkey://axiom@valkey:6379
+      AXIOM_VALKEY_PASSWORD_FILE: /keys/valkey-password
     volumes:
       - keys:/keys:ro
     ports:
@@ -132,6 +189,9 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
       keys: {condition: service_completed_successfully}
+      # Not service_healthy: a cache that is slow or broken must cost the node its fallback, not its start
+      # (internal/platform/kv/README.md「部署」).
+      valkey: {condition: service_started}
     <<: *hardened
 
   # The scheduled backup (docs/ops/backup-restore.md): `docker compose run --rm backup`. It sees the key ring read-only,
@@ -172,3 +232,4 @@ volumes:
   keys:
   # The backup's lock file; it has to outlive the container that takes it.
   backup_state:
+  cache:
