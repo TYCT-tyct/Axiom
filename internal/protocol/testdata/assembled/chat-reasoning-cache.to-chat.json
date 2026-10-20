@@ -1,0 +1,15 @@
+{
+  "model": "up",
+  "messages": [
+    {"role": "user", "content": "What is the GCD of 1071 and 462?"},
+    {"role": "assistant", "content": "", "reasoning_content": "Use the Euclidean algorithm.", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "gcd", "arguments": "{\"a\":1071,\"b\":462}"}}]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "21"},
+    {"role": "user", "content": "Explain it."}
+  ],
+  "reasoning": {"effort": "high"},
+  "prompt_cache_key": "h(session-7)",
+  "safety_identifier": "h(end-user-42)",
+  "stream": true,
+  "stream_options": {"include_usage": true, "include_obfuscation": false},"max_tokens":4096
+}
+

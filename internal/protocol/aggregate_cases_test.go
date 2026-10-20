@@ -177,7 +177,7 @@ func TestAggregateChat(t *testing.T) {
 				"index": 0.0, "logprobs": map[string]any{"content": []any{map[string]any{"token": "a"}}, "refusal": nil},
 				"finish_reason": "stop",
 				"message": map[string]any{
-					"role": "assistant", "content": "a\"bc", "refusal": "no", "reasoning": "th",
+					"role": "assistant", "content": "a\"bc", "refusal": "no", "reasoning": "th", "reasoning_content": "th",
 					"annotations": []any{map[string]any{"type": "url_citation", "url_citation": map[string]any{"url": "u"}}},
 					"reasoning_details": []any{
 						map[string]any{"type": "reasoning.text", "text": "think", "signature": "S", "format": "f", "index": 0.0},
@@ -409,5 +409,22 @@ func TestAggregateChatHeld(t *testing.T) {
 				t.Errorf("the node's budget is %d after the reply, was %d", mem.Left(), node)
 			}
 		})
+	}
+}
+
+// TestAggregateChatKeepsTheCallIdentity: DashScope and DeepSeek write "id":"" and "name":"" on the fragments of a call
+// after the first, which carry only arguments; the call keeps the id and name it started with (sub2api drops the same
+// filler, openai_gateway_cc_tool_call_identity.go).
+func TestAggregateChatKeepsTheCallIdentity(t *testing.T) {
+	stream := chatChunk(`[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
+		`"function":{"name":"get","arguments":""}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"","function":{"name":"","arguments":"{\"a\""}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":":1}"}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{},"finish_reason":"tool_calls"}]`) + chatDone
+	got := aggregateAll(t, protocol.Chat, stream)
+	calls := listOf(obj(obj(listOf(got["choices"])[0])["message"])["tool_calls"])
+	want := []any{map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "get", "arguments": `{"a":1}`}}}
+	if diff := cmp.Diff(want, calls); diff != "" {
+		t.Errorf("tool calls (-want +got):\n%s", diff)
 	}
 }
