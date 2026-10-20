@@ -133,6 +133,10 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
+	console.master, _, err = keyRotation(db, cfg.masterKeyFile).Check(ctx)
+	if err != nil {
+		return err
+	}
 
 	exit, err := outbound(tel)
 	if err != nil {
