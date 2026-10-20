@@ -4,6 +4,7 @@ import { uuid } from "./admin-data.ts";
 import { adminUrl } from "./apps.ts";
 import type { MockData } from "./mock.ts";
 import { signedInAs } from "./mock-auth.ts";
+import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 import { words } from "./words.ts";
 
@@ -11,9 +12,42 @@ import { words } from "./words.ts";
 
 export const acct = (n: number) => `acct_${String(n).padStart(26, "0")}`;
 
+type SceneState = Awaited<ReturnType<typeof mockAdmin>>;
+
+// What the API was asked on each page, so a heading that does not come can say whether the page asked at all.
+const states = new WeakMap<Page, SceneState>();
+
+// How long the page area is given to come up before the scene says what it showed instead. Not a bound: the check's
+// own timeout is what fails it, and this only says why. What it waits for is the page behind the heading that a
+// loading state carries (page-heading.ts), so the note names the document, what is on screen, and what the API was
+// asked, which #363 could only guess at.
+const explainAfter = 5_000;
+
+async function explain(page: Page, path: string) {
+  const shown: unknown = await page
+    .evaluate(() => ({
+      ready: document.readyState,
+      headings: [...document.querySelectorAll("h1")].map((node) => node.textContent?.trim() ?? ""),
+      loading: document.querySelectorAll("[role=status]").length,
+      alerts: [...document.querySelectorAll("[role=alert]")].map((node) => node.textContent?.trim().slice(0, 80) ?? ""),
+      main: document.querySelectorAll("main").length,
+      text: document.body.innerText.replace(/\s+/g, " ").slice(0, 120),
+    }))
+    .catch((error: unknown) => `page unavailable: ${String(error)}`);
+  console.warn(
+    `[e2e] ${path}: still not showing its page ${explainAfter} ms on, the document showed ${JSON.stringify(shown)}; ` +
+      `requests: ${JSON.stringify(states.get(page)?.log ?? [])}`,
+  );
+}
+
 async function goto(page: Page, path: string) {
   await page.goto(adminUrl(path));
-  await page.getByRole("heading", { level: 1 }).waitFor();
+  const timer = setTimeout(() => void explain(page, path).catch(() => {}), explainAfter);
+  try {
+    await pageHeading(page);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const press = (page: Page, name: string, nth = 0) =>
@@ -143,6 +177,7 @@ const enroll: Scene = { name: "enroll", signedIn: false, open: (p) => goto(p, "e
 // prepare mocks the API for a scene on a page: with the data the scene is shown with, and the session it needs.
 async function prepare(p: Page, sceneToShow: Scene, data: MockData = "usual") {
   const state = await mockAdmin(p, data);
+  states.set(p, state);
   if (sceneToShow.name === "mfa") {
     state.level = "pending_mfa";
     state.csrf = "csrf-0";

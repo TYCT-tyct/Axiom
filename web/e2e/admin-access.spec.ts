@@ -130,6 +130,24 @@ test.describe("permissions", () => {
 });
 
 test.describe("the four states of a view of data", () => {
+  test("a page area that is waiting for its session has the page's heading, and gives it to the page", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    // Held, so the page area is the gate's own loading state for as long as the test needs (#363).
+    let answer = () => {};
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/admin/v1/session", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await page.goto("/suppliers");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
+    answer();
+    await expect(h1(page, zhText("nav.suppliers"))).toBeVisible();
+  });
+
   test("loading, empty and failing lists say what to do", async ({ page }) => {
     const state = await mockAdmin(page, "empty");
     signedInAs(state, "mfa");
