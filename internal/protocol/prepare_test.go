@@ -253,8 +253,10 @@ func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`, userIDLen},
 		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`, 0},
 	} {
+		// prepareWith derives an identity of n bytes, which with what the format wraps around it makes up the value the
+		// bound applies to.
 		prepareWith := func(n int) (float64, error) {
-			id := strings.Repeat(`\`, n-c.wraps)
+			id := strings.Repeat(`\`, n)
 			w := protocol.Rewrites{Identity: func(string) string { return id }}
 			r := inspected(t, c.format, []byte(c.body))
 			var err error
@@ -263,7 +265,7 @@ func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 			})
 			return allocs, err
 		}
-		long, err := prepareWith(128)
+		long, err := prepareWith(128 - c.wraps)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,7 +276,7 @@ func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 		if long != short {
 			t.Errorf("format %d: %d allocations with 128 escaped bytes, %d with one", c.format, int(long), int(short))
 		}
-		if _, err := prepareWith(129); err == nil || errors.Is(err, protocol.ErrInvalid) {
+		if _, err := prepareWith(129 - c.wraps); err == nil || errors.Is(err, protocol.ErrInvalid) {
 			t.Errorf("format %d: got %v for 129 bytes, want the gateway's error", c.format, err)
 		}
 	}
