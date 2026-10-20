@@ -73,8 +73,8 @@ func TestUses(t *testing.T) {
 }
 
 // TestPriceSegmentsFallbacks pins every fallback price at input and output 1 a token, 50 input and 20 output (70):
-// unknown tokens at the highest token price, unknown uses at the dearest per-use default, both estimated; a waiver
-// keeps the uses and drops the tokens; a free model's unknown tokens are free with it, but its uses are not.
+// unknown tokens at the highest token price, unknown uses at the dearest per-use default, both estimated; a cached
+// modality intersection is recorded and free; a waiver keeps the uses and drops the tokens; a free model's unknown tokens are free with it, but its uses are not.
 func TestPriceSegmentsFallbacks(t *testing.T) {
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"},
 		"service_tiers":{"priority":{"rates":{"input":"0.000000003","output":"0.000000002"}}}}`)
@@ -92,6 +92,8 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 		{"a fraction of a use rounds up", s, "usage.server_tool_use.web_fetch_requests", "1.2", false, 70 + 100},
 		{"a service tier is one use", s, "usage.service_tier", `"scale"`, false, 70 + 50},
 		{"tokens past the bound are uses", s, "usage.new_thing_tokens", "20000000000", false, 70 + 50*1e10},
+		{"a cached intersection member costs nothing", s, "usage.input_tokens_details.cached_tokens_details.video_tokens", "800", false, 70},
+		{"a cached intersection member in Chat", s, "usage.prompt_tokens_details.cached_tokens_details.video_tokens", "800", true, 0},
 		{"waived: the tokens go", s, "usage.new_thing_tokens", "30", true, 0},
 		{"waived: the uses stay", s, "usage.server_tool_use.web_fetch_requests", "2", true, 100},
 		{"a free model's tokens", free, "usage.new_thing_tokens", "30", false, 0},

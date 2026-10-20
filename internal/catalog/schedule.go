@@ -126,7 +126,7 @@ func (w *contextTiersJSON) parseBasis() (basis ItemSet, err error) {
 	if basis == 0 || len(w.Tiers) == 0 {
 		return 0, errors.New("want a basis and at least one tier")
 	}
-	if basis&^inputSide != 0 {
+	if basis&^InputSide != 0 {
 		return 0, errors.New("basis: only input-side items count")
 	}
 	return basis, nil

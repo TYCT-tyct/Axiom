@@ -58,6 +58,7 @@ func TestANodeServesModelCalls(t *testing.T) {
 	w.checkRefusedForCredit(n)
 	w.checkUnservedModel(n)
 	w.checkSecondNode(n)
+	w.checkDialect(n)
 
 	if err := n.stop(); err != nil {
 		t.Errorf("shutdown: %v", err)

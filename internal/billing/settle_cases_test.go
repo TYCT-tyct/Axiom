@@ -22,12 +22,13 @@ func TestWaiverPricesPerUseItemsAtTheBand(t *testing.T) {
 	}
 }
 
-// TestSettleReleasesWithoutAttempts: a call that never reached an upstream is released once, and cleanup leaves it.
+// TestSettleReleasesWithoutAttempts: a call that never reached an upstream is released once, with a profit of 0 (no
+// attempt ran, so there is no cost to be unknown), and cleanup leaves it.
 func TestSettleReleasesWithoutAttempts(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
 	for range 2 {
-		if f, err := b.billing.Settle(t.Context(), h, Outcome{}); err != nil || f.Charged != (platform.Exact{}) {
+		if f, err := b.billing.Settle(t.Context(), h, Outcome{}); err != nil || f.Charged != (platform.Exact{}) || f.Profit == nil || *f.Profit != 0 {
 			t.Fatalf("Settle = %+v, %v", f, err)
 		}
 	}

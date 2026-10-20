@@ -68,7 +68,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 - 金额沿用 `platform.Exact`；`platform.RequestID`（即调用编号）、`platform.AttemptSeq`（从 1 起，进入 `Send` 时分配）由第一个用到它们的 PR 加进 `platform`。价格版本只追加、不删除，`PriceRef` 就是版本号。
 - 后续事务（追加、结算、`SettleOrphan`）的账户范围只能从 `accounts.Admission.Scope()` 取得。
 - `Reserve` 在 accounts 打开的准入事务里执行；`Settle`、`Cleanup`（接管）在自己的事务里调用 `suppliers.RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`。这是[总体架构规则 5](../../docs/architecture.md#模块边界规则) 的两处跨模块同事务，接口直接说 suppliers 的类型，由 `suppliers.CallWrites` 实现。
-- **输出上界**（`Observe` 用它）：字节上界 = 已完整读到的事件里解码后的正文、推理、工具参数、思考的签名和加密推理的 UTF-8 字节（不含 SSE 和 JSON 外壳；计哪些成员见 [protocol 的「转发（草图）」](../protocol/README.md#转发草图)的「字节上界」；token 不多于字节）+ 正在读的不完整事件已到的原始字节（`PartialBytes`）；搜索按事件计数。已报告的输入侧项（输入、缓存读写）一经报告就是准数；输出侧的项（输出、推理、搜索）在最后的用量事件之前报告的只是下界（Anthropic `message_start` 里的 `output_tokens`、任何累计中的计数），所以在 `Final` 标明它之前，计量的输出 = max(已报告, 字节上界)。测试用已有的样本 `internal/protocol/testdata/messages/text/upstream.sse`：`message_start` 报 `output_tokens: 1`，之后的正文仍按字节计量、越过当前段时触发追加，`message_delta` 的 15 才是最终值。`Relay.Next` 每做一次至多 16 KiB 的底层读就返回，所以两次计量之间没计量的输出不超过一次读。
+- **输出上界**（`Observe` 用它）：字节上界 = 已完整读到的事件里解码后的正文、推理、工具参数、思考的签名和加密推理的 UTF-8 字节（不含 SSE 和 JSON 外壳；计哪些成员见 [protocol 的「转发（草图）」](../protocol/README.md#转发草图)的「字节上界」；token 不多于字节）+ 正在读的不完整事件已到的原始字节（`PartialBytes`）；搜索按事件计数。已报告的输入侧项（输入、缓存读写、音频、图片）一经报告就是准数；输出侧的项（普通输出、推理、音频、图片、搜索）在最后的用量事件之前报告的只是下界（Anthropic `message_start` 里的 `output_tokens`、任何累计中的计数），所以在 `Final` 标明它之前，计量的输出 = max(已报告, 字节上界)。测试用已有的样本 `internal/protocol/testdata/messages/text/upstream.sse`：`message_start` 报 `output_tokens: 1`，之后的正文仍按字节计量、越过当前段时触发追加，`message_delta` 的 15 才是最终值。`Relay.Next` 每做一次至多 16 KiB 的底层读就返回，所以两次计量之间没计量的输出不超过一次读。
 - **`InputBound(d, m)`** 给出首次采样和任一次采样输入的最大 token 数，决定价格落在哪一档；`Quote` 和路由的最高价过滤用同一个函数。**`InputEstimate(d, m)`** 是上游没报告输入时收费用的暂估：文本字节 ÷ `InputBytesPerToken`（4，向上取整，routing 估上下文也用它）+ 每张图片 min(单张上界, 1600) + 每个文件 min(单个文件上界, 4096)，不超过上下文长度；因为每一项都不大于 `InputBound` 的对应项，暂估永远不超过预留（`TestInputEstimateNeverExceedsTheBound`）。预留仍按上界，两者分开：暂估不能高过预留，预留不能低过用户可能花的。
 - **`Segmentable`** 由 routing 按条目和请求算出（见 [routing 的「接口」](../routing/README.md#接口)）；不可分段的条目全额预留、不追加、不截断。
 
@@ -131,6 +131,8 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 
 ## 结算与账本
 
+- OpenAI 的物理输入总数与计费量分开；`storedSegment.physical_input` 连同存在性写入 `final_usage`，重试解码、`costWithout` 和 gateway 的暂估重建都保留它，避免回显或上下文分档把缓存重叠多算。旧记录没有此字段时沿用原有计费项口径。`decodeUsage` 严格拒绝未知成员（静默跳过会改变分档含义），所以滚动发布的窗口里，旧节点读到新节点写的带 `physical_input` 的 `final_usage`（只有 OpenAI 用量才带）会报错，重试落到新节点即成功，不会多算或少算。发布顺序：先让旧节点停接新请求并排空在途结算，再升级；不排空时，窗口内只有这类重试会报错。回滚同理：回滚前这些行只能由新版本读。映射和有效价格契约见 [catalog](../catalog/README.md#计费项与用量)。
+
 迁移 `migrations/00002_settlement.sql`，查询 `queries/settlement.sql`。
 
 | 表 / 列 | 内容 | 谁能读写 |
@@ -146,7 +148,7 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 - **账本**：一笔交易的分录合计为 0（写入时断言），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
 - **按请求读账本**：`LedgerOf(ctx, tx, requestID)` 按 `transactions.request_id` 读一个请求的全部交易，每笔带自己的分录；交易按 `created_at, id`、分录按 `book, amount` 排序。`(request_id, attempt_seq, kind, revision)` 的唯一索引以请求 ID 开头，所以是一次范围扫描加按 `transaction_id` 的连接，与账本总量无关。它是运营和管理读的内部接口，不是用户的：分录里也有供应商成本。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己的这些分录。调用记录不复制交易或分录的 ID，调用、尝试和账本都只用请求 ID 关联（[observability 的「追溯」](../observability/README.md#追溯)）。
 - **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，按精确值算，超出部分记 `platform_borne`，事务提交后记一条 Error 日志（请求、应收、实收、承担）并计入 `axiom.billing.platform_borne` 和 `axiom.billing.platform_borne.amount`（重试时预留已是终态，不重复报）；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。语句依次发出、没有批量，尝试成本逐次写（写交易、写分录两条）：一次尝试、成本非零、走免单检查并进入终态时 13 次往返（开始、设范围、锁余额行、读预留行、每次尝试 2 条、写尝试、记收费 2 条、移动计数、写预留行、`EndRequest`、提交），每多一次尝试多 2 次；从锁余额行到提交持锁 10 次；各段先按精确值求和再向上取整一次。纯成本的分录不动余额行。
-- **免单**：最后一次尝试 `NotExecuted` 不收；收费的那次尝试是因客户端离开而结束的（`Finish` 为 `FinishCancelled`）照收，客户端在一次失败的尝试之后才离开则按那次失败判断（`waivable` 只看收费的那次尝试，`Outcome` 里没有整个调用的"取消"）；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、输出与推理合计为 0、结束原因为空或出错的，只收按次项目（仍按整次采样所在的档位计价）。没有上限，也不数次数：同一个账户连续多少次零输出调用都全免（`settle_test.go` 的 `TestWaiversHaveNoCap`），`billing.waivers` 表已随迁移 `00006_drop_unused.sql` 删除。判定只看这三条，与金额无关（`waivable`、`zeroOutput`）。
+- **免单**：最后一次尝试 `NotExecuted` 不收；收费的那次尝试是因客户端离开而结束的（`Finish` 为 `FinishCancelled`）照收，客户端在一次失败的尝试之后才离开则按那次失败判断（`waivable` 只看收费的那次尝试，`Outcome` 里没有整个调用的"取消"）；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、普通输出、推理与图片合计为 0、结束原因为空或出错的，只收按次项目（仍按整次采样所在的档位计价）。没有上限，也不数次数：同一个账户连续多少次零输出调用都全免（`settle_test.go` 的 `TestWaiversHaveNoCap`），`billing.waivers` 表已随迁移 `00006_drop_unused.sql` 删除。判定只看这三条，与金额无关（`waivable`、`zeroOutput`）。
 - **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估，`Final.Estimated` 如实报出。缺价的都按「兜底价」收，结算和迟到的 `Settle` 都按它，所以从不免费：映射不了的用量由 `addFallbacks` 收，价目表给了项却给不了价的由 `addMissing` 收——上游按 `priority` 服务而锁定的售价只有标准档时 `Cost` 一项也价不了，token 按该价目表全部服务等级和档位里最高的 token 单价、按次项目按锁定的默认单价。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估。上架门槛挡不住前一种：它查的是售价能不能给得出价（报价取请求等级与端点等级的交集再加标准档），不管上游回报什么。暂估不保留任何东西：预留里没用掉的部分在结算里一起释放，没有稍后校正它的作业（下文「预留的状态」）。
 - **`Cleanup`**：平台范围，逐笔一个事务。挂起且过了截止时间或持有者已回收的：记一行丢失的请求（带预留冻结的路线，不含被删条目的零 UUID），再清理释放；只释放，不收费，也不留待校正的状态。一笔失败不拦后面的，但算一次尝试：一次调用最多尝试 `max` 笔（成功加失败），工作量有界；到期的按 `request_id` 排序，游标越过失败的往后走，`sweep` 把游标记在内存里跨轮、跨次延续，走到到期集末尾就回到开头，所以恒失败的积压（每次都排在前面）不论多大都挡不住后面能清理的：排在游标之后第 r 位的预留，最多 ceil(r/max) 次调用就轮到。返回里区分「扫完」和「预算用尽」（`sweep` 扫完才停）；错误只保留前 5 条并计数其余；context 结束而提前返回时，带上下文的原因并入错误、已接管的数量照返；每释放一笔记一条警告日志（请求和释放的金额）。供应商侧因此留着「这个请求可能产生过费用，它的尝试可能落在这些端点上」，迟到的 `Settle` 或对账据此补上。没有尝试的记录可读：内容已交到客户端、结算还没提交时节点崩了，这次交付的尝试没有成本行，对账键也没有保存，由供应商的逐笔记录补齐。
 - **迟到的 `Settle`**：按完整的 `Outcome` 收（版本号 −1，先冲正清理记过的、再记这一笔），补扣最多到底线、其余平台承担，并 `ResolveLostRequest`。没有任何尝试的迟到 `Settle`（调用没到过上游）不收费，也 `ResolveLostRequest`。清理只释放、不收钱，所以冲正的那笔通常没有分录。清理不收钱而迟到的 `Settle` 收，是因为收费要按用户最终看到的用量，清理手上没有（理由见[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。找不到预留行时（主备切换丢了提交）现在返回错误，按清理释放补扣还没有：要先补一行预留。
@@ -230,17 +232,28 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 
 ## 定价规则
 
-已实现存储、维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）与售价（`sale.go`）：规则怎么变成售价有了，`Sell`/`SalePrices` 把参考价乘成售价，管理接口的 `PreviewPricing` 用它试算；报价读的就是规则算出的售价：路由快照每次重建时（`cmd/axiom/callpath.go`）用 `SalePrices` 给每个模型算售价，条目带着它的价目表进预留（`Quotable.Price`）。成本侧（供应商单位价值、汇率、保本价）随后续 PR（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）。
+已实现存储、维护（`pricing.go`、`queries/pricing.sql`、迁移 `00004_pricing_rules.sql`）与售价（`sale.go`）：规则怎么变成售价有了，`Sell`/`SalePrices` 把参考价乘成售价，管理接口的 `PreviewPricing` 用它试算；报价读的就是规则算出的售价：路由快照每次重建时（`cmd/axiom/callpath.go`）用 `SalePrices` 给每个模型算售价，条目带着它的价目表进预留（`Quotable.Price`）。成本侧单位价值与人工汇率已接入，见「汇率与成本依据」；保本价与按成本定价仍随后续 PR（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）。
 
 一条规则：目标（端点、分组、供应商、模型、厂商、来源类型或全部）、受众（账户、等级或全部）、方法（`cost_plus`：加成率或毛利率二选一、可附固定加价；`reference_multiplier`：参考价倍率；`fixed`：整张固定价格表）和约束（最低毛利率、相对参考价的上下限；M1 不生效）。同一站点里目标和受众相同的规则只能有一条（唯一约束），所以任意两条都能排出先后：`Rules` 按目标越具体越先、受众越具体越先、ID 排序；`Place` 把一条还没存的规则按同一顺序放进这个列表（试算用）。
 
 - **函数**：`Rules(ctx, tx, site)`、`CreateRule(ctx, tx, actor, site, currency, input, reason)`、`UpdateRule(..., id, rev, input, reason)`，都在调用方的平台范围事务里；`currency` 是站点的结算货币，固定价格必须是它。`RuleInput.Check` 检查契约的模式表达不了的部分：目标和受众的 ID 是对应种类的 ID，每种方法只带自己的成员，比率是不为负的十进制，毛利率小于 1，固定价格表合法且是站点的币种；约束（最低毛利率、相对参考价的上下限）不属于 M1，带任一成员的规则在这里被拒绝（`/rule/constraints/...`），保存、修改和试算都不接受。它还拒绝 M1 不生效的部分，而不是接受之后悄悄由更宽的规则定价：目标不是模型、厂商、全部（`/rule/target/kind`），方法是 `cost_plus`（`/rule/method/kind`），`reference_multiplier` 的换算方式不是 `face`（含缺省，`/rule/method/currency_conversion`），与受众只接受"全部"同理；存储形式和 `targetKinds` 的先后不动，以后放开只删这几处拒绝（`honouredTargets`）。已经存下的这类规则不受影响，照旧不生效。出错是 `*RuleError`，只带成员名与规则，不带值。
-- **售价 `Sell`**：纯函数，不碰数据库。`reference_multiplier` 把参考价的每个单价（各服务等级、各档位）乘 `Multiplier`，`currency_conversion` 为 `face` 时数字直接记入站点币种——只在参考价本来就是站点币种时成立（`face` 说的不是汇率，M1 也没有汇率），为 `exchange` 时要汇率，M1 没有（`ErrUnpriced`）；`fixed` 原样用规则里的价目表。`cost_plus` 要每端点成本，M1 没有（`ErrUnpriced`）。没有方法、方法不支持、没有参考价，都是 `ErrUnpriced`：**不会悄悄按参考价卖**。带约束的规则报 `ErrRuleRefuses`。四舍五入只发生一次，与供应商成本计划的 `Schedule.Scaled` 是同一段代码，所以同一个倍率在成本和售价两边得到同一个数。
+- **售价 `Sell`**：纯函数，不碰数据库。`reference_multiplier` 把参考价的每个单价（各服务等级、各档位）乘 `Multiplier`，`currency_conversion` 为 `face` 时数字直接记入站点币种——只在参考价本来就是站点币种时成立（`face` 说的不是汇率，M1 也没有汇率），为 `exchange` 时仍返回 `ErrUnpriced`：本次汇率只用于成本，售价还缺参考价选择和价格版本接线；`fixed` 原样用规则里的价目表。`cost_plus` 要每端点成本，M1 没有（`ErrUnpriced`）。没有方法、方法不支持、没有参考价，都是 `ErrUnpriced`：**不会悄悄按参考价卖**。带约束的规则报 `ErrRuleRefuses`。四舍五入只发生一次，与供应商成本计划的 `Schedule.Scaled` 是同一段代码，所以同一个倍率在成本和售价两边得到同一个数。
 - **`SalePrices`**：一份规则、一份目录快照和要问的那些模型，给出每个模型最具体的规则的售价（`map[catalog.ModelID]Sold`）；只算问到的模型，`fixed` 的价目表一个规则解析一次。`Sold.Version` 是规则 ID + `rev` + 参考价行的 SHA-256，取版本 8 的 UUID，同一份输入的版本不变，规则或参考价一改就变；固定价不读参考价，所以它的版本里参考价行是 `uuid.Nil`，发布参考价不会让固定价换版本。价格适用的模型按这个顺序看：端点、分组、供应商、模型、厂商、来源类型、全部；前面的种类 M1 没有对应的价格，所以今天只有模型、厂商、全部能命中，`RuleInput.Check` 拒绝其余的目标。规则的**约束**（最低毛利率、相对参考价的上下限）不在售价里（[#234](https://github.com/TYCT-tyct/Axiom/issues/234)）：`Sell` 遇到带约束的规则报 `ErrRuleRefuses`，`SalePrices` 让这个规则命中的模型没有售价、返回 `*RuleRefusal`（规则和模型），不落到更宽的规则；约束的执行随 M2 的成本侧一起接上，所以今天试算的 `cost` 和 `margin_ratio` 是空的。
 - **从不删除**：停用代替删除；每次修改把当时的整条规则存进 `pricing_rule_versions`（带操作者和原因，只追加），说明过去的价格是怎么来的。
 - **乐观令牌**：`rev` 从 0 起，修改必须带读到的 `rev`，不同报 `ErrStaleRule`（锁住行后比较）；目标和受众撞上另一条规则报 `ErrRuleExists`，找不到报 `ErrRuleNotFound`。
 - **审计**：`pricing_rule.create`、`pricing_rule.update` 带原因，`detail` 只放规则 ID 和 `rev`。
 - **范围**：两张表只有平台范围能读写；站点由调用方传入（管理接口按路径里的站点），表里的 `site_id` 不是租户隔离，是规则的归属。
+
+## 汇率与成本依据
+
+`exchange.go`、`queries/exchange.sql` 与迁移 `00017_exchange_rates.sql`。`SetExchangeRate`、`ExchangeRates`、`ExchangeRateHistory` 都接受调用方的平台事务；管理接口挂在 `/api/admin/v1/pricing/exchange-rates`，读需要 `pricing.view`，写需要 `pricing.manage`，沿用 MFA、CSRF、`Idempotency-Key` 和 422 字段指针。历史每页最多 100 行，`before_version` 为排他的版本游标。币种与数值边界见[领域文档的汇率](../../docs/domains/billing.md#汇率)。
+
+- 同一规范化货币对用事务级 advisory lock 串行。锁键是固定命名空间字节加六个币种 ASCII 字节，不哈希；第一次写正反方向也锁同一个键。锁内下一条语句读前版，核对 `expected_version`，检查绝对范围与普通调整的五倍阈值，再追加 `version + 1`，审计失败整笔回滚。幂等键由管理处理器在同一事务占用，丢失响应后重放原响应，不重新应用旧调整。
+- `billing.exchange_rates` 强制 RLS，平台范围 SELECT/INSERT；应用角色没有 UPDATE/DELETE。版本决定当前值，时间戳只用于展示。`platform.ExchangeRate` 是可复制的值类型，`Between` 返回精确分数或倒数；下层 suppliers 不依赖 billing。
+- 路由每次构建只读一次当前汇率，条目持有自己的值副本。`Reserve` 从保留的 `Quotable.Exchange` 去重，连缺失货币对一起写入 `reservations.exchange_rates`，同时保存售价与路线，不增加数据库往返。NULL 是旧节点/历史未知依据，`[]` 是新请求确定不需要汇率。冻结集合不补当天汇率；`reservations.exchange_rates` 目前只用于审计，没有读它的代码。
+- `AttemptResult.CostKnown` 由 gateway 给出：换算已知，且最终的 `CostFlag` 为 `complete`。结算将所有尝试的成本精确相加，每次尝试都已知时以实收减成本写 `reservations.profit`，否则保存 NULL；金额超界也保存 NULL。没有任何尝试就释放的预留没有成本，profit 写确定的 0。`Final.Profit` 从保存值恢复，重复结算不改；清理丢失请求没有可靠成本，保持 NULL。用户收费不因成本未知而改变。账本里换算未知的尝试仍按 0 记入 `supplier_cost`，行上没有「未知」标记：按账本汇总供应商成本时，要排除 `reservations.profit IS NULL` 的请求，或关联 `attempt_costs.conversion_state`。
+- 新尝试完整依据随成本行落库（suppliers 迁移 `00007_exchange_basis.sql` 和 `00008_validate_exchange_basis.sql`）。预留后、结算前崩溃只能恢复请求冻结的汇率与路线，不能凭它推断实际尝试、用量或单位价值；对账校正消费者仍未实现。
+- 测试见 `exchange_test.go`、`exchange_settle_test.go`，覆盖写入边界、正反向并发、幂等重放、审计回滚、应用角色权限、预留持久化、混合未知成本与重复结算。端到端传递与刷新测试在 gateway，精确乘法与原生对账测试在 suppliers。
 
 ## 决策与理由
 

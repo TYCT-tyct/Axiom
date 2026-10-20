@@ -348,8 +348,9 @@ type options struct {
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64  // the node's budget; memorySize when zero
-	price        string // the entries' price schedule; cheap when empty
+	memory       int64         // the node's budget; memorySize when zero
+	price        string        // the entries' price schedule; cheap when empty
+	logs         *bytes.Buffer // the node's log, discarded when nil
 }
 
 type harness struct {
@@ -411,8 +412,12 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if alive == nil {
 		alive = func() bool { return true }
 	}
+	logger := slog.New(slog.DiscardHandler)
+	if o.logs != nil {
+		logger = slog.New(slog.NewTextHandler(o.logs, nil))
+	}
 	h.exec, err = NewExecutor(ExecDeps{
-		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
+		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
 	})

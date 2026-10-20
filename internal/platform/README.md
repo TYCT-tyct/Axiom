@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
+| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
@@ -23,6 +23,7 @@
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
+| `kv` | 设计中，随 K1 加入：Valkey 上的限流计数、登录前的尝试次数和会话粘性，期限、熔断与兜底，见 [kv 的 README](kv/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -108,7 +109,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。

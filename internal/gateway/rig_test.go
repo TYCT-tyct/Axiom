@@ -67,7 +67,8 @@ type rig struct {
 	alpha     catalog.ModelID             // acme/alpha, served by two endpoints
 	beta      catalog.ModelID             // acme/beta, served by one
 	bare      catalog.ModelID             // anthropic/claude-test, listed with its maker's name too, and no endpoint
-	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta
+	claude    catalog.ModelID             // anthropic/claude-live, listed with its maker's name too, served by one
+	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
 	suppliers *suppliers.Service          // the real module, in a rig that has its tables
 
 	mu         sync.Mutex

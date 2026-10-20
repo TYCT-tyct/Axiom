@@ -149,12 +149,13 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, routable *atomic.Bool) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
-		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
-		Catalog:      d.catalog,
-		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
-		UnknownItems: unknownItems(d.db),
-		Router:       router,
-		Logger:       d.logger,
+		ExchangeRates: exchangeRates(d),
+		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
+		Catalog:       d.catalog,
+		Prices:        salePrices(d.db, d.accounts, d.catalog, d.logger),
+		UnknownItems:  unknownItems(d.db),
+		Router:        router,
+		Logger:        d.logger,
 		// Readiness is decided here, once the snapshot is the router's: a node whose suppliers offer no endpoint yet is
 		// ready, because there is nothing to route and the console is how its first supplier is set up; a node whose
 		// suppliers offer endpoints that the catalog or the price list cannot describe is not, because every model call

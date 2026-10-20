@@ -71,8 +71,10 @@ func (b *bank) holdLock(account uuid.UUID) (release func()) {
 	}
 }
 
-// TestExpireGoesPastABlockedAccount: an account whose lock is held, so that its write-off cannot finish within its
-// budget, fails and is counted, and the run goes on: the accounts after it are written off in the same run.
+// TestExpireGoesPastABlockedAccount: an account whose lock is held fails and is counted, and the run goes on: the
+// accounts after it are written off in the same run. The test ends the blocked write-off itself, once it waits on the
+// lock, by terminating its backend; a short budget would end it by the clock, but then the next account would share
+// that clock, and on a loaded machine its write-off could outlast it too (TestExpireAccountBudget has the budget).
 func TestExpireGoesPastABlockedAccount(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo) // the first account, the first in the scan
@@ -80,10 +82,19 @@ func TestExpireGoesPastABlockedAccount(t *testing.T) {
 	release := b.holdLock(b.admitted.Account)
 	defer release()
 	e := b.expirer()
-	e.accountBudget = 300 * time.Millisecond
-	changed, failed, err := e.run(t.Context())
-	if err != nil || changed != 1 || failed != 1 {
-		t.Fatalf("run = %d changed, %d failed, %v; want the other account changed and the blocked one failed", changed, failed, err)
+	type outcome struct {
+		changed, failed int
+		err             error
+	}
+	ran := make(chan outcome, 1)
+	go func() {
+		changed, failed, err := e.run(b.t.Context())
+		ran <- outcome{changed, failed, err}
+	}()
+	b.waitForLockWait()
+	b.sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
+	if got := <-ran; got != (outcome{1, 1, nil}) {
+		t.Fatalf("run = %d changed, %d failed, %v; want the other account changed and the blocked one failed", got.changed, got.failed, got.err)
 	}
 	if n := b.balanceOf(other.Account); n != 1 {
 		t.Errorf("the other account holds %d, want only the 1 that does not expire", n)
@@ -91,6 +102,26 @@ func TestExpireGoesPastABlockedAccount(t *testing.T) {
 	release()
 	if changed, failed, err := e.run(t.Context()); err != nil || changed != 1 || failed != 0 {
 		t.Errorf("the next run = %d changed, %d failed, %v; want the blocked account written off", changed, failed, err)
+	}
+}
+
+// TestExpireAccountBudget: an account whose budget is spent before its write-off starts fails and is counted, and
+// nothing of it is written; a run with its budget writes it off. The budget is already past, not short, so that no
+// clock decides the outcome.
+func TestExpireAccountBudget(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	b.creditBatch(100, longAgo)
+	e := b.expirer()
+	e.accountBudget = -time.Second
+	if changed, failed, err := e.run(t.Context()); err != nil || changed != 0 || failed != 1 {
+		t.Fatalf("run = %d changed, %d failed, %v; want the account failed", changed, failed, err)
+	}
+	if n := b.balanceOf(b.admitted.Account); n != 100 {
+		t.Errorf("the account holds %d, want the 100 untouched", n)
+	}
+	e.accountBudget = expireAccountBudget
+	if changed, failed, err := e.run(t.Context()); err != nil || changed != 1 || failed != 0 {
+		t.Errorf("the next run = %d changed, %d failed, %v; want the account written off", changed, failed, err)
 	}
 }
 

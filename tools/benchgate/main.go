@@ -1,10 +1,17 @@
-// Command benchgate runs the benchmarks at a base commit and in the working tree, and fails if a benchmark allocates
-// more per operation, was skipped, or if no measurement can be compared any more. Every run of every benchmark runs the
-// same fixed number of iterations on both sides, with the garbage collector off and on one processor, so what a run pays
-// once — refilling the pools the collection before it emptied — divides by the same count in both and cancels;
-// allocations per operation are then stable from run to run, up to noise that only adds, so the smallest of the runs is
-// compared. Time and bytes are noisy on shared CI machines, so they are only reported through benchstat
-// (docs/performance.md「怎么验证」).
+// Command benchgate runs, at a base commit and in the working tree, the benchmarks whose allocation counts that
+// difference can move, and fails if a benchmark allocates more per operation, was skipped, or if no measurement can be
+// compared any more. Every run of every benchmark runs the same fixed number of iterations on both sides, with the
+// garbage collector off and on one processor, so what a run pays once — refilling the pools the collection before it
+// emptied — divides by the same count in both and cancels; allocations per operation are then stable from run to run, up
+// to noise that only adds, so the smallest of the runs is compared. Time and bytes are noisy on shared CI machines, so
+// they are only reported through benchstat (docs/performance.md「怎么验证」).
+//
+// A benchmark's allocation count depends only on what is compiled into its test binary, so the gate reads the test
+// import closure of every benchmark package (go list -deps -test) and measures only the packages whose closure a changed
+// file lies in or below — testdata and the files a package embeds live there too. A change to a module file (go.mod,
+// go.sum, go.work) decides how every package resolves and compiles and so cannot be attributed: it runs every package.
+// The base commit and the working tree are measured at the same time, sharing the bound on how many test binaries run at
+// once.
 //
 // The go command reports in its JSON form, so skipped benchmarks arrive as events rather than as text that only verbose
 // mode prints, and the benchmark lines are read with golang.org/x/perf/benchfmt, the reader benchstat itself uses.
@@ -51,19 +58,20 @@ const allocsUnit = "allocs/op"
 // whole gate as short as the 100 ms it replaced.
 const benchtime = "20x"
 
-// packages is how many benchmark packages run at once. One `go test` cannot do it: cmd/go runs the benchmark packages
-// of an invocation one after another whatever -p says ("Force benchmarks to run in serial" in cmd/go/internal/test), so
-// the gate gives every package its own invocation and keeps `packages` of them in flight. The test binaries still get
-// one processor each and the collector off, so their allocation counts do not depend on how many run at once. Four at
-// once, the same bound as `just test`: the host is shared with other jobs, and with the collector off the heaviest
-// package (protocol) peaks near 530 MiB.
+// packages is how many benchmark packages run at once, base commit and working tree together. One `go test` cannot do
+// it: cmd/go runs the benchmark packages of an invocation one after another whatever -p says ("Force benchmarks to run
+// in serial" in cmd/go/internal/test), so the gate gives every package its own invocation and keeps `packages` of them
+// in flight. The test binaries still get one processor each and the collector off, so their allocation counts do not
+// depend on how many run at once. Four at once, the same bound as `just test`: the host is shared with other jobs, and
+// with the collector off the heaviest package (protocol) peaks near 530 MiB. The two sides share the bound, so measuring
+// them at the same time leaves the peak where it was.
 const packages = 4
 
 var (
 	// list asks the testing package which benchmarks each package has; -list runs none of them, and -p builds the test
 	// binaries four at a time.
 	list = []string{"test", "-json", "-run", "^$", "-list", "^Benchmark", "-p", strconv.Itoa(packages), "./..."}
-	// bench runs every benchmark of the one package benchmarks() appends to it.
+	// bench runs every benchmark of the one package benchmark() runs.
 	bench = []string{"test", "-json", "-run", "^$", "-bench", ".", "-benchmem", "-count", "6", "-benchtime", benchtime, "-p", strconv.Itoa(packages)}
 )
 
@@ -96,39 +104,77 @@ type measurements struct {
 }
 
 func run(ctx context.Context, root, base string) (problems []string, err error) {
+	// The go command reports absolute directories and the test closures are relative to the tree, so the repository
+	// root is made absolute here (`just bench-compare` passes `..`).
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
 	scratch, err := os.MkdirTemp("", "benchgate")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, os.RemoveAll(scratch)) }()
-	baseRun, err := benchmarksAt(ctx, root, base, filepath.Join(scratch, "base"))
+	tree := filepath.Join(scratch, "base")
+	// The worktree is removed even when a step fails, from the checkout on.
+	defer func() { err = errors.Join(err, removeWorktree(ctx, root, tree)) }()
+	if err := addWorktree(ctx, root, base, tree); err != nil {
+		return nil, err
+	}
+	change, err := changedFiles(ctx, root, base)
+	if err != nil {
+		// The gate may compare more than the change needs, never less: with nothing attributed, every package runs.
+		fmt.Fprintln(os.Stderr, "benchgate:", err)
+		change = diff{all: true}
+	}
+	baseTargets, headTargets, skipped, err := selectPackages(ctx, tree, root, base, change)
 	if err != nil {
 		return nil, err
 	}
-	headRun, err := benchmarks(ctx, root, "the working tree")
-	if err != nil {
+	for _, pkg := range skipped {
+		fmt.Println("skipped benchmark package", pkg+":", "no changed file is in its test closure")
+	}
+	var (
+		slots  = make(chan struct{}, packages) // shared, so both sides together keep only `packages` test binaries running
+		stderr = new(sync.Mutex)               // one package's stderr line at a time, from either side
+		runs   [2]measurements
+		errs   [2]error
+		wg     sync.WaitGroup
+	)
+	// One side failing stops the other, which would otherwise spend minutes on a result nobody reads.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	measure := func(i int, dir, label string, targets []string) {
+		runs[i], errs[i] = benchmarks(ctx, dir, label, targets, slots, stderr)
+		if errs[i] != nil {
+			cancel()
+		}
+	}
+	wg.Go(func() { measure(0, tree, "base commit "+base, baseTargets) })
+	wg.Go(func() { measure(1, root, "the working tree", headTargets) })
+	wg.Wait()
+	if err := errors.Join(errs[0], errs[1]); err != nil {
 		return nil, err
 	}
-	if err := report(ctx, scratch, baseRun.text, headRun.text); err != nil {
+	if err := report(ctx, scratch, runs[0].text, runs[1].text); err != nil {
 		return nil, err
 	}
-	problems, removed := gate(baseRun, headRun)
+	problems, removed := gate(runs[0], runs[1])
 	for _, name := range removed {
 		fmt.Println("removed or renamed benchmark, not compared:", name)
 	}
 	return problems, nil
 }
 
-// benchmarksAt runs the benchmarks of commit in a temporary worktree, which is removed even when a step fails.
-func benchmarksAt(ctx context.Context, root, commit, tree string) (run measurements, err error) {
-	defer func() { err = errors.Join(err, removeWorktree(ctx, root, tree)) }()
+// addWorktree checks out commit in tree, a temporary worktree of the repository at root.
+func addWorktree(ctx context.Context, root, commit, tree string) error {
 	// The arguments reach git directly, without a shell, and --end-of-options keeps a commit or path that starts with a
 	// dash from being read as an option, so neither command nor option injection is possible.
 	add := exec.CommandContext(ctx, "git", "-C", root, "worktree", "add", "--detach", "--end-of-options", tree, commit) // #nosec G204 G702 -- see above
 	if out, err := add.CombinedOutput(); err != nil {
-		return measurements{}, fmt.Errorf("check out the base commit %s: %w\n%s", commit, err, out)
+		return fmt.Errorf("check out the base commit %s: %w\n%s", commit, err, out)
 	}
-	return benchmarks(ctx, tree, "base commit "+commit)
+	return nil
 }
 
 // removeWorktree deletes the temporary worktree and its registration, touching no other worktree, also after a
@@ -137,11 +183,11 @@ func removeWorktree(ctx context.Context, root, tree string) error {
 	ctx = context.WithoutCancel(ctx)
 	// Removal fails when add never created the worktree; its error matters only if git still lists the worktree at the
 	// end. The second --force also removes a worktree that an interrupted add left locked.
-	removed, removeErr := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", "--force", "--force", "--end-of-options", tree).CombinedOutput() // #nosec G204 G702 -- as in benchmarksAt
+	removed, removeErr := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", "--force", "--force", "--end-of-options", tree).CombinedOutput() // #nosec G204 G702 -- as in addWorktree
 	if err := os.RemoveAll(tree); err != nil {
 		return fmt.Errorf("remove the base worktree: %w", err)
 	}
-	list, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output() // #nosec G204 G702 -- as in benchmarksAt
+	list, err := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain").Output() // #nosec G204 G702 -- as in addWorktree
 	if err != nil {
 		return fmt.Errorf("list worktrees: %w", err)
 	}
@@ -170,20 +216,15 @@ func sameDir(a, b string) bool {
 	return a == b
 }
 
-// benchmarks runs every benchmark in dir at the fixed iteration count, one `go test` per package that has some, up to
-// `packages` at a time (see packages). The discovery pass is the go command's own answer to which packages have
-// benchmarks, and it builds their test binaries, so the runs that follow only start them.
-func benchmarks(ctx context.Context, dir, label string) (measurements, error) {
-	targets, err := benchmarkPackages(ctx, dir)
-	if err != nil {
-		return measurements{}, fmt.Errorf("list the benchmarks of %s: %w", label, err)
-	}
+// benchmarks runs every benchmark of the packages targets in dir at the fixed iteration count, one `go test` per
+// package, up to `packages` at a time across both sides: each run holds a slot of slots from before its `go test`
+// starts until it ends. The discovery pass (benchmarkPackages) built the test binaries, so the runs only start them.
+// stderr is shared by both sides, so their lines stay whole.
+func benchmarks(ctx context.Context, dir, label string, targets []string, slots chan struct{}, stderr *sync.Mutex) (measurements, error) {
 	var (
-		slots    = make(chan struct{}, packages)
 		wg       sync.WaitGroup
 		runs     = make([]measurements, len(targets))
 		failures = make([]error, len(targets))
-		stderr   = new(sync.Mutex) // one package's stderr line at a time
 	)
 	for i, pkg := range targets {
 		slots <- struct{}{}

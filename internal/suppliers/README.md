@@ -39,7 +39,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
 | `attempt_journal` | 旧的对账日志（「没有对账日志」）：没有代码再读写，表按收缩规则留到下一个发布删 | PK `(request_id, attempt_seq)`；平台范围 |
-| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
+| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
 | `ended_requests` | billing 告知的请求终结时刻与到达终态的时间 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |
@@ -229,8 +229,10 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **`Send`** 对拒绝请求本身的失败（`ScopeRequest`）还附上 `Failure.Rejection`：响应体里 `error` 对象的 `message`、`type`、`param`、`code`（OpenAI 和 Anthropic 的外壳同位置），清洗见「不变量」；响应体不是这种对象时为空，网关回统一的说法。**给每个失败标明上游是否执行过**（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
-- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执带行 id，但目前不落库：要按 id 复算已结算的尝试，需先给 `attempt_costs` 加 `unit_value_id` 列（兼容的改动）。
-- **`Credits`**（连同它换算前的 `Cost`，一次定价）= `Cost` 的原生金额 × 单位价值，精确相乘，转成十亿分之一时向上取整一次。只有结算币种就是要的币种时才能换算（还没有汇率）；币种不同、超出金额的范围时给 0 和"未知"，成本计划缺项时给已定价的部分和"未知"。gateway 把"未知"交给 billing，按 0 记成本：成本只进平台的账，不影响向用户收多少（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。
+- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执的 `unit_value_id` 随结算写入 `attempt_costs`；旧行保持 NULL，不能拿最新单位价值推断过去。
+- **`Credits`**（连同换算前的 `Cost`，一次定价）= 原生金额 × 尝试的单位余额价值 × 预留冻结的汇率，精确相乘后转成十亿分之一时向上取整一次。同币种不读汇率，结果与原算法一致。gateway 将路由冻结的 `platform.ExchangeRate` 经 `AttemptReceipt.WithExchange` 传回；供应商不读 billing 表。缺汇率、转换溢出返回未知，缺计费项给已定价部分与未知；原生 `CostFlag` 不因缺汇率改变，对账仍能比较原生估算与实际扣费。gateway 保留 `known` 给 billing，任何尝试未知都让请求利润为 NULL。
+- **换算依据**（迁移 `00007_exchange_basis.sql`，其检查约束先 `NOT VALID`，`00008_validate_exchange_basis.sql` 再 `VALIDATE`，不在大表上持排他锁扫描）：`attempt_costs` 保存 `unit_value_id`、`exchange_rate_id`、`conversion_from`/`conversion_to` 和 `conversion_state`（`Conversion` 枚举：same_currency、converted、missing_rate、overflow、unpriced、not_executed；SQL 的检查约束重复了这些名字，`TestConversionStatesAreStoredAndKeepTheRateOnlyWhenUsed` 逐个写入核对）。方向由源/目标币种与汇率行的规范化币种对确定；同币种、缺汇率和未执行的尝试没有用汇率，不写汇率 ID，只有 converted 和 overflow 写。旧节点/旧行的 NULL 是未知依据，绝不回填当前配置；字段随尝试只插入，不随重试变化，不建到 billing 的外键。测试在 `exchange_test.go`。
+- **缺汇率告警的数据**：`EnabledCurrencies` 在平台事务列出 active、low_balance 的供应商，包括暂时没有可路由端点的。组装层每轮路由构建与当前汇率一同读取，日志/指标只记录缺失及恢复状态变化，读取失败不能推进路由快照的新鲜时间。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
 
@@ -293,7 +295,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | 决策 | 理由 | 不选 |
 |---|---|---|
 | 独立 River 周期任务执行供应商逐条对账，估低摘牌；归属、事件与后续页同事务 | 即使同步暂停或尝试迟到，已有记录也要继续核对；重试不能重复加版本，下一页不能只留在某个 worker 内存里 | 只在同步成功后运行；每个节点各起计时器。参考源码（只读，2026-10-18）：[new-api `BillingSession.Settle`](https://github.com/QuantumNous/new-api/blob/6cf0d90b5ff27f901697dddd61e0c28aba8efefc/service/billing_session.go#L47) 根据本地算出的实际额度调整预扣，[`quota.go`](https://github.com/QuantumNous/new-api/blob/6cf0d90b5ff27f901697dddd61e0c28aba8efefc/service/quota.go#L250) 写消费日志；[sub2api `usageBillingRepository.Apply`](https://github.com/Wei-Shaw/sub2api/blob/b0a02a3304a0a78cdd003ddda1dd23ba02c03084/backend/internal/repository/usage_billing_repo.go#L22) 在事务内按请求号与 API key 去重并应用计费。这些结算路径没有拉取供应商扣费记录来做容差比较或估低摘牌，Axiom 沿用自己的[对账规则](../../docs/domains/billing.md#供应商成本) |
-| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照；id 目前只在内存回执里，复算已结算的尝试要先落库） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
+| 单位价值按供应商存在 `suppliers.unit_values`，`Reload` 时读进快照，回执带着它和行 id | 它是供应商余额的属性（[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)），与管理接口按供应商确认一致；读进快照让 `Credits` 仍是纯内存，结算路径上不多一次查询；回执里的 id 让复算不靠时间推断（节点用的是它最近一次 Reload 时的快照，id 随结算落库，旧行未知） | 按端点存：同一份余额的值要逐端点改，漏改一个就算错；结算时查库：钱的路径上多一次往返；折进成本计划：计划是原生单位、对账按原生单位比，每次充值改值都要重写全部计划 |
 | 用周期扫描补任务，不让每个任务在结束时入队它的后继 | River 的唯一性必须含"运行"这一状态，任务结束前不能为同一个供应商插入后继；不唯一的后继链会在多入队一次后永远多一条。扫描没有状态，节点挂了、任务丢了都自愈，代价是到期后最多晚一个扫描间隔 | 后继链加扫描补漏：两套机制，还要防链增殖 |
 | 任务失败不由队列重试 | 重试的时间由引擎的退避决定，写在状态里，队列再重试一份会绕过它 | River 的重试：两份退避 |
 | 适配器的 `Open` 推迟到任务第一次用 | 登录失败成为那个任务的失败，进入引擎的处理（需处理、退避）；提前打开则一轮之前就失败，引擎看不到 | 轮前打开：登录被拒时引擎不知道，下一轮还会再登录，正是要避免的封号 |

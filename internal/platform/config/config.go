@@ -84,7 +84,10 @@ func (e *Env) Int(name string, def, least int) int {
 }
 
 // Prefixes returns the variable as a comma-separated list of IP addresses and networks such as 10.0.0.0/8 (a bare
-// address is its own network); none when it is unset.
+// address is its own network); none when it is unset. A v4-mapped IPv6 entry such as ::ffff:10.0.0.0/104 is returned as
+// the IPv4 network it names (10.0.0.0/8), because clientip compares the peer after Unmap and an IPv6 prefix never
+// matches an IPv4 address. A mapped network shorter than /96 also covers addresses that are not mapped, so it has no
+// IPv4 form to return and is refused.
 func (e *Env) Prefixes(name string) []netip.Prefix {
 	value := e.String(name, "")
 	if value == "" {
@@ -101,6 +104,13 @@ func (e *Env) Prefixes(name string) []netip.Prefix {
 				return nil
 			}
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		if prefix.Addr().Is4In6() {
+			if prefix.Bits() < 96 {
+				e.errs = append(e.errs, fmt.Errorf("%s: want a v4-mapped IPv6 network within ::ffff:0:0/96, such as ::ffff:10.0.0.0/104", name))
+				return nil
+			}
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
 		}
 		prefixes = append(prefixes, prefix.Masked())
 	}
