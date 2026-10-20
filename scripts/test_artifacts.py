@@ -6,10 +6,11 @@ import justrepo
 LIMIT = check_artifacts.LIMIT
 
 
-def artifacts(main_files, branch_files, origin_main=True):
+def artifacts(main_files, branch_files, origin_main=True, uncommitted=None, stage=False):
     """Run the real `just artifacts`: main_files committed as origin/main, then branch_files as this branch.
 
-    Without origin_main the repository has no origin/main, as a partial clone would not, so every tracked file counts.
+    Without origin_main the repository has no origin/main, as a partial clone would not, so every file counts.
+    uncommitted files are written after the last commit, and staged when stage is true.
     """
     with justrepo.repository() as repo:
         justrepo.commit(repo, main_files)
@@ -17,10 +18,20 @@ def artifacts(main_files, branch_files, origin_main=True):
             justrepo.git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
         if branch_files:
             justrepo.commit(repo, branch_files)
+        if uncommitted:
+            justrepo.write(repo, uncommitted)
+            if stage:
+                justrepo.git(repo, "add", "--", *uncommitted)
         return justrepo.just(repo, "artifacts")
 
 
 class Artifacts(unittest.TestCase):
+    def assert_refused(self, result, refused, why):
+        self.assertEqual(result.returncode != 0, refused is not None, result.stdout)
+        if refused:
+            found = next((line for line in result.stdout.splitlines() if line.startswith(f"{refused}: ")), "")
+            self.assertIn(why, found)
+
     def test_cases(self):
         cases = [
             # name, files on origin/main, files this branch adds or changes, origin/main exists, refused, why
@@ -49,11 +60,25 @@ class Artifacts(unittest.TestCase):
         ]
         for name, main, branch, origin_main, refused, why in cases:
             with self.subTest(name):
-                result = artifacts(main, branch, origin_main)
-                self.assertEqual(result.returncode != 0, refused is not None, result.stdout)
-                if refused:
-                    found = next((line for line in result.stdout.splitlines() if line.startswith(f"{refused}: ")), "")
-                    self.assertIn(why, found)
+                self.assert_refused(artifacts(main, branch, origin_main), refused, why)
+
+    def test_what_a_commit_would_take(self):
+        # the branch has a commit, and the worktree holds what the next one would take: staged, unstaged or untracked
+        cases = [
+            # name, files on origin/main, files this branch commits, files left in the worktree, staged, refused, why
+            ("a staged file over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
+             {"blob": "a" * (LIMIT + 1)}, True, "blob", "bytes is over the 1 MB limit"),
+            ("an unstaged change over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
+             {"note.txt": "a" * (LIMIT + 1)}, False, "note.txt", "bytes is over the 1 MB limit"),
+            ("an untracked file over 1 MB", {"note.txt": "kept\n"}, {"note.txt": "committed\n"},
+             {"blob": "a" * (LIMIT + 1)}, False, "blob", "bytes is over the 1 MB limit"),
+            # .gitignore is what keeps a local build out of the check: an ignored file is never committed
+            ("an ignored build output", {".gitignore": "*.exe\n", "note.txt": "kept\n"}, {"note.txt": "committed\n"},
+             {"axiom.exe": "MZ"}, False, None, ""),
+        ]
+        for name, main, branch, uncommitted, stage, refused, why in cases:
+            with self.subTest(name):
+                self.assert_refused(artifacts(main, branch, uncommitted=uncommitted, stage=stage), refused, why)
 
     def test_a_git_failure_fails(self):
         self.assertNotEqual(justrepo.just_with_broken_git("artifacts").returncode, 0)

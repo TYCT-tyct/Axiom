@@ -66,8 +66,8 @@ adapters-removable:
 api:
     go run -C tools ./checkapi ..
 
-# No build output, binary or file over 1 MB enters the branch: the files it adds or changes against origin/main are
-# checked by size, by suffix and for a NUL byte (every tracked file on main, and without origin/main);
+# No build output, binary or file over 1 MB is committed: the files the branch adds or changes, and the untracked ones a
+# `git add` would take, are checked by size, by suffix and for a NUL byte (every file on main, and without origin/main);
 # scripts/check_artifacts.py holds the rules and the allowlist of what the tree keeps on purpose
 artifacts:
     {{ python }} {{ quote(justfile_directory() / "scripts/check_artifacts.py") }}

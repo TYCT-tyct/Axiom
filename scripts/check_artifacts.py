@@ -7,8 +7,11 @@ binary. The suffix counts on its own because a build that failed halfway leaves 
 finds; the NUL byte catches a format that no suffix announces.
 
 What the branch adds or changes against origin/main is what counts, so a file merged long ago does not fail every pull
-request; on main, and where origin/main does not exist (a partial clone), every tracked file is checked instead. ALLOWED
-names, by directory and with the reason, the files this repository keeps on purpose.
+request. The worktree is the other side, not HEAD: a staged or an unstaged change is checked before it is committed, and
+a file the branch has not added yet is checked too, because a `git add` would take it. .gitignore is what keeps a local
+build from failing the check: an ignored file is not committed and not looked at. On main, and where origin/main does not
+exist (a partial clone), every file is checked instead, untracked ones included. ALLOWED names, by directory and with the
+reason, the files this repository keeps on purpose.
 
 usage: python scripts/check_artifacts.py   (from the repository root; `just artifacts`)
 """
@@ -56,14 +59,20 @@ def commit(ref):
 
 
 def candidates():
-    """The files this branch adds or changes: every tracked file on main and where origin/main is missing."""
+    """The files this branch adds or changes, untracked ones included; every file on main and without origin/main."""
     main, head = commit(MAIN), commit("HEAD")
     if main is None or main == head:
-        return [path for path in git("ls-files", "-z").split("\0") if path]
-    # Three dots: the merge base, so main's own later changes are not this branch's; no right side is the working tree,
-    # which is what a check run before committing must see.
-    diff = git("diff", "--name-only", "--no-renames", "--diff-filter=AM", "-z", f"{MAIN}...")
-    return [path for path in diff.split("\0") if path]
+        changed = git("ls-files", "-z")
+    else:
+        # The merge base as the one commit, so main's own later changes are not this branch's, and the worktree as the
+        # other side: three dots would end at HEAD and miss a staged or an unstaged change, which is what a run before
+        # the commit has to see.
+        base = git("merge-base", MAIN, "HEAD").strip()
+        changed = git("diff", "--name-only", "--no-renames", "--diff-filter=AM", "-z", base)
+    # A file a `git add` would take is still untracked; --exclude-standard leaves out the ignored build outputs, so a
+    # local `go build` passes a check that .gitignore already keeps out of the commit.
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    return [path for path in changed.split("\0") + untracked.split("\0") if path]
 
 
 def problem(path):
