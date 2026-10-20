@@ -10,10 +10,13 @@ var contentNames = map[Format]map[string]string{
 
 // Precomputed prefixes keep the existing writers' single append and allocation profile.
 var (
-	messagesTextHead   = `{"type":"` + contentNames[Messages]["text"] + `","text":`
-	messagesImageHead  = `{"type":"` + contentNames[Messages]["image_url"] + `","source":`
-	responsesTextHead  = `{"type":"` + contentNames[Responses]["text"] + `","text":`
-	responsesImageHead = `{"type":"` + contentNames[Responses]["image_url"] + `","image_url":`
+	messagesTextHead     = `{"type":"` + contentNames[Messages]["text"] + `","text":`
+	messagesImageHead    = `{"type":"` + contentNames[Messages]["image_url"] + `","source":`
+	messagesFileHead     = `{"type":"` + contentNames[Messages]["file"] + `","source":{"type":"base64","media_type":"application/pdf","data":`
+	responsesTextHead    = `{"type":"` + contentNames[Responses]["text"] + `","text":`
+	responsesImageHead   = `{"type":"` + contentNames[Responses]["image_url"] + `","image_url":`
+	responsesFileHead    = `{"type":"` + contentNames[Responses]["file"] + `","file_data":`
+	responsesRefusalHead = `{"type":"` + contentNames[Responses]["refusal"] + `","refusal":`
 )
 
 func nativeContent(v jsontext.Value, f Format, role string) (jsontext.Value, error) {
@@ -57,7 +60,7 @@ func nativePart(o requestObject, quotedKind string, f Format, role string) (requ
 	case "refusal":
 		part["refusal"] = o.take("refusal")
 	case "image_url":
-		if role != "user" && role != "tool" {
+		if role != "user" {
 			return nil, &NotSupported{Reason: "an image outside user content"}
 		}
 		url, err := nativeImage(o, f)

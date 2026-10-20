@@ -30,15 +30,23 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 		}
 		out = append(out, requestObject{"role": jsonValue("system"), "content": instructions})
 	}
-	items := make([]jsontext.Value, 0, len(w.History)+1)
-	for _, item := range w.History {
+	items, err := responsesInput(src.take("input"), w.History)
+	if err != nil {
+		return nil, err
+	}
+	return responsesItemsToChat(items, out)
+}
+
+// responsesInput combines resolved history with the current input before item conversion.
+func responsesInput(v jsontext.Value, history [][]byte) ([]jsontext.Value, error) {
+	items := make([]jsontext.Value, 0, len(history)+1)
+	for _, item := range history {
 		canonical, err := jsonx.MarshalCanonical(jsontext.Value(item))
 		if err != nil {
 			return nil, fmt.Errorf("protocol: invalid history item: %w", err)
 		}
 		items = append(items, canonical)
 	}
-	v := src.take("input")
 	if v.Kind() == '"' {
 		items = append(items, jsonValue(requestObject{"role": jsonValue("user"), "content": v}))
 	} else {
@@ -48,7 +56,7 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 		}
 		items = append(items, input...)
 	}
-	return responsesItemsToChat(items, out)
+	return items, nil
 }
 
 func responsesReasoning(v jsontext.Value, dst requestObject) error {

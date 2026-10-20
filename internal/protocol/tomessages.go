@@ -384,7 +384,7 @@ func documentBlock(out []byte, fileData string) ([]byte, error) {
 	if !ok || media != "application/pdf" {
 		return nil, &NotSupported{Reason: "a file that is not PDF data"}
 	}
-	out = append(out, `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":`...)
+	out = append(out, messagesFileHead...)
 	return append(appendQuoted(out, data), '}'), nil
 }
 
