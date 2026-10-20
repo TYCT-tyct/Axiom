@@ -135,6 +135,7 @@ export default {
     group: "分组",
     until: "冷却 / 过期",
     concurrency: "最大并发",
+    perMinute: "每分钟请求",
     cooldown: "冷却至",
     state: {
       binding: "绑定中",
@@ -161,5 +162,19 @@ export default {
     choose: "选择分组",
     missing: "请选择一个分组。",
     done: "已开始绑定，稍后状态会变成“可用”。",
+  },
+  limits: {
+    open: "上限",
+    title: "这把 key 放出去多少",
+    body: "一个节点同时用这把 key 发几个调用、它的分钟里放几个请求。计数目前按节点各记各的，五秒内到达每个节点：",
+    action: "设定上限",
+    concurrency: "同时调用数",
+    concurrencyHint: "1 以上的整数；新绑定从 4 开始。",
+    perMinute: "每分钟请求",
+    perMinuteHint: "留空表示不设 Axiom 自己的天花板，只有对方自己的限速。",
+    concurrencyInvalid: "同时调用数是 1 以上的整数。",
+    perMinuteInvalid: "每分钟请求是 1 以上的整数，或者留空。",
+    done: "这把 key 现在同时服务 {concurrency} 个调用、一分钟 {perMinute} 个请求。",
+    doneUnbounded: "这把 key 现在同时服务 {concurrency} 个调用，它的分钟不设 Axiom 的天花板。",
   },
 };

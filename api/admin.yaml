@@ -815,6 +815,52 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits:
+    put:
+      operationId: setSupplierCredentialLimits
+      tags: [Suppliers]
+      summary: Set how much of a credential a node gives out
+      description: >-
+        The calls the key has in flight at once, and the requests its minute admits. Both are counted in a node's
+        memory when a call takes its slot, so the ceiling holds per node until nodes share the count
+        (internal/suppliers/README.md「并发与速率」). A `requests_per_minute` of null is no ceiling of Axiom's: the
+        supplier's own limit then governs, and nothing is counted. A change reaches a node at its next reload, within
+        seconds.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialLimits"}
+      responses:
+        "200":
+          description: The credential as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/pending-mappings:
     get:
       operationId: listPendingMappings
@@ -2031,7 +2077,7 @@ components:
         reason: {$ref: "#/components/schemas/Reason"}
     SupplierCredential:
       type: object
-      required: [id, group_id, upstream_key_ref, status, max_concurrency]
+      required: [id, group_id, upstream_key_ref, status, max_concurrency, requests_per_minute]
       properties:
         id: {$ref: "#/components/schemas/Uuid"}
         group_id: {$ref: "#/components/schemas/Uuid"}
@@ -2042,6 +2088,27 @@ components:
         cooldown_until: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         max_concurrency: {type: integer, minimum: 1}
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: "The requests the credential's minute admits, or null for no ceiling of Axiom's."
+    CredentialLimits:
+      type: object
+      required: [max_concurrency, requests_per_minute, reason]
+      properties:
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: The calls the key has in flight at once. A new binding starts at 4.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          nullable: true
+          description: "The requests its minute admits; null is no ceiling of Axiom's."
+        reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object
       required: [ref, status]

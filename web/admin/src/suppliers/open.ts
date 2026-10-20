@@ -4,4 +4,5 @@ import type { AdminSchemas } from "@axiom/api";
 export type Open =
   | { kind: "pause" | "resume" | "remove" | "login" | "unit" }
   | { kind: "group"; group: AdminSchemas["SupplierGroup"] }
-  | { kind: "bind"; key: AdminSchemas["UpstreamKey"] };
+  | { kind: "bind"; key: AdminSchemas["UpstreamKey"] }
+  | { kind: "limits"; credential: AdminSchemas["SupplierCredential"] };

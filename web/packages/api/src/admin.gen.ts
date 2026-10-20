@@ -463,6 +463,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set how much of a credential a node gives out
+         * @description The calls the key has in flight at once, and the requests its minute admits. Both are counted in a node's memory when a call takes its slot, so the ceiling holds per node until nodes share the count (internal/suppliers/README.md「并发与速率」). A `requests_per_minute` of null is no ceiling of Axiom's: the supplier's own limit then governs, and nothing is counted. A change reaches a node at its next reload, within seconds.
+         */
+        put: operations["setSupplierCredentialLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/pending-mappings": {
         parameters: {
             query?: never;
@@ -1144,6 +1164,15 @@ export interface components {
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
+            /** @description The requests the credential's minute admits, or null for no ceiling of Axiom's. */
+            requests_per_minute: number | null;
+        };
+        CredentialLimits: {
+            /** @description The calls the key has in flight at once. A new binding starts at 4. */
+            max_concurrency: number;
+            /** @description The requests its minute admits; null is no ceiling of Axiom's. */
+            requests_per_minute: number | null;
+            reason: components["schemas"]["Reason"];
         };
         /** @description A key the supplier lists that Axiom has not bound to a group. */
         UpstreamKey: {
@@ -2285,6 +2314,44 @@ export interface operations {
         responses: {
             /** @description Binding. */
             201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialLimits"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;

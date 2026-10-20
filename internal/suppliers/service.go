@@ -79,8 +79,9 @@ type Service struct {
 	snap      atomic.Pointer[snapshot]
 	schedules atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
 	reloadMu  sync.Mutex // one Reload at a time; no call takes it
-	// What outlives a snapshot: the in-flight count and rest of a credential must not reset when the snapshot is rebuilt
-	// while calls run. Each lock is held for a lookup, never while anything is parsed or decrypted.
+	// What outlives a snapshot: the in-flight count, the rest and the minute's requests of a credential must not reset
+	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
+	// decrypted.
 	runtimeMu sync.Mutex
 	runtime   map[uuid.UUID]*credRuntime
 	cancelsMu sync.RWMutex
@@ -130,6 +131,56 @@ func New(cfg Config) (*Service, error) {
 type credRuntime struct {
 	inflight atomic.Int32
 	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
+
+	// The requests this node has started in the minute it is counting, when the credential has a per-minute limit.
+	// mu holds start and used together, because checking the limit and counting the request one step
+	// (README.md「并发与速率」).
+	mu    sync.Mutex
+	start time.Time
+	used  int32
+}
+
+// minute is the window a per-minute limit is counted over.
+const minute = time.Minute
+
+// room is whether the minute now counting admits another request, or the credential has no per-minute limit. It is a
+// hint for picking a credential: take is the one that decides.
+func (rt *credRuntime) room(now time.Time, limit int32) bool {
+	if limit == 0 {
+		return true
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.used < limit || !now.Before(rt.start.Add(minute))
+}
+
+// take counts one request at now, and says whether it was below the limit; a credential without one takes every
+// request. The count and the check are one step under mu, so two callers cannot both take the last request of a minute
+// (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier, whose own count
+// it is in.
+func (rt *credRuntime) take(now time.Time, limit int32) bool {
+	if limit == 0 {
+		return true
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.start.IsZero() || !now.Before(rt.start.Add(minute)) {
+		rt.start, rt.used = now, 0
+	}
+	if rt.used >= limit {
+		return false
+	}
+	rt.used++
+	return true
+}
+
+// ceiling is a per-minute limit as the snapshot holds it: a column with no value is no ceiling of Axiom's, which is
+// zero here.
+func ceiling(n *int32) int32 {
+	if n == nil {
+		return 0
+	}
+	return *n
 }
 
 // endpoint is what is needed to call one endpoint, and to turn its costs into money: what a unit of its supplier's
@@ -148,11 +199,12 @@ type endpoint struct {
 }
 
 type credential struct {
-	id      uuid.UUID
-	key     secret.Secret
-	max     int32
-	expires *time.Time
-	rt      *credRuntime
+	id        uuid.UUID
+	key       secret.Secret
+	max       int32
+	perMinute int32 // requests a minute this node starts, 0 for no ceiling of ours
+	expires   *time.Time
+	rt        *credRuntime
 }
 
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
@@ -297,7 +349,10 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
-	return &credential{id: r.CredentialID, key: key, max: r.MaxConcurrency, expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID)}, nil
+	return &credential{
+		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID),
+	}, nil
 }
 
 // runtimeOf is the running state of a credential, made when it is first seen and kept after.
