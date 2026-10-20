@@ -424,11 +424,17 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry) (*pg.DB, *secret.Keyring, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
 	defer cancel()
+	// Read before the database, so a file the node cannot use is named as such instead of as a connection failure, and
+	// CheckRing then checks this ring under the lock instead of reading the file again.
+	master, err := secret.Load(cfg.masterKeyFile)
+	if err != nil {
+		return nil, nil, err
+	}
 	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel)
 	if err != nil {
 		return nil, nil, err
 	}
-	ring, _, err := keyRotation(db, cfg.masterKeyFile).Check(ctx)
+	ring, _, err := keyRotation(db, cfg.masterKeyFile).CheckRing(ctx, master)
 	if err == nil {
 		return db, ring, nil
 	}

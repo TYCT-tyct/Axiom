@@ -59,16 +59,27 @@ func (r Rotation) ensureNoWriters(ctx context.Context, tx pg.Tx) error {
 	return nil
 }
 
-// Check bootstraps legacy metadata once, checks every required version, and returns an immutable ring whose
-// write version comes from the database. Call it before starting any worker or accepting requests.
+// Check reads the ring at Path, then bootstraps legacy metadata once, checks every required version, and returns an
+// immutable ring whose write version comes from the database. Call it before starting any worker or accepting requests.
 func (r Rotation) Check(ctx context.Context) (*Keyring, KeyStatus, error) {
-	var ring *Keyring
+	return r.check(ctx, nil)
+}
+
+// CheckRing is Check on a ring the caller has already read. A node reads the file before it opens the database, so a
+// file it cannot use is reported without one, and the transaction still reads the file only once.
+func (r Rotation) CheckRing(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus, error) {
+	return r.check(ctx, ring)
+}
+
+func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus, error) {
 	var status KeyStatus
 	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
 		var err error
-		ring, err = Load(r.Path)
-		if err != nil {
-			return err
+		if ring == nil {
+			ring, err = Load(r.Path)
+			if err != nil {
+				return err
+			}
 		}
 		if err := bootstrapRing(ctx, tx, ring); err != nil {
 			return err
