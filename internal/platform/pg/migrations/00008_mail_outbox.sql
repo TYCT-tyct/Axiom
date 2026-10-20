@@ -31,11 +31,12 @@ GRANT SELECT, INSERT (site_id, account_id, recipient, subject, text_body, html_b
     ON platform.mail_outbox TO axiom_app;
 
 -- A worker starts with the id the queue carries and nothing else, so it must learn the row's tenant before any scope
--- is set. The lookup does that and nothing more: the role reads the two tenant columns through a policy of its own,
--- and the function returns them, so the payload is read by the application in the tenant's scope (the pattern of
--- internal/accounts' 00002_lookup.sql).
+-- is set. The lookup does that and nothing more: the role reads the row's id, which it matches, and its two tenant
+-- columns, through a policy of its own, and the function returns those two, so the payload is read by the application
+-- in the tenant's scope (the pattern of internal/accounts' 00002_lookup.sql, which likewise grants every column its
+-- functions match on).
 GRANT USAGE ON SCHEMA platform TO axiom_lookup;
-GRANT SELECT (site_id, account_id) ON platform.mail_outbox TO axiom_lookup;
+GRANT SELECT (id, site_id, account_id) ON platform.mail_outbox TO axiom_lookup;
 CREATE POLICY lookup ON platform.mail_outbox FOR SELECT TO axiom_lookup USING (true);
 
 -- The tenant of the queued message with this id; no row (sent, refused, or deleted) gives an empty result.

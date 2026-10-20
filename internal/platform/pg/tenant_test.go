@@ -20,7 +20,7 @@ CREATE POLICY tenant ON accounts.notes USING (platform.in_scope(site_id, account
 CREATE POLICY lookup ON accounts.notes FOR SELECT TO axiom_lookup USING (true);
 GRANT USAGE ON SCHEMA accounts TO axiom_app, axiom_lookup;
 GRANT SELECT, INSERT, DELETE ON accounts.notes TO axiom_app;
-GRANT SELECT (site_id, account_id) ON accounts.notes TO axiom_lookup;
+GRANT SELECT (id, site_id, account_id) ON accounts.notes TO axiom_lookup;
 CREATE FUNCTION accounts.note_tenant(id uuid) RETURNS TABLE (site_id uuid, account_id uuid)
 	LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp
 	AS $$ SELECT n.site_id, n.account_id FROM accounts.notes n WHERE n.id = note_tenant.id $$;
