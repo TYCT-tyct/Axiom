@@ -59,6 +59,11 @@ func TestRelayResponsesFailureUsage(t *testing.T) {
 			5, 11, true, true,
 		},
 		{
+			"the error event before the content, with usage",
+			responsesErrorEvent(0, "context_length_exceeded", "too long", `{"input_tokens":5,"output_tokens":11}`),
+			5, 11, true, true,
+		},
+		{
 			"an earlier count only bounds the output",
 			responsesFailureStream(`{"output_tokens":4}`, responsesFailed(4, `{"input_tokens":5}`)),
 			5, 4, true, false,
