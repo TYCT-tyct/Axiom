@@ -59,15 +59,17 @@ var taken = func() []string {
 	return names
 }()
 
-// forwardable copies the client's headers that any protocol takes, as they came: attempt.upstreamHeader cuts them to its
-// endpoint's protocol and derives the session ones. Every other header is dropped here, which includes the client's
-// credentials, x-axiom-*, x-claude-code-*, HTTP-Referer and X-Title (docs/domains/gateway.md「转发规则」).
+// forwardable copies the client's headers that any protocol takes, their values as they came, under the canonical name
+// attempts read them by: attempt.upstreamHeader cuts them to its endpoint's protocol and derives the session ones. Every
+// other header is dropped here, which includes the client's credentials, x-axiom-*, x-claude-code-*, HTTP-Referer and
+// X-Title (docs/domains/gateway.md「转发规则」).
 func forwardable(in http.Header) http.Header {
 	out := make(http.Header, len(taken))
-	for _, name := range taken {
-		if v := in.Values(name); len(v) > 0 {
-			out[name] = append([]string(nil), v...)
+	for name, values := range in {
+		if name = http.CanonicalHeaderKey(name); !slices.Contains(taken, name) {
+			continue
 		}
+		out[name] = append(out[name], values...)
 	}
 	return out
 }
