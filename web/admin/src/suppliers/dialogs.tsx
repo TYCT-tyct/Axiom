@@ -269,7 +269,7 @@ export function LimitsDialog({
             name="requests_per_minute"
             inputMode="numeric"
             autoComplete="off"
-            defaultValue={credential.requests_per_minute === null ? "" : String(credential.requests_per_minute)}
+            defaultValue={credential.requests_per_minute === undefined ? "" : String(credential.requests_per_minute)}
           />
         </>
       )}
@@ -286,7 +286,7 @@ export function LimitsDialog({
         )
       }
       done={(changed) =>
-        changed.requests_per_minute === null ? (
+        changed.requests_per_minute === undefined ? (
           <p>{t("suppliers.limits.doneUnbounded", { concurrency: format.number(changed.max_concurrency) })}</p>
         ) : (
           <p>

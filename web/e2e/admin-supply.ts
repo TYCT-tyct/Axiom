@@ -160,7 +160,6 @@ function bindKey({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier
     upstream_key_ref: key.ref,
     status: "binding",
     max_concurrency: 4,
-    requests_per_minute: null,
   } as const;
   detail.credentials.push(credential);
   return { status: 201, json: credential } as const;
@@ -177,7 +176,7 @@ function setLimits({
     return fail(404, "not_found");
   }
   credential.max_concurrency = body.max_concurrency;
-  credential.requests_per_minute = body.requests_per_minute;
+  credential.requests_per_minute = body.requests_per_minute ?? undefined;
   return ok(credential);
 }
 

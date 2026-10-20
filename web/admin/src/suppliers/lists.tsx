@@ -136,7 +136,7 @@ export function Credentials({
               </Td>
               <Td className="hidden tabular-nums md:table-cell">{format.number(credential.max_concurrency)}</Td>
               <Td className="hidden tabular-nums md:table-cell">
-                {credential.requests_per_minute === null ? "—" : format.number(credential.requests_per_minute)}
+                {credential.requests_per_minute === undefined ? "—" : format.number(credential.requests_per_minute)}
               </Td>
               {onOpen ? (
                 <Td className="whitespace-nowrap">
