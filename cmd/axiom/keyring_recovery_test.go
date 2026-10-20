@@ -10,6 +10,15 @@ import (
 	"axiom/internal/platform/secret"
 )
 
+// restoreKeyFile puts contents back where the fixture's key file lives, as a crash between a commit and the file
+// replacement leaves it.
+func restoreKeyFile(t *testing.T, path string, contents []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, contents, 0o600); err != nil { //nolint:gosec // the path is the fixture's own temp file
+		t.Fatal(err)
+	}
+}
+
 func TestKeyringAddRecoversAfterFilePersisted(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
@@ -54,9 +63,7 @@ func TestKeyringRetireRecoversAfterMetadataCommitted(t *testing.T) {
 	f.run("rewrap")
 	f.run("retire", "--version", "1")
 	// Reproduce a crash after the retirement commit but before the file replacement.
-	if err := os.WriteFile(f.path, both, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	restoreKeyFile(t, f.path, both)
 	f.run("retire", "--version", "1")
 	if got := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action='keyring.retire'"); got != "1" {
 		t.Fatalf("retry recorded %s retirements, want one", got)
@@ -131,9 +138,7 @@ func TestKeyringRetiredMaterialCannotUseAnotherVersion(t *testing.T) {
 	}
 	// A unique fingerprint tombstone also refuses old material relabeled after it left the live file.
 	relabeled := strings.Replace(string(old), "1:", "3:", 1)
-	if err := os.WriteFile(f.path, append(active, []byte(relabeled)...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	restoreKeyFile(t, f.path, append(active, []byte(relabeled)...))
 	if _, err := secret.Load(f.path); err != nil {
 		t.Fatal(err)
 	}

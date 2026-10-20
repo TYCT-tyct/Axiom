@@ -39,7 +39,7 @@ func newRotationFixture(t *testing.T) rotationFixture {
 	return f
 }
 
-func (f *rotationFixture) seed() {
+func (f rotationFixture) seed() {
 	f.t.Helper()
 	ctx := f.t.Context()
 	keys := masterKeys(f.t)
@@ -113,28 +113,15 @@ func (f rotationFixture) read(row rotationEnvelope) secret.Sealed {
 func TestKeyringRotationEndToEnd(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	f.run("add", "--version", "2")
-	ring, status, err := f.r.Check(t.Context())
-	if err != nil || status.Active != 1 || len(status.Readable) != 2 {
-		t.Fatalf("adding activated a write key or lost a readable key: %+v, %v", status, err)
-	}
-	if ring.Seal(secret.New("new data"), secret.Location{Table: "test", RowID: "1", Purpose: "test"}).KeyVersion != 1 {
-		t.Fatal("a newly added readable key was used for writes")
-	}
-	f.run("activate", "--version", "2")
-	if err := f.r.Retire(t.Context(), 1); err == nil || !strings.Contains(err.Error(), "still referenced") {
-		t.Fatalf("retired a referenced key: %v", err)
-	}
-	if err := f.r.Retire(t.Context(), 2); err == nil {
-		t.Fatal("retired the active key")
-	}
+	f.addAndActivate("2")
+	// A rotated read is only useful once the data written before the switch is readable under the new version.
 	if out := f.run("rewrap", "--batch-size", "1", "--max-batches", "1"); !strings.Contains(out, `"paused"`) {
 		t.Fatalf("bounded run did not pause: %s", out)
 	}
 	if out := f.run("rewrap", "--batch-size", "1"); !strings.Contains(out, `"done"`) {
 		t.Fatalf("resume did not finish: %s", out)
 	}
-	if got := f.text("SELECT sum((detail->>'count')::int)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "3" {
+	if got := f.rewrapped(); got != "3" {
 		t.Fatalf("rewrapped/audited %s rows, want 3", got)
 	}
 	audits := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action LIKE 'keyring.%'")
@@ -146,7 +133,7 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 	}
 	f.run("retire", "--version", "1")
 	f.run("retire", "--version", "1")
-	ring, status, err = f.r.Check(t.Context())
+	ring, status, err := f.r.Check(t.Context())
 	if err != nil || status.Active != 2 || len(status.Readable) != 1 || len(status.Retired) != 1 {
 		t.Fatalf("retirement status: %+v, %v", status, err)
 	}
@@ -154,6 +141,33 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 	if err := f.r.Add(t.Context(), 1); err == nil {
 		t.Fatal("reused a retired version")
 	}
+}
+
+// addAndActivate runs the two lifecycle commands of a rotation and checks what adding alone must not do: change the
+// write version, or leave the new key unusable for later reads.
+func (f rotationFixture) addAndActivate(version string) {
+	f.t.Helper()
+	f.run("add", "--version", version)
+	ring, status, err := f.r.Check(f.t.Context())
+	if err != nil || status.Active != 1 || len(status.Readable) != 2 {
+		f.t.Fatalf("adding activated a write key or lost a readable key: %+v, %v", status, err)
+	}
+	if ring.Seal(secret.New("new data"), secret.Location{Table: "test", RowID: "1", Purpose: "test"}).KeyVersion != 1 {
+		f.t.Fatal("a newly added readable key was used for writes")
+	}
+	f.run("activate", "--version", version)
+	if err := f.r.Retire(f.t.Context(), 1); err == nil || !strings.Contains(err.Error(), "still referenced") {
+		f.t.Fatalf("retired a referenced key: %v", err)
+	}
+	if err := f.r.Retire(f.t.Context(), 2); err == nil {
+		f.t.Fatal("retired the active key")
+	}
+}
+
+// rewrapped is the number of envelopes the rewrap audit entries report, which is also the number of committed batches.
+func (f rotationFixture) rewrapped() string {
+	f.t.Helper()
+	return f.text("SELECT coalesce(sum((detail->>'count')::int), 0)::text FROM platform.audit_log WHERE action='keyring.rewrap'")
 }
 
 func (f rotationFixture) verifyRotated(ring *secret.Keyring) {
@@ -218,8 +232,10 @@ func TestKeyringCheckMissingAndMismatchedVersions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// This replacement file simulates a node that was missed during distribution.
-			environ := []string{pg.DatabaseURLVar + "=" + f.database.App, masterKeyFileVar + "=" + tc.path,
-				keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i')}
+			environ := []string{
+				pg.DatabaseURLVar + "=" + f.database.App, masterKeyFileVar + "=" + tc.path,
+				keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'),
+			}
 			var out bytes.Buffer
 			err := keyringCommand(t.Context(), environ, []string{"check"}, &out)
 			if err == nil || !strings.Contains(err.Error(), tc.reason) {
@@ -258,9 +274,16 @@ func TestKeyringAuditFailureRollsBackBatch(t *testing.T) {
 
 func TestKeyringArgs(t *testing.T) {
 	for _, args := range [][]string{
-		nil, {"unknown"}, {"add"}, {"add", "--version", "0"}, {"activate", "--version", "01"},
-		{"retire", "--version", "4294967296"}, {"rewrap", "--batch-size", "0"},
-		{"rewrap", "--batch-size", "1001"}, {"rewrap", "--max-batches", "-1"}, {"check", "--version", "1"},
+		nil,
+		{"unknown"},
+		{"add"},
+		{"add", "--version", "0"},
+		{"activate", "--version", "01"},
+		{"retire", "--version", "4294967296"},
+		{"rewrap", "--batch-size", "0"},
+		{"rewrap", "--batch-size", "1001"},
+		{"rewrap", "--max-batches", "-1"},
+		{"check", "--version", "1"},
 	} {
 		if _, err := parseKeyringArgs(args); err == nil {
 			t.Errorf("accepted invalid arguments %v", args)
