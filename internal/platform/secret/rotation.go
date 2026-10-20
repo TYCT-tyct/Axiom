@@ -131,16 +131,63 @@ func insertVersion(ctx context.Context, tx pg.Tx, version uint32, fingerprint [3
 	return nil
 }
 
-// checkVersions reports missing or mismatched material, and a retired version that is still in the local file. The
-// version being retired is exempt: its tombstone is already committed and the file is pruned by the same command.
+// versionCheck collects what the database says about each version and how the local ring compares.
+type versionCheck struct {
+	readable, retired, missing, mismatched, held []uint32
+	active                                       uint32
+}
+
+func newVersionCheck() versionCheck {
+	return versionCheck{readable: []uint32{}, retired: []uint32{}}
+}
+
+// add records one row. A retired version that is still in the local file is held, unless it is the version being
+// retired: its tombstone is already committed and the same command prunes the file.
+func (c *versionCheck) add(ring *Keyring, version uint32, fingerprint []byte, state string, retiring uint32) {
+	if state == "retired" {
+		c.retired = append(c.retired, version)
+		if _, ok := ring.fingerprints[version]; ok && version != retiring {
+			c.held = append(c.held, version)
+		}
+		return
+	}
+	c.readable = append(c.readable, version)
+	if state == "active" {
+		c.active = version
+	}
+	if local, ok := ring.fingerprints[version]; !ok {
+		c.missing = append(c.missing, version)
+	} else if !bytes.Equal(local[:], fingerprint) {
+		c.mismatched = append(c.mismatched, version)
+	}
+}
+
+// err is nil only when every version the database knows is held locally with the same material, no retired version
+// remains in the file, and one version is active.
+func (c *versionCheck) err() error {
+	if len(c.held) > 0 {
+		return fmt.Errorf("keyring: retired versions still in the local file: %v", c.held)
+	}
+	if len(c.missing)+len(c.mismatched) > 0 {
+		return fmt.Errorf("keyring: missing versions %v; mismatched versions %v", c.missing, c.mismatched)
+	}
+	if c.active == 0 {
+		return errors.New("keyring: no active version")
+	}
+	return nil
+}
+
+func (c *versionCheck) status() KeyStatus {
+	return KeyStatus{Active: c.active, Readable: c.readable, Retired: c.retired}
+}
+
 func checkVersions(ctx context.Context, tx pg.Tx, ring *Keyring, retiring uint32) (KeyStatus, error) {
 	rows, err := tx.Query(ctx, "SELECT version, fingerprint, state FROM platform.key_versions ORDER BY version")
 	if err != nil {
 		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", err)
 	}
 	defer rows.Close()
-	status := KeyStatus{Readable: []uint32{}, Retired: []uint32{}}
-	var missing, mismatched, held []uint32
+	found := newVersionCheck()
 	for rows.Next() {
 		var version uint32
 		var fingerprint []byte
@@ -148,36 +195,15 @@ func checkVersions(ctx context.Context, tx pg.Tx, ring *Keyring, retiring uint32
 		if err := rows.Scan(&version, &fingerprint, &state); err != nil {
 			return KeyStatus{}, fmt.Errorf("keyring: cannot decode versions: %w", err)
 		}
-		if state == "retired" {
-			status.Retired = append(status.Retired, version)
-			if _, ok := ring.fingerprints[version]; ok && version != retiring {
-				held = append(held, version)
-			}
-			continue
-		}
-		status.Readable = append(status.Readable, version)
-		if state == "active" {
-			status.Active = version
-		}
-		if local, ok := ring.fingerprints[version]; !ok {
-			missing = append(missing, version)
-		} else if !bytes.Equal(local[:], fingerprint) {
-			mismatched = append(mismatched, version)
-		}
+		found.add(ring, version, fingerprint, state, retiring)
 	}
-	if rows.Err() != nil {
-		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", rows.Err())
+	if err := rows.Err(); err != nil {
+		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", err)
 	}
-	if len(held) > 0 {
-		return KeyStatus{}, fmt.Errorf("keyring: retired versions still in the local file: %v", held)
+	if err := found.err(); err != nil {
+		return KeyStatus{}, err
 	}
-	if len(missing)+len(mismatched) > 0 {
-		return KeyStatus{}, fmt.Errorf("keyring: missing versions %v; mismatched versions %v", missing, mismatched)
-	}
-	if status.Active == 0 {
-		return KeyStatus{}, errors.New("keyring: no active version")
-	}
-	return status, nil
+	return found.status(), nil
 }
 
 // Add generates and durably stores a new readable key without changing the current write version.
