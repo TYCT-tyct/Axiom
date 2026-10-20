@@ -1,0 +1,342 @@
+package protocol
+
+import (
+	"bytes"
+	"encoding/json/jsontext" //nolint:depguard // as in canon.go
+	"fmt"
+	"strconv"
+
+	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol/internal/sse"
+)
+
+// chatToNative adapts new-api relaykit/relayconvert/internal/oai_chat/
+// to_oai_responses_stream_resp.go (603a5ce) and sub2api's
+// backend/internal/pkg/apicompat/chatcompletions_anthropic_bridge.go (8f2cbb5).
+// Chat owns metering; this state owns only the client's event lifecycle. Unlike
+// the references, retained output and deferred parallel calls draw on the budget.
+type chatToNative struct {
+	aggBase
+	inner             upstream
+	client            Format
+	o                 RelayOptions
+	items             []chatOutput
+	tools             map[int64]int
+	toolIDs           map[string]bool
+	active            int
+	messageNext       int // first Messages block that has not closed
+	seq               int64
+	started, finished bool
+	published         bool // at least one batch has been handed to Relay, including its buffered prelude
+	reason            string
+	out               []byte
+	scratch           int
+}
+
+type chatOutput struct {
+	kind, id, name  string
+	text            []byte // JSON string contents, with escapes intact
+	sent            int
+	started, closed bool
+}
+
+type nativeChatChunk struct {
+	Choices []nativeChatChoice `json:"choices"`
+}
+
+type nativeChatChoice struct {
+	Index int64 `json:"index"`
+	Delta struct {
+		Content          jsontext.Value `json:"content"`
+		Reasoning        jsontext.Value `json:"reasoning"`
+		ReasoningContent jsontext.Value `json:"reasoning_content"`
+		Refusal          jsontext.Value `json:"refusal"`
+		Details          jsontext.Value `json:"reasoning_details"`
+		Tools            []struct {
+			Index    int64  `json:"index"`
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Function struct {
+				Name      string         `json:"name"`
+				Arguments jsontext.Value `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+	} `json:"delta"`
+	Finish string `json:"finish_reason"`
+}
+
+func newChatToMessages(u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	return newChatToNative(Messages, u, o, charge)
+}
+
+func newChatToResponses(u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	return newChatToNative(Responses, u, o, charge)
+}
+
+func newChatToNative(f Format, u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	inner := newChatStreamReader(u, o, charge)
+	inner.converting = true
+	s := &chatToNative{client: f, o: o, inner: inner, active: -1,
+		tools: map[int64]int{}, toolIDs: map[string]bool{}}
+	s.init(charge)
+	return s
+}
+
+func (s *chatToNative) event(data []byte, m *meter) (event, error) {
+	e, err := s.inner.event(data, m)
+	if err != nil {
+		return event{}, err
+	}
+	out := event{role: skipped, usageAt: -1, content: e.content, searches: e.searches, usage: e.usage, final: e.final}
+	if string(data) == sse.Done {
+		if !s.started || !s.finished {
+			return event{}, fmt.Errorf("%w: Chat ended without a finished choice", ErrUpstream)
+		}
+		if err := s.completeItems(); err != nil {
+			return event{}, err
+		}
+		out.role = end
+		return out, nil
+	}
+	chunk, err := s.readChunk(data)
+	if err != nil {
+		return event{}, err
+	}
+	s.out = s.out[:0]
+	for _, choice := range chunk.Choices {
+		if err := s.choice(choice); err != nil {
+			return event{}, err
+		}
+	}
+	if len(s.out) > 0 {
+		s.published = true
+		out.data, out.framed, out.role = s.out, true, passive
+		if e.content > 0 {
+			out.role = content
+		}
+	}
+	return out, nil
+}
+
+func (s *chatToNative) readChunk(data []byte) (nativeChatChunk, error) {
+	// The typed decoder's transient structures are bounded by the input's bytes
+	// and objects, just as PrepareCost bounds request conversion.
+	n := len(data)*convertPerByte + bytes.Count(data, []byte("{"))*convertPerObject
+	if n > s.scratch {
+		if err := s.draw(n - s.scratch); err != nil {
+			return nativeChatChunk{}, err
+		}
+		s.scratch = n
+	}
+	var chunk nativeChatChunk
+	if err := jsonx.Unmarshal(data, &chunk); err != nil {
+		return nativeChatChunk{}, upstreamFailure(err)
+	}
+	return chunk, nil
+}
+
+func (s *chatToNative) choice(choice nativeChatChoice) error {
+	if choice.Index != 0 || s.finished {
+		return fmt.Errorf("%w: extra choice or content after Chat finish", ErrUpstream)
+	}
+	if !s.started {
+		if err := s.start(); err != nil {
+			return err
+		}
+	}
+	if err := s.choiceText(choice); err != nil {
+		return err
+	}
+	for _, call := range choice.Delta.Tools {
+		if call.Type != "" && call.Type != "function" {
+			return fmt.Errorf("%w: non-function Chat tool", ErrUpstream)
+		}
+		if err := s.toolDelta(call.Index, call.ID, call.Function.Name, call.Function.Arguments); err != nil {
+			return err
+		}
+	}
+	if choice.Finish != "" {
+		if inverseName(messagesFinish, strconv.Quote(choice.Finish)) == "" {
+			return fmt.Errorf("%w: unknown Chat finish reason %q", ErrUpstream, choice.Finish)
+		}
+		s.finished, s.reason = true, choice.Finish
+	}
+	return nil
+}
+
+func (s *chatToNative) choiceText(choice nativeChatChoice) error {
+	d := choice.Delta
+	if !isNull(d.Details) && string(d.Details) != "[]" {
+		return fmt.Errorf("%w: Chat reasoning_details cannot be represented by this client", ErrUpstream)
+	}
+	for _, text := range []struct {
+		kind string
+		v    jsontext.Value
+	}{{"thinking", given(d.Reasoning, d.ReasoningContent)}, {"text", d.Content}, {"refusal", d.Refusal}} {
+		if !isNull(text.v) && string(text.v) != `""` {
+			if err := s.textDelta(text.kind, text.v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *chatToNative) addOutput(kind, id, name string) (int, error) {
+	// The final Responses snapshot materializes a map and encoded item per entry;
+	// empty tools still need that room, independent of their argument byte count.
+	if err := s.take(len(id)+len(name)+2048, 2); err != nil {
+		return 0, err
+	}
+	items, err := grow(&s.aggBase, s.items, 1, 2)
+	if err != nil {
+		return 0, err
+	}
+	s.items = append(items, chatOutput{kind: kind, id: id, name: name})
+	return len(s.items) - 1, nil
+}
+
+func (s *chatToNative) textDelta(kind string, v jsontext.Value) error {
+	i := s.active
+	if i < 0 || s.items[i].kind != kind {
+		var err error
+		i, err = s.addOutput(kind, "", "")
+		if err != nil {
+			return err
+		}
+		s.active = i
+	}
+	return s.appendDelta(i, v)
+}
+
+func (s *chatToNative) toolDelta(index int64, id, name string, v jsontext.Value) error {
+	i, exists := s.tools[index]
+	if !exists {
+		if index != int64(len(s.tools)) || id == "" || name == "" || s.toolIDs[id] {
+			return fmt.Errorf("%w: Chat tool starts without consecutive index, id or name", ErrUpstream)
+		}
+		var err error
+		i, err = s.addOutput("tool_use", id, name)
+		if err != nil {
+			return err
+		}
+		s.tools[index] = i
+		s.toolIDs[id] = true
+	} else if id != "" && id != s.items[i].id || name != "" && name != s.items[i].name {
+		return fmt.Errorf("%w: Chat tool changed identity", ErrUpstream)
+	}
+	s.active = i
+	return s.appendDelta(i, v)
+}
+
+func (s *chatToNative) appendDelta(i int, v jsontext.Value) error {
+	it := &s.items[i]
+	if !isNull(v) {
+		if err := s.add(&it.text, v, 8); err != nil {
+			return err
+		}
+	}
+	if s.client == Responses {
+		return s.responseDelta(i)
+	}
+	return s.messagesDelta(i)
+}
+
+func (s *chatToNative) emit(name string, members requestObject) error {
+	members["type"] = jsonValue(name)
+	if s.client == Responses {
+		members["sequence_number"] = jsonValue(s.seq)
+		s.seq++
+	}
+	// Account before serializing; the object consists only of retained raw JSON,
+	// indexes and fixed field names. The output buffer is reused between chunks.
+	size := 128 + len(name)
+	for key, value := range members {
+		size += len(key) + len(value) + 8
+	}
+	var err error
+	s.out, err = grow(&s.aggBase, s.out, size+len(name)+16, 2)
+	if err != nil {
+		return err
+	}
+	s.out = sse.AppendEvent(s.out, name, jsonValue(members))
+	return nil
+}
+
+func (s *chatToNative) start() error {
+	s.started = true
+	if s.client == Messages {
+		return s.emit("message_start", requestObject{"message": jsonValue(requestObject{
+			"id": jsonValue(s.o.ID), "type": jsonValue("message"), "role": jsonValue("assistant"), "model": jsonValue(s.o.Model),
+			"content": jsontext.Value("[]"), "stop_reason": jsontext.Value("null"), "stop_sequence": jsontext.Value("null"),
+			"usage": jsontext.Value(`{"input_tokens":0,"output_tokens":0}`),
+		})})
+	}
+	return s.emit("response.created", requestObject{"response": s.response("in_progress", nil)})
+}
+
+func (s *chatToNative) completeItems() error {
+	s.out = s.out[:0]
+	for i := range s.items {
+		it := &s.items[i]
+		if it.kind == "tool_use" {
+			if len(it.text) == 0 {
+				it.text = append(it.text, "{}"...)
+			}
+			if s.client == Messages {
+				if _, err := arguments(quotedContents(it.text)); err != nil {
+					return &faultError{fault: FaultToolInput, detail: err.Error()}
+				}
+			}
+		}
+		if s.client == Messages {
+			if err := s.messagesDelta(i); err != nil {
+				return err
+			}
+			if err := s.closeMessageBlock(i); err != nil {
+				return err
+			}
+		} else if err := s.closeResponseItem(i); err != nil {
+			return err
+		}
+	}
+	// Finish writes these frames only after settlement. Their capacity was charged
+	// above, including the complete Responses snapshot retained by the items.
+	return nil
+}
+
+func (s *chatToNative) dropBuffers() {
+	s.inner.dropBuffers()
+	s.items, s.tools, s.toolIDs, s.out = nil, nil, nil, nil
+	s.reader = reader{}
+}
+
+func (s *chatToNative) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
+	if s.client == Messages {
+		return (*messagesStream)(nil).failure(dst, e, u, cost)
+	}
+	writer := &responsesStream{seq: s.seq - 1, created: s.published}
+	writer.id, writer.model = strconv.Quote(s.o.ID), strconv.Quote(s.o.Model)
+	return writer.failure(dst, e, u, cost)
+}
+
+func (s *chatToNative) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
+	dst = append(dst, s.out...)
+	if s.client == Messages {
+		reason := inverseName(messagesFinish, strconv.Quote(s.reason))
+		data := appendQuoted([]byte(`{"type":"message_delta","delta":{"stop_reason":`), reason)
+		data = append(data, `,"stop_sequence":null},"usage":`...)
+		data = append(appendMessagesUsage(data, u, cost), top+"}"...)
+		dst = sse.AppendEvent(dst, "message_delta", data)
+		return sse.AppendEvent(dst, "message_stop", []byte(`{"type":"message_stop"}`))
+	}
+	status := "completed"
+	if inverseName(responsesIncomplete, strconv.Quote(s.reason)) != "" {
+		status = "incomplete"
+	}
+	name := "response." + status
+	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,"response":`, name, s.seq)
+	data = append(data, s.response(status, appendOpenAIUsage(nil, responsesNames, u, cost))...)
+	return sse.AppendEvent(dst, name, append(data, top+"}"...))
+}
