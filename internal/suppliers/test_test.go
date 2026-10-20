@@ -53,7 +53,7 @@ func newTestUpstream(t *testing.T, mode int) *testUpstream {
 		rw.Header().Set("Content-Type", "text/event-stream")
 		rw.Header().Set("X-Ref", "ref-1")
 		rw.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(rw, chatEvent(`"choices":[{"index":0,"delta":{"role":"assistant","content":"he"}}`)) //nolint:errcheck // a test server
+		_, _ = io.WriteString(rw, chatEvent(`"choices":[{"index":0,"delta":{"role":"assistant","content":"he"}}]`)) //nolint:errcheck // a test server
 		flush(rw)
 		if u.mode == answersBroken {
 			if conn, _, err := rw.(http.Hijacker).Hijack(); err == nil {
