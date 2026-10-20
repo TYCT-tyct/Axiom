@@ -33,14 +33,16 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
   if (!account) {
     return fail(404, "not_found");
   }
-  const amount = BigInt(body.amount.amount);
+  // An offline payment buys what it was paid in the site's currency; the mock keeps no exchange rates.
+  const credit = body.source === "offline_payment" ? body.payment?.amount : body.amount;
+  const { currency } = account.balance.balance;
+  const amount = BigInt(credit?.amount ?? "0");
   const expires = body.expires_at !== undefined; // refused: nothing writes off an expired batch yet
-  if (amount <= 0n || amount > grantLimit || body.amount.currency !== account.balance.balance.currency || expires) {
+  if (amount <= 0n || amount > grantLimit || credit?.currency !== currency || expires) {
     return fail(422, "unprocessable");
   }
   const balance = BigInt(account.balance.balance.amount) + amount;
   const available = BigInt(account.balance.available.amount) + amount;
-  const { currency } = body.amount;
   account.balance = {
     ...account.balance,
     balance: { amount: String(balance), currency },
@@ -51,7 +53,9 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
     json: {
       id: `00000000-0000-4000-8000-${String(state.stored.size).padStart(12, "0")}`,
       account_id: account.id,
-      amount: body.amount,
+      source: body.source ?? "gift",
+      amount: { amount: String(amount), currency },
+      payment: body.payment,
       created_at: new Date().toISOString(),
       balance_after: account.balance,
     },
