@@ -1,0 +1,69 @@
+// Package payments takes top-ups: merchant accounts on payment channels, quotes, orders, callbacks, refunds and
+// reconciliation. README.md holds its interfaces, invariants and data; docs/domains/payments.md the behavior.
+package payments
+
+import (
+	"embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"sync/atomic"
+
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
+)
+
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+// Migrations is this module's migrations, which cmd/axiom hands to pg.Migrate and pg.DB.Check.
+func Migrations() pg.Module {
+	files, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		panic(err) // the directory is embedded, so this cannot happen
+	}
+	return pg.Module{Name: "payments", Migrations: files}
+}
+
+var queries = New()
+
+// Config is what Open needs.
+type Config struct {
+	DB       *pg.DB
+	Platform pg.Scope // for the reference exchange rates, which only the platform scope reads
+	Keyring  *secret.Keyring
+	Client   *egress.Client // what channels reach their gateways through
+	Plugins  []Plugin       // one per kind, compiled in
+	Logger   *slog.Logger   // where alerts go; default slog.Default()
+}
+
+// Payments is the module's service.
+type Payments struct {
+	db       *pg.DB
+	platform pg.Scope
+	keyring  *secret.Keyring
+	client   *egress.Client
+	plugins  map[Kind]Plugin
+	logger   *slog.Logger
+	turn     atomic.Uint64 // the round-robin position of merchant selection, per process as in sub2api
+}
+
+// Open checks the plugins: two plugins of one kind are a mistake in assembling the program and fail the start.
+func Open(c Config) (*Payments, error) {
+	if c.DB == nil || c.Keyring == nil {
+		return nil, errors.New("payments: a database and a keyring are required")
+	}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger}
+	if p.logger == nil {
+		p.logger = slog.Default()
+	}
+	for _, plugin := range c.Plugins {
+		if _, ok := p.plugins[plugin.Kind()]; ok {
+			return nil, fmt.Errorf("payments: two plugins of kind %q", plugin.Kind())
+		}
+		p.plugins[plugin.Kind()] = plugin
+	}
+	return p, nil
+}
