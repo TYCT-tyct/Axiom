@@ -2,10 +2,13 @@ package protocol
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: Prepare walks the body token by token
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"axiom/internal/catalog"
 )
@@ -251,7 +254,7 @@ var (
 				"stream_options": (*rewriter).streamOptions,
 			}),
 			add: (*rewriter).addChat, identities: 3,
-			room: len(addStream) + len(addStreamOptions) + len(addCap) + len(maxInt64),
+			room: len(addStream) + len(addStreamOptions) + len(addCompletionCap) + len(maxInt64),
 		},
 	}
 	// compactRules rewrite a compaction request: the members that must not reach an upstream as they are — the
@@ -304,10 +307,10 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
-	// addCap and addStreamOptions are what a Chat request lacks: the cap it was quoted at, as the member every
-	// OpenAI-compatible endpoint takes, and the option that makes the upstream report usage; forcedOptions stands for
-	// a null stream_options.
+	// addCap and addCompletionCap are the Chat members the output cap is written in (usesCompletionCap), addStreamOptions
+	// the option that makes the upstream report usage; forcedOptions stands for a null stream_options.
 	addCap           = `,"max_tokens":`
+	addCompletionCap = `,"max_completion_tokens":`
 	addStreamOptions = `,"stream_options":` + forcedOptions
 	forcedOptions    = `{"include_usage":true}`
 	// addStream asks for the upstream's stream when the endpoint streams one, since the gateway reads every call as a
@@ -325,7 +328,8 @@ type rewriter struct {
 	continues, stored, included, hasInput bool            // the Responses members seen
 	streamed                              bool            // the stream member seen
 	ending                                bool            // the event is the one that carries the final usage
-	capped                                bool            // max_output_tokens, or Chat's max_tokens or max_completion_tokens, has a value
+	capped                                bool            // max_output_tokens was given a value
+	chatCap                               int64           // the smallest of Chat's output caps above 0, 0 for none
 	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
@@ -579,15 +583,48 @@ func (p *rewriter) stream() error {
 	return err
 }
 
-// chatOutputCap keeps a Chat output cap that has a value and drops a null one, which stands for none: the member that
-// is added instead would otherwise be a duplicate. Either of the two members caps the output (Inspect reads the
-// larger), so a cap is added only when neither has a value.
+// chatOutputCap takes a Chat output cap out of the body, to be written again as the one member the endpoint reads
+// (addChat). The client's two members cap the same output, and which of them an endpoint reads depends on the endpoint,
+// so a cap the endpoint ignores must not stay and be taken for the bound the call was reserved at. The smallest value
+// above 0 is the client's cap; null and 0 stand for none (Inspect reads 0 as no cap too).
 func (p *rewriter) chatOutputCap() error {
-	if p.dec.PeekKind() == 'n' {
-		return p.drop()
+	v, err := p.dec.ReadValue()
+	p.at = p.offset()
+	if err != nil || v.Kind() != '0' {
+		return err
 	}
-	p.capped = true
-	return p.skip()
+	if n, perr := strconv.ParseInt(string(v), 10, 64); perr == nil && n > 0 && (p.chatCap == 0 || n < p.chatCap) {
+		p.chatCap = n
+	}
+	return nil
+}
+
+// usesCompletionCap reports whether a Chat endpoint of the model reads max_completion_tokens and refuses max_tokens:
+// OpenAI's o1, o3 and o4 reasoning models, GPT-5 and the GPT-6 Astra, Sol and Luna snapshots. It is new-api's rule
+// (relaykit/dto/openai_request.go, GetOpenAIChatCapabilities with IsOpenAIReasoningOModel and IsOpenAIGPT5Model,
+// 32e5874), which converts the member for them; every other endpoint, DeepSeek and Qwen among them, reads max_tokens
+// and ignores the other member. The model is the endpoint's name for it (Target.Model).
+func usesCompletionCap(model string) bool {
+	if strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") ||
+		model == "gpt-5" || strings.HasPrefix(model, "gpt-5-") || strings.HasPrefix(model, "gpt-5.") {
+		return true
+	}
+	for _, base := range [...]string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+		if rest, ok := strings.CutPrefix(model, base); ok && (rest == "" || isDatedSnapshot(rest)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDatedSnapshot reports whether s is "-" and a date, YYYY-MM-DD, as OpenAI names a snapshot of a model.
+func isDatedSnapshot(s string) bool {
+	date, ok := strings.CutPrefix(s, "-")
+	if !ok {
+		return false
+	}
+	_, err := time.Parse(time.DateOnly, date)
+	return err == nil
 }
 
 // streamOptions makes a streaming upstream report usage whatever the client wrote: the gateway meters from the
@@ -627,10 +664,16 @@ func (p *rewriter) forceUsage() error {
 	return err
 }
 
-// addChat appends what a Chat request lacks.
+// addChat appends the output cap in the member the endpoint reads, and what else a Chat request lacks. The cap is the
+// client's, else the one the call was quoted at, so that what is sent is what was reserved (I1).
 func (p *rewriter) addChat() error {
-	if !p.capped && p.t.MaxOutput > 0 {
-		p.out = strconv.AppendInt(append(p.out, addCap...), p.t.MaxOutput, 10)
+	limit := cmp.Or(p.chatCap, p.t.MaxOutput)
+	if limit > 0 {
+		member := addCap
+		if usesCompletionCap(p.t.Model) {
+			member = addCompletionCap
+		}
+		p.out = strconv.AppendInt(append(p.out, member...), limit, 10)
 	}
 	if p.t.Streams && !p.optioned {
 		p.out = append(p.out, addStreamOptions...)

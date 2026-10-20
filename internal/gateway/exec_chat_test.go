@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"strings"
@@ -52,4 +53,27 @@ func checkContains(t *testing.T, what, text string, wants ...string) {
 			t.Errorf("%s lacks %s:\n%s", what, want, text)
 		}
 	}
+}
+
+// TestAChatCapTheEndpointIgnoresIsNotTheBound: a client that caps its output in max_completion_tokens, sent to an
+// endpoint that reads only max_tokens (DeepSeek, Qwen), has the cap written in max_tokens, the member the endpoint
+// honors, so that the output is bounded by what the call was reserved for and not by the endpoint's own default.
+func TestAChatCapTheEndpointIgnoresIsNotTheBound(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{client: protocol.Chat, mutate: func(c *Call) {
+			c.Body = bytes.Replace(c.Body, []byte(`"stream": true`), []byte(`"stream": true, "max_completion_tokens": 1`), 1)
+			tiers := c.Request.ServiceTiers
+			var err error
+			if c.Request, err = protocol.Inspect(protocol.Chat, c.Body); err != nil {
+				t.Fatal(err)
+			}
+			c.Request.ServiceTiers = tiers
+		}})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+		h.run()
+		sent := string(h.up.endpoint(1).calls[0].Body)
+		if !strings.Contains(sent, `"max_tokens":1`) || strings.Contains(sent, "max_completion_tokens") {
+			t.Errorf("the request sent:\n%s", sent)
+		}
+	})
 }

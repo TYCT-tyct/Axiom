@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"maps"
@@ -35,9 +34,13 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 	rules := diffRules()
 	for _, c := range diffCases() {
 		t.Run(c.name, func(t *testing.T) {
+			w, n := w, n
+			if c.failsUpstream() { // routing pauses an endpoint whose upstream failed, so each such case has a node of its own
+				w, n = newDiffNode(t, up)
+			}
 			theirs := send(t, api.base, "", orKey(c.key, api.key), c)
 			theirs.body = newAPIRequestID.ReplaceAll(theirs.body, nil)
-			ours := sendWhenResting(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
+			ours := send(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
 			for _, d := range compareReplies(theirs, ours) {
 				explainOrFail(t, rules, c.name, d)
 			}
@@ -73,21 +76,6 @@ func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
 		return
 	}
 	t.Errorf("%s [unexplained]", line)
-}
-
-// sendWhenResting is send to Axiom, repeated while the endpoint is paused: an upstream failure pauses the endpoint for a few
-// seconds (routing.Config.Pause), and the cases that follow a failed one are not about the pause, so each waits it out.
-func sendWhenResting(t *testing.T, base, host, key string, c diffCase) reply {
-	t.Helper()
-	for range 40 {
-		r := send(t, base, host, key, c)
-		if r.status != http.StatusServiceUnavailable || !bytes.Contains(r.body, []byte(`"cooling_down"`)) {
-			return r
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	t.Fatalf("%s: the endpoint is still paused after 20 seconds", c.name)
-	return reply{}
 }
 
 // send posts a case to a gateway; host, when set, is the Host header a gateway that serves by domain needs.

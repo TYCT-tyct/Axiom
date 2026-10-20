@@ -23,9 +23,10 @@ type openAIUsage struct {
 	OutputDetails     *openAIDetails `json:"output_tokens_details"`
 	// DeepSeek names the cached part of the prompt prompt_cache_hit_tokens and the rest prompt_cache_miss_tokens, which
 	// add up to prompt_tokens (DeepSeek《Create Chat Completion》, usage, read 2026-10-19). The hit count is the cache read
-	// when prompt_tokens_details has none, as new-api reads it (relay/channel/openai/usage.go, applyUsagePostProcessing,
-	// 32e5874); the miss count is no usage of its own. Left unnamed, both would be charged as unknown tokens, on top of
-	// the prompt.
+	// when prompt_tokens_details.cached_tokens is absent or 0 and the hit count is above 0; when both are above 0 the
+	// standard member wins and the two are not compared. new-api reads it so (relay/channel/openai/usage.go,
+	// applyUsagePostProcessing, 32e5874); the miss count is no usage of its own. Left unnamed, both would be charged as
+	// unknown tokens, on top of the prompt.
 	CacheHit  *int64         `json:"prompt_cache_hit_tokens"`
 	CacheMiss jsontext.Value `json:"prompt_cache_miss_tokens"`
 	// Reported but not billed: the sum, and a relay's price, which is not usage (OpenRouter《Usage accounting》, read

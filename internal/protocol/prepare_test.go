@@ -366,10 +366,20 @@ func FuzzPrepare(f *testing.F) {
 			t.Fatalf("%s: %v", out, err)
 		}
 		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
+		r = withSmallerCap(r, got)
 		if diff := cmp.Diff(r, got); diff != "" {
 			t.Fatalf("%s:\n%s", out, diff)
 		}
 	})
+}
+
+// withSmallerCap is r with the output cap of got when that is the smaller of the two caps a Chat request may have: they are
+// sent as one, which is the smaller.
+func withSmallerCap(r, got protocol.Request) protocol.Request {
+	if r.MaxOutput > 0 && got.MaxOutput > 0 && got.MaxOutput <= r.MaxOutput {
+		r.MaxOutput = got.MaxOutput
+	}
+	return r
 }
 
 // rejects reports whether Prepare must refuse a body Inspect accepted, decoding it to tell: a member only Prepare reads

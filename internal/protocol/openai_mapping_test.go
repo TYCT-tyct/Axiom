@@ -163,6 +163,7 @@ var deepSeekCases = []overlapCase{
 	{name: "all of it hit", body: `{"input_tokens":100,"prompt_cache_hit_tokens":100,"prompt_cache_miss_tokens":0}`, read: 100},
 	{name: "no hit", body: `{"input_tokens":100,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":100}`, input: 100},
 	{name: "miss alone", body: `{"input_tokens":100,"prompt_cache_miss_tokens":100}`, input: 100},
+	{name: "an explicit zero is not a count", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30}`, input: 30, read: 70},
 	{name: "standard details win", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30}`, input: 40, read: 60},
 	{name: "both say the same", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":70},"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30}`, input: 30, read: 70},
 	{name: "hit with details of another count", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":0,"audio_tokens":10},"prompt_cache_hit_tokens":70}`, input: 20, read: 70, audio: 10},

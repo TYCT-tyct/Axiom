@@ -149,3 +149,9 @@ func streamName(stream bool) string {
 	}
 	return "whole"
 }
+
+// failsUpstream reports a case whose upstream answers with a 429 or a 5xx: routing then pauses the endpoint for a few
+// seconds (routing.Config.Pause), which would turn every case after it into a 503 that is not what it is about.
+func (c diffCase) failsUpstream() bool {
+	return strings.Contains(c.name, "-429-") || strings.Contains(c.name, "-500-")
+}

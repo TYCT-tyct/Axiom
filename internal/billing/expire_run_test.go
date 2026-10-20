@@ -71,6 +71,58 @@ func (b *bank) holdLock(account uuid.UUID) (release func()) {
 	}
 }
 
+// TestAdvanceRacesAReplayThatSpendsABatch: a replay without the lock reads the place of the allocation, and before it
+// reads the batches another replay commits the batch spent up, which takes it out of the batches that hold something.
+// The first replay drops its work as stale and the expiry goes on under the lock; it does not fail on a credit whose
+// batch it did not load (#357). The other replay holds the batches' table locked from before it saves until it
+// commits, so the first one reads the place, waits on the batches and reads them after the commit, whatever the timing.
+func TestAdvanceRacesAReplayThatSpendsABatch(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	b.creditBatch(100, farAhead)
+	b.charge(100) // spends the batch in the ledger; only a replay writes it to the batch
+	// The other replay runs as the superuser, since the application may not lock the table.
+	super, err := pg.Open(t.Context(), b.db.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer super.Close()
+	saved, commit, other := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	release := sync.OnceFunc(func() { close(commit) })
+	defer release()
+	go func() {
+		other <- super.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE billing.credit_batches IN ACCESS EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			if _, err := writeOffAccount(t.Context(), tx, b.admitted.Account, movementPage); err != nil {
+				return err
+			}
+			close(saved)
+			<-commit
+			return nil
+		})
+	}()
+	select {
+	case <-saved:
+	case err := <-other:
+		t.Fatal(err)
+	}
+	expired := make(chan error, 1)
+	go func() {
+		_, err := b.expirer().expire(t.Context(), b.admitted.Account)
+		expired <- err
+	}()
+	b.waitForLockWait()
+	release()
+	if err := <-other; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-expired; err != nil {
+		t.Fatalf("the expiry raced by another replay failed: %v", err)
+	}
+	b.checkStored(b.admitted.Account)
+}
+
 // TestExpireGoesPastABlockedAccount: an account whose lock is held fails and is counted, and the run goes on: the
 // accounts after it are written off in the same run. The test ends the blocked write-off itself, once it waits on the
 // lock, by terminating its backend; a short budget would end it by the clock, but then the next account would share

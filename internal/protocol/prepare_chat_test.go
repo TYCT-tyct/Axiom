@@ -44,12 +44,13 @@ func TestPrepareChat(t *testing.T) {
 		},
 		{"the largest cap", `{"model":"m"}`, `{"model":"up","max_tokens":9223372036854775807` + tail, math.MaxInt64},
 		{"no cap to send", `{"model":"m"}`, `{"model":"up"` + tail, 0},
-		{"a cap kept", `{"model":"m","max_tokens":50,"stream":true}`, `{"model":"up","max_tokens":50,"stream":true,"stream_options":{"include_usage":true}}`, 4096},
-		{"the other cap kept", `{"model":"m","max_completion_tokens":50}`, `{"model":"up","max_completion_tokens":50` + tail, 4096},
-		{"both caps kept", `{"model":"m","max_tokens":50,"max_completion_tokens":60}`, `{"model":"up","max_tokens":50,"max_completion_tokens":60` + tail, 4096},
+		{"a cap kept", `{"model":"m","max_tokens":50,"stream":true}`, `{"model":"up","stream":true,"max_tokens":50,"stream_options":{"include_usage":true}}`, 4096},
+		{"the other cap is the one the endpoint reads", `{"model":"m","max_completion_tokens":50}`, `{"model":"up","max_tokens":50` + tail, 4096},
+		{"both caps, the smaller", `{"model":"m","max_tokens":60,"max_completion_tokens":50}`, `{"model":"up","max_tokens":50` + tail, 4096},
+		{"a cap of 0 is none", `{"model":"m","max_tokens":0,"max_completion_tokens":0}`, `{"model":"up","max_tokens":4096` + tail, 4096},
 		{"a null cap is the cap sent", `{"model":"m","max_tokens":null,"stream":true}`, `{"model":"up","stream":true,"max_tokens":4096,"stream_options":{"include_usage":true}}`, 4096},
 		{"a first null cap", `{"max_tokens":null,"model":"m"}`, `{"model":"up","max_tokens":4096` + tail, 4096},
-		{"a null cap beside a cap", `{"model":"m","max_tokens":null,"max_completion_tokens":50}`, `{"model":"up","max_completion_tokens":50` + tail, 4096},
+		{"a null cap beside a cap", `{"model":"m","max_tokens":null,"max_completion_tokens":50}`, `{"model":"up","max_tokens":50` + tail, 4096},
 		{"both null", `{"model":"m","max_tokens":null,"max_completion_tokens":null}`, `{"model":"up","max_tokens":4096` + tail, 4096},
 		{"stream false", `{"model":"m","stream":false}`, `{"model":"up","stream":true,"stream_options":{"include_usage":true}}`, 0},
 		{"stream null", `{"model":"m","stream":null}`, `{"model":"up","stream":true,"stream_options":{"include_usage":true}}`, 0},
@@ -188,8 +189,47 @@ func checkChatStreamSent(t *testing.T, r protocol.Request, body, sent []byte) {
 		t.Fatalf("%s: stream %t, include_usage %t", sent, got.Stream, options.StreamOptions.IncludeUsage)
 	}
 	r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(sent)-len(body))
+	if r.MaxOutput > 0 && (got.MaxOutput == 0 || got.MaxOutput > r.MaxOutput) || r.MaxOutput == 0 && got.MaxOutput != 7 {
+		t.Fatalf("%s: the cap sent is %d, the request read as %d and the call was quoted at 7", sent, got.MaxOutput, r.MaxOutput)
+	}
 	r.Stream, r.MaxOutput = true, got.MaxOutput
 	if diff := cmp.Diff(r, got); diff != "" {
 		t.Fatalf("%s:\n%s", sent, diff)
+	}
+}
+
+// TestPrepareChatWritesTheCapTheEndpointReads: the output cap is written in the one member the endpoint reads, whichever
+// the client wrote, so that an endpoint cannot ignore the cap the call was reserved at: a DeepSeek- or Qwen-like endpoint
+// reads max_tokens and ignores max_completion_tokens, OpenAI's reasoning, GPT-5 and GPT-6 models read
+// max_completion_tokens and refuse max_tokens (new-api's rule, GetOpenAIChatCapabilities).
+func TestPrepareChatWritesTheCapTheEndpointReads(t *testing.T) {
+	for _, c := range []struct {
+		model, body, want string
+	}{
+		{"deepseek-chat", `{"model":"m","max_completion_tokens":1}`, `"max_tokens":1`},
+		{"deepseek-chat", `{"model":"m","max_tokens":2}`, `"max_tokens":2`},
+		{"deepseek-chat", `{"model":"m"}`, `"max_tokens":9`},
+		{"gpt-4o", `{"model":"m","max_tokens":3}`, `"max_tokens":3`},
+		{"gpt-5x", `{"model":"m"}`, `"max_tokens":9`},
+		{"gpt-6-astra-x", `{"model":"m"}`, `"max_tokens":9`},
+		{"o3-mini", `{"model":"m","max_tokens":4}`, `"max_completion_tokens":4`},
+		{"o1", `{"model":"m"}`, `"max_completion_tokens":9`},
+		{"o4-mini", `{"model":"m","max_completion_tokens":5}`, `"max_completion_tokens":5`},
+		{"gpt-5", `{"model":"m","max_tokens":6}`, `"max_completion_tokens":6`},
+		{"gpt-5-mini", `{"model":"m","max_tokens":6}`, `"max_completion_tokens":6`},
+		{"gpt-5.2", `{"model":"m","max_tokens":6}`, `"max_completion_tokens":6`},
+		{"gpt-6-astra", `{"model":"m","max_tokens":7}`, `"max_completion_tokens":7`},
+		{"gpt-6-sol-2026-05-01", `{"model":"m","max_tokens":7}`, `"max_completion_tokens":7`},
+		{"gpt-6-luna", `{"model":"m"}`, `"max_completion_tokens":9`},
+	} {
+		t.Run(c.model+" "+c.body, func(t *testing.T) {
+			r := inspected(t, protocol.Chat, []byte(c.body))
+			target := chatTarget(9)
+			target.Model = c.model
+			u, err := protocol.Prepare(&r, []byte(c.body), target, protocol.Rewrites{Identity: derive})
+			if err != nil || !strings.Contains(string(u.Body), c.want) || strings.Count(string(u.Body), "max_") != 1 {
+				t.Errorf("got %s (%v), want exactly %s", u.Body, err, c.want)
+			}
+		})
 	}
 }
