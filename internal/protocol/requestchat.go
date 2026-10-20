@@ -81,6 +81,12 @@ func jsonValue(v any) jsontext.Value {
 // The canonical model and Prepare's Chat rewrite own validation and identity/cap
 // policy; unlike the reference, unsupported members are never silently discarded.
 func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
+	// Dispatch on JSON values, independent of escaped enum spelling or whitespace
+	// in empty arrays. Same-format rewrites still preserve the original bytes.
+	body, err := jsonx.MarshalCanonical(jsontext.Value(body))
+	if err != nil {
+		return nil, shapeError("invalid request JSON")
+	}
 	src, err := requestMembers(body)
 	if err != nil {
 		return nil, err

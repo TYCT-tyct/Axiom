@@ -48,11 +48,11 @@ type nativeChatChunk struct {
 type nativeChatChoice struct {
 	Index int64 `json:"index"`
 	Delta struct {
-		Content          jsontext.Value `json:"content"`
-		Reasoning        jsontext.Value `json:"reasoning"`
-		ReasoningContent jsontext.Value `json:"reasoning_content"`
-		Refusal          jsontext.Value `json:"refusal"`
-		Details          jsontext.Value `json:"reasoning_details"`
+		Content          jsontext.Value   `json:"content"`
+		Reasoning        jsontext.Value   `json:"reasoning"`
+		ReasoningContent jsontext.Value   `json:"reasoning_content"`
+		Refusal          jsontext.Value   `json:"refusal"`
+		Details          []jsontext.Value `json:"reasoning_details"`
 		Tools            []struct {
 			Index    int64  `json:"index"`
 			ID       string `json:"id"`
@@ -169,7 +169,7 @@ func (s *chatToNative) choice(choice nativeChatChoice) error {
 
 func (s *chatToNative) choiceText(choice nativeChatChoice) error {
 	d := choice.Delta
-	if !isNull(d.Details) && string(d.Details) != "[]" {
+	if len(d.Details) > 0 {
 		return fmt.Errorf("%w: Chat reasoning_details cannot be represented by this client", ErrUpstream)
 	}
 	for _, text := range []struct {

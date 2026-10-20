@@ -1,11 +1,13 @@
 package protocol_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
 
 	"axiom/internal/platform/alloctest"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -180,7 +182,7 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 		}
 	}
 	body := chatBody(`"previous_response_id":"r","instructions":"new","input":"next"`)
-	history := [][]byte{[]byte(`{"role":"user","content":"old"}`), []byte(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed"}`)}
+	history := [][]byte{[]byte(`{"role":"user","content":"old"}`), []byte(`{"type":"mess\u0061ge","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[ ]}],"status":"compl\u0065ted"}`)}
 	up, err := prepareNativeChat(protocol.Responses, body, "up", history)
 	if err != nil {
 		t.Fatal(err)
@@ -227,5 +229,29 @@ func TestResponsesToolSchemaKeepsLargeIntegerConstraints(t *testing.T) {
 	}
 	if !strings.Contains(string(up.Body), `"minimum":`+bound) {
 		t.Fatalf("integer constraint rounded: %s", up.Body)
+	}
+}
+
+func TestNativeChatUsesJSONValuesRegardlessOfSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		format  protocol.Format
+		members string
+	}{
+		{protocol.Messages, `"messages":[{"role":"user","content":[{"type":"t\u0065xt","text":"hi"}]}],"service_tier":"stand\u0061rd_only","thinking":{"type":"dis\u0061bled"},"tool_choice":{"type":"\u0061ny"}`},
+		{protocol.Responses, `"input":[{"type":"mess\u0061ge","role":"assistant","content":[{"type":"output_t\u0065xt","text":"hi","annotations":[ ]}],"status":"compl\u0065ted"}],"reasoning":{"summary":"\u0061uto"},"tools":[{"type":"funct\u0069on","name":"f","strict":false}]`},
+	} {
+		body := []byte(chatBody(tc.members))
+		canonical, err := jsonx.MarshalCanonical(jsonx.Raw(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := prepareNativeChat(tc.format, string(body), "up", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := prepareNativeChat(tc.format, string(canonical), "up", nil)
+		if err != nil || !bytes.Equal(a.Body, b.Body) {
+			t.Fatalf("JSON spelling changed conversion: %v\n%s\n%s", err, a.Body, b.Body)
+		}
 	}
 }

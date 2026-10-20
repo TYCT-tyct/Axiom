@@ -253,7 +253,7 @@ func TestChatConversionCannotOutgrowTheNodeBudget(t *testing.T) {
 }
 
 func TestChatConversionUsesOneReasoningCopyAndWaitsForSettlement(t *testing.T) {
-	stream := chatPiece(`{"reasoning":"why","reasoning_content":"why"}`, `"stop"`) + ev("[DONE]")
+	stream := chatPiece(`{"reasoning":"why","reasoning_content":"why","reasoning_details":[ ]}`, `"stop"`) + ev("[DONE]")
 	for _, format := range formats[:2] {
 		got := relayTo(t, format.f, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20),
 			func(u protocol.Usage) protocol.Final { return protocol.Final{Usage: u, Pending: true} })

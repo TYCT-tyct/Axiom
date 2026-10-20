@@ -1,6 +1,11 @@
 package protocol
 
-import "encoding/json/jsontext" //nolint:depguard // as in canon.go
+import (
+	"encoding/json/jsontext" //nolint:depguard // as in canon.go
+	"fmt"
+
+	"axiom/internal/platform/jsonx"
+)
 
 func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject, error) {
 	src.move(dst, "max_output_tokens", "max_completion_tokens")
@@ -27,7 +32,11 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 	}
 	items := make([]jsontext.Value, 0, len(w.History)+1)
 	for _, item := range w.History {
-		items = append(items, item)
+		canonical, err := jsonx.MarshalCanonical(jsontext.Value(item))
+		if err != nil {
+			return nil, fmt.Errorf("protocol: invalid history item: %w", err)
+		}
+		items = append(items, canonical)
 	}
 	v := src.take("input")
 	if v.Kind() == '"' {
