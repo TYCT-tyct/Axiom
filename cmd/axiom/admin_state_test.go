@@ -26,7 +26,8 @@ func TestSetUserStatus(t *testing.T) {
 		t.Errorf("the user after the disabling: %+v", user)
 	}
 	f.expectAudit("user.disable", map[string]string{
-		"actor_kind || ':' || actor_id": "user:" + f.userOf(ownerEmail), "target_kind": "user", "target_id": id,
+		"actor_kind || ':' || actor_id": "user:" + f.text("SELECT id::text FROM accounts.users WHERE email = '"+ownerEmail+"'"),
+		"target_kind":                   "user", "target_id": id,
 		"detail->>'from'": "active", "detail->>'to'": "disabled", "detail->>'sessions'": "1", "reason": "a stolen laptop",
 	})
 	expectAdmin(t, "alice's session after the disabling", f.do(http.MethodGet, "/session", "", as(alice)), http.StatusUnauthorized, codeUnauthenticated)
@@ -76,7 +77,8 @@ func TestSetAccountStatus(t *testing.T) {
 		t.Errorf("the account after the suspending: %+v", detail)
 	}
 	f.expectAudit("account.suspend", map[string]string{
-		"actor_kind || ':' || actor_id": "user:" + f.userOf(ownerEmail), "target_kind": "account", "target_id": account,
+		"actor_kind || ':' || actor_id": "user:" + f.text("SELECT id::text FROM accounts.users WHERE email = '"+ownerEmail+"'"),
+		"target_kind":                   "account", "target_id": account,
 		"detail->>'from'": "active", "detail->>'to'": "disabled", "reason": "unpaid",
 	})
 	if rec := f.change(s, http.MethodPut, path, `{"status":"disabled","reason":"unpaid"}`, newKey()); rec.Code != http.StatusOK {

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -20,7 +20,9 @@ func events(t *testing.T, db *pg.DB) []string {
 	t.Helper()
 	return texts(t, db, platform, ids.Replace(`SELECT format('%s %s %s user=%s account=%s session=%s', kind,
 		CASE WHEN refused THEN 'refused' ELSE 'ok' END, coalesce(nullif(reason, ''), '-'),
-		user_id IS NOT NULL, account_id IS NOT NULL, session_id IS NOT NULL)
+		CASE WHEN user_id IS NULL THEN 'false' ELSE 'true' END,
+		CASE WHEN account_id IS NULL THEN 'false' ELSE 'true' END,
+		CASE WHEN session_id IS NULL THEN 'false' ELSE 'true' END)
 		FROM accounts.security_events WHERE site_id = :s1 ORDER BY id`))
 }
 
@@ -44,9 +46,9 @@ func TestEveryAttemptIsOneEvent(t *testing.T) {
 		})
 		return err
 	}
-	register := func(email, password string) error {
+	register := func(email, password, code string) error {
 		_, err := x.s.Register(t.Context(), accounts.RegisterRequest{
-			Host: console, InviteCode: invite, Email: email, Password: password, ClientIP: client,
+			Host: console, InviteCode: code, Email: email, Password: password, ClientIP: client,
 		})
 		return err
 	}
@@ -57,10 +59,10 @@ func TestEveryAttemptIsOneEvent(t *testing.T) {
 	}{
 		{"a wrong password", signIn("wrong password", x.email), accounts.ErrBadCredentials},
 		{"an unknown email", signIn(password, "nobody@example.com"), accounts.ErrBadCredentials},
-		{"a taken email", register(x.email, password), accounts.ErrEmailTaken},
-		{"no such invite", register("new@example.com", password), accounts.ErrInvalidInvite},
-		{"a malformed email", register("no at sign", password), accounts.ErrBadEmail},
-		{"a short password", register("new@example.com", "short"), accounts.ErrWeakPassword},
+		{"a taken email", register(x.email, password, invite), accounts.ErrEmailTaken},
+		{"no such invite", register("new@example.com", password, "not-an-invite"), accounts.ErrInvalidInvite},
+		{"a malformed email", register("no at sign", password, invite), accounts.ErrBadEmail},
+		{"a short password", register("new@example.com", "short", invite), accounts.ErrWeakPassword},
 	} {
 		if !errors.Is(c.err, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, c.err, c.want)
@@ -68,8 +70,8 @@ func TestEveryAttemptIsOneEvent(t *testing.T) {
 	}
 	key, _, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console) // a sign-in that waits for the code, so an event with its session
-	if _, err := x.verify(t, console, pending, accounts.TOTPCode(key, x.clock.Now().Add(30*time.Second))); !errors.Is(err, accounts.ErrBadCode) {
-		t.Errorf("a wrong code: %v", err)
+	if _, err := x.verify(t, console, pending, accounts.TOTPCode(key, x.clock.Now())); !errors.Is(err, accounts.ErrBadCode) {
+		t.Errorf("the code ConfirmTOTP spent: %v", err)
 	}
 	if _, err := x.verify(t, console, pending, codes[0]); err != nil {
 		t.Fatalf("a recovery code: %v", err)
@@ -123,18 +125,23 @@ func TestEventsHoldNoPersonalData(t *testing.T) {
 			Host: console, Email: x.email, Password: "wrong", ClientIP: ip, UserAgent: "a very personal browser",
 		})
 	}
-	before := hashes(t, x.db)
+	before := hashes(t, x.db) // the registration, whose request had no address
+	if !slices.Equal(before, []string{""}) {
+		t.Errorf("the hash of a request without an address: %q, want one empty", before)
+	}
 	signIn(client)
-	once := hashes(t, x.db)
-	if once[len(once)-1] != before[len(before)-1] {
-		t.Errorf("the same address hashed as %q and then %q", before[len(before)-1], once[len(once)-1])
+	signIn(client)
+	same := hashes(t, x.db)[1:]
+	if len(same) != 2 || same[0] != same[1] {
+		t.Errorf("one address hashed as %q, want the same hash twice", same)
 	}
 	signIn(netip.MustParseAddr("198.51.100.9"))
-	if twice := hashes(t, x.db); twice[len(twice)-1] == once[len(once)-1] {
-		t.Errorf("another address hashed the same, %q", twice[len(twice)-1])
+	all := hashes(t, x.db)
+	if all[3] == same[0] {
+		t.Errorf("another address hashed the same, %q", all[3])
 	}
 	hash := regexp.MustCompile(`^[0-9a-f]{64}$`)
-	for _, h := range hashes(t, x.db) {
+	for _, h := range all[1:] {
 		if !hash.MatchString(h) {
 			t.Errorf("an address stored as %q, want a keyed hash", h)
 		}
