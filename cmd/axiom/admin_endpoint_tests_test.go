@@ -17,13 +17,13 @@ func TestTestEndpointRefusals(t *testing.T) {
 	f := newSupplierFixture(t)
 	body := `{"endpoint_id":"` + uuid.NewV7().String() + `","format":"chat","reason":"check the endpoint"}`
 	rec := f.change(f.s, http.MethodPost, "/suppliers/endpoint-tests", body, newKey())
-	expectAdmin(t, "testSupplierEndpoint", rec, http.StatusConflict, "the endpoint cannot be called now")
-	if n := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action = 'endpoint.test'"); n != "0" {
+	expectAdmin(t, "testSupplierEndpoint", rec, http.StatusConflict, codeConflict)
+	if n := f.auditCount("endpoint.test"); n != "0" {
 		t.Errorf("%s audit entries of a test that never ran", n)
 	}
 	body = `{"endpoint_id":"` + uuid.NewV7().String() + `","format":"compaction","reason":"check the endpoint"}`
 	rec = f.change(f.s, http.MethodPost, "/suppliers/endpoint-tests", body, newKey())
-	expectAdmin(t, "testSupplierEndpoint in a format the contract has not", rec, http.StatusBadRequest, "")
+	expectAdmin(t, "testSupplierEndpoint in a format the contract has not", rec, http.StatusBadRequest, codeInvalidRequest)
 }
 
 // TestTheContractNamesEveryProblemATestCanHave: the module's names of what a test found are the contract's enum values,
