@@ -23,6 +23,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -398,6 +399,10 @@ func (w *callWorld) start() runningNode {
 	environ := append(slices.Clone(w.environ), "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=10s", "AXIOM_MASTER_KEY_FILE="+keyFile(w.t, 'm'), "AXIOM_KEY_HASH_FILE="+keyFile(w.t, 'h'),
 		"AXIOM_IDENTITY_KEY_FILE="+keyFile(w.t, 'i'))
+	// The story has two nodes of one deployment (checkSecondNode), so this is one: N is 2, and the nodes share a Valkey
+	// for the rate counts, which serveVia lets through where serve, the program's entry, would refuse (singleNodeOnly).
+	cache := kvtest.New(w.t)
+	environ = append(environ, "AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL="+cache.URL, "AXIOM_VALKEY_PASSWORD_FILE="+cache.PasswordFile)
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(w.t.Context())
 	done := make(chan error, 1)

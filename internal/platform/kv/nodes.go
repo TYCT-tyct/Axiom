@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -9,6 +10,10 @@ import (
 
 	"axiom/internal/platform/pg"
 )
+
+// defaultHeartbeatTimeout bounds one round of the heartbeat's database work (Deps.HeartbeatTimeout): a database that
+// holds the node's row, or has stopped answering, must not hold back what the loop does for Valkey.
+const defaultHeartbeatTimeout = 5 * time.Second
 
 const (
 	// beatEvery is how often a node writes its row. 30 seconds without one is stale, so a node that misses two in a row
@@ -33,22 +38,44 @@ func newHeartbeat(db *pg.DB, scope pg.Scope) *heartbeat {
 	return &heartbeat{db: db, scope: scope, id: uuid.New()}
 }
 
+// startLock is the advisory lock that one node at a time holds while it counts the others and writes its own row. Without
+// it two nodes that start together both count none, and both are let in.
+const startLock = 0x61786e6f6465 // "axnode"
+
+// errTooMany marks the refusal inside the transaction that makes it.
+var errTooMany = errors.New("another live node reaches N")
+
 // start writes this node's first row, and refuses to start when another live node already reaches N: it is N set too
-// low, or a second node that reached this database without Valkey. It forgets the rows that went stale first, so a
-// crash does not keep the row for longer than forgetAfter.
+// low, or a second node that reached this database without Valkey. The count and the write are one transaction under
+// startLock, so they cannot interleave with another node's. It forgets the rows that went stale first, so a crash does
+// not keep the row for longer than forgetAfter.
 func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m metrics) error {
-	others, alive, err := h.count(ctx)
-	if err != nil {
-		return err
-	}
-	if others >= nodes {
+	var others, alive int
+	err := h.db.Tx(ctx, h.scope, func(tx pg.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(startLock)); err != nil {
+			return err
+		}
+		if err := forget(ctx, tx); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE id <> $1 AND seen_at > now() - make_interval(secs => $2)),
+			count(*) FILTER (WHERE seen_at > now() - make_interval(secs => $2))
+			FROM platform.nodes`, h.id, aliveFor.Seconds()).Scan(&others, &alive)
+		if err != nil {
+			return err
+		}
+		if others >= nodes {
+			return errTooMany
+		}
+		return h.write(ctx, tx)
+	})
+	if errors.Is(err, errTooMany) {
 		return fmt.Errorf("%s: %d nodes are alive besides this one, which is not fewer than the %d configured: either "+
 			"this node's %s is too low, or another node reached this database without %s (internal/platform/kv/README.md"+
 			"「配置与启动」)", NodesVar, others, nodes, NodesVar, URLVar)
 	}
-	err = h.db.Tx(ctx, h.scope, func(tx pg.Tx) error { return h.write(ctx, tx) })
 	if err != nil {
-		return fmt.Errorf("kv: write this node's heartbeat: %w", err)
+		return fmt.Errorf("kv: register this node: %w", err)
 	}
 	live.Store(int64(alive + 1))
 	m.nodes.Record(ctx, int64(alive+1))
@@ -72,23 +99,6 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("kv: write this node's heartbeat: %w", err)
 	}
 	return alive, nil
-}
-
-// count returns how many nodes are alive besides this one, and how many in total. A row that went stale is not a node
-// any more, so a crash refuses a restart for aliveFor and not for as long as the row exists (README「配置与启动」).
-func (h *heartbeat) count(ctx context.Context) (others, alive int, err error) {
-	err = h.db.Tx(ctx, h.scope, func(tx pg.Tx) error {
-		if err := forget(ctx, tx); err != nil {
-			return err
-		}
-		return tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE id <> $1 AND seen_at > now() - make_interval(secs => $2)),
-			count(*) FILTER (WHERE seen_at > now() - make_interval(secs => $2))
-			FROM platform.nodes`, h.id, aliveFor.Seconds()).Scan(&others, &alive)
-	})
-	if err != nil {
-		return 0, 0, fmt.Errorf("kv: count the live nodes: %w", err)
-	}
-	return others, alive, nil
 }
 
 // write is this node's row, made or refreshed. now() is the database's clock, so every node's row is aged by one clock

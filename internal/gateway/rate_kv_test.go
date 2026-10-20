@@ -15,24 +15,37 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 )
 
-// offsetClock is the real clock moved by an amount a test sets after the client has measured its offset to the server, so
-// that a test puts "now" where it wants it without waiting, and without the start refusing a clock that far off
+// frozenClock is the real time until a test places a client on it, and stands still from then, so that nothing the test
+// compares is read at two moments. A client measures its offset to the server at the start and keeps it, so the corrected
+// time of a client of this clock is the clock's plus that offset, and place puts it where a test wants it
 // (internal/platform/kv/README.md「时钟」).
-type offsetClock struct{ ahead atomic.Int64 }
+type frozenClock struct{ at atomic.Int64 } // zero while the clock runs
 
-func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.ahead.Load())) }
+func newFrozenClock() *frozenClock { return &frozenClock{} }
 
-// midWindow moves the clock to the middle of a window ahead of the real one, so that the milliseconds a test takes stay
-// inside one window: the windows are the epoch's, and a count that crossed a boundary would be a different count.
-func (c *offsetClock) midWindow(window time.Duration) {
-	now := time.Now()
-	start := (now.UnixMilli()/window.Milliseconds() + 1) * window.Milliseconds()
-	c.ahead.Store(int64(time.UnixMilli(start).Add(window / 2).Sub(now)))
+func (c *frozenClock) Now() time.Time {
+	if at := c.at.Load(); at != 0 {
+		return time.Unix(0, at)
+	}
+	return time.Now()
+}
+
+// place moves the clock so that the client's own time is target.
+func (c *frozenClock) place(client *kv.Client, target time.Time) {
+	offset := client.Now().Sub(c.Now())
+	c.at.Store(target.Add(-offset).UnixNano())
+}
+
+// midWindow puts the client's time in the middle of a window ahead of its time, so that a test stays inside one window:
+// the windows are the epoch's, and a count that crossed a boundary would be a different count.
+func (c *frozenClock) midWindow(client *kv.Client, window time.Duration) {
+	length := window.Milliseconds()
+	c.place(client, time.UnixMilli((client.Now().UnixMilli()/length+1)*length).Add(window/2))
 }
 
 // node is the precheck's side of a core node: its own in-process counter, and a client of the shared cache in the
 // namespace that makes two nodes one deployment. Its in-process counter reads the client's clock, as the shared count does.
-func node(t *testing.T, server *kvtest.Server, namespace string, clock *offsetClock) *Handler {
+func node(t *testing.T, server *kvtest.Server, namespace string, clock *frozenClock) *Handler {
 	t.Helper()
 	limits, err := New(DefaultConfig(), nil)
 	if err != nil {
@@ -55,9 +68,9 @@ func TestSharedCountIsOneAcrossNodes(t *testing.T) {
 	t.Parallel()
 	server := kvtest.New(t)
 	namespace := kvtest.Namespace()
-	clock := &offsetClock{}
+	clock := newFrozenClock()
 	a, b := node(t, server, namespace, clock), node(t, server, namespace, clock)
-	clock.midWindow(a.Limits.cfg.RateWindow)
+	clock.midWindow(a.KV, a.Limits.cfg.RateWindow)
 	ctx := t.Context()
 	for i := 1; i <= 10; i++ {
 		h := a
@@ -92,17 +105,20 @@ func TestSharedCountMatchesTheProcessCount(t *testing.T) {
 	for seed := range uint64(6) {
 		t.Run("seed "+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			clock := &offsetClock{}
+			clock := newFrozenClock()
 			h := node(t, server, kvtest.Namespace(), clock)
 			window := h.Limits.cfg.RateWindow
-			clock.midWindow(window)
+			clock.midWindow(h.KV, window)
 			reference := NewRateCounter(window)
-			index, _ := reference.slot(h.KV.Now())
+			moment := h.KV.Now()
+			index, _ := reference.slot(moment)
 			reference.now, reference.start = h.KV.Now, time.UnixMilli(index*window.Milliseconds())
 			random := rand.New(rand.NewPCG(seed, 1)) //nolint:gosec // a seeded sequence of inputs, repeatable
-			// The windows keep their keys for two windows of the real clock, which this test does not take.
+			// Both sides read the moment the test has set, which stands still through the call: a step is a whole number of
+			// milliseconds, and the keys keep their life in the server's own time, which this test does not reach.
 			for op := range 120 {
-				clock.ahead.Add(int64(steps[random.IntN(len(steps))]))
+				moment = moment.Add(steps[random.IntN(len(steps))])
+				clock.place(h.KV, moment)
 				key := strconv.Itoa(random.IntN(3))
 				want := reference.Count(key)
 				if got := h.countRate(t.Context(), rateSite, callDimension, key, key); got != want {
@@ -119,10 +135,11 @@ func TestSharedCountMatchesTheProcessCount(t *testing.T) {
 func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	clock := &offsetClock{}
+	clock := newFrozenClock()
 	h := node(t, server, kvtest.Namespace(), clock)
+	here := h.KV.Now()
 	for _, ahead := range []time.Duration{0, time.Hour, -time.Hour} {
-		clock.ahead.Store(int64(ahead))
+		clock.place(h.KV, here.Add(ahead))
 		h.countRate(t.Context(), rateSite, callDimension, "local", strconv.FormatInt(int64(ahead), 10))
 	}
 	keys, err := server.Do(t, t.Context(), server.Admin.B().Keys().Pattern("ax:*").Build())[0].AsStrSlice()
@@ -150,9 +167,9 @@ func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 func TestRateFallsBackToTheProcessCount(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	clock := &offsetClock{}
+	clock := newFrozenClock()
 	h := node(t, server, kvtest.Namespace(), clock)
-	clock.midWindow(h.Limits.cfg.RateWindow)
+	clock.midWindow(h.KV, h.Limits.cfg.RateWindow)
 	if got := h.countRate(t.Context(), rateSite, callDimension, "local", "one"); got != 1 {
 		t.Fatalf("first call = %d", got)
 	}
@@ -189,13 +206,15 @@ func BenchmarkPrecheck(b *testing.B) {
 func TestKeyRateIsJudgedOnTheSharedCount(t *testing.T) {
 	t.Parallel()
 	server := kvtest.New(t)
-	namespace, clock := kvtest.Namespace(), &offsetClock{}
+	namespace, clock := kvtest.Namespace(), newFrozenClock()
+	var cache *kv.Client
 	r := newRig(t, func(o *rigOptions) {
 		o.config = func(c *Config) { c.KeyRate = 2 }
-		o.cache = server.OpenIn(t, namespace, kv.Deps{Now: clock.Now})
+		cache = server.OpenIn(t, namespace, kv.Deps{Now: clock.Now})
+		o.cache = cache
 	})
-	other := node(t, server, namespace, clock) // opened before the clock moves: the start refuses a clock that far off
-	clock.midWindow(r.cfg.RateWindow)
+	other := node(t, server, namespace, clock)
+	clock.midWindow(cache, r.cfg.RateWindow)
 	a := r.newAccount(100_000_000)
 	for range 2 {
 		other.countRate(t.Context(), accounts.SiteID(siteID), callDimension, "other", kv.Hex(uuid.UUID(a.keyID)))

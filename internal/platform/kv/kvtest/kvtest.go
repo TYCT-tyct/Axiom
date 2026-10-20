@@ -75,7 +75,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	if settings.hostPort, err = freePort(t.Context()); err != nil {
 		t.Fatalf("find a free port: %v", err)
 	}
-	password, admin := randomPassword(t), randomPassword(t)
+	password, admin := newPassword(), newPassword()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "password")
 	if err := os.WriteFile(file, []byte(password+"\n"), 0o600); err != nil {
@@ -225,10 +225,7 @@ func (s *Server) Client(t testing.TB) valkey.Client {
 // function that removes both. The ACL user and the configuration are a deployment's, because the tests must run as the
 // user a deployment gives them.
 func StartServer(ctx context.Context) (url, passwordFile string, terminate func(context.Context) error, err error) {
-	password, err := newPassword()
-	if err != nil {
-		return "", "", nil, err
-	}
+	password := newPassword()
 	dir, err := os.MkdirTemp("", "kvtest-")
 	if err != nil {
 		return "", "", nil, err
@@ -287,23 +284,12 @@ func digest(password string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// newPassword is a random password of 32 bytes, printable and without spaces, as a deployment's is.
-func newPassword() (string, error) {
+// newPassword is a random password of 32 bytes, printable and without spaces, as a deployment's is. crypto/rand.Read
+// does not return an error: it ends the program when the system has no randomness.
+func newPassword() string {
 	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(raw[:]), nil
-}
-
-// randomPassword is newPassword for a test, which cannot report the failure of a random read.
-func randomPassword(t testing.TB) string {
-	t.Helper()
-	password, err := newPassword()
-	if err != nil {
-		t.Fatalf("make a password: %v", err)
-	}
-	return password
+	rand.Read(raw[:])
+	return hex.EncodeToString(raw[:])
 }
 
 // dial connects as a user, for the admin commands.

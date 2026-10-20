@@ -46,7 +46,6 @@ type bucket struct {
 // (README「熔断」).
 type breaker struct {
 	mu        sync.Mutex
-	now       func() time.Time
 	buckets   [windowBuckets]bucket
 	streak    int
 	open      bool
@@ -54,7 +53,7 @@ type breaker struct {
 	probing   bool // a probe is out: the half-open state has at most one
 }
 
-func newBreaker(now func() time.Time) *breaker { return &breaker{now: now} }
+func newBreaker() *breaker { return &breaker{} }
 
 // allow reports whether an access may do I/O now, and whether it is the half-open probe, whose outcome closes or opens
 // the breaker again. The clock can be injected, so a test opens and closes it without waiting.
@@ -81,10 +80,17 @@ func (b *breaker) trip(now time.Time) {
 // done records how an access ended, and reports whether the breaker changed state and what it is now. A probe's success
 // closes the breaker and clears the window, so the accesses that opened it do not open it again at once, and its failure
 // opens it again. An access that ends while the breaker is open was started before it opened and says nothing new. A
-// skip says nothing about the server at all; a refused command is an answer, which counts as an access and as proof that
+// skip says nothing about the server at all, and a skipped probe gives its place to the next access; a refused command is an answer, which counts as an access and as proof that
 // the server is there (README「熔断」).
 func (b *breaker) done(started time.Time, probe bool, result outcome) (changed, open bool) {
 	if result == skipped {
+		if probe {
+			// The caller took the probe's place and left: nothing was learned, so the next access probes, and the open
+			// period neither grows nor counts a failure.
+			b.mu.Lock()
+			b.probing = false
+			b.mu.Unlock()
+		}
 		return false, false
 	}
 	b.mu.Lock()

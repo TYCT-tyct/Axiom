@@ -95,19 +95,22 @@ func readSettings(environ []string) (nodeSettings, error) {
 		},
 	}
 	// The cache's own settings are judged with the rest, so a node that is wrong about them does not touch the database.
-	if err := errors.Join(env.Err(), s.valkey.Check(), singleNodeOnly(s.valkey.Nodes)); err != nil {
+	if err := errors.Join(env.Err(), s.valkey.Resolve()); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
 }
 
 // singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
-// node would multiply the login attempts. The last of the cache's slices (K3) removes this function
-// (internal/platform/kv/README.md「落地顺序」).
-func singleNodeOnly(nodes int) error {
-	if nodes > 1 {
-		return fmt.Errorf("%s: %d nodes are not supported yet: login and stickiness still live in the process, so more "+
-			"than one node would multiply the login attempts", kv.NodesVar, nodes)
+// node would multiply the login attempts. It is the check of the program's own entry, serve, and not of serveVia, which
+// the tests that run two nodes of one deployment use. The last of the cache's slices (K3) removes it
+// (internal/platform/kv/README.md「落地顺序」). A value that is no number is for readSettings to report.
+func singleNodeOnly(environ []string) error {
+	env := config.New(environ)
+	nodes := env.Int(kv.NodesVar, 1, 1)
+	if env.Problems() == nil && nodes > 1 {
+		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: login and stickiness still live in the process, "+
+			"so more than one node would multiply the login attempts", kv.NodesVar, nodes)
 	}
 	return nil
 }
@@ -117,6 +120,9 @@ func singleNodeOnly(nodes int) error {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
+	if err := singleNodeOnly(environ); err != nil {
+		return err
+	}
 	return serveVia(ctx, environ, logger, directEgress)
 }
 

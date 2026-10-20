@@ -97,7 +97,7 @@ func TestClockTooFarRefusesTheStart(t *testing.T) {
 	if err == nil {
 		t.Fatal("a node an hour ahead of the server started")
 	}
-	for _, want := range []string{kv.URLVar, "1h0m0s"} {
+	for _, want := range []string{kv.URLVar, "away from the server's"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not say %q", err, want)
 		}
@@ -105,15 +105,26 @@ func TestClockTooFarRefusesTheStart(t *testing.T) {
 }
 
 // TestClockIsCorrected: the offset the start measures is what Now adds, so a node whose clock is off by less than the
-// bound still writes the windows of the server's clock (README「时钟」).
+// bound still writes the windows of the server's clock (README「时钟」). The local clock stands still, so the offset is
+// the server's time at the measurement less that one moment, and the server's own clock read before and after the start
+// brackets it, however long the test is held up.
 func TestClockIsCorrected(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	behind := 300 * time.Millisecond // under the second the start allows
-	client := server.Open(t, kv.Deps{Now: func() time.Time { return time.Now().Add(-behind) }})
-	corrected := time.Since(client.Now()) // how far the corrected clock is from this one, which is the server's
-	if corrected < -50*time.Millisecond || corrected > 50*time.Millisecond {
-		t.Fatalf("the corrected clock is %v from the server's", corrected)
+	serverNow := func() time.Time {
+		parts, err := server.Do(t, t.Context(), server.Admin.B().Time().Build())[0].AsIntSlice()
+		if err != nil || len(parts) != 2 {
+			t.Fatalf("read the server's time: %v, %v", parts, err)
+		}
+		return time.Unix(parts[0], parts[1]*int64(time.Microsecond))
+	}
+	local := time.Now().Add(-300 * time.Millisecond) // under the second the start allows
+	before := serverNow()
+	client := server.Open(t, kv.Deps{Now: func() time.Time { return local }})
+	after := serverNow()
+	if offset := client.Now().Sub(local); offset < before.Sub(local) || offset > after.Sub(local) {
+		t.Fatalf("the stored offset is %v, not between the server's time before the start less the local clock (%v) and after (%v)",
+			offset, before.Sub(local), after.Sub(local))
 	}
 	if _, err := count(t, client, kv.NewScript(countScript), 100); err != nil {
 		t.Fatalf("run the count: %v", err)

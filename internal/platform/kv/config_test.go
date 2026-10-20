@@ -192,3 +192,28 @@ func TestSingleCoreMode(t *testing.T) {
 		t.Errorf("close: %v", err)
 	}
 }
+
+// TestResolveKeepsWhatItRead: the URL is parsed and the password file read once, when serve reads its settings, and Open
+// uses that: a file removed in between does not change the start, which would otherwise read it a second time, after the
+// database had been opened.
+func TestResolveKeepsWhatItRead(t *testing.T) {
+	t.Parallel()
+	path := passwordFile(t, "s3cret\n", 0o600)
+	cfg := Config{URL: "valkey://axiom@127.0.0.1:1", PasswordFile: path, Nodes: 1}
+	if err := cfg.Resolve(); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if cfg.resolved == nil || cfg.resolved.password != "s3cret" || cfg.resolved.username != "axiom" {
+		t.Fatalf("resolved = %+v", cfg.resolved)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	client, err := Open(t.Context(), cfg, Deps{}) // nothing listens on port 1: the node starts through the outage
+	if err != nil {
+		t.Fatalf("open after the file was removed: %v", err)
+	}
+	if err := client.Close(t.Context()); err != nil {
+		t.Errorf("close: %v", err)
+	}
+}

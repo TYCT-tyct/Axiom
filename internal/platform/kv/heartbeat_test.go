@@ -2,7 +2,10 @@ package kv_test
 
 import (
 	"context"
+	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,5 +147,139 @@ func setSeen(t *testing.T, db *pg.DB, scope pg.Scope, age time.Time) {
 		return err
 	}); err != nil {
 		t.Fatalf("age the heartbeat rows: %v", err)
+	}
+}
+
+// openBare opens a node without Valkey, the way a single-core deployment runs, and closes it when the test ends.
+func openBare(t *testing.T, db *pg.DB, scope pg.Scope) (*kv.Client, error) {
+	t.Helper()
+	client, err := kv.Open(t.Context(), kv.Config{Nodes: 1}, kv.Deps{DB: db, Scope: scope})
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { closeQuietly(t, client) })
+	return client, nil
+}
+
+// TestNodesWithoutValkeyAreCounted: a node without Valkey registers like any other, so two nodes of N = 1 that both have
+// no Valkey, or one that has it and one that has not, cannot both serve; and its row goes when it stops, so a restart is
+// not refused (README「配置与启动」「节点心跳」).
+func TestNodesWithoutValkeyAreCounted(t *testing.T) {
+	t.Parallel()
+	server := kvtest.New(t)
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	first, err := openBare(t, db, scope)
+	if err != nil {
+		t.Fatalf("the first node without Valkey: %v", err)
+	}
+	if rows := heartbeats(t, db, scope); rows != 1 {
+		t.Fatalf("%d rows for one node without Valkey, want 1", rows)
+	}
+	if _, err := openBare(t, db, scope); err == nil || !strings.Contains(err.Error(), kv.NodesVar) {
+		t.Fatalf("a second node without Valkey: %v, want a refusal naming %s", err, kv.NodesVar)
+	}
+	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope}); err == nil {
+		t.Fatal("a node with Valkey started beside one without")
+	}
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if rows := heartbeats(t, db, scope); rows != 0 {
+		t.Fatalf("%d rows after the node stopped, want 0", rows)
+	}
+	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope}); err != nil {
+		t.Fatalf("a node with Valkey after the one without stopped: %v", err)
+	}
+}
+
+// TestNodesStartingTogetherAreOneAtATime: nodes of N = 1 that start at the same moment are let in one by one, because the
+// count of the others and the write of the node's own row are one step under a lock: with the count taken apart from the
+// write, each would find nobody and every one of them would be let in.
+func TestNodesStartingTogetherAreOneAtATime(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	const starting = 8
+	begin := make(chan struct{})
+	var group sync.WaitGroup
+	var started atomic.Int32
+	for range starting {
+		group.Go(func() {
+			<-begin
+			client, err := kv.Open(t.Context(), kv.Config{Nodes: 1}, kv.Deps{DB: db, Scope: scope})
+			if err != nil {
+				return
+			}
+			started.Add(1)
+			t.Cleanup(func() { closeQuietly(t, client) })
+		})
+	}
+	close(begin)
+	group.Wait()
+	if got := started.Load(); got != 1 {
+		t.Fatalf("%d of %d nodes started together against N = 1, want 1", got, starting)
+	}
+	if rows := heartbeats(t, db, scope); rows != 1 {
+		t.Fatalf("%d heartbeat rows, want 1", rows)
+	}
+}
+
+// TestAStuckDatabaseDoesNotStopTheChecksOfValkey: a heartbeat that waits on a lock the database holds gives up at its own
+// deadline, logs it, and the round has already read the server's memory: the checks of Valkey go on whatever the database
+// does (CONTRIBUTING.md「检查清单」「可靠」).
+func TestAStuckDatabaseDoesNotStopTheChecksOfValkey(t *testing.T) {
+	t.Parallel()
+	server := kvtest.New(t)
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	seen, logs := newReadings(), &lockedBuffer{}
+	cfg := server.Config(kvtest.Namespace())
+	client, err := kv.Open(t.Context(), cfg, kv.Deps{
+		DB: db, Scope: scope, Meter: seen.meter, Logger: slog.New(slog.NewTextHandler(logs, nil)), HeartbeatTimeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { closeQuietly(t, client) })
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE platform.nodes IN ACCESS EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-held:
+		t.Fatalf("take the lock: %v", err)
+	}
+	defer func() {
+		close(release)
+		if err := <-held; err != nil {
+			t.Errorf("release the lock: %v", err)
+		}
+	}()
+	round := make(chan struct{})
+	go func() {
+		defer close(round)
+		client.Beat(t.Context())
+	}()
+	select {
+	case <-round:
+	case <-time.After(time.Minute): // only catches a round that never ends; the heartbeat's own deadline is 200 ms
+		t.Fatal("a round of the loop never ended: the heartbeat waited on the database for ever")
+	}
+	if got := seen.memory(t); got <= 0 {
+		t.Fatalf("memory_used_bytes = %d: the round did not read the server", got)
+	}
+	if !strings.Contains(logs.String(), "heartbeat failed") {
+		t.Fatalf("the heartbeat that gave up was not reported: %s", logs.String())
 	}
 }

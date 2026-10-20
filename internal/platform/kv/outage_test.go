@@ -85,14 +85,52 @@ func (r readings) calls(t *testing.T, result string) int64 {
 	return total
 }
 
-// pause stops the server answering anyone for d, as a stall of its host would.
-func pause(t *testing.T, server *kvtest.Server, d time.Duration) {
+// memory is axiom.kv.memory_used_bytes as last written.
+func (r readings) memory(t *testing.T) int64 {
 	t.Helper()
-	server.Do(t, t.Context(), server.Admin.B().ClientPause().Timeout(d.Milliseconds()).All().Build())
+	for _, m := range r.collect(t) {
+		if gauge, ok := m.Data.(metricdata.Gauge[int64]); ok && m.Name == "axiom.kv.memory_used_bytes" && len(gauge.DataPoints) > 0 {
+			return gauge.DataPoints[len(gauge.DataPoints)-1].Value
+		}
+	}
+	return 0
 }
 
-// untilCounts runs the count until it succeeds, with a jump over the breaker's open period before each: the pause or the
-// restart is the server's, in real time, and what the test waits for is the breaker's probe finding it back.
+// total is a counter's sum over its points.
+func (r readings) total(t *testing.T, name string) int64 {
+	t.Helper()
+	var total int64
+	for _, m := range r.collect(t) {
+		if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == name {
+			for _, point := range sum.DataPoints {
+				total += point.Value
+			}
+		}
+	}
+	return total
+}
+
+// pauseWrites makes the server hold every command that may write, as a server stalled on its disk does, until the test
+// lets them go with the function it returns (and at the latest when the test ends). Reads and the client's own readings
+// keep answering, so the connection stays up while the scripts wait in it. Unlike a pause for a length of time, nothing
+// here depends on how long the test takes.
+func pauseWrites(t *testing.T, server *kvtest.Server) (resume func()) {
+	t.Helper()
+	server.Do(t, t.Context(), server.Admin.B().ClientPause().Timeout(time.Hour.Milliseconds()).Write().Build())
+	var once sync.Once
+	resume = func() {
+		once.Do(func() {
+			if err := server.Admin.Do(context.WithoutCancel(t.Context()), server.Admin.B().ClientUnpause().Build()).Error(); err != nil {
+				t.Errorf("resume the server: %v", err)
+			}
+		})
+	}
+	t.Cleanup(resume)
+	return resume
+}
+
+// untilCounts runs the count until it succeeds, with a jump over the breaker's open period before each: what the test
+// waits for is the breaker's probe finding the server back.
 func untilCounts(t *testing.T, clock *offsetClock, client *kv.Client, script kv.Script) []int64 {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -109,10 +147,10 @@ func untilCounts(t *testing.T, clock *offsetClock, client *kv.Client, script kv.
 	}
 }
 
-// TestTimeoutReturnsAndTheBreakerRecovers: a paused server does not answer, so every access returns unavailable at the
-// deadline, the breaker opens, and once the server answers the half-open probe closes it. The test does not time the
-// deadline: an access that waited for the server instead would succeed after the pause, which the test refuses
-// (internal/platform/kv/README.md「测试」).
+// TestTimeoutReturnsAndTheBreakerRecovers: a server whose scripts wait does not answer them, so every access returns
+// unavailable at the deadline, the breaker opens, and once the server answers the half-open probe closes it. The test does
+// not time the deadline: an access that waited for the server instead would succeed only after the resume, which the test
+// has not given yet (internal/platform/kv/README.md「测试」).
 func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
@@ -122,17 +160,18 @@ func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 	if _, err := count(t, client, script, 100); err != nil {
 		t.Fatalf("run the count: %v", err)
 	}
-	pause(t, server, 3*time.Second)
+	resume := pauseWrites(t, server)
 	for i := range 32 {
 		if _, err := count(t, client, script, 100); !errors.Is(err, kv.ErrUnavailable) {
-			t.Fatalf("access %d against a paused server: %v", i, err)
+			t.Fatalf("access %d against a server that does not answer: %v", i, err)
 		}
 	}
 	if got := seen.breakerOpen(t); got != 1 {
 		t.Fatalf("breaker_open = %d after 32 accesses that timed out", got)
 	}
+	resume()
 	if counts := untilCounts(t, clock, client, script); len(counts) != 2 {
-		t.Fatalf("count after the pause = %v", counts)
+		t.Fatalf("count after the resume = %v", counts)
 	}
 	if got := seen.breakerOpen(t); got != 0 {
 		t.Fatalf("breaker_open = %d after the probe succeeded", got)
@@ -148,7 +187,7 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 	seen := newReadings()
 	client := server.Open(t, kv.Deps{Meter: seen.meter})
 	script := kv.NewScript(countScript)
-	pause(t, server, 3*time.Second)
+	pauseWrites(t, server)
 	for range 20 {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond) // earlier than kv.Timeout, so the caller's
 		_, err := client.Do(ctx, kv.Precheck, script.Cmd(window(client, 100), "120000"))
@@ -170,23 +209,25 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 	}
 }
 
-// TestEveryAccessReturns: far more concurrent accesses than the client's ring has slots, 4096, against a server that
-// answers nobody, must each return. A full ring blocks in PutOne, which ignores the context, so what bounds it is the
-// breaker and the connection's own write timeout (README「客户端与连接」).
+// TestEveryAccessReturns: far more concurrent accesses than a connection's ring has slots, against a server whose scripts
+// wait, must each return, and no more of them may reach the server than the client lets be out: the ring waits for a slot
+// without looking at any context, so what keeps a call from waiting there is that the client never fills it. The clock is
+// frozen, so the breaker that opens stays open and nothing is sent after it (README「客户端与连接」).
 func TestEveryAccessReturns(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	client := server.Open(t, kv.Deps{})
+	frozen := time.Now()
+	client := server.Open(t, kv.Deps{Now: func() time.Time { return frozen }})
 	script := kv.NewScript(countScript)
 	keys := window(client, 100)
-	pause(t, server, 3*time.Second)
+	resume := pauseWrites(t, server)
 	const concurrent = 5000
 	var group sync.WaitGroup
 	group.Add(concurrent)
 	for range concurrent {
 		go func() {
 			defer group.Done()
-			if _, err := client.Do(t.Context(), kv.Precheck, script.Cmd(keys, "120000")); err != nil && !errors.Is(err, kv.ErrUnavailable) {
+			if _, err := client.Do(t.Context(), kv.Precheck, script.Cmd(keys, "120000")); !errors.Is(err, kv.ErrUnavailable) {
 				t.Errorf("access: %v", err)
 			}
 		}()
@@ -200,6 +241,38 @@ func TestEveryAccessReturns(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Minute): // only catches an access that never returns; it is no measure of how long one takes
 		t.Fatal("an access never returned")
+	}
+	// The scripts that were out run when the server resumes; the key counts them.
+	resume()
+	got := untilStable(t, server, keys[0])
+	if got < 1 || got > kv.MaxOutstanding {
+		t.Fatalf("%d of %d accesses reached the server, want between 1 and the %d the client lets be out", got, concurrent, kv.MaxOutstanding)
+	}
+}
+
+// untilStable is the value of the counter key once it has stopped moving: the scripts the paused server held run in the
+// background after the resume, and a count taken in the middle of them would only be smaller.
+func untilStable(t *testing.T, server *kvtest.Server, key string) int {
+	t.Helper()
+	read := func() int {
+		got, err := server.Admin.Do(t.Context(), server.Admin.B().Get().Key(key).Build()).AsInt64()
+		if err != nil {
+			return 0 // no script has run yet
+		}
+		return int(got)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for last, same := read(), 0; ; {
+		time.Sleep(50 * time.Millisecond)
+		now := read()
+		if now != last || now == 0 {
+			last, same = now, 0
+		} else if same++; same == 4 {
+			return now
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the counter never settled: %d", now)
+		}
 	}
 }
 
@@ -309,30 +382,14 @@ func TestOOMFallsBack(t *testing.T) {
 	if _, err := client.Do(t.Context(), kv.Precheck, script.Cmd(kept, "600000")); err != nil {
 		t.Fatalf("write the key that must survive: %v", err)
 	}
-	// Fill the server a kilobyte at a time until it refuses to take more. The last key it accepted took it over its limit,
-	// and only then does it refuse a write of any size: a refused 16 KiB value would only have been too big to fit.
-	filler, full := strings.Repeat("x", 1<<10), false
-	for i := range 1 << 14 {
-		result := server.Admin.Do(t.Context(),
-			server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build())
-		if err := result.Error(); err != nil {
-			full = true
-			break
-		}
-	}
-	if !full {
-		used, err := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
-		t.Fatalf("16 MiB went into a server limited to 3 MiB without a refusal (%v): %s", err, used)
-	}
+	fillUp(t, server)
 	const refused = 10 // more than the breaker's streak of unavailable accesses
-	for i := range refused {
-		_, err := client.Do(t.Context(), kv.Precheck, script.Cmd(window(client, 101+i), "600000"))
-		if !errors.Is(err, kv.ErrUnavailable) || !strings.Contains(err.Error(), "OOM") {
-			t.Fatalf("a full server answered a write with %v", err)
-		}
-	}
+	refuseWrites(t, client, script, refused)
 	if got := seen.calls(t, "error"); got != refused {
 		t.Errorf("%d refused writes counted as errors, want %d", got, refused)
+	}
+	if got := seen.total(t, "axiom.kv.rejected_oom"); got != refused {
+		t.Errorf("rejected_oom = %d, want the %d refusals", got, refused)
 	}
 	if got := seen.breakerOpen(t); got != 0 {
 		t.Fatalf("a server that answers OOM opened the breaker: breaker_open = %d", got)
@@ -341,5 +398,36 @@ func TestOOMFallsBack(t *testing.T) {
 	got, err := server.Do(t, t.Context(), server.Admin.B().Get().Key(kept[0]).Build())[0].ToString()
 	if err != nil || got != "1" {
 		t.Fatalf("the key that must survive = %q, %v", got, err)
+	}
+}
+
+// fillUp fills the server a kilobyte at a time until it refuses to take more. The last key it accepted took it over its
+// limit, and only then does it refuse a write of any size: a refused 16 KiB value would only have been too big to fit.
+func fillUp(t *testing.T, server *kvtest.Server) {
+	t.Helper()
+	filler := strings.Repeat("x", 1<<10)
+	for i := range 1 << 14 {
+		result := server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build())
+		if result.Error() != nil {
+			return
+		}
+	}
+	used, err := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
+	t.Fatalf("16 MiB went into a server limited to 3 MiB without a refusal (%v): %s", err, used)
+}
+
+// refuseWrites sends writes to a full server until it has answered n of them with OOM. A write that met a busy machine and
+// timed out says nothing about the memory, so it is tried again; only the answers of the server are counted.
+func refuseWrites(t *testing.T, client *kv.Client, script kv.Script, n int) {
+	t.Helper()
+	for answered, attempt := 0, 0; answered < n; attempt++ {
+		_, err := client.Do(t.Context(), kv.Precheck, script.Cmd(window(client, 101+attempt), "600000"))
+		switch {
+		case errors.Is(err, context.DeadlineExceeded) && attempt < 10*n:
+		case errors.Is(err, kv.ErrUnavailable) && strings.Contains(err.Error(), "OOM"):
+			answered++
+		default:
+			t.Fatalf("a full server answered a write with %v", err)
+		}
 	}
 }

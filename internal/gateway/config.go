@@ -124,8 +124,20 @@ func (c Config) Validate() error {
 	// Subtracted, not added: two huge positives would overflow past the grace.
 	relation(c.SettleBackground < c.SettleGrace-c.SettleRetry, "SettleGrace %v must exceed SettleRetry %v + SettleBackground %v",
 		c.SettleGrace, c.SettleRetry, c.SettleBackground)
+	// The shared count's windows are whole milliseconds, counted from the epoch, and its keys live two windows: a window
+	// that is not a whole number of milliseconds numbers and weighs by different lengths, and one over a day makes a key
+	// that long-lived for no use. Compared, not multiplied, so no value overflows past the bound (internal/platform/kv/README.md「键」).
+	relation(c.RateWindow >= minRateWindow && c.RateWindow <= maxRateWindow && c.RateWindow%time.Millisecond == 0,
+		"RateWindow %v must be a whole number of milliseconds from %v to %v", c.RateWindow, minRateWindow, maxRateWindow)
 	return errors.Join(errs...)
 }
+
+// The shortest and longest RateWindow: a window under a second is a count of a few requests that the clock's own
+// granularity decides, and over a day is a key that lives two days.
+const (
+	minRateWindow = time.Second
+	maxRateWindow = 24 * time.Hour
+)
 
 // KeyLookupSlot is accounts.Config.LookupSlot: a lookup of a key that is not cached uses a database connection like an
 // admission does, so it takes one of the admission class, for as long as the lookup runs (internal/gateway/README.md

@@ -16,6 +16,7 @@ import (
 
 	"github.com/valkey-io/valkey-go"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/semaphore"
 
 	"axiom/internal/platform/pg"
 )
@@ -29,6 +30,8 @@ type Deps struct {
 	Scope  pg.Scope
 	Meter  metric.Meter // where the client's instruments go; nil for none
 	Logger *slog.Logger // nil for none
+	// HeartbeatTimeout bounds one round of the heartbeat's database work; zero is defaultHeartbeatTimeout. A test shortens it.
+	HeartbeatTimeout time.Duration
 	// Now is the local clock, and nil is time.Now. Tests set one that is wrong to see the clock check, and one they
 	// advance to open and close the breaker without waiting (README「时钟」「熔断」).
 	Now func() time.Time
@@ -47,7 +50,10 @@ type Client struct {
 	logger *slog.Logger
 	m      metrics
 	br     *breaker
-	hear   *heartbeat // nil without a database: a test's client, or single-core mode's
+	slots  *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
+	hear   *heartbeat          // nil without a database: a test's client
+	// beatTimeout bounds one round of the heartbeat's database work.
+	beatTimeout time.Duration
 
 	// deferred is set when the server was unreachable at startup: the checks that need one are owed, and the loop runs
 	// them at the first answer and reports what they find (README「配置与启动」).
@@ -57,10 +63,12 @@ type Client struct {
 	closing  sync.Once
 }
 
-// Open connects to Valkey and checks it as far as the configuration allows (README「配置与启动」). Without URLVar it
-// returns the single-core client: Enabled is false, and every caller keeps its in-process implementation. A server that
-// cannot be reached is not an error, and the node starts on its fallbacks; a server that refuses the user, has no
-// memory limit, or disagrees about the time stops the start, because those are deployment mistakes.
+// Open registers the node, connects to Valkey and checks it as far as the configuration allows (README「配置与启动」).
+// Every node registers and keeps a heartbeat when it has a database, with or without Valkey, so that a second node
+// against the same database is found whatever it is configured with. Without URLVar it returns the single-core client:
+// Enabled is false, and every caller keeps its in-process implementation. A server that cannot be reached is not an
+// error, and the node starts on its fallbacks; a server that refuses the user, has no memory limit, or disagrees about
+// the time stops the start, because those are deployment mistakes.
 func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -68,47 +76,52 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 	if deps.Logger == nil {
 		deps.Logger = slog.New(slog.DiscardHandler)
 	}
+	if deps.HeartbeatTimeout == 0 {
+		deps.HeartbeatTimeout = defaultHeartbeatTimeout
+	}
 	namespace := cfg.Namespace
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
+	if err := cfg.Resolve(); err != nil {
+		return nil, err
+	}
 	c := &Client{
 		ns: namespace, now: deps.Now, config: cfg.Nodes, logger: deps.Logger, m: newMetrics(deps.Meter),
-		br: newBreaker(deps.Now),
+		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), beatTimeout: deps.HeartbeatTimeout,
 	}
 	c.live.Store(int64(cfg.Nodes))
-	if err := cfg.Check(); err != nil {
-		return nil, err
-	}
-	if cfg.URL == "" {
-		return c, nil // single-core mode: nothing below applies
-	}
-	a, err := cfg.endpoint()
-	if err != nil {
-		return nil, err
-	}
-	// The heartbeat speaks first: a second node that reached this database without Valkey, or an N set too low, is
-	// found before the server is touched, and this node's row is written only once it may start.
+	// The heartbeat speaks first: a second node that reached this database, with Valkey or without, or an N set too low,
+	// is found before the server is touched, and this node's row is written only once it may start.
 	if deps.DB != nil {
 		c.hear = newHeartbeat(deps.DB, deps.Scope)
 		if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
 			return nil, err
 		}
 	}
-	// With ForceSingleClient the client comes back even when its first dial failed, and the error is that failure: the
-	// client dials again by itself at its next access, so a server that is not there yet is no reason to have no client.
-	vk, dialErr := valkey.NewClient(option(a))
+	if cfg.URL != "" {
+		if err := c.connect(ctx, cfg); err != nil {
+			return nil, errors.Join(err, c.Close(ctx))
+		}
+	}
+	if c.vk != nil || c.hear != nil {
+		loop, stop := context.WithCancel(context.WithoutCancel(ctx))
+		c.stop = stop
+		c.done.Go(func() { c.watch(loop) })
+	}
+	return c, nil
+}
+
+// connect makes the client and judges the first access. With ForceSingleClient the client comes back even when its first
+// dial failed, and the error is that failure: the client dials again by itself at its next access, so a server that is
+// not there yet is no reason to have no client.
+func (c *Client) connect(ctx context.Context, cfg Config) error {
+	vk, dialErr := valkey.NewClient(option(*cfg.resolved))
 	if vk == nil {
-		return nil, errors.Join(fmt.Errorf("%s: cannot make a client", URLVar), c.release(ctx))
+		return fmt.Errorf("%s: cannot make a client", URLVar)
 	}
 	c.vk = vk
-	if err := c.probe(ctx, dialErr); err != nil {
-		return nil, errors.Join(err, c.Close(ctx))
-	}
-	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
-	c.stop = stop
-	c.done.Go(func() { c.watch(loop) })
-	return c, nil
+	return c.probe(ctx, dialErr)
 }
 
 // option is the connection README「客户端与连接」 fixes: always pipelining, few connections, no cache and no retry, a

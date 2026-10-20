@@ -20,7 +20,7 @@ func (c *fakeClock) advance(d time.Duration) { c.at = c.at.Add(d) }
 func opened(t *testing.T) (*breaker, *fakeClock) {
 	t.Helper()
 	clock := newFakeClock()
-	b := newBreaker(clock.Now)
+	b := newBreaker()
 	for i := range rateAccesses {
 		result := ok
 		if i%2 == 0 {
@@ -85,7 +85,7 @@ func TestBreakerHalfOpen(t *testing.T) {
 func TestBreakerOpensOnSlowAccesses(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	b := newBreaker(clock.Now)
+	b := newBreaker()
 	for range slowAccesses {
 		b.done(clock.Now(), false, ok)
 	}
@@ -100,7 +100,7 @@ func TestBreakerOpensOnSlowAccesses(t *testing.T) {
 func TestBreakerOpensOnAStreak(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	b := newBreaker(clock.Now)
+	b := newBreaker()
 	for i := range streakAccesses {
 		_, open := b.done(clock.Now(), false, unavailable)
 		if open != (i == streakAccesses-1) {
@@ -114,7 +114,7 @@ func TestBreakerOpensOnAStreak(t *testing.T) {
 func TestBreakerForgetsOldAccesses(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	b := newBreaker(clock.Now)
+	b := newBreaker()
 	for range rateAccesses {
 		b.record(clock.Now(), unavailable)
 	}
@@ -132,7 +132,7 @@ func TestBreakerForgetsOldAccesses(t *testing.T) {
 func TestBreakerIgnoresSkipsAndOurMistakes(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	b := newBreaker(clock.Now)
+	b := newBreaker()
 	for range 10 * rateAccesses {
 		b.done(clock.Now(), false, skipped)
 		b.done(clock.Now(), false, failed)
@@ -169,5 +169,30 @@ func TestOutcomeTellsTheCallersFailure(t *testing.T) {
 				t.Fatalf("outcome = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBreakerCancelledProbeGivesItsPlaceUp: the access that got the probe's place and was cancelled by its caller learned
+// nothing, so it frees the place, counts no failure and leaves the open period alone; the next access probes and its
+// success closes the breaker. Without that the half-open breaker refused everything for ever.
+func TestBreakerCancelledProbeGivesItsPlaceUp(t *testing.T) {
+	t.Parallel()
+	b, clock := opened(t)
+	clock.advance(openFor)
+	if probe, allowed := b.allow(clock.Now()); !probe || !allowed {
+		t.Fatal("no probe after the open period")
+	}
+	if changed, open := b.done(clock.Now(), true, skipped); changed || open {
+		t.Fatalf("a cancelled probe changed the breaker: changed %v, open %v", changed, open)
+	}
+	if !b.open || b.streak != 0 {
+		t.Fatalf("a cancelled probe counted as a failure: open %v, streak %d", b.open, b.streak)
+	}
+	probe, allowed := b.allow(clock.Now())
+	if !probe || !allowed {
+		t.Fatal("the next access after a cancelled probe was not given the probe")
+	}
+	if changed, open := b.done(clock.Now(), probe, ok); !changed || open {
+		t.Fatal("the next probe's success did not close the breaker")
 	}
 }

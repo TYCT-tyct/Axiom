@@ -100,7 +100,7 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
-	values, err := c.run(ctx, cmds)
+	values, err := c.send(ctx, caller, c.build(cmds))
 	took := c.now().Sub(started)
 	result := outcomeOf(caller, err)
 	c.m.duration.Record(caller, took.Seconds(), c.m.useOption(use))
@@ -111,15 +111,59 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 	if err != nil {
 		if result == failed {
 			c.logger.ErrorContext(caller, "valkey refused a command: a script or its keys are wrong", "err", err)
+			if isOOM(err) {
+				c.m.oom.Add(caller, 1)
+			}
 		}
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return values, nil
 }
 
-// run builds and sends the batch, and reads every reply: a command the server refused fails the batch, because a module
-// that lost one of two counts cannot tell what the other one means.
-func (c *Client) run(ctx context.Context, cmds []Cmd) ([]Value, error) {
+// The most commands that may be sent and not yet answered, and how long one may stay out. A connection's ring holds 2^10
+// commands, and putting a command into a full ring waits for a slot without looking at any context (valkey-go v1.0.78
+// ring.go). So the client never lets more than half a ring be out, whichever connection a batch takes, and a call that
+// cannot get its place before its deadline leaves without sending. A command whose caller has left stays out until its
+// reply or until the connection is closed for its silence, which the one-second dial and write timeouts make about two
+// seconds; settleBy cuts the wait there.
+const (
+	maxOutstanding = 512
+	settleBy       = 3 * time.Second
+)
+
+// flight is one batch on its way, which the caller may leave before it lands.
+type flight struct {
+	values []Value
+	err    error
+	done   chan struct{}
+}
+
+// send puts the batch on the wire and waits for its replies for as long as ctx lasts. The batch is sent by a goroutine of
+// its own that holds its place until the replies come, not until the caller stops waiting: the place stands for the ring
+// slot, which an abandoned command keeps. Without a place by the deadline nothing is sent.
+func (c *Client) send(ctx, caller context.Context, built []valkey.Completed) ([]Value, error) {
+	weight := int64(len(built))
+	if err := c.slots.Acquire(ctx, weight); err != nil {
+		return nil, err
+	}
+	sent := &flight{done: make(chan struct{})}
+	go func() {
+		work, cancel := context.WithTimeout(context.WithoutCancel(caller), settleBy)
+		defer cancel()
+		sent.values, sent.err = c.run(work, built)
+		c.slots.Release(weight)
+		close(sent.done)
+	}()
+	select {
+	case <-sent.done:
+		return sent.values, sent.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// build turns the batch into commands. It runs in the caller's goroutine, so the caller may reuse its Cmds once Do returns.
+func (c *Client) build(cmds []Cmd) []valkey.Completed {
 	builder := c.vk.B()
 	built := make([]valkey.Completed, len(cmds))
 	for i, cmd := range cmds {
@@ -132,6 +176,12 @@ func (c *Client) run(ctx context.Context, cmds []Cmd) ([]Value, error) {
 			built[i] = builder.Eval().Script(cmd.src).Numkeys(int64(len(cmd.keys))).Key(cmd.keys...).Arg(cmd.args...).Build()
 		}
 	}
+	return built
+}
+
+// run sends the commands and reads every reply: a command the server refused fails the batch, because a module that lost
+// one of two counts cannot tell what the other one means.
+func (c *Client) run(ctx context.Context, built []valkey.Completed) ([]Value, error) {
 	replies := c.vk.DoMulti(ctx, built...)
 	values := make([]Value, len(replies))
 	for i, reply := range replies {
@@ -160,6 +210,12 @@ func outcomeOf(caller context.Context, err error) outcome {
 	default:
 		return unavailable // a connection that failed, or was closed under the command
 	}
+}
+
+// isOOM reports the refusal of a server whose memory is full.
+func isOOM(err error) bool {
+	var reply *valkey.ValkeyError
+	return errors.As(err, &reply) && strings.HasPrefix(reply.Error(), "OOM")
 }
 
 // isServerError reports an error the server sent, as opposed to a connection that failed.

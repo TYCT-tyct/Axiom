@@ -28,7 +28,7 @@ func TestMoreLiveNodesThanConfigured(t *testing.T) {
 	var logs strings.Builder
 	reader := sdkmetric.NewManualReader()
 	node := &Client{
-		config: 1, now: func() time.Time { return now }, logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		config: 1, beatTimeout: defaultHeartbeatTimeout, now: func() time.Time { return now }, logger: slog.New(slog.NewTextHandler(&logs, nil)),
 		m: newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")), hear: newHeartbeat(db, scope),
 	}
 	node.live.Store(1)

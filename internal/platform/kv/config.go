@@ -34,6 +34,8 @@ type Config struct {
 	// Namespace is the key format version, "v1" in production and one random per test case, so cases that share a
 	// Valkey do not see each other's keys (README「键」). Empty is "v1".
 	Namespace string
+
+	resolved *endpoint // the URL parsed and the password read, by Resolve; Open reads it again only when it is missing
 }
 
 // DefaultNamespace is the key format version of production.
@@ -47,29 +49,31 @@ type endpoint struct {
 	tls      bool
 }
 
-// Check reports the configuration's own problems, before anything is reached (serve calls it with the other variables'
-// checks, so the database is not touched for them): each names its variable and none quotes a value, which may be a
-// secret pasted into the wrong one.
-func (c Config) Check() error {
+// Resolve reports the configuration's own problems and keeps what it parsed, so that nothing is read twice. serve calls it
+// with the other variables' checks, before the database is touched, and Open calls it again for a Config that was not
+// resolved. Each problem names its variable and none quotes a value, which may be a secret pasted into the wrong one.
+func (c *Config) Resolve() error {
 	if c.Nodes < 1 {
 		return fmt.Errorf("%s: want a whole number of at least 1", NodesVar)
 	}
-	if c.URL == "" && c.Nodes > 1 {
-		return fmt.Errorf("%s: %d nodes need Valkey: set %s, or run a single node", NodesVar, c.Nodes, URLVar)
+	if c.URL == "" {
+		if c.Nodes > 1 {
+			return fmt.Errorf("%s: %d nodes need Valkey: set %s, or run a single node", NodesVar, c.Nodes, URLVar)
+		}
+		return nil
 	}
-	return nil
-}
-
-// endpoint parses the URL and reads the password file.
-func (c Config) endpoint() (endpoint, error) {
+	if c.resolved != nil {
+		return nil
+	}
 	parsed, err := parseURL(c.URL)
 	if err != nil {
-		return endpoint{}, err
+		return err
 	}
 	if parsed.password, err = readPassword(c.PasswordFile); err != nil {
-		return endpoint{}, err
+		return err
 	}
-	return parsed, nil
+	c.resolved = &parsed
+	return nil
 }
 
 // parseURL reads the URL's parts without ever quoting it back: a password pasted into it must not reach the logs.

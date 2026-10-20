@@ -45,21 +45,27 @@ func (c *Client) watch(ctx context.Context) {
 	}
 }
 
-// beat is one round of the loop: this node's heartbeat, then the server's memory, and its time when the clock is due.
+// beat is one round of the loop: the server's memory, and its time when the clock is due, then this node's heartbeat.
+// The heartbeat goes last and under a deadline of its own, so a database that does not answer delays the round by that
+// deadline at most and never stops the checks of Valkey.
 func (c *Client) beat(ctx context.Context, over *since, clockDue time.Time) {
+	if c.vk != nil {
+		if _, _, err := c.measure(ctx, !c.now().Before(clockDue)); err != nil &&
+			ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
+			// An outage is the breaker's to report; what reaches here answered, but not as one of our deployments must.
+			c.logger.ErrorContext(ctx, "valkey does not answer as it must: the node keeps serving on its own counters", "err", err)
+		}
+	}
 	if c.hear != nil {
 		c.heartbeat(ctx, over)
-	}
-	if _, _, err := c.measure(ctx, !c.now().Before(clockDue)); err != nil &&
-		ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
-		// An outage is the breaker's to report; what reaches here answered, but not as one of our deployments must.
-		c.logger.ErrorContext(ctx, "valkey does not answer as it must: the node keeps serving on its own counters", "err", err)
 	}
 }
 
 // heartbeat writes this node's row, and reports a live count above N once per episode.
 func (c *Client) heartbeat(ctx context.Context, over *since) {
-	live, err := c.hear.beat(ctx)
+	round, cancel := context.WithTimeout(ctx, c.beatTimeout)
+	defer cancel()
+	live, err := c.hear.beat(round)
 	if err != nil {
 		if ctx.Err() == nil {
 			c.logger.ErrorContext(ctx, "the node heartbeat failed: a wrong core-node count would not be noticed", "err", err)
