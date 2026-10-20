@@ -31,17 +31,20 @@ WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
     OR s.subject = @key_id AND s.window_start = @key_window;
 
 -- name: InsertTransaction :execrows
--- 0 rows: the event was posted already, and its entries with it.
+-- Only for a caller that already holds the account's balance row lock: every transaction of an account is numbered under
+-- that lock (InsertLockedTransaction), and the replay's upper bound depends on it (ReplayThrough). A row numbered
+-- outside the lock could take a seq below a locked credit and still commit after it, so a replay would read the credit
+-- without its batch. 0 rows: the event was posted already, and its entries with it.
 INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
 VALUES (@id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision)
 ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING;
 
 -- name: InsertLockedTransaction :execrows
--- InsertTransaction for a transaction that moves the user's balance: the account's balance row is locked by the same
--- statement before the row, and so its seq, is made, so the sequence numbers of one account's balance movements follow
--- the order they commit, which the allocation replays by (internal/billing/README.md「额度批次的分配与到期」). The lock
--- is taken again, without waiting, by a caller that holds it. 0 rows: the event was posted already, or the account has
--- no balance row.
+-- Numbers the transaction under the account's balance row lock, whether or not it moves the user's balance: the lock is
+-- taken by the same statement before the row, and so its seq, is made, so the seqs of one account's transactions follow
+-- the order they commit, which the allocation replays by and the unlocked replay bounds itself with (ReplayThrough;
+-- internal/billing/README.md「额度批次的分配与到期」). The lock is taken again, without waiting, by a caller that holds
+-- it. 0 rows: the event was posted already, or the account has no balance row.
 WITH locked AS (SELECT 1 FROM billing.balances WHERE account_id = @account_id FOR UPDATE)
 INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
 SELECT @id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision FROM locked

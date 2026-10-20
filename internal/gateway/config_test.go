@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,11 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		"per-key waiters above the queue":              {func(c *Config) { c.QueuePerKey = c.QueueMax + 1 }, "QueuePerKey"},
 		"zero node slots":                              {func(c *Config) { c.NodeInFlight = 0 }, "NodeInFlight"},
 		"negative gate wait":                           {func(c *Config) { c.AccountGateWait = -1 }, "AccountGateWait"},
+		"rate window that truncates to zero ms":        {func(c *Config) { c.RateWindow = 500 * time.Microsecond }, "RateWindow"},
+		"rate window under the minimum":                {func(c *Config) { c.RateWindow = minRateWindow - time.Millisecond }, "RateWindow"},
+		"rate window of fractional milliseconds":       {func(c *Config) { c.RateWindow = time.Minute + time.Microsecond }, "RateWindow"},
+		"rate window over the maximum":                 {func(c *Config) { c.RateWindow = maxRateWindow + time.Millisecond }, "RateWindow"},
+		"rate window whose double overflows":           {func(c *Config) { c.RateWindow = time.Duration(math.MaxInt64 - math.MaxInt64%int64(time.Millisecond)) }, "RateWindow"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := DefaultConfig()
@@ -46,6 +52,21 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 				t.Fatalf("New() error = %v, want one naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// The ends of the allowed rate windows are allowed, and the shared count's TTL, two windows in milliseconds, is positive.
+func TestConfigAcceptsTheRateWindowBounds(t *testing.T) {
+	for _, window := range []time.Duration{minRateWindow, time.Minute, maxRateWindow} {
+		cfg := DefaultConfig()
+		cfg.RateWindow = window
+		limits, err := New(cfg, nil)
+		if err != nil {
+			t.Fatalf("window %v: %v", window, err)
+		}
+		if want := (2 * window).Milliseconds(); limits.rateTTL != strconv.FormatInt(want, 10) || want <= 0 {
+			t.Fatalf("window %v: ttl %q, want %d", window, limits.rateTTL, want)
+		}
 	}
 }
 

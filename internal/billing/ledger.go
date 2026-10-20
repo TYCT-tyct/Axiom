@@ -52,9 +52,11 @@ const lateRevision = -1
 // entries must balance in each currency on its own: a sum over all of them would let a top-up in another currency
 // balance against the wrong book.
 //
-// A transaction that moves the user's balance takes the account's balance row lock in the statement that makes it, so
-// its seq, which the allocation of credit batches replays by, is taken under the lock whether or not the caller holds it
-// already: no writer can number a movement and commit it after a later one.
+// Every transaction of an account is numbered while its balance row lock is held, so the seqs of one account follow the
+// order they commit, which the allocation replays by and the unlocked replay bounds itself with (#361). A transaction
+// that moves the user's balance takes that lock in the statement that makes it, whether or not the caller holds it
+// already; one that moves nothing is numbered without the lock, so its caller has to hold it, as the flows that post
+// such an event do: settlement, cleanup and expiry lock the account first (putTransaction).
 func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error) {
 	id := uuid.NewV7()
 	params := InsertEntriesParams{TransactionID: id, SiteID: e.site, AccountID: e.account}
@@ -87,7 +89,9 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 	return err == nil, wrapPost(e, err)
 }
 
-// putTransaction inserts the transaction row; locked takes the balance row lock with it. Of no row inserted, a
+// putTransaction inserts the transaction row; locked takes the balance row lock with it, and is set exactly when the
+// transaction moves the user's balance. When it is not set the caller must hold that lock already, so that the account's
+// transactions are numbered in the order they commit whichever of the two it takes (post). Of no row inserted, a
 // transaction that locks says whether the event was posted already or the account has no balance row to lock.
 func putTransaction(ctx context.Context, tx pg.Tx, e event, id uuid.UUID, locked bool) (int64, error) {
 	if !locked {
