@@ -4,8 +4,9 @@ import { Button } from "./button";
 import { Icon } from "./icon";
 
 // CopyButton puts text on the clipboard and says so. The clipboard needs a secure page and a permission, so a refusal
-// is said too, and the text stays on screen to select by hand.
-export function CopyButton({ text }: { text: string }) {
+// is said too, and the text stays on screen to select by hand. `label` names what it copies, for a page whose buttons
+// would otherwise all read the same.
+export function CopyButton({ text, label }: { text: string; label?: string }) {
   const { t } = useTranslation("common");
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   return (
@@ -20,7 +21,7 @@ export function CopyButton({ text }: { text: string }) {
         }}
       >
         <Icon name={state === "copied" ? "check" : "copy"} />
-        {state === "copied" ? t("copy.copied") : t("copy.copy")}
+        {state === "idle" ? (label ?? t("copy.copy")) : t(`copy.${state}`)}
       </Button>
       <span role="status" className="text-label text-t3">
         {state === "idle" ? "" : t(`copy.${state}`)}
