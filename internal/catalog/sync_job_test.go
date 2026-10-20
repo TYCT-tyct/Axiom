@@ -148,7 +148,10 @@ func TestTheSyncRoundRunsOnTheSyncsQueue(t *testing.T) {
 	q := s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil)
 	if err := catalog.RegisterSync(catalog.SyncJobConfig{
 		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.logger(),
-		Clock: func() time.Time { close(ran); return now },
+		Clock: func() time.Time {
+			close(ran)
+			return now
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
