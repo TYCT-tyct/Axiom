@@ -27,7 +27,14 @@ var overlapCases = []overlapCase{
 	{name: "fully cached without intersection", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":100,"image_tokens":100}}`, read: 100},
 	{name: "partly cached without intersection", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"image_tokens":60}}`, read: 80, image: 20},
 	{name: "overlap and images", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80,"image_tokens":100}}`, read: 80, write: 80},
+	{name: "video input", body: `{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`, input: 90, image: 10},
+	{name: "video with images", body: `{"input_tokens":100,"input_tokens_details":{"image_tokens":10,"video_tokens":20}}`, input: 70, image: 30},
+	{name: "fully cached video", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":100,"video_tokens":100}}`, read: 100},
+	{name: "partly cached video", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"video_tokens":60}}`, read: 80, image: 20},
+	{name: "video after audio", body: `{"input_tokens":100,"input_tokens_details":{"audio_tokens":80,"video_tokens":60}}`, audio: 80, image: 20},
+	{name: "cached image among video", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":10,"video_tokens":30,"cached_tokens_details":{"image_tokens":10}}}`, input: 30, read: 40, image: 30},
 	{name: "image output only", body: `{"output_tokens":100,"output_tokens_details":{"text_tokens":0,"image_tokens":100}}`, imageOut: 100},
+	{name: "video in output details is billed with the output", body: `{"output_tokens":100,"output_tokens_details":{"video_tokens":20}}`, output: 100},
 	{name: "explicit zero", body: `{"input_tokens":0,"output_tokens":0}`},
 	{name: "cap", body: `{"input_tokens":10000000000,"input_tokens_details":{"cached_tokens":10000000000,"cache_write_tokens":10000000000}}`, read: 1e10, write: 1e10},
 	{name: "read above total", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":101}}`, invalid: true},
@@ -38,6 +45,7 @@ var overlapCases = []overlapCase{
 	{name: "past cap", body: `{"input_tokens":10000000001}`, invalid: true},
 	{name: "fraction", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":1.5}}`, invalid: true},
 	{name: "image above total", body: `{"input_tokens":100,"input_tokens_details":{"image_tokens":101}}`, invalid: true},
+	{name: "video above total", body: `{"input_tokens":100,"input_tokens_details":{"video_tokens":101}}`, invalid: true},
 	{name: "cached image above cache", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":60,"cached_tokens_details":{"image_tokens":41}}}`, invalid: true},
 	{name: "cached image above image", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"image_tokens":10,"cached_tokens_details":{"image_tokens":11}}}`, invalid: true},
 	{name: "fully cached audio", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"audio_tokens":800,"cached_tokens_details":{"audio_tokens":800}}}`, read: 1000},
@@ -47,6 +55,7 @@ var overlapCases = []overlapCase{
 	{name: "cached modalities above cache", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"audio_tokens":30,"image_tokens":30,"cached_tokens_details":{"audio_tokens":21,"image_tokens":20}}}`, invalid: true},
 	{name: "unknown cached member is recorded", body: `{"input_tokens":1000,"input_tokens_details":{"cached_tokens":1000,"cached_tokens_details":{"video_tokens":800}}}`, read: 1000, unknown: 1},
 	{name: "output parts above total", body: `{"output_tokens":100,"output_tokens_details":{"image_tokens":90,"reasoning_tokens":20}}`, invalid: true},
+	{name: "video in output details above total", body: `{"output_tokens":100,"output_tokens_details":{"video_tokens":101}}`, invalid: true},
 }
 
 // Both wire formats accept both names used by OpenAI-compatible upstreams.
