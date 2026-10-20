@@ -74,6 +74,9 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		{"deepseek cache names changed", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", "65", false},
 		{"deepseek cache names made up", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", absent, "64", false},
 		{"deepseek cache names in another case", "chat-gpt-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", absent, false},
+		{"converted item identity", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, `"12345678-1234-1234-1234-123456789abc_0"`, true},
+		{"converted identity cannot leak", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, `"msg_other_up"`, false},
+		{"converted identity cannot disappear", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, absent, false},
 		{"times", "chat-claude-text-whole", "json.created", "1741290958", "1792390509", true},
 		{"time that is no time", "chat-claude-text-whole", "json.created", "1741290958", `"soon"`, false},
 	} {
