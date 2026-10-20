@@ -28,7 +28,7 @@ it("says nothing without an API domain, because there is nowhere for a client to
   expect(keyGuide("", secret)).toBeUndefined();
 });
 
-// The address in the snippets is the one the site has, which is why the tests above use a site-specific one: a domain
+// The address in the snippets is the one the site has, which is why `apiBase` above is a site-specific one: a domain
 // written into the code would show up here as a snippet that ignores its input.
 it("follows the site's address instead of one written into the code", () => {
   const other = keyGuide("https://api.other-site.example", secret);
