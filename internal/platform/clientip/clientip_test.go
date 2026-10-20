@@ -4,17 +4,22 @@ import (
 	"net/http"
 	"net/netip"
 	"testing"
+
+	"axiom/internal/platform/config"
 )
 
 // TestAddr: only the connection's own address is believed unless it is a trusted proxy, and then X-Forwarded-For is
 // read from its right past the proxies to the first address that is not one; without a trusted proxy the header is
-// ignored whoever sends it, and a header that cannot be read is not believed.
+// ignored whoever sends it, and a header that cannot be read is not believed. The peers are compared after Unmap, so a
+// proxy a deployment wrote in the v4-mapped form is trusted only because config turns that entry into its IPv4 network
+// (#335).
 func TestAddr(t *testing.T) {
 	t.Parallel()
 	trusted := []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.9/32"),
 		netip.MustParsePrefix("2001:db8:ffff::/48"),
 	}
+	mapped := config.New([]string{"AXIOM_TRUSTED_PROXIES=::ffff:10.0.0.0/104"}).Prefixes("AXIOM_TRUSTED_PROXIES")
 	cases := []struct {
 		name    string
 		trusted []netip.Prefix
@@ -39,6 +44,8 @@ func TestAddr(t *testing.T) {
 		{"a zone on a hop", trusted, "10.1.1.1:1", []string{"2001:db8::1%a"}, "2001:db8::1"},
 		{"a zone on a trusted hop", trusted, "10.1.1.1:1", []string{"198.51.100.1, 2001:db8:ffff::2%b"}, "198.51.100.1"},
 		{"v4 in v6 clothes", trusted, "[::ffff:10.1.1.1]:1", []string{"::ffff:198.51.100.1"}, "198.51.100.1"},
+		{"a v4-mapped trusted proxy, its peer mapped", mapped, "[::ffff:10.1.1.1]:1", []string{"198.51.100.1"}, "198.51.100.1"},
+		{"a v4-mapped trusted proxy, its peer plain", mapped, "10.1.1.1:1", []string{"198.51.100.1"}, "198.51.100.1"},
 		{"an address that is no address", trusted, "pipe", []string{"198.51.100.1"}, ""},
 		{"an address without a port", trusted, "10.1.1.1", []string{"198.51.100.1"}, ""},
 	}
