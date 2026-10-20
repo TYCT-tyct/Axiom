@@ -91,6 +91,42 @@ func (q *Queries) ExchangeHistory(ctx context.Context, db DBTX, arg ExchangeHist
 	return items, nil
 }
 
+const exchangeRateByID = `-- name: ExchangeRateByID :many
+SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at FROM billing.exchange_rates WHERE id = $1
+`
+
+func (q *Queries) ExchangeRateByID(ctx context.Context, db DBTX, id uuid.UUID) ([]BillingExchangeRate, error) {
+	rows, err := db.Query(ctx, exchangeRateByID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BillingExchangeRate
+	for rows.Next() {
+		var i BillingExchangeRate
+		if err := rows.Scan(
+			&i.ID,
+			&i.Base,
+			&i.Quote,
+			&i.Version,
+			&i.Numerator,
+			&i.Denominator,
+			&i.Source,
+			&i.Kind,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertExchangeRate = `-- name: InsertExchangeRate :one
 INSERT INTO billing.exchange_rates (id, base, quote, version, numerator, denominator, kind, reason, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
