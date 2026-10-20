@@ -114,10 +114,10 @@
 
 ### Messages、Responses 请求到 Chat
 
-反向使用上表的内容、工具、选择与结束原因映射，来源是 new-api `relaykit/relayconvert/internal/{claude_messages,oai_responses}/to_oai_chat_req.go`（603a5ce，2026-10-20）和 sub2api `backend/internal/pkg/apicompat/chatcompletions_anthropic_bridge.go`（8f2cbb5，2026-10-19）。没有经由第三种格式中转：多一次编解码会丢掉不能往返的成员，也增加分配。
+反向使用上表的内容、工具、选择与结束原因映射，来源是 new-api `relaykit/relayconvert/internal/{claude_messages,oai_responses}/to_oai_chat_req.go`（603a5ce，2026-10-20）和 sub2api `backend/internal/pkg/apicompat/chatcompletions_anthropic_bridge.go`（8f2cbb5，2026-10-19）。没有经由第三种格式中转：多一次编解码会丢掉不能往返的成员，也增加分配。转换入口与已解析历史先规范化 JSON，转义的枚举、带空白的空数组按值判断；整数约束不经过浮点数。同格式改写不经过这一步。
 
 - `system` / `instructions` 变成首条系统消息；Messages 块和 Responses 输入项依原顺序转成 Chat 内容、助手工具调用、工具结果。图片的 base64 源变成 data URL；Responses 的图片精度保留。内联 PDF、Responses 的内联文件数据使用已有 Chat 文件部件；远程文件 ID 拒绝。
-- `metadata.user_id` 变成派生后的 `user`；其他非空 metadata 成员、服务端工具、引用、工具错误标记等没有对应表达的内容按已有 `NotSupported` 策略拒绝。每层对象消费已知成员后检查剩余成员，不能借嵌套对象悄悄丢掉约束。路由参数由 gateway 使用后删除，缓存提示按既有可丢策略处理。
+- `metadata.user_id` 变成派生后的 `user`；其他非空 metadata 成员、服务端工具、引用、工具错误标记等没有对应表达的内容按已有 `NotSupported` 策略拒绝。Chat 工具结果只接受文本：媒体结果也拒绝；new-api、sub2api 会把其中图片搬到后续用户消息，本站不改变内容所属的轮次。每层对象消费已知成员后检查剩余成员，不能借嵌套对象悄悄丢掉约束。路由参数由 gateway 使用后删除，缓存提示按既有可丢策略处理。
 - Messages 的 `thinking.enabled.budget_tokens` 使用 Chat/OpenRouter 的 `reasoning.max_tokens`，保留精确预算；adaptive 默认 high，显式 `output_config.effort` 优先；disabled 使用 none。Responses 的 effort 原样，summary 只接受 auto。此处不按模型名猜推理方言，仍由 Chat 端点解释；不能把预算近似成另一个努力等级。Messages 的结构化输出使用固定名称 response 包装原 schema；Responses 的 `text.format`、verbosity 反向展开。
 - 工具定义显式的参数、说明、strict 原样；Responses 未写 strict 时，普通 schema 递归补齐 required 和 additionalProperties: false，并显式写 true，防止 Chat 的默认 false 改变约束。特殊 schema 无法确定服务端的自动回退规则时返回 NotSupported，要求显式选择 strict；不猜测更宽松的约束（[OpenAI Strict mode](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)，2026-10-20）。工具调用、结果的 ID 保持一致，并复用 `canon.checkCalls` 检查。可读的推理文本回放到 `reasoning_content`；别家签名、密文不交给 Chat，沿用反向转换对不可回放推理的丢弃规则。
 - Responses 的 `store` 由本站管理；`previous_response_id` 必须与 `Rewrites.History` 一致，先拼历史再转换，当前 instructions 不从历史继承。输出上限、派生标识、强制 stream 和 include_usage 全部交给同一个 Chat 改写器。
