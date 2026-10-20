@@ -24,8 +24,8 @@ type diffClient struct {
 }
 
 // diffBackend is a model and the reply the upstream gives to each kind of conversation with it. Axiom's endpoints serve
-// the Claude model by Messages and the GPT model by Responses, as new-api's channels do, so the upstream sees the same
-// path from both: what is compared is how each relays a reply, not which format it chose to ask for.
+// the Claude model by Messages, the GPT model by Responses and the DeepSeek-like one by Chat, as new-api's channels do, so
+// the upstream sees the same path from both: what is compared is how each relays a reply, not which format it chose to ask for.
 type diffBackend struct {
 	name, model string
 	replies     map[string]string // by kind
@@ -81,12 +81,17 @@ var diffBackends = map[string]diffBackend{
 		"text": "responses-text", "tools": "responses-reasoning", "reasoning": "responses-reasoning", "image": "responses-text",
 		"429": "responses-429", "500": "responses-500", "400": "responses-400",
 	}},
+	"deepseek": {name: "deepseek", model: "deepseek-v4-chat", replies: map[string]string{
+		"text": "chat-text", "tools": "chat-tools", "reasoning": "chat-reasoning", "image": "chat-text",
+		"429": "chat-429", "500": "chat-500", "400": "chat-400",
+	}},
 }
 
 // diffPairs are the client formats and the models each is tried with: a format with the model of its own format, which
-// both gateways forward as it is, and Chat with each of the other two, which both convert.
+// both gateways forward as it is, and Chat with each of the other two, which both convert, and with a model of its own
+// format, which they forward as it is.
 var diffPairs = []struct{ client, backend string }{
-	{"chat", "claude"}, {"chat", "gpt"}, {"messages", "claude"}, {"responses", "gpt"},
+	{"chat", "claude"}, {"chat", "gpt"}, {"chat", "deepseek"}, {"messages", "claude"}, {"responses", "gpt"},
 }
 
 // body is a request of the client's format to the model, for a conversation, as a stream or whole.

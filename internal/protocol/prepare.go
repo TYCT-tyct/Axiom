@@ -145,8 +145,7 @@ func usageContext(r *Request) UsageContext {
 	return u
 }
 
-// rewrite is Prepare for an endpoint of the request's format. Chat's rewrites depend on the endpoint's dialect,
-// which come later (#27).
+// rewrite is Prepare for an endpoint of the request's format.
 func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	rules := rulesFor(f, t)
 	if rules.members == nil {
@@ -241,7 +240,19 @@ var (
 			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) +
 				len(maxInt64) + len(addStream),
 		},
-		Chat: {},
+		// Chat's rewrites are the identity members and the output cap the other formats' are, and the usage the gateway
+		// meters from: stream_options.include_usage. The dialect of the model (its reasoning parameters, its cache
+		// markers) is the client's: what it wrote reaches the endpoint as it wrote it (README.md「同格式改写」).
+		Chat: {
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "user": (*rewriter).identity, "prompt_cache_key": (*rewriter).identity,
+				"safety_identifier": (*rewriter).identity, "max_tokens": (*rewriter).chatOutputCap,
+				"max_completion_tokens": (*rewriter).chatOutputCap, "stream": (*rewriter).stream,
+				"stream_options": (*rewriter).streamOptions,
+			}),
+			add: (*rewriter).addChat, identities: 3,
+			room: len(addStream) + len(addStreamOptions) + len(addCap) + len(maxInt64),
+		},
 	}
 	// compactRules rewrite a compaction request: the members that must not reach an upstream as they are — the
 	// endpoint's model name, the identifiers, the routing parameters — and nothing else. A generation's rewrite adds
@@ -293,6 +304,12 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
+	// addCap and addStreamOptions are what a Chat request lacks: the cap it was quoted at, as the member every
+	// OpenAI-compatible endpoint takes, and the option that makes the upstream report usage; forcedOptions stands for
+	// a null stream_options.
+	addCap           = `,"max_tokens":`
+	addStreamOptions = `,"stream_options":` + forcedOptions
+	forcedOptions    = `{"include_usage":true}`
 	// addStream asks for the upstream's stream when the endpoint streams one, since the gateway reads every call as a
 	// stream and a client that wants no stream gets the events aggregated (docs/domains/gateway.md「转发规则」).
 	addStream = `,"stream":true`
@@ -308,7 +325,8 @@ type rewriter struct {
 	continues, stored, included, hasInput bool            // the Responses members seen
 	streamed                              bool            // the stream member seen
 	ending                                bool            // the event is the one that carries the final usage
-	capped                                bool            // max_output_tokens was given a value
+	capped                                bool            // max_output_tokens, or Chat's max_tokens or max_completion_tokens, has a value
+	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
 }
@@ -559,4 +577,63 @@ func (p *rewriter) stream() error {
 		p.replace(len(v), "true")
 	}
 	return err
+}
+
+// chatOutputCap keeps a Chat output cap that has a value and drops a null one, which stands for none: the member that
+// is added instead would otherwise be a duplicate. Either of the two members caps the output (Inspect reads the
+// larger), so a cap is added only when neither has a value.
+func (p *rewriter) chatOutputCap() error {
+	if p.dec.PeekKind() == 'n' {
+		return p.drop()
+	}
+	p.capped = true
+	return p.skip()
+}
+
+// streamOptions makes a streaming upstream report usage whatever the client wrote: the gateway meters from the
+// upstream's report, and aggregates its stream for a client that asked for none, so include_usage is true and the
+// client's other options stay. new-api forces it the same way (relay/compatible_handler.go, ForceStreamOption), and
+// sub2api sets this member alone (backend/internal/service/openai_gateway_chat_completions_raw.go,
+// ensureOpenAIChatStreamUsage, 8f2cbb5).
+func (p *rewriter) streamOptions() error {
+	p.optioned = true
+	if !p.t.Streams {
+		return p.skip()
+	}
+	if ok, err := p.open('{', "an object"); !ok {
+		if err == nil {
+			p.replace(len("null"), forcedOptions)
+		}
+		return err
+	}
+	if err := p.members(map[string]rule{"include_usage": (*rewriter).forceUsage}, (*rewriter).skip); err != nil {
+		return err
+	}
+	if !p.usageForced {
+		if p.out[len(p.out)-1] != '{' { // everything up to here is copied: an object that has no member ends the output
+			p.out = append(p.out, ',')
+		}
+		p.out = append(p.out, `"include_usage":true`...)
+	}
+	return p.token()
+}
+
+func (p *rewriter) forceUsage() error {
+	p.usageForced = true
+	v, err := p.dec.ReadValue()
+	if err == nil && string(v) != "true" {
+		p.replace(len(v), "true")
+	}
+	return err
+}
+
+// addChat appends what a Chat request lacks.
+func (p *rewriter) addChat() error {
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addCap...), p.t.MaxOutput, 10)
+	}
+	if p.t.Streams && !p.optioned {
+		p.out = append(p.out, addStreamOptions...)
+	}
+	return p.addStream()
 }

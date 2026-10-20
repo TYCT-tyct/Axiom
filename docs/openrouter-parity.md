@@ -193,11 +193,11 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | `usage.cost_details{upstream_inference_cost,upstream_inference_prompt_cost,upstream_inference_completions_cost,server_tool_cost}` | 上游成本与服务端工具成本 | 同上；spec `CostDetails` | 没有（只解析，不输出：`proto/openai.go:28`）；上游成本有意不对用户暴露 | 无 | 无 | `server_tool_cost` 对联网搜索计费可见性有用 |
 | `usage.is_byok` | 是否用了自己的 key | 同上 | 没有 | 无 | 无 | 无 BYOK |
 | `usage.completion_tokens_details.{reasoning_tokens,audio_tokens,accepted/rejected_prediction_tokens}` | 明细 | spec `ChatUsage` | 部分：只有 `reasoning_tokens`（`proto/openai.go:137`） | 部分 | 部分 | 缺音频/预测 token |
-| `usage.prompt_tokens_details.{cached_tokens,cache_write_tokens,audio_tokens,video_tokens}` | 明细 | spec `ChatUsage` | 部分：上游报的 `cached_tokens`、`cache_write_tokens`、`audio_tokens`（`proto/openai.go:37`）、`video_tokens`（计入 `image_in`，`:39`）都解析并计费；返回给客户端的用量块（`appendOpenAIUsage`）只写缓存读写明细，不输出音频、视频明细 | 部分 | 部分 | 无 |
+| `usage.prompt_tokens_details.{cached_tokens,cache_write_tokens,audio_tokens,video_tokens}` | 明细 | spec `ChatUsage` | 部分：上游报的 `cached_tokens`、`cache_write_tokens`、`audio_tokens`（`proto/openai.go:37`）、`video_tokens`（计入 `image_in`，`:39`）都解析并计费；返回给客户端的用量块（`appendOpenAIUsage`）只写缓存读写明细，不输出音频、视频明细；DeepSeek 的 `prompt_cache_hit_tokens` 按缓存读计（`proto/openai.go`） | 部分 | 部分 | 无 |
 | `usage.server_tool_use_details` | 服务端工具调用次数 | spec `ChatUsage` | 部分：Messages 用量里有 `server_tool_use.web_search_requests`（`proto/errors.go:158`）；Chat 里没有 | 无 | 无 | 小 |
 | 响应 `cache_discount`（缓存省了多少） | 缓存折扣 | docs/guides/best-practices/prompt-caching | 没有 | 无 | 无 | 小 |
 | 响应 `model` 为实际使用的模型（回退/路由器后） | 返回实际模型 | docs/guides/routing/model-fallbacks | 不一致：Axiom 回显客户端请求的名字（`docs/domains/gateway.md:68`，`proto/chat.go:81` `ourModel`） | 回显请求名 | 回显 | 用了 `models` 回退的客户端分不清实际用了哪个；这是有意的（隐藏供应商），但对跨模型回退不利 |
-| `stream_options.include_usage` | 开关 | spec `ChatStreamOptions` | 部分：总是返回用量（比 OpenRouter 多），参数被接受 | 有 | 有 | 无 |
+| `stream_options.include_usage` | 开关 | spec `ChatStreamOptions` | 部分：总是返回用量（比 OpenRouter 多），参数被接受；发给 Chat 上游时强制为 true（`proto/prepare.go` 的 `streamOptions`），其他选项原样 | 有（强制，`na:relay/compatible_handler.go`） | 有（`s2:internal/service/openai_gateway_chat_completions_raw.go`） | 无 |
 | 请求 `usage:{include:true}`（旧参数） | 旧开关 | spec | 部分：被丢弃，用量总是有（`proto/prepare.go:281`） | 无 | 无 | 行为兼容 |
 | 零补全保险：零输出且无结束原因/错误结束时不收费 | 自动 | docs/guides/features/zero-completion-insurance | 有：`bill/settle.go:241` `zeroOutput` + 免单规则 | 无 | 无 | 无 |
 
@@ -278,7 +278,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 5. 【模型元数据】`GET /api/v1/models` 只有 `id/object/owned_by/created(恒0)/display_name`，没有 `pricing`、`context_length`、`architecture`、`supported_parameters`、`top_provider`、`reasoning`、`default_parameters`，也没有查询参数过滤和单模型详情；而 `docs/domains/gateway.md:25` 说有。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算都依赖这些。→ #311
 6. 【预设】`@preset/…`、`preset` 字段、`/api/v1/presets` 全部没有，但产品范围把预设列在第一版（`docs/product.md:93`）；`docs/domains/gateway.md:150` 与代码不符，先改文档或做功能。→ #313（预设属于路由配置）
 7. 【错误形态】错误体用字符串 `code` 而不是数字（有意，`docs/domains/gateway.md:225`）；`error_type` 词表只有 12 个且名字多数与 OpenRouter 不同（缺 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、图片类、`payload_too_large`…）；没有 403；预算耗尽用 402 而不是 OpenRouter 的 403+`limit_source`。读 OpenRouter 错误的客户端会走默认分支。→ #311
-8. 【Chat 上游】Chat 格式的上游端点 M1 不提供，Chat 客户端只能走 Messages/Responses 端点并经转换（转换无法表达的成员返回 400，`proto/canon.go:363-381`，具体名单未核实）；`modalities` 非纯文本、音频输入输出都被拒。→ #311（#301 已开）
+8. 【Chat 上游】Chat 客户端调用说 Chat 的端点已是同格式转发（#301 A，`proto/prepare.go` 的 Chat 规则、`rt/plan.go` 的 `callFormat`）；还没有的是 Messages、Responses 客户端调用 Chat 端点（#301 B，现在 `format_not_served`），以及按模型规格把推理参数换成端点认的写法；Chat 客户端调用 Messages/Responses 端点时转换无法表达的成员返回 400（`proto/canon.go:363-381`，具体名单未核实），`modalities` 非纯文本、音频输入输出都被拒。→ #311（#301 已开）
 9. 【推理】`reasoning.max_tokens` 的跨格式换算、`effort: xhigh/max/minimal` 映射、`reasoning` 在模型列表里的元数据未核实或没有；推理文本的两个名字已有，这块对 Claude Code/Codex 用户基本可用。→ #311
 10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers`、`/endpoints/zdr` 没有；`/generation` 缺 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled` 等，`/generation/content`、`/generation/feedback`、`/activity` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
 11. 【用量字段】`usage.cost_details`（含 `server_tool_cost`）、`is_byok`、`completion_tokens_details` 的音频/预测项、返回给客户端的 `prompt_tokens_details` 音频/视频明细、`cache_discount`、Chat 里的 `server_tool_use_details` 没有；响应 `model` 回显请求名而不是实际使用的模型（用 `models` 回退时看不出换了谁）。→ #319

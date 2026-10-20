@@ -154,3 +154,24 @@ func checkDelivered(t *testing.T, upstream, client protocol.Format, broken, aggr
 		}
 	}
 }
+
+// deepSeekCases are Chat usage objects that name the cache read the way DeepSeek does, prompt_cache_hit_tokens, with
+// prompt_cache_miss_tokens for the rest (new-api relay/channel/openai/usage.go, applyUsagePostProcessing): the hit count
+// is the cache read, once, and neither is charged again as an unknown count.
+var deepSeekCases = []overlapCase{
+	{name: "hit and miss", body: `{"input_tokens":100,"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30,"output_tokens":5}`, input: 30, read: 70, output: 5},
+	{name: "all of it hit", body: `{"input_tokens":100,"prompt_cache_hit_tokens":100,"prompt_cache_miss_tokens":0}`, read: 100},
+	{name: "no hit", body: `{"input_tokens":100,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":100}`, input: 100},
+	{name: "miss alone", body: `{"input_tokens":100,"prompt_cache_miss_tokens":100}`, input: 100},
+	{name: "standard details win", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":60},"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30}`, input: 40, read: 60},
+	{name: "both say the same", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":70},"prompt_cache_hit_tokens":70,"prompt_cache_miss_tokens":30}`, input: 30, read: 70},
+	{name: "hit with details of another count", body: `{"input_tokens":100,"input_tokens_details":{"cached_tokens":0,"audio_tokens":10},"prompt_cache_hit_tokens":70}`, input: 20, read: 70, audio: 10},
+	{name: "hit above total", body: `{"input_tokens":100,"prompt_cache_hit_tokens":101}`, invalid: true},
+	{name: "negative hit", body: `{"input_tokens":100,"prompt_cache_hit_tokens":-1}`, invalid: true},
+}
+
+func TestOpenAIDeepSeekCache(t *testing.T) {
+	for _, tc := range deepSeekCases {
+		t.Run(tc.name, func(t *testing.T) { tc.check(t, protocol.Chat, "prompt") })
+	}
+}

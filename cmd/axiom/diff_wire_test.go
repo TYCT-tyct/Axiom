@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -35,7 +37,7 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			theirs := send(t, api.base, "", orKey(c.key, api.key), c)
 			theirs.body = newAPIRequestID.ReplaceAll(theirs.body, nil)
-			ours := send(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
+			ours := sendWhenResting(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
 			for _, d := range compareReplies(theirs, ours) {
 				explainOrFail(t, rules, c.name, d)
 			}
@@ -73,6 +75,21 @@ func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
 	t.Errorf("%s [unexplained]", line)
 }
 
+// sendWhenResting is send to Axiom, repeated while the endpoint is paused: an upstream failure pauses the endpoint for a few
+// seconds (routing.Config.Pause), and the cases that follow a failed one are not about the pause, so each waits it out.
+func sendWhenResting(t *testing.T, base, host, key string, c diffCase) reply {
+	t.Helper()
+	for range 40 {
+		r := send(t, base, host, key, c)
+		if r.status != http.StatusServiceUnavailable || !bytes.Contains(r.body, []byte(`"cooling_down"`)) {
+			return r
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("%s: the endpoint is still paused after 20 seconds", c.name)
+	return reply{}
+}
+
 // send posts a case to a gateway; host, when set, is the Host header a gateway that serves by domain needs.
 func send(t *testing.T, base, host, key string, c diffCase) reply {
 	t.Helper()
@@ -100,11 +117,12 @@ func send(t *testing.T, base, host, key string, c diffCase) reply {
 	return reply{resp.StatusCode, resp.Header, body}
 }
 
-// newDiffNode starts a node that serves the callpath world's Claude model by Messages and its GPT model by Responses
-// from the fake upstream, each sold at one and a half times its reference price.
+// newDiffNode starts a node that serves the callpath world's Claude model by Messages, its GPT model by Responses and a
+// DeepSeek-like model by Chat, from the fake upstream, each sold at one and a half times its reference price.
 func newDiffNode(t *testing.T, up *diffUpstream) (*callWorld, runningNode) {
 	t.Helper()
 	w := newCallWorld(t)
+	w.addChatModel()
 	w.declareAbilities()
 	// The endpoints call the upstream by the names their clients use, the way a gateway in front of one upstream does.
 	if err := pgtest.Run(t.Context(), w.database.Superuser,
@@ -119,6 +137,33 @@ func newDiffNode(t *testing.T, up *diffUpstream) (*callWorld, runningNode) {
 	return w, n
 }
 
+// chatSlug is the model the Chat endpoint serves, as a supplier's DeepSeek or Qwen channel does.
+const chatSlug = "deepseek/deepseek-v4-chat"
+
+// addChatModel lists a model that only an endpoint of the Chat format serves, on the supplier the world has, and gives it
+// that endpoint, called by the name the clients use as the other two are.
+func (w *callWorld) addChatModel() {
+	w.t.Helper()
+	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	model := w.listModel(cat, chatSlug, "deepseek-v4-chat")
+	w.models = maps.Clone(w.models) // the fixture's map is every test's
+	w.models[chatSlug] = model
+	supplier, group := uuid.MustParse(w.text("SELECT id::text FROM suppliers.suppliers")), uuid.MustParse(w.text("SELECT id::text FROM suppliers.supplier_groups"))
+	if err := w.db.Tx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		for _, s := range endpointStatements(supplier, group, model, "deepseek-v4-chat", "chat") {
+			if _, err := tx.Exec(w.t.Context(), s.sql, s.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 // declareAbilities makes the two models able to take a picture and to reason, which the callpath world's do not say:
 // a request that needs an ability its model lacks is not routed.
 func (w *callWorld) declareAbilities() {
@@ -127,8 +172,11 @@ func (w *callWorld) declareAbilities() {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	spec := strings.Replace(servedSpec, `"abilities":["tools","web_search"]`, `"abilities":["tools","images","documents","reasoning","web_search"]`, 1)
-	for _, slug := range []string{"anthropic/claude-opus-5-5", "openai/gpt-6-astra"} {
+	spec := strings.Replace(servedSpec, `"abilities":["tools","web_search","reasoning"]`, `"abilities":["tools","images","documents","reasoning","web_search"]`, 1)
+	if spec == servedSpec {
+		w.t.Fatal("the callpath world's abilities are not what the differential test replaces")
+	}
+	for _, slug := range []string{"anthropic/claude-opus-5-5", "openai/gpt-6-astra", chatSlug} {
 		id := w.models[slug]
 		rev, err := strconv.ParseInt(w.query("SELECT rev::text FROM catalog.model WHERE id = $1", id), 10, 64)
 		if err != nil {

@@ -157,7 +157,7 @@ var routingParameters = []string{"provider", "models", "route", "transforms", "p
 
 // TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
 func TestPrepareDropsRoutingParameters(t *testing.T) {
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		want := `{"model":"up"}`
 		if f == protocol.Responses {
 			want = `{"model":"up","store":false}`
@@ -278,6 +278,7 @@ func TestPrepareSamples(t *testing.T) {
 		{protocol.Messages, "messages/thinking/request.json", `"claude-opus-5-5"`, false},
 		{protocol.Messages, "messages/tool-use/request.json", `"claude-opus-5"`, false},
 		{protocol.Responses, "responses/text/request.json", `"gpt-6-astra"`, true},
+		{protocol.Chat, "chat/text/request.json", `"gpt-6-astra"`, false},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			body := caseBody(t, c.file)
@@ -330,7 +331,7 @@ func TestPrepareRejects(t *testing.T) {
 
 // FuzzPrepare holds Prepare's output to the summary Inspect read from the input, which also holds it to jsonx's
 // policy: admission's reservation and routing's capabilities stay true of what is sent, the model, the continued
-// response and the history's bytes aside. Chat's seeds are read as Messages.
+// response and the history's bytes aside.
 func FuzzPrepare(f *testing.F) {
 	for _, c := range inspectCases {
 		f.Add(uint8(c.format), caseBody(f, c.body))
@@ -345,7 +346,7 @@ func FuzzPrepare(f *testing.F) {
 	f.Add(uint8(protocol.Messages), []byte(`{"model":"m","metadata":{"user_id":"u","n":1e1000}}`))
 	f.Add(uint8(protocol.Responses), []byte(`{"model":"m","include":["x"],"n":1e1000}`))
 	f.Fuzz(func(t *testing.T, format uint8, body []byte) {
-		fm := protocol.Format(format % 2)
+		fm := protocol.Format(format % 3)
 		r, err := protocol.Inspect(fm, body)
 		if err != nil {
 			return
@@ -394,6 +395,9 @@ func rejects(t *testing.T, f protocol.Format, body []byte) bool {
 			decode(top["metadata"], &metadata)
 		}
 		return notString(metadata["user_id"])
+	}
+	if f == protocol.Chat {
+		return slices.ContainsFunc([]jsontext.Value{top["user"], top["prompt_cache_key"], top["safety_identifier"]}, notString)
 	}
 	var include []jsontext.Value
 	if !is(top["include"], '[') {

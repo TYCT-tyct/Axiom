@@ -21,6 +21,13 @@ type openAIUsage struct {
 	Output            *int64         `json:"output_tokens"`
 	CompletionDetails *openAIDetails `json:"completion_tokens_details"`
 	OutputDetails     *openAIDetails `json:"output_tokens_details"`
+	// DeepSeek names the cached part of the prompt prompt_cache_hit_tokens and the rest prompt_cache_miss_tokens, which
+	// add up to prompt_tokens (DeepSeek《Create Chat Completion》, usage, read 2026-10-19). The hit count is the cache read
+	// when prompt_tokens_details has none, as new-api reads it (relay/channel/openai/usage.go, applyUsagePostProcessing,
+	// 32e5874); the miss count is no usage of its own. Left unnamed, both would be charged as unknown tokens, on top of
+	// the prompt.
+	CacheHit  *int64         `json:"prompt_cache_hit_tokens"`
+	CacheMiss jsontext.Value `json:"prompt_cache_miss_tokens"`
 	// Reported but not billed: the sum, and a relay's price, which is not usage (OpenRouter《Usage accounting》, read
 	// 2026-10-14).
 	Total       jsontext.Value            `json:"total_tokens"`
@@ -89,11 +96,14 @@ func (u *openAIUsage) mapInput(r *usageReport) error {
 	if in == nil {
 		return nil
 	}
-	d := details.orZero()
+	d, detailed := details.orZero(), details != nil
+	if u.Prompt != nil && d.Cached == 0 && u.CacheHit != nil {
+		d.Cached, detailed = *u.CacheHit, true
+	}
 	if err := r.openAIInput(*in, d); err != nil {
 		return err
 	}
-	r.inputDetailed = details != nil
+	r.inputDetailed = detailed
 	unknownCounts(r, "usage."+name, d.Unknown)
 	if d.CachedDetails != nil {
 		unknownCounts(r, "usage."+name+".cached_tokens_details", d.CachedDetails.Unknown)

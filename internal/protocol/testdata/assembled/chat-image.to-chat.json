@@ -1,0 +1,13 @@
+{
+  "model": "up",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "What is in this picture?"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}
+    ]}
+  ],
+  "max_completion_tokens": 512,
+  "stream": true,
+  "stream_options": {"include_usage": true}
+}
+
