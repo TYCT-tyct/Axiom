@@ -358,6 +358,56 @@ func TestAnEstimateOfImagesAndFiles(t *testing.T) {
 	}
 }
 
+// TestAnEstimateOfCountedText: the input an upstream did not report is the request's own text counted in the tokens of
+// the endpoint's model family where that family publishes a tokenizer, not its bytes at 4 a token; a family without one
+// keeps the rule, the count is held to the window, and a reported input is never estimated over.
+func TestAnEstimateOfCountedText(t *testing.T) {
+	t.Parallel()
+	const in = catalog.ItemInput
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"` +
+		strings.Repeat("今天天气很好，我们一起去公园散步。", 500) + `"}]}`)
+	req, err := protocol.Inspect(protocol.Messages, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := (req.TextBytes + billing.InputBytesPerToken - 1) / billing.InputBytesPerToken
+	d := billing.Demand{TextBytes: req.TextBytes}
+	cl100k := billing.Model{ContextLength: 100000, Tokenizer: billing.TokenizerCl100k}
+	counted := textTokens(protocol.Messages, body, d, cl100k)
+	if counted <= rule {
+		t.Errorf("counted %d, no more than the bytes rule's %d, on text the rule undercounts", counted, rule)
+	}
+	for _, tc := range []struct {
+		name  string
+		model billing.Model
+		want  int64
+	}{
+		{"cl100k's own count", cl100k, counted},
+		{"a window below the count", billing.Model{ContextLength: 3000, Tokenizer: billing.TokenizerCl100k}, 3000},
+		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, rule},
+	} {
+		d := d
+		d.TextTokens = textTokens(protocol.Messages, body, d, tc.model)
+		if tc.model.Tokenizer == billing.TokenizerNone && d.TextTokens != 0 {
+			t.Errorf("%s: counted %d with no tokenizer", tc.name, d.TextTokens)
+		}
+		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64)
+		if n := got[0].Usage.Count(in); n != tc.want {
+			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
+		}
+	}
+	// A reported input is kept, whatever the count says it could have been.
+	d.TextTokens = counted
+	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 12}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported := protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << in}}}
+	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64)[0].Usage.Count(in); n != 12 {
+		t.Errorf("the reported input of 12 was estimated over: %d", n)
+	}
+}
+
 // TestAnEstimateStaysWithinTheOutputLimit: the bytes of a stream are read at 3 bytes a token, rounded up, and what they
 // say is held to the output limit the attempt was quoted at, the one metering holds it to, so a stream that never
 // reported its usage is not charged for more than the reservation covers; a count the upstream did report stays

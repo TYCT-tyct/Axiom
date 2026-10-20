@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -111,12 +112,33 @@ func bodyFault(err error) string {
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
 func Inspect(f Format, body []byte) (Request, error) {
+	s, err := scan(f, body, nil)
+	if err != nil {
+		return Request{}, err
+	}
+	return s.r, nil
+}
+
+// Text walks body as Inspect does and calls text with the request's text: the bytes of the body that are not an image's
+// or a file's own data, which are the bytes Request.TextBytes counts, in the order they appear. The data is left out
+// because a base64 image of a few hundred kilobytes is no text at all, and counting it would take the whole context. The
+// calls stop once text takes no more, so a counter that has what it needs costs no further counting, and a body Inspect
+// accepts never fails here.
+func Text(f Format, body []byte, text func(piece []byte) bool) error {
+	_, err := scan(f, body, text)
+	return err
+}
+
+// scan reads body once for Inspect, or hands its text to text when that is not nil. The scanner is the one value of
+// either walk, allocated once: returning it by value would copy it.
+func scan(f Format, body []byte, text func(piece []byte) bool) (*scanner, error) {
 	g := &grammars[f]
-	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
+	s := &scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g, body: body, text: text}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}
 	if err := s.top(); err != nil {
-		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return s, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
+	s.emitText()
 	s.r.ServiceTiers = s.fast
 	if s.r.ServiceTiers == 0 {
 		s.r.ServiceTiers = s.tiers
@@ -132,7 +154,7 @@ func Inspect(f Format, body []byte) (Request, error) {
 			s.r.CodeExecutions = s.callCap
 		}
 	}
-	return s.r, nil
+	return s, nil
 }
 
 // anyTier is what a request that names no tier may get: OpenAI's auto takes the project's tier and Anthropic's auto
@@ -156,17 +178,49 @@ type scanner struct {
 	g           *grammar
 	r           Request
 	p           part
-	tiers, fast catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
-	callCap     int64                  // Responses' max_tool_calls
+	tiers, fast catalog.ServiceTierSet  // service_tier, and Anthropic's speed, which overrides it
+	callCap     int64                   // Responses' max_tool_calls
+	body        []byte                  // the body, which the text is cut from
+	text        func(piece []byte) bool // where the text goes, nil when it is not wanted
+	spans       []span                  // where the image and file data is, when the text is wanted
 }
 
 // part is the content part, tool or reasoning setting being read.
 type part struct {
 	kind        Capabilities
-	payload     int64 // the raw bytes of the data the part carries
+	payload     int   // the raw bytes of the data the part carries
+	at          int   // where that data starts in the body
 	binary      bool  // the payload is image or file data, not text
 	max         int64 // a server tool's max_uses
 	off, hidden bool  // reasoning turned off; reasoning left out of the stream
+}
+
+// span is a run of the body: an image's or a file's own data, which is no text.
+type span struct{ from, to int }
+
+// emitText hands text the body without the data recorded in spans, in order, and stops once text takes no more of it.
+// The pieces are what TextBytes counts: the body less exactly those spans.
+func (s *scanner) emitText() {
+	if s.text == nil {
+		return
+	}
+	slices.SortFunc(s.spans, func(a, b span) int { return a.from - b.from })
+	from := 0
+	for _, sp := range s.spans {
+		if sp.from > from && !s.text(s.body[from:sp.from]) {
+			return
+		}
+		from = max(from, sp.to)
+	}
+	if from < len(s.body) {
+		s.text(s.body[from:])
+	}
+}
+
+// place records the raw value just read as the data the part being read carries, and where it starts in the body.
+func (s *scanner) place(v jsontext.Value) {
+	s.p.payload = len(v)
+	s.p.at = int(s.dec.InputOffset()) - len(v) // where the value starts: its last byte is the offset
 }
 
 // fields maps an object's member names to their readers; other members are skipped.
