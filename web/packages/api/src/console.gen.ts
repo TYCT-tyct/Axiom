@@ -463,10 +463,10 @@ export interface components {
             key_prefix: string;
             /**
              * Format: uri
-             * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host.
+             * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host. Absent when the site has no enabled API domain.
              * @example https://api.example.com
              */
-            api_base_url: string;
+            api_base_url?: string;
             /**
              * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
              * @enum {string}

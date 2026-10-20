@@ -100,6 +100,7 @@ export default {
     },
     guide: {
       title: "接入",
+      loadFailed: "接入地址加载失败",
       protocols: "调用格式",
       clients: "客户端",
       model: "示例里的 <model> 换成 /v1/models 里列出的名字，形如 厂商/模型。",

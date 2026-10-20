@@ -111,9 +111,7 @@ function Snippet({ name, text, hint }: { name: string; text: string; hint?: stri
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-label text-t2">{name}</p>
-        <div className="flex items-center gap-2">
-          <CopyButton text={text} label={t("keys.guide.copy", { name })} />
-        </div>
+        <CopyButton text={text} label={t("keys.guide.copy", { name })} />
       </div>
       {/* Wrapped, not scrolled sideways: a scroll region needs its own tab stop, and a focusable `pre` is what the
           accessibility rules forbid. */}
@@ -177,7 +175,16 @@ export function SecretDialog({ created, onClose }: { created: Schemas["CreatedKe
             {t("keys.secret.done")}
           </Button>
         </div>
-        <Guide apiBase={site.data?.api_base_url ?? ""} secret={created.secret} />
+        {site.isError ? (
+          <div className="space-y-2">
+            <FormError>{t("keys.guide.loadFailed")}</FormError>
+            <Button disabled={site.isFetching} onClick={() => site.refetch()}>
+              {t("state.retry", { ns: "common" })}
+            </Button>
+          </div>
+        ) : (
+          <Guide apiBase={site.data?.api_base_url ?? ""} secret={created.secret} />
+        )}
       </div>
     </Dialog>
   );

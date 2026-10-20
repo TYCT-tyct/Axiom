@@ -57,11 +57,16 @@ func TestSnapshotAPIBase(t *testing.T) {
 		{"no API domain", "SELECT 1", ""},
 		{"another site's API domain", `INSERT INTO accounts.site_domains VALUES
 			('other-api.example', '` + s2.String() + `', 'api', 'https://other-api.example', NULL)`, ""},
+		{"HTTP fallback", `INSERT INTO accounts.site_domains VALUES
+			('localhost:318', '` + s1.String() + `', 'api', 'http://localhost:318', NULL)`, "http://localhost:318"},
+		{"smallest HTTP origin", `INSERT INTO accounts.site_domains VALUES
+			('localhost:317', '` + s1.String() + `', 'api', 'http://localhost:317', NULL)`, "http://localhost:317"},
 		{"smallest origin", `INSERT INTO accounts.site_domains VALUES
 			('bbb.main.example', '` + s1.String() + `', 'api', 'https://bbb.main.example', NULL),
 			('aaa.main.example', '` + s1.String() + `', 'api', 'https://aaa.main.example', NULL)`, "https://aaa.main.example"},
 		{"disabled domain", `UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = 'aaa.main.example'`, "https://bbb.main.example"},
-		{"all API domains disabled", `UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = 'bbb.main.example'`, ""},
+		{"HTTPS domains disabled", `UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = 'bbb.main.example'`, "http://localhost:317"},
+		{"all API domains disabled", `UPDATE accounts.site_domains SET disabled_at = now() WHERE surface = 'api'`, ""},
 		{"re-enabled domain", `UPDATE accounts.site_domains SET disabled_at = NULL WHERE domain = 'aaa.main.example'`, "https://aaa.main.example"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

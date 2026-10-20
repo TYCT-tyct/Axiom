@@ -72,6 +72,7 @@ it("gives Claude Code the host alone, because the client appends /v1/messages it
 });
 
 it("keeps the key out of Codex's file, which names the variable that holds it", () => {
+  expect(textOf("codex")).toContain('[model_providers.axiom]\nname = "Axiom"\n');
   expect(textOf("codex")).toContain('env_key = "AXIOM_API_KEY"');
   expect(textOf("codex")).not.toContain(secret);
 });

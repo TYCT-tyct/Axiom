@@ -102,6 +102,7 @@ export default {
     },
     guide: {
       title: "Connect",
+      loadFailed: "Couldn’t load the connection address",
       protocols: "Request formats",
       clients: "Clients",
       model: "The examples leave <model> to fill in: use a name /v1/models lists, shaped vendor/model.",

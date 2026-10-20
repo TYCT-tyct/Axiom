@@ -55,6 +55,7 @@ function clientEntries(apiBase: string, secret: string): GuideEntry<GuideClient>
         `model = "${model}"`,
         "",
         "[model_providers.axiom]",
+        'name = "Axiom"',
         `base_url = "${openaiBase(apiBase)}"`,
         'env_key = "AXIOM_API_KEY"',
         'wire_api = "responses"',

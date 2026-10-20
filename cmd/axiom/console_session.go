@@ -21,10 +21,14 @@ func grant(issued accounts.Issued) consoleapi.SessionGrant {
 // GetSite tells the sign-in and registration pages whose they are, and where a key's calls go.
 func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
 	site := callOf(ctx).site
-	return consoleapi.GetSite200JSONResponse(consoleapi.Site{
+	response := consoleapi.Site{
 		Name: site.Name, Currency: site.Currency.String(), KeyPrefix: site.KeyPrefix,
-		Registration: consoleapi.SiteRegistration(site.Registration), ApiBaseUrl: site.APIBase,
-	}), nil
+		Registration: consoleapi.SiteRegistration(site.Registration),
+	}
+	if site.APIBase != "" {
+		response.ApiBaseUrl = &site.APIBase
+	}
+	return consoleapi.GetSite200JSONResponse(response), nil
 }
 
 // Register makes a user from an invite code.

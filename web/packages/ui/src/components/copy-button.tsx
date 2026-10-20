@@ -21,7 +21,7 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
         }}
       >
         <Icon name={state === "copied" ? "check" : "copy"} />
-        {state === "idle" ? (label ?? t("copy.copy")) : t(`copy.${state}`)}
+        {state === "copied" ? t("copy.copied") : (label ?? t("copy.copy"))}
       </Button>
       <span role="status" className="text-label text-t3">
         {state === "idle" ? "" : t(`copy.${state}`)}

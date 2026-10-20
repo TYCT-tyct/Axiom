@@ -192,17 +192,25 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 
 // readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
 // host a key's calls are made to, which the console shows the user instead of a URL built from the request's Host
-// (README.md「快照」). A site may register more than one, so the smallest origin is the one it shows: the query has no
-// order, and the address must not change between reloads.
+// (README.md「快照」). Prefer HTTPS to avoid sending a key in cleartext when both schemes are registered. Break ties by
+// origin so the query's unordered results cannot change the address between reloads.
 func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
 	for _, r := range domains {
 		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
 		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
-			(site.APIBase == "" || r.Origin < site.APIBase) {
+			preferAPIOrigin(r.Origin, site.APIBase) {
 			site.APIBase = r.Origin
 			next.sites[site.ID] = site
 		}
 	}
+}
+
+func preferAPIOrigin(candidate, current string) bool {
+	secure, currentSecure := strings.HasPrefix(candidate, "https://"), strings.HasPrefix(current, "https://")
+	if secure != currentSecure {
+		return secure
+	}
+	return current == "" || candidate < current
 }
 
 // seconds is a session length in seconds as a duration, or fallback when it is unset (0).
