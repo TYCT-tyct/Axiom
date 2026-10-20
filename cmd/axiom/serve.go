@@ -128,20 +128,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	startup, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
-	defer cancel()
-	db, err := openNodeDatabase(startup, cfg.databaseURL, cfg.startupTimeout, tel)
+	db, master, err := openCheckedDatabase(ctx, cfg, tel)
 	if err != nil {
 		return err
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
-	console.master, _, err = keyRotation(db, cfg.masterKeyFile).Check(startup)
-	if err != nil {
-		if errors.Is(context.Cause(startup), errNoAnswer) {
-			return errNoAnswer // a lock held on an envelope table is still the database not answering
-		}
-		return err
-	}
+	console.master = master
 	exit, err := outbound(tel)
 	if err != nil {
 		return err
@@ -361,6 +353,27 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	if err := queue.Stop(ctx); err != nil {
 		logger.Error("stopping the job queue", "err", err)
 	}
+}
+
+// openCheckedDatabase opens the node's database and checks that the key ring it needs is complete and agrees with the
+// database, both under one AXIOM_STARTUP_TIMEOUT. The key ring check reads every envelope store, so a lock held on one of
+// them is the database not answering, like a lock held on the fallback prices.
+func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry) (*pg.DB, *secret.Keyring, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
+	defer cancel()
+	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel)
+	if err != nil {
+		return nil, nil, err
+	}
+	ring, _, err := keyRotation(db, cfg.masterKeyFile).Check(ctx)
+	if err == nil {
+		return db, ring, nil
+	}
+	db.Close()
+	if errors.Is(context.Cause(ctx), errNoAnswer) {
+		return nil, nil, errNoAnswer
+	}
+	return nil, nil, err
 }
 
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check

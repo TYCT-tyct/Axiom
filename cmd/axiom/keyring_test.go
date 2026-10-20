@@ -125,6 +125,7 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 	if got := f.rewrapped(); got != "3" {
 		t.Fatalf("rewrapped/audited %s rows, want 3", got)
 	}
+	// Adding a version that exists, and activating the active one, must change nothing.
 	audits := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action LIKE 'keyring.%'")
 	f.run("add", "--version", "2")
 	f.run("activate", "--version", "2")
@@ -134,22 +135,28 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 	}
 	f.run("retire", "--version", "1")
 	f.run("retire", "--version", "1")
-	ring, status, err := f.r.Check(t.Context())
+	f.verifyRetired()
+}
+
+// verifyRetired checks the state a finished rotation leaves, and that the retired version stays refused.
+func (f rotationFixture) verifyRetired() {
+	f.t.Helper()
+	ring, status, err := f.r.Check(f.t.Context())
 	if err != nil || status.Active != 2 || len(status.Readable) != 1 || len(status.Retired) != 1 {
-		t.Fatalf("retirement status: %+v, %v", status, err)
+		f.t.Fatalf("retirement status: %+v, %v", status, err)
 	}
 	f.verifyRotated(ring)
 	// A retired version is refused by its state, before any material is written for it: the tombstone in the database
 	// would refuse the insert too, but only after the file had grown a key for a version it considers dead.
 	before, err := os.ReadFile(f.path)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	if err := f.r.Add(t.Context(), 1); err == nil || !strings.Contains(err.Error(), "is retired") {
-		t.Fatalf("reused a retired version: %v", err)
+	if err := f.r.Add(f.t.Context(), 1); err == nil || !strings.Contains(err.Error(), "is retired") {
+		f.t.Fatalf("reused a retired version: %v", err)
 	}
 	if after, err := os.ReadFile(f.path); err != nil || !bytes.Equal(before, after) {
-		t.Fatal("a refused addition rewrote the key file")
+		f.t.Fatal("a refused addition rewrote the key file")
 	}
 }
 
