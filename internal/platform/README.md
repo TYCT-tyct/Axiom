@@ -16,7 +16,7 @@
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」。生成的代码里内嵌的契约是 gzip 后的 base64，会被 gitleaks 的 `generic-api-key` 误报，所以仓库根的 `.gitleaks.toml` 只对这两个包的 `.gen.go` 放行，别处的密钥照常拦下 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
+| `pg` | 连接池、`Hold`（在池外的一条专用连接上持有会话级 advisory lock，连接断了就知道，节点名用它，见 [kv](kv/README.md#配置与启动)）、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群（`withcluster` 同时起一个 Valkey，见 `kvtest`） |
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
@@ -237,7 +237,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
 - **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
 - **一个账户占不满**：单个账户受账户闸和每秒 151–222 个请求的上限约束，约占 2 条。
-- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
+- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。每个节点还有一条不在池里的专用连接，持有节点名的 advisory lock（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），所以按每节点 `PoolSize` + 1 条算。
 
 连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
 

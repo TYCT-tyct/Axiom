@@ -216,8 +216,10 @@ func TestKeyRateIsJudgedOnTheSharedCount(t *testing.T) {
 	other := node(t, server, namespace, clock)
 	clock.midWindow(cache, r.cfg.RateWindow)
 	a := r.newAccount(100_000_000)
-	for range 2 {
-		other.countRate(t.Context(), accounts.SiteID(siteID), callDimension, "other", kv.Hex(uuid.UUID(a.keyID)))
+	for want := 1; want <= 2; want++ {
+		if got := other.countRate(t.Context(), accounts.SiteID(siteID), callDimension, "other", kv.Hex(uuid.UUID(a.keyID))); got != want {
+			t.Fatalf("the other node's call %d was counted %d: the shared count did not take it", want, got)
+		}
 	}
 	if resp, _ := r.message(a, "acme/beta"); resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("a call after the other node's two: status %d, want 429", resp.StatusCode)

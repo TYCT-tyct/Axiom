@@ -57,6 +57,7 @@ type Client struct {
 	br      *breaker
 	slots   *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
 	hear    *heartbeat          // nil without a database: a test's client
+	hold    *pg.Hold            // the node's name, held by a session of the database; nil when hear is
 	timeout time.Duration       // the deadline of an access
 	// beatTimeout bounds one round of the heartbeat's database work.
 	beatTimeout time.Duration
@@ -89,11 +90,10 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), beatTimeout: deps.HeartbeatTimeout, timeout: deps.AccessTimeout,
 	}
 	c.live.Store(int64(cfg.Nodes))
-	// The heartbeat speaks first: a second node that reached this database, with Valkey or without, or an N set too low,
-	// is found before the server is touched, and this node's row is written only once it may start.
+	// The node registers first: a second node that reached this database, with Valkey or without, or an N set too low, is
+	// found before the server is touched, and this node's row is written only once it may start.
 	if deps.DB != nil {
-		c.hear = newHeartbeat(deps.DB, deps.Scope, cmp.Or(cfg.NodeID, uuid.New().String()))
-		if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
+		if err := c.register(ctx, cfg, deps); err != nil {
 			return nil, err
 		}
 	}
@@ -108,6 +108,36 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 		c.done.Go(func() { c.watch(loop) })
 	}
 	return c, nil
+}
+
+// register takes the node's name and writes its row. The name is held by a session of the database for as long as the
+// node lives, so a second process under the same name is refused at once while the first is alive, and a node that
+// crashed has lost it with its connection, so its restart is let in at once. The row says who is alive besides, and the
+// count of the others is the check against N.
+func (c *Client) register(ctx context.Context, cfg Config, deps Deps) error {
+	id := cmp.Or(cfg.NodeID, uuid.New().String())
+	hold, err := deps.DB.Hold(ctx, "axiom node "+id, holdEvery)
+	if errors.Is(err, pg.ErrHeld) {
+		return fmt.Errorf("%s: another live process already runs as node %q: give every node its own name, and a node that "+
+			"restarts the one it had (internal/platform/kv/README.md「配置与启动」)", NodeIDVar, id)
+	}
+	if err != nil {
+		return fmt.Errorf("kv: hold this node's name: %w", err)
+	}
+	c.hold, c.hear = hold, newHeartbeat(deps.DB, deps.Scope, id)
+	if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
+		return errors.Join(err, hold.Release(ctx))
+	}
+	return nil
+}
+
+// Lost is closed when the node has lost its name: the connection that holds it is gone, so another process may already
+// run as this node and this one must stop serving. It never closes for a client without a database.
+func (c *Client) Lost() <-chan struct{} {
+	if c.hold == nil {
+		return nil
+	}
+	return c.hold.Lost()
 }
 
 // fillDefaults gives the settings a test leaves out their production values.
@@ -265,10 +295,10 @@ func (c *Client) Close(ctx context.Context) error {
 	return c.release(ctx)
 }
 
-// release deletes this node's heartbeat row, if it wrote one.
+// release deletes this node's heartbeat row and lets its name go, if it took them.
 func (c *Client) release(ctx context.Context) error {
 	if c.hear == nil {
 		return nil
 	}
-	return c.hear.stop(ctx)
+	return errors.Join(c.hear.stop(ctx), c.hold.Release(ctx))
 }

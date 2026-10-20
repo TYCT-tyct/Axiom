@@ -2,7 +2,6 @@ package kv
 
 import (
 	"context"
-	"time"
 )
 
 // MaxOutstanding is how many commands a client lets be out at once, for the test that counts what reached the server.
@@ -15,8 +14,21 @@ func (c *Client) Measure(ctx context.Context) error {
 	return err
 }
 
+// Crash ends the client the way a crashed process ends: its loops and connections go and its row stays, and the name it
+// held is freed with the connection, which is all a restart needs.
+func (c *Client) Crash(ctx context.Context) error {
+	if c.stop != nil {
+		c.stop()
+	}
+	c.done.Wait()
+	if c.vk != nil {
+		c.vk.Close()
+	}
+	return c.hold.Release(ctx)
+}
+
 // Beat is a whole round of the loop, the clock included, run by a test now.
 func (c *Client) Beat(ctx context.Context) {
 	var over since
-	c.beat(ctx, &over, time.Time{})
+	c.beat(ctx, &over, true)
 }

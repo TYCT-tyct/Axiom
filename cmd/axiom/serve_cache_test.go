@@ -66,9 +66,29 @@ func TestServeWithTheSharedCache(t *testing.T) {
 }
 
 // TestServeRefusesASecondNodeOfOne: a second process against the same database with the default N of 1 does not start,
-// and names the variable; the first keeps serving (internal/platform/kv/README.md「配置与启动」).
+// whether it has another name or, as two processes of one host have by default (the host name), the same one, and it names
+// the variable; the first keeps serving (internal/platform/kv/README.md「配置与启动」).
 func TestServeRefusesASecondNodeOfOne(t *testing.T) {
 	t.Parallel()
+	for _, tt := range []struct {
+		name          string
+		first, second string // AXIOM_NODE_ID, or none for the host name
+		want          string
+	}{
+		{"another name", "AXIOM_NODE_ID=first", "AXIOM_NODE_ID=second", "AXIOM_CORE_NODES"},
+		{"the default name of the same host", "", "", "AXIOM_NODE_ID"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			secondIsRefused(t, tt.first, tt.second, tt.want)
+		})
+	}
+}
+
+// secondIsRefused runs a node under the first name and then another under the second, and checks that the second is
+// refused with a message that names want while the first goes on.
+func secondIsRefused(t *testing.T, firstName, secondName, want string) {
+	t.Helper()
 	server := kvtest.New(t)
 	database := pgtest.New(t, modules()...)
 	environ := []string{
@@ -77,23 +97,27 @@ func TestServeRefusesASecondNodeOfOne(t *testing.T) {
 		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + database.App,
 		"AXIOM_VALKEY_URL=" + server.URL, "AXIOM_VALKEY_PASSWORD_FILE=" + server.PasswordFile,
 	}
+	named := func(id string) []string {
+		if id == "" {
+			return slices.Clone(environ)
+		}
+		return append(slices.Clone(environ), id)
+	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	first := make(chan error, 1)
-	go func() {
-		first <- serve(ctx, append(slices.Clone(environ), "AXIOM_NODE_ID=first"), slog.New(slog.NewJSONHandler(logs, nil)))
-	}()
+	go func() { first <- serve(ctx, named(firstName), slog.New(slog.NewJSONHandler(logs, nil))) }()
 	servingAddrs(t, logs, first)
 
 	second, stop := context.WithTimeout(t.Context(), 30*time.Second)
 	defer stop()
-	err := serve(second, append(slices.Clone(environ), "AXIOM_NODE_ID=second"), slog.New(slog.DiscardHandler))
+	err := serve(second, named(secondName), slog.New(slog.DiscardHandler))
 	if err == nil {
 		t.Fatal("a second node against N = 1 started")
 	}
-	if !strings.Contains(err.Error(), "AXIOM_CORE_NODES") {
-		t.Errorf("%q does not name AXIOM_CORE_NODES", err)
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("%q does not name %s", err, want)
 	}
 	select {
 	case err := <-first:

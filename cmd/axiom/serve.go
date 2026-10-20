@@ -203,12 +203,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
-	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder)
+	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder, cache)
 }
 
 // runNode listens, serves until ctx ends, and then shuts the node down in stopNode's order.
 func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
-	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder,
+	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
 	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
@@ -219,7 +219,7 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
 	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
-	stopped := awaitEnd(ctx, served, routes.calls.reaped)
+	stopped := awaitEnd(ctx, served, routes.calls.reaped, cache.Lost())
 	stopAnnouncing()
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
 	err := stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder)
@@ -251,10 +251,13 @@ func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Hea
 	return errors.Join(err, queueErr, recorderErr)
 }
 
-// awaitEnd waits until the node is asked to stop (nil), a listener stops, or the billing loop ends because this node's
-// holder was reaped, and says which of the last two it was.
-func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error) error {
+// awaitEnd waits until the node is asked to stop (nil), a listener stops, the billing loop ends because this node's
+// holder was reaped, or the node loses its name (kv.Client.Lost), and says which of the last three it was. A node that
+// lost its name may no longer be the only one of its name, and stops serving rather than count on it.
+func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, lost <-chan struct{}) error {
 	select {
+	case <-lost:
+		return errors.New("this node lost its name in the database: its connection to the database was cut, so another process may now run as this node")
 	case err := <-served:
 		return fmt.Errorf("a listener stopped: %w", err)
 	case err := <-reaped:

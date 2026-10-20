@@ -10,6 +10,9 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+// holdEvery is how often the connection that holds the node's name is checked, and so how soon a lost name is known.
+const holdEvery = 5 * time.Second
+
 // defaultHeartbeatTimeout bounds one round of the heartbeat's database work (Deps.HeartbeatTimeout): a database that
 // holds the node's row, or has stopped answering, must not hold back what the loop does for Valkey.
 const defaultHeartbeatTimeout = 5 * time.Second

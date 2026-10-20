@@ -31,11 +31,14 @@ func (c *Client) watch(ctx context.Context) {
 	ticker := time.NewTicker(beatEvery)
 	defer ticker.Stop()
 	var over since
-	nextClock := c.now().Add(clockEvery) // the start measured the clock just now
+	// The cadence of the clock check is real elapsed time, not the node's clock, which is what is being checked (and a
+	// clock that was stepped must not skip or repeat the check). The start measured the clock just now.
+	lastClock := time.Now()
 	for {
-		c.beat(ctx, &over, nextClock)
-		if !c.now().Before(nextClock) {
-			nextClock = c.now().Add(clockEvery)
+		due := time.Since(lastClock) >= clockEvery
+		c.beat(ctx, &over, due)
+		if due {
+			lastClock = time.Now()
 		}
 		select {
 		case <-ctx.Done():
@@ -48,9 +51,9 @@ func (c *Client) watch(ctx context.Context) {
 // beat is one round of the loop: the server's memory, and its time when the clock is due, then this node's heartbeat.
 // The heartbeat goes last and under a deadline of its own, so a database that does not answer delays the round by that
 // deadline at most and never stops the checks of Valkey.
-func (c *Client) beat(ctx context.Context, over *since, clockDue time.Time) {
+func (c *Client) beat(ctx context.Context, over *since, clockDue bool) {
 	if c.vk != nil {
-		if _, _, err := c.measure(ctx, !c.now().Before(clockDue)); err != nil &&
+		if _, _, err := c.measure(ctx, clockDue); err != nil &&
 			ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
 			// An outage is the breaker's to report; what reaches here answered, but not as one of our deployments must.
 			c.logger.ErrorContext(ctx, "valkey does not answer as it must: the node keeps serving on its own counters", "err", err)

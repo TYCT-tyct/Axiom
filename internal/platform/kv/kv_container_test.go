@@ -104,28 +104,13 @@ func TestClockTooFarRefusesTheStart(t *testing.T) {
 	}
 }
 
-// TestClockIsCorrected: the offset the start measures is what Now adds, so a node whose clock is off by less than the
-// bound still writes the windows of the server's clock (README「时钟」). The local clock stands still, so the offset is
-// the server's time at the measurement less that one moment, and the server's own clock read before and after the start
-// brackets it, however long the test is held up.
-func TestClockIsCorrected(t *testing.T) {
+// TestASmallRealSkewStarts: a node whose clock runs a little behind a real server's starts and counts. What the offset is,
+// and what is refused, is decided without a real server's moving clock in TestTheOffsetToTheServerIsMeasuredAndKept; this
+// is the real server accepting what was measured, and asserts nothing that depends on how long the test took.
+func TestASmallRealSkewStarts(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	serverNow := func() time.Time {
-		parts, err := server.Do(t, t.Context(), server.Admin.B().Time().Build())[0].AsIntSlice()
-		if err != nil || len(parts) != 2 {
-			t.Fatalf("read the server's time: %v, %v", parts, err)
-		}
-		return time.Unix(parts[0], parts[1]*int64(time.Microsecond))
-	}
-	local := time.Now().Add(-300 * time.Millisecond) // under the second the start allows
-	before := serverNow()
-	client := server.Open(t, kv.Deps{Now: func() time.Time { return local }})
-	after := serverNow()
-	if offset := client.Now().Sub(local); offset < before.Sub(local) || offset > after.Sub(local) {
-		t.Fatalf("the stored offset is %v, not between the server's time before the start less the local clock (%v) and after (%v)",
-			offset, before.Sub(local), after.Sub(local))
-	}
+	client := server.Open(t, kv.Deps{Now: func() time.Time { return time.Now().Add(-300 * time.Millisecond) }})
 	if _, err := count(t, client, kv.NewScript(countScript), 100); err != nil {
 		t.Fatalf("run the count: %v", err)
 	}

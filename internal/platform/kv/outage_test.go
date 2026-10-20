@@ -26,6 +26,19 @@ type offsetClock struct{ ahead atomic.Int64 }
 
 func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.ahead.Load())) }
 
+// steadyClock is the real clock until stand is called and stands still from then, so that a client measures its offset to
+// a server whose clock runs, and the breaker's open period never ends in a test that wants it to stay open.
+type steadyClock struct{ at atomic.Int64 } // zero while the clock runs
+
+func (c *steadyClock) Now() time.Time {
+	if at := c.at.Load(); at != 0 {
+		return time.Unix(0, at)
+	}
+	return time.Now()
+}
+
+func (c *steadyClock) stand() { c.at.Store(time.Now().UnixNano()) }
+
 // jump moves the clock forward.
 func (c *offsetClock) jump(d time.Duration) { c.ahead.Add(int64(d)) }
 
@@ -216,8 +229,9 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 func TestEveryAccessReturns(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	frozen := time.Now()
-	client := server.Open(t, kv.Deps{Now: func() time.Time { return frozen }, AccessTimeout: kv.Timeout})
+	clock := &steadyClock{}
+	client := server.Open(t, kv.Deps{Now: clock.Now, AccessTimeout: kv.Timeout})
+	clock.stand()
 	script := kv.NewScript(countScript)
 	keys := window(client, 100)
 	resume := pauseWrites(t, server)
@@ -408,17 +422,23 @@ func TestOOMFallsBack(t *testing.T) {
 	}
 }
 
-// fillUp fills the server a kilobyte at a time until it refuses to take more. The last key it accepted took it over its
-// limit, and only then does it refuse a write of any size: a refused 16 KiB value would only have been too big to fit.
+// fillUp puts the server over its memory limit, and checks that it is. A write is refused when the server's memory,
+// counting the buffer the write itself arrived in, is over the limit, so filling with writes ends with the data just under
+// the limit and a server that takes a smaller write again once the refused one's buffer is gone. What leaves it over is a
+// small command that makes a big value: SETRANGE at a large offset. Then a small write must be refused, or the test stops.
 func fillUp(t *testing.T, server *kvtest.Server) {
 	t.Helper()
 	filler := strings.Repeat("x", 1<<10)
 	for i := range 1 << 14 {
-		result := server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build())
-		if result.Error() != nil {
-			return
+		if server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build()).Error() != nil {
+			break
 		}
 	}
-	used, err := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
-	t.Fatalf("16 MiB went into a server limited to 3 MiB without a refusal (%v): %s", err, used)
+	// Accepted if the server is under its limit, and then it is over; refused if it is over already.
+	_ = server.Admin.Do(t.Context(), server.Admin.B().Setrange().Key("ax:fill:big").Offset(8<<20).Value("x").Build()).Error() //nolint:errcheck // either answer leaves the server over
+	err := server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:probe").Value("x").Build()).Error()
+	if err == nil || !strings.HasPrefix(err.Error(), "OOM") {
+		used, infoErr := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
+		t.Fatalf("the server did not go over its limit: a small write got %v (%v): %s", err, infoErr, used)
+	}
 }
