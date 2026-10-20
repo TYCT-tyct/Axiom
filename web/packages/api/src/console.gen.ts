@@ -285,6 +285,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement
+         * @description Every movement of the account's credits, newest first: a top-up, a gift, a charge for a call, an expiry or a refund, each with the balance after it. One row is one movement, so a call is one row here and the calls list has what it used and cost. `reference` is the call behind a charge, or the credit batch behind a top-up, a gift, an expiry and a refund. No ledger entry, book or platform account appears. A movement that settles while the pages are being read lands above the cursor and shifts none of the pages already read.
+         */
+        get: operations["listStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/statement.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement as a CSV file
+         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount` and `balance_after` (exact decimal amounts of the site's currency, in credits), `currency` and `reference`. At most the newest 10 000 movements; an account with more reads the rest a page at a time from `listStatement`.
+         */
+        get: operations["exportStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls": {
         parameters: {
             query?: never;
@@ -440,6 +480,31 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+        };
+        /**
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge, unused credit that expired, or credit given back.
+         * @enum {string}
+         */
+        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund";
+        /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded. */
+        StatementRow: {
+            /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When the movement was recorded.
+             */
+            at: string;
+            kind: components["schemas"]["StatementKind"];
+            amount: components["schemas"]["Money"];
+            balance_after: components["schemas"]["Money"];
+            /** @description What the movement was for: the call's ID (as `listCalls` and `getCall` give it) for a charge, or the credit batch's ID for the others. */
+            reference: string;
+        };
+        Statement: {
+            data: components["schemas"]["StatementRow"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
         };
         /** @description An API key's ID (TypeID). */
         KeyId: string;
@@ -1078,6 +1143,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Balance"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listStatement: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Statement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exportStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statement, at most the newest 10 000 movements. */
+            200: {
+                headers: {
+                    /** @description An attachment named for its contents. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

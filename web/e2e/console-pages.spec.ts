@@ -432,6 +432,36 @@ test.describe("balance", () => {
   });
 });
 
+test.describe("statement", () => {
+  test("the movements page by cursor, a charge opens its call, and the export is a file", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/statement");
+    const rows = page.getByRole("row");
+    await expect(rows).toHaveCount(51);
+    // A charge says what it charged, and the call it opens is that one.
+    await expect(page.getByRole("link", { name: /^调用 00000000/ }).first()).toBeVisible();
+    await rows.nth(1).getByRole("link").click();
+    await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
+    await page.goBack();
+    await page.getByRole("button", { name: "加载更多" }).click();
+    await expect(rows).toHaveCount(101);
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    expect((await download).suggestedFilename()).toMatch(/^statement-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(state.log.filter((line) => line === "GET /statement.csv")).toHaveLength(1);
+  });
+
+  test("an account with no movements says so", async ({ page }) => {
+    const state = await mockConsole(page, "empty");
+    signedInAs(state);
+    await page.goto("/console/statement");
+    await expect(page.getByRole("heading", { name: "还没有额度变动" })).toBeVisible();
+    await expect(page.getByRole("row")).toHaveCount(0);
+  });
+});
+
 test.describe("calls", () => {
   test("the list pages by cursor, filters live in the address, and a call opens", async ({ page }) => {
     const state = await mockConsole(page);

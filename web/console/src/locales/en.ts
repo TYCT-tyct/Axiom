@@ -7,6 +7,7 @@ export default {
     keys: "API keys",
     calls: "Calls",
     balance: "Balance",
+    statement: "Statement",
     security: "Account & security",
   },
   auth: {
@@ -51,6 +52,21 @@ export default {
     floor: "Balance floor",
     floorNote: "The lowest the available balance may go. 0 means no overdraft.",
     topUp: "There’s no online top-up yet; an admin adds credit.",
+  },
+  statement: {
+    description: "Every movement of your credit: top-ups, gifts, charges, expiries and refunds.",
+    movements: "Movements",
+    export: "Export CSV",
+    exportFailed: "The export failed: {{reason}}",
+    note: "Newest first, by the time the ledger recorded it, each row with the balance it left. The export holds the newest 10,000 rows; page here for the rest.",
+    empty: {
+      title: "No movements yet",
+      body: "Top-ups, gifts and charges show up here.",
+      balance: "See your balance",
+    },
+    col: { time: "Time", kind: "Kind", amount: "Amount", balance: "Balance after", reference: "Reference" },
+    kind: { top_up: "Top-up", gift: "Gift", spend: "Call charge", expiry: "Expired", refund: "Refund" },
+    call: "Call {{id}}",
   },
   keys: {
     description: "Create and manage the keys you call Axiom with.",

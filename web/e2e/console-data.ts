@@ -13,6 +13,7 @@ export type MockState = AuthState & {
   balance: Schemas["Balance"];
   keys: Schemas["Key"][];
   calls: Schemas["Call"][];
+  statement: Schemas["StatementRow"][];
 };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "calls.view"];
@@ -68,6 +69,24 @@ function aCall(n: number, over: Partial<Schemas["Call"]> = {}): Schemas["Call"] 
 
 const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 
+// A movement of the account's credits, newest first by n: a charge names one of the account's calls, and a gift, a
+// top-up or an expiry names the batch it came from.
+const kinds = ["spend", "spend", "top_up", "spend", "gift", "expiry", "refund"] as const;
+
+function aMovement(n: number, over: Partial<Schemas["StatementRow"]> = {}): Schemas["StatementRow"] {
+  const kind = kinds[n % kinds.length] ?? "spend";
+  const income = kind === "top_up" || kind === "gift" || kind === "refund";
+  return {
+    id: callId(1000 + n),
+    at: new Date(Date.UTC(2026, 9, 14, 8, 30) - n * 60_000).toISOString(),
+    kind,
+    amount: nano(String(income ? 500_000_000 : -1_500_000)),
+    balance_after: nano(String(3_000_000_000 - n * 100_000)),
+    reference: kind === "spend" ? callId(1 + (n % 3)) : callId(2000 + n),
+    ...over,
+  };
+}
+
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
@@ -85,11 +104,12 @@ export function usualState(): MockState {
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
     calls: range(120).map((n) => aCall(n)),
+    statement: range(120).map((n) => aMovement(n)),
   };
 }
 
 export function emptyState(): MockState {
-  return { ...usualState(), keys: [], calls: [] };
+  return { ...usualState(), keys: [], calls: [], statement: [] };
 }
 
 const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
@@ -130,6 +150,9 @@ export function worstState(): MockState {
           }
         : {},
     ),
+  );
+  state.statement = range(300).map((n) =>
+    aMovement(n, n === 1 ? { amount: nano("-9223372036854775807"), balance_after: nano("-9223372036854775807") } : {}),
   );
   return state;
 }

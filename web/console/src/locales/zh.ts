@@ -5,6 +5,7 @@ export default {
     keys: "API key",
     calls: "调用记录",
     balance: "余额",
+    statement: "额度流水",
     security: "账户与安全",
   },
   auth: {
@@ -49,6 +50,21 @@ export default {
     floor: "余额底线",
     floorNote: "可用余额允许降到的最低值。0 表示不能透支。",
     topUp: "目前没有在线充值，额度由管理员添加。",
+  },
+  statement: {
+    description: "账户额度每一笔进出的记录：充值、赠送、调用扣费、到期和退款。",
+    movements: "流水",
+    export: "导出 CSV",
+    exportFailed: "导出没有成功：{{reason}}",
+    note: "按记入账本的时间从新到旧排列，每行都带变动后的余额。导出含最近的 10 000 条，更早的在页面上翻页查看。",
+    empty: {
+      title: "还没有额度变动",
+      body: "充值、赠送或调用扣费之后，记录会出现在这里。",
+      balance: "查看余额",
+    },
+    col: { time: "时间", kind: "类型", amount: "金额", balance: "变动后余额", reference: "参考" },
+    kind: { top_up: "充值", gift: "赠送", spend: "调用扣费", expiry: "到期", refund: "退款" },
+    call: "调用 {{id}}",
   },
   keys: {
     description: "创建和管理调用 Axiom 用的 key。",

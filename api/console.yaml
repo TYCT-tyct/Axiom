@@ -437,6 +437,62 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement:
+    get:
+      operationId: listStatement
+      tags: [Balance]
+      summary: The account's credit statement
+      description: >-
+        Every movement of the account's credits, newest first: a top-up, a gift, a charge for a call, an expiry or a
+        refund, each with the balance after it. One row is one movement, so a call is one row here and the calls list has
+        what it used and cost. `reference` is the call behind a charge, or the credit batch behind a top-up, a gift, an
+        expiry and a refund. No ledger entry, book or platform account appears. A movement that settles while the pages
+        are being read lands above the cursor and shifts none of the pages already read.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the statement
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Statement"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement.csv:
+    get:
+      operationId: exportStatement
+      tags: [Balance]
+      summary: The account's credit statement as a CSV file
+      description: >-
+        The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC),
+        `kind`, `amount` and `balance_after` (exact decimal amounts of the site's currency, in credits), `currency` and
+        `reference`. At most the newest 10 000 movements; an account with more reads the rest a page at a time from
+        `listStatement`.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      responses:
+        "200":
+          description: The statement, at most the newest 10 000 movements.
+          headers:
+            Content-Disposition:
+              required: true
+              description: An attachment named for its contents.
+              schema: {type: string}
+          content:
+            text/csv:
+              schema: {type: string}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/calls:
     get:
       operationId: listCalls
@@ -767,6 +823,41 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+    StatementKind:
+      type: string
+      enum: [top_up, gift, spend, expiry, refund]
+      description: >-
+        What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
+        given, a call's charge, unused credit that expired, or credit given back.
+    StatementRow:
+      type: object
+      required: [id, at, kind, amount, balance_after, reference]
+      description: >-
+        One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and
+        `balance_after` is the account's balance once this movement was recorded.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The row's own identity, to tell two rows apart; it names no ledger entry.
+        at: {type: string, format: date-time, description: When the movement was recorded.}
+        kind: {$ref: "#/components/schemas/StatementKind"}
+        amount: {$ref: "#/components/schemas/Money"}
+        balance_after: {$ref: "#/components/schemas/Money"}
+        reference:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: >-
+            What the movement was for: the call's ID (as `listCalls` and `getCall` give it) for a charge, or the credit
+            batch's ID for the others.
+    Statement:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/StatementRow"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     CallId:
