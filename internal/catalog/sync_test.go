@@ -421,7 +421,8 @@ func TestSelectPriceSourceTakesNoDatasetPrices(t *testing.T) {
 func TestCheck(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
-	s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, xSpec, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
+	// An OpenAI model's spec says what a Responses request reads of it, which the check asks for; another vendor's need not.
+	s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, strings.TrimSuffix(xSpec, "}")+`,"cache_breakpoints":false}`, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
 	s.follow("other/model", catalog.VersionDated, catalog.SourceManual, xSpec, xCurrent, "other/model")
 	// a draft with no price, and a listed one whose price lacks the cache read its spec declares cannot both be told apart
 	// from a good one by anything but the check

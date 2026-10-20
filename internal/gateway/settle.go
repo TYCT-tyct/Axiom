@@ -89,10 +89,14 @@ func permanent(err error) bool {
 // the two to the endpoint the attempt called, and billing writes them to suppliers with the ledger's cost. An attempt
 // known not to have run used nothing and cost nothing.
 func (a *attempt) result(receipt suppliers.AttemptReceipt) {
+	receipt = receipt.WithExchange(a.entry.Exchange)
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Receipt, rec.FinishedAt = receipt, time.Now()
 	if rec.Result == billing.NotExecuted {
+		rec.CostKnown = true
+		rec.Estimate.Conversion = suppliers.ConversionNotRun
+		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
 	rec.Segments = estimated(a.usage, a.seen, routing.DemandOf(&s.c.Request), a.entry.Limits, a.meter.OutputCap())
@@ -100,7 +104,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
 	}
-	c, credits, _, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+	c, credits, known, err := s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
 	if err != nil {
 		// Ours to know, not the user's to pay: the attempt is booked at what came back, and the supplier's own record of
 		// it is what reconciliation compares that against. Holding the settlement back for it would leave a call that
@@ -109,6 +113,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		c.Flag = suppliers.CostUnpriced // zero for a failure is not a cost known to be zero
 	}
 	c.Flag = costFlag(rec.Segments, c.Flag)
+	// Profit needs the whole cost: one the usage did not fully support (none reported, or a guessed or unpriced item) is
+	// not a cost known to be what the supplier charged, whatever it converted to.
+	rec.CostKnown = known && err == nil && c.Flag == suppliers.CostComplete
 	rec.Cost, rec.Estimate = credits, c
 }
 
@@ -155,12 +162,13 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	for it := range catalog.NumItems {
 		counts[it] = reply.Usage.Count(it)
 	}
-	if reply.Reported&inputSide == 0 {
+	if reply.Reported&catalog.InputSide == 0 { // none of the input was reported, so it is estimated
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
 		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning]
+		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning] -
+			counts[catalog.ItemAudioOut] - counts[catalog.ItemImageOut]
 	}
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
@@ -168,7 +176,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	for it, n := range counts {
 		counts[it] = min(n, maxCount)
 	}
-	usage, err := catalog.NewUsage(counts, reply.Usage.ServiceTier(), reply.Usage.Unknown())
+	usage, err := reply.Usage.Recount(counts, reply.Usage.Unknown())
 	if err != nil {
 		panic(err) // every count is within 0 and maxCount, and the tier and items are the usage's own
 	}
@@ -193,7 +201,3 @@ func tokensOf(bytes, perToken int64) int64 {
 // maxCount is the largest count catalog.NewUsage takes: what an estimate is capped at. The bytes of a stream, which an
 // output estimate counts, have no bound of their own.
 const maxCount = 1e10
-
-// inputSide are the items reported before the reply starts, together: when one of them was, the input is known.
-const inputSide = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite |
-	1<<catalog.ItemCacheWrite1h)

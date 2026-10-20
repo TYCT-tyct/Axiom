@@ -79,3 +79,72 @@ func TestCatalogCommandRefusals(t *testing.T) {
 		t.Errorf("no file: %v", err)
 	}
 }
+
+// dialectCatalog is a database with the vendor and a draft model that reasons, and the means to write a request file and
+// run `axiom catalog` on it.
+type dialectCatalog struct {
+	t       *testing.T
+	environ []string
+}
+
+func newDialectCatalog(t *testing.T) *dialectCatalog {
+	d := &dialectCatalog{t: t, environ: []string{"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App}}
+	for _, step := range [][2]string{
+		{"save-author", `{"op_key":"0198c0a8-0000-7000-8000-000000000001","reason":"vendor","slug":"anthropic","name":"Anthropic"}`},
+		{"create-model", `{"op_key":"0198c0a8-0000-7000-8000-000000000002","reason":"draft","slug":"anthropic/alpha","version_basis":"dated",
+			"price_source":"manual","spec":{"items":["input"],"tiers":[],"abilities":["reasoning"]}}`},
+	} {
+		if _, err := d.run(step[0], d.write(step[1])); err != nil {
+			t.Fatalf("%s: %v", step[0], err)
+		}
+	}
+	return d
+}
+
+func (d *dialectCatalog) write(doc string) string {
+	d.t.Helper()
+	file := filepath.Join(d.t.TempDir(), "request.json")
+	if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
+		d.t.Fatal(err)
+	}
+	return file
+}
+
+func (d *dialectCatalog) run(args ...string) (string, error) {
+	var out bytes.Buffer
+	err := catalogCommand(d.t.Context(), d.environ, args, &out)
+	return out.String(), err
+}
+
+// TestCatalogApplyDialect: the command shows what the dialect file would write and writes nothing without --apply, writes
+// it with --apply through the audited spec update, and a second run with it finds nothing to do.
+func TestCatalogApplyDialect(t *testing.T) {
+	t.Parallel()
+	d := newDialectCatalog(t)
+	good := d.write(`{"models":{"anthropic/alpha":{"thinking":"adaptive","mid_system":false},"anthropic/absent":{"mid_system":true}}}`)
+	out, err := d.run("apply-dialect", good)
+	if err != nil || !strings.Contains(out, `"applied":false`) || !strings.Contains(out, `"outcome":"set"`) || !strings.Contains(out, `"outcome":"absent"`) {
+		t.Fatalf("the plan: %v, %s", err, out)
+	}
+	if out, err = d.run("apply-dialect", "--apply", good); err != nil || !strings.Contains(out, `"applied":true`) {
+		t.Fatalf("the run: %v, %s", err, out)
+	}
+	if out, err = d.run("apply-dialect", "--apply", good); err != nil || strings.Contains(out, `"outcome":"set"`) || !strings.Contains(out, `"outcome":"unchanged"`) {
+		t.Errorf("the second run: %v, %s", err, out)
+	}
+}
+
+// TestCatalogApplyDialectRefusals: a model that does not take its keys fails the command, and so do a file it cannot read
+// and a file with a model that sets no key.
+func TestCatalogApplyDialectRefusals(t *testing.T) {
+	t.Parallel()
+	d := newDialectCatalog(t)
+	if _, err := d.run("apply-dialect", "--apply", d.write(`{"models":{"anthropic/alpha":{"thinking":"none"}}}`)); err == nil || !strings.Contains(err.Error(), "1 models failed") {
+		t.Errorf("a model that does not take its keys: %v", err)
+	}
+	for _, args := range [][]string{{"apply-dialect", "--apply"}, {"apply-dialect", filepath.Join(t.TempDir(), "none.json")}, {"apply-dialect", d.write(`{"models":{"a/b":{}}}`)}} {
+		if _, err := d.run(args...); err == nil {
+			t.Errorf("%v: no error", args)
+		}
+	}
+}

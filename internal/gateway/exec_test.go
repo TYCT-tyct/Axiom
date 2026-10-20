@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -267,6 +269,27 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 	}
 }
 
+// TestAnUnsetSpecKeyIsTheOperatorsToKnow: when no endpoint can take the request because the spec of its model leaves a
+// key out, the client is told the model does not support the parameter yet, and the log, which the operator reads, names
+// the key.
+func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		var logs bytes.Buffer
+		messages := protocol.Messages
+		h := newHarness(t, ctx, options{client: protocol.Chat, upstream: &messages, logs: &logs, mutate: func(c *Call) {
+			c.Body = []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"top_p":0.5,"stream":true}`)
+		}})
+		h.run()
+		body := h.w.body()
+		if h.w.status != 400 || !strings.Contains(body, "does not support top_p other than the default yet") || strings.Contains(body, "spec") {
+			t.Errorf("the client got %d: %s", h.w.status, body)
+		}
+		if !strings.Contains(logs.String(), "default_sampling_only") {
+			t.Errorf("the log does not name the key: %s", logs.String())
+		}
+	})
+}
+
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Chat }})
@@ -357,7 +380,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -368,6 +391,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
+		"quality": func(d *ExecDeps) { d.Quality = nil },
 	} {
 		d := full
 		missing(&d)

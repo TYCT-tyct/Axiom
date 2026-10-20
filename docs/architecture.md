@@ -143,7 +143,7 @@
 | 数据库迁移 | goose，SQL 文件放在各自模块里，每个模块独立的版本序列，按固定顺序执行；只向前，合并后不改 | MIT 许可；模块之间没有外键，迁移互不依赖 | Atlas：默认安装受专有协议约束，检查与漂移检测收费（Atlas 官网，2026-07）。sub2api 有约 18 个迁移在执行后被改动（sub2api 源码，2026-10），所以由 CI 校验已合并迁移的内容不变 |
 | 缓存与协调 | Valkey（兼容 Redis 协议），客户端 valkey-go | BSD 许可，由 Linux 基金会维护（valkey.io，2026-09）。只放丢了也不影响正确性的数据：限流计数、登录前的尝试次数、会话粘性、辅助锁；不存任何余额和预留。分布式锁只做辅助，正确性靠 PostgreSQL 的行锁和防重复编号。不可用时各用途有界地兜底，不持久化；客户端、键、期限、熔断和部署见 [platform/kv 的设计](../internal/platform/kv/README.md) | Redis 8：可选 AGPLv3 等三种许可，Valkey 免去许可问题；DragonflyDB：BSL 许可限制用途 |
 | 后台任务 | River（基于 PostgreSQL 的任务队列） | 任务和业务数据在同一个事务里入队，事件不会丢也不会早发；MPL-2.0 许可。还没到 1.0，固定版本、升级前读变更说明 | Asynq：基于 Redis，无法与数据库事务绑定 |
-| 出站邮件 | 标准库 `net/smtp`，同步发送放进 River 的默认队列 | 通用 SMTP 接得上大多数服务商和企业邮箱，不绑一家；任务和触发它的写入在同一个事务里入队，重试和放弃由队列负责，重启不丢（[platform 的 mail](../internal/platform/mail/README.md)） | 服务商 SDK 或发信 API：换一家要改代码，密钥和限流各有一套；sub2api 用进程内 channel 发送，重启即丢（sub2api 源码 `email_queue_service.go`，2026-10） |
+| 出站邮件 | 标准库 `net/smtp`，同步发送放进 River 的通知队列 | 通用 SMTP 接得上大多数服务商和企业邮箱，不绑一家；任务和触发它的写入在同一个事务里入队，重试和放弃由队列负责，重启不丢（[platform 的 mail](../internal/platform/mail/README.md)） | 服务商 SDK 或发信 API：换一家要改代码，密钥和限流各有一套；sub2api 用进程内 channel 发送，重启即丢（sub2api 源码 `email_queue_service.go`，2026-10） |
 | 变更通知 | PostgreSQL LISTEN/NOTIFY（尚未实现，现在是定时轮询） | 事务提交后才送达，快照重建不会读到未提交的数据。通知只带 ID；监听用直连数据库的独立连接，不经事务模式的连接池；断线重连后全量重建快照 | 定时轮询：new-api 改配置后多节点最长 60 秒才生效（new-api 源码，2026-10） |
 | 对象存储 | 只依赖 S3 接口；云厂商的对象存储或自托管 SeaweedFS | 对话内容体量最大，与数据库分开 | MinIO：社区版仓库已于 2026-04 归档、停止维护（GitHub） |
 | 调用记录分析 | 先用 PostgreSQL 分区表，量大后加 ClickHouse | 调用路径从不读记录表；记录经异步管道写入，以后换存储不影响调用 | 让请求路径查记录表：LiteLLM 和 sub2api 都因此变慢（LiteLLM 文档《Spend Monitoring》，2026-10；sub2api issue #7867，2026-10） |
@@ -191,7 +191,7 @@ docs/                         文档
   - 预留和结算带防重复编号；账本只追加。
 - **配置有错就不启动**，不把错误留到运行时。
 - **优雅退出**：节点先停止接收新请求，等在途的流结束（有上限时间），处理完结算后再退出。
-- **许可证**：new-api 采用 AGPLv3，sub2api 采用 LGPL-3.0（GitHub，2026-10）。适配器只参考它们的接口行为，不复制代码；复制 AGPL 代码会迫使 Axiom 开源。
+- **参考实现的代码**：new-api 采用 AGPLv3，sub2api 采用 LGPL-3.0（GitHub，2026-10）。负责人 2026-10-20 决定 Axiom 将开源、不受这两个许可证的约束限制，所以可以复制：能原样放进 Axiom 的部分（协议与格式转换、厂商和中转站的特殊处理、签名与验签算法、错误映射、测试样本）直接复制后按 Axiom 的类型改写，并在代码里用一行注释写明来源（仓库、路径、提交）；绑在它们框架（gin、gorm/ent）、钱（Axiom 用精确分数，不用浮点数）、租户（行级安全）或数据模型上的部分，按 Axiom 的结构重写。开源时按复制来源统一整理许可证与版权声明。
 - **日志从第一天内置，指标和链路追踪随第一个调用路径上的模块内置**（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）；都不记录对话正文和任何密钥。指标与链路的命名、标签上限、采样和导出见 [platform 的「遥测」](../internal/platform/README.md#遥测)。
 - **安全**：威胁模型、安全基线和跨模块的安全规则见[安全](security.md)。
 

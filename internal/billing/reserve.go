@@ -8,6 +8,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -108,8 +109,14 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		locked[i], models[i], endpoints[i] = fallbacks[i], uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
+	rates := frozenRates(q, r.Kept)
+	rateJSON, err := jsonx.MarshalCanonical(rates)
+	if err != nil {
+		return nil, nil, fmt.Errorf("billing: freeze exchange rates: %w", err)
+	}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
+		ExchangeRates: rateJSON,
+		Prices:        prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),
@@ -117,6 +124,21 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
 	}
 	return h, r.Kept, nil
+}
+
+// frozenRates keeps missing pairs too, so an absent rate cannot be filled with a later configuration.
+func frozenRates(q []Quotable, kept []int) []platform.ExchangeRate {
+	rates := []platform.ExchangeRate{}
+	seen := map[[2]string]bool{}
+	for _, i := range kept {
+		r := q[i].Exchange
+		pair := [2]string{r.Base, r.Quote}
+		if r.Base != "" && !seen[pair] {
+			rates = append(rates, r)
+			seen[pair] = true
+		}
+	}
+	return rates
 }
 
 // Extend makes h's reservation cover the cumulative target r.Target, in a transaction of its own (README.md「追加与结算」):

@@ -46,11 +46,14 @@ var (
 			s.hasResponse = true
 			return walk(&s.reader, s, responseFields)
 		},
+		"code": func(s *responsesStream) error { return s.class(&s.code) }, // the error event's
 	}
 	responseFields = map[string]func(*responsesStream) error{
 		"usage":        (*responsesStream).usage,
 		"service_tier": (*responsesStream).serviceTier,
+		"error":        func(s *responsesStream) error { return errorObject(&s.reader, s, responseErrorFields) }, // response.failed's
 	}
+	responseErrorFields = map[string]func(*responsesStream) error{"code": func(s *responsesStream) error { return s.class(&s.code) }}
 	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
@@ -68,7 +71,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	}
 	switch s.e.name {
 	case "response.failed", "error":
-		return event{}, fmt.Errorf("%w: %s", ErrUpstream, s.e.name)
+		return event{}, s.errorEvent(s.e.name)
 	case "response.created":
 		s.created = true
 	case "response.completed", "response.incomplete":

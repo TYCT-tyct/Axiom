@@ -106,10 +106,10 @@ type sendArgs struct {
 // Kind implements river.JobArgs.
 func (sendArgs) Kind() string { return jobKind }
 
-// InsertOpts implements river.JobArgsWithInsertOpts. The job stays on the default queue; the queue split gives
-// notifications a queue of their own later.
+// InsertOpts implements river.JobArgsWithInsertOpts. The job rides the notifications queue, so a burst of mail waits
+// behind that queue's workers alone.
 func (sendArgs) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: river.QueueDefault, MaxAttempts: maxAttempts}
+	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: maxAttempts}
 }
 
 // work delivers one message and records the result. The job row is the durable record of the attempt (state, attempts

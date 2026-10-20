@@ -20,6 +20,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -348,8 +349,10 @@ type options struct {
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64  // the node's budget; memorySize when zero
-	price        string // the entries' price schedule; cheap when empty
+	memory       int64            // the node's budget; memorySize when zero
+	price        string           // the entries' price schedule; cheap when empty
+	logs         *bytes.Buffer    // the node's log, discarded when nil
+	health       *quality.Monitor // what the attempts tell; a new one when nil
 }
 
 type harness struct {
@@ -366,6 +369,7 @@ type harness struct {
 	events  []string
 	cfg     Config
 	refused func() map[string]int64 // the 429s counted so far, by reason
+	health  *quality.Monitor        // what the attempts told quality
 	started time.Time
 
 	mu          sync.Mutex
@@ -389,7 +393,10 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	all, _ := sample(t, upstream)
 	_, request := sample(t, client)
-	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{})}
+	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{}), health: o.health}
+	if h.health == nil {
+		h.health = quality.New(nil)
+	}
 	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w}
 	h.cfg = DefaultConfig()
 	if o.config != nil {
@@ -411,10 +418,14 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if alive == nil {
 		alive = func() bool { return true }
 	}
+	logger := slog.New(slog.DiscardHandler)
+	if o.logs != nil {
+		logger = slog.New(slog.NewTextHandler(o.logs, nil))
+	}
 	h.exec, err = NewExecutor(ExecDeps{
-		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
+		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
-		Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health,
 	})
 	if err != nil {
 		t.Fatal(err)

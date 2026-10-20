@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）。只有类型和运算，取整和换算的规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示) |
+| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
@@ -24,7 +24,7 @@
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
 | `kv` | 设计中，随 K1 加入：Valkey 上的限流计数、登录前的尝试次数和会话粘性，期限、熔断与兜底，见 [kv 的 README](kv/README.md) |
-| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，默认队列）和按收件人的限流，见 [mail/README.md](mail/README.md) |
+| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流，见 [mail/README.md](mail/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -110,7 +110,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -194,6 +194,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
   | `axiom_gateway_rate_limited_total` | 计数 | `reason`：节点回 429 的次数，按拒绝的那道限制（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`，含义见 [gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)；#295；测试：`TestEachRateLimitIsCountedByItsReason` 等） |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
+  | `axiom_pg_queue_oldest_job_wait_seconds` | 仪表 | `queue`：每个队列最老的可用任务已经等了多久，没有在等的为 0（`pg.Queue`；它上升说明这个队列的 worker 跟不上；采集的数据库访问有 2 秒期限，超时这次采集报错、不报数（不伪报 0）。测试：`TestTheOldestWaitingJobOfEachQueueIsMeasured` 经 `telemetry.New` 的处理器读到这个名字和四个队列；`TestACollectionEndsWhileTheDatabaseBlocksAndRecovers` 锁住任务表，采集仍会结束，锁放开后恢复） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
@@ -261,7 +262,14 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 任务队列
 
-`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。节点只取自己有 worker 的任务种类：滚动发布期间旧节点碰到新版本登记的种类时不取，不消耗尝试次数也不退避，唯一任务因此不会被卡住（代价是领导节点的救援仍会丢弃它不认识的、已运行满 15 分钟的任务，所以新旧版本并存只应持续一次发布的时间）。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
+`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列按任务的性质分成四个具名队列：`money`（额度到期、扣费与账本的对账）、`notifications`（邮件和告警，目前只有 `mail.send`）、`syncs`（供应商同步的扫描和一轮同步）、`archive`（丢弃任务的扫描等清理任务）；每个具名队列有自己的 worker 数（资金 3、通知 2、同步 4、归档 1，四个合计仍是原来的 10 个，是代码里的默认值，不设配置项），所以一批同步或归档任务不会挡住资金任务。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册，在归档队列上运行。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）；每个任务种类在它的 `InsertOpts` 里写明队列，这是唯一一处；没写队列的任务落在 River 的 `default` 队列，只有排空的 1 个 worker 会做它，丢掉了隔离，所以 `TestEveryJobKindNamesOneOfTheQueues` 从源码里列出全部种类，新增种类没写队列就失败。River 的 `default` 队列也配一个 worker：旧版本把每种任务都入在那里，做完它们才会放掉其唯一键，否则新队列里的同名周期任务再也插不进来（River 的唯一键不含队列）；没有任务种类写这个队列，测试保证这一点。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。节点只取自己有 worker 的任务种类：滚动发布期间旧节点碰到新版本登记的种类时不取，不消耗尝试次数也不退避，唯一任务因此不会被卡住（代价是领导节点的救援仍会丢弃它不认识的、已运行满 15 分钟的任务，所以新旧版本并存只应持续一次发布的时间）。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点在四个具名队列上同时做共 10 个任务（另有排空 `default` 的 1 个），一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。每个队列最老的可用任务等了多久由 `axiom_pg_queue_oldest_job_wait_seconds` 按 `queue` 报告（见「遥测」）；它上升或长时间不降，说明这个队列的 worker 跟不上。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
+
+**回滚到拆队列之前的版本**：旧版本只做 `default` 队列，也只在 `default` 里入队；River 的唯一键不含队列，所以留在具名队列里的未结束任务（例如 `money` 里一个 `available` 的额度到期任务）会一直占着唯一键，旧节点既不会去做它，它自己后续插入同样的周期任务也被当作重复跳过，额度到期因此停摆。只看运行中的任务不够，`scheduled`（延迟）和 `retryable`（等重试）的也会留下。按顺序做：
+
+1. **停止新增任务**：先停掉所有新版本节点（`Stop` 会等在跑的任务做完；任务都在引起它的写入的事务里入队，新版本节点停了就不再有新任务），再启动旧版本。
+2. **处理具名队列里全部非终态任务**：先看有哪些，`SELECT queue, state, kind, count(*) FROM river.river_job WHERE queue <> 'default' AND state IN ('available','scheduled','retryable','running') GROUP BY 1,2,3`。`running` 的等它做完；节点已经停了的，由旧版本领导节点的救援在 15 分钟后收回，再按下一条处理。其余的改放到旧版本能做的队列：`UPDATE river.river_job SET queue = 'default' WHERE queue <> 'default' AND state IN ('available','scheduled','retryable')`。这些任务的种类旧版本都认识，唯一键不受队列影响，所以不会冲突，也不丢任务；`running` 的任务不要改，它的节点会按原队列写回结果。
+3. **验证没有遗留**：重跑上面的查询，`queue <> 'default'` 的行必须是 0；再看 `SELECT queue, kind, count(*) FROM river.river_job WHERE state IN ('available','scheduled','retryable','running') GROUP BY 1,2`，每个周期任务的种类（`billing.expire_credit`、`billing.reconcile`、`suppliers.sync_sweep`、`suppliers.reconcile`、`queue.discard_scan`）都只在 `default`，且每种至多一个，旧版本的下一次周期插入才不会被跳过。
+4. **新版本起不来、旧版本已经在跑时**：具名队列里又出现了任务（例如新节点停得晚），重做第 2 步和第 3 步；旧节点会在 `default` 里把它们做完。要再升级回新版本，直接部署即可：新版本留着 1 个 `default` 的 worker，会把 `default` 里剩下的任务做完。
 
 任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略写 `platform.in_scope(site_id, account_id)`，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](../mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
 

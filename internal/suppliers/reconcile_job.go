@@ -44,8 +44,10 @@ type reconcileArgs struct {
 
 func (reconcileArgs) Kind() string { return "suppliers.reconcile" }
 
+// InsertOpts implements river.JobArgsWithInsertOpts: the next page of a run covers the run, and the reconciliation is a
+// money job, so it waits only for other money jobs.
 func (reconcileArgs) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+	return river.InsertOpts{Queue: pg.QueueMoney, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning,
 		rivertype.JobStateRetryable, rivertype.JobStateScheduled,
 	}}}

@@ -135,6 +135,20 @@ bench-compare base:
 diff: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
 
+# Show what writing deploy/catalog/dialects.json into the models of the database AXIOM_DATABASE_URL names would change, and
+# change nothing (docs/ops/release.md). Run it before catalog-dialect-apply.
+catalog-dialect-plan:
+    go run ./cmd/axiom catalog apply-dialect deploy/catalog/dialects.json
+
+# Write deploy/catalog/dialects.json into those models through the catalog's audited spec update; a second run changes nothing
+catalog-dialect-apply:
+    go run ./cmd/axiom catalog apply-dialect --apply deploy/catalog/dialects.json
+
+# The catalog's acceptance check against AXIOM_DATABASE_URL, read-only: every model has what a release needs of it
+# (internal/catalog/README.md「第一版验收的检查」); fails when it finds any problem
+catalog-check:
+    go run ./cmd/axiom catalog check
+
 compose := "docker compose -f deploy/compose.yaml"
 
 # Build the program for Linux with the frontend embedded and start it with its database on this machine, writing random local passwords to
@@ -153,6 +167,13 @@ up: web-embed
 # one COMPOSE_PROJECT_NAME names for a CI job, otherwise axiom — so it works without deploy/.env.
 down *flags:
     docker compose --project-name "${COMPOSE_PROJECT_NAME:-axiom}" down {{ flags }}
+
+# Rehearse the backup and the restore end to end: its own compose project, a local S3 server instead of the bucket, the
+# database and the key ring wiped and restored from a set, and what came back compared with what was there
+# (docs/ops/backup-restore.md「恢复演练」). It removes everything it creates, volumes included, and never touches a
+# deployment or a real bucket: about ten minutes, one run at a time on a machine.
+backup-rehearsal:
+    bash scripts/ops/rehearse.sh
 
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the

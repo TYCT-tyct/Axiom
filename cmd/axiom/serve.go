@@ -311,11 +311,13 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with supplier syncing, charge reconciliation, the ledger's daily check and the expiry of
-// credit. It reaches the suppliers through exit, the client the whole node shares.
+// startSync starts the queue with supplier syncing on the syncs queue, and charge reconciliation, the ledger's daily
+// check and the expiry of credit on the money queue. Each queue has its own workers, so a burst of syncs cannot hold a
+// money job back (internal/platform/README.md「任务队列」). It reaches the suppliers through exit, the client the whole
+// node shares.
 func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
-	// Outbound email rides the queue's default queue. Registering here also reports at startup whether this node can
+	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
 	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
 	if _, err := mail.Register(ctx, db, queue, smtp, logger); err != nil {
 		return nil, err

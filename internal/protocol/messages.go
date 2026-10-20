@@ -50,7 +50,10 @@ var (
 		"content_block": func(s *messagesStream) error { return walk(&s.reader, s, blockFields) },
 		"message":       func(s *messagesStream) error { return walk(&s.reader, s, messageFields) },
 		"usage":         (*messagesStream).usage,
+		"error":         func(s *messagesStream) error { return errorObject(&s.reader, s, messagesErrorFields) },
 	}
+	// messagesErrorFields are what an error event's error says of its class (Anthropic《Errors》, read 2026-10-19).
+	messagesErrorFields = map[string]func(*messagesStream) error{"type": func(s *messagesStream) error { return s.class(&s.errClass) }}
 	// contentFields and blockFields carry the members the client is given that the upstream bills as output:
 	// thinking's signature and redacted_thinking's data count like its text (README.md「字节上界」).
 	contentFields = map[string]func(*messagesStream) error{
@@ -72,7 +75,7 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
-		return event{}, fmt.Errorf("%w: an error event", ErrUpstream)
+		return event{}, s.errorEvent("an error event")
 	}
 	s.settle()
 	if s.report != nil {

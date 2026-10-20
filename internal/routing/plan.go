@@ -142,8 +142,11 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
 		target.MaxOutput = out
 	}
+	limits := c.model
+	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
+		Exchange: c.Exchange,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }

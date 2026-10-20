@@ -77,9 +77,11 @@ type SyncArgs struct {
 func (SyncArgs) Kind() string { return "suppliers.sync" }
 
 // InsertOpts implements river.JobArgsWithInsertOpts. A job that fails is not retried by the queue: the sweep makes a new
-// one when the supplier is due again, which is when its backoff says.
+// one when the supplier is due again, which is when its backoff says. A round waits on the syncs queue only for other
+// rounds.
 func (SyncArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
+		Queue:       pg.QueueSyncs,
 		MaxAttempts: 1,
 		UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
@@ -93,6 +95,9 @@ type SweepArgs struct{}
 
 // Kind implements river.JobArgs.
 func (SweepArgs) Kind() string { return "suppliers.sync_sweep" }
+
+// InsertOpts implements river.JobArgsWithInsertOpts: the sweep is a sync job too, and waits with the rounds it enqueues.
+func (SweepArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: pg.QueueSyncs} }
 
 // Schedule is the syncing of the suppliers on one node.
 type Schedule struct {

@@ -1,6 +1,6 @@
 # mail
 
-出站邮件：调用方写好正文，这里把它经 SMTP 发出。每次发送是一个 River 任务（`mail.send`，默认队列），按失败能否重试分别重试或放弃，同一收件人一分钟最多一封。
+出站邮件：调用方写好正文，这里把它经 SMTP 发出。每次发送是一个 River 任务（`mail.send`，`notifications` 队列），按失败能否重试分别重试或放弃，同一收件人一分钟最多一封。
 
 投递放在 `platform` 而不是 accounts：收件人、模板、站点品牌和多语言属于账户流程（[accounts 的「给用户的邮件」](../../../docs/domains/accounts.md#给用户的邮件)），这里只有各模块共用的发送能力。走队列而不是进程内的 channel：任务和触发它的写入在同一个事务里入队，重启不丢，重试次数和最后错误由 River 记下（sub2api 的 `email_queue_service.go` 用 channel，重启即丢，2026-10）。
 
@@ -38,7 +38,7 @@
 
 ## 队列与重试
 
-任务种类 `mail.send`，默认队列，最多尝试 5 次：River 的默认退避约为 16 秒、81 秒、256 秒、625 秒（五次共约 16 分钟），覆盖服务商几分钟的故障；用完仍失败的任务被丢弃，由队列的扫描报告（`queue.job_discarded` 和 `axiom.pg.queue.discarded_jobs`，[observability 的「监控与告警」](../../../docs/domains/observability.md#监控与告警)）。
+任务种类 `mail.send`，`notifications` 队列，最多尝试 5 次：River 的默认退避约为 16 秒、81 秒、256 秒、625 秒（五次共约 16 分钟），覆盖服务商几分钟的故障；用完仍失败的任务被丢弃，由队列的扫描报告（`queue.job_discarded` 和 `axiom.pg.queue.discarded_jobs`，[observability 的「监控与告警」](../../../docs/domains/observability.md#监控与告警)）。
 
 邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略是 `platform.in_scope(site_id, account_id)`：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#租户隔离)）。
 

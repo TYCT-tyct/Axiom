@@ -59,6 +59,44 @@ func (w *world) count(sql string, args ...any) (n int) {
 	return n
 }
 
+// A stored attempt shows the prompt the upstream reported beside the items: 100 prompt tokens that are 80 cache reads and
+// 80 cache writes would otherwise read as 160 input.
+func TestUsageOfKeepsPhysicalInput(t *testing.T) {
+	t.Parallel()
+	overlap, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 80}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := overlap.WithPhysicalInput(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero, err := overlap.Recount(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zero, err = zero.WithPhysicalInput(0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		segments []catalog.Usage
+		want     string
+	}{
+		{"one sampling", []catalog.Usage{physical}, `{"items":{"cache_read":80,"cache_write":80},"physical_input":100,"tier":"standard","unknown":[]}`},
+		{"two samplings add up", []catalog.Usage{physical, physical}, `{"items":{"cache_read":160,"cache_write":160},"physical_input":200,"tier":"standard","unknown":[]}`},
+		{"no total reported", []catalog.Usage{overlap}, `{"items":{"cache_read":80,"cache_write":80},"tier":"standard","unknown":[]}`},
+		{"an explicit zero is not absent", []catalog.Usage{zero}, `{"items":{},"physical_input":0,"tier":"standard","unknown":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := usageOf(tc.segments)
+			if err != nil || string(got) != tc.want {
+				t.Errorf("usageOf = %s, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
+}
+
 // TestRecordingAttemptsIsOneStatementAndRepeatable: a request's attempts are written together with their cost and key;
 // settling again after a crash, even with different figures, leaves what was written; a wrong attempt number writes
 // nothing.

@@ -12,6 +12,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -122,10 +123,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
-		if s.skips.unsupported == "" {
-			s.skips.unsupported = unsupported.Reason
-		}
-		s.exclude(entry, routing.FormatNotServed)
+		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
 		conn.Done()
@@ -140,6 +138,19 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		return nextEntry, ended{}
 	}
 	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
+// when no entry is left; why, when it is a key the model's spec lacks, goes to the log and no further.
+func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.NotSupported) {
+	if unsupported.Detail != "" {
+		s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
+			"supplier", entry.Supplier, "endpoint", entry.Endpoint)
+	}
+	if s.skips.unsupported == "" {
+		s.skips.unsupported = unsupported.Reason
+	}
+	s.exclude(entry, routing.FormatNotServed)
 }
 
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
@@ -204,6 +215,8 @@ type attempt struct {
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
+
+	obs quality.Observation // how it ended, as quality is told when it closes
 }
 
 // bind fixes the attempt's identity before anything is sent: its number, and the entry whose price the reservation
@@ -212,8 +225,9 @@ type attempt struct {
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
+	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
-	s.tries = append(s.tries, try{entry: entry, started: time.Now()})
+	s.tries = append(s.tries, try{entry: entry, started: a.obs.Sent})
 	s.currency = entry.Price.Schedule.Currency()
 	s.last = a
 	policy := conn.Policy()
@@ -227,15 +241,48 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 }
 
 // close ends the attempt: its upstream is cancelled if it still runs, the credential's slot and the endpoint's count
-// are given back, and what billing takes of it is made from its usage and the receipt, which has the supplier's
-// request id.
-func (a *attempt) close() {
+// are given back, what billing takes of it is made from its usage and the receipt, which has the supplier's request
+// id, and quality is told how it ended. ctx is the attempt's, by then cancelled, which only quality's counters read.
+func (a *attempt) close(ctx context.Context) {
 	a.s.setCancel(nil, false)
 	a.unhook()
 	a.cancel(nil)
 	a.release()
 	a.result(a.conn.Done())
 	a.s.x.Router.End(a.entry.Endpoint)
+	a.observe(ctx)
+}
+
+// observe tells quality how the attempt ended, once, as it closes, with the input it was estimated at and the output
+// it is charged for (docs/domains/quality.md「什么算一次失败」).
+func (a *attempt) observe(ctx context.Context) {
+	s, o := a.s, &a.obs
+	o.Gone = s.isGone()
+	if o.Ended.IsZero() { // cut by us before the upstream said it was done
+		o.Ended = time.Now()
+	}
+	r := &s.c.Request
+	o.InputTokens = billing.InputEstimate(billing.Demand{TextBytes: r.TextBytes, Images: r.Images, Documents: r.Documents}, a.entry.Limits)
+	for _, seg := range s.ends[a.i].Segments {
+		o.OutputTokens += seg.Usage.OutputTotal()
+	}
+	s.x.Quality.Observe(ctx, *o)
+}
+
+// cutOf is why the gateway cancelled an attempt, read from its context: not at all, one of the two waits quality
+// judges, or anything else, which is the call's own end (its deadline, the node's shutdown, an extension refused, the
+// client leaving, which quality tells by Gone).
+func cutOf(ctx context.Context) quality.Cut {
+	cause := context.Cause(ctx)
+	switch {
+	case ctx.Err() == nil:
+		return quality.NotCut
+	case errors.Is(cause, errHeaderWait):
+		return quality.HeaderWait
+	case errors.Is(cause, errIdle):
+		return quality.Idle
+	}
+	return quality.Ours
 }
 
 // attempt runs one try: send, and either a failure to decide on or an answer to read, a stream for a client relayed, a
@@ -243,9 +290,10 @@ func (a *attempt) close() {
 func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream, held int64) (step, ended) {
 	s.let() // another attempt answers the call: the reply kept before it is not part of it
 	a, ctx := s.bind(ctx, i, entry, conn)
-	defer a.close()
+	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
+		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
