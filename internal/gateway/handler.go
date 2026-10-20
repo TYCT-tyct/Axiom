@@ -366,7 +366,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
 		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
 	}
-	over, err := override(req.Provider)
+	over, names, err := readRouting(&req)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	models, err := resolve(snap, &req)
+	models, err := resolve(snap, names)
 	if err != nil {
 		return err
 	}
@@ -386,22 +386,6 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	c.sticky, _ = h.Router.Stuck(c.Session)
 	c.rate = h.Limits.Rate.Count(keyKey(c.caller))
 	return nil
-}
-
-// resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an
-// alternate that does not is left out, as it could not be tried.
-func resolve(snap *catalog.Snapshot, req *protocol.Request) ([]catalog.ModelID, error) {
-	first, err := snap.ResolvePublic(req.Model)
-	if err != nil {
-		return nil, err
-	}
-	models := []catalog.ModelID{first.Model}
-	for _, name := range req.Models {
-		if m, err := snap.ResolvePublic(name); err == nil {
-			models = append(models, m.Model)
-		}
-	}
-	return models, nil
 }
 
 // fail answers a request that did not get through, unless its client has gone. A body that was too slow is answered

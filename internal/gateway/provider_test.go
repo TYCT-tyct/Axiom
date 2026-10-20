@@ -114,17 +114,20 @@ func TestOverrideRefuses(t *testing.T) {
 	}
 }
 
-// withProvider adds the provider object to the body of a request.
-func withProvider(body, provider string) string {
-	return strings.Replace(body, `{"model"`, `{"provider":`+provider+`,"model"`, 1)
-}
-
 // sendWith posts a request for acme/alpha with the provider object and returns the route it was admitted with, if it
 // was.
 func (r *rig) sendWith(a account, provider string) (route []routing.EndpointID, resp reply, body string) {
 	r.t.Helper()
+	return r.sendNamed(a, "acme/alpha", `"provider":`+provider+`,`)
+}
+
+// sendNamed posts a request for the model, written as given, with members (JSON members, each ending in a comma)
+// before it, and returns the route it was admitted with, if it was.
+func (r *rig) sendNamed(a account, model, members string) (route []routing.EndpointID, resp reply, body string) {
+	r.t.Helper()
 	before := len(r.calls())
-	resp, body = r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(withProvider(messageBody("acme/alpha"), provider)))
+	req := strings.Replace(messageBody(model), `{"model"`, `{`+members+`"model"`, 1)
+	resp, body = r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(req))
 	if calls := r.calls(); len(calls) > before {
 		for _, e := range calls[len(calls)-1].Plan.Entries {
 			route = append(route, e.Endpoint)

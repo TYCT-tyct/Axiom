@@ -56,7 +56,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 | 3 | `SiteForHost(r.Host)`，必须是 API 域名；`Authorization: Bearer`（不分大小写）或 `x-api-key` 认 key（有 Bearer 用 Bearer）；未登记的域名、控制台域名、认不出的 key 都是同一个 401，带 `Connection: close`，体从不被读。key 不在缓存里时查库，查库在共享的一次任务里取一个准入类连接名额（`accounts.Config.LookupSlot`，见「并发、背压与共享状态」）；认出只表示 key 存在，能否使用由第 7 步的 `Admit` 判定 | 401；站点快照过旧、库不答、名额等不到 503 |
 | 4 | 账户在途名额，再节点名额（`InFlight.Acquire`） | 429 / 503 |
 | 5 | 读体（`MaxBody`，默认 32 MiB）：宣告的长度先计入节点内存预算（`protocol.Memory.Charge`），按宣告的长度一次分配；未宣告的从 4 KiB 起翻倍增长，每次分配前先计入新缓冲、复制后退还旧的，峰值就是已计入的量，读完留下的是最终缓冲（至多正文的两倍） | 413；408（超时）；503（预算不够）；断开或读到一半 400 |
-| 6 | `Inspect`；`previous_response_id` 非空 400；`provider` 对象转成路由覆盖（下文「路由参数」）；`catalog.ResolvePublic` 认主模型（不存在或已下线 404），`models` 里的备选认得出的跟在后面；`SessionKey`；`Stuck` 读粘性；`RateCounter.Count(key)` | 400 / 404 / 503 |
+| 6 | `Inspect`；`previous_response_id` 非空 400；`provider` 对象转成路由覆盖（下文「路由参数」）；`parseModelName` 读掉模型名的变体（`:nitro`、`:floor` 定排序，`:exacto`、`:online`、`~` 别名 400，目录变体和不认识的后缀 404），`catalog.ResolvePublic` 认主模型的基础名字（不存在或已下线 404），`models` 里的备选（同样读变体）认得出的跟在后面；`SessionKey`；`Stuck` 读粘性；`RateCounter.Count(key)` | 400 / 404 / 503 |
 | 7 | 准入循环（下文） | 见「错误出口」 |
 | 8 | 交给 `Run` | — |
 
@@ -78,6 +78,8 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 **派生标识的长度**：`protocol.Rewrites.Identity` 返回的会话和用户标识（`Executor.identity` 等）须不超过 128 字节，`Prepare` 对超出的返回错误（`IdentityLen` 为 0 时的默认上限，#121）；G1、G3 自己不调 `Identity`；调用 `Prepare` 的尝试（G4）把客户端的值经 HMAC-SHA256（密钥 `ExecDeps.IdentitySecret`，加账户 ID）派生成 32 个十六进制字符，远在约束之内。
 
 **路由参数**（`provider`，`override`）：`Inspect` 把 `provider` 对象原样交出（至多 4 KiB），gateway 转成 `routing.Override`，每个成员要么生效要么按名字回 400，从不当作没写。生效的：`sort`（`price` 最便宜，`throughput` 最快——routing 的“最快”先比吞吐、吞吐相等才比首字延迟；`latency` 没有对应的排序，返回 400，不按吞吐代替）、`data_collection: "deny"` 与 `zdr: true`（只留数据政策为不留存的端点）、`max_price` 的 `prompt`、`completion`（本站记账单位每百万 token，十进制精确换算成每 token 的单价，超过 9 位小数不取整而是拒绝）、`preferred_min_throughput`、`preferred_max_latency`（秒；百分位对象不支持）。`max_price` 的数在构造大整数之前先按十进制位数和指数（至多三位）检查范围和精度，`1e1000000` 这类写法不会被算出来。不支持的：`only`、`ignore`、`order` 写了名字，`allow_fallbacks: false`（没有 `order` 就没有“首选”），`require_parameters: true`，`quantizations`，`max_price` 的其他项，不认识的成员。写了名字要把名称或代号换成 `SupplierID`，现在没有哪个模块给得出这张表（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上）；表来了才能支持，见 [docs/domains/gateway.md 的「待定问题」](../../docs/domains/gateway.md#待定问题)。
+
+**模型名变体**（`variant.go`，[docs/domains/gateway.md 的「模型名变体」](../../docs/domains/gateway.md#模型名变体)）：`parseModelName` 在 `resolve` 和 `count_tokens` 查目录之前把 `:` 后面的变体读掉，只把基础名字交给 `ResolvePublic`，`Request.Model` 不改，所以回显和调用记录里仍是客户端写的名字。`:nitro`、`:floor` 查 `strategies` 表，等于 `provider.sort` 的 `throughput`、`price`，最后一个排序变体生效；显式的 `provider.sort`（`override` 已读好的 `Sort`）优先，`resolve` 把最终排序交回，`read` 写进 `Override.Sort`。`:exacto` 在没有别的排序替换它时回 400（质量分和工具调用错误率还没有测量，`route.go` 里质量固定为 1），`:online` 回 400，`~` 开头回 400；`:free`、`:batch`、`:thinking`、`:extended` 和不认识的后缀回 404，不看基础名字存不存在，从不落到基础模型。备选名字读同一个函数：400 照回，404 的略去，排序变体与请求最终排序不同回 400，备选的 `:exacto` 只有显式 `provider.sort` 能替换。调用（`read`）和 `count_tokens` 共用 `readRouting`（它连 `provider` 一起读，`override` 在其中），所以两边拒绝的一致。整个名字超过 `maxModelName`（200 字节，调用记录的列上限）在 `parseModelName` 里 404，后缀叠加也绕不过。不变量：目录只收到不带 `:` 的名字；`parseModelName` 是读变体的唯一入口，`readRouting` 是定最终排序的唯一入口。
 
 **头白名单**：只转发 `Anthropic-Beta`、`Anthropic-Version`，值原样；其余一律不转发（含 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`Cookie`）。要加协议头只改 `forwarded` 这一处。
 

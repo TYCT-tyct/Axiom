@@ -76,7 +76,11 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	model, err := snap.ResolvePublic(req.Model)
+	_, names, err := readRouting(&req) // a count refuses what the call would
+	if err != nil {
+		return 0, err
+	}
+	model, err := snap.ResolvePublic(names.primary)
 	if err != nil {
 		return 0, err
 	}
