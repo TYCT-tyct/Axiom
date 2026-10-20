@@ -24,12 +24,27 @@ type stuckValkey struct {
 	out     int // commands sent and not yet answered
 	mostOut int
 	sent    atomic.Int64
+	batches atomic.Int64
 }
 
-func (*stuckValkey) B() valkey.Builder { return valkey.Builder{} }
+// buildable is a real client's builder, the only use this client has. A zero valkey.Builder carries no key slot, and the
+// first Get, Set or Del built from it panics in v1.0.78 (cmds.Set.Key checks the slot), while the slot itself cannot be
+// set from outside the library. The address refuses: ForceSingleClient keeps the client anyway, and no command goes
+// through it.
+var buildable = func() valkey.Builder {
+	option := valkey.ClientOption{
+		InitAddress: []string{"127.0.0.1:1"}, ForceSingleClient: true, DisableRetry: true, DisableCache: true,
+		ClientSetInfo: valkey.DisableClientSetInfo,
+	}
+	client, _ := valkey.NewClient(option) //nolint:errcheck // the refusal is what is wanted: nothing is sent through it
+	return client.B()
+}()
+
+func (*stuckValkey) B() valkey.Builder { return buildable }
 
 func (s *stuckValkey) DoMulti(_ context.Context, cmds ...valkey.Completed) []valkey.ValkeyResult {
 	s.sent.Add(int64(len(cmds)))
+	s.batches.Add(1)
 	s.mu.Lock()
 	s.out += len(cmds)
 	s.mostOut = max(s.mostOut, s.out)

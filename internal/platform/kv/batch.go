@@ -23,21 +23,25 @@ var ErrUnavailable = errors.New("valkey unavailable")
 // Use is what a batch of commands is for: the label of the metrics and of the log line (README「指标与告警」).
 type Use string
 
-// The uses of a batch, as the metrics label them. K2 and K3 add theirs: login and the sticky write.
+// The uses of a batch, as the metrics label them.
 const (
-	Precheck Use = "precheck" // the precheck of a model call, before admission
+	Precheck    Use = "precheck" // the precheck of a model call, before admission
+	StickyWrite Use = "sticky_write"
 	// check is the client's own reading of the server: the startup checks and the loop's measurements.
 	check Use = "check"
 )
 
 // uses is every Use, in the order the metrics prebuild their options.
-var uses = [...]Use{Precheck, check}
+var uses = [...]Use{Precheck, check, StickyWrite}
 
-// Space is the purpose a key serves, its third field (README「键」). K2 and K3 add the login and the sticky ones.
+// Space is the purpose a key serves, its third field (README「键」).
 type Space string
 
 // RateSpace is a rate counter's.
 const RateSpace Space = "rate"
+
+// StickySpace holds routing's session-to-endpoint bindings.
+const StickySpace Space = "stick"
 
 // Script is a module's Lua script. kv runs it and holds none of its rules: the keys are the module's, and so are the
 // arguments, which carry the time the module read from Now (README「接口」).
@@ -47,13 +51,14 @@ type Script struct{ src string }
 // NOSCRIPT, and the second round trip would break the one round trip a precheck has.
 func NewScript(src string) Script { return Script{src} }
 
-// Cmd is one command of a batch. The type is opaque so that a module runs its own script and nothing else: the client's
-// two readings of the server are the other commands it knows.
+// Cmd is one command of a batch: a module's script, an expiring binding operation, or the client's server readings.
 type Cmd struct {
-	kind cmdKind
-	src  string   // the script's source, for a script
-	keys []string // the keys the script declares, which the server checks against the ACL user
-	args []string
+	kind       cmdKind
+	src        string   // the script's source, for a script
+	keys       []string // the keys the script declares, which the server checks against the ACL user
+	args       []string
+	key, value string
+	ttl        time.Duration
 }
 
 // cmdKind is the command a Cmd runs.
@@ -63,7 +68,24 @@ const (
 	scriptCmd cmdKind = iota
 	timeCmd
 	memoryCmd
+	getCmd
+	deleteCmd
+	setCmd
 )
+
+// Get reads an optional binding; a missing key does not fail the other commands.
+func Get(key string) Cmd { return Cmd{kind: getCmd, key: key} }
+
+// Delete forgets a binding in the precheck batch.
+func Delete(key string) Cmd { return Cmd{kind: deleteCmd, key: key} }
+
+// Set writes a binding with a positive, relative lifetime. There is no persistent form.
+func Set(key, value string, ttl time.Duration) Cmd {
+	if ttl <= 0 {
+		panic("kv: a binding needs a positive lifetime")
+	}
+	return Cmd{kind: setCmd, key: key, value: value, ttl: ttl}
+}
 
 // Cmd is one run of the script over keys with arguments.
 func (s Script) Cmd(keys []string, args ...string) Cmd {
@@ -83,6 +105,9 @@ func (v Value) Ints() ([]int64, error) { return v.r.AsIntSlice() }
 
 // String is the reply as text: INFO's fields, or a sticky key's endpoint.
 func (v Value) String() (string, error) { return v.r.ToString() }
+
+// Missing reports the normal GET miss, distinct from a failed batch.
+func (v Value) Missing() bool { return valkey.IsValkeyNil(v.r.Error()) }
 
 // Do runs the batch in one round trip, through the breaker, under the deadline the caller's context and Timeout set,
 // and counts it. Any failure is ErrUnavailable with its cause, and the caller falls back; the replies are read only
@@ -174,6 +199,12 @@ func (c *Client) build(cmds []Cmd) []valkey.Completed {
 			built[i] = builder.Info().Section("memory").Build()
 		case scriptCmd:
 			built[i] = builder.Eval().Script(cmd.src).Numkeys(int64(len(cmd.keys))).Key(cmd.keys...).Arg(cmd.args...).Build()
+		case getCmd:
+			built[i] = builder.Get().Key(cmd.key).Build()
+		case deleteCmd:
+			built[i] = builder.Del().Key(cmd.key).Build()
+		case setCmd:
+			built[i] = builder.Set().Key(cmd.key).Value(cmd.value).PxMilliseconds(max(1, cmd.ttl.Milliseconds())).Build()
 		}
 	}
 	return built
@@ -185,7 +216,7 @@ func (c *Client) run(ctx context.Context, built []valkey.Completed) ([]Value, er
 	replies := c.vk.DoMulti(ctx, built...)
 	values := make([]Value, len(replies))
 	for i, reply := range replies {
-		if err := reply.Error(); err != nil {
+		if err := reply.Error(); err != nil && !valkey.IsValkeyNil(err) {
 			return nil, err
 		}
 		values[i] = Value{reply}

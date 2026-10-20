@@ -64,10 +64,14 @@ type Client struct {
 
 	// deferred is set when the server was unreachable at startup: the checks that need one are owed, and the loop runs
 	// them at the first answer and reports what they find (README「配置与启动」).
-	deferred atomic.Bool
-	stop     context.CancelFunc
-	done     sync.WaitGroup
-	closing  sync.Once
+	deferred   atomic.Bool
+	stop       context.CancelFunc
+	done       sync.WaitGroup
+	closing    sync.Once
+	closed     atomic.Bool
+	later      chan Cmd
+	accounts   writeAccounts
+	memoryStop atomic.Bool
 }
 
 // Open registers the node, connects to Valkey and checks it as far as the configuration allows (README「配置与启动」).
@@ -105,6 +109,11 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 	if c.vk != nil || c.hear != nil {
 		loop, stop := context.WithCancel(context.WithoutCancel(ctx))
 		c.stop = stop
+		if c.vk != nil {
+			c.later = make(chan Cmd, laterCapacity)
+			c.accounts.fullAt = make(map[uuid.UUID]time.Time)
+			c.done.Go(func() { c.writeLater(loop) })
+		}
 		c.done.Go(func() { c.watch(loop) })
 	}
 	return c, nil
@@ -284,6 +293,7 @@ func (c *Client) Now() time.Time {
 // only a crash would leave. ctx bounds the deletion, and a returned error is the row's alone.
 func (c *Client) Close(ctx context.Context) error {
 	c.closing.Do(func() {
+		c.closed.Store(true)
 		if c.stop != nil {
 			c.stop()
 			c.done.Wait()
