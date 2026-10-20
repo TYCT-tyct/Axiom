@@ -209,9 +209,9 @@ const movements = `-- name: Movements :many
 WITH page AS (
     SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
     FROM billing.transactions t
-    WHERE t.account_id = $1 AND t.seq > $2::bigint
+    WHERE t.account_id = $1 AND t.seq > $2::bigint AND t.seq <= $3::bigint
     ORDER BY t.seq
-    LIMIT $3
+    LIMIT $4
 )
 SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
     coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
@@ -220,9 +220,10 @@ ORDER BY p.seq
 `
 
 type MovementsParams struct {
-	AccountID uuid.UUID
-	AfterSeq  int64
-	Max       int32
+	AccountID  uuid.UUID
+	AfterSeq   int64
+	ThroughSeq int64
+	Max        int32
 }
 
 type MovementsRow struct {
@@ -235,9 +236,14 @@ type MovementsRow struct {
 }
 
 // A page of the account's numbered transactions after the seq given, in the order of seq, each with its net debit on
-// the user's balance as for LegacyMovements. Bounded by the index transactions_by_account_seq.
+// the user's balance as for LegacyMovements, never past through_seq. Bounded by the index transactions_by_account_seq.
 func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) ([]MovementsRow, error) {
-	rows, err := db.Query(ctx, movements, arg.AccountID, arg.AfterSeq, arg.Max)
+	rows, err := db.Query(ctx, movements,
+		arg.AccountID,
+		arg.AfterSeq,
+		arg.ThroughSeq,
+		arg.Max,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +267,24 @@ func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const replayThrough = `-- name: ReplayThrough :one
+SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = $1
+`
+
+// Fix the unlocked replay's upper bound before reading batches. Every transaction of an account takes its seq under that
+// account's balance row lock (InsertLockedTransaction), in the order the lock is taken and released at commit, so by the
+// time this reads B every transaction of the account with a seq at or below B has committed, and the batches read after
+// it see theirs. A credit committed later gets a higher seq, and so stays out of this replay: the next one loads it
+// along with its batch (#361). Rows from before the sequence cannot arrive later, so they need no bound of their own.
+// The account's maximum is served by transactions_by_account_seq, whose NULL seqs sort after the numbered ones: an
+// account that has rows from before the release pays one pass over them here, frozen and never longer.
+func (q *Queries) ReplayThrough(ctx context.Context, db DBTX, accountID uuid.UUID) (int64, error) {
+	row := db.QueryRow(ctx, replayThrough, accountID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const saveAllocation = `-- name: SaveAllocation :execrows

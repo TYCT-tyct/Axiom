@@ -1,0 +1,19 @@
+From: "Axiom" <no-reply@axiom.example>
+To: <user@example.com>
+Subject: Welcome
+Date: Fri, 02 Jan 2026 03:04:05 +0000
+Message-ID: <golden@axiom.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="axiom-golden"
+
+--axiom-golden
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+Hello from Axiom.
+--axiom-golden
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<p>Hello from Axiom.</p>
+--axiom-golden--
