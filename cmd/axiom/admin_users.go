@@ -231,7 +231,7 @@ func (a adminAPI) GrantCredit(ctx context.Context, request adminapi.GrantCreditR
 					Actor: actor(ctx), Reason: request.Body.Reason,
 				})
 			} else {
-				made.Source, made.Payment = adminapi.CreditSourceOfflinePayment, request.Body.Payment
+				made.Source, made.Payment = adminapi.CreditSourceOfflinePayment, &adminapi.OfflinePayment{Amount: request.Body.Payment.Amount, Channel: g.channel}
 				made.ExchangeRate, err = creditOffline(ctx, tx, billing.PaidCredit{
 					ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), SiteCurrency: currency, Payment: *g.payment,
 					Channel: billing.Channel{Offline: g.channel}, ExpiresAt: g.expires, Actor: actor(ctx), Reason: request.Body.Reason,
