@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"axiom/internal/protocol"
 )
@@ -57,5 +58,51 @@ func TestFaultOf(t *testing.T) {
 		if got := protocol.FaultOf(err); got != want {
 			t.Errorf("FaultOf(%v) = %d, want %d", err, got, want)
 		}
+	}
+}
+
+// TestRejectionOf: an error event's words and the members a client branches on are the stream's to give, each bounded,
+// and a failure that named none of them gives none: a stream that broke off says nothing of the request, and a member
+// of another type is no words. What is given still holds the supplier's identity, which the supplier takes out
+// (docs/domains/gateway.md「错误」).
+func TestRejectionOf(t *testing.T) {
+	long := strings.Repeat("é", 3000) // 6000 bytes of text, twice the bound
+	for _, c := range []struct {
+		name   string
+		f      protocol.Format
+		stream string
+		want   *protocol.Rejection
+	}{
+		{
+			"Messages", protocol.Messages, messageStart(`{"input_tokens":3}`) +
+				"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"x\"}}\n\n",
+			&protocol.Rejection{Message: "x", Type: "invalid_request_error"},
+		},
+		{
+			"an error event without words", protocol.Messages, messageStart(`{"input_tokens":3}`) +
+				"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\"}}\n\n",
+			&protocol.Rejection{Type: "api_error"},
+		},
+		{"a stream that broke off", protocol.Messages, messageStart(`{"input_tokens":3}`) + textBlock, nil},
+		{"a member of another type", protocol.Chat, "data: {\"error\":{\"message\":5,\"code\":\"x\"}}\n\n", &protocol.Rejection{Code: "x"}},
+		{"too long", protocol.Chat, "data: {\"error\":{\"message\":\"" + long + "\"}}\n\n", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := relay(t, c.f, strings.NewReader(c.stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+			r := protocol.RejectionOf(got.err)
+			switch {
+			case c.name == "too long":
+				if r == nil || len(r.Message) == 0 || len(r.Message) > 2<<10 || !strings.HasPrefix(long, r.Message) ||
+					!utf8.ValidString(r.Message) {
+					t.Errorf("rejection %v, want the first bytes of the message", r)
+				}
+			case c.want == nil && r != nil:
+				t.Errorf("rejection %+v, want none", *r)
+			case c.want != nil && r == nil:
+				t.Errorf("no rejection, want %+v", *c.want)
+			case c.want != nil && *r != *c.want:
+				t.Errorf("rejection %+v, want %+v", *r, *c.want)
+			}
+		})
 	}
 }

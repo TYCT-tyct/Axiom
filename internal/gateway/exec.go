@@ -27,6 +27,10 @@ type Conn interface {
 	Send(ctx context.Context, call suppliers.Call) (*http.Response, *suppliers.Failure)
 	Policy() suppliers.CallPolicy
 	Done() suppliers.AttemptReceipt
+	// Sanitize takes the supplier's identity out of an error the upstream's stream carried, as the supplier does for a
+	// refusal of the request's: the protocol reads an error's words bounded, and only the supplier knows the credential and
+	// the addresses to hide (docs/domains/gateway.md「错误」). nil is a refusal with nothing left to tell the client.
+	Sanitize(protocol.Rejection) *protocol.Rejection
 }
 
 // Upstreams is the call side of suppliers as the attempts use it. Acquire returns suppliers.ErrNoEndpoint or

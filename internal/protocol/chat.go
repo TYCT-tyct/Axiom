@@ -96,6 +96,11 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
+		// an error chunk ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
+		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
+		if s.report != nil {
+			s.meter(m, true)
+		}
 		return event{}, s.errorEvent("an error chunk")
 	}
 	if len(s.held) > 0 {
@@ -112,7 +117,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	}
 	if s.report != nil {
 		s.e.final = true
-		s.meter(m)
+		s.meter(m, false)
 		s.report, s.reportErr = nil, nil
 	}
 	if s.rewrites {
@@ -221,10 +226,13 @@ func (s *chatStream) upstreamError() error {
 }
 
 // chatErrorFields are what an error chunk's error says of its class: OpenAI's type, and its code, which is the more
-// specific (context_length_exceeded comes with invalid_request_error).
+// specific (context_length_exceeded comes with invalid_request_error). Its words and param are the client's too
+// (docs/domains/gateway.md「错误」).
 var chatErrorFields = map[string]func(*chatStream) error{
-	"type": func(s *chatStream) error { return s.class(&s.errClass) },
-	"code": func(s *chatStream) error { return s.class(&s.code) },
+	"type":    func(s *chatStream) error { return s.class(&s.errClass, &s.rejection.Type) },
+	"code":    func(s *chatStream) error { return s.class(&s.code, &s.rejection.Code) },
+	"message": func(s *chatStream) error { return s.textOf(&s.rejection.Message) },
+	"param":   func(s *chatStream) error { return s.textOf(&s.rejection.Param) },
 }
 
 func (s *chatStream) rewritten() error {
@@ -249,7 +257,9 @@ func (s *chatStream) usage() error {
 	return nil
 }
 
-func (s *chatStream) meter(m *meter) {
+// meter maps the usage just read onto billing items. final is set for the usage of the chunk that ended the stream:
+// what it states is charged as it is rather than estimated (meter.finalize).
+func (s *chatStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -257,6 +267,10 @@ func (s *chatStream) meter(m *meter) {
 	r, err := s.report.items(s.tier)
 	if err != nil {
 		m.invalid = err
+		return
+	}
+	if final {
+		m.finalize(r, nil)
 		return
 	}
 	m.report(r, nil)

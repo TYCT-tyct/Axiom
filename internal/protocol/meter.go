@@ -54,7 +54,8 @@ func (r *usageReport) sortUnknown() {
 type meter struct {
 	usageReport
 	compactions []Segment
-	final       bool // the format's last usage event has come
+	final       bool            // the format's last usage event has come
+	trusted     catalog.ItemSet // the items the frame that ended the stream stated, which are final even though the rest is not
 	invalid     error
 	scratch     map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
 }
@@ -91,6 +92,19 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	if compactions != nil {
 		m.compact(compactions)
 	}
+}
+
+// finalize takes the usage object of the frame that ended the stream with the upstream's failure: an error event, or
+// the failure frame after one. What it states is the upstream's last word on the attempt, so those items are charged as
+// they are rather than estimated from the bytes relayed, while the items it leaves out stay estimated, as they do for a
+// stream that broke off before its last usage event: a count reported by an earlier frame only bounds them from below
+// (docs/domains/billing.md「用量来源与暂估」).
+func (m *meter) finalize(r usageReport, compactions []usageReport) {
+	m.report(r, compactions)
+	if r.seen == 0 { // no usage object at all: nothing the upstream said is final
+		return
+	}
+	m.trusted |= r.seen
 }
 
 // bound reports a report that would take the meter past its bounds.
@@ -189,14 +203,14 @@ func (m *meter) compact(compactions []usageReport) {
 	}
 }
 
-// progress is the reply's counts reported so far, and which of them are final: the input side once reported,
-// everything after the last usage event; none when the usage is invalid.
+// progress is the reply's counts reported so far, and which of them are final: the input side once reported, what the
+// frame that ended the stream stated, everything after the format's last usage event; none when the usage is invalid.
 func (m *meter) progress() (Segment, catalog.ItemSet) {
 	u, err := m.usage(m.usageReport)
 	if err != nil && m.invalid == nil {
 		m.invalid = err
 	}
-	final := m.seen & catalog.InputSide // the input is read before the reply starts, so its first report is final
+	final := m.seen & (catalog.InputSide | m.trusted) // the input is read before the reply starts, so its first report is final
 	switch {
 	case m.invalid != nil:
 		return Segment{Usage: u}, 0

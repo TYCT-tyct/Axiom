@@ -87,8 +87,8 @@ func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFo
 // fails because the client left, the node is out of memory, or the call is out of road answers with the error.
 func (s *session) failedReply(a *attempt, ctx context.Context, err error) (step, ended) {
 	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
-	e, finish, again := s.classify(ctx, err)
+	e, finish, again := s.classify(ctx, err, a.conn)
 	rec := &s.ends[a.i]
 	rec.Result, rec.Finish = billing.FailedBeforeCommit, finish
-	return s.unanswered(a, e, again)
+	return s.unanswered(a, e, again, routing.ScopeEndpoint)
 }

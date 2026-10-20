@@ -79,8 +79,9 @@ type eventReader struct {
 	// identity reaches the client, so there is nothing to rewrite.
 	converting bool
 	// errClass and code are the fault the event's error names by its class and by its code, FaultNone when it names
-	// none; the error event's failure is made of them.
+	// none; the error event's failure is made of them. rejection is what it says besides, in its own words.
 	errClass, code Fault
+	rejection      Rejection
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
@@ -101,10 +102,12 @@ func (s *eventReader) start(data []byte) {
 	}
 	s.e = event{role: passive, data: data, usageAt: -1, edits: s.e.edits[:0]}
 	s.errClass, s.code = FaultNone, FaultNone
+	s.rejection = Rejection{}
 }
 
 func (s *eventReader) dropBuffers() {
 	s.reader, s.src, s.rw, s.buf, s.pre, s.e, s.tier = reader{}, bytes.Buffer{}, rewriter{}, nil, nil, event{}, nil
+	s.rejection = Rejection{}
 }
 
 // serviceTier keeps the service tier the event names, charging what it holds beyond the one before.

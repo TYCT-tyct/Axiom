@@ -170,6 +170,9 @@ type Relay struct {
 	endingName, stopName                          string
 	meter                                         meter
 	progress                                      Progress
+	// pending is the upstream's error event, held for the frame that may end the stream with the attempt's usage
+	// (relayFormat.holdsFailure); it is the failure the stream ends with otherwise.
+	pending error
 	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
 	held, charged int64
 	// For a reply that is aggregated: its aggregator, the data of an event of several lines, joined, and the HTTP
@@ -190,19 +193,24 @@ type relayFormat struct {
 	// an upstream not asked for usage leaves out, and whose shape follows OpenRouter's (docs/domains/gateway.md「用量与
 	// 费用」).
 	rendersUsage bool
+	// holdsFailure is set for a format whose error event the upstream may follow with the frame that ends the stream
+	// with the attempt's usage, as OpenAI's bare error event is sometimes followed by response.failed: the relay holds
+	// the error until the next frame, which is bounded by the caller's idle and total deadlines, and reports it when
+	// the stream ends instead (docs/domains/billing.md「用量来源与暂估」).
+	holdsFailure bool
 }
 
 var relayFormats = [...]relayFormat{
-	Messages:  {newMessagesStream, 1 << 20, false},
-	Responses: {newResponsesStream, 32 << 20, false},
-	Chat:      {newChatStream, 1 << 20, true},
+	Messages:  {newMessagesStream, 1 << 20, false, false},
+	Responses: {newResponsesStream, 32 << 20, false, true},
+	Chat:      {newChatStream, 1 << 20, true, false},
 }
 
 // chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
 // events, by its own bound, become chunks whose usage chunk the relay writes.
 var chatConversions = [...]relayFormat{
-	Messages:  {newMessagesToChat, relayFormats[Messages].limit, true},
-	Responses: {newResponsesToChat, relayFormats[Responses].limit, true},
+	Messages:  {newMessagesToChat, relayFormats[Messages].limit, true, false},
+	Responses: {newResponsesToChat, relayFormats[Responses].limit, true, false},
 }
 
 // NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
@@ -262,9 +270,26 @@ func (r *Relay) Next() (Step, error) {
 func (r *Relay) event(data []byte) (Step, error) {
 	e, err := r.up.event(data, &r.meter)
 	if err != nil {
+		switch {
+		case r.pending != nil:
+			// the frame after a held error event: this one says how the stream failed, and its usage, if it carried one,
+			// was taken above
+			r.pending = nil
+		case r.format.holdsFailure && errorEventOf(err):
+			// an error event that a later frame may end the stream for, with the attempt's usage: hold it until that
+			// frame, or until the stream ends (docs/domains/billing.md「用量来源与暂估」)
+			r.pending = err
+			return Step{Kind: StepBuffered}, nil
+		}
 		return Step{}, err
 	}
 	r.observe(e)
+	if r.pending != nil {
+		// the error event was the stream's failure after all: this frame says nothing the client may read, and its usage
+		// was taken above
+		err, r.pending = r.pending, nil
+		return Step{}, err
+	}
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
@@ -471,6 +496,11 @@ func (r *Relay) Release() {
 // for the failure ending, so the relay lives on meanwhile: it lets go of every buffer but out, which still holds the
 // events before the commit point, and gives back only what it no longer holds.
 func (r *Relay) fail(err error) error {
+	if r.pending != nil {
+		// the stream ended after the upstream's error event without the frame that would have ended it: the error event
+		// is the failure, whatever ended the read, and the usage observed so far only bounds the attempt from below
+		err, r.pending = r.pending, nil
+	}
 	switch {
 	case errors.Is(err, io.EOF):
 		err = fmt.Errorf("%w: the stream ended before its end event", ErrUpstream)

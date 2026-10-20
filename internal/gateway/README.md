@@ -140,12 +140,15 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 情况 | 提交前 | 提交后 |
 |---|---|---|
 | 上游断流、格式出错、空闲超时 | 取消并换条目（空闲超时的原因是 `errIdle`）；结局 `FailedBeforeCommit` | 以 `Fail` 结束：`upstream_error` / `timeout`；结局 `Committed`，`FinishError` / `FinishTimeout` |
+| 上游在流里报错（出错事件、`response.failed`） | 按 `protocol.FaultOf` 分：请求本身的（上下文过长、内容被拒、请求不合法）400 `invalid_request`，带上游的 `code`、`param` 和原话，不再换条目；其余换条目 | 请求本身的以 `invalid_request` 结束（上游的 `code`、`param` 和原话），其余以 `upstream_error` 结束；结局 `Committed`，`FinishError` |
 | 200 无正文 | 换条目 | — |
 | 单次调用最长 | 408，不再换 | `timeout` 结束，`FinishTimeout` |
 | `ErrMemory` | 503，不再换 | `overloaded` 结束 |
 | 客户端已走 | 不写，不再换；传递取消的端点已被取消，其余读到结束 | 同左，结局 `FinishCancelled` |
 | 上游正常结束 | — | `Settle` 后 `Finish`；结算写不进则 `Final{Pending}` |
 | 追加没批准 | 截断：回 402 / 503，不再换 | 截断：以 `credits_insufficient` / `billing_unavailable` 结束 |
+
+`classify` 定这三行里的答复、结束原因和要不要再试，所以同一段读失败在提交前后答得一致（`TestARefusalInTheStreamIsAnsweredWithTheUpstreamsWords`）。请求本身的那几类不换条目，理由与 `send` 阶段的 `ScopeRequest` 相同：换个端点也还是这个请求，而且 4xx 的原话是客户端能自己恢复的唯一依据（[gateway.md 的「错误」](../../docs/domains/gateway.md#错误)）。上游原话经过 `Conn.Sanitize`：协议按帧取出有界的 `code`、`type`、`message`、`param`，去掉供应商身份仍是 suppliers 的事，网关不认识凭证和端点地址。Responses 的裸 `error` 事件由 relay 留到下一帧，所以 `broke` 拿到的仍是上游说的那个错——是我们这边的空闲超时结束了读也一样，此时报的仍是上游的失败，不是 `timeout`（`classify` 只在没有出错事件的情况下把 `errIdle` 当超时）。quality 照旧按 `protocol.FaultOf` 判这算端点的还是请求的。
 
 **收尾**（`session.conclude`）只在这一处结算，所以每条出口恰好一次：运行 panic 时 `settleOnPanic` 以已有的尝试结算再让 panic 继续。尝试在 `attempt` 返回时已 `close`：取消它的 context、还凭证的名额和端点的在途数，按用量和回执（有上游的请求号）写好它的 `billing.AttemptResult`；`Settle` 之后才写结尾（I3）；提交前的错误用 `protocol.RenderError`，收了费的带上用量和费用（`axiom` 对象），没收费的不带。
 
@@ -392,6 +395,10 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | 重试预算在尝试之前取（`TakeRetry`），第一次尝试记 `Sent` | `Plan` 只看不取；并发的重试靠 `TakeRetry` 各占一次 | 在 `Plan` 里扣 |
 | 过了 `Plan.StartBy` 不再发起尝试，且以它为准，不读 `Config.StartBy` | 它由路由器按预设的窗口算好，`Config.StartBy` 只是种子；默认值下（StartBy 120s、空闲 180s）提交前空闲超时那次已过了窗口，所以只有空闲超时调短（按模型可调）才会换端点，返回最后一次尝试的错误（502）是文档的规则 | 两处都读：同一个值两个来源 |
 | 上游因请求自身拒绝（`ScopeRequest`）回 400 `invalid_request`，带上游的 `message`、`type`、`param`、`code`（`Failure.Rejection`，已去掉网址、凭证、请求编号），没有原话时用统一的说法 | 负责人 2026-10-18：影响兼容的行为照 new-api；Claude Code 靠原话自动恢复。`Rejection` 只在这一处出现，只进给客户端的响应，不进日志和表（`failed` 只把它交给 `protocol.Error`） | 让每个适配器的 `Classify` 带原文：各清洗一遍，漏一个就泄露；原样透传：会暴露供应商的网址 |
+| 上游在流里报的错走同一套：`protocol.FaultOf` 分类，请求本身的按 `ScopeRequest` 答 400（提交后以错误事件）、不换端点，原话经 `Conn.Sanitize`（suppliers 的同一份清洗）；其余换端点或用统一的说法 | #311 的 E2-4：同一个参数错误无论从 HTTP 400 还是从流里来，读到的都是同一句话、同样的 `code` 和 `param`，客户端才不必按来路分两种处理；只有 suppliers 知道该遮蔽哪个凭证和地址，所以协议只交出有界的原文，清洗仍在一处（`cleanRejection`）。不换端点的理由与上一行相同：换个端点还是这个请求。代价：`Conn` 多一个方法 | 让适配器在流里各清洗一遍：漏一个就泄露，且 `Classify` 至今不留文字；把 5xx、限流的原话也交给客户端：与 HTTP 路径不一致，会漏出供应商内部报错 |
+| 提交点之前按上游的类别决定换不换端点，与 `send` 阶段的 `routing.Decide` 同口径：请求本身的失败不再交给下一个端点 | 一条流在提交前失败和一次 4xx 失败是同一件事：请求本身的失败换端点必败，还多花一次尝试 | 提交前一律换端点：同一个 400 被重试两次 |
+| `classify` 里上游自己的说法优先于我们结束读的原因（空闲超时、单次调用最长），但客户端已走、节点退出、`ErrMemory` 除外 | 失败帧之后上游不再说话，读结束往往是我们这边的计时器，把它报成 `timeout` 会让客户端重试一个必然再失败的请求，也丢掉上游的 `code`（#311 的 E2-4）；客户端已走时什么都不写，节点退出、内存不足是本站的原因，与上游说了什么无关 | 一律按读结束的原因答：上游的 400 变成 408，Claude Code 不再自动恢复 |
+| Responses 的裸 `error` 事件留到下一帧再出错（`relayFormat.holdsFailure`），期间这一帧的用量已记账 | OpenAI 两种顺序都有：`error` 之后还有带 `usage` 的 `response.failed`，先报错就丢掉这次的用量（#311 的 E2-3），还得等上游自己把用量补在别处；留一帧的时间以既有的空闲和总时限为界，不会无限等。同一格式才留：转换给 Chat 的读取器不把这帧当失败（E2-2 的既有缺口），留了也没有下文 | 读到 `error` 就结束：用量靠估；留到流结束：空闲超时才报错，`timeout` 盖掉上游的 `code`；对所有格式都留：Messages 没有第二帧可等 |
 | 非流式的答案也由同一个读循环聚合，而不是另开一条路 | 上游一律以流调用，计量、追加、截断、结算、断开四种情况都只有一份；聚合只是出口不同（`RelayOptions.Aggregate`） | 上游按客户端的 `stream` 调用：计量看不到进度，非分段预留，转换后的请求体还得再转换回复 |
 | 聚合时提交点不写响应头，失败的尝试可以换端点 | 客户端在整份回复写好之前什么都没收到，所以"I4 提交后不换尝试"对它是写出那一刻；代价是聚合的回复在最后一次尝试之前不占状态码 | 见到第一个内容就定 200：中途失败只能返回半截内容，或丢掉已生成的内容报错 |
 | 聚合保留"最后一次有内容的尝试"，下一次尝试开始时放掉 | 文档只让"最后一次尝试生成了部分内容"随错误返回，各次尝试的内容不混；保留一个 `Relay` 最多 16 MiB | 把每次尝试的内容都留着：容量随尝试数翻倍，且违反不混的要求 |

@@ -46,14 +46,25 @@ var (
 			s.hasResponse = true
 			return walk(&s.reader, s, responseFields)
 		},
-		"code": func(s *responsesStream) error { return s.class(&s.code) }, // the error event's
+		// The error event's own members: its code, and the words and param a client reads (docs/domains/gateway.md
+		// 「错误」). Some upstreams put the usage of the attempt at its top level, as they do on other events, so it is
+		// read here as well as in the response.
+		"code":    func(s *responsesStream) error { return s.class(&s.code, &s.rejection.Code) },
+		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
+		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
+		"usage":   (*responsesStream).usage,
 	}
 	responseFields = map[string]func(*responsesStream) error{
 		"usage":        (*responsesStream).usage,
 		"service_tier": (*responsesStream).serviceTier,
 		"error":        func(s *responsesStream) error { return errorObject(&s.reader, s, responseErrorFields) }, // response.failed's
 	}
-	responseErrorFields = map[string]func(*responsesStream) error{"code": func(s *responsesStream) error { return s.class(&s.code) }}
+	responseErrorFields = map[string]func(*responsesStream) error{
+		"code":    func(s *responsesStream) error { return s.class(&s.code, &s.rejection.Code) },
+		"type":    func(s *responsesStream) error { return s.textOf(&s.rejection.Type) },
+		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
+		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
+	}
 	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
@@ -71,6 +82,11 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	}
 	switch s.e.name {
 	case "response.failed", "error":
+		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
+		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
+		if s.report != nil {
+			s.meter(m, true)
+		}
 		return event{}, s.errorEvent(s.e.name)
 	case "response.created":
 		s.created = true
@@ -81,7 +97,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, err
 	}
 	if s.report != nil {
-		s.meter(m)
+		s.meter(m, false)
 		s.report = nil
 	}
 	if s.hasResponse {
@@ -199,7 +215,9 @@ func (s *responsesStream) usage() error {
 	return nil
 }
 
-func (s *responsesStream) meter(m *meter) {
+// meter maps the usage just read onto billing items. final is set for the usage of the event that ended the stream:
+// what it states is charged as it is rather than estimated (meter.finalize).
+func (s *responsesStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -209,24 +227,39 @@ func (s *responsesStream) meter(m *meter) {
 		m.invalid = err
 		return
 	}
+	if final {
+		m.finalize(r, nil)
+		return
+	}
 	m.report(r, nil)
 }
 
 // failure appends response.failed, with our error type at its top level (docs/domains/gateway.md「错误」), or, before
-// response.created, the error event, which is the only failure a stream may start with.
+// response.created, the error event, which is the only failure a stream may start with. The code and param of a refusal
+// are the upstream's own, as a 4xx answer gives them: it is the same error either way.
 func (s *responsesStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	name := "response.failed"
+	code, param := appendQuoted(nil, errorTypes[e.Type].name), []byte("null")
+	if r := e.Rejection; r != nil {
+		if r.Code != "" {
+			code = appendQuoted(nil, r.Code)
+		}
+		if r.Param != "" {
+			param = appendQuoted(nil, r.Param)
+		}
+	}
 	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,`, name, s.seq+1)
 	if s.created {
 		data = append(data, `"response":{"id":`+s.id+`,"object":"response","status":"failed","model":`+s.model+
-			`,"output":[],"error":{"code":"`+errorTypes[e.Type].name+`","message":`...)
-		data = append(appendQuoted(data, e.message()), `},"usage":`...)
+			`,"output":[],"error":{"code":`...)
+		data = append(append(append(data, code...), `,"message":`...), appendQuoted(nil, e.message())...)
+		data = append(data, `},"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 		data = append(data, '}')
 	} else {
 		name = "error"
-		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":"%s","param":null,"message":`, s.seq+1,
-			errorTypes[e.Type].name)
+		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":`, s.seq+1)
+		data = append(append(append(append(data, code...), `,"param":`...), param...), `,"message":`...)
 		data = append(appendQuoted(data, e.message()), `,"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 	}

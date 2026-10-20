@@ -82,6 +82,7 @@
 - **余额截断**：转发中追加预留失败时，按下文「流中途出错」的方式发错误事件结束回答，说明余额或某个 key 的额度不足、回答已截断（见[计费的「预留与结算」](billing.md#预留与结算)）。
 - **费用的单位**：用本站的记账货币（见[计费的「钱的表示」](billing.md#钱的表示)），并附带币种字段。主站是美元，与 OpenRouter 客户端的预期一致。
 - **各格式的放置位置**：各格式按自己的习惯放用量字段，费用字段附加在该格式允许扩展的位置。Responses 在回答结束之前的事件（`response.created`、`response.in_progress`）里 `response.usage` 是 `null`（OpenAI 如此，new-api 原样转发），我们也原样保留；结尾事件里才是用量对象。
+- **流以失败结束时，失败帧报的用量照收**：上游在结束的那一帧报的用量（Anthropic 的 `error` 事件、Chat 的出错块、Responses 的 `response.failed` 及其之后那一帧）按它说的算，不按已转发的字节估；它没报的项仍估算，这次费用标暂估。裸 `error` 事件可能只是先报一句、后面还有带用量的 `response.failed`，所以 Responses 把它留到下一帧再定；流就此结束时它就是失败（受既有的空闲和总时限约束，不会无限等）。见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)。
 - **调用编号**：就是请求 ID，每个响应（含错误）都在 `X-Request-ID` 和 `X-Generation-Id` 两个响应头里带同一个值，响应体的 `id` 也是它（与 OpenRouter 一致）。凭它可以查询调用记录：每次尝试、路由过程、费用明细。查询只返回用户付的售价，不返回我们的成本；中转站只显示代号。调用记录写入前（约 200 ms 内）查询返回 404 `generation_not_found`，客户端稍后重试；账本只记金额、没有用量，所以不提供精简版，等调用记录的写入方（G10）定了再补。
 - **客户端断开**：
 
@@ -106,7 +107,7 @@
   - **没有原话时**：上游的响应不是这种错误对象、或没有 `message`，用统一的说法；
   - **只用于这一次回复**：原话只进给客户端的响应，不进日志，也不进任何表（suppliers 的 `Failure` 只在这一处带它，`Cause` 仍不带任何文字）；
   - **依据**：new-api 的 `ToOpenAIError` 带上游的四项并遮蔽上游的网址和 API key（new-api `relaykit/types/error.go`、`relaykit/relayconvert/kitutil/mask.go`，2026-10-18）；OpenRouter 在非 500 的错误里带供应商的话，500 的换成通用说法，供应商的原始细节在 `metadata`（OpenRouter《Errors and Debugging》，2026-10-19）。我们比 new-api 多去掉所有网址，因为供应商的充值页、文档页会暴露货源。
-  - 其余的错误（含上游的 429 和 5xx）仍然是统一的说法。
+  - 其余的错误（含上游的 429 和 5xx）仍然是统一的说法。上游在流里用错误事件报的也一样：按它的类别算这个请求的还是供应商的，只有拒绝请求本身的（下文）才带上游的原话、`type`、`param` 和 `code`，别的类别都换成统一的说法。
 - **我们自己的错误和上游的 5xx**：使用统一的说法，不出现中转站的名字或原始报错。
 - **请求体不是合法 JSON**：400，说 "Invalid request: invalid JSON request body"（new-api 的同一句）；解析库的原话（偏移量、Go 类型名）不返回。类型不对的值用它的 JSON 指针指出位置。
 - **状态码**：
@@ -126,7 +127,7 @@
 | 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
-| 上游因请求本身拒绝（4xx） | 400 `invalid_request`，带上游的原话、`type`、`param`、`code`（上文），没有原话时用统一的说法 | `invalid_request_error` | — |
+| 上游因请求本身拒绝（4xx，或在流里以错误事件报出） | 400 `invalid_request`，带上游的原话、`type`、`param`、`code`（上文），没有原话时用统一的说法；不再换端点 | `invalid_request_error` | 错误事件里是同样的原话和 `code`（格式有这两项的；开头的 Responses `error` 事件还有 `param`），`error_type` 是 `invalid_request`，已转发的内容保留 |
 | 所有尝试都失败，含各自超时 | 502 `upstream_error` | `api_error` | 上游中途出错，`upstream_error` |
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `request_too_large` | `invalid_request_error`；`request_too_large` | — |
@@ -139,6 +140,7 @@
   - Chat：一个带顶层 `error`、结束原因为 `error` 的数据块；
   - Anthropic：`error` 事件；
   - Responses：`response.failed` 事件。
+  - 上游自己报的错按它的类别定（`protocol.FaultOf`）：拒绝请求本身的（上下文过长、内容被拒、请求不合法）算这个请求的，不换端点重试，客户端读到上游的原话（格式支持的还带 `code`、`param`）；请求的写法没问题而端点失败、限流、看不出来的，都算供应商的失败，用统一的说法，提交点之前还可以交给下一个端点（[路由的「失败怎么办」](routing.md#失败怎么办)）。上游的裸 `error` 事件之后可能还有一个带用量的 `response.failed`，所以 Responses 把它留到下一帧再定：流就此结束时它就是失败（即使是我们这边的空闲超时结束了读），这一帧的用量也照收。
 - **非流式请求出错**：最后一次尝试生成了部分内容后失败时，Chat 返回 200，带已生成的内容、`finish_reason: "error"`、`error`、用量和费用；Responses 返回 200，`status: "failed"`，带 `output`、用量和费用；Messages 例外，返回 502 错误体、不带内容，用量和费用放在 `axiom` 对象里。没生成内容的，返回上表的状态码。未完成的工具参数不修补。
 - **对中转站对接方友好**：计费类问题绝不返回 401；不使用 new-api 默认会触发自动禁用渠道的措辞，例如 "You exceeded your current quota"、"Your credit balance is too low"（new-api 源码，2026-10）。这份措辞清单写成测试，防止以后被无意改坏。
 

@@ -52,8 +52,12 @@ var (
 		"usage":         (*messagesStream).usage,
 		"error":         func(s *messagesStream) error { return errorObject(&s.reader, s, messagesErrorFields) },
 	}
-	// messagesErrorFields are what an error event's error says of its class (Anthropic《Errors》, read 2026-10-19).
-	messagesErrorFields = map[string]func(*messagesStream) error{"type": func(s *messagesStream) error { return s.class(&s.errClass) }}
+	// messagesErrorFields are what an error event's error says of its class and of the refusal, in its own words
+	// (Anthropic《Errors》, read 2026-10-19).
+	messagesErrorFields = map[string]func(*messagesStream) error{
+		"type":    func(s *messagesStream) error { return s.class(&s.errClass, &s.rejection.Type) },
+		"message": func(s *messagesStream) error { return s.textOf(&s.rejection.Message) },
+	}
 	// contentFields and blockFields carry the members the client is given that the upstream bills as output:
 	// thinking's signature and redacted_thinking's data count like its text (README.md「字节上界」).
 	contentFields = map[string]func(*messagesStream) error{
@@ -75,11 +79,16 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
+		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
+		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
+		if s.report != nil {
+			s.meter(m, true)
+		}
 		return event{}, s.errorEvent("an error event")
 	}
 	s.settle()
 	if s.report != nil {
-		s.meter(m)
+		s.meter(m, false)
 		s.report = nil
 	}
 	if s.e.name == "message_start" || s.e.role == ending {
@@ -192,8 +201,9 @@ var messagesUsageMembers = keep("input_tokens", "cache_read_input_tokens", "cach
 
 // meter maps the usage just read onto billing items: the reply's, and each compaction's as its own segment, since
 // a compaction is a sampling of its own; message iterations are already in the totals (catalog README.md「计费项与
-// 用量」).
-func (s *messagesStream) meter(m *meter) {
+// 用量」). final is set for the usage of the event that ended the stream: what it states is charged as it is rather
+// than estimated (meter.finalize).
+func (s *messagesStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -221,6 +231,10 @@ func (s *messagesStream) meter(m *meter) {
 			m.invalid = fmt.Errorf("usage: iteration %d is of type %q", i, it.Type)
 			return
 		}
+	}
+	if final {
+		m.finalize(reply, compactions)
+		return
 	}
 	m.report(reply, compactions)
 }
