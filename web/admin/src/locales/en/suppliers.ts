@@ -151,6 +151,7 @@ export default {
     group: "Group",
     until: "Cooldown / expiry",
     concurrency: "Max concurrency",
+    perMinute: "Requests / minute",
     cooldown: "Cooling until",
     state: {
       binding: "Binding",
@@ -177,5 +178,19 @@ export default {
     choose: "Choose a group",
     missing: "Choose a group.",
     done: "Binding has started; the state becomes “Active” shortly.",
+  },
+  limits: {
+    open: "Limits",
+    title: "How much this key gives out",
+    body: "The calls a node runs on this key at once, and the requests its minute admits. The count is per node and reaches each node within five seconds:",
+    action: "Set the limits",
+    concurrency: "Calls at once",
+    concurrencyHint: "A whole number of 1 or more; a new binding starts at 4.",
+    perMinute: "Requests a minute",
+    perMinuteHint: "Leave empty for no ceiling of Axiom’s: the supplier’s own limit is the only one.",
+    concurrencyInvalid: "Calls at once is a whole number of 1 or more.",
+    perMinuteInvalid: "Requests a minute is a whole number of 1 or more, or empty.",
+    done: "This key now serves {concurrency} calls at once and {perMinute} requests a minute.",
+    doneUnbounded: "This key now serves {concurrency} calls at once; its minute has no ceiling of Axiom’s.",
   },
 };

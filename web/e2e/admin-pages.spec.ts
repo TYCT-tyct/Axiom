@@ -229,6 +229,15 @@ test.describe("suppliers", () => {
     await close(page);
     await expect(page.getByText("key-2-b").first()).toBeVisible();
     expect(state.suppliers[1]?.credentials).toHaveLength(2);
+
+    await press(page, "suppliers.limits.open", 1).click();
+    await dialog(page).getByLabel(words("suppliers.limits.concurrency")).fill("6");
+    await dialog(page).getByLabel(words("suppliers.limits.perMinute")).fill("300");
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    await close(page);
+    expect(state.suppliers[1]?.credentials[1]?.max_concurrency).toBe(6);
+    expect(state.suppliers[1]?.credentials[1]?.requests_per_minute).toBe(300);
   });
 
   test("pausing and resuming move the supplier, and a risky removal asks for its name", async ({ page }) => {

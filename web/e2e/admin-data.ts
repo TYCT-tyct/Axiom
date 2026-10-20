@@ -131,6 +131,7 @@ function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["S
         upstream_key_ref: `key-${n}-a`,
         status: "active",
         max_concurrency: 8,
+        requests_per_minute: 600,
       },
     ],
     unbound_keys: [{ ref: `key-${n}-b`, group_ref: "group-2", status: "active" }],
