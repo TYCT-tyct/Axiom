@@ -476,6 +476,10 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 			entry.Target.Streams != c.streams || entry.Supplier != sup(1) {
 			t.Errorf("%s: supplier %v, target %+v, want format %d streaming %t", c.name, entry.Supplier, entry.Target, c.want, c.streams)
 		}
+		// The reply's usage follows the call format: only an OpenAI call reserves for cache reads and writes that overlap.
+		if want := c.want != protocol.Messages; entry.Limits.OpenAIUsage != want {
+			t.Errorf("%s: OpenAIUsage = %t, want %t", c.name, entry.Limits.OpenAIUsage, want)
+		}
 	}
 }
 

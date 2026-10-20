@@ -12,7 +12,7 @@ import (
 
 // FuzzCost checks Cost against an independent math/big model of README.md「条件」 and「计费项与用量」: the service tier's
 // own prices, or every item missing when the schedule has none for it; the highest tier whose threshold the basis sum
-// strictly exceeds, a tier's prices over the service tier's base prices, reasoning at the output price when it has
+// (images counted as input when the basis names input but not image_in) strictly exceeds, a tier's prices over the service tier's base prices, reasoning at the output price when it has
 // none of its own, every other item with usage and no price reported as missing, and the exact total of the priced
 // items, whose tier the whole usage chose, missing items included. Missing must cover whatever Cost finds missing, so a
 // schedule that passes the listing threshold never meets an unpriced item. Each input seeds a batch of random
@@ -196,12 +196,24 @@ func (p prices) json() map[string]string {
 	return m
 }
 
-// cost is the model: the exact cost of the priced items and, in enumeration order, the items with usage and no price.
-func (c costCase) cost() (*big.Rat, []catalog.Item) {
-	var length int64
+// sideFallback is the item whose price an item without its own takes.
+var sideFallback = map[catalog.Item]catalog.Item{reasoning: out, imageOut: out, imageIn: in}
+
+// basisSum is what a context tier's threshold is compared with: the basis items, and the images when the basis names
+// input but not image_in, since they were part of input before they were split out.
+func (c costCase) basisSum() (length int64) {
 	for _, it := range c.basis {
 		length += c.usage[it]
 	}
+	if slices.Contains(c.basis, in) && !slices.Contains(c.basis, imageIn) {
+		length += c.usage[imageIn]
+	}
+	return length
+}
+
+// cost is the model: the exact cost of the priced items and, in enumeration order, the items with usage and no price.
+func (c costCase) cost() (*big.Rat, []catalog.Item) {
+	length := c.basisSum()
 	l, offered := c.levels[c.tier]
 	tier := prices{}
 	for i, above := range c.above {
@@ -220,8 +232,8 @@ func (c costCase) cost() (*big.Rat, []catalog.Item) {
 	for _, it := range items {
 		n := c.usage[it]
 		p := price(it)
-		if p == nil && it == reasoning {
-			p = price(out)
+		if side, ok := sideFallback[it]; ok && p == nil {
+			p = price(side)
 		}
 		switch {
 		case p != nil:

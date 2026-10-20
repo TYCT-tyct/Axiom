@@ -39,7 +39,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
 | `attempt_journal` | 旧的对账日志（「没有对账日志」）：没有代码再读写，表按收缩规则留到下一个发布删 | PK `(request_id, attempt_seq)`；平台范围 |
-| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
+| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
 | `ended_requests` | billing 告知的请求终结时刻与到达终态的时间 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |

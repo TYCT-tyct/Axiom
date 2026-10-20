@@ -118,6 +118,7 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	if r.IntN(2) == 0 {
 		c.e.Model.Reports.Add(catalog.ItemCacheRead)
 	}
+	c.e.Model.OpenAIUsage = r.IntN(2) == 0
 	drawTiers(&c, r)
 	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5*time.Second)) + 1)} // both above 0, or the entry is refused
 	if limit == math.MaxInt64 {
@@ -299,22 +300,12 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	uses, samplings := c.referenceUses()
 	tiers := c.servedAt()
 	tiers.Add(catalog.ServiceTierStandard)
-	inputs := c.d.InputItems
-	inputs.Add(in)
-	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
-		inputs.Add(catalog.ItemCacheRead)
-	}
+	inputs := c.inputItems()
 	longest := first.Int64()
 	if samplings.Cmp(b(1)) > 0 || uses[webSearch] != nil {
 		longest = c.e.Model.ContextLength
 	}
-	price := func(items catalog.ItemSet, length int64) *big.Rat {
-		p, ok := c.e.Price.Ceiling(items, tiers, length)
-		if !ok {
-			tb.Fatalf("no price for %v", items)
-		}
-		return p.Mul(1).Rat()
-	}
+	price := func(items catalog.ItemSet, length int64) *big.Rat { return c.ceilingRate(tb, items, tiers, length) }
 	total, counts := new(big.Rat), []*big.Int(nil)
 	term := func(p *big.Rat, n *big.Int) {
 		total.Add(total, new(big.Rat).Mul(p, new(big.Rat).SetInt(n)))
@@ -332,6 +323,39 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 		fits = fits && n.Cmp(b(math.MaxInt64)) < 0
 	}
 	return total, fits
+}
+
+// inputItems are the items an entry's input may be billed as: what the request may produce, a cache read the model
+// reports, and for an OpenAI call also the images, and the cache writes and audio the model reports.
+func (c quoteCase) inputItems() catalog.ItemSet {
+	inputs := c.d.InputItems
+	inputs.Add(in)
+	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
+		inputs.Add(catalog.ItemCacheRead)
+	}
+	if c.e.Model.OpenAIUsage {
+		inputs |= c.e.Model.Reports&(1<<cacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+	}
+	return inputs
+}
+
+// ceilingRate is the dearest price of the items; an OpenAI call that may read and write the cache adds their two
+// dearest prices, as the same cached tokens may be billed as both, if that is dearer.
+func (c quoteCase) ceilingRate(tb testing.TB, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64) *big.Rat {
+	tb.Helper()
+	p, ok := c.e.Price.Ceiling(items, tiers, length)
+	if !ok {
+		tb.Fatalf("no price for %v", items)
+	}
+	rate := p.Rat()
+	if c.e.Model.OpenAIUsage && items.Has(catalog.ItemCacheRead) && items.Has(cacheWrite) {
+		read, _ := c.e.Price.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
+		write, _ := c.e.Price.Ceiling(1<<cacheWrite, tiers, length)
+		if combined := new(big.Rat).Add(read.Rat(), write.Rat()); combined.Cmp(rate) > 0 {
+			rate = combined
+		}
+	}
+	return rate
 }
 
 func (c quoteCase) referenceUses() (map[catalog.Item]*big.Int, *big.Int) {

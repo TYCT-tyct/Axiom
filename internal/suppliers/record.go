@@ -155,11 +155,15 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 	return nil
 }
 
-// usageOf is the usage of an attempt as stored: the counts of each item added over the segments, and the tier.
+// usageOf is the usage of an attempt as stored: the counts of each item added over the segments, and the tier. An
+// OpenAI segment's cache reads and writes may overlap, so its items add up to more than its prompt: the prompts as the
+// upstream reported them are kept beside them as physical_input.
 func usageOf(segments []catalog.Usage) ([]byte, error) {
 	items := map[string]int64{}
 	unknown := []map[string]string{}
 	tier := catalog.ServiceTierStandard
+	var physical int64
+	var hasPhysical bool
 	for i, u := range segments {
 		if i == 0 {
 			tier = u.ServiceTier()
@@ -172,8 +176,15 @@ func usageOf(segments []catalog.Usage) ([]byte, error) {
 		for _, k := range u.Unknown() {
 			unknown = append(unknown, map[string]string{"field": k.Field, "value": k.Value})
 		}
+		if n, ok := u.PhysicalInput(); ok {
+			physical, hasPhysical = physical+n, true
+		}
 	}
-	return jsonx.MarshalCanonical(map[string]any{"items": items, "unknown": unknown, "tier": tier.String()})
+	doc := map[string]any{"items": items, "unknown": unknown, "tier": tier.String()}
+	if hasPhysical {
+		doc["physical_input"] = physical
+	}
+	return jsonx.MarshalCanonical(doc)
 }
 
 // decimal writes an exact amount as the decimal text the database reads, without a float in between.
