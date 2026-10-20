@@ -114,13 +114,17 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
-// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// Chat and Messages/Responses requests convert in either direction (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		u.Body, err = rewrite(r.Format, body, t, w)
+		return u, err
+	}
+	if t.Format == Chat && !t.Compact && (r.Format == Messages || r.Format == Responses) {
+		u.Body, err = requestToChat(r.Format, body, t, w)
 		return u, err
 	}
 	if r.Format != Chat {
@@ -202,11 +206,26 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	if r.Format == t.Format {
 		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
 	}
-	if r.Format != Chat {
-		return 0 // Prepare refuses at once: nothing is converted from another format
+	if r.Format != Chat && t.Format != Chat {
+		return 0
 	}
 	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
-	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	if t.Format == Chat {
+		// Native input maps, their canonical Chat encoding and its validation coexist.
+		// This path also expands stored Responses items before rewriting identities.
+		cost := nativeRequestCost(body)
+		for _, item := range w.History {
+			cost += nativeRequestCost(item)
+		}
+		return cost + int64(quoted(len(t.Model))+3*quoted(w.withDefaults().IdentityLen))
+	}
+	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	return cost
+}
+
+func nativeRequestCost(body []byte) int64 {
+	return 32*int64(len(body)) + 8192*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
+		2048*int64(bytes.Count(body, []byte(":")))
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
