@@ -195,16 +195,18 @@ if compose config --services | grep -qx caddy; then
   api_host=$(compose exec -T caddy printenv AXIOM_EDGE_API_HOST)
   https=$(compose port caddy 443)
   https=${https##*:}
-  # The certificate is the edge's own business (ACME, or a CA of its own), so it is not verified here; --resolve sends the
-  # right name to the published port without a DNS entry. Only a request that got no answer at all is retried: a fresh
-  # edge has no certificate for the name until it has got one, and that is a handshake that fails rather than a status.
-  # The status is kept, because the two surfaces are told apart by it: the version endpoint answers on every host, and the
-  # site's answers on a console domain only.
+  # The certificate is the edge's own business (ACME, or a CA of its own), so it is not verified here. --connect-to keeps
+  # the request on the standard port, which is what a client of a deployment sends and what the site's hosts are
+  # registered as, while the connection goes to the port the host published; the alternative, a URL with the published
+  # port in it, would put that port into the Host header and the program would look up a domain nobody registered. Only a
+  # request that got no answer at all is retried: a fresh edge has no certificate for the name until it has got one, and
+  # that is a handshake that fails rather than a status. The status is kept, because the two surfaces are told apart by
+  # it: the version endpoint answers on every host, and the site's answers on a console domain only.
   edge() {
     local out tries=0
     while :; do
-      out=$(curl --silent --show-error --insecure --max-time 30 --resolve "$1:$https:127.0.0.1" \
-        --write-out '\n%{http_code}' "https://$1:$https$2") && break
+      out=$(curl --silent --show-error --insecure --max-time 30 --connect-to "$1:443:127.0.0.1:$https" \
+        --write-out '\n%{http_code}' "https://$1$2") && break
       tries=$((tries + 1))
       [ "$tries" -lt 15 ] || die "no answer from the edge for $1$2: is it up, and has it a certificate for $1?"
       sleep 2

@@ -179,15 +179,16 @@ SQL
 keys_hash() { ops sha256sum /keys/master /keys/hash /keys/identity; }
 
 # Through the edge, on the name each surface answers. This is the check a deployment is reached by, so the rehearsal makes
-# it the same way rather than on the program's loopback ports. Nothing resolves these names, so --resolve sends them to the
-# port the host published; the certificate is Caddy's own, hence --insecure. A fresh edge has no certificate for a name
-# until it has got one, which is a failed handshake rather than a status, so only a request with no answer at all is
-# retried.
+# it the same way rather than on the program's loopback ports. The certificate is Caddy's own, hence --insecure, and
+# --connect-to keeps the request on the standard port while the connection goes to the one the host published: a URL with
+# that port in it would put the port into the Host header, and the program looks a domain up by it. A fresh edge has no
+# certificate for a name until it has got one, which is a failed handshake rather than a status, so only a request with no
+# answer at all is retried.
 edge() {
   local name=$1 path=$2 out tries=0
   while :; do
-    out=$(curl --silent --show-error --insecure --max-time 30 --resolve "$name:$https:127.0.0.1" \
-      --write-out '\n%{http_code}' "https://$name:$https$path") && break
+    out=$(curl --silent --show-error --insecure --max-time 30 --connect-to "$name:443:127.0.0.1:$https" \
+      --write-out '\n%{http_code}' "https://$name$path") && break
     tries=$((tries + 1))
     [ "$tries" -lt 15 ] || die "no answer from the edge for $name$path: is it up, and has it a certificate for $name?"
     sleep 2
