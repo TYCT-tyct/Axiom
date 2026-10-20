@@ -117,28 +117,11 @@ func hostName() string {
 	return name
 }
 
-// singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
-// node would multiply the login attempts. It is the check of the program's own entry, serve, and not of serveVia, which
-// the tests that run two nodes of one deployment use. The last of the cache's slices (K3) removes it
-// (internal/platform/kv/README.md「落地顺序」). A value that is no number is for readSettings to report.
-func singleNodeOnly(environ []string) error {
-	env := config.New(environ)
-	nodes := env.Int(kv.NodesVar, 1, 1)
-	if env.Problems() == nil && nodes > 1 {
-		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: login and stickiness still live in the process, "+
-			"so more than one node would multiply the login attempts", kv.NodesVar, nodes)
-	}
-	return nil
-}
-
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
 // and requests in flight and the jobs of the queue get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	if err := singleNodeOnly(environ); err != nil {
-		return err
-	}
 	return serveVia(ctx, environ, logger, directEgress)
 }
 

@@ -116,16 +116,6 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			},
 		},
 		{
-			// K1 to K3 are not all in yet: with login and stickiness still in the process, a second core node would
-			// multiply the login attempts (internal/platform/kv/README.md「落地顺序」).
-			"more than one core node",
-			[]string{
-				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
-				"AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL=valkey://axiom@planted-value:6379", "AXIOM_VALKEY_PASSWORD_FILE=" + good,
-			},
-			[]string{"AXIOM_CORE_NODES: 2 nodes are not supported yet"},
-		},
-		{
 			"a node ID that is no name",
 			[]string{
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
@@ -139,7 +129,7 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
 				"AXIOM_CORE_NODES=2",
 			},
-			[]string{"AXIOM_CORE_NODES: 2 nodes are not supported yet"},
+			[]string{"AXIOM_CORE_NODES: 2 nodes need Valkey"},
 		},
 		{
 			// The cache's URL and password file are read with the other settings, before the database, which is not there.
