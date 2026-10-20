@@ -19,6 +19,18 @@ import (
 
 func derive(s string) string { return "h(" + s + ")" }
 
+// rewrites are the gateway's values the protocol tests prepare with: an identity that tags what it derives, and a device.
+func rewrites() protocol.Rewrites { return protocol.Rewrites{Identity: derive, Device: "d"} }
+
+// testUserID is what Prepare writes in metadata.user_id for the client identifier s: the device of the test's Rewrites,
+// and the session derived from s, as a JSON string whose content is a JSON object.
+func testUserID(s string) string {
+	return `{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"` + derive(s) + `\"}`
+}
+
+// userIDLen is how many bytes that structure adds around the derived session.
+const userIDLen = len(`{"device_id":"","account_uuid":"","session_id":""}`)
+
 // history is a stored chain: a user message and the compaction item the reply carried (OpenAI《Compaction》,
 // https://developers.openai.com/api/docs/guides/compaction, read 2026-10-14; the item's id and encrypted_content are
 // made up, as the guide shows none).
@@ -45,7 +57,7 @@ var prepareCases = []struct {
 		`{"provider":{"order":["a"]}, "model":"claude-opus-5-5","metadata":{"user_id":"u\u00e9","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}],"axiom":{}, "max_tokens":5}`,
-		`{ "model":"up","metadata":{"user_id":"h(ué)","x":1},` +
+		`{ "model":"up","metadata":{"user_id":"` + testUserID("u\u00e9") + `","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}], "max_tokens":5}`,
 	},
@@ -125,7 +137,7 @@ func claim(yes bool) catalog.Claim {
 }
 
 func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte, error) {
-	w := protocol.Rewrites{Identity: derive}
+	w := rewrites()
 	if continues {
 		w.History = history
 	}
@@ -208,12 +220,13 @@ func TestPrepareBufferEscapes(t *testing.T) {
 	for _, c := range []struct {
 		format protocol.Format
 		body   string
+		wraps  int // the bytes the format's derived value adds around Identity's own
 	}{
-		{protocol.Messages, `{"model":"m","metadata":{"user_id":"u"}}`},
-		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`},
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"u"}}`, userIDLen},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`, 0},
 	} {
 		allocs := func(model, identity string) float64 {
-			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity)}
+			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity) + c.wraps}
 			r := inspected(t, c.format, []byte(c.body))
 			return testing.AllocsPerRun(5, func() {
 				if _, err := protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: model}, w); err != nil {
@@ -227,19 +240,21 @@ func TestPrepareBufferEscapes(t *testing.T) {
 	}
 }
 
-// TestPrepareBufferDefaultIdentityLen holds the room for Identity's values to the default bound when IdentityLen is
-// not set: values as long as the bound, all of bytes that need escaping, replacing originals that need none, fit in
-// one allocation; a longer one is refused as the gateway's error.
+// TestPrepareBufferDefaultIdentityLen holds the room for derived values to the default bound when IdentityLen is not set:
+// a value as long as the bound, all of bytes that need escaping, replacing an original that needs none, fits in one
+// allocation; a longer one is refused as the gateway's error. The structure of metadata.user_id counts towards the bound,
+// so the Messages case gives Identity less room by its length.
 func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
 	for _, c := range []struct {
 		format protocol.Format
 		body   string
+		wraps  int // the bytes the format's derived value adds around Identity's own
 	}{
-		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`},
-		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`},
+		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`, userIDLen},
+		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`, 0},
 	} {
 		prepareWith := func(n int) (float64, error) {
-			id := strings.Repeat(`\`, n)
+			id := strings.Repeat(`\`, n-c.wraps)
 			w := protocol.Rewrites{Identity: func(string) string { return id }}
 			r := inspected(t, c.format, []byte(c.body))
 			var err error

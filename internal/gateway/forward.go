@@ -65,6 +65,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 // end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
 	a.content = true
+	s.state = a.state // the attempt answers the call: its upstream's state is the one that goes with the answer
 	if s.isGone() {
 		return
 	}
@@ -77,6 +78,7 @@ func (s *session) commit(a *attempt, out []byte) {
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no") // an nginx in front would otherwise hold the events back until its buffer fills
+	s.relayState()
 	s.w.WriteHeader(http.StatusOK)
 	if !s.put(out) {
 		return
@@ -166,6 +168,7 @@ func (s *session) respond(status int, body []byte) {
 	s.started = true
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
+	s.relayState()
 	s.w.WriteHeader(status)
 	until := time.Now().Add(max(s.writeFor, time.Duration(int64(len(body))*int64(time.Second)/respondRate)))
 	for b := body; len(b) > 0; {

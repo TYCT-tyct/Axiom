@@ -57,17 +57,22 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
-	// IdentityLen is the most bytes Identity may return, before JSON escaping; 0 means defaultIdentityLen. It sizes the
-	// output, so that identifiers that are longer than the ones they replace, or need escaping, do not make Prepare
-	// copy the body again; a longer value is refused (errIdentity).
+	// Device is the value that stands for the client's machine in Anthropic's metadata.user_id, whose session member is
+	// Identity's value for the same request: a relay of this deployment reads the session out of it to pin a
+	// conversation to one account (docs/domains/gateway.md「转发规则」). It is written into the object as it is, so it
+	// must be an opaque identifier, as the ones Identity returns are.
+	Device string
+	// IdentityLen is the most bytes a value Identity or Device makes up may take, before JSON escaping; 0 means
+	// defaultIdentityLen. It sizes the output, so that identifiers that are longer than the ones they replace, or need
+	// escaping, do not make Prepare copy the body again; a longer value is refused (errIdentity).
 	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
 }
 
-// defaultIdentityLen is what Identity may return when Rewrites.IdentityLen is 0: derived identifiers are short opaque
-// values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
+// defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short
+// opaque values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
 const defaultIdentityLen = 128
 
 // withDefaults fills in what a zero Rewrites value leaves to its defaults.
@@ -79,7 +84,7 @@ func (w Rewrites) withDefaults() Rewrites {
 }
 
 // errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
-var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
+var errIdentity = errors.New("protocol: a derived value is longer than Rewrites.IdentityLen bytes")
 
 // Upstream is a request ready for an endpoint: its body, and what the body tells the relay about the usage the
 // endpoint will report.
@@ -257,7 +262,7 @@ var (
 		},
 		Chat: {}, // spelled out so that the array covers every format, as rewriteRules does: rulesFor never indexes past it
 	}
-	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
+	metadataRules = map[string]rule{"user_id": (*rewriter).userID}
 )
 
 // rulesFor is how a request of format f is rewritten for the endpoint t: a compaction request is the one that is not a
@@ -387,7 +392,25 @@ func (p *rewriter) model() error {
 	return p.replaceString(len(v), p.t.Model)
 }
 
-func (p *rewriter) identity() error {
+// identity replaces the identifier just read with the gateway's opaque value of it.
+func (p *rewriter) identity() error { return p.replaceDerived(p.w.Identity) }
+
+// userID replaces Anthropic's metadata.user_id with the structure a relay of this deployment reads the session out of.
+func (p *rewriter) userID() error {
+	return p.replaceDerived(func(s string) string { return metadataUserID(p.w, s) })
+}
+
+// metadataUserID is Anthropic's metadata.user_id for the client identifier v: the device, and the session derived from v
+// beside it, in the structure a relay of this deployment parses to pin a conversation to one account
+// (docs/domains/gateway.md「转发规则」). It is a JSON string whose content is JSON, which is the shape Claude Code sends,
+// so a reader that takes the member for a string and a reader that parses it both find what they expect.
+func metadataUserID(w Rewrites, v string) string {
+	return `{"device_id":"` + w.Device + `","account_uuid":"","session_id":"` + w.Identity(v) + `"}`
+}
+
+// replaceDerived reads the string just read and writes derive's value of it in its place, refusing one longer than
+// Rewrites.IdentityLen.
+func (p *rewriter) replaceDerived(derive func(string) string) error {
 	v, err := p.raw()
 	if v == nil || err != nil {
 		return err
@@ -396,7 +419,7 @@ func (p *rewriter) identity() error {
 	if err != nil {
 		return err
 	}
-	derived := p.w.Identity(string(s))
+	derived := derive(string(s))
 	if p.w.IdentityLen > 0 && len(derived) > p.w.IdentityLen {
 		return errIdentity
 	}

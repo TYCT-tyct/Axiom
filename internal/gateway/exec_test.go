@@ -80,8 +80,9 @@ func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	}
 }
 
-// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers
-// are replaced by derived ones, and the whitelisted headers go with it.
+// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers are
+// replaced by derived ones — the metadata.user_id of an Anthropic call by the structure the session is read out of — and
+// the whitelisted headers go with it.
 func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) {
@@ -94,20 +95,15 @@ func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 		}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		h.run()
+		account := uuid.UUID(h.call.caller.AccountID())
 		call := h.up.endpoint(1).calls[0]
-		body := string(call.Body)
-		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, `"user_id":"`) {
-			t.Errorf("the request upstream: %s", body)
+		body, want := string(call.Body), `"user_id":"{\"device_id\":\"`+h.exec.deviceID(account)+`\",\"account_uuid\":\"\",`+
+			`\"session_id\":\"`+h.exec.identity(account)("client-secret-user")+`\"}"`
+		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, want) {
+			t.Errorf("the request upstream:\n%s\nwant it to hold %s", body, want)
 		}
 		if call.Format != protocol.Messages || call.Header.Get("Anthropic-Beta") != "beta-1" {
 			t.Errorf("format %d, headers %v", call.Format, call.Header)
-		}
-		var ids []string
-		for _, part := range strings.Split(body, `"user_id":"`)[1:] {
-			ids = append(ids, part[:strings.Index(part, `"`)])
-		}
-		if len(ids) != 1 || len(ids[0]) != 32 {
-			t.Errorf("the derived identifier: %v", ids)
 		}
 	})
 }
