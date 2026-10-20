@@ -168,6 +168,13 @@ up: web-embed
 down *flags:
     docker compose --project-name "${COMPOSE_PROJECT_NAME:-axiom}" down {{ flags }}
 
+# Rehearse the backup and the restore end to end: its own compose project, a local S3 server instead of the bucket, the
+# database and the key ring wiped and restored from a set, and what came back compared with what was there
+# (docs/ops/backup-restore.md「恢复演练」). It removes everything it creates, volumes included, and never touches a
+# deployment or a real bucket: about ten minutes, one run at a time on a machine.
+backup-rehearsal:
+    bash scripts/ops/rehearse.sh
+
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the
 # check: an empty list from a failed diff would pass it.
