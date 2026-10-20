@@ -131,7 +131,8 @@ func (r TestResult) failureOutcome() TestOutcome {
 		return TestInconclusive
 	}
 	switch c := r.Failure.Cause.(type) {
-	case Overloaded, ModelNotFound, Transport:
+	case Overloaded, ModelNotFound, Transport, UpstreamError:
+		// The endpoint's own 5xx, its model gone or its route down: nothing about the request caused it.
 		return TestFailed
 	case Unknown:
 		// A status of 500 and above is the endpoint's; the ones below are mostly the request's (a 413 is a body too
