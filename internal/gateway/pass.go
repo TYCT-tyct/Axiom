@@ -90,5 +90,5 @@ func (s *session) failedReply(a *attempt, ctx context.Context, err error) (step,
 	e, finish, again := s.classify(ctx, err, a.conn)
 	rec := &s.ends[a.i]
 	rec.Result, rec.Finish = billing.FailedBeforeCommit, finish
-	return s.unanswered(a, e, again, routing.ScopeEndpoint)
+	return s.unanswered(a, e, again, scopeOf(a.obs.Fault))
 }

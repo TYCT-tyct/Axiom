@@ -270,10 +270,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	e, finish, again := s.classify(ctx, err, a.conn)
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), finish
-	scope := routing.ScopeEndpoint // unless the upstream refused the request itself, which is the client's
-	if upstreamRefused(a.obs.Fault) {
-		scope = routing.ScopeRequest
-	}
+	scope := scopeOf(a.obs.Fault)
 	if s.aggregate {
 		return s.brokeAggregate(a, relay, e, again, scope)
 	}
@@ -324,6 +321,15 @@ func upstreamRefused(fault protocol.Fault) bool {
 		protocol.FaultUnrecognised, protocol.FaultToolInput:
 	}
 	return false
+}
+
+// scopeOf is whose failure a failed attempt is recorded as: a request the upstream refused is the request's, as the
+// same answer over HTTP is, and everything else is the endpoint's (docs/domains/gateway.md「状态码」).
+func scopeOf(fault protocol.Fault) routing.Scope {
+	if upstreamRefused(fault) {
+		return routing.ScopeRequest
+	}
+	return routing.ScopeEndpoint
 }
 
 // upstreamRefusal is what the upstream refused with, the supplier's identity taken out: the protocol reads an error's
