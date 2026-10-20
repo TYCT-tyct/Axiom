@@ -309,6 +309,79 @@ func TestGrantCreditRefusals(t *testing.T) {
 	expectAdmin(t, "the corrected request with the same key", g.change(g.s, http.MethodPost, g.path, grantBody("10000000000000", ""), key), http.StatusCreated, "")
 }
 
+// offlineBody is a request to record an offline payment of amount billionths of currency, received at channel.
+func offlineBody(amount, currency, channel string) string {
+	return `{"source":"offline_payment","payment":{"amount":{"amount":"` + amount + `","currency":"` + currency + `"},"channel":"` +
+		channel + `"},"reason":"paid by transfer"}`
+}
+
+// TestGrantCreditOffline: an offline payment is a paid batch booked as a top-up: cash in the payment's currency, the
+// credit it buys at the reference rate rounded down, the books of each currency balanced by the exchange gain or loss,
+// and the source, payment and channel in the audit entry. A payment in the site's currency needs no rate.
+func TestGrantCreditOffline(t *testing.T) {
+	t.Parallel()
+	g := newGrantee(t)
+	expectAdmin(t, "setExchangeRate", g.change(g.s, http.MethodPost, "/pricing/exchange-rates", initialExchange, newKey()), http.StatusCreated, "")
+	rec := g.change(g.s, http.MethodPost, g.path, offlineBody("74000000000", "CNY", "ICBC 6222"), newKey())
+	expectAdmin(t, "an offline payment in CNY", rec, http.StatusCreated, "")
+	var grant adminapi.CreditGrant
+	decode(t, rec, &grant)
+	// 74 CNY at 1 USD = 7.1 CNY is 10.42253521126… USD, rounded down to a billionth.
+	if grant.Source != adminapi.CreditSourceOfflinePayment || grant.Amount != (adminapi.Money{Amount: "10422535211", Currency: "USD"}) ||
+		grant.Payment == nil || grant.Payment.Channel != "ICBC 6222" || grant.ExchangeRate == nil || grant.ExchangeRate.Version != 1 ||
+		grant.BalanceAfter.Balance.Amount != "10422535211" {
+		t.Errorf("the grant: %+v", grant)
+	}
+	rec = g.change(g.s, http.MethodPost, g.path, offlineBody("12340000000", "USD", "cash"), newKey())
+	expectAdmin(t, "an offline payment in USD", rec, http.StatusCreated, "")
+	var same adminapi.CreditGrant
+	decode(t, rec, &same)
+	if same.Amount.Amount != "12340000000" || same.ExchangeRate != nil {
+		t.Errorf("the grant in the site's currency: %+v", same)
+	}
+	for query, want := range map[string]string{
+		"SELECT count(*)::text FROM billing.credit_batches WHERE id = '" + grant.Id + "' AND source = 'paid' AND currency = 'CNY' AND paid = 7400 AND fee = 0 AND offline_channel = 'ICBC 6222' AND rate_id IS NOT NULL": "1",
+		"SELECT count(*)::text FROM billing.credit_batches WHERE id = '" + same.Id + "' AND source = 'paid' AND currency = 'USD' AND paid = 1234 AND rate_id IS NULL":                                                    "1",
+		"SELECT string_agg(currency || ' ' || s, ',' ORDER BY currency) FROM (SELECT coalesce(currency, '') AS currency, sum(amount)::text AS s FROM billing.entries GROUP BY 1) e":                                      " 0,CNY 0",
+		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries WHERE book = 'cash' AND currency = 'CNY'":                                                                                                            "74000000000",
+		"SELECT coalesce(sum(amount), 0)::text FROM billing.entries WHERE book = 'gift_expense'":                                                                                                                         "0",
+		"SELECT count(*)::text FROM platform.audit_log WHERE action = 'credit.add' AND detail->>'source' = 'paid' AND detail->>'channel' = 'offline: ICBC 6222' AND detail->>'paid' = '7400'":                            "1",
+	} {
+		if got := g.text(query); got != want {
+			t.Errorf("%s = %s, want %s", query, got, want)
+		}
+	}
+}
+
+// TestGrantCreditOfflineRefusals: an offline payment with a gift's amount or without a payment, a gift with a payment,
+// a payment that is not whole minor units of a currency an exchange rate is kept for, in a currency with no rate to the
+// site's, of nothing, beyond what one grant gives, or with no channel is a 422 and changes nothing.
+func TestGrantCreditOfflineRefusals(t *testing.T) {
+	t.Parallel()
+	g := newGrantee(t)
+	for _, c := range []struct{ name, body, pointer string }{
+		{"a payment with an amount", strings.Replace(offlineBody("100", "USD", "cash"), `"payment"`, `"amount":{"amount":"1","currency":"USD"},"payment"`, 1), "/payment"},
+		{"a payment without a payment", `{"source":"offline_payment","reason":"r"}`, "/payment"},
+		{"a gift with a payment", strings.Replace(grantBody("1", ""), `"reason"`, `"payment":{"amount":{"amount":"10000000","currency":"USD"},"channel":"c"},"reason"`, 1), "/amount"},
+		{"a fraction of a cent", offlineBody("10000001", "USD", "cash"), "/payment/amount"},
+		{"a fraction of a yen", offlineBody("500000000", "JPY", "cash"), "/payment/amount"},
+		{"a currency no rate is kept for", offlineBody("1000000000", "XAU", "cash"), "/payment/amount"},
+		{"no rate to the site's", offlineBody("1000000000", "EUR", "cash"), "/payment/amount/currency"},
+		{"nothing", offlineBody("0", "USD", "cash"), "/payment/amount/amount"},
+		{"more than a grant may give", offlineBody("10000010000000", "USD", "cash"), ""},
+		{"no channel", offlineBody("10000000", "USD", "  "), "/payment/channel"},
+	} {
+		rec := g.change(g.s, http.MethodPost, g.path, c.body, newKey())
+		expectAdmin(t, c.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+		if fields := errorDetailOf(t, rec).Fields; c.pointer != "" && (fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != c.pointer) {
+			t.Errorf("%s: fields %v, want %s", c.name, fields, c.pointer)
+		}
+	}
+	if g.text("SELECT count(*)::text FROM billing.credit_batches")+g.auditCount("credit.add") != "00" {
+		t.Error("a refused grant changed something")
+	}
+}
+
 // TestGrantCreditToNoAccount: an ID that is not an account's, or no account's, is a 404 and grants nothing.
 func TestGrantCreditToNoAccount(t *testing.T) {
 	t.Parallel()

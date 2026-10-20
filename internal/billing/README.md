@@ -2,7 +2,7 @@
 
 预留、计量、追加、结算与清理在代码层面的接口和规则。钱怎么算、收谁多少见[计费](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；这里只写调用路径上下游代码要依赖的部分，账本、额度批次的代码结构随实现补入本文。
 
-> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、账本、后台加额度 `AddCredit`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、售价 `Sell`／`SalePrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期 `RegisterExpire` 也已实现（见「额度批次的分配与到期」）；付费来源、退款、拒付随支付设计。
+> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、账本、后台加额度 `AddCredit`、付费额度 `CreditPaid`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、售价 `Sell`／`SalePrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期 `RegisterExpire` 也已实现（见「额度批次的分配与到期」）；退款、拒付随支付设计。
 
 ## 接口（草图）
 
@@ -40,8 +40,14 @@ type ExtendRequest struct{ Seq int; Entry int; Target platform.Exact } // 已实
 func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error // 已实现；ErrTerminated、*Insufficient；不读 Meter
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 已实现；前提：无追加在途
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者
-func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：只有赠送；tx 须是平台范围（审计日志要求）
-func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 做的批次（金额、过期、创建时间），管理接口回答赠送时读
+func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：赠送；tx 须是平台范围（审计日志要求）
+func CreditPaid(ctx context.Context, tx pg.Tx, p PaidCredit) error    // 已实现：付费额度，见「结算与账本」；tx 须是平台范围
+type PaidCredit struct{ ID, Site, Account uuid.UUID; SiteCurrency platform.Currency; Credited int64; Payment Payment; Channel Channel; RateID uuid.UUID; ExpiresAt *time.Time; Actor audit.Actor; Reason string } // 已实现；RateID 为零当且仅当付款币种就是记账货币
+type Payment struct{ Currency platform.Currency; Paid, Fee int64 } // 已实现；付款币种的最小单位，0 ≤ Fee < Paid
+type Channel struct{ Merchant uuid.UUID; Offline string }            // 已实现；恰好一个非零
+func CreditsFor(p Payment, site platform.Currency, rate *BillingExchangeRate) (int64, error) // 已实现：(实付 − 手续费) 按 rate 折成额度，向下取整一次；CreditPaid 的上限，管理接口按它算线下付款的额度
+func MinorUnits(c platform.Currency, billionths int64) (int64, error) // 已实现：十亿分之一单位换成最小单位，不是整数个最小单位就报错
+func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 或 CreditPaid 做的批次（来源、金额、过期、创建时间，付费的还有付款、渠道和汇率版本），管理接口回答加额度时读
 func RegisterExpire(cfg ExpireConfig) error // 已实现：把到期作废登记为队列上的周期任务 billing.expire_credit，每分钟，在队列 Start 之前调用（cmd/axiom 的 startSync）；包内的 expirer.run 是一轮，writeOffAccount 是一个账户的作废
 func Reconcile(ctx context.Context, db *pg.DB, platform pg.Scope) ([]string, error) // 已实现：每日自平，列出不平的交易和与账本不符的余额
 func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记为队列上的周期任务，在队列 Start 之前调用（cmd/axiom 的 startSync）
@@ -62,7 +68,7 @@ type AttemptResult struct { // 已实现
 }
 type Final struct{ Segments []Segment; Charged platform.Exact; Estimated bool } // 已实现；币种随站点的额度
 type LedgerTransaction struct{ ID uuid.UUID; Kind string; AttemptSeq int32; Revision int64; CreatedAt time.Time; Entries []LedgerEntry } // 已实现；LedgerOf 的一项
-type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负，一笔交易的分录合计为 0
+type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实现；借正贷负，Currency 空为记账货币，一笔交易的分录在每个币种里合计为 0
 ```
 
 - 金额沿用 `platform.Exact`；`platform.RequestID`（即调用编号）、`platform.AttemptSeq`（从 1 起，进入 `Send` 时分配）由第一个用到它们的 PR 加进 `platform`。价格版本只追加、不删除，`PriceRef` 就是版本号。
@@ -139,20 +145,21 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 |---|---|---|
 | `reservations` 新增列 | `prices`（保留条目锁定的价目表，规范 JSON，按路线下标，被删的为空串）、`charged_seq` 与 `entry`（收费的那次尝试和它的条目）、`charged`（实收）、`price`（规则算出、底线截断前的应收）、`waived`（是否只收了按次项目）、`estimated`（收费是否基于上游没报告的用量或兜底价）、`final_usage`（收费所用的用量，含映射不了的，JSON，`Final` 从它读出） | 已释放、已结算的行不能再改 |
 | `transactions` | 一个事件一笔：租户、`kind`（credit、settle、reverse、attempt_cost、expire）、`(request_id, attempt_seq, kind, revision)` 唯一 | 账户范围；只插入 |
-| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense、credit_expired）、`amount`（借正贷负，不为 0）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
-| `credit_batches` | 每次加额度一个批次：来源（目前只有赠送）、金额、过期时间；`consumed`、`expired` 是分配存下的已用和已作废（见「额度批次的分配与到期」） | 账户范围；插入，可改 `consumed`、`expired` |
+| `entries` | 交易的分录：租户、`book`（user_balance、revenue、platform_borne、supplier_cost、supplier_prepaid、gift_expense、credit_expired、cash、fee_income、exchange_gain_loss）、`amount`（借正贷负，不为 0，该币种一个单位的十亿分之一）、`currency`（空为站点的记账货币；否则是不同于它的付款币种，`user_balance` 不能有）；`user_balance` 有按账户的部分索引，对账一次聚合 | 账户范围；只插入 |
+| `credit_batches` | 每次加额度一个批次：来源（`gift` 或 `paid`）、金额（入账额度）、过期时间；付费批次另有 `currency`、`paid`、`fee`（付款币种的最小单位）、`merchant_id` 或 `offline_channel`（恰好一个）、`rate_id`（参考汇率版本，同币种为空），赠送这些全为空，由 `credit_batches_source_check` 约束；`consumed`、`expired` 是分配存下的已用和已作废（见「额度批次的分配与到期」） | 账户范围；插入，可改 `consumed`、`expired` |
 | `expiry_cursor` | 到期扫描停在哪个账户（一行） | 只有平台范围 |
 
 - **收缩**（迁移 `00006_drop_unused.sql`）：删了没有读写方的 `corrections`、`waivers` 两张表，`reservations` 的 `unpriced`、`correct_by` 两列和 `estimated_by_correct_by` 索引，状态约束收窄到下文「预留的状态」的五种（`pending`、`released`、`settled`、`cleanup_settled`、`cleanup_released`）；旧版本不读写它们，滚动发布不受影响。`fallbacks` 里的 `markup` 还在：行的解析不认没声明的成员，删它要先迁移改写 `body`（[#232](https://github.com/TYCT-tyct/Axiom/issues/232)）。
 - **每日自平**：`RegisterReconcile` 把 `Reconcile` 登记为队列上的周期任务 `billing.reconcile`（节点启动时先跑一次，之后每 24 小时；同一时刻只有一个在排队或在跑，多节点时只有队列的领导节点插入）。它只读，找出分录合计不为 0 的交易和与账本合计不符的余额；每个问题记一条 Error 日志（最多列 20 条，其余给总数）并计入 `axiom.billing.reconcile.problems`。队列先于 billing 启动，所以它不依赖 `*Billing`，只要数据库和平台范围。这是账本自己对平，与供应商逐条对账无关（[#227](https://github.com/TYCT-tyct/Axiom/issues/227)）。
-- **账本**：一笔交易的分录合计为 0（写入时断言），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
+- **账本**：一笔交易的分录在每个币种里合计为 0（写入时 `post` 按币种断言，每日自平按 `(transaction_id, currency)` 分组；只看总和会让跨币种的充值把一边的错配平），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
 - **按请求读账本**：`LedgerOf(ctx, tx, requestID)` 按 `transactions.request_id` 读一个请求的全部交易，每笔带自己的分录；交易按 `created_at, id`、分录按 `book, amount` 排序。`(request_id, attempt_seq, kind, revision)` 的唯一索引以请求 ID 开头，所以是一次范围扫描加按 `transaction_id` 的连接，与账本总量无关。它是运营和管理读的内部接口，不是用户的：分录里也有供应商成本。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己的这些分录。调用记录不复制交易或分录的 ID，调用、尝试和账本都只用请求 ID 关联（[observability 的「追溯」](../observability/README.md#追溯)）。
 - **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用)，按精确值算，超出部分记 `platform_borne`，事务提交后记一条 Error 日志（请求、应收、实收、承担）并计入 `axiom.billing.platform_borne` 和 `axiom.billing.platform_borne.amount`（重试时预留已是终态，不重复报）；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。语句依次发出、没有批量，尝试成本逐次写（写交易、写分录两条）：一次尝试、成本非零、走免单检查并进入终态时 13 次往返（开始、设范围、锁余额行、读预留行、每次尝试 2 条、写尝试、记收费 2 条、移动计数、写预留行、`EndRequest`、提交），每多一次尝试多 2 次；从锁余额行到提交持锁 10 次；各段先按精确值求和再向上取整一次。纯成本的分录不动余额行。
 - **免单**：最后一次尝试 `NotExecuted` 不收；收费的那次尝试是因客户端离开而结束的（`Finish` 为 `FinishCancelled`）照收，客户端在一次失败的尝试之后才离开则按那次失败判断（`waivable` 只看收费的那次尝试，`Outcome` 里没有整个调用的"取消"）；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、普通输出、推理与图片合计为 0、结束原因为空或出错的，只收按次项目（仍按整次采样所在的档位计价）。没有上限，也不数次数：同一个账户连续多少次零输出调用都全免（`settle_test.go` 的 `TestWaiversHaveNoCap`），`billing.waivers` 表已随迁移 `00006_drop_unused.sql` 删除。判定只看这三条，与金额无关（`waivable`、`zeroOutput`）。
 - **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估，`Final.Estimated` 如实报出。缺价的都按「兜底价」收，结算和迟到的 `Settle` 都按它，所以从不免费：映射不了的用量由 `addFallbacks` 收，价目表给了项却给不了价的由 `addMissing` 收——上游按 `priority` 服务而锁定的售价只有标准档时 `Cost` 一项也价不了，token 按该价目表全部服务等级和档位里最高的 token 单价、按次项目按锁定的默认单价。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估。上架门槛挡不住前一种：它查的是售价能不能给得出价（报价取请求等级与端点等级的交集再加标准档），不管上游回报什么。暂估不保留任何东西：预留里没用掉的部分在结算里一起释放，没有稍后校正它的作业（下文「预留的状态」）。
 - **`Cleanup`**：平台范围，逐笔一个事务。挂起且过了截止时间或持有者已回收的：记一行丢失的请求（带预留冻结的路线，不含被删条目的零 UUID），再清理释放；只释放，不收费，也不留待校正的状态。一笔失败不拦后面的，但算一次尝试：一次调用最多尝试 `max` 笔（成功加失败），工作量有界；到期的按 `request_id` 排序，游标越过失败的往后走，`sweep` 把游标记在内存里跨轮、跨次延续，走到到期集末尾就回到开头，所以恒失败的积压（每次都排在前面）不论多大都挡不住后面能清理的：排在游标之后第 r 位的预留，最多 ceil(r/max) 次调用就轮到。返回里区分「扫完」和「预算用尽」（`sweep` 扫完才停）；错误只保留前 5 条并计数其余；context 结束而提前返回时，带上下文的原因并入错误、已接管的数量照返；每释放一笔记一条警告日志（请求和释放的金额）。供应商侧因此留着「这个请求可能产生过费用，它的尝试可能落在这些端点上」，迟到的 `Settle` 或对账据此补上。没有尝试的记录可读：内容已交到客户端、结算还没提交时节点崩了，这次交付的尝试没有成本行，对账键也没有保存，由供应商的逐笔记录补齐。
 - **迟到的 `Settle`**：按完整的 `Outcome` 收（版本号 −1，先冲正清理记过的、再记这一笔），补扣最多到底线、其余平台承担，并 `ResolveLostRequest`。没有任何尝试的迟到 `Settle`（调用没到过上游）不收费，也 `ResolveLostRequest`。清理只释放、不收钱，所以冲正的那笔通常没有分录。清理不收钱而迟到的 `Settle` 收，是因为收费要按用户最终看到的用量，清理手上没有（理由见[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。找不到预留行时（主备切换丢了提交）现在返回错误，按清理释放补扣还没有：要先补一行预留。
-- **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。线下付款还不收：现金要按实付金额和锁定汇率记，随支付一起做。
+- **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。
+- **`CreditPaid`**：与 `AddCredit` 共用 `addBatch`（锁余额行 → credit 交易 → 批次 → 审计），交易同样是 `credit`，所以分配重放不用改，`sourceRank` 已把非赠送排在赠送之后。先在边界检查：渠道恰好一个；`RateID` 按 ID 读出参考汇率版本，它必须是付款币种与记账货币这一对（同币种时必须为零）；入账额度在 1 到 `CreditsFor` 之间。分录：付款币种（同币种时就是记账货币）的账借现金（实付）、贷手续费收入（手续费）；记账货币的账贷用户余额（入账额度）；跨币种时付款币种的账贷汇兑损益（实付 − 手续费）、记账货币的账借汇兑损益（入账额度）；同币种时实付 − 手续费 − 入账额度（取整的零头）贷汇兑损益。同一 ID 已入账时读回批次比较账户、站点、来源、入账额度、付款（币种、实付、手续费）、渠道和汇率版本：一致返回 nil，不一致返回 `ErrCreditConflict`（不比较过期时间，重试可能按更晚的时钟重算它）。审计详情带来源、入账额度、币种、实付、手续费、渠道和汇率版本。迁移 `00018_paid_credit.sql`：`entries` 的两个约束以 NOT VALID 加上，存量行由下一个 billing 迁移 VALIDATE。
 - **`Suppliers`**：billing 在自己的事务里写尝试（每个尝试的成本、用量、回执、供应商单位下的估算）、丢失的请求与其解决、请求的终结（`EndRequest`）；接口在 billing，参数直接用 suppliers 的类型，`suppliers.CallWrites` 是它的实现（无状态，转发 suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`），测试用替身。
 - **`EndRequest`**：预留进入终态（已结算、已释放、清理释放）的那个事务里调用，时间取写预留行时的数据库时钟，suppliers 据此知道请求已有定论。迟到的 `Settle` 只在预留行上补记，不改写请求的结束。`SettleOrphan` 释放或写墓碑时同样调用。
 
@@ -272,6 +279,8 @@ type LedgerEntry struct{ Book string; Amount int64 } // 已实现；借正贷负
 | 一步同时报 `Extend` 和 `Exhausted` | 一次读可以同时越过追加点和当前段；只报其一，所有者要么停读却没有追加可等，要么继续读越过预留 | 枚举 Continue / ExtendNow / Exhausted |
 | 报价是纯函数 `Quote`，`Reserve` 在锁下调用它 | 报价规则最多、最容易错，脱开数据库才能用表驱动和性质测试逐条证明；锁内只多一次内存计算 | 在 `Reserve` 里边读边算：规则只能经数据库测试 |
 | 每条分录带产生它的租户，账户名记在 `book` | 结算在账户范围的事务里写收入和成本分录，没有租户的行过不了行级安全；平台的报表在平台范围按 `book` 汇总 | 平台科目的分录不带租户：账户范围写不进 |
+| 分录带可空的 `currency`，空为记账货币；付款币种的分录也按十亿分之一单位记，每个币种各自平衡 | 现金按实付原样入账，对得上渠道的原币账单；可空列不改写、不扫存量，旧代码和旧行都是记账货币；一个金额单位让最小单位换算精确、`amount` 的含义不随币种变（理由与行为层面的取舍见[计费的「决策与理由」](../../docs/domains/billing.md#决策与理由)） | 账本只用额度一个单位、现金按参考汇率折算：除不尽的汇率让现金再取整一次，现金账对不上原币；按最小单位记付款币种：同一列的单位随币种变 |
+| 付费额度与赠送用同一种 `credit` 交易和 `addBatch` | 分配按交易种类开批次，同一种交易不必改重放；锁、批次、审计只有一份 | 新的 `paid` 交易种类：重放、`LiveBatches` 都要跟着改 |
 | 收费的那次尝试是否因客户端离开而结束，看它自己的 `Finish`，不看整个调用 | 失败的尝试之后客户端才断开，不该让这次失败被收模型用量；`Outcome.Cancelled` 记的是调用结束那一刻的状态，会把前面那次失败也判成取消。每条"客户端走了"的路径都已把那次尝试的 `Finish` 记为 `FinishCancelled`（`classify`、`complete`、`pass` 和 `failed` 都先查 `isGone`，包括请求已写出、等响应头时客户端离开），所以判断不丢任何一种取消 | 留 `Outcome.Cancelled`：整个调用一个标志，判错的是它 |
 | 免单只由三条规则决定，不看金额、不数次数 | 收不收一个调用是产品规则，不是账务计算：把它挂到金额上，就要先知道这次调用值多少，判定和记账就纠缠在一起；不设上限是因为上限让同一份用量时收时不收，用户没法预期，而平台为免单付出的钱由「零输出」这条规则自己限住（没有输出就没有可交付的内容） | 每天按免单成本设上限：要一个所有账户范围都能写的计数，行级安全的口径待定，且判定依赖金额 |
 | 锁定的价目表存进预留行 | 清理和迟到的 `Settle` 没有准入时的进程，只能从库里拿到锁定价格；`PriceRef` 还没有 | 只在内存里：进程一死，清理结算就没有价可用 |

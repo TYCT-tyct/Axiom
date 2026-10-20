@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"math/big"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -130,35 +134,82 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 // this default stands until it does, and the owner sets it (README.md「管理接口」).
 const maxGrant = 10_000 * 1_000_000_000
 
-// grantOf reads a grant request for an account whose site counts in currency. An amount that is not in that currency
-// cannot be read, a 400; one that is too small or too large, or an expiry that has passed, is a rule the grant breaks,
-// a 422.
-func grantOf(b *adminapi.CreditGrantRequest, currency platform.Currency, now time.Time) (amount int64, expires *time.Time, err error) {
-	var p problems
-	amount, _ = moneyIn(b.Amount, currency, "/amount", &p)
-	if err := p.err(); err != nil {
-		return 0, nil, err
-	}
-	if amount <= 0 || amount > maxGrant {
-		return 0, nil, unprocessable("a grant is more than 0 and at most 10,000 units of the site's currency")
-	}
-	if b.ExpiresAt != nil {
-		if !b.ExpiresAt.After(now) {
-			return 0, nil, unprocessableFields("/expires_at", "expires_at must be in the future")
-		}
-		utc := b.ExpiresAt.UTC()
-		expires = &utc
-	}
-	return amount, expires, nil
+// creditInput is a grant request read for an account: a gift of amount, or an offline payment that buys what it
+// converts to.
+type creditInput struct {
+	amount  int64 // a gift's, in billionths of a credit
+	payment *billing.Payment
+	channel string
+	expires *time.Time
 }
 
-// GrantCredit gives an account a gift: a credit batch, its ledger entry and its audit entry, in one transaction.
+// grantOf reads a grant request for an account whose site counts in currency. A gift's amount that is not in that
+// currency, or a payment's that is not text of an integer, cannot be read, a 400; a source given what the other needs,
+// an amount out of range, a payment that is not whole minor units of a currency an exchange rate is kept for, or an
+// expiry that has passed, is a rule the grant breaks, a 422.
+func grantOf(b *adminapi.CreditGrantRequest, currency platform.Currency, now time.Time) (g creditInput, err error) {
+	if b.ExpiresAt != nil {
+		if !b.ExpiresAt.After(now) {
+			return creditInput{}, unprocessableFields("/expires_at", "expires_at must be in the future")
+		}
+		utc := b.ExpiresAt.UTC()
+		g.expires = &utc
+	}
+	if b.Source != nil && *b.Source == adminapi.CreditSourceOfflinePayment {
+		if b.Amount != nil || b.Payment == nil {
+			return creditInput{}, unprocessableFields("/payment", "an offline payment gives payment, and no amount")
+		}
+		g.payment, g.channel, err = offlinePayment(b.Payment)
+		return g, err
+	}
+	if b.Payment != nil || b.Amount == nil {
+		return creditInput{}, unprocessableFields("/amount", "a gift gives amount, and no payment")
+	}
+	var p problems
+	g.amount, _ = moneyIn(*b.Amount, currency, "/amount", &p)
+	if err := p.err(); err != nil {
+		return creditInput{}, err
+	}
+	if g.amount <= 0 || g.amount > maxGrant {
+		return creditInput{}, unprocessable("a grant is more than 0 and at most 10,000 units of the site's currency")
+	}
+	return g, nil
+}
+
+// offlinePayment reads what an administrator says was paid: an amount of its own currency, in whole minor units of it.
+func offlinePayment(m *adminapi.OfflinePayment) (*billing.Payment, string, error) {
+	amount, err := strconv.ParseInt(m.Amount.Amount, 10, 64)
+	if err != nil {
+		var p problems
+		p.add("/payment/amount/amount", "does not fit 64 bits")
+		return nil, "", p.err()
+	}
+	currency, err := platform.ParseCurrency(m.Amount.Currency)
+	if err != nil {
+		return nil, "", unprocessableFields("/payment/amount/currency", err.Error())
+	}
+	minor, err := billing.MinorUnits(currency, amount)
+	if err != nil {
+		return nil, "", unprocessableFields("/payment/amount", err.Error())
+	}
+	if minor <= 0 {
+		return nil, "", unprocessableFields("/payment/amount/amount", "a payment is more than 0")
+	}
+	channel := strings.TrimSpace(m.Channel)
+	if channel == "" || utf8.RuneCountInString(channel) > 200 {
+		return nil, "", unprocessableFields("/payment/channel", "the channel is 1 to 200 characters")
+	}
+	return &billing.Payment{Currency: currency, Paid: minor}, channel, nil
+}
+
+// GrantCredit gives an account credit, a gift or an offline payment: a credit batch, its ledger entries and its audit
+// entry, in one transaction.
 func (a adminAPI) GrantCredit(ctx context.Context, request adminapi.GrantCreditRequestObject) (adminapi.GrantCreditResponseObject, error) {
 	id, err := accountID(request.AccountId)
 	if err != nil {
 		return nil, err
 	}
-	grant, replayed, err := idempotently(ctx, a.db, "grantCredit", request.Params.IdempotencyKey, []any{request.AccountId, request.Body},
+	body, replayed, err := idempotently(ctx, a.db, "grantCredit", request.Params.IdempotencyKey, []any{request.AccountId, request.Body},
 		func(tx pg.Tx) (adminapi.CreditGrant, error) {
 			account, err := a.accounts.Account(ctx, tx, id)
 			if err != nil {
@@ -168,32 +219,83 @@ func (a adminAPI) GrantCredit(ctx context.Context, request adminapi.GrantCreditR
 			if err != nil {
 				return adminapi.CreditGrant{}, err
 			}
-			amount, expires, err := grantOf(request.Body, currency, time.Now())
+			g, err := grantOf(request.Body, currency, time.Now())
 			if err != nil {
 				return adminapi.CreditGrant{}, err
 			}
 			batch := uuid.NewV7()
-			if err := billing.AddCredit(ctx, tx, billing.Credit{
-				ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Amount: amount, ExpiresAt: expires,
-				Actor: actor(ctx), Reason: request.Body.Reason,
-			}); err != nil {
-				return adminapi.CreditGrant{}, err
+			made := adminapi.CreditGrant{Id: batch.String(), AccountId: id.TypeID(), Source: adminapi.CreditSourceGift}
+			if g.payment == nil {
+				err = billing.AddCredit(ctx, tx, billing.Credit{
+					ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Amount: g.amount, ExpiresAt: g.expires,
+					Actor: actor(ctx), Reason: request.Body.Reason,
+				})
+			} else {
+				made.Source, made.Payment = adminapi.CreditSourceOfflinePayment, request.Body.Payment
+				made.ExchangeRate, err = creditOffline(ctx, tx, billing.PaidCredit{
+					ID: batch, Site: uuid.UUID(account.Site), Account: uuid.UUID(id), SiteCurrency: currency, Payment: *g.payment,
+					Channel: billing.Channel{Offline: g.channel}, ExpiresAt: g.expires, Actor: actor(ctx), Reason: request.Body.Reason,
+				})
 			}
-			made, _, err := billing.ReadCredit(ctx, tx, batch)
 			if err != nil {
 				return adminapi.CreditGrant{}, err
 			}
-			balance, err := a.readBalance(ctx, tx, id)
-			if err != nil {
-				return adminapi.CreditGrant{}, err
-			}
-			return adminapi.CreditGrant{
-				Id: batch.String(), AccountId: id.TypeID(), Amount: adminMoney(made.Amount, currency), ExpiresAt: made.ExpiresAt,
-				CreatedAt: made.CreatedAt, BalanceAfter: balanceBody(balance, currency),
-			}, nil
+			return a.granted(ctx, tx, id, batch, made, currency)
 		})
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GrantCredit201JSONResponse{Body: grant, Headers: adminapi.GrantCredit201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+	return adminapi.GrantCredit201JSONResponse{Body: body, Headers: adminapi.GrantCredit201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// creditOffline credits p, a payment an administrator received offline, with what it buys at the reference exchange
+// rate in force, none in the site's own currency, and returns that rate. The current rate is used as it stands: the
+// buffer a top-up adds comes with payments' quotes, which an offline payment does not have.
+func creditOffline(ctx context.Context, tx pg.Tx, p billing.PaidCredit) (*adminapi.ExchangeRate, error) {
+	var rate *billing.BillingExchangeRate
+	if p.Payment.Currency != p.SiteCurrency {
+		rates, err := billing.ExchangeRateHistory(ctx, tx, p.Payment.Currency.String(), p.SiteCurrency.String(), 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(rates) == 0 {
+			return nil, unprocessableFields("/payment/amount/currency", "no exchange rate to "+p.SiteCurrency.String()+" is kept for it")
+		}
+		rate, p.RateID = &rates[0], rates[0].ID
+	}
+	credited, err := billing.CreditsFor(p.Payment, p.SiteCurrency, rate)
+	if invalid := new(billing.PaidError); errors.As(err, &invalid) {
+		return nil, unprocessableFields("/payment/amount", err.Error())
+	} else if err != nil {
+		return nil, err
+	}
+	if credited <= 0 || credited > maxGrant {
+		return nil, unprocessable("a grant is more than 0 and at most 10,000 units of the site's currency")
+	}
+	p.Credited = credited
+	if err := billing.CreditPaid(ctx, tx, p); err != nil {
+		return nil, err
+	}
+	if rate == nil {
+		return nil, nil //nolint:nilnil // a payment in the site's currency is converted at no rate
+	}
+	body := exchangeBody(*rate)
+	return &body, nil
+}
+
+// granted is what a grant answers: made, with the batch as it was written and the balance after it.
+func (a adminAPI) granted(ctx context.Context, tx pg.Tx, account accounts.AccountID, id uuid.UUID, made adminapi.CreditGrant,
+	currency platform.Currency,
+) (adminapi.CreditGrant, error) {
+	batch, _, err := billing.ReadCredit(ctx, tx, id)
+	if err != nil {
+		return adminapi.CreditGrant{}, err
+	}
+	balance, err := a.readBalance(ctx, tx, account)
+	if err != nil {
+		return adminapi.CreditGrant{}, err
+	}
+	made.Amount, made.ExpiresAt, made.CreatedAt = adminMoney(batch.Amount, currency), batch.ExpiresAt, batch.CreatedAt
+	made.BalanceAfter = balanceBody(balance, currency)
+	return made, nil
 }
