@@ -467,7 +467,7 @@ func TestOpenRouterListIsTheBuilds(t *testing.T) {
 func TestOpenRouterListIsOneBuild(t *testing.T) {
 	t.Parallel()
 	r := goldenRig(t)
-	v := visibility{} // every model, and no router: the list answers for the build, as it does in a request
+	v := visibility{router: r.router} // every model; the projection must ignore subsequent changes to this router
 	l := r.models.published()
 	q := orQuery{limit: 2}
 	both := l.encode(v, q)
