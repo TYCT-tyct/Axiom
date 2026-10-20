@@ -23,10 +23,11 @@ func TestOpenRouterVersionedModel(t *testing.T) {
 		t.Fatalf("the list: %v; want acme/versioned and no internal slug", ids)
 	}
 	m := r.orModel(a, "acme/versioned")
-	if m.CanonicalSlug != "acme/versioned" || m.Name != "versioned" || m.Links.Details != orListPath+"/acme/versioned" {
+	want := []string{"acme/versioned", "versioned", orListPath + "/acme/versioned"}
+	if got := []string{m.CanonicalSlug, m.Name, m.Links.Details}; !slices.Equal(got, want) {
 		t.Errorf("the entry: %+v", m)
 	}
-	resp, body := r.do(http.MethodGet, orListPath+"/"+m.ID, a.key, nil)
+	resp, body := r.do(http.MethodGet, m.Links.Details, a.key, nil)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"id":"acme/versioned"`) {
 		t.Errorf("the detail: %d %s", resp.StatusCode, body)
 	}
