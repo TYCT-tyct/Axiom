@@ -219,7 +219,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending is out.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
-	s.stick()
+	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
@@ -265,7 +265,11 @@ func (s *session) stick() {
 		return
 	}
 	if ep := s.tries[last].entry.Endpoint; ep != s.c.sticky {
-		s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
+		if cache := s.c.stickyCache; cache != nil {
+			cache.Later(uuid.UUID(s.c.caller.AccountID()), s.x.Router.StickyWrite(s.c.stickyKey, ep, s.c.Plan.StickyTTL))
+		} else {
+			s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/kv"
+	"axiom/internal/routing"
 )
 
 // The rate dimensions of README「键」: a key's calls and its count_tokens requests have an allowance each.
@@ -88,21 +89,56 @@ func estimate(current, previous int64, elapsed, window time.Duration) int {
 // does not. The node's own counter is advanced on every request either way, so a fallback starts from the traffic the
 // node has already seen rather than from zero (README「限流计数」).
 func (h *Handler) countRate(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string) int {
+	return h.precheck(ctx, site, dimension, localKey, subject, nil, false)
+}
+
+// precheck reads the count, and the call's session binding when there is one, in one batch before admission. A cache
+// failure retains only the process count: a local sticky binding would disagree with other nodes, including after
+// recovery.
+func (h *Handler) precheck(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string, call *Call, compacted bool) int {
 	local := h.Limits.Rate.Count(localKey)
 	if h.KV == nil || !h.KV.Enabled() {
+		if call != nil {
+			call.sticky = h.stickyLocal(call.Session, compacted)
+		}
 		return local
 	}
 	index, elapsed := h.Limits.Rate.slot(h.KV.Now())
 	keys := []string{h.rateKey(site, dimension, subject, index), h.rateKey(site, dimension, subject, index-1)}
-	values, err := h.KV.Do(ctx, kv.Precheck, rateCounter.Cmd(keys, h.Limits.rateTTL))
+	var cmds [2]kv.Cmd
+	cmds[0] = rateCounter.Cmd(keys, h.Limits.rateTTL)
+	n := 1
+	if call != nil {
+		// One store for the whole call, its eventual write included: the shared one, never the process table.
+		call.stickyCache, call.stickyKey = h.KV, routing.StickyKey(h.KV, uuid.UUID(site), call.Session)
+		cmds[1] = kv.Get(call.stickyKey)
+		if compacted {
+			cmds[1] = kv.Delete(call.stickyKey)
+		}
+		n++
+	}
+	values, err := h.KV.Do(ctx, kv.Precheck, cmds[:n]...)
 	if err != nil {
 		return local // the breaker and the deadline have already counted it: the limit falls back, and never to a refusal
+	}
+	if call != nil && !compacted {
+		call.sticky = routing.StickyEndpoint(values[1])
 	}
 	counts, err := values[0].Ints()
 	if err != nil || len(counts) != 2 {
 		return local
 	}
 	return estimate(counts[0], counts[1], elapsed, h.Limits.cfg.RateWindow)
+}
+
+// stickyLocal is the binding of single-core mode: the process table, forgotten first when the client says its context
+// was compacted, since the cache it stuck for is gone.
+func (h *Handler) stickyLocal(session routing.SessionKey, compacted bool) routing.EndpointID {
+	if compacted {
+		h.Router.Forget(session)
+	}
+	endpoint, _ := h.Router.Stuck(session)
+	return endpoint
 }
 
 // rateKey is one window's key for a subject: ax:v1:rate:<site>:<dimension>:<subject>:<window> (README「键」).
