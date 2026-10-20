@@ -77,6 +77,9 @@ type eventReader struct {
 	// converting is set for a reader whose events are converted to another format: nothing of the upstream's
 	// identity reaches the client, so there is nothing to rewrite.
 	converting bool
+	// errClass and code are the fault the event's error names by its class and by its code, FaultNone when it names
+	// none; the error event's failure is made of them.
+	errClass, code Fault
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
@@ -96,6 +99,7 @@ func (s *eventReader) start(data []byte) {
 		s.dec.Reset(&s.src)
 	}
 	s.e = event{role: passive, data: data, usageAt: -1, edits: s.e.edits[:0]}
+	s.errClass, s.code = FaultNone, FaultNone
 }
 
 func (s *eventReader) dropBuffers() {

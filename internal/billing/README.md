@@ -48,9 +48,9 @@ type Channel struct{ Merchant uuid.UUID; Offline string }            // 已实�
 func CreditsFor(p Payment, site platform.Currency, rate *BillingExchangeRate) (int64, error) // 已实现：(实付 − 手续费) 按 rate 折成额度，向下取整一次；CreditPaid 的上限，管理接口按它算线下付款的额度
 func MinorUnits(c platform.Currency, billionths int64) (int64, error) // 已实现：十亿分之一单位换成最小单位，不是整数个最小单位就报错
 func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 或 CreditPaid 做的批次（来源、金额、过期、创建时间，付费的还有付款、渠道和汇率版本），管理接口回答加额度时读
-func RegisterExpire(cfg ExpireConfig) error // 已实现：把到期作废登记为队列上的周期任务 billing.expire_credit，每分钟，在队列 Start 之前调用（cmd/axiom 的 startSync）；包内的 expirer.run 是一轮，writeOffAccount 是一个账户的作废
+func RegisterExpire(cfg ExpireConfig) error // 已实现：把到期作废登记为队列上的周期任务 billing.expire_credit（`money` 队列，与扣费对账共用，不和同步、归档抢 worker，见 [平台的「任务队列」](../platform/README.md#任务队列)），每分钟，在队列 Start 之前调用（cmd/axiom 的 startSync）；包内的 expirer.run 是一轮，writeOffAccount 是一个账户的作废
 func Reconcile(ctx context.Context, db *pg.DB, platform pg.Scope) ([]string, error) // 已实现：每日自平，列出不平的交易和与账本不符的余额
-func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记为队列上的周期任务，在队列 Start 之前调用（cmd/axiom 的 startSync）
+func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记为队列上的周期任务（`money` 队列），在队列 Start 之前调用（cmd/axiom 的 startSync）
 func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；只从运营或管理的处理器调用，事务须是平台范围
 type Suppliers interface{ RecordAttempts; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
