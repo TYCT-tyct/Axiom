@@ -19,6 +19,17 @@ WHERE k.id = @key_id
     AND w.status = 'active' AND w.deleted_at IS NULL
     AND a.status = 'active';
 
+-- name: LockAccount :many
+-- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
+-- second one's count sees the first: a count read before the insert without this lock would let both through.
+SELECT id FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
+
+-- name: CountKeys :one
+-- The call keys the account holds that are not deleted: what the site's limit of keys per account bounds. Read in the
+-- account's turn (LockAccount), by API key of the account, so it counts what the insert is about to follow.
+SELECT count(*) FROM accounts.api_keys
+WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL;
+
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
     secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
@@ -40,12 +51,19 @@ LIMIT @page_size;
 SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL;
 
--- name: UpdateKey :many
--- Every setting a user may change, replaced whole; the expiry is not among them.
+-- name: LockKey :one
+-- The settings a change leaves behind, read in the key's row's turn in the transaction that writes: the audit entry
+-- names what this change replaced, and not what a change made at the same moment did.
+SELECT site_id, account_id, name, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL
+FOR UPDATE;
+
+-- name: UpdateKey :exec
+-- Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
+-- (LockKey), which has already given the tenant the audit entry needs.
 UPDATE accounts.api_keys SET name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
     models = @models, ip_allow = @ip_allow
-WHERE id = @id AND kind = 'call'
-RETURNING site_id, account_id;
+WHERE id = @id AND kind = 'call';
 
 -- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.

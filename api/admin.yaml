@@ -1696,13 +1696,15 @@ components:
         A site's own values for the sessions and keys its users get. A value that is absent is the default in code.
         Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days;
         the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to
-        1,000,000 units.
+        1,000,000 units; the keys one account may hold from 1 to 10,000, and the keys it may make in an hour too.
       properties:
         console_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 2592000}
         console_max_age_seconds: {type: integer, minimum: 300, maximum: 7776000}
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+        max_keys_per_account: {type: integer, minimum: 1, maximum: 10000}
+        key_creations_per_hour: {type: integer, minimum: 1, maximum: 10000}
     SiteSettingsView:
       type: object
       required: [settings, defaults]

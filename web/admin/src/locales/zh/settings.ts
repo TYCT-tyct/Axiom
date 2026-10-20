@@ -14,9 +14,13 @@ export default {
     admin_idle_timeout_seconds: "管理后台：闲置多久后会话失效",
     admin_max_age_seconds: "管理后台：会话最长保持多久",
     new_key_daily_limit: "新 key 的每日花费上限",
+    max_keys_per_account: "每个账户最多保有多少把调用 key",
+    key_creations_per_hour: "每个账户每小时最多创建多少把 key",
   },
   hint: "单位是秒，范围 {{min}} 到 {{max}}。留空用默认值（{{default}}）。",
+  countHint: "整数，范围 {{min}} 到 {{max}}。留空用默认值（{{default}}）。",
   limitHint: "金额（{{currency}}），0 到 1,000,000，最多 9 位小数。留空用默认值。",
   invalidRange: "时间要填整数秒，并且在提示的范围内。",
+  invalidCount: "数量要填整数，并且在提示的范围内。",
   invalidLimit: "新 key 的每日上限要填 0 到 1,000,000 之间的{{currency}}金额，最多 9 位小数。",
 };

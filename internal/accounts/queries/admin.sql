@@ -13,21 +13,24 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit
+    t.new_key_daily_limit, t.max_keys_per_account, t.key_creations_per_hour
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
 
 -- name: WriteSiteSettings :exec
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
 -- limits are not the admin API's and are left as they are.
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit)
+    new_key_daily_limit, max_keys_per_account, key_creations_per_hour)
 VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
     make_interval(secs => sqlc.narg(console_max_age_seconds)::bigint),
     make_interval(secs => sqlc.narg(admin_idle_seconds)::bigint),
-    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint)
+    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint,
+    sqlc.narg(max_keys_per_account)::integer, sqlc.narg(key_creations_per_hour)::integer)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
+    max_keys_per_account = excluded.max_keys_per_account,
+    key_creations_per_hour = excluded.key_creations_per_hour;
 
 -- name: CutSessions :exec
 -- A site that shortens its sessions writes the shorter lifetimes into the ones already made, so that loosening it again

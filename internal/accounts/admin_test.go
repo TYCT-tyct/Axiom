@@ -23,7 +23,7 @@ func TestSiteSettingsBounds(t *testing.T) {
 	t.Parallel()
 	ok := accounts.SiteSettings{
 		ConsoleIdle: 5 * time.Minute, ConsoleMaxAge: 90 * 24 * time.Hour, AdminIdle: 12 * time.Hour, AdminMaxAge: 24 * time.Hour,
-		NewKeyDailyLimit: new(int64(1_000_000_000_000_000)),
+		NewKeyDailyLimit: new(int64(1_000_000_000_000_000)), MaxKeysPerAccount: new(int32(10_000)), KeyCreationsPerHour: new(int32(1)),
 	}
 	for name, c := range map[string]struct {
 		change func(*accounts.SiteSettings)
@@ -39,6 +39,10 @@ func TestSiteSettingsBounds(t *testing.T) {
 		"an admin age too long":         {func(v *accounts.SiteSettings) { v.AdminMaxAge = 24*time.Hour + time.Second }, "admin_max_age_seconds"},
 		"a negative limit":              {func(v *accounts.SiteSettings) { v.NewKeyDailyLimit = new(int64(-1)) }, "new_key_daily_limit"},
 		"a limit over a million":        {func(v *accounts.SiteSettings) { v.NewKeyDailyLimit = new(int64(1_000_000_000_000_001)) }, "new_key_daily_limit"},
+		"no keys at all":                {func(v *accounts.SiteSettings) { v.MaxKeysPerAccount = new(int32(0)) }, "max_keys_per_account"},
+		"ten thousand and one keys":     {func(v *accounts.SiteSettings) { v.MaxKeysPerAccount = new(int32(10_001)) }, "max_keys_per_account"},
+		"no keys in an hour":            {func(v *accounts.SiteSettings) { v.KeyCreationsPerHour = new(int32(0)) }, "key_creations_per_hour"},
+		"ten thousand and one an hour":  {func(v *accounts.SiteSettings) { v.KeyCreationsPerHour = new(int32(10_001)) }, "key_creations_per_hour"},
 	} {
 		v := ok
 		c.change(&v)
@@ -113,7 +117,10 @@ func TestSiteSettingsAreWrittenWhole(t *testing.T) {
 		t.Fatalf("a site with no settings row (-want +got):\n%s", diff)
 	}
 	for _, set := range []accounts.SiteSettings{
-		{ConsoleIdle: time.Hour, AdminMaxAge: 2 * time.Hour, NewKeyDailyLimit: new(int64(0))},
+		{
+			ConsoleIdle: time.Hour, AdminMaxAge: 2 * time.Hour, NewKeyDailyLimit: new(int64(0)),
+			MaxKeysPerAccount: new(int32(7)), KeyCreationsPerHour: new(int32(3)),
+		},
 		{AdminIdle: time.Hour},
 	} {
 		if err := o.write(s1, set); err != nil {

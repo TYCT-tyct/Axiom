@@ -86,6 +86,7 @@ type guards struct {
 	ips    *buckets[siteIP]
 	emails *buckets[siteEmail]
 	users  *buckets[uuid.UUID]
+	keys   *buckets[uuid.UUID] // the call keys an account makes, by account
 
 	hashing  *semaphore.Weighted
 	hashWait time.Duration
@@ -110,6 +111,7 @@ func newGuards(concurrency int, wait time.Duration) guards {
 	}
 	return guards{
 		ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[uuid.UUID](),
+		keys:    newBuckets[uuid.UUID](),
 		hashing: semaphore.NewWeighted(int64(concurrency)), hashWait: wait,
 	}
 }

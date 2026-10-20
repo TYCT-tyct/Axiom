@@ -233,7 +233,7 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit
+    t.new_key_daily_limit, t.max_keys_per_account, t.key_creations_per_hour
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
 `
 
@@ -243,6 +243,8 @@ type ReadSiteSettingsRow struct {
 	AdminIdleSeconds     int64
 	AdminMaxAgeSeconds   int64
 	NewKeyDailyLimit     *int64
+	MaxKeysPerAccount    *int32
+	KeyCreationsPerHour  *int32
 }
 
 // A site with no settings row has none of its own; a site that does not exist has no row at all. A length of 0 is unset:
@@ -262,6 +264,8 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 			&i.AdminIdleSeconds,
 			&i.AdminMaxAgeSeconds,
 			&i.NewKeyDailyLimit,
+			&i.MaxKeysPerAccount,
+			&i.KeyCreationsPerHour,
 		); err != nil {
 			return nil, err
 		}
@@ -275,14 +279,17 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 
 const writeSiteSettings = `-- name: WriteSiteSettings :exec
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit)
+    new_key_daily_limit, max_keys_per_account, key_creations_per_hour)
 VALUES ($1, make_interval(secs => $2::bigint),
     make_interval(secs => $3::bigint),
     make_interval(secs => $4::bigint),
-    make_interval(secs => $5::bigint), $6::bigint)
+    make_interval(secs => $5::bigint), $6::bigint,
+    $7::integer, $8::integer)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
+    max_keys_per_account = excluded.max_keys_per_account,
+    key_creations_per_hour = excluded.key_creations_per_hour
 `
 
 type WriteSiteSettingsParams struct {
@@ -292,6 +299,8 @@ type WriteSiteSettingsParams struct {
 	AdminIdleSeconds     *int64
 	AdminMaxAgeSeconds   *int64
 	NewKeyDailyLimit     *int64
+	MaxKeysPerAccount    *int32
+	KeyCreationsPerHour  *int32
 }
 
 // Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
@@ -304,6 +313,8 @@ func (q *Queries) WriteSiteSettings(ctx context.Context, db DBTX, arg WriteSiteS
 		arg.AdminIdleSeconds,
 		arg.AdminMaxAgeSeconds,
 		arg.NewKeyDailyLimit,
+		arg.MaxKeysPerAccount,
+		arg.KeyCreationsPerHour,
 	)
 	return err
 }

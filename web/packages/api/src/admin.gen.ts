@@ -889,13 +889,15 @@ export interface components {
         TierList: {
             data: components["schemas"]["TierRef"][];
         };
-        /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
+        /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units; the keys one account may hold from 1 to 10,000, and the keys it may make in an hour too. */
         SiteSettings: {
             console_idle_timeout_seconds?: number;
             console_max_age_seconds?: number;
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
+            max_keys_per_account?: number;
+            key_creations_per_hour?: number;
         };
         SiteSettingsView: {
             settings: components["schemas"]["SiteSettings"];

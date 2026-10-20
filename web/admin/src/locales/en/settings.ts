@@ -16,9 +16,13 @@ export default {
     admin_idle_timeout_seconds: "Admin: idle time before a session ends",
     admin_max_age_seconds: "Admin: longest a session lasts",
     new_key_daily_limit: "Daily spend limit of a new key",
+    max_keys_per_account: "Call keys one account may hold",
+    key_creations_per_hour: "Call keys one account may make in an hour",
   },
   hint: "In seconds, from {{min}} to {{max}}. Empty uses the default ({{default}}).",
+  countHint: "A whole number from {{min}} to {{max}}. Empty uses the default ({{default}}).",
   limitHint: "An amount in {{currency}}, 0 to 1,000,000, up to 9 decimals. Empty uses the default.",
   invalidRange: "Times are whole seconds within the range shown.",
+  invalidCount: "Counts are whole numbers within the range shown.",
   invalidLimit: "The daily limit of a new key is an amount in {{currency}} from 0 to 1,000,000, with up to 9 decimals.",
 };

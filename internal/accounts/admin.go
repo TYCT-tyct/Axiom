@@ -28,19 +28,23 @@ type SiteSettings struct {
 	AdminIdle, AdminMaxAge     time.Duration
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit *int64
+	// MaxKeysPerAccount is how many call keys an account may hold that are not deleted, and KeyCreationsPerHour how
+	// many it may make in an hour.
+	MaxKeysPerAccount, KeyCreationsPerHour *int32
 }
 
 // DefaultSiteSettings are the values that apply where a site sets none.
 func DefaultSiteSettings() SiteSettings {
 	limit := int64(defaultNewKeyDailyLimit)
+	maxKeys, perHour := int32(defaultMaxKeysPerAccount), int32(defaultKeyCreationsPerHour)
 	return SiteSettings{
 		ConsoleIdle: defaultLifetimes[Console].idle, ConsoleMaxAge: defaultLifetimes[Console].max,
 		AdminIdle: defaultLifetimes[Admin].idle, AdminMaxAge: defaultLifetimes[Admin].max,
-		NewKeyDailyLimit: &limit,
+		NewKeyDailyLimit: &limit, MaxKeysPerAccount: &maxKeys, KeyCreationsPerHour: &perHour,
 	}
 }
 
-// The bounds the table keeps (00001_tables.sql), the same the contract states.
+// The bounds the table keeps (00001_tables.sql, 00007_key_limits.sql), the same the contract states.
 const (
 	minSession     = 5 * time.Minute
 	maxConsoleIdle = 30 * 24 * time.Hour
@@ -48,6 +52,8 @@ const (
 	maxAdminIdle   = 12 * time.Hour
 	maxAdminAge    = 24 * time.Hour
 	maxNewKeyDaily = 1_000_000_000_000_000
+	minKeyLimit    = 1
+	maxKeyLimit    = 10_000
 )
 
 // SettingError is a setting outside its bounds. Field is the setting's name in the admin API.
@@ -73,6 +79,17 @@ func (v SiteSettings) Check() error {
 	if l := v.NewKeyDailyLimit; l != nil && (*l < 0 || *l > maxNewKeyDaily) {
 		return &SettingError{"new_key_daily_limit", fmt.Sprintf("must be from 0 to %d billionths of a credit", int64(maxNewKeyDaily))}
 	}
+	for _, c := range []struct {
+		field string
+		n     *int32
+	}{
+		{"max_keys_per_account", v.MaxKeysPerAccount},
+		{"key_creations_per_hour", v.KeyCreationsPerHour},
+	} {
+		if c.n != nil && (*c.n < minKeyLimit || *c.n > maxKeyLimit) {
+			return &SettingError{c.field, fmt.Sprintf("must be from %d to %d", minKeyLimit, maxKeyLimit)}
+		}
+	}
 	return nil
 }
 
@@ -86,7 +103,8 @@ func (v SiteSettings) detail() map[string]any {
 	return map[string]any{
 		"console_idle_timeout_seconds": seconds(v.ConsoleIdle), "console_max_age_seconds": seconds(v.ConsoleMaxAge),
 		"admin_idle_timeout_seconds": seconds(v.AdminIdle), "admin_max_age_seconds": seconds(v.AdminMaxAge),
-		"new_key_daily_limit": v.NewKeyDailyLimit,
+		"new_key_daily_limit": v.NewKeyDailyLimit, "max_keys_per_account": v.MaxKeysPerAccount,
+		"key_creations_per_hour": v.KeyCreationsPerHour,
 	}
 }
 
@@ -123,7 +141,7 @@ func (s *Service) SiteSettings(ctx context.Context, tx pg.Tx, site SiteID) (Site
 	return SiteSettings{
 		ConsoleIdle: time.Duration(r.ConsoleIdleSeconds) * time.Second, ConsoleMaxAge: time.Duration(r.ConsoleMaxAgeSeconds) * time.Second,
 		AdminIdle: time.Duration(r.AdminIdleSeconds) * time.Second, AdminMaxAge: time.Duration(r.AdminMaxAgeSeconds) * time.Second,
-		NewKeyDailyLimit: r.NewKeyDailyLimit,
+		NewKeyDailyLimit: r.NewKeyDailyLimit, MaxKeysPerAccount: r.MaxKeysPerAccount, KeyCreationsPerHour: r.KeyCreationsPerHour,
 	}, nil
 }
 
@@ -148,6 +166,7 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err := s.queries.WriteSiteSettings(ctx, tx, WriteSiteSettingsParams{
 		SiteID: uuid.UUID(site), ConsoleIdleSeconds: seconds64(set.ConsoleIdle), ConsoleMaxAgeSeconds: seconds64(set.ConsoleMaxAge),
 		AdminIdleSeconds: seconds64(set.AdminIdle), AdminMaxAgeSeconds: seconds64(set.AdminMaxAge), NewKeyDailyLimit: set.NewKeyDailyLimit,
+		MaxKeysPerAccount: set.MaxKeysPerAccount, KeyCreationsPerHour: set.KeyCreationsPerHour,
 	}); err != nil {
 		return fmt.Errorf("write the site's settings: %w", err)
 	}

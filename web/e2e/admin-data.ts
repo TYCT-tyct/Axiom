@@ -260,6 +260,8 @@ export function usualState(): AdminState {
         admin_idle_timeout_seconds: 3600,
         admin_max_age_seconds: 43200,
         new_key_daily_limit: usd("10"),
+        max_keys_per_account: 100,
+        key_creations_per_hour: 50,
       },
     },
     tiers,

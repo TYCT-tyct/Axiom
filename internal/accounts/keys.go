@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
+	"sync"
 	"time"
 	"uuid"
 
@@ -16,6 +18,20 @@ import (
 
 // ErrKeyNotFound is a key the transaction cannot see, or already deleted.
 var ErrKeyNotFound = errors.New("accounts: no such API key")
+
+// ErrTooManyKeys is an account that already holds as many call keys as its site allows. It is lifted by deleting a
+// key, never taken away: the keys made are the account's, and a site that lowers its limit keeps them usable.
+var ErrTooManyKeys = errors.New("accounts: too many API keys")
+
+// TooManyKeys is ErrTooManyKeys with the limit of the site and the keys the account holds.
+type TooManyKeys struct{ Limit, Count int }
+
+func (e *TooManyKeys) Error() string {
+	return fmt.Sprintf("%s: %d of %d", ErrTooManyKeys, e.Count, e.Limit)
+}
+
+// Is makes errors.Is(err, ErrTooManyKeys) true for it.
+func (*TooManyKeys) Is(target error) bool { return target == ErrTooManyKeys }
 
 // The reset windows of a spend limit.
 const (
@@ -71,15 +87,21 @@ type CreatedKey struct {
 }
 
 // CreateKey makes a call key in tx, with the site's prefix and, unless r says otherwise, the site's daily spend limit
-// for new keys, and records it in the audit log in the same transaction.
+// for new keys, and records it in the audit log in the same transaction. It refuses a key over one of the site's two
+// limits on how many an account holds and how many it makes in an hour (admitKey).
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error) {
 	site, ok := s.snapshot.Load().sites[r.Site]
 	if !ok {
 		return CreatedKey{}, fmt.Errorf("create an API key: site %s is not in the snapshot", r.Site.TypeID())
 	}
+	give, err := s.admitKey(ctx, tx, site, r.Account)
+	if err != nil {
+		return CreatedKey{}, err
+	}
 	if r.Workspace == (WorkspaceID{}) {
 		found, err := s.queries.DefaultWorkspace(ctx, tx, uuid.UUID(r.Account))
 		if err != nil || len(found) == 0 {
+			give()
 			return CreatedKey{}, fmt.Errorf("create an API key: the account's default workspace: %w", errors.Join(err, ErrKeyNotFound))
 		}
 		r.Workspace = WorkspaceID(found[0])
@@ -98,12 +120,48 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy), ExpiresAt: r.ExpiresAt,
 		SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}); err != nil {
+		give()
 		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
-	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account)); err != nil {
+	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), nil); err != nil {
+		give()
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
+}
+
+// admitKey is the site's limits on the call keys account holds, met in the transaction that makes one: the hour's
+// creation turns (KeyCreationsPerHour), and the keys the account already holds (MaxKeysPerAccount). The count is read
+// in the account's row's turn, so that two creates at once cannot both take the last place. It returns the turn, to be
+// given back when the key is not made after all. The turns are counted by the node, as the attempts before sign-in are
+// (README.md「登录前的资源」), so the nodes multiply the hourly limit by their number.
+func (s *Service) admitKey(ctx context.Context, tx pg.Tx, site Site, account AccountID) (func(), error) {
+	per := time.Hour / time.Duration(site.KeyCreationsPerHour)
+	turns := s.guards.keys
+	if wait := turns.take(uuid.UUID(account), site.KeyCreationsPerHour, per, s.now()); wait > 0 {
+		return nil, &TooManyAttempts{RetryAfter: wait}
+	}
+	// The turn is given back on every way out that makes no key: here, and by the caller whose later steps fail.
+	give := sync.OnceFunc(func() { turns.give(uuid.UUID(account), per, s.now()) })
+	locked, err := s.queries.LockAccount(ctx, tx, uuid.UUID(account))
+	if err != nil {
+		give()
+		return nil, fmt.Errorf("create an API key: lock the account: %w", err)
+	}
+	if len(locked) == 0 {
+		give()
+		return nil, fmt.Errorf("create an API key: %w", ErrNotFound)
+	}
+	count, err := s.queries.CountKeys(ctx, tx, uuid.UUID(account))
+	if err != nil {
+		give()
+		return nil, fmt.Errorf("create an API key: count the account's keys: %w", err)
+	}
+	if int(count) >= site.MaxKeysPerAccount {
+		give()
+		return nil, &TooManyKeys{Limit: site.MaxKeysPerAccount, Count: int(count)}
+	}
+	return give, nil
 }
 
 // nullable is s as a nullable column: empty is null.
@@ -156,28 +214,69 @@ func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
 	return keyOf(rows[0]), nil
 }
 
-// UpdateKey replaces id's settings in tx, records it, and returns the key as changed. Turning a disabled key on again
-// is a change of settings like any other. The next call with the key meets the new settings on every node: Admit reads
-// them from the database.
+// UpdateKey replaces id's settings in tx, records what it changed, and returns the key as changed. Turning a disabled
+// key on again is a change of settings like any other. The old settings are read in the key's row's turn, in this
+// transaction, so the audit entry names what this change replaced and not what a change made at the same moment did.
+// The next call with the key meets the new settings on every node: Admit reads them from the database.
 func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) {
+	before, err := s.queries.LockKey(ctx, tx, uuid.UUID(id))
+	if errors.Is(err, pg.ErrNoRows) {
+		return Key{}, ErrKeyNotFound
+	}
+	if err != nil {
+		return Key{}, fmt.Errorf("update an API key: read it: %w", err)
+	}
 	status := "active"
 	if k.Disabled {
 		status = "disabled"
 	}
-	rows, err := s.queries.UpdateKey(ctx, tx, UpdateKeyParams{
+	if err := s.queries.UpdateKey(ctx, tx, UpdateKeyParams{
 		ID: uuid.UUID(id), Name: k.Name, Status: status, SpendLimit: k.SpendLimit, LimitReset: nullable(k.LimitReset),
 		Models: nilIfEmpty(k.Models), IpAllow: nilIfEmpty(k.IPAllow),
-	})
-	if err != nil {
+	}); err != nil {
 		return Key{}, fmt.Errorf("update an API key: %w", err)
 	}
-	if len(rows) == 0 {
-		return Key{}, ErrKeyNotFound
-	}
-	if err := recordKey(ctx, tx, actor, "api_key.update", id, rows[0].SiteID, rows[0].AccountID); err != nil {
+	if err := recordKey(ctx, tx, actor, "api_key.update", id, before.SiteID, before.AccountID, keyChange(before, k)); err != nil {
 		return Key{}, err
 	}
 	return s.GetKey(ctx, tx, id)
+}
+
+// keyChange is what a change to a key replaced, as the audit entry records it: the names of the settings that changed,
+// and the values of those the log may hold, as they were and as they now are. A setting that did not change is in
+// neither. The two lists are named and no more: a model list is up to 256 names of 200 characters, more than an entry's
+// 8 KiB, and an address is personal data the log does not hold (platform/README.md「审计日志」).
+func keyChange(before LockKeyRow, now KeySettings) map[string]any {
+	changed := []string{}
+	was, after := map[string]any{}, map[string]any{}
+	disclose := func(name string, old, next any) {
+		changed = append(changed, name)
+		was[name], after[name] = old, next
+	}
+	if before.Name != now.Name {
+		disclose("name", before.Name, now.Name)
+	}
+	if disabled := before.Status == "disabled"; disabled != now.Disabled {
+		disclose("disabled", disabled, now.Disabled)
+	}
+	if !sameOptional(before.SpendLimit, now.SpendLimit) {
+		disclose("spend_limit", before.SpendLimit, now.SpendLimit)
+	}
+	if reset := nullable(now.LimitReset); !sameOptional(before.LimitReset, reset) {
+		disclose("limit_reset", before.LimitReset, reset)
+	}
+	if !slices.Equal(before.Models, nilIfEmpty(now.Models)) {
+		changed = append(changed, "models")
+	}
+	if !slices.Equal(before.IpAllow, nilIfEmpty(now.IPAllow)) {
+		changed = append(changed, "ip_allow")
+	}
+	return map[string]any{"changed": changed, "before": was, "after": after}
+}
+
+// sameOptional is whether two optional values are both unset or both the same.
+func sameOptional[T comparable](a, b *T) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 // keyOf is a key row as a Key.
@@ -210,12 +309,12 @@ func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, ke
 	if len(rows) == 0 {
 		return ErrKeyNotFound
 	}
-	return recordKey(ctx, tx, actor, "api_key.delete", key, rows[0].SiteID, rows[0].AccountID)
+	return recordKey(ctx, tx, actor, "api_key.delete", key, rows[0].SiteID, rows[0].AccountID, nil)
 }
 
-// recordKey records a change to key, which belongs to account of site.
-func recordKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, key KeyID, site, account uuid.UUID) error {
-	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Target: audit.Target{
+// recordKey records a change to key, which belongs to account of site, with what it replaced.
+func recordKey(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, key KeyID, site, account uuid.UUID, detail map[string]any) error {
+	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Detail: detail, Target: audit.Target{
 		Module: "accounts", Kind: "api_key", ID: key.TypeID(), Site: site, Account: account,
 	}})
 }

@@ -19,6 +19,13 @@ const durations = [
   { name: "admin_max_age_seconds", min: 300, max: 86_400 },
 ] as const;
 
+// The limits that are counts of keys rather than lengths of time: the call keys one account may hold, and the ones it
+// may make in an hour.
+const counts = [
+  { name: "max_keys_per_account", min: 1, max: 10_000 },
+  { name: "key_creations_per_hour", min: 1, max: 10_000 },
+] as const;
+
 // The site the settings are of: the admin has no list of sites in M1, so it is the site the admin's own account is of.
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -87,6 +94,16 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
       {limit ? format.money(limit) : "—"} {settings.new_key_daily_limit ? own : standard}
     </span>,
   ]);
+  for (const { name } of counts) {
+    const value = settings[name];
+    const shown = value ?? defaults[name] ?? 0;
+    rows.push([
+      t(`settings.field.${name}`),
+      <span key={name}>
+        {format.number(shown)} {value === undefined ? standard : own}
+      </span>,
+    ]);
+  }
   return (
     <>
       <Actions>
@@ -101,23 +118,39 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
   );
 }
 
-// The settings as typed: a value left empty is left out (the default applies), and one outside its bounds is a problem.
-function readSettings(
+// A whole number typed for one of the counted settings: empty is left out, so the default applies, and anything but an
+// integer in the setting's bounds is the problem to show.
+function readNumbers(
   values: Record<string, string>,
-  limitCurrency: string | undefined,
-  words: { range: string; limit: string },
-): Settings | Problem {
-  const settings: Record<string, unknown> = {};
-  for (const { name, min, max } of durations) {
+  settings: Record<string, unknown>,
+  numbers: readonly { name: string; min: number; max: number }[],
+  problem: string,
+): string | undefined {
+  for (const { name, min, max } of numbers) {
     const typed = (values[name] ?? "").trim();
     if (typed === "") {
       continue;
     }
-    const seconds = Number(typed);
-    if (!/^\d+$/.test(typed) || seconds < min || seconds > max) {
-      return { problem: words.range };
+    const count = Number(typed);
+    if (!/^\d+$/.test(typed) || count < min || count > max) {
+      return problem;
     }
-    settings[name] = seconds;
+    settings[name] = count;
+  }
+  return undefined;
+}
+
+// The settings as typed: a value left empty is left out (the default applies), and one outside its bounds is a problem.
+function readSettings(
+  values: Record<string, string>,
+  limitCurrency: string | undefined,
+  words: { range: string; count: string; limit: string },
+): Settings | Problem {
+  const settings: Record<string, unknown> = {};
+  const problem =
+    readNumbers(values, settings, durations, words.range) ?? readNumbers(values, settings, counts, words.count);
+  if (problem !== undefined) {
+    return { problem };
   }
   const limit = (values.new_key_daily_limit ?? "").trim();
   if (limit !== "") {
@@ -128,6 +161,28 @@ function readSettings(
     settings.new_key_daily_limit = { amount, currency: limitCurrency };
   }
   return settings as Settings;
+}
+
+// The counted limits of the form: the call keys one account may hold, and the ones it may make in an hour.
+function KeyLimits({ view, error }: { view: AdminSchemas["SiteSettingsView"]; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      {counts.map(({ name, min, max }) => (
+        <TextField
+          key={name}
+          label={t(`settings.field.${name}`)}
+          hint={t("settings.countHint", { min, max, default: view.defaults[name] ?? 0 })}
+          name={name}
+          inputMode="numeric"
+          autoComplete="off"
+          defaultValue={view.settings[name]}
+          error={errors.field(error, name)}
+        />
+      ))}
+    </>
+  );
 }
 
 function EditDialog({
@@ -143,7 +198,11 @@ function EditDialog({
   const errors = useErrors();
   const duration = useDuration();
   const currency = view.defaults.new_key_daily_limit?.currency;
-  const words = { range: t("settings.invalidRange"), limit: t("settings.invalidLimit", { currency: currency ?? "" }) };
+  const words = {
+    range: t("settings.invalidRange"),
+    count: t("settings.invalidCount"),
+    limit: t("settings.invalidLimit", { currency: currency ?? "" }),
+  };
   return (
     <ChangeDialog
       title={t("settings.edit")}
@@ -176,6 +235,7 @@ function EditDialog({
             defaultValue={view.settings.new_key_daily_limit ? moneyInput(view.settings.new_key_daily_limit.amount) : ""}
             error={errors.field(error, "new_key_daily_limit")}
           />
+          <KeyLimits view={view} error={error} />
         </>
       )}
       read={(values) => readSettings(values, currency, words)}

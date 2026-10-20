@@ -229,7 +229,7 @@ export interface paths {
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it.
+         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds and the keys it makes in an hour; the cap is answered 409, and the hourly one 429 with `Retry-After`, and neither depends on this request alone.
          */
         post: operations["createKey"];
         delete?: never;
@@ -978,6 +978,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
     };
