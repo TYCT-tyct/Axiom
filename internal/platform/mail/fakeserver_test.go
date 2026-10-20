@@ -23,9 +23,11 @@ import (
 	"time"
 )
 
-// delivery is one message the fake server accepted, and whether the session that carried it was encrypted.
+// delivery is one message the fake server accepted, the envelope commands that led to it, and whether the session that
+// carried it was encrypted.
 type delivery struct {
 	payload   []byte
+	envelope  []string // the MAIL FROM and RCPT TO lines as they arrived, angle brackets included
 	encrypted bool
 }
 
@@ -39,7 +41,7 @@ type fakeServer struct {
 	startTLS   bool             // advertise and honour STARTTLS
 	silent     bool             // accept and say nothing, as a stalled server does
 	user, pass string           // empty serves without authentication
-	rejectStep string           // "auth", "mail", "rcpt" or "data": the step answered with rejectCode
+	rejectStep string           // "hello", "starttls", "auth", "mail", "rcpt" or "data": the step answered with rejectCode
 	rejectCode int
 	messages   chan delivery
 
@@ -170,6 +172,7 @@ type session struct {
 	w             *bufio.Writer
 	encrypted     bool
 	authenticated bool
+	envelope      []string // the MAIL FROM and RCPT TO lines, as received
 }
 
 // write sends one reply line and reports whether the session continues.
@@ -186,15 +189,22 @@ func (s *session) command(ctx context.Context, line string) bool {
 	switch strings.ToUpper(verb) {
 	case "EHLO":
 		return s.ehlo()
-	case "HELO", "RSET", "NOOP":
+	case "HELO":
+		if s.server.rejectStep == "hello" {
+			return s.write(s.server.rejection())
+		}
+		return s.write("250 OK")
+	case "RSET", "NOOP":
 		return s.write("250 OK")
 	case "STARTTLS":
 		return s.startTLS(ctx)
 	case "AUTH":
 		return s.authenticate(rest)
 	case "MAIL":
+		s.envelope = append(s.envelope, line)
 		return s.mail()
 	case "RCPT":
+		s.envelope = append(s.envelope, line)
 		return s.rcpt()
 	case "DATA":
 		return s.data()
@@ -207,6 +217,9 @@ func (s *session) command(ctx context.Context, line string) bool {
 }
 
 func (s *session) ehlo() bool {
+	if s.server.rejectStep == "hello" {
+		return s.write(s.server.rejection())
+	}
 	extensions := []string{"250-fake"}
 	if s.server.startTLS && !s.encrypted {
 		extensions = append(extensions, "250-STARTTLS")
@@ -227,6 +240,9 @@ func (s *session) startTLS(ctx context.Context) bool {
 	if !s.server.startTLS || s.encrypted {
 		return s.write("502 5.5.1 STARTTLS is not offered")
 	}
+	if s.server.rejectStep == "starttls" {
+		return s.write(s.server.rejection())
+	}
 	if !s.write("220 Ready to start TLS") {
 		return false
 	}
@@ -242,7 +258,10 @@ func (s *session) startTLS(ctx context.Context) bool {
 }
 
 func (s *session) authenticate(rest string) bool {
-	s.authenticated = s.server.rejectStep != "auth" && s.server.credentials(rest)
+	if s.server.rejectStep == "auth" {
+		return s.write(s.server.rejection())
+	}
+	s.authenticated = s.server.credentials(rest)
 	reply := "535 5.7.8 Authentication failed"
 	if s.authenticated {
 		reply = "235 2.7.0 Authentication successful"
@@ -295,7 +314,7 @@ func (s *session) data() bool {
 	if !s.write("250 2.0.0 OK: queued") {
 		return false
 	}
-	s.server.messages <- delivery{payload: payload, encrypted: s.encrypted}
+	s.server.messages <- delivery{payload: payload, envelope: s.envelope, encrypted: s.encrypted}
 	return true
 }
 

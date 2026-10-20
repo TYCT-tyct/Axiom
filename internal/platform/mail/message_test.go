@@ -59,7 +59,10 @@ func TestMessageBytes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := c.c.bytes()
+			got, err := c.c.bytes()
+			if err != nil {
+				t.Fatalf("bytes() error = %v", err)
+			}
 			assertWireFormat(t, got)
 			golden(t, c.name+".eml", got)
 		})
@@ -77,7 +80,10 @@ func TestMessageLongSubject(t *testing.T) {
 		subject: subject, text: "Hello", html: "<p>Hello</p>",
 		date: goldenDate, messageID: "<long@axiom.example>", boundary: "axiom-long",
 	}
-	payload := c.bytes()
+	payload, err := c.bytes()
+	if err != nil {
+		t.Fatalf("bytes() error = %v", err)
+	}
 	assertWireFormat(t, payload)
 	msg, err := netmail.ReadMessage(bytes.NewReader(payload))
 	if err != nil {
@@ -86,6 +92,71 @@ func TestMessageLongSubject(t *testing.T) {
 	decoded, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
 	if err != nil || decoded != subject {
 		t.Errorf("subject decodes to %q, %v; want the subject back", decoded, err)
+	}
+	// Every line of the header section is folded at the recommended width, not merely under the hard limit.
+	maxLine(t, payload, foldAt)
+}
+
+// TestMessageLongDisplayNames: a display name too long for one line is encoded and folded like a subject, and the
+// recipient's library gives back the name the caller wrote.
+func TestMessageLongDisplayNames(t *testing.T) {
+	t.Parallel()
+	name := strings.Repeat("运维通知", 20)
+	c := compose{
+		from:    netmail.Address{Name: name, Address: "no-reply@axiom.example"},
+		to:      netmail.Address{Name: name, Address: "user@example.com"},
+		subject: "Welcome", text: "Hello", html: "<p>Hello</p>",
+		date: goldenDate, messageID: "<names@axiom.example>", boundary: "axiom-names",
+	}
+	payload, err := c.bytes()
+	if err != nil {
+		t.Fatalf("bytes() error = %v", err)
+	}
+	assertWireFormat(t, payload)
+	maxLine(t, payload, foldAt)
+	msg, err := netmail.ReadMessage(bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	for _, field := range []string{"From", "To"} {
+		list, err := msg.Header.AddressList(field)
+		if err != nil || len(list) != 1 {
+			t.Fatalf("%s = %v, %v; want one address", field, list, err)
+		}
+		if list[0].Name != name {
+			t.Errorf("%s name = %q; want the name back", field, list[0].Name)
+		}
+	}
+}
+
+// TestMessageLongASCII: a plain-ASCII value that fits no single line is folded at its spaces and still reads as written;
+// one with nowhere to fold is refused, because no header line may pass 998 characters.
+func TestMessageLongASCII(t *testing.T) {
+	t.Parallel()
+	c := compose{
+		from:    netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"},
+		to:      netmail.Address{Address: "user@example.com"},
+		subject: strings.Repeat("word ", 400), text: "Hello", html: "<p>Hello</p>",
+		date: goldenDate, messageID: "<ascii@axiom.example>", boundary: "axiom-ascii",
+	}
+	payload, err := c.bytes()
+	if err != nil {
+		t.Fatalf("bytes() error = %v", err)
+	}
+	assertWireFormat(t, payload)
+	maxLine(t, payload, foldAt)
+	msg, err := netmail.ReadMessage(bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	if got := strings.TrimSuffix(msg.Header.Get("Subject"), " "); got != strings.TrimSuffix(c.subject, " ") {
+		t.Errorf("subject is %d bytes; want the %d bytes written", len(got), len(c.subject))
+	}
+
+	unbreakable := c
+	unbreakable.subject = strings.Repeat("x", 1000)
+	if _, err := unbreakable.bytes(); !errors.Is(err, ErrInvalidMessage) {
+		t.Errorf("bytes() of a 1000-byte word error = %v; want ErrInvalidMessage", err)
 	}
 }
 
@@ -102,7 +173,10 @@ func TestMessageParses(t *testing.T) {
 		text:    text, html: html,
 		date: goldenDate, messageID: "<parse@axiom.example>", boundary: "axiom-parse",
 	}
-	payload := c.bytes()
+	payload, err := c.bytes()
+	if err != nil {
+		t.Fatalf("bytes() error = %v", err)
+	}
 	assertWireFormat(t, payload)
 
 	msg, err := netmail.ReadMessage(bytes.NewReader(payload))
@@ -172,6 +246,7 @@ func TestMessageValidation(t *testing.T) {
 		{name: "an empty subject", edit: func(m *Message) { m.Subject = "" }},
 		{name: "a subject of spaces", edit: func(m *Message) { m.Subject = " \t" }},
 		{name: "a subject spanning lines", edit: func(m *Message) { m.Subject = "Welcome\r\nBcc: other@example.com" }},
+		{name: "a subject holding a control character", edit: func(m *Message) { m.Subject = "Welcome\x00" }},
 		{name: "no text body", edit: func(m *Message) { m.Text = "" }},
 		{name: "no HTML body", edit: func(m *Message) { m.HTML = "" }},
 		{name: "no recipient", edit: func(m *Message) { m.To = "" }},
@@ -199,11 +274,115 @@ func TestNewMessageID(t *testing.T) {
 	if !strings.HasPrefix(id, "<") || !strings.HasSuffix(id, "@axiom.example>") {
 		t.Errorf("newMessageID() = %q; want an id at axiom.example", id)
 	}
+	// The domain comes from the address even when its local part holds one of its own.
+	if got := newMessageID(`"post"@"no-reply"@axiom.example`); !strings.HasSuffix(got, "@axiom.example>") {
+		t.Errorf("newMessageID() = %q; want an id at axiom.example", got)
+	}
 	if other := newMessageID("no-reply@axiom.example"); other == id {
 		t.Errorf("two messages got the same id %q", id)
 	}
-	if id := newMessageID("planted"); !strings.HasSuffix(id, "@localhost>") {
-		t.Errorf("newMessageID() of an address without a domain = %q; want the localhost fallback", id)
+}
+
+// TestEncodedWords: the encoder matches the standard library byte for byte, so a message this package renders is the
+// message mime.QEncoding would have rendered, and every word keeps within the 75-character limit.
+func TestEncodedWords(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"验证邮件",
+		strings.Repeat("模型切换通知 ", 12),
+		"Hello, 世界! =?UTF-8?q?not-a-word?=",
+		"tab\tand a very long tail " + strings.Repeat("的话", 40),
+	}
+	for _, value := range cases {
+		got := strings.Join(encodeWords(value), " ")
+		if want := mime.QEncoding.Encode("UTF-8", value); got != want {
+			t.Errorf("encodeWords(%q) = %q; want %q", value, got, want)
+		}
+		for _, word := range encodeWords(value) {
+			if len(word) > 75 {
+				t.Errorf("encodeWords(%q) produced %d characters; want at most 75", value, len(word))
+			}
+		}
+	}
+}
+
+// TestMailbox: the envelope path is what the server routes on, so it is quoted and escaped, never truncated.
+func TestMailbox(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		addr netmail.Address
+		want string
+	}{
+		{name: "a dot-atom", addr: netmail.Address{Address: "user.name+tag@example.com"}, want: "user.name+tag@example.com"},
+		{name: "a space", addr: netmail.Address{Address: "a b@example.com"}, want: `"a b"@example.com`},
+		{name: "a quote and a backslash", addr: netmail.Address{Address: `a"b\c@example.com`}, want: `"a\"b\\c"@example.com`},
+		{name: "an at sign inside the local part", addr: netmail.Address{Address: "a@b@example.com"}, want: `"a@b"@example.com`},
+		{name: "a domain literal", addr: netmail.Address{Address: "user@[192.0.2.1]"}, want: "user@[192.0.2.1]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := mailbox(c.addr)
+			if err != nil {
+				t.Fatalf("mailbox() error = %v", err)
+			}
+			if got != c.want {
+				t.Errorf("mailbox() = %q; want %q", got, c.want)
+			}
+			// What the server parses back is the address the caller gave.
+			if back, err := netmail.ParseAddress(got); err != nil || back.Address != c.addr.Address {
+				t.Errorf("ParseAddress(%q) = %v, %v; want %q", got, back, err, c.addr.Address)
+			}
+		})
+	}
+	for _, c := range []struct {
+		name string
+		addr netmail.Address
+	}{
+		{name: "no domain", addr: netmail.Address{Address: "planted"}},
+		{name: "a local part only SMTPUTF8 carries", addr: netmail.Address{Address: "用户@example.com"}},
+		{name: "a domain only SMTPUTF8 carries", addr: netmail.Address{Address: "user@例え.example"}},
+		{name: "a path past 256 octets", addr: netmail.Address{Address: strings.Repeat("x", 250) + "@example.com"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got, err := mailbox(c.addr); !errors.Is(err, ErrInvalidMessage) {
+				t.Errorf("mailbox() = %q, %v; want ErrInvalidMessage", got, err)
+			}
+		})
+	}
+}
+
+// TestAddressHeader: a display name is quoted when it is plain, encoded when it is not, and either way the mailbox it
+// wraps is the one the envelope is given.
+func TestAddressHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		addr netmail.Address
+		want string
+	}{
+		{name: "no name", addr: netmail.Address{Address: "user@example.com"}, want: "<user@example.com>"},
+		{name: "a plain name", addr: netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"}, want: `"Axiom" <no-reply@axiom.example>`},
+		{name: "a name with a quote", addr: netmail.Address{Name: `A "quoted" name`, Address: "user@example.com"}, want: `"A \"quoted\" name" <user@example.com>`},
+		{name: "an encoded name", addr: netmail.Address{Name: "运维", Address: "user@example.com"}, want: `=?UTF-8?q?=E8=BF=90=E7=BB=B4?= <user@example.com>`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := addressHeader(c.addr)
+			if err != nil {
+				t.Fatalf("addressHeader() error = %v", err)
+			}
+			if got != c.want {
+				t.Errorf("addressHeader() = %q; want %q", got, c.want)
+			}
+			back, err := netmail.ParseAddress(got)
+			if err != nil || back.Address != c.addr.Address || back.Name != c.addr.Name {
+				t.Errorf("ParseAddress(%q) = %v, %v; want %q at %q", got, back, err, c.addr.Name, c.addr.Address)
+			}
+		})
 	}
 }
 
@@ -219,9 +398,16 @@ func assertWireFormat(t *testing.T, payload []byte) {
 			t.Errorf("byte %d is a bare CR", i)
 		}
 	}
-	for i, line := range bytes.Split(payload, []byte("\r\n")) {
-		if len(line) > 998 {
-			t.Errorf("line %d is %d bytes; want at most 998", i+1, len(line))
+	maxLine(t, payload, lineMax)
+}
+
+// maxLine checks that no line of the header section passes width, which is where a long value has to be folded.
+func maxLine(t *testing.T, payload []byte, width int) {
+	t.Helper()
+	headers, _, _ := bytes.Cut(payload, []byte("\r\n\r\n"))
+	for i, line := range bytes.Split(headers, []byte("\r\n")) {
+		if len(line) > width {
+			t.Errorf("header line %d is %d bytes; want at most %d: %q", i+1, len(line), width, line)
 		}
 	}
 }

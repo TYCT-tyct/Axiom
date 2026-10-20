@@ -15,17 +15,21 @@ import (
 )
 
 const (
-	// defaultDialTimeout bounds the connection, DNS included. sub2api dials with the same limit
+	// defaultDialTimeout bounds the connection, DNS included, and nothing else. sub2api dials with the same limit
 	// (backend/internal/service/email_service.go smtpDialTimeout, 2026-10-19).
 	defaultDialTimeout = 10 * time.Second
-	// defaultSendTimeout bounds one whole session. A server that stops answering mid-session holds a queue worker
-	// until it ends, and sub2api bounds a whole delivery at 30 seconds too; larger than a normal message needs,
-	// shorter than the queue's ten-minute job timeout.
+	// defaultSendTimeout bounds one whole session, dial included: one clock for the send, so a connection, a
+	// greeting, a TLS handshake or a stalled body cannot each spend a timeout of their own. sub2api bounds a whole
+	// delivery at 30 seconds too; larger than a normal message needs, shorter than the queue's ten-minute job
+	// timeout.
 	defaultSendTimeout = 30 * time.Second
 	// rateInterval is how long a recipient is left alone after one message, so a repeated flow cannot fill an inbox.
 	// sub2api keeps a minute between verification mails to one address (email_service.go verifyCodeCooldown,
 	// 2026-10-19).
 	rateInterval = time.Minute
+	// helloName is the name the client gives itself in EHLO. net/smtp defaults to this one; saying it here makes the
+	// hello a step of its own, with an error of its own.
+	helloName = "localhost"
 )
 
 // tlsMode is how a session is encrypted before the first command is sent.
@@ -58,11 +62,14 @@ type sender struct {
 	dialTimeout time.Duration
 	sendTimeout time.Duration
 	limiter     *limiter
+	// dial opens the connection a session runs on. Tests replace it to control the socket: a real one cannot be made
+	// to fail on demand without a clock.
+	dial func(ctx context.Context) (net.Conn, error)
 }
 
 // newSender takes a Config that ReadConfig accepted.
 func newSender(cfg Config) *sender {
-	return &sender{
+	s := &sender{
 		cfg:         cfg,
 		addr:        net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 		mode:        modeFor(cfg.Port),
@@ -70,6 +77,8 @@ func newSender(cfg Config) *sender {
 		sendTimeout: defaultSendTimeout,
 		limiter:     newLimiter(),
 	}
+	s.dial = s.dialServer
+	return s
 }
 
 // Send delivers one message and returns the Message-ID it used, which it also returns when delivery fails so the log
@@ -87,6 +96,12 @@ func (s *sender) Send(ctx context.Context, msg Message) (string, error) {
 		from: s.cfg.From, to: *to, subject: msg.Subject, text: msg.Text, html: msg.HTML,
 		date: time.Now().UTC(), messageID: newMessageID(s.cfg.From.Address), boundary: rand.Text(),
 	}
+	// A value the headers cannot carry is refused before a connection is opened: every server would refuse it the same
+	// way, and the job must not spend its attempts on it.
+	payload, err := c.bytes()
+	if err != nil {
+		return c.messageID, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.sendTimeout)
 	defer cancel()
@@ -95,7 +110,9 @@ func (s *sender) Send(ctx context.Context, msg Message) (string, error) {
 		return c.messageID, interrupted(ctx, err)
 	}
 	defer conn.Close() //nolint:errcheck // the session is over; a failure to close it cannot change the outcome
-	// A cancelled job (the queue stopping) unblocks the read below; the deadline alone would wait out the whole send.
+	// The send's deadline is the context's, and the connection carries none of its own: when the context ends, the
+	// connection is closed and the read that was waiting returns at once, and interrupted names the deadline rather
+	// than the socket it looks like.
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) //nolint:errcheck // same as the deferred close
 	defer stop()
 	client, err := s.session(conn)
@@ -103,7 +120,7 @@ func (s *sender) Send(ctx context.Context, msg Message) (string, error) {
 		return c.messageID, interrupted(ctx, err)
 	}
 	defer client.Close() //nolint:errcheck // the message is accepted or not; closing cannot change that
-	if err := deliver(client, c); err != nil {
+	if err := deliver(client, c, payload); err != nil {
 		return c.messageID, interrupted(ctx, err)
 	}
 	return c.messageID, nil
@@ -118,19 +135,20 @@ func interrupted(ctx context.Context, err error) error {
 	return err
 }
 
-// connect dials and sets the deadline of the whole session on the connection, so no single step can outlive the send.
+// connect opens the connection the session runs on. The dial has a timeout of its own, which ends the DNS lookup and
+// the handshake of a host that does not answer; everything after it is bounded by the context, one deadline for the
+// whole send.
 func (s *sender) connect(ctx context.Context) (net.Conn, error) {
-	conn, err := (&net.Dialer{Timeout: s.dialTimeout}).DialContext(ctx, "tcp", s.addr)
+	conn, err := s.dial(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mail: dial %s: %w", s.cfg.Host, err)
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			_ = conn.Close() //nolint:errcheck // the connection is unusable either way
-			return nil, fmt.Errorf("mail: set the session deadline: %w", err)
-		}
-	}
 	return conn, nil
+}
+
+// dialServer is the real dial, whose timeout covers the addresses of a name and the TCP handshake.
+func (s *sender) dialServer(ctx context.Context) (net.Conn, error) {
+	return (&net.Dialer{Timeout: s.dialTimeout}).DialContext(ctx, "tcp", s.addr)
 }
 
 // session speaks TLS and authenticates: port 465 is TLS from the first byte, everything else is upgraded with
@@ -142,10 +160,7 @@ func (s *sender) session(conn net.Conn) (*smtp.Client, error) {
 	)
 	switch s.mode {
 	case implicitTLS:
-		client, err = smtp.NewClient(tls.Client(conn, s.tlsConfig()), s.cfg.Host)
-		if err != nil {
-			return nil, wrapRejected("greet", err)
-		}
+		client, err = greet(tls.Client(conn, s.tlsConfig()), s.cfg.Host)
 	case startTLS:
 		client, err = s.upgrade(conn)
 	}
@@ -162,11 +177,27 @@ func (s *sender) session(conn net.Conn) (*smtp.Client, error) {
 	return client, nil
 }
 
-// upgrade opens a plain session and moves it to TLS before anything else is sent.
-func (s *sender) upgrade(conn net.Conn) (*smtp.Client, error) {
-	client, err := smtp.NewClient(conn, s.cfg.Host)
+// greet reads the greeting and says hello. net/smtp sends EHLO, falls back to HELO, and keeps whichever error it got for
+// the next command to report, where it would be blamed on MAIL FROM; asking here gives the handshake an error of its
+// own, with the step's name.
+func greet(conn net.Conn, host string) (*smtp.Client, error) {
+	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return nil, wrapRejected("greet", err)
+	}
+	if err := client.Hello(helloName); err != nil {
+		_ = client.Close() //nolint:errcheck // the session is unusable either way
+		return nil, wrapRejected("hello", err)
+	}
+	return client, nil
+}
+
+// upgrade opens a plain session and moves it to TLS before anything else is sent. StartTLS reports both ways of failing
+// — the command refused, and the EHLO that follows the handshake refused — so a 5xx on either is permanent.
+func (s *sender) upgrade(conn net.Conn) (*smtp.Client, error) {
+	client, err := greet(conn, s.cfg.Host)
+	if err != nil {
+		return nil, err
 	}
 	if ok, _ := client.Extension("STARTTLS"); !ok {
 		_ = client.Close() //nolint:errcheck // the session is unusable either way
@@ -174,7 +205,7 @@ func (s *sender) upgrade(conn net.Conn) (*smtp.Client, error) {
 	}
 	if err := client.StartTLS(s.tlsConfig()); err != nil {
 		_ = client.Close() //nolint:errcheck // the session is unusable either way
-		return nil, fmt.Errorf("mail: start TLS: %w", err)
+		return nil, wrapRejected("start TLS", err)
 	}
 	return client, nil
 }
@@ -186,20 +217,30 @@ func (s *sender) tlsConfig() *tls.Config {
 	return &tls.Config{ServerName: s.cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: s.roots}
 }
 
-// deliver sends the envelope and the message. The message is accepted when the DATA reply arrives, so a failing QUIT
-// afterwards is not reported: some servers answer it in ways net/smtp takes for an error.
-func deliver(client *smtp.Client, c compose) error {
-	if err := client.Mail(c.from.Address); err != nil {
+// deliver sends the envelope and the message. The payload is rendered before this point, so a message the headers cannot
+// carry never reaches the wire, and the envelope paths are the same mailboxes the headers show. The message is accepted
+// when the DATA reply arrives, so a failing QUIT afterwards is not reported: some servers answer it in ways net/smtp
+// takes for an error.
+func deliver(client *smtp.Client, c compose, payload []byte) error {
+	from, err := mailbox(c.from)
+	if err != nil {
+		return err
+	}
+	to, err := mailbox(c.to)
+	if err != nil {
+		return err
+	}
+	if err := client.Mail(from); err != nil {
 		return wrapRejected("MAIL FROM", err)
 	}
-	if err := client.Rcpt(c.to.Address); err != nil {
+	if err := client.Rcpt(to); err != nil {
 		return wrapRejected("RCPT TO", err)
 	}
 	w, err := client.Data()
 	if err != nil {
 		return wrapRejected("DATA", err)
 	}
-	if _, err := w.Write(c.bytes()); err != nil {
+	if _, err := w.Write(payload); err != nil {
 		return fmt.Errorf("mail: write the message: %w", err)
 	}
 	if err := w.Close(); err != nil {

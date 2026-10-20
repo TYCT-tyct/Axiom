@@ -6,19 +6,41 @@ import (
 	"errors"
 	"log/slog"
 	netmail "net/mail"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
+// syncBuffer collects the mailer's log lines. The worker runs on the queue's goroutines, so the test may read the
+// buffer while a line is being written to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // queueWorld is one node's queue over a private copy of the database.
 type queueWorld struct {
 	db    *pg.DB
 	queue *pg.Queue
-	logs  *bytes.Buffer
+	logs  *syncBuffer
 }
 
 func newQueueWorld(t *testing.T) *queueWorld {
@@ -31,7 +53,7 @@ func newQueueWorld(t *testing.T) *queueWorld {
 	return &queueWorld{
 		db:    db,
 		queue: db.NewQueue(slog.New(slog.DiscardHandler), pg.NewScope(true, nil, nil), nil),
-		logs:  &bytes.Buffer{},
+		logs:  &syncBuffer{},
 	}
 }
 
@@ -51,41 +73,42 @@ func (w *queueWorld) start(t *testing.T) {
 	})
 }
 
-func (w *queueWorld) enqueue(t *testing.T, mailer *Mailer, msg Message) {
+// enqueue queues one message for its tenant, in a transaction of that tenant's scope, as a flow does.
+func (w *queueWorld) enqueue(t *testing.T, mailer *Mailer, tenant Tenant, msg Message) {
 	t.Helper()
-	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		return mailer.Enqueue(t.Context(), tx, msg)
+	scope := pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)
+	if err := w.db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return mailer.Enqueue(t.Context(), tx, tenant, msg)
 	}); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 }
 
-// job is the node's most recent mail job: its state, as River spells it, and the attempt it reached.
-func (w *queueWorld) job(t *testing.T) (string, int) {
+// job is the node's most recent mail job: its state, as River spells it, its attempt, and the arguments it carries.
+func (w *queueWorld) job(t *testing.T) (state string, attempt int, args string) {
 	t.Helper()
-	var (
-		state   string
-		attempt int
-	)
 	err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT state::text, attempt FROM river.river_job
-			WHERE kind = $1 ORDER BY id DESC LIMIT 1`, jobKind).Scan(&state, &attempt)
+		return tx.QueryRow(t.Context(), `SELECT state::text, attempt, args::text FROM river.river_job
+			WHERE kind = $1 ORDER BY id DESC LIMIT 1`, jobKind).Scan(&state, &attempt, &args)
 	})
 	if err != nil {
 		t.Fatalf("read the mail job: %v", err)
 	}
-	return state, attempt
+	return state, attempt, args
 }
 
-func (w *queueWorld) waitForJob(t *testing.T, want string) int {
+// waitForJob waits until the node's latest mail job reaches one of the given states, and returns how many attempts it
+// took. River leaves a job that is to be retried as retryable, or scheduled when the retry is nearer than its scheduler's
+// run, so a retried job is either.
+func (w *queueWorld) waitForJob(t *testing.T, want ...string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		state, attempt := w.job(t)
-		if state == want {
+		state, attempt, _ := w.job(t)
+		if slices.Contains(want, state) {
 			return attempt
 		}
 		select {
@@ -96,10 +119,35 @@ func (w *queueWorld) waitForJob(t *testing.T, want string) int {
 	}
 }
 
+// queued reads the outbox in scope: what a transaction of that scope can see of the queued messages.
+func (w *queueWorld) queued(t *testing.T, scope pg.Scope) []string {
+	t.Helper()
+	var recipients []string
+	err := w.db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT recipient FROM platform.mail_outbox ORDER BY created_at`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var recipient string
+			if err := rows.Scan(&recipient); err != nil {
+				return err
+			}
+			recipients = append(recipients, recipient)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	return recipients
+}
+
 // register registers a mailer that talks to the fake server instead of a real SMTP host, and returns it.
 func (w *queueWorld) register(t *testing.T, server *fakeServer) *Mailer {
 	t.Helper()
-	mailer, err := Register(t.Context(), w.queue, Config{
+	mailer, err := Register(t.Context(), w.db, w.queue, Config{
 		Host: "127.0.0.1", Port: 587, From: netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"},
 	}, slog.New(slog.NewTextHandler(w.logs, nil)))
 	if err != nil {
@@ -119,7 +167,8 @@ func TestMailerDelivers(t *testing.T) {
 	mailer := w.register(t, server)
 	w.start(t)
 
-	w.enqueue(t, mailer, welcome)
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
 	attempt := w.waitForJob(t, "completed")
 	if attempt != 1 {
 		t.Errorf("the completed job took %d attempts; want 1", attempt)
@@ -132,8 +181,14 @@ func TestMailerDelivers(t *testing.T) {
 			t.Errorf("the log does not contain %q:\n%s", want, w.logs.String())
 		}
 	}
+	// The message is deleted once it is sent: nothing keeps a one-time link after it has been used.
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
+		t.Errorf("the outbox still holds %v after delivery", got)
+	}
 }
 
+// TestMailerLeavesTheMessageOnFailure: a refused or rate-limited send keeps the queued message, because the job is
+// retried and must find it.
 func TestMailerRetriesTransientFailure(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
@@ -142,13 +197,17 @@ func TestMailerRetriesTransientFailure(t *testing.T) {
 	mailer := w.register(t, server)
 	w.start(t)
 
-	w.enqueue(t, mailer, welcome)
-	attempt := w.waitForJob(t, "scheduled")
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
+	attempt := w.waitForJob(t, "retryable", "scheduled")
 	if attempt != 1 {
 		t.Errorf("the retryable job took %d attempts; want 1", attempt)
 	}
 	if !strings.Contains(w.logs.String(), "permanent=false") {
 		t.Errorf("the log does not record a transient failure:\n%s", w.logs.String())
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 1 {
+		t.Errorf("the outbox holds %v; want the message kept for the retry", got)
 	}
 }
 
@@ -160,7 +219,8 @@ func TestMailerCancelsPermanentFailure(t *testing.T) {
 	mailer := w.register(t, server)
 	w.start(t)
 
-	w.enqueue(t, mailer, welcome)
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
 	attempt := w.waitForJob(t, "cancelled")
 	if attempt != 1 {
 		t.Errorf("the cancelled job took %d attempts; want 1", attempt)
@@ -168,20 +228,85 @@ func TestMailerCancelsPermanentFailure(t *testing.T) {
 	if !strings.Contains(w.logs.String(), "permanent=true") {
 		t.Errorf("the log does not record a permanent failure:\n%s", w.logs.String())
 	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
+		t.Errorf("the outbox still holds %v after a permanent refusal", got)
+	}
+}
+
+// TestOutboxKeepsMailFromOtherTenants: the queue carries the outbox row's id and nothing else, and the row is readable
+// only in the scope of the tenant it was queued for — neither another site's scope nor the empty one sees any of it
+// (internal/platform/pg/migrations/00008_mail_outbox.sql).
+func TestOutboxKeepsMailFromOtherTenants(t *testing.T) {
+	t.Parallel()
+	w := newQueueWorld(t)
+	mailer := w.register(t, startTLSServer(t, nil))
+	// The queue is not started: the message and the job stay as the flow left them.
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
+
+	// What the queue stores: the row's id, and no part of the message.
+	_, _, args := w.job(t)
+	for _, secret := range []string{welcome.To, welcome.Subject, welcome.Text, welcome.HTML} {
+		if strings.Contains(args, secret) {
+			t.Errorf("the job's arguments hold %q:\n%s", secret, args)
+		}
+	}
+	own := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil))
+	if len(own) != 1 || !strings.Contains(args, "id") {
+		t.Fatalf("the tenant's scope reads %v and the job's arguments are %q; want one message and its id", own, args)
+	}
+	// The id is what the queue carries, and the only thing it carries.
+	var id uuid.UUID
+	if err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{tenant.Site}, nil), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT id FROM platform.mail_outbox`).Scan(&id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(args, id.String()) {
+		t.Errorf("the job's arguments are %q; want them to hold the outbox id %s", args, id)
+	}
+
+	for name, scope := range map[string]pg.Scope{
+		"another site":    pg.NewScope(false, []uuid.UUID{uuid.NewV7()}, nil),
+		"another account": pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()}),
+		"the empty":       pg.NewScope(false, nil, nil),
+	} {
+		if got := w.queued(t, scope); len(got) != 0 {
+			t.Errorf("%s scope read %d queued messages (%v); want none", name, len(got), got)
+		}
+	}
+}
+
+// TestEnqueueRefusesAnotherTenant: the policy's WITH CHECK refuses a row for a site outside the caller's scope, so a flow
+// cannot queue mail for another tenant.
+func TestEnqueueRefusesAnotherTenant(t *testing.T) {
+	t.Parallel()
+	w := newQueueWorld(t)
+	mailer := w.register(t, startTLSServer(t, nil))
+	own, other := uuid.NewV7(), uuid.NewV7()
+	err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{own}, nil), func(tx pg.Tx) error {
+		return mailer.Enqueue(t.Context(), tx, Tenant{Site: other}, welcome)
+	})
+	if got := pg.SQLState(err); got != "42501" {
+		t.Errorf("Enqueue() error = %v (SQLSTATE %q); want the policy's refusal", err, got)
+	}
+	if got := w.queued(t, pg.NewScope(true, nil, nil)); len(got) != 0 {
+		t.Errorf("the outbox holds %v after a refused enqueue", got)
+	}
 }
 
 func TestRegisterWithoutSettings(t *testing.T) {
 	t.Parallel()
-	var logs bytes.Buffer
+	var logs syncBuffer
 	// A node without SMTP settings has no queue to register on: email is disabled before the queue is touched.
-	mailer, err := Register(t.Context(), nil, Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
+	mailer, err := Register(t.Context(), nil, nil, Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	if !strings.Contains(logs.String(), "email disabled") {
 		t.Errorf("the log does not say email is disabled:\n%s", logs.String())
 	}
-	if err := mailer.Enqueue(t.Context(), pg.Tx{}, welcome); !errors.Is(err, ErrNotConfigured) {
+	if err := mailer.Enqueue(t.Context(), pg.Tx{}, Tenant{Site: uuid.NewV7()}, welcome); !errors.Is(err, ErrNotConfigured) {
 		t.Errorf("Enqueue() error = %v; want ErrNotConfigured", err)
 	}
 }
@@ -189,23 +314,26 @@ func TestRegisterWithoutSettings(t *testing.T) {
 func TestEnqueueRejectsInvalidMessage(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)
-	server := startTLSServer(t, nil)
-	mailer := w.register(t, server)
+	mailer := w.register(t, startTLSServer(t, nil))
 
 	invalid := welcome
 	invalid.Subject = ""
-	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		return mailer.Enqueue(t.Context(), tx, invalid)
+	tenant := Tenant{Site: uuid.NewV7()}
+	if err := w.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{tenant.Site}, nil), func(tx pg.Tx) error {
+		return mailer.Enqueue(t.Context(), tx, tenant, invalid)
 	}); !errors.Is(err, ErrInvalidMessage) {
 		t.Errorf("Enqueue() error = %v; want ErrInvalidMessage", err)
 	}
-	var count int
+	var jobs int
 	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*) FROM river.river_job WHERE kind = $1`, jobKind).Scan(&count)
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM river.river_job WHERE kind = $1`, jobKind).Scan(&jobs)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Errorf("an invalid message queued %d jobs", count)
+	if jobs != 0 {
+		t.Errorf("an invalid message queued %d jobs", jobs)
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 0 {
+		t.Errorf("an invalid message left %v in the outbox", got)
 	}
 }

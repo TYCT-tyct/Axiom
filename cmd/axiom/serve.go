@@ -317,7 +317,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	// Outbound email rides the queue's default queue. Registering here also reports at startup whether this node can
 	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
-	if _, err := mail.Register(ctx, queue, smtp, logger); err != nil {
+	if _, err := mail.Register(ctx, db, queue, smtp, logger); err != nil {
 		return nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{

@@ -115,6 +115,12 @@ func TestReadConfigProblems(t *testing.T) {
 			want:    []string{"AXIOM_SMTP_FROM: want one address"},
 		},
 		{
+			// SMTPUTF8 is not offered, so a local part outside ASCII cannot be put in an envelope path.
+			name:    "a sender only SMTPUTF8 could carry",
+			environ: []string{"AXIOM_SMTP_HOST=smtp.example.com", "AXIOM_SMTP_FROM=用户@example.com"},
+			want:    []string{"AXIOM_SMTP_FROM: want one address"},
+		},
+		{
 			name:    "a host with a scheme",
 			environ: []string{"AXIOM_SMTP_HOST=planted://smtp.example.com", "AXIOM_SMTP_FROM=no-reply@example.com"},
 			want:    []string{"AXIOM_SMTP_HOST: want a host name"},
