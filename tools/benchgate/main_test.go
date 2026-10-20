@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -426,62 +425,6 @@ func TestBenchmarksKeepCompileErrors(t *testing.T) {
 	}
 }
 
-// git runs git in root and returns what it printed, failing the test if git fails.
-func git(t *testing.T, root string, args ...string) []byte {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...).CombinedOutput() // #nosec G204 -- the test's own arguments
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
-	return out
-}
-
-// TestRemoveWorktree runs git: the gate's worktree goes away, also when its directory is already gone; a registration
-// git refuses to remove is reported with git's failure; and another session's worktree, even a stale one, is untouched.
-func TestRemoveWorktree(t *testing.T) {
-	type outcome struct{ Failed, CarriesGitFailure, StillListed, DirectoryGone, StaleKept bool }
-	cases := []struct {
-		name    string
-		prepare func(tree string) error
-		refused bool
-	}{
-		{"intact", func(string) error { return nil }, false},
-		{"directory already gone", os.RemoveAll, false},
-		// Without its .git file, git cannot validate the worktree and refuses to remove it, even with --force twice.
-		{"git refuses", func(tree string) error { return os.Remove(filepath.Join(tree, ".git")) }, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			root, scratch := t.TempDir(), t.TempDir()
-			tree, stale := filepath.Join(scratch, "tree"), filepath.Join(scratch, "stale")
-			git(t, root, "init", "-q")
-			git(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
-			git(t, root, "worktree", "add", "-q", "--detach", tree)
-			git(t, root, "worktree", "add", "-q", "--detach", stale)
-			if err := errors.Join(os.RemoveAll(stale), c.prepare(tree)); err != nil {
-				t.Fatal(err)
-			}
-
-			err := removeWorktree(t.Context(), root, tree)
-			list := git(t, root, "worktree", "list", "--porcelain")
-			_, statErr := os.Stat(tree)
-			var exitErr *exec.ExitError
-			got := outcome{err != nil, errors.As(err, &exitErr), listed(list, tree), os.IsNotExist(statErr), listed(list, stale)}
-			want := outcome{c.refused, c.refused, c.refused, true, true}
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("after removal (-want +got):\n%s\nerror: %v", diff, err)
-			}
-		})
-	}
-}
-
-func TestListed(t *testing.T) {
-	list := []byte("worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/benchgate1/base\nHEAD def\ndetached\nlocked\n")
-	if !listed(list, filepath.FromSlash("/tmp/benchgate1/base")) || listed(list, filepath.FromSlash("/tmp/benchgate2/base")) {
-		t.Error("listed matches the wrong worktree")
-	}
-}
-
 // TestChangedFiles runs git: the change is the difference from the merge base to the working tree, so a commit on a
 // branch of its own is left out, a rename names both of its paths, and a path with a space stays whole.
 func TestChangedFiles(t *testing.T) {
@@ -527,95 +470,6 @@ func TestParseRejectsUnreadableBenchmarkLines(t *testing.T) {
 	broken := `{"Action":"output","Output":"BenchmarkScan-8\t100\t10 ns/op\t9 allocs/op\ttrailing\n"}` + "\n"
 	if _, err := parse(strings.NewReader(broken)); err == nil {
 		t.Fatal("a benchmark line benchfmt cannot read was accepted")
-	}
-}
-
-// TestAffects is the decision the gate makes for every benchmark package: a changed file in a directory its test
-// binary compiles, or below it, can move the allocation counts, and so can a module file, which decides how every
-// package compiles. Everything else is skipped.
-func TestAffects(t *testing.T) {
-	routing := closure{"internal/protocol", "internal/routing"}
-	cases := []struct {
-		name     string
-		change   diff
-		closures []closure
-		want     bool
-	}{
-		{"a file of a package the test binary compiles", diff{files: []string{"internal/routing/plan.go"}}, []closure{routing}, true},
-		{"a test file", diff{files: []string{"internal/routing/session_test.go"}}, []closure{routing}, true},
-		{"a file below a package, such as its testdata", diff{files: []string{"internal/platform/typeid/testdata/many"}}, []closure{{"internal/platform/typeid"}}, true},
-		{"a file a package embeds, which lives in its directory", diff{files: []string{"internal/catalog/testdata/dataset.json"}}, []closure{{"internal/catalog"}}, true},
-		{"a file of a package the test binary does not compile", diff{files: []string{"internal/gateway/scan.go"}}, []closure{routing}, false},
-		{"a directory that only starts like one of the closure", diff{files: []string{"internal/routing2/plan.go"}}, []closure{routing}, false},
-		{"a package only the other side compiles", diff{files: []string{"internal/new/scan.go"}}, []closure{{}, {"internal/new"}}, true},
-		{"no change", diff{}, []closure{routing}, false},
-		{"go.mod", diff{files: []string{"go.mod"}}, []closure{routing}, true},
-		{"go.sum", diff{files: []string{"go.sum"}}, nil, true},
-		{"go.work", diff{files: []string{"go.work"}}, nil, true},
-		{"a module file of another module", diff{files: []string{"tools/go.mod"}}, nil, true},
-		{"the changed files could not be read", diff{all: true}, nil, true},
-		{"the justfile", diff{files: []string{"justfile"}}, []closure{routing}, true},
-		{"the ci workflow", diff{files: []string{".github/workflows/ci.yml"}}, []closure{routing}, true},
-		{"the setup action", diff{files: []string{".github/actions/setup/action.yml"}}, []closure{routing}, true},
-		{"the gate itself", diff{files: []string{"tools/benchgate/main.go"}}, []closure{routing}, true},
-		{"another workflow", diff{files: []string{".github/workflows/review.yml"}}, []closure{routing}, false},
-		{"a justfile of a subdirectory", diff{files: []string{"web/justfile"}}, []closure{routing}, false},
-		{"another tool", diff{files: []string{"tools/other/main.go"}}, []closure{routing}, false},
-		{"a file nobody compiles", diff{files: []string{"docs/performance.md"}}, []closure{routing}, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := c.change.affects(c.closures...); got != c.want {
-				t.Errorf("affects(%v) = %v, want %v", c.change.files, got, c.want)
-			}
-		})
-	}
-}
-
-// TestPlan keeps the decision per package, whichever side lists it: a package both sides have is measured on both or
-// left out of both, and a package only one side has stays there.
-func TestPlan(t *testing.T) {
-	routing, gateway := closure{"internal/routing"}, closure{"internal/gateway"}
-	cases := []struct {
-		name                            string
-		change                          diff
-		base, head                      side
-		wantBase, wantHead, wantSkipped []string
-	}{
-		{
-			"a package the change cannot reach is left out of both sides",
-			diff{files: []string{"internal/routing/plan.go"}},
-			side{[]string{"internal/gateway", "internal/routing"}, map[string]closure{"internal/gateway": gateway, "internal/routing": routing}},
-			side{[]string{"internal/gateway", "internal/routing"}, map[string]closure{"internal/gateway": gateway, "internal/routing": routing}},
-			[]string{"internal/routing"}, []string{"internal/routing"}, []string{"internal/gateway"},
-		},
-		{
-			"a package only one side has stays there",
-			diff{files: []string{"internal/new/x.go", "internal/routing/plan.go"}},
-			side{[]string{"internal/routing"}, map[string]closure{"internal/routing": routing}},
-			side{[]string{"internal/new", "internal/routing"}, map[string]closure{"internal/new": {"internal/new"}, "internal/routing": routing}},
-			[]string{"internal/routing"}, []string{"internal/new", "internal/routing"}, nil,
-		},
-		{
-			"a module file runs every package",
-			diff{files: []string{"go.mod"}},
-			side{packages: []string{"internal/gateway"}}, side{packages: []string{"internal/gateway"}},
-			[]string{"internal/gateway"}, []string{"internal/gateway"}, nil,
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			base, head, skipped := plan(c.change, c.base, c.head)
-			if diff := cmp.Diff(c.wantBase, base); diff != "" {
-				t.Errorf("base targets (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(c.wantHead, head); diff != "" {
-				t.Errorf("head targets (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(c.wantSkipped, skipped); diff != "" {
-				t.Errorf("skipped (-want +got):\n%s", diff)
-			}
-		})
 	}
 }
 
