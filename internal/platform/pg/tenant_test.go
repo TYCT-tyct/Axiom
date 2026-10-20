@@ -72,14 +72,14 @@ func createNotes(t *testing.T) (db *pg.DB, notes []note) {
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // TestTenantTx: a transaction that starts with an id alone reads the row of the tenant that id belongs to — the
-// account's row for an account, the site's for the site itself — and nothing else. Migrate grants roles cluster-wide,
-// so this test does not run in parallel (see TestMigrateRunsTakeTurns).
+// account's row for an account, the site's for the site itself — through a scope that holds that tenant. Migrate
+// grants roles cluster-wide, so this test does not run in parallel (see TestMigrateRunsTakeTurns).
 func TestTenantTx(t *testing.T) {
 	db, notes := createNotes(t)
 	for _, row := range notes {
 		var body string
 		found, err := db.TenantTx(t.Context(), "accounts.note_tenant", row.id, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), "SELECT body FROM accounts.notes").Scan(&body)
+			return tx.QueryRow(t.Context(), "SELECT body FROM accounts.notes WHERE id = $1", row.id).Scan(&body)
 		})
 		if err != nil || !found || body != row.body {
 			t.Errorf("TenantTx(%s) read %q, %v, %v; want %q", row.id, body, found, err, row.body)
