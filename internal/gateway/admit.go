@@ -85,8 +85,8 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 	}
 	plan, wait, err := h.Router.Plan(routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
-		// M1 converts a Chat client's request to a Messages or Responses endpoint and nothing else: a request of another
-		// format is served only by an endpoint that speaks it (docs/domains/gateway.md「转发规则」).
+		// A Chat client's request goes to an endpoint that speaks Chat, or is converted to a Messages or Responses one; a
+		// request of another format is served only by an endpoint that speaks it (docs/domains/gateway.md「转发规则」).
 		NativeOnly: c.Format != protocol.Chat,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
 		NoSegments: c.Compact,

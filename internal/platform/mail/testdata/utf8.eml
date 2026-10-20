@@ -1,0 +1,19 @@
+From: <no-reply@axiom.example>
+To: "Test User" <user@example.com>
+Subject: =?UTF-8?q?=E9=AA=8C=E8=AF=81=E9=82=AE=E4=BB=B6?=
+Date: Fri, 02 Jan 2026 03:04:05 +0000
+Message-ID: <utf8@axiom.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="axiom-utf8"
+
+--axiom-utf8
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+=E9=AA=8C=E8=AF=81=E7=A0=81 123456
+--axiom-utf8
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<p>=E9=AA=8C=E8=AF=81=E7=A0=81 123456</p>
+--axiom-utf8--

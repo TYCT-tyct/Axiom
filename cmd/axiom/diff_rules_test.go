@@ -144,12 +144,17 @@ func diffRules() []*diffRule {
 			"new-api relays the upstream's headers; Axiom lets through only its own (gateway.md「转发规则」: 响应头按白名单放行)"),
 		rule(`json\.id|chat\.id|sse\[message_start\]\.message\.id|sse\[response\.[a-z_]+\]\.response\.id`, "", axiomIs(uuidText),
 			"the id of a reply is Axiom's call id, new-api passes the upstream's (gateway.md「转发规则」: 自己回显)"),
+		rule(`(json|chat)\.usage\.prompt_cache_(hit|miss)_tokens`, `chat-deepseek-.*`, axiomLacks,
+			"DeepSeek's names for the cache read and the rest of the prompt, which the upstream sends and new-api passes on; Axiom reports them as prompt_tokens_details.cached_tokens, once, in the format's own member (internal/protocol README.md「用量」)"),
 		rule(`(json|chat)\.usage\.cost(_currency|_estimated)?|sse\[message_delta\]\.usage\.cost(_currency|_estimated)?|`+
 			`sse\[response\.completed\]\.response\.usage\.cost(_currency|_estimated)?`, "", newAPILacks,
 			"Axiom's usage carries the call's cost (gateway.md「用量与费用」)"),
 		rule(`(json|chat)\.usage\.(billing_usage\..*|usage_semantic|usage_source|claude_cache_creation_.*|input_tokens|output_tokens|`+
 			`input_tokens_details|(prompt|completion)_tokens_details\.(audio|image|text)_tokens)`, `chat-.*`, axiomLacks,
 			"members new-api adds to a Chat usage that are not part of the format"),
+		rule(`(json|chat)\.usage\.(prompt_tokens_details\.cached_tokens|completion_tokens_details\.reasoning_tokens)`, `chat-deepseek-.*`,
+			all(newAPILacks, axiomIs("0")),
+			"an upstream that sends no details object in its usage gets them from Axiom, as 0: Axiom writes the details of the format from the settlement, so a client always finds them (gateway.md「用量与费用」)"),
 		rule(`(json|chat)\.usage\.prompt_tokens_details\.cache_write_tokens`, "", newAPILacks,
 			"OpenRouter's usage reports cache writes, which Axiom's does the same way (gateway.md「用量与费用」)"),
 		rule(`json\.choices\[\]\.(logprobs|message\.refusal)`, "", all(newAPILacks, axiomIs("null")),

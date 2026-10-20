@@ -152,10 +152,10 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 }
 
 // callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
-// the endpoint's own format is called in it, or in one protocol converts it to. A Chat request is only ever converted:
-// M1 rewrites no Chat request for an endpoint of its own format, so it is called in the first format the endpoint
-// speaks that protocol converts a Chat request to, Messages before Responses (docs/domains/gateway.md「转发规则」).
-// NativeOnly says only the request's own format will do.
+// the endpoint's own format is called in it. A Chat request is called in Chat when the endpoint speaks it, which
+// changes the least; else it is converted to the first format the endpoint speaks that protocol converts a Chat request
+// to, Messages before Responses (docs/domains/gateway.md「转发规则」). NativeOnly says only the request's own format
+// will do.
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
 	if n.in.NativeOnly {
@@ -164,7 +164,7 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	if f != protocol.Chat {
 		return f, c.Served.Has(f)
 	}
-	for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, g := range [...]protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		if c.Native.Has(g) {
 			return g, true
 		}

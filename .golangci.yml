@@ -117,6 +117,19 @@ linters:
           deny:
             - pkg: encoding/json # a prefix: also encoding/json/v2 and encoding/json/jsontext
               desc: "handle JSON through platform/jsonx, which holds the strictness and depth policy (docs/architecture.md「技术选型」)"
+        # The shared cache is reached through platform/kv, which holds the deadline, the breaker and the metrics, and money
+        # never goes into it: kv holds counts, login buckets and session endpoints (internal/platform/kv/README.md
+        # 「不变量」). tools/checkmodules judges by module and lets every module use platform, so the rule for the modules
+        # that handle money is here.
+        valkey:
+          deny:
+            - pkg: github.com/valkey-io/valkey-go
+              desc: "reach the shared cache only through platform/kv, which holds the deadline, the breaker and the metrics (internal/platform/kv/README.md「客户端与连接」)"
+        kv:
+          files: ["**/internal/billing/**", "**/internal/payments/**"]
+          deny:
+            - pkg: axiom/internal/platform/kv
+              desc: "money and authorization state never go into the shared cache (internal/platform/kv/README.md「不变量」)"
     forbidigo:
       analyze-types: true # so an import alias of fmt cannot hide a call
       forbid:
@@ -125,7 +138,7 @@ linters:
         - pattern: ^pg\.(PlatformScope|NewScope)$
           pkg: ^axiom/internal/platform/pg$
           msg: "a scope decides which tenants' rows a module reads: only cmd/ builds the platform scope, and only tests build an arbitrary one (internal/platform/README.md)"
-        - pattern: ^pg\.(SiteScope|AccountScope)$
+        - pattern: ^pg\.(SiteScope|AccountScope|AccountScopeIn)$
           pkg: ^axiom/internal/platform/pg$
           msg: "a scope decides which tenants' rows a module reads: only internal/accounts builds a site or account scope, after authorization (internal/accounts/README.md)"
   exclusions:
@@ -146,6 +159,9 @@ linters:
       - path: ^internal/platform/ # the platform opens the database
         linters: [depguard]
         text: from list 'database'
+      - path: ^internal/platform/kv/ # the one place that speaks to the shared cache, and its test helper
+        linters: [depguard]
+        text: from list 'valkey'
       - path: ^internal/platform/jsonx/ # the one place that handles JSON
         linters: [depguard]
         text: from list 'json'

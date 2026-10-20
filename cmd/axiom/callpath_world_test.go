@@ -23,6 +23,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -288,10 +289,7 @@ func (w *callWorld) seedSupplier() {
 	}
 	supplier, group, credential := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	sealed := masterKeys(w.t).Seal(secret.New(supplierKey), secret.Location{Table: "suppliers.credentials", RowID: credential.String(), Purpose: "key"})
-	stmts := []struct {
-		sql  string
-		args []any
-	}{
+	stmts := []statement{
 		{`INSERT INTO suppliers.suppliers (id, owner_scope, name, kind, origin, upstream_account, native_unit,
 			settlement_currency, mgmt_egress_id, status, balance_native)
 			VALUES ($1, 'platform', 'Relay', 'newapi', $2, 'account', 'quota', 'USD', 'direct', 'active', 100)`, []any{supplier, w.supplier.server.URL}},
@@ -307,20 +305,7 @@ func (w *callWorld) seedSupplier() {
 	for _, e := range []struct{ slug, upstream, format string }{
 		{"anthropic/claude-opus-5-5", "up-claude", "messages"}, {"openai/gpt-6-astra", "up-gpt", "responses"},
 	} {
-		endpoint, schedule := uuid.NewV7(), uuid.NewV7()
-		stmts = append(stmts, []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
-				VALUES ($1, $2, $3, $4, $5, ARRAY[$6])`, []any{endpoint, supplier, group, w.models[e.slug], e.upstream, e.format}},
-			{
-				`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-				VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`,
-				[]any{schedule, supplier, endpoint, servedCost},
-			},
-			{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
-		}...)
+		stmts = append(stmts, endpointStatements(supplier, group, w.models[e.slug], e.upstream, e.format)...)
 	}
 	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		for _, s := range stmts {
@@ -398,6 +383,10 @@ func (w *callWorld) start() runningNode {
 	environ := append(slices.Clone(w.environ), "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=10s", "AXIOM_MASTER_KEY_FILE="+keyFile(w.t, 'm'), "AXIOM_KEY_HASH_FILE="+keyFile(w.t, 'h'),
 		"AXIOM_IDENTITY_KEY_FILE="+keyFile(w.t, 'i'))
+	// The story has two nodes of one deployment (checkSecondNode), so this is one: N is 2, and the nodes share a Valkey
+	// for the rate counts, which serveVia lets through where serve, the program's entry, would refuse (singleNodeOnly).
+	cache := kvtest.New(w.t)
+	environ = append(environ, "AXIOM_NODE_ID="+uuid.New().String(), "AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL="+cache.URL, "AXIOM_VALKEY_PASSWORD_FILE="+cache.PasswordFile)
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(w.t.Context())
 	done := make(chan error, 1)
@@ -509,4 +498,25 @@ type nodeLog struct {
 func (l nodeLog) Write(p []byte) (int, error) {
 	l.t.Log(strings.TrimSpace(string(p)))
 	return l.serves.Write(p)
+}
+
+// statement is one SQL statement of a seed and its arguments.
+type statement struct {
+	sql  string
+	args []any
+}
+
+// endpointStatements write an endpoint of a model on the supplier, speaking format and costed from servedCost.
+func endpointStatements(supplier, group, model uuid.UUID, upstream, format string) []statement {
+	endpoint, schedule := uuid.NewV7(), uuid.NewV7()
+	return []statement{
+		{`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+			VALUES ($1, $2, $3, $4, $5, ARRAY[$6])`, []any{endpoint, supplier, group, model, upstream, format}},
+		{
+			`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
+			VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`,
+			[]any{schedule, supplier, endpoint, servedCost},
+		},
+		{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
+	}
 }
