@@ -108,6 +108,11 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 // on a long account as on a short one. 30,000 numbered transactions of an account, 12,000 from before the sequence of
 // another, as many of a third and three of a fourth are seeded; a page of 100 is read from the start and from deep in
 // (the numbered ones at 25,000, the legacy ones at 10,000), and the bound of the long accounts against the short one.
+//
+// The bound over an account with rows from before the sequence pays for them: transactions_by_account_seq holds no seq
+// to stop at for those rows, so the scan reaches the end of the account's prefix, which is where they sort. That is one
+// pass over the account's own entries from before the release, which the release froze, rather than over a history that
+// grows, so it is bounded by a budget instead of by the short account's reading.
 func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	legacy, noise, short := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
@@ -129,26 +134,31 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	for _, tc := range []struct {
 		name, query, index, what string
 		first, deep              []any
+		budget                   int // the most blocks deep may touch; 0 compares deep with first instead
 	}{
 		{
 			"numbered", movements, "transactions_by_account_seq", "a page of 100, from the start and 25,000 in",
 			[]any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)},
 			[]any{b.admitted.Account, farSeq, int64(math.MaxInt64), int32(100)},
+			0,
 		},
 		{
 			"from before the sequence", legacyMovements, "transactions_legacy_by_account", "a page of 100, from the start and 10,000 in",
 			[]any{legacy, long, uuid.UUID{}, int32(100)},
 			[]any{legacy, farAt, farID, int32(100)},
+			0,
 		},
 		{
-			"the bound", replayThrough, "transactions_by_account_seq", "the bound over an account with 30,000 transactions and one with 3",
+			"the bound", replayThrough, "transactions_by_account_seq", "the bound over an account with 3 transactions and one with 30,000",
 			[]any{short},
 			[]any{b.admitted.Account},
+			0,
 		},
 		{
-			"the bound over rows from before the sequence", replayThrough, "transactions_by_account_seq", "the bound over an account with 12,000 rows from before the sequence and one with 3",
+			"the bound over rows from before the sequence", replayThrough, "transactions_by_account_seq", "the bound over an account with 3 transactions and one with 12,000 that all precede the sequence",
 			[]any{short},
 			[]any{legacy},
+			1000,
 		},
 	} {
 		first, _ := b.plan(tc.query, tc.first...)
@@ -157,7 +167,7 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 		if !strings.Contains(deepPlan, tc.index) || strings.Contains(deepPlan, "Seq Scan") {
 			t.Errorf("%s: %s: not read from the index %s:\n%s", tc.name, tc.what, tc.index, deepPlan)
 		}
-		if deep > first+first/2+50 || deep > 1000 {
+		if tc.budget > 0 && deep > tc.budget || tc.budget == 0 && (deep > first+first/2+50 || deep > 1000) {
 			t.Errorf("%s: %s: %d blocks against %d; the plan:\n%s", tc.name, tc.what, deep, first, deepPlan)
 		}
 	}

@@ -8,7 +8,8 @@ SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances
 -- time this reads B every transaction of the account with a seq at or below B has committed, and the batches read after
 -- it see theirs. A credit committed later gets a higher seq, and so stays out of this replay: the next one loads it
 -- along with its batch (#361). Rows from before the sequence cannot arrive later, so they need no bound of their own.
--- The account's maximum is served by transactions_by_account_seq.
+-- The account's maximum is served by transactions_by_account_seq, whose NULL seqs sort after the numbered ones: an
+-- account that has rows from before the release pays one pass over them here, frozen and never longer.
 SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = @account_id;
 
 -- name: LiveBatches :many
