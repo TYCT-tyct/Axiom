@@ -235,14 +235,14 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 `pg.Open` 管理两个物理池，共用一个连接预算 N：默认 64（`pg.PoolSize`），连接串 `pool_max_conns` 可覆盖，包括调小。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
 
-`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。持有者心跳仍走普通池，专用连接见 #217。
+`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。持有者心跳仍走普通池，专用连接见 #217。
 
-- **和 gateway 的许可同一份数**：gateway 的许可数就是打开后的 N 和 R（`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`），最后 R 个许可只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)），和两个池的分界一致。预算调小，许可跟着调小，不必改代码。
-- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+- **和 gateway 的许可同一份数**：`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`，准入和完成类分别限 N−R、R 个许可、各自计数，持有和等待完成许可都不减少准入容量（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。预算调小，许可跟着调小，不必改代码。
+- **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据 N=64 推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
 - **一个账户占不满**：单个账户受账户闸和每秒 151–222 个请求的上限约束，约占 2 条。
 - **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
 
-默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接。new-api `model/main.go`（603a5ce，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
+默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
 
 部署按**所有进程**计预算：每个 `serve` 节点另有两条不在池里的连接，都从池里取走后 `Hijack`，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），以及 River v0.49.0 的 LISTEN 监听器；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+2 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名和 River 监听合计最多 84 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
 

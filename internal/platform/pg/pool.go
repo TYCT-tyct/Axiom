@@ -106,7 +106,7 @@ func splitPoolConfig(config *pgxpool.Config, reserve int) (*pgxpool.Config, *pgx
 	config.MaxConns = kept
 	// Applying the URL's minimum to both pools would exceed the configured budget.
 	if ordinary.MinConns > ordinary.MaxConns || ordinary.MinIdleConns > ordinary.MaxConns {
-		return nil, nil, errors.New(DatabaseURLVar + ": pool minimums must fit outside the completion reserve")
+		return nil, nil, fmt.Errorf("%s: pool_min_conns %d and pool_min_idle_conns %d must not exceed ordinary pool capacity %d", DatabaseURLVar, ordinary.MinConns, ordinary.MinIdleConns, ordinary.MaxConns)
 	}
 	config.MinConns, config.MinIdleConns = 0, 0
 	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not

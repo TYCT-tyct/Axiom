@@ -8,7 +8,7 @@ import (
 // Class says what a database connection is wanted for.
 type Class int
 
-// The classes, in the order Pool grants them.
+// The classes share an account gate but use separate connection pools.
 const (
 	// Completion is extension, settlement and SettleOrphan: money already committed to, so it has priority.
 	Completion Class = iota
@@ -21,19 +21,19 @@ const (
 // outside the gateway: a permit alone cannot protect connections from background work.
 type Pool struct {
 	mu      sync.Mutex
-	used    int
 	classes [classCount]poolClass
 }
 
-// poolClass grants while the pool's total in use is below ceiling.
+// Each class counts only its own permits: completions must not consume admission capacity in the other physical pool.
 type poolClass struct {
+	used    int
 	ceiling int
 	waiting waitList
 }
 
 func newPool(size, reserve int) *Pool {
 	return &Pool{classes: [classCount]poolClass{
-		Completion: {ceiling: size},
+		Completion: {ceiling: reserve},
 		Admission:  {ceiling: size - reserve},
 	}}
 }
@@ -44,32 +44,30 @@ func newPool(size, reserve int) *Pool {
 func (p *Pool) Acquire(ctx context.Context, class Class) (release func(), err error) {
 	p.mu.Lock()
 	wt := p.classes[class].waiting.push("")
-	p.dispatch()
+	p.classes[class].dispatch()
 	p.mu.Unlock()
 
 	if !wt.park(ctx, &p.mu) {
 		return nil, ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
-		p.release()
+		p.release(class)
 		return nil, err
 	}
-	return sync.OnceFunc(p.release), nil
+	return sync.OnceFunc(func() { p.release(class) }), nil
 }
 
-func (p *Pool) release() {
+func (p *Pool) release(class Class) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.used--
-	p.dispatch()
+	c := &p.classes[class]
+	c.used--
+	c.dispatch()
 }
 
-// dispatch grants every waiter that may run now. Grants only raise the total, so one pass is enough.
-func (p *Pool) dispatch() {
-	for i := range p.classes {
-		c := &p.classes[i]
-		for p.used < c.ceiling && c.waiting.grant() {
-			p.used++
-		}
+// dispatch runs with Pool.mu held.
+func (c *poolClass) dispatch() {
+	for c.used < c.ceiling && c.waiting.grant() {
+		c.used++
 	}
 }

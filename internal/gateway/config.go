@@ -28,7 +28,7 @@ type Config struct {
 	CountRate  int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
 	PoolSize    int // N, gateway permits, derived from the combined database pool ceiling
-	PoolReserve int // permits admissions may not take; pg separately enforces the physical reserve
+	PoolReserve int // completion permits; admission permits are PoolSize - PoolReserve
 
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key

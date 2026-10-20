@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -9,40 +10,46 @@ func acquire(ctx context.Context, p *Pool, c Class) func() (func(), error) {
 	return func() (func(), error) { return p.Acquire(ctx, c) }
 }
 
-// Admission may use N-16 connections, never the last 16; completion may use all of them. The boundary is exact: the
-// admission waiter runs when the pool falls to N-17 in use, not before.
-func TestPoolKeepsTheLastConnectionsForCompletion(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		cfg := DefaultConfig()
-		bp, err := New(cfg, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pool := bp.Pool
-		var admissions, completions []func()
-		for range cfg.PoolSize - cfg.PoolReserve {
-			admissions = append(admissions, mustAcquire(t, acquire(ctx, pool, Admission)))
-		}
-		waitingAdmission := start(acquire(ctx, pool, Admission))
-		waitingAdmission.mustWait(t)
+// Saturating either physical pool must leave the other class's entire permit budget available.
+func TestPoolClassesDoNotConsumeEachOthersCapacity(t *testing.T) {
+	for name, first := range map[string]Class{"completions first": Completion, "admissions first": Admission} {
+		t.Run(name, func(t *testing.T) {
+			run(t, func(t *testing.T, ctx context.Context) {
+				cfg := DefaultConfig()
+				pool := newPool(cfg.PoolSize, cfg.PoolReserve)
+				capacity := [classCount]int{Completion: cfg.PoolReserve, Admission: cfg.PoolSize - cfg.PoolReserve}
+				other := Admission
+				if first == Admission {
+					other = Completion
+				}
+				var holders []func()
+				for range capacity[first] {
+					holders = append(holders, mustAcquire(t, acquire(ctx, pool, first)))
+				}
+				waiting := start(acquire(ctx, pool, first))
+				waiting.mustWait(t)
+				next := start(acquire(ctx, pool, first))
+				next.mustWait(t)
+				var others []func()
+				for range capacity[other] {
+					others = append(others, mustAcquire(t, acquire(ctx, pool, other)))
+				}
+				waitingOther := start(acquire(ctx, pool, other))
+				waitingOther.mustWait(t)
 
-		for range cfg.PoolReserve {
-			completions = append(completions, mustAcquire(t, acquire(ctx, pool, Completion)))
-		}
-		waitingCompletion := start(acquire(ctx, pool, Completion))
-		waitingCompletion.mustWait(t)
-
-		completions[0]()
-		waitingCompletion.mustGranted(t)
-		waitingAdmission.mustWait(t)
-
-		for i := range cfg.PoolReserve {
-			admissions[i]()
-			waitingAdmission.mustWait(t) // 64 - 16 in use is still not below the admission ceiling of 48
-		}
-		admissions[cfg.PoolReserve]()
-		waitingAdmission.mustGranted(t)
-	})
+				holders[0]()
+				waiting.mustGranted(t)
+				next.mustWait(t)
+				waitingOther.mustWait(t)
+				holders[0]() // releasing twice cannot grant another permit
+				next.mustWait(t)
+				waiting.release()
+				next.mustGranted(t)
+				others[0]()
+				waitingOther.mustGranted(t)
+			})
+		})
+	}
 }
 
 // A context that has ended never keeps a connection, whether it ended before or while the call waited.
@@ -55,14 +62,30 @@ func TestPoolDeadContextKeepsNothing(t *testing.T) {
 		}
 		dead, cancel := context.WithCancel(ctx)
 		cancel()
-		for range 100 {
-			if release, err := bp.Pool.Acquire(dead, Completion); err == nil {
-				release()
-				t.Fatal("a cancelled context got a connection")
+		for class, capacity := range [classCount]int{Completion: cfg.PoolReserve, Admission: cfg.PoolSize - cfg.PoolReserve} {
+			for range 100 {
+				if release, err := bp.Pool.Acquire(dead, Class(class)); err == nil {
+					release()
+					t.Fatal("a cancelled context got a connection")
+				}
 			}
-		}
-		for range cfg.PoolSize {
-			mustAcquire(t, acquire(ctx, bp.Pool, Completion))
+			var holders []func()
+			for range capacity {
+				holders = append(holders, mustAcquire(t, acquire(ctx, bp.Pool, Class(class))))
+			}
+			waitingCtx, stop := context.WithCancel(ctx)
+			waiting := start(acquire(waitingCtx, bp.Pool, Class(class)))
+			waiting.mustWait(t)
+			stop()
+			if !waiting.finished() || !errors.Is(waiting.err, context.Canceled) {
+				t.Fatalf("cancelled waiter: finished=%v err=%v", waiting.finished(), waiting.err)
+			}
+			for _, release := range holders {
+				release()
+			}
+			for range capacity {
+				mustAcquire(t, acquire(ctx, bp.Pool, Class(class)))
+			}
 		}
 	})
 }
