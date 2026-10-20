@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -269,24 +270,24 @@ func TestCreditPaidRefusals(t *testing.T) {
 	}
 }
 
-// TestPostBalancesEachCurrency: entries that sum to zero only across currencies are refused when posted, and found by
-// the reconciliation if they were ever written.
+// TestPostBalancesEachCurrency: entries that sum to zero only across currencies are refused before anything is
+// written, so no transaction is needed to show it.
 func TestPostBalancesEachCurrency(t *testing.T) {
 	t.Parallel()
-	b := newBank(t, 0, 0, Config{})
-	lines := []line{{bookCash, 100, "CNY"}, {bookUserBalance, -100, siteCredits}}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("post took entries that balance only across currencies")
-			}
-		}()
-		err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-			_, err := post(t.Context(), tx, event{site: b.admitted.Site, account: b.admitted.Account, kind: "credit", request: uuid.NewV7()}, lines...)
-			return err
-		})
-		t.Errorf("post returned %v", err)
+	defer func() {
+		if p, _ := recover().(string); !strings.Contains(p, `sum to 100 in "CNY"`) {
+			t.Errorf("post took entries that balance only across currencies (%q)", p)
+		}
 	}()
+	_, err := post(t.Context(), pg.Tx{}, event{kind: "credit"}, line{bookCash, 100, "CNY"}, line{bookUserBalance, -100, siteCredits})
+	t.Errorf("post returned %v", err)
+}
+
+// TestReconcileBalancesEachCurrency: the daily reconciliation finds a transaction that balances only across currencies,
+// had one ever been written.
+func TestReconcileBalancesEachCurrency(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
 	id := uuid.NewV7()
 	b.sql(fmt.Sprintf(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) VALUES ('%[1]s', '%[2]s', '%[3]s', 'credit', '%[1]s');
 		INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency) VALUES
