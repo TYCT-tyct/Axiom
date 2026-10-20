@@ -202,6 +202,7 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.UpstreamRequest = result.receipt.ref
 	if failure != nil {
 		result.Failure, result.Total, result.FinishedAt = failure, time.Since(sent), s.now()
+		result.Status = statusOf(*failure)
 		return result, nil
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing more to learn from a body that fails to close
@@ -209,6 +210,17 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.read(ctx, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
+}
+
+// statusOf is the HTTP status a failure names: the supplier's own when it answered, 0 when nothing came back.
+func statusOf(f Failure) int {
+	switch c := f.Cause.(type) {
+	case UpstreamError:
+		return c.Status
+	case Unknown:
+		return c.Status
+	}
+	return 0
 }
 
 // testable is the endpoint a test may call, if it serves the format asked for.

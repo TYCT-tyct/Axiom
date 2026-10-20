@@ -321,10 +321,24 @@ func TestReconciliationMatchesATestButNeverJudgesIt(t *testing.T) {
 		WHERE c.charge_ref = 'ref-1' AND e.payload->>'verdict' = 'unjudged'`); n != 1 {
 		t.Error("the test's charge was judged")
 	}
-	// And a test that no charge arrives for is never listed as an attempt waiting for one, while a call's is.
+}
+
+// TestATestIsNotAnAttemptWaitingForItsCharge: reconciliation never reports a test as an attempt whose charge has not
+// come, the way it reports a call's, because a test's charge may never be ingested at all (H-I9).
+func TestATestIsNotAnAttemptWaitingForItsCharge(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.pointAt(newTestUpstream(t, answersWhole).URL)
+	result, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return RecordTest(ctx, tx, audit.User(uuid.NewV7()), "test the endpoint", result)
+	})
 	w.record(w.attempt(newRequest(), 1, "a-calls-ref"))
-	late := w.reconcile(w.clock.now().Add(time.Hour))
-	if len(late.Unmatched) != 1 || late.Unmatched[0].Ref != "a-calls-ref" {
-		t.Errorf("the attempts waiting for a charge are %+v, want only the call's", late.Unmatched)
+	report := w.reconcile(w.clock.now().Add(time.Hour))
+	if len(report.Unmatched) != 1 || report.Unmatched[0].Ref != "a-calls-ref" {
+		t.Errorf("the attempts waiting for a charge are %+v, want only the call's", report.Unmatched)
 	}
 }
