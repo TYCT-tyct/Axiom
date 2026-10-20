@@ -1,12 +1,33 @@
 package catalog_test
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"axiom/internal/catalog"
 )
+
+func TestTheSyncRecordsACancelledRound(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
+	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := catalog.RunSyncRound(ctx, catalog.SyncJobConfig{
+		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: slog.New(slog.DiscardHandler),
+		Clock: func() time.Time { return now },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("round: %v, want context cancellation", err)
+	}
+	if got, want := s.record(), "never|2025-11-01T03:00:00Z|1|0"; got != want {
+		t.Fatalf("cancelled round record: %s, want %s", got, want)
+	}
+}
 
 func TestTheSyncRecoversAfterAPartialRound(t *testing.T) {
 	t.Parallel()

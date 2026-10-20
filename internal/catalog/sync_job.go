@@ -24,6 +24,9 @@ const syncEvery = 24 * time.Hour
 // (docs/domains/observability.md「监控与告警」): this is the default, and SyncJobConfig.AlertAfter is a departure from it.
 const syncAlertAfter = 2 * syncEvery
 
+// Bookkeeping must survive a cancelled download without extending shutdown indefinitely.
+const syncRecordTimeout = 5 * time.Second
+
 // syncOverdueEvent is the stable name of the alert log, and syncOverdueMetric the counter that rises with it once per
 // round, so an alert rule watches a rise and not a total.
 const (
@@ -133,11 +136,13 @@ type syncJob struct {
 func (j *syncJob) work(ctx context.Context, _ *river.Job[syncArgs]) error {
 	reports, syncErr := j.cat.SyncAll(ctx, j.fetcher, true)
 	at := j.now()
-	state, err := j.record(ctx, reports, syncErr, at)
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncRecordTimeout)
+	defer cancel()
+	state, err := j.record(recordCtx, reports, syncErr, at)
 	if err != nil {
 		return errors.Join(syncErr, err)
 	}
-	j.report(ctx, state, syncErr, at)
+	j.report(recordCtx, state, syncErr, at)
 	return syncErr
 }
 
