@@ -17,6 +17,9 @@ func addKey(path string, version uint32) error {
 	if err != nil {
 		return err
 	}
+	if err := removeLeftovers(filepath.Dir(path)); err != nil {
+		return err
+	}
 	if _, ok := keys[version]; ok {
 		return nil
 	}
@@ -29,6 +32,9 @@ func addKey(path string, version uint32) error {
 func removeKey(path string, version uint32) error {
 	keys, _, err := readKeyFile(keyFileVariable, path)
 	if err != nil {
+		return err
+	}
+	if err := removeLeftovers(filepath.Dir(path)); err != nil {
 		return err
 	}
 	if _, ok := keys[version]; !ok {
@@ -47,9 +53,6 @@ func replaceKeys(path string, keys map[uint32][32]byte) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%s: replacement requires a regular file, not a symlink", keyFileVariable)
-	}
-	if err := removeLeftovers(filepath.Dir(path)); err != nil {
-		return err
 	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".keyring-*")
 	if err != nil {

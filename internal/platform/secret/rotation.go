@@ -223,11 +223,11 @@ func (r Rotation) Add(ctx context.Context, version uint32) error {
 		if state == "retired" {
 			return fmt.Errorf("keyring: version %d is retired", version)
 		}
-		if state != "" {
-			return nil
-		}
 		if err := addKey(r.Path, version); err != nil {
 			return err
+		}
+		if state != "" {
+			return nil
 		}
 		ring, err := Load(r.Path)
 		if err != nil {
