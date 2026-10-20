@@ -359,6 +359,46 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/users/{user_id}/status:
+    put:
+      operationId: setUserStatus
+      tags: [Users]
+      summary: Disable or re-enable a user's login
+      description: >-
+        `disabled` stops the user signing in and ends every session they have, on both surfaces, so a page that is
+        open stops working at its next request; the account's API keys keep working, because stopping calls is the
+        account's status. `active` lets them sign in again. Asking for the state the user is already in changes
+        nothing, ends no session and writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/UserId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StatusUpdate"}
+      responses:
+        "200":
+          description: The user as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UserSummary"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}:
     get:
       operationId: getAccount
@@ -382,6 +422,47 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/status:
+    put:
+      operationId: setAccountStatus
+      tags: [Users]
+      summary: Suspend or resume an account
+      description: >-
+        `disabled` suspends the account: from the next call on its API keys are refused at admission, because every
+        call reads the account's state from the database, while its console session keeps working, so a person can
+        still sign in and look. `active` resumes it, and its keys work again. The account's users are not touched:
+        stopping a login is the user's status. Asking for the state the account is already in changes nothing and
+        writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StatusUpdate"}
+      responses:
+        "200":
+          description: The account as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountDetail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/credit-grants:
     post:
@@ -1880,6 +1961,13 @@ components:
             email: {type: string}
         balance: {$ref: "#/components/schemas/Balance"}
         created_at: {type: string, format: date-time}
+    StatusUpdate:
+      type: object
+      description: The state to put an account or a user in, and why.
+      required: [status, reason]
+      properties:
+        status: {type: string, enum: [active, disabled]}
+        reason: {$ref: "#/components/schemas/Reason"}
     CreditGrantRequest:
       type: object
       required: [amount, reason]

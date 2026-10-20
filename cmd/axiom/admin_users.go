@@ -45,16 +45,21 @@ func (a adminAPI) ListUsers(ctx context.Context, request adminapi.ListUsersReque
 	}
 	list := adminapi.UserList{Data: make([]adminapi.UserSummary, len(users))}
 	for i, u := range users {
-		list.Data[i] = adminapi.UserSummary{
-			Id: u.ID.TypeID(), AccountId: u.Account.TypeID(), SiteId: u.Site.TypeID(), Email: u.Email,
-			Status: adminapi.UserSummaryStatus(u.Status), Tier: tierRef(u.Tier), MfaEnabled: u.MFA, CreatedAt: u.CreatedAt,
-		}
+		list.Data[i] = userBody(u)
 	}
 	if more {
 		next := users[len(users)-1].ID.TypeID()
 		list.NextCursor = &next
 	}
 	return adminapi.ListUsers200JSONResponse(list), nil
+}
+
+// userBody is a user as the contract writes it.
+func userBody(u accounts.UserSummary) adminapi.UserSummary {
+	return adminapi.UserSummary{
+		Id: u.ID.TypeID(), AccountId: u.Account.TypeID(), SiteId: u.Site.TypeID(), Email: u.Email,
+		Status: adminapi.UserSummaryStatus(u.Status), Tier: tierRef(u.Tier), MfaEnabled: u.MFA, CreatedAt: u.CreatedAt,
+	}
 }
 
 // balanceBody is an account's money as the contract gives it. Available is the balance less what is reserved, which
@@ -116,13 +121,18 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	if err != nil {
 		return nil, err
 	}
+	return adminapi.GetAccount200JSONResponse(accountBody(account, balance, currency)), nil
+}
+
+// accountBody is an account with its money as the contract writes it.
+func accountBody(account accounts.AccountDetail, balance billing.BalanceView, currency platform.Currency) adminapi.AccountDetail {
 	body := adminapi.AccountDetail{
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
 		CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
-	return adminapi.GetAccount200JSONResponse(body), nil
+	return body
 }
 
 // maxGrant is the most one grant gives, in billionths of a credit: 10,000 units of the site's currency. The contract

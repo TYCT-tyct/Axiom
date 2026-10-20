@@ -27,6 +27,12 @@ INSERT INTO accounts.platform_grants (id, site_id, account_id, user_id, role_id)
 VALUES (@id, @site_id, @account_id, @user_id, @role_id)
 ON CONFLICT (user_id, role_id) WHERE revoked_at IS NULL DO NOTHING;
 
+-- name: RevokePlatformGrant :execrows
+-- Takes the role away; the row stays with the time it ended, because the unrevoked ones are unique. Granting it again
+-- is a new row.
+UPDATE accounts.platform_grants SET revoked_at = now()
+WHERE user_id = @user_id AND role_id = @role_id AND revoked_at IS NULL;
+
 -- name: SetPassword :exec
 UPDATE accounts.users SET password_hash = @password_hash, factor_version = factor_version + 1 WHERE id = @id;
 

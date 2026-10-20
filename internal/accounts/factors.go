@@ -34,17 +34,25 @@ const recoveryCodeCount = 10 // each 80 random bits
 // failures, across challenges (ErrTooManyAttempts when none is left). Under the user's lock it checks the pending session (not revoked or expired, its
 // factor version the user's, attempts left) and spends the code with a conditional update that must change one row;
 // a wrong code only counts an attempt, which commits. The pending session is revoked and a new one with new tokens
-// issued, so one challenge yields one session.
-func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, ip netip.Addr, userAgent string) (Issued, error) {
+// issued, so one challenge yields one session. The attempt is recorded as a security event, refused or not.
+func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, ip netip.Addr, userAgent string) (issued Issued, err error) {
 	found, tokenHash, d, err := s.sessionOf(ctx, r)
 	if err != nil {
 		return Issued{}, err
 	}
+	event := securityEvent{
+		kind: eventMFA, site: d.site, ip: ip, account: AccountID(found.AccountID), user: UserID(found.UserID),
+		session: SessionID(found.SessionID),
+	}
+	defer func() {
+		if event.outcome(err) {
+			s.record(ctx, event)
+		}
+	}()
 	if err := s.fromIP(d.site, ip); err != nil {
 		return Issued{}, err
 	}
 	l := s.snapshot.Load().sites[d.site].limits
-	var issued Issued
 	err = failing(s, s.guards.users, found.UserID, l.codeFailures, codeWindow, func() error {
 		issued, err = s.verifyMFA(ctx, r, code, found, tokenHash, d, l.challengeAttempts, ip, userAgent)
 		return err

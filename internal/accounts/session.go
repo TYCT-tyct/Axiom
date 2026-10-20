@@ -73,9 +73,11 @@ type SignInRequest struct {
 }
 
 // Issued is a new session: its token, which goes only into the cookie, and its CSRF token, which the client sends
-// back in X-CSRF-Token. Pending is a session that waits for the second factor.
+// back in X-CSRF-Token. Pending is a session that waits for the second factor. Session is the row's ID, which the
+// security event of the attempt names.
 type Issued struct {
 	Token, CSRFToken string
+	Session          SessionID
 	Pending          bool
 	MaxAge           time.Duration
 }
@@ -84,8 +86,8 @@ type Issued struct {
 // spends one of its IP's attempts and, until it succeeds, one of its email's failures (ErrTooManyAttempts when none is
 // left); the hash takes one of the node's turns (ErrBusy). The hash is checked before the issuing transaction, which
 // then locks the user and issues only if the factors have not changed and the user is enabled. An unknown email costs
-// a hash too.
-func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
+// a hash too. The attempt is recorded as a security event, refused or not.
+func (s *Service) SignIn(ctx context.Context, r SignInRequest) (issued Issued, err error) {
 	d, snap, err := s.domain(r.Host)
 	if err != nil {
 		return Issued{}, err
@@ -93,18 +95,23 @@ func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error) {
 	if d.surface != Console && d.surface != Admin {
 		return Issued{}, ErrUnknownHost
 	}
+	event := securityEvent{kind: eventSignIn, site: d.site, ip: r.ClientIP}
+	defer func() {
+		if event.outcome(err) {
+			s.record(ctx, event)
+		}
+	}()
 	if err := s.fromIP(d.site, r.ClientIP); err != nil {
 		return Issued{}, err
 	}
-	var issued Issued
 	err = failing(s, s.guards.emails, siteEmail{d.site, normalEmail(r.Email)}, snap.sites[d.site].limits.emailFailures, emailWindow, func() error {
-		issued, err = s.signIn(ctx, r, d, snap)
+		issued, err = s.signIn(ctx, r, d, snap, &event)
 		return err
 	})
 	return issued, err
 }
 
-func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *snapshot) (Issued, error) {
+func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *snapshot, event *securityEvent) (Issued, error) {
 	var err error
 	var found []LoginTenantRow
 	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
@@ -120,6 +127,7 @@ func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *s
 		return Issued{}, ErrBadCredentials
 	}
 	user, account := found[0].UserID, found[0].AccountID
+	event.user, event.account = UserID(user), AccountID(account)
 	var stored []UserPasswordRow
 	if err := s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
 		stored, err = s.queries.UserPassword(ctx, tx, user)
@@ -150,6 +158,9 @@ func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *s
 		})
 		return err
 	})
+	if err == nil {
+		event.session = issued.Session
+	}
 	return issued, err
 }
 
@@ -188,15 +199,16 @@ func (s *Service) issue(ctx context.Context, tx pg.Tx, n newSession) (Issued, er
 	if n.ip.IsValid() {
 		ip = n.ip.String()
 	}
+	id := uuid.NewV7()
 	if err := s.queries.InsertSession(ctx, tx, InsertSessionParams{
-		ID: uuid.NewV7(), SiteID: uuid.UUID(n.site.ID), AccountID: n.account, UserID: n.user, Surface: string(n.surface),
+		ID: id, SiteID: uuid.UUID(n.site.ID), AccountID: n.account, UserID: n.user, Surface: string(n.surface),
 		TokenHash: hash[:], CsrfToken: csrf, Level: n.level, FactorVersion: n.factorVersion,
 		MaxAgeSeconds: int64(life.max / time.Second), IdleSeconds: int64(life.idle / time.Second),
 		Ip: ip, UserAgent: truncate(n.userAgent, 512),
 	}); err != nil {
 		return Issued{}, fmt.Errorf("issue a session: %w", err)
 	}
-	return Issued{Token: token, CSRFToken: csrf, Pending: n.level == levelPending, MaxAge: life.max}, nil
+	return Issued{Token: token, CSRFToken: csrf, Session: SessionID(id), Pending: n.level == levelPending, MaxAge: life.max}, nil
 }
 
 // Authenticate is the user whose session the request's cookie carries, for the site and surface of its Host. A

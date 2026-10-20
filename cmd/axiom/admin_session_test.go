@@ -57,7 +57,7 @@ func TestAdminSessionPermissions(t *testing.T) {
 	wantAll := []string{
 		"api_keys.manage", "api_keys.view", "balance.view", "calls.view", "catalog.manage", "catalog.view", "credits.grant",
 		"platform_grants.manage", "pricing.manage", "pricing.view", "sites.manage", "suppliers.manage", "suppliers.view",
-		"users.view", "workspaces.manage",
+		"users.manage", "users.view", "workspaces.manage",
 	}
 	got := f.readSession(f.verified(ownerEmail))
 	if diff := cmp.Diff(wantAll, got.Permissions); got.Level != "mfa" || !got.MfaEnabled || diff != "" {

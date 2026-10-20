@@ -25,7 +25,7 @@ func openBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error {
 
 const (
 	siteUsage = "usage: axiom site init --name NAME --currency CODE --console HOST --api HOST [--admin HOST] [--key-prefix PREFIX]"
-	userUsage = "usage: axiom user create|set-password --email ADDRESS < password | axiom user grant-platform --email ADDRESS [--role NAME] | axiom user reset-mfa --email ADDRESS"
+	userUsage = "usage: axiom user create|set-password --email ADDRESS < password | axiom user grant-platform|revoke-platform --email ADDRESS [--role NAME] | axiom user reset-mfa --email ADDRESS"
 )
 
 // flags parses args as the flags define declares, naming usage on a mistake; anything left over is a mistake too.
@@ -96,6 +96,9 @@ var userVerbs = map[string]userVerb{
 	"grant-platform": {false, func(ctx context.Context, o *accounts.Operator, a userArgs, out io.Writer) error {
 		return doneLine(out, "grant-platform", o.GrantPlatform(ctx, a.email, a.role))
 	}},
+	"revoke-platform": {false, func(ctx context.Context, o *accounts.Operator, a userArgs, out io.Writer) error {
+		return doneLine(out, "revoke-platform", o.RevokePlatform(ctx, a.email, a.role))
+	}},
 	"set-password": {true, func(ctx context.Context, o *accounts.Operator, a userArgs, out io.Writer) error {
 		return doneLine(out, "set-password", o.SetPassword(ctx, a.email, a.password))
 	}},
@@ -117,7 +120,7 @@ func userCommand(ctx context.Context, environ, args []string, stdin io.Reader, o
 	var a userArgs
 	if err := flags("user "+args[0], userUsage, args[1:], func(set *flag.FlagSet) {
 		set.StringVar(&a.email, "email", "", "the user's email address")
-		set.StringVar(&a.role, "role", "admin", "the platform role to grant")
+		set.StringVar(&a.role, "role", "admin", "the platform role to grant or revoke")
 	}); err != nil {
 		return err
 	}

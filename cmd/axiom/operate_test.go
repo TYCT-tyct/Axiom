@@ -164,9 +164,9 @@ func TestSiteInitAndUserCreate(t *testing.T) {
 	}
 }
 
-// TestUserVerbs: grant-platform, set-password and reset-mfa each report that they are done; the password
-// set-password read from standard input, less its line ending, is the one that signs in afterwards.
-func TestUserVerbs(t *testing.T) {
+// TestGrantAndRevokePlatform: each verb reports that it is done; a revoked grant stays as a row with no permission, and
+// granting again is a new row, so one role is held at a time.
+func TestGrantAndRevokePlatform(t *testing.T) {
 	t.Parallel()
 	c := withOwner(t)
 	if done, err := c.user("", "grant-platform", "--email", "owner@example.com"); err != nil || done["done"] != "grant-platform" {
@@ -175,6 +175,29 @@ func TestUserVerbs(t *testing.T) {
 	if got := c.text("SELECT count(*)::text FROM accounts.platform_grants"); got != "1" {
 		t.Errorf("%s grants", got)
 	}
+	if done, err := c.user("", "revoke-platform", "--email", "owner@example.com"); err != nil || done["done"] != "revoke-platform" {
+		t.Errorf("revoke-platform: %v, %v", done, err)
+	}
+	if got := c.text("SELECT count(*)::text FROM accounts.platform_grants WHERE revoked_at IS NULL"); got != "0" {
+		t.Errorf("%s grants held after the revoke", got)
+	}
+	if got := c.text(`SELECT string_agg(action, ' ' ORDER BY id) FROM platform.audit_log WHERE action LIKE 'platform_grant.%'`); got != "platform_grant.create platform_grant.revoke" {
+		t.Errorf("the audit log of the grants: %q", got)
+	}
+	if done, err := c.user("", "grant-platform", "--email", "owner@example.com"); err != nil || done["done"] != "grant-platform" {
+		t.Errorf("grant-platform again: %v, %v", done, err)
+	}
+	if held, all := c.text("SELECT count(*)::text FROM accounts.platform_grants WHERE revoked_at IS NULL"),
+		c.text("SELECT count(*)::text FROM accounts.platform_grants"); held != "1" || all != "2" {
+		t.Errorf("after granting again: %s grants held of %s rows, want 1 of the revoked and the new one", held, all)
+	}
+}
+
+// TestSetPasswordAndResetMFA: each verb reports that it is done; the password set-password read from standard input,
+// less its line ending, is the one that signs in afterwards.
+func TestSetPasswordAndResetMFA(t *testing.T) {
+	t.Parallel()
+	c := withOwner(t)
 	if done, err := c.user(secondPW+"\r\n", "set-password", "--email", "owner@example.com"); err != nil || done["done"] != "set-password" {
 		t.Errorf("set-password: %v, %v", done, err)
 	}

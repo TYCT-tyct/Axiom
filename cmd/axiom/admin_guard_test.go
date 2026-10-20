@@ -12,6 +12,7 @@ import (
 const (
 	someSite     = "/sites/site_00000000000000000000000000/settings"
 	someAccount  = "/accounts/acct_00000000000000000000000000"
+	someUser     = "/users/user_00000000000000000000000000"
 	someSupplier = "/suppliers/0198c0a8-0000-7000-8000-000000000001"
 	someModel    = "/models/0198c0a8-0000-7000-8000-000000000002"
 	someRule     = "/pricing/rules/0198c0a8-0000-7000-8000-000000000003"
@@ -38,7 +39,9 @@ var adminOperations = []adminOperation{
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
 	{"listTiers", http.MethodGet, "/tiers", "", "users.view", false},
 	{"listUsers", http.MethodGet, "/users", "", "users.view", false},
+	{"setUserStatus", http.MethodPut, someUser + "/status", `{"status":"disabled","reason":"r"}`, "users.manage", true},
 	{"getAccount", http.MethodGet, someAccount, "", "users.view", false},
+	{"setAccountStatus", http.MethodPut, someAccount + "/status", `{"status":"disabled","reason":"r"}`, "users.manage", true},
 	{"grantCredit", http.MethodPost, someAccount + "/credit-grants", `{"amount":{"amount":"1","currency":"USD"},"reason":"r"}`, "credits.grant", true},
 	{"listSuppliers", http.MethodGet, "/suppliers", "", "suppliers.view", false},
 	{"createSupplier", http.MethodPost, "/suppliers", `{}`, "suppliers.manage", true},

@@ -76,14 +76,16 @@ SELECT u.id, u.account_id, u.site_id, u.email, u.status, (u.mfa_enabled_at IS NO
 FROM accounts.users u
 JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
-WHERE ($1::uuid IS NULL OR u.site_id = $1)
-    AND ($2::text IS NULL OR u.email LIKE $2 || '%')
-    AND ($3::uuid IS NULL OR u.id < $3)
+WHERE ($1::uuid IS NULL OR u.id = $1)
+    AND ($2::uuid IS NULL OR u.site_id = $2)
+    AND ($3::text IS NULL OR u.email LIKE $3 || '%')
+    AND ($4::uuid IS NULL OR u.id < $4)
 ORDER BY u.id DESC
-LIMIT $4::int
+LIMIT $5::int
 `
 
 type ListUsersParams struct {
+	ID          *uuid.UUID
 	SiteID      *uuid.UUID
 	EmailPrefix *string
 	After       *uuid.UUID
@@ -103,9 +105,11 @@ type ListUsersRow struct {
 }
 
 // Newest first: an ID is a UUIDv7, so its order is the order of making, and a page starts after the last ID of the one
-// before. The prefix is matched literally (its % and _ are escaped by the caller) against the lower-cased email.
+// before. The prefix is matched literally (its % and _ are escaped by the caller) against the lower-cased email. An ID
+// asks for that one user, which is how a change of its state answers with the user.
 func (q *Queries) ListUsers(ctx context.Context, db DBTX, arg ListUsersParams) ([]ListUsersRow, error) {
 	rows, err := db.Query(ctx, listUsers,
+		arg.ID,
 		arg.SiteID,
 		arg.EmailPrefix,
 		arg.After,
@@ -139,6 +143,37 @@ func (q *Queries) ListUsers(ctx context.Context, db DBTX, arg ListUsersParams) (
 	return items, nil
 }
 
+const lockAccountState = `-- name: LockAccountState :many
+SELECT site_id, status FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
+`
+
+type LockAccountStateRow struct {
+	SiteID uuid.UUID
+	Status string
+}
+
+// Takes the account's turn, so two changes of its state are applied one after the other, and reads the state it is in,
+// so that a change to the state it is already in writes nothing.
+func (q *Queries) LockAccountState(ctx context.Context, db DBTX, id uuid.UUID) ([]LockAccountStateRow, error) {
+	rows, err := db.Query(ctx, lockAccountState, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockAccountStateRow
+	for rows.Next() {
+		var i LockAccountStateRow
+		if err := rows.Scan(&i.SiteID, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockSite = `-- name: LockSite :many
 
 SELECT id FROM accounts.sites WHERE id = $1 FOR NO KEY UPDATE
@@ -161,6 +196,37 @@ func (q *Queries) LockSite(ctx context.Context, db DBTX, id uuid.UUID) ([]uuid.U
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockUserState = `-- name: LockUserState :many
+SELECT site_id, account_id, status FROM accounts.users WHERE id = $1 FOR NO KEY UPDATE
+`
+
+type LockUserStateRow struct {
+	SiteID    uuid.UUID
+	AccountID uuid.UUID
+	Status    string
+}
+
+// Takes the user's turn, as a change of a login takes it against a sign-in, and reads the state it is in.
+func (q *Queries) LockUserState(ctx context.Context, db DBTX, id uuid.UUID) ([]LockUserStateRow, error) {
+	rows, err := db.Query(ctx, lockUserState, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockUserStateRow
+	for rows.Next() {
+		var i LockUserStateRow
+		if err := rows.Scan(&i.SiteID, &i.AccountID, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -271,6 +337,48 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeUserSessions = `-- name: RevokeUserSessions :execrows
+UPDATE accounts.sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL
+`
+
+// Ends every session the user has, of both surfaces: a disabled login is no longer a session anywhere. Sessions
+// already ended are left alone, so the count is the ones this change ended.
+func (q *Queries) RevokeUserSessions(ctx context.Context, db DBTX, userID uuid.UUID) (int64, error) {
+	result, err := db.Exec(ctx, revokeUserSessions, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setAccountStatus = `-- name: SetAccountStatus :exec
+UPDATE accounts.accounts SET status = $1 WHERE id = $2
+`
+
+type SetAccountStatusParams struct {
+	Status string
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetAccountStatus(ctx context.Context, db DBTX, arg SetAccountStatusParams) error {
+	_, err := db.Exec(ctx, setAccountStatus, arg.Status, arg.ID)
+	return err
+}
+
+const setUserStatus = `-- name: SetUserStatus :exec
+UPDATE accounts.users SET status = $1 WHERE id = $2
+`
+
+type SetUserStatusParams struct {
+	Status string
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetUserStatus(ctx context.Context, db DBTX, arg SetUserStatusParams) error {
+	_, err := db.Exec(ctx, setUserStatus, arg.Status, arg.ID)
+	return err
 }
 
 const writeSiteSettings = `-- name: WriteSiteSettings :exec

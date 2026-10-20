@@ -39,12 +39,18 @@ type RegisterRequest struct {
 // invitation, the inviter enabled), then, in a transaction scoped to the new account alone, its personal account in
 // the site's default tier, registered as a tenant, its default workspace, the user and the user as the account's
 // owner. A taken email fails the whole transaction. It spends one of the IP's attempts, and the hash one of the
-// node's turns.
-func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, error) {
+// node's turns. The attempt is recorded as a security event, refused or not.
+func (s *Service) Register(ctx context.Context, r RegisterRequest) (registered UserID, err error) {
 	d, snap, err := s.domain(r.Host)
 	if err != nil {
 		return UserID{}, err
 	}
+	event := securityEvent{kind: eventSignUp, site: d.site, ip: r.ClientIP}
+	defer func() {
+		if event.outcome(err) {
+			s.record(ctx, event)
+		}
+	}()
 	if d.surface != Console {
 		return UserID{}, ErrUnknownHost
 	}
@@ -79,7 +85,9 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if err != nil {
 		return UserID{}, fmt.Errorf("register: %w", err)
 	}
-	return UserID(user), nil
+	registered = UserID(user)
+	event.user, event.account = registered, AccountID(account)
+	return registered, nil
 }
 
 // newUser is a user and the personal account that comes with them. inviter is nil for a user the command line makes.

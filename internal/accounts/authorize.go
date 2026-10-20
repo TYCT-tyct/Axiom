@@ -26,8 +26,10 @@ var (
 	ManageSites          = Permission{"sites.manage", true}
 	ManagePlatformGrants = Permission{"platform_grants.manage", true}
 
-	// The admin API's, asked of the platform. The ones that change money, credentials, prices or the catalog are sensitive.
+	// The admin API's, asked of the platform. The ones that change money, credentials, prices, the catalog or a
+	// security state are sensitive.
 	ViewUsers       = Permission{"users.view", false}
+	ManageUsers     = Permission{"users.manage", true}
 	GrantCredits    = Permission{"credits.grant", true}
 	ViewSuppliers   = Permission{"suppliers.view", false}
 	ManageSuppliers = Permission{"suppliers.manage", true}
@@ -41,7 +43,7 @@ var permissions = func() map[string]Permission {
 	declared := map[string]Permission{}
 	for _, p := range []Permission{
 		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, ManageSites, ManagePlatformGrants,
-		ViewUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
+		ViewUsers, ManageUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
 	} {
 		declared[p.name] = p
 	}

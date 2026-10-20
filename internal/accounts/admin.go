@@ -193,8 +193,9 @@ func (s *Service) Tiers(ctx context.Context, tx pg.Tx, site SiteID) ([]Tier, err
 
 // UserQuery chooses the users to list, newest first. A nil Site is every site; EmailPrefix is matched literally
 // against the start of the lower-cased email; After is the last user of the page before, and the zero UserID the first
-// page.
+// page. An ID asks for that one user instead of a page.
 type UserQuery struct {
+	ID          UserID
 	Site        *SiteID
 	EmailPrefix string
 	After       UserID
@@ -219,6 +220,10 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // Users lists a page of users; more tells whether users remain beyond it.
 func (s *Service) Users(ctx context.Context, tx pg.Tx, q UserQuery) (users []UserSummary, more bool, err error) {
 	params := ListUsersParams{PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
+	if q.ID != (UserID{}) {
+		id := uuid.UUID(q.ID)
+		params.ID = &id
+	}
 	if q.Site != nil {
 		id := uuid.UUID(*q.Site)
 		params.SiteID = &id
@@ -246,6 +251,18 @@ func (s *Service) Users(ctx context.Context, tx pg.Tx, q UserQuery) (users []Use
 		}
 	}
 	return users, more, nil
+}
+
+// User reads one user, the one with id, in the shape a list gives it; ErrNotFound when there is none.
+func (s *Service) User(ctx context.Context, tx pg.Tx, id UserID) (UserSummary, error) {
+	users, _, err := s.Users(ctx, tx, UserQuery{ID: id, PageSize: 1})
+	if err != nil {
+		return UserSummary{}, err
+	}
+	if len(users) == 0 {
+		return UserSummary{}, ErrNotFound
+	}
+	return users[0], nil
 }
 
 // AccountDetail is an account with its tier and its owner.

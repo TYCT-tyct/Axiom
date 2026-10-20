@@ -238,6 +238,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/users/{user_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Disable or re-enable a user's login
+         * @description `disabled` stops the user signing in and ends every session they have, on both surfaces, so a page that is open stops working at its next request; the account's API keys keep working, because stopping calls is the account's status. `active` lets them sign in again. Asking for the state the user is already in changes nothing, ends no session and writes no audit entry.
+         */
+        put: operations["setUserStatus"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/accounts/{account_id}": {
         parameters: {
             query?: never;
@@ -248,6 +268,26 @@ export interface paths {
         /** One account with its balance */
         get: operations["getAccount"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Suspend or resume an account
+         * @description `disabled` suspends the account: from the next call on its API keys are refused at admission, because every call reads the account's state from the database, while its console session keeps working, so a person can still sign in and look. `active` resumes it, and its keys work again. The account's users are not touched: stopping a login is the user's status. Asking for the state the account is already in changes nothing and writes no audit entry.
+         */
+        put: operations["setAccountStatus"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1007,6 +1047,12 @@ export interface components {
             balance: components["schemas"]["Balance"];
             /** Format: date-time */
             created_at: string;
+        };
+        /** @description The state to put an account or a user in, and why. */
+        StatusUpdate: {
+            /** @enum {string} */
+            status: "active" | "disabled";
+            reason: components["schemas"]["Reason"];
         };
         CreditGrantRequest: {
             amount: components["schemas"]["Money"];
@@ -1900,6 +1946,42 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    setUserStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description The user as changed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getAccount: {
         parameters: {
             query?: never;
@@ -1923,6 +2005,42 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAccountStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description The account as changed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

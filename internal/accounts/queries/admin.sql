@@ -40,18 +40,40 @@ WHERE site_id = @site_id AND surface = @surface AND revoked_at IS NULL AND expir
     AND (created_at + make_interval(secs => @max_age_seconds::bigint) < expires_at
         OR make_interval(secs => @idle_seconds::bigint) < idle_timeout);
 
+-- name: LockAccountState :many
+-- Takes the account's turn, so two changes of its state are applied one after the other, and reads the state it is in,
+-- so that a change to the state it is already in writes nothing.
+SELECT site_id, status FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
+
+-- name: SetAccountStatus :exec
+UPDATE accounts.accounts SET status = @status WHERE id = @id;
+
+-- name: LockUserState :many
+-- Takes the user's turn, as a change of a login takes it against a sign-in, and reads the state it is in.
+SELECT site_id, account_id, status FROM accounts.users WHERE id = @id FOR NO KEY UPDATE;
+
+-- name: SetUserStatus :exec
+UPDATE accounts.users SET status = @status WHERE id = @id;
+
+-- name: RevokeUserSessions :execrows
+-- Ends every session the user has, of both surfaces: a disabled login is no longer a session anywhere. Sessions
+-- already ended are left alone, so the count is the ones this change ended.
+UPDATE accounts.sessions SET revoked_at = now() WHERE user_id = @user_id AND revoked_at IS NULL;
+
 -- name: ListTiers :many
 SELECT id, name FROM accounts.tiers WHERE site_id = @site_id ORDER BY name, id;
 
 -- name: ListUsers :many
 -- Newest first: an ID is a UUIDv7, so its order is the order of making, and a page starts after the last ID of the one
--- before. The prefix is matched literally (its % and _ are escaped by the caller) against the lower-cased email.
+-- before. The prefix is matched literally (its % and _ are escaped by the caller) against the lower-cased email. An ID
+-- asks for that one user, which is how a change of its state answers with the user.
 SELECT u.id, u.account_id, u.site_id, u.email, u.status, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
     a.tier_id, t.name AS tier_name, uuid_extract_timestamp(u.id)::timestamptz AS created_at
 FROM accounts.users u
 JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
-WHERE (sqlc.narg(site_id)::uuid IS NULL OR u.site_id = sqlc.narg(site_id))
+WHERE (sqlc.narg(id)::uuid IS NULL OR u.id = sqlc.narg(id))
+    AND (sqlc.narg(site_id)::uuid IS NULL OR u.site_id = sqlc.narg(site_id))
     AND (sqlc.narg(email_prefix)::text IS NULL OR u.email LIKE sqlc.narg(email_prefix) || '%')
     AND (sqlc.narg(after)::uuid IS NULL OR u.id < sqlc.narg(after))
 ORDER BY u.id DESC

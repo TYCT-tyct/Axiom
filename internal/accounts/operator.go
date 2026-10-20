@@ -260,6 +260,36 @@ func (o *Operator) GrantPlatform(ctx context.Context, email, roleName string) er
 	return nil
 }
 
+// RevokePlatform takes the built-in platform role roleName away from the main site's user with email, in the one
+// transaction: the row stays, with the time the grant ended, because the grants a user holds are the unrevoked ones.
+// The next request that asks for a permission of that role is refused, as the platform reads the grants from the
+// database every time. A user who does not hold the role is left as it is, and granting it again is a new row
+// (GrantPlatform).
+func (o *Operator) RevokePlatform(ctx context.Context, email, roleName string) error {
+	site, user, err := o.userOf(ctx, email)
+	if err != nil {
+		return err
+	}
+	role, err := o.role(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	err = o.db.Tx(ctx, o.platform, func(tx pg.Tx) error {
+		revoked, err := o.queries.RevokePlatformGrant(ctx, tx, RevokePlatformGrantParams{UserID: user.ID, RoleID: role})
+		if err != nil || revoked == 0 {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{
+			Actor: operator, Action: "platform_grant.revoke", Target: userTarget(site, user.AccountID, user.ID),
+			Detail: map[string]any{"role": roleName},
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("revoke a platform role: %w", err)
+	}
+	return nil
+}
+
 // SetPassword replaces the main site's user's password, which raises the factor version: the user's sessions, pending
 // sign-ins and unused recovery codes stop working.
 func (o *Operator) SetPassword(ctx context.Context, email, password string) error {

@@ -144,6 +144,26 @@ func (q *Queries) ResetMFA(ctx context.Context, db DBTX, id uuid.UUID) error {
 	return err
 }
 
+const revokePlatformGrant = `-- name: RevokePlatformGrant :execrows
+UPDATE accounts.platform_grants SET revoked_at = now()
+WHERE user_id = $1 AND role_id = $2 AND revoked_at IS NULL
+`
+
+type RevokePlatformGrantParams struct {
+	UserID uuid.UUID
+	RoleID uuid.UUID
+}
+
+// Takes the role away; the row stays with the time it ended, because the unrevoked ones are unique. Granting it again
+// is a new row.
+func (q *Queries) RevokePlatformGrant(ctx context.Context, db DBTX, arg RevokePlatformGrantParams) (int64, error) {
+	result, err := db.Exec(ctx, revokePlatformGrant, arg.UserID, arg.RoleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const roleByName = `-- name: RoleByName :many
 SELECT id FROM accounts.roles WHERE name = $1
 `

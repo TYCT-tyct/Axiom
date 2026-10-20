@@ -100,6 +100,8 @@ var seed = []string{
 	apiKey(":k1", ":s1", ":a1", ":w1", ":u1", "call"), apiKey(":k2", ":s2", ":a2", ":w2", ":u2", "call"),
 	session(":e1", ":s1", ":a1", ":u1"), session(":e2", ":s2", ":a2", ":u2"),
 	code(":c1", ":s1", ":a1", ":u1"), code(":c2", ":s2", ":a2", ":u2"),
+	`INSERT INTO accounts.security_events (site_id, account_id, user_id, kind, refused, reason, ip_hash)
+		VALUES (:s2, :a2, :u2, 'sign_in', true, 'bad_credentials', encode(sha256(convert_to('ip', 'UTF8')), 'hex'))`,
 	`INSERT INTO platform.tenants VALUES (:s1, :s1), (:s2, :s2), (:s1, :a1), (:s2, :a2), (:s1, :p)`,
 }
 
@@ -274,6 +276,14 @@ func TestScopesSeeAndWriteOnlyTheirRows(t *testing.T) {
 		{"api_keys", "account_id", "name = name", accountRows, []string{apiKey(":z", ":s1", ":a1", ":w1", ":u1", "call")}, tenantOf1, nil},
 		{"sessions", "account_id", "mfa_attempts = mfa_attempts", accountRows, []string{session(":z", ":s1", ":a1", ":u1")}, tenantOf1, nil},
 		{"recovery_codes", "account_id", "used_at = used_at", accountRows, []string{code(":z", ":s1", ":a1", ":u1")}, tenantOf1, nil},
+		{
+			"security_events", "site_id", "",
+			map[string][]string{"platform": {"s2"}, "s2": {"s2"}, "a2": {"s2"}},
+			[]string{`INSERT INTO accounts.security_events (site_id, account_id, user_id, kind, refused, reason)
+				VALUES (:s1, :a1, :u1, 'sign_in', true, 'bad_credentials')`},
+			[]string{"platform"},
+			nil,
+		},
 	}
 	for _, c := range tables {
 		for name, scope := range scopes {
@@ -369,6 +379,22 @@ func TestKeysHoldTheTenantStructure(t *testing.T) {
 		{"a management key that never expires", []string{apiKey(":z", ":s1", ":a1", ":w1", ":u1", "management")}, "23514"},
 		{"a session of another account's user", []string{session(":z", ":s1", ":a1", ":u2")}, "23503"},
 		{"a recovery code of another account's user", []string{code(":z", ":s1", ":a1", ":u2")}, "23503"},
+		{
+			"a refusal with no reason",
+			[]string{`INSERT INTO accounts.security_events (site_id, kind, refused) VALUES (:s1, 'sign_in', true)`},
+			"23514",
+		},
+		{
+			"a reason on an attempt that was not refused",
+			[]string{`INSERT INTO accounts.security_events (site_id, kind, refused, reason)
+				VALUES (:s1, 'sign_in', false, 'bad_credentials')`},
+			"23514",
+		},
+		{
+			"an event of no known kind",
+			[]string{`INSERT INTO accounts.security_events (site_id, kind, refused) VALUES (:s1, 'sign_out', false)`},
+			"23514",
+		},
 		{"a secondary site with its own tier", []string{newSite, newTier}, ""},
 	}
 	for _, c := range cases {
@@ -420,6 +446,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"api_keys":        {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":        {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":  {"used_at"},
+		"security_events": nil,
 	}
 	// Generated columns are left out: the database refuses to set them before it looks at privileges.
 	for _, column := range texts(t, db, platform, `SELECT table_name || ' ' || column_name FROM information_schema.columns
@@ -491,11 +518,11 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "api_keys", "members", "platform_grants", "recovery_codes", "roles", "sessions", "site_domains",
-		"site_settings", "sites", "tiers", "users", "workspaces",
+		"accounts", "api_keys", "members", "platform_grants", "recovery_codes", "roles", "security_events", "sessions",
+		"site_domains", "site_settings", "sites", "tiers", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
-		if table == "members" {
+		if table == "members" || table == "security_events" {
 			commands = "INSERT, SELECT"
 		}
 		want = append(want, table+": "+commands)

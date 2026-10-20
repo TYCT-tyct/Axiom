@@ -53,6 +53,7 @@ type Service struct {
 	slot     func(ctx context.Context) (func(), error) // the lookups' slot; never nil
 	gated    bool                                      // whether Config.LookupSlot was set
 	misses   metric.Int64Counter                       // key lookups that had to ask the database
+	lost     metric.Int64Counter                       // security events that could not be written
 
 	snapshot atomic.Pointer[snapshot]
 	// Key identities never change once made, so a hit needs no database. A miss of a key that does not exist is
@@ -98,8 +99,13 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
+	lost, err := cfg.Meter.Int64Counter("axiom.accounts.security_events.lost",
+		metric.WithDescription("Security events that could not be written."))
+	if err != nil {
+		panic(err) // the instrument name is a constant
+	}
 	return &Service{
-		misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		misses: misses, lost: lost, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
