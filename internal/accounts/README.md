@@ -156,7 +156,7 @@
 - **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
 - **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PUT /api/admin/v1/sites/{site_id}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
 
-| 登录前的资源 | 默认上限（进程内计数，多节点时按节点数放大） | 站点设置 |
+| 登录前的资源 | 默认上限（配了 Valkey 时各节点共享计数，不可用时退回进程内、按核心节点数等分；没配时进程内计数，只用于单核心） | 站点设置 |
 |---|---|---|
 | 客户端 IP | 只认 `RemoteAddr`；`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信的地址；默认不信任任何代理 | — |
 | 每 IP 的登录、注册、两步验证 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
@@ -165,10 +165,11 @@
 | 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` | `challenge_code_attempts` |
 | argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 `ErrBusy`（503）；请求在排队时结束就带它自己的错误返回 | 按节点：`Config.HashConcurrency`、`HashWait` |
 | key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
-| 计数器本身 | 有容量上限的 LRU | — |
+| 计数器本身 | Valkey 里带到期时间的键，装满的桶没有键；进程内（单核心模式和兜底）是有容量上限的 LRU。argon2id 名额和 key 未命中查库的令牌桶保护的是本节点，始终按节点 | — |
 
 - 超限返回 `*TooManyAttempts`（`errors.Is(err, ErrTooManyAttempts)` 仍成立），带 `RetryAfter`：桶再放过一次尝试的时间，控制台接口据此写 `Retry-After`（至少 1 秒）。开启 TOTP 也算：错的验证码或密码用掉用户的验证码失败次数（与登录的验证共用），"已经开启"这类没在猜什么的拒绝不算。
-- 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时从 LRU 过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
+- 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
+- **多节点**（M2）：配了 Valkey 时，桶在 Valkey 里，由 `take`、`give` 两个脚本按同样的算法原子地扣和退，键里的邮箱和 IP 只以 HMAC 出现（从主密钥派生的专用密钥；IP 先 `Unmap()`，IPv6 取 /64，进程内的桶同样按此计）；建任何登录键之前先过进程内的粗 IP 桶；`give` 只退到 `take` 扣的那一边；Valkey 不可用时退回进程内的桶，突发除以节点数 N（至少 1）、间隔乘 N，不拒绝登录。脚本、键、兜底和恢复见 [platform/kv 的设计](../platform/kv/README.md)。
 - 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再计算哈希、不碰数据库。IP 的次数不退。
 - 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
 
@@ -308,3 +309,4 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 | 恢复码和会话令牌只存 SHA-256，密码用 argon2id | 80 位和 256 位的随机串猜不中，快哈希就够；密码是人选的，要慢哈希 | 全部 argon2：每个请求认会话都要一次慢哈希 |
 | 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |
 | 每种 ID 各写 `TypeID` 和 `Parse…ID`，不用泛型 | 每种只多一个类型和两个短函数，类型名和报错直接是 `SiteID`；前缀在本模块，一眼能对上 | `ID[K]` 加每种一个标记类型：省不了几行，读的人要多绕一层 |
+| Valkey 不可用时登录前的次数退回进程内、按节点数等分，不拒绝登录 | Valkey 只放丢了也不影响正确性的数据（[总体架构](../../docs/architecture.md#技术选型)），它出故障就挡住所有人登录，正是[安全的「账户安全」](../../docs/security.md#账户安全)要避免的「把用户锁在门外」；进程内的桶按份额限制后，N 个节点合计的回填速度不超过设定、突发不超过 max(突发, N)，代价只是每次故障或重启至多多一次突发，argon2id 名额仍按节点限制猜测速度 | 失败即拒（sub2api 认证路由在 Redis 故障时一律 429，`routes/auth.go:34`；new-api 回 500，`middleware/rate-limit.go:119`）：缓存故障变成登录故障；兜底不等分：故障期间限额放大 N 倍 |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"uuid"
@@ -26,7 +27,8 @@ var (
 // skips is why entries were passed over without an attempt (internal/gateway/README.md「尝试」).
 type skips struct {
 	noSlot, noEndpoint bool
-	unsupported        string // the first reason an endpoint could not express the request
+	unsupported        string               // the first reason an endpoint could not express the request
+	failedSuppliers    []routing.SupplierID // stay excluded for this request even after their pause ends
 }
 
 // step is what the attempt loop does after an entry.
@@ -101,6 +103,11 @@ func (s *session) exhausted() ended {
 // retry its supplier's budget does not allow. Only an attempt counts.
 func (s *session) try(ctx context.Context, i int) (step, ended) {
 	entry := s.c.Plan.Entries[i]
+	if slices.Contains(s.skips.failedSuppliers, entry.Supplier) || s.x.Router.Blocked(entry) {
+		s.skips.noEndpoint = true
+		s.exclude(entry, routing.CoolingDown)
+		return nextEntry, ended{}
+	}
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(entry.Endpoint))
 	if err != nil {
 		s.skips.noSlot = s.skips.noSlot || errors.Is(err, suppliers.ErrNoSlot)
@@ -115,10 +122,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
-		if s.skips.unsupported == "" {
-			s.skips.unsupported = unsupported.Reason
-		}
-		s.exclude(entry, routing.FormatNotServed)
+		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
 		conn.Done()
@@ -133,6 +137,19 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		return nextEntry, ended{}
 	}
 	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
+// when no entry is left; why, when it is a key the model's spec lacks, goes to the log and no further.
+func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.NotSupported) {
+	if unsupported.Detail != "" {
+		s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
+			"supplier", entry.Supplier, "endpoint", entry.Endpoint)
+	}
+	if s.skips.unsupported == "" {
+		s.skips.unsupported = unsupported.Reason
+	}
+	s.exclude(entry, routing.FormatNotServed)
 }
 
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
@@ -277,10 +294,17 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	if f.Executed == suppliers.NotExecuted {
 		s.ends[a.i].Result = billing.NotExecuted
 	}
-	if _, ok := f.Cause.(suppliers.RateLimited); ok {
+	scope := routingScope(f.Scope)
+	limit, limited := f.Cause.(suppliers.RateLimited)
+	if limited || scope == routing.ScopeSupplier {
+		s.x.Router.Block(a.entry, scope, limit.RetryAfter)
+	}
+	if limited {
 		s.x.Router.Throttled(a.entry.Endpoint)
 	}
-	scope := routingScope(f.Scope)
+	if scope == routing.ScopeSupplier {
+		s.skips.failedSuppliers = append(s.skips.failedSuppliers, a.entry.Supplier)
+	}
 	next := routing.Decide(routing.Failure{Scope: scope})
 	s.record(a, true, scope, next)
 	switch next {

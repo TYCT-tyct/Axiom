@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -348,40 +347,4 @@ func TestRequestsHaveADeadline(t *testing.T) {
 		t.Errorf("the key is %q after the update that timed out", name)
 	}
 	expect(t, "the next request", slow.do(http.MethodGet, "/keys", "", as(s)), http.StatusOK, "")
-}
-
-// TestClientIP: only the connection's address is believed unless it is a trusted proxy, and then the header is read
-// from its right past the proxies; a header that cannot be read is not believed.
-func TestClientIP(t *testing.T) {
-	t.Parallel()
-	proxies := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.0.2.9/32")}
-	cases := []struct {
-		name, remote string
-		forwarded    []string
-		want         string
-	}{
-		{"no proxies", "203.0.113.5:1", []string{"198.51.100.1"}, "203.0.113.5"},
-		{"a proxy that forwards", "10.1.1.1:1", []string{"198.51.100.1"}, "198.51.100.1"},
-		{"the client's own claims are left of the proxy's", "10.1.1.1:1", []string{"6.6.6.6, 198.51.100.1"}, "198.51.100.1"},
-		{"a chain of proxies", "10.1.1.1:1", []string{"198.51.100.1, 10.2.2.2", "192.0.2.9"}, "198.51.100.1"},
-		{"all proxies", "10.1.1.1:1", []string{"10.2.2.2"}, "10.1.1.1"},
-		{"no header", "10.1.1.1:1", nil, "10.1.1.1"},
-		{"an unreadable header", "10.1.1.1:1", []string{"198.51.100.1, garbage"}, "10.1.1.1"},
-		{"v6 mapped v4", "[::ffff:10.1.1.1]:1", []string{"198.51.100.1"}, "198.51.100.1"},
-		{"an address that is no address", "pipe", []string{"198.51.100.1"}, ""},
-	}
-	for _, c := range cases {
-		r := &http.Request{RemoteAddr: c.remote, Header: http.Header{"X-Forwarded-For": c.forwarded}}
-		trusted := proxies
-		if c.name == "no proxies" {
-			trusted = nil
-		}
-		got := ""
-		if ip := clientIP(r, trusted); ip.IsValid() {
-			got = ip.String()
-		}
-		if got != c.want {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-		}
-	}
 }

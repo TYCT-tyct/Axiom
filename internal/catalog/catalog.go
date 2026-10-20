@@ -226,6 +226,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
+		dialect: spec.dialect,
 	}, nil
 }
 
@@ -250,6 +251,20 @@ type specJSON struct {
 	MaxOutput *int64    `json:"max_output_tokens"`
 	Streams   *bool     `json:"streams"`
 	Abilities *[]string `json:"abilities"`
+
+	DialectKeys
+}
+
+// DialectKeys are the spec keys that say what a request to the model is written with (Dialect), each of which a spec may
+// leave out: a nil key is absent, which is not false.
+type DialectKeys struct {
+	Thinking                  *string `json:"thinking,omitzero"`
+	EncryptedReasoning        *bool   `json:"encrypted_reasoning,omitzero"`
+	MidSystem                 *bool   `json:"mid_system,omitzero"`
+	UntrustedSystemAfterTools *bool   `json:"untrusted_system_after_tools,omitzero"`
+	DefaultSamplingOnly       *bool   `json:"default_sampling_only,omitzero"`
+	ForcedToolChoice          *bool   `json:"forced_tool_choice,omitzero"`
+	CacheBreakpoints          *bool   `json:"cache_breakpoints,omitzero"`
 }
 
 type spec struct {
@@ -257,6 +272,8 @@ type spec struct {
 	declared   bool // both lists are present, possibly empty
 	serving    Serving
 	serves     bool // every key Serving reads is present
+	abilities  bool // the abilities are listed, possibly empty
+	dialect    Dialect
 }
 
 // parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
@@ -274,11 +291,17 @@ func parseSpec(raw []byte) (spec, error) {
 	if err != nil {
 		return spec{}, err
 	}
+	dialect, err := parseDialect(w.DialectKeys)
+	if err != nil {
+		return spec{}, err
+	}
 	return spec{
 		reportable: reportable,
 		serving:    serving,
+		dialect:    dialect,
 		declared:   w.Items != nil && w.Tiers != nil,
 		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
+		abilities:  w.Abilities != nil,
 	}, nil
 }
 
@@ -324,4 +347,40 @@ func parseServing(w specJSON) (Serving, error) {
 		s.Abilities = abilities
 	}
 	return s, nil
+}
+
+// parseSavedSpec is parseSpec for a spec about to be saved, which must also be consistent: what is saved can be
+// refused for more than what is already stored may be, or one bad row already stored would fail the snapshot.
+func parseSavedSpec(raw []byte) (spec, error) {
+	s, err := parseSpec(raw)
+	if err != nil {
+		return spec{}, err
+	}
+	reasons := s.serving.Abilities.Has(AbilityReasoning)
+	switch {
+	case !s.abilities:
+	case reasons && s.dialect.Thinking == ThinkingNone:
+		return spec{}, errors.New(`spec says the model reasons (abilities) and does not think (thinking "none")`)
+	case !reasons && (s.dialect.Thinking == ThinkingAdaptive || s.dialect.Thinking == ThinkingManual):
+		return spec{}, errors.New("spec says the model thinks (thinking) and does not list reasoning in its abilities")
+	}
+	return s, nil
+}
+
+// parseDialect reads how the spec says requests to the model are written. A key it leaves out, or sets to null, stays
+// unset; a thinking mode it names must be one the catalog knows, as with the abilities.
+func parseDialect(w DialectKeys) (Dialect, error) {
+	d := Dialect{
+		EncryptedReasoning: claimOf(w.EncryptedReasoning), MidSystem: claimOf(w.MidSystem),
+		UntrustedSystemAfterTools: claimOf(w.UntrustedSystemAfterTools), DefaultSamplingOnly: claimOf(w.DefaultSamplingOnly),
+		ForcedToolChoice: claimOf(w.ForcedToolChoice), CacheBreakpoints: claimOf(w.CacheBreakpoints),
+	}
+	if w.Thinking != nil {
+		t, ok := thinkingByName[*w.Thinking]
+		if !ok {
+			return Dialect{}, fmt.Errorf("spec thinking: unknown name %q", *w.Thinking)
+		}
+		d.Thinking = t
+	}
+	return d, nil
 }

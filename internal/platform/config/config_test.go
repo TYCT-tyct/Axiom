@@ -127,6 +127,7 @@ func TestIntAndPrefixes(t *testing.T) {
 	const (
 		wantInt      = "AXIOM_COUNT: want a whole number of at least 1"
 		wantPrefixes = "AXIOM_PROXIES: want IP addresses and networks such as 10.0.0.0/8, separated by commas"
+		wantMapped   = "AXIOM_PROXIES: want a v4-mapped IPv6 network within ::ffff:0:0/96, such as ::ffff:10.0.0.0/104"
 	)
 	cases := []struct {
 		name     string
@@ -142,6 +143,11 @@ func TestIntAndPrefixes(t *testing.T) {
 		{"not a number, never quoted", []string{"AXIOM_COUNT=planted-value"}, 4, nil, []string{wantInt}},
 		{"a host name is no address", []string{"AXIOM_PROXIES=10.0.0.1,proxy.example"}, 4, nil, []string{wantPrefixes}},
 		{"an empty item", []string{"AXIOM_PROXIES=10.0.0.1,"}, 4, nil, []string{wantPrefixes}},
+		{"a v4-mapped address is its IPv4 one", []string{"AXIOM_PROXIES=::ffff:10.0.0.1"}, 4, []string{"10.0.0.1/32"}, nil},
+		{"a v4-mapped network", []string{"AXIOM_PROXIES=::ffff:10.0.0.0/104"}, 4, []string{"10.0.0.0/8"}, nil},
+		{"a v4-mapped network is masked after unmapping", []string{"AXIOM_PROXIES=::ffff:10.1.2.3/104"}, 4, []string{"10.0.0.0/8"}, nil},
+		{"a mapped network that also covers unmapped addresses", []string{"AXIOM_PROXIES=::ffff:0:0/95"}, 4, nil, []string{wantMapped}},
+		{"plain v6 is unchanged, short or not", []string{"AXIOM_PROXIES=2001:db8::/32,2001:db8:1::/104"}, 4, []string{"2001:db8::/32", "2001:db8:1::/104"}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

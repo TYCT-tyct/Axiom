@@ -46,9 +46,8 @@ type reader func(ctx context.Context, tx pg.Tx, a accounts.Admission, q url.Valu
 // reading serves a GET that shows the key's own account. Errors take Chat's shell, which OpenRouter's clients read.
 func (h *Handler) reading(serve reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
-		if err != nil {
-			h.fail(w, r, protocol.Chat, err)
+		release, ok := h.ipSlot(w, r, protocol.Chat)
+		if !ok {
 			return
 		}
 		defer release()
@@ -74,6 +73,11 @@ func writeJSON(w http.ResponseWriter, v any) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	writeBody(w, body)
+}
+
+// writeBody answers 200 with a JSON body that is already encoded.
+func writeBody(w http.ResponseWriter, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store") // money and usage: never from a shared cache
 	w.Write(body)                               //nolint:errcheck,gosec // the client may be gone
