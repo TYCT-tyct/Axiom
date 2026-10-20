@@ -52,7 +52,8 @@ class Artifacts(unittest.TestCase):
                 result = artifacts(main, branch, origin_main)
                 self.assertEqual(result.returncode != 0, refused is not None, result.stdout)
                 if refused:
-                    self.assertIn(f"{refused}: {why}", result.stdout)
+                    found = next((line for line in result.stdout.splitlines() if line.startswith(f"{refused}: ")), "")
+                    self.assertIn(why, found)
 
     def test_a_git_failure_fails(self):
         self.assertNotEqual(justrepo.just_with_broken_git("artifacts").returncode, 0)
