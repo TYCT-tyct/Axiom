@@ -18,15 +18,19 @@
 | OpenAI Chat | `POST /v1/chat/completions` | 大多数 SDK、Cursor、OpenRouter 客户端 |
 | OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/compact`；按 ID 删除随续接提供（见下文「Responses 的会话状态」） | Codex |
 | Anthropic Messages | `POST /v1/messages`、`POST /v1/messages/count_tokens` | Claude Code |
-| 模型列表 | `GET /v1/models` | 所有客户端 |
+| 模型列表 | `GET /v1/models`、`GET /v1/models/{model}` | 所有客户端 |
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
 - **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 要返回 OpenRouter 的模型列表格式（含价格、上下文长度等）；现在它和 `/v1/models` 是同一个列表，只有身份字段（[#311](https://github.com/TYCT-tyct/Axiom/issues/311)）。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
-- **`GET /v1/models`**：
-  - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；
+- **`GET /v1/models` 与 `GET /v1/models/{model}`**：
+  - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；只列这把 key 能调用、且有端点可走的模型，权限用的是与调用相同的判断，不能用的模型、没有端点的模型和不存在的模型一样回 404 `model_not_found`（不是 403）；
   - Anthropic 模型同时列出厂商原生的名字。Claude Code 只认 ID 里含 `claude` 或 `anthropic` 的条目；
+  - `GET /v1/models/{model}` 按调用路径的方式解析别名（`catalog.ResolvePublic`，与 sub2api 从列表项取单个模型的做法一致），返回列表里同一项的形状，`id` 是请求里的名字；
+  - 列表看有没有端点，不看端点的实时状态：没有端点（没接供应商，或缺规格/售价而被路由排除）的模型不列，因为调用它必然失败；端点暂时满载、熔断、暂停或预算用尽不让模型少列，容量由调用自己排队或报错；
+  - OpenRouter 在 `/models` 下的 `count`、`user`、`{author}/{slug}/endpoints` 不提供，回 404 `not_found`；
+  - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
 - **token 计数**：
   - 没有这个接口时，Claude Code 只能按字符数粗估上下文用量；
@@ -125,6 +129,7 @@
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `request_too_large` | `invalid_request_error`；`request_too_large` | — |
 
+- **没有路由接的路径和方法**：也按上面的外壳作答——`/v1/messages`（含 `/api/v1/messages`）下用 Messages 的外壳，其余用 OpenAI（Chat）的外壳；路径不存在回 404 `not_found`，方法不对回 405 `method_not_allowed` 并保留 `Allow` 响应头，请求 ID 两个头照常带。new-api 对未知路径也回 404 的 OpenAI 外壳（new-api `controller/relay.go` 的 `RelayNotFound`，2026-10-19）。
 - **`Retry-After`** 用整数秒，不超过 60 秒。Claude Code 对超过 60 秒的值不再重试。
 - **429 的原因只进指标**：上表所有 429 的错误码都是 `rate_limited`，客户端程序不必区分；节点按原因（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`）计入指标 `axiom.gateway.rate_limited`，运维凭它判断是哪一道限制在拒绝（逐项含义见 [gateway 模块](../../internal/gateway/README.md#并发背压与共享状态)）。原因不写进响应：OpenRouter 的 429 也只给统一的 `error_type`（`rate_limit_exceeded`），要等的时间放在 `Retry-After`，它对付费模型没有平台级的请求上限，只有免费模型的额度和防 DDoS（OpenRouter《Limits》《Errors and Debugging》，2026-10-18）；sub2api 把原因编进错误码是它自己的做法（`gateway_queue_full`、`gateway_concurrency_limit`，`backend/internal/handler/concurrency_error_response.go`）。
 - **供应商自己的 401、402、403、429** 只用来换凭证（同一端点另一把凭证，没有可用凭证时换下一个端点）或换端点，从不当作我们的认证或钱包错误返回给客户端。
