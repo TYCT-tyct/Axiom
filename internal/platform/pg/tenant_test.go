@@ -1,6 +1,7 @@
 package pg_test
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 	"uuid"
@@ -56,15 +57,19 @@ func createNotes(t *testing.T) (db *pg.DB, notes []note) {
 	for _, row := range notes {
 		accountValue := "NULL"
 		if row.account != nil {
-			accountValue = "'" + row.account.String() + "'"
+			accountValue = quote(row.account.String())
 		}
-		if err := pgtest.Run(t.Context(), database.Superuser, "INSERT INTO accounts.notes VALUES ('"+
-			row.id.String()+"', '"+row.site.String()+"', "+accountValue+", '"+row.body+"')"); err != nil {
+		if err := pgtest.Run(t.Context(), database.Superuser, "INSERT INTO accounts.notes VALUES ("+
+			quote(row.id.String())+", "+quote(row.site.String())+", "+accountValue+", "+quote(row.body)+")"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return open(t, database.App), notes
 }
+
+// quote writes a value as a SQL string literal, the way the seeding statements of the other tests do: the apostrophe is
+// doubled, so a value of the test's choosing cannot end the literal.
+func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // TestTenantTx: a transaction that starts with an id alone reads the row of the tenant that id belongs to — the
 // account's row for an account, the site's for the site itself — and nothing else. Migrate grants roles cluster-wide,
