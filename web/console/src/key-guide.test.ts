@@ -5,7 +5,7 @@ import zh from "./locales/zh";
 
 type AnyGuide = GuideProtocol | GuideClient;
 
-const apiBase = "https://api.example.com";
+const apiBase = "https://api.tenant-317.example";
 const secret = "sk-ax-v1-0123456789abcdef";
 const guide = keyGuide(apiBase, secret);
 
@@ -26,6 +26,14 @@ const clients: GuideClient[] = ["claude-code", "codex", "cursor"];
 
 it("says nothing without an API domain, because there is nowhere for a client to point", () => {
   expect(keyGuide("", secret)).toBeUndefined();
+});
+
+// The address in the snippets is the one the site has, which is why the tests above use a site-specific one: a domain
+// written into the code would show up here as a snippet that ignores its input.
+it("follows the site's address instead of one written into the code", () => {
+  const other = keyGuide("https://api.other-site.example", secret);
+  expect(other?.protocols[0]?.text).toContain("https://api.other-site.example/v1/chat/completions");
+  expect(other?.protocols[0]?.text).not.toContain(apiBase);
 });
 
 it.each(addresses)("$case points at the site's API domain, not one written here", ({ id, has }) => {
