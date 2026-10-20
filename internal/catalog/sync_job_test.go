@@ -144,20 +144,28 @@ func TestTheSyncRoundRunsOnTheSyncsQueue(t *testing.T) {
 	s := newStore(t)
 	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
 	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
+	ran := make(chan struct{})
 	q := s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil)
 	if err := catalog.RegisterSync(catalog.SyncJobConfig{
 		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.logger(),
-		Clock: func() time.Time { return now },
+		Clock: func() time.Time { close(ran); return now },
 	}); err != nil {
 		t.Fatal(err)
 	}
 	startQueue(t, q)
-	deadline := time.Now().Add(30 * time.Second)
-	for query[int](s, platformScope, "SELECT count(*) FROM river.river_job WHERE kind = 'catalog.sync' AND state = 'completed'") != 1 {
-		if time.Now().After(deadline) {
-			t.Fatalf("the queue never completed a round; the log:\n%s", logs.String())
-		}
-		time.Sleep(50 * time.Millisecond)
+	select {
+	case <-ran:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the queue never ran a round; the log:\n%s", logs.String())
+	}
+	// Stop waits for the signalled round to finish its transaction and acknowledgement.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := q.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := query[int](s, platformScope, "SELECT count(*) FROM river.river_job WHERE kind = 'catalog.sync' AND state = 'completed'"); n != 1 {
+		t.Fatalf("completed rounds: %d, want 1", n)
 	}
 	if queue := query[string](s, platformScope, "SELECT queue FROM river.river_job WHERE kind = 'catalog.sync'"); queue != "syncs" {
 		t.Errorf("the round ran on queue %q, want syncs", queue)
@@ -249,9 +257,14 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 	if strings.Contains(logs.String(), "catalog.sync.overdue") {
 		t.Fatalf("one day of failure alerted:\n%s", logs.String())
 	}
-	now = now.Add(24 * time.Hour)
+	now = now.Add(23 * time.Hour)
 	round(true)
-	for _, want := range []string{"level=ERROR", "catalog.sync.overdue", "failures=2", "pending=0"} {
+	if strings.Contains(logs.String(), "catalog.sync.overdue") {
+		t.Fatalf("a round exactly at the threshold alerted:\n%s", logs.String())
+	}
+	now = now.Add(time.Hour)
+	round(true)
+	for _, want := range []string{"level=ERROR", "catalog.sync.overdue", "failures=3", "pending=0"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the alert lacks %q:\n%s", want, logs.String())
 		}

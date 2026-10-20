@@ -132,11 +132,12 @@ type syncJob struct {
 // publishing part of the catalog is not lost.
 func (j *syncJob) work(ctx context.Context, _ *river.Job[syncArgs]) error {
 	reports, syncErr := j.cat.SyncAll(ctx, j.fetcher, true)
-	state, err := j.record(ctx, reports, syncErr, j.now())
+	at := j.now()
+	state, err := j.record(ctx, reports, syncErr, at)
 	if err != nil {
 		return errors.Join(syncErr, err)
 	}
-	j.report(ctx, state, syncErr)
+	j.report(ctx, state, syncErr, at)
 	return syncErr
 }
 
@@ -183,12 +184,12 @@ func pendingChanges(reports []SyncReport) int64 {
 // report raises the alert when the prices have gone unrefreshed for longer than the threshold: the error log names the
 // stable event, the counter rises by one, and the record says how far behind it is. A round that failed for its own
 // reasons is logged by SyncAll with the dataset and the error; this is the lasting outage.
-func (j *syncJob) report(ctx context.Context, state GetSyncStateRow, syncErr error) {
+func (j *syncJob) report(ctx context.Context, state GetSyncStateRow, syncErr error, at time.Time) {
 	since := state.LastSuccessAt
 	if since == nil {
 		since = state.FailingSince
 	}
-	if since == nil || j.now().Sub(*since) <= j.alertAfter {
+	if since == nil || at.Sub(*since) <= j.alertAfter {
 		return
 	}
 	j.overdue.Add(ctx, 1)
