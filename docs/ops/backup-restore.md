@@ -126,7 +126,7 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 `scripts/ops/rehearse.sh`（`just backup-rehearsal`）把上面整条路走一遍，并且不碰任何真实部署：
 
 - 自己的 compose 项目 `axiom-rehearsal`、自己的 `deploy/.env.rehearsal`、内核分配的宿主机端口（程序的和入口的都是）；
-- 先用两种 `AXIOM_EDGE_TLS_ISSUER` 各校验一次 `deploy/ingress/Caddyfile`：`internal`，和变量缺失时 compose 填进去的那个值。
+- 先用两种 `AXIOM_EDGE_TLS_ISSUER` 各解析一次 `deploy/ingress/Caddyfile`（`caddy validate`）：`internal`，和变量缺失时 compose 填进去的那个值。
   演练自己跑 `internal`，所以另一个取值——有公网证书的部署用的那个——只能这样验到；
 - 开跑先把继承来的 `AXIOM_*`、`RCLONE_*`、`DEPLOY_*` 和 `COMPOSE_FILE` 一类变量清掉：compose 的插值优先取 Shell 环境，
   操作者导出过的生产桶名和凭证会覆盖 `--env-file`，第一次备份就写进真桶、再按演练的保留策略删掉真实 set；
@@ -161,7 +161,7 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 | 时间（UTC） | 备份集 | RTO | 自动检查 | 结论 |
 |---|---|---|---|---|
-| 2026-10-20 01:37 | 20261020013618-92e31d | 20s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-20 01:51 | 20261020015021-3934be | 20s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 
 ## 生产入口
 
