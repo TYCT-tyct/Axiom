@@ -366,7 +366,7 @@ func constant(spec *ast.ValueSpec, consts map[string]string) {
 }
 
 // queueOf is the queue a job args type names, following the embedded types it inherits InsertOpts from.
-func (p packageJobs) queueOf(typ string, consts map[string]string) string {
+func (p *packageJobs) queueOf(typ string, consts map[string]string) string {
 	seen := map[string]bool{}
 	for typ != "" && !seen[typ] {
 		seen[typ] = true
