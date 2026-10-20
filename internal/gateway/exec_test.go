@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -375,7 +376,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -386,6 +387,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
+		"quality": func(d *ExecDeps) { d.Quality = nil },
 	} {
 		d := full
 		missing(&d)

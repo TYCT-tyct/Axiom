@@ -14,25 +14,29 @@ import (
 // that the client's session never leaves the node and two accounts never share a derived one
 // (docs/domains/gateway.md「转发规则」).
 //
-// The chat protocols' names are the ones sub2api reads to schedule a call to the account it pinned the session to
-// (sub2api backend/internal/service/openai_gateway_scheduling.go, explicitOpenAIHeaderSessionNames, read 2026-10-19),
-// beside the prompt_cache_key of the body: both carry the same derived value, so either path pins one session.
-// x-codex-turn-state is the vendor's own state, minted on an earlier turn and replayed by the client: it goes as it came,
-// since a derived one would be an invented one. Anthropic has no session header: there the session travels in
-// metadata.user_id (internal/protocol/README.md「同格式改写」).
+// The session names are the ones sub2api reads to schedule a call to the account it pinned the session to (sub2api
+// backend/internal/service/openai_gateway_scheduling.go, explicitOpenAIHeaderSessionNames, read 2026-10-19), beside the
+// prompt_cache_key of the body: both carry the same derived value, so either path pins one session. They go to every
+// OpenAI dialect — Responses and Chat — since that is what the relay reads them as. Anthropic has no session header:
+// there the session travels in metadata.user_id (internal/protocol/README.md「同格式改写」).
+// x-codex-turn-state is the vendor's own state, minted on an earlier turn and replayed by the client: it goes as it
+// came, since a derived one would be an invented one, and only the Responses endpoint mints it.
 var requestHeaders = [...][]headerRule{
-	protocol.Messages: {{name: "Anthropic-Beta"}, {name: "Anthropic-Version"}},
-	protocol.Responses: {
-		{name: "session_id", session: true},
-		{name: "session-id", session: true},
-		{name: "conversation_id", session: true},
-		{name: "X-Session-Affinity", session: true},
-		{name: "X-Session-Id", session: true},
-		{name: "X-OpenCode-Session", session: true},
-		{name: "X-Conversation-ID", session: true},
-		{name: stateHeader},
-	},
-	protocol.Chat: {}, // Chat's dialects are not rewritten yet (#27): nothing is sent to one until they are
+	protocol.Messages:  {{name: "Anthropic-Beta"}, {name: "Anthropic-Version"}},
+	protocol.Responses: slices.Concat(openAISessionHeaders, []headerRule{{name: stateHeader}}),
+	protocol.Chat:      openAISessionHeaders,
+}
+
+// openAISessionHeaders are the names a client may name its conversation in for an endpoint of an OpenAI dialect, each
+// with the value a session is derived from.
+var openAISessionHeaders = []headerRule{
+	{name: "session_id", session: true},
+	{name: "session-id", session: true},
+	{name: "conversation_id", session: true},
+	{name: "X-Session-Affinity", session: true},
+	{name: "X-Session-Id", session: true},
+	{name: "X-OpenCode-Session", session: true},
+	{name: "X-Conversation-ID", session: true},
 }
 
 // headerRule is one request header a format's endpoints take, and how its value is made.

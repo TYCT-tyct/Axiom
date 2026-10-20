@@ -56,18 +56,19 @@
 
 - **请求头按目标协议的白名单转发**（`internal/gateway/headers.go` 是唯一的一处表）：
   - 协议需要的头原样转发，例如 Anthropic 的 `anthropic-beta`、`anthropic-version`，Responses 端点的 `x-codex-turn-state`。`anthropic-beta` 不筛选具体的值，因为 Claude Code 每个版本发的值都不同，筛选会让长上下文、交替思考等功能悄悄失效或直接报 400；
-  - 会话请求头（`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`）只发给 Responses 端点，值是下面那一条的派生值，中转站据此把两轮对话固定到同一个账号；客户端的 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`User-Agent` 一律不转发，其中有用的信息由我们自己记录。
+  - 会话请求头（`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`）发给 Responses 和 Chat 端点（两者都是 OpenAI 的方言，中转站按这些名字定账号），不发给 Messages 端点，值是下面那一条的派生值，中转站据此把两轮对话固定到同一个账号；客户端的 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`User-Agent` 一律不转发，其中有用的信息由我们自己记录。
 - **会话和用户标识换成派生值**：`prompt_cache_key`、Anthropic 的 `metadata.user_id` 和上面的会话请求头，替换成用账户密钥派生的不透明标识再转发（见[路由的「会话粘性」](routing.md#会话粘性)），这样上游的缓存仍然有效。`metadata.user_id` 写成 JSON 字符串，内容是 `{"device_id":"…","account_uuid":"","session_id":"…"}`：`device_id` 每个账户固定，`session_id` 与同值的会话请求头是同一个派生，中转站从中取出会话固定账号（格式见 `internal/protocol/README.md` 的「同格式改写」）；`account_uuid` 留空，中转站接受空值，我们也不把账户标识交给上游。`user`、`safety_identifier` 换成哈希值，不把终端用户标识原样发往上游。`session_id` 作为路由参数用过之后与其他路由参数一样删除；请求头里的那个不是路由参数，它是客户端自己的会话名。
 - **上游一律流式调用**：生成请求都以流式调用上游，路由只保留能流式的端点；客户端要的是非流式也由网关聚合后一次返回，这样计费进度看得见（见[计费的「预留与结算」](billing.md#预留与结算)）。非流式的回答在返回之前没有"已转发内容"这一刻，所以中途失败仍可换端点，各次尝试的内容互不混入。`/responses/compact` 例外：上游不流式，回复原样透传，请求只改必须改的成员，一次预留足。
-- **跨格式**：M1 只做 Chat 客户端调用 Messages、Responses 端点；Messages、Responses 客户端只走原格式的端点。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
-- **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。
-- **发出的输出上限就是预留用的上限**：请求没写输出上限（或写 `null`）时，发给上游的是该条目报价用的上限，也就是模型的默认值，上下文装不下时则是裁短后的值（Messages 必须有，Responses 加 `max_output_tokens`）；请求写了就照它发。模型的上限未知时不发，由上游自己的默认值管。否则上游可以生成比预留依据更多的输出。
+- **跨格式**：Chat 客户端调用说 Chat 的端点（DeepSeek、Qwen 等 OpenAI 兼容的模型，同格式转发），也调用 Messages、Responses 端点（转换）；端点同时说 Chat 和别的格式时走 Chat，因为转发不改变含义，而转换会拒绝表达不了的成员。Messages、Responses 客户端只走原格式的端点，还不能调用只说 Chat 的端点（路由答 `format_not_served`）。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
+- **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。Chat 请求里模型方言的成员（`reasoning`、`reasoning_effort`、`cache_control`、助手消息里回传的 `reasoning_content`、图片部件）也照客户端写的发给端点，由端点按它自己的方言处理；按模型规格把推理参数换成端点认的写法，现在没有，待定。
+- **Chat 端点的请求改什么**：`model` 换成端点的名字，`user`、`safety_identifier`、`prompt_cache_key` 换成派生值，路由参数删除，一律要流，并且 `stream_options.include_usage` 一律为 `true`（客户端写了 `false` 或 `null` 也一样，`stream_options` 里的其他选项不动）：计量和非流式的聚合都读上游报告的用量，这和 new-api（`relay/compatible_handler.go` 的 `ForceStreamOption`）、sub2api（`openai_gateway_chat_completions_raw.go` 的 `ensureOpenAIChatStreamUsage`）一样。输出上限：客户端的 `max_tokens`、`max_completion_tokens` 两个成员都拿掉，把其中最小的正数（都没有就是报价用的上限）写进端点读的那一个成员：端点的上游模型名是 OpenAI 的 o1、o3、o4、GPT-5 或 GPT-6 的 Astra、Sol、Luna 时写 `max_completion_tokens`（它们拒绝 `max_tokens`），其余写 `max_tokens`（DeepSeek、Qwen 一类忽略 `max_completion_tokens`，留着它输出上限就没有了）；这是 new-api 的规则（`GetOpenAIChatCapabilities`）。`store` 等其余成员不动。
+- **发出的输出上限就是预留用的上限**：请求没写输出上限（或写 `null`）时，发给上游的是该条目报价用的上限，也就是模型的默认值，上下文装不下时则是裁短后的值（Messages 必须有，Responses 加 `max_output_tokens`，Chat 写在端点读的那个成员里，见下）；请求写了就照它发。模型的上限未知时不发，由上游自己的默认值管。否则上游可以生成比预留依据更多的输出。
 - **跨格式时缓存标记按 OpenRouter 的做法转换**（OpenRouter《Prompt caching》「OpenAI」、OpenAI《Prompt caching》，2026-10-16）：发往 Messages 时原样带着；发往 Responses 时，规格写明支持显式断点的模型（OpenAI 从 GPT-5.6 起）上，用户、系统、开发者、助手和工具结果的文本块的 `cache_control` 写成 `prompt_cache_breakpoint`，TTL 丢掉；不支持断点（规格写明不支持，或没写）的模型上的标记，以及工具定义、图片和文件上的标记丢掉，由 OpenAI 自动缓存前缀。对费用的影响：OpenAI 的缓存写入从 GPT-5.6 起按输入价的 1.25 倍收，更早的模型没有写入加价；Responses 只有 30 分钟起的缓存期，Anthropic 的 1 小时 TTL 表达不了，所以发往 Responses 的请求不会产生 1 小时的写入价（Anthropic 是输入价的 2 倍）；丢掉的标记可能让命中率比在 Anthropic 上低。收费始终按上游报告的实际缓存读写，不按请求里的标记。
 - **只认原上游的内容**：请求里带着只有原上游才认的内容时（Claude 推理块的签名、OpenAI 的加密推理内容），优先粘回产生它们的端点。同格式透传时这些内容原样转发、从不删改：删掉中间的思考块会让其后的块全部失效，而换了模型或账户时，Anthropic 自己丢弃读不了的思考块、请求照常成功（Anthropic《Preserved thinking》，2026-10）；OpenAI 的加密推理换了组织是否可用，要录样本确认，被拒时按原话返回。
 - **格式特有的能力只走原格式的端点**，见[路由的「一个请求的路由步骤」](routing.md#一个请求的路由步骤)。
 - **Claude Code 的提示信息**（会话 ID、请求类别、"上下文已压缩"标记）用于会话粘性和路由，见[路由](routing.md)。
 - **事件流带 `X-Accel-Buffering: no`**：前面有 nginx 时，它据此不缓冲，事件才能及时到达客户端；new-api 的每个流都带这个头（new-api 源码 `relay/helper/common.go`，2026-10-18）。
-- **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。
+- **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
 - **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
 - **自己回显**：响应里的 `id` 用我们的调用编号，`model` 回显客户端请求的名字。
 
@@ -75,6 +76,7 @@
 
 - **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。
 - **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；M1 不按供应商记录校正它（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
+- **Chat 端点报的用量**：按 OpenAI 的口径映射（`prompt_tokens` 含缓存的 token，`completion_tokens` 含推理的 token，缓存读写和图片的 token 只算一次，不在输入里再算一遍）。DeepSeek 把缓存命中写在 `prompt_cache_hit_tokens`（与 `prompt_cache_miss_tokens` 之和等于 `prompt_tokens`），`prompt_tokens_details.cached_tokens` 缺失或为 0、而命中数大于 0 时，命中数就是缓存读；两者都大于 0 时以 `cached_tokens` 为准，不比较是否相等。这和 new-api 一样（`relay/channel/openai/usage.go` 的 `applyUsagePostProcessing`）；两个名字都不当作额外的用量，否则会按未知 token 再收一遍。用量块可以在带内容的最后一块里（DeepSeek），也可以是没有选项的单独一块（OpenAI、Qwen）。
 - **结算写不进时**：上游已经正常结束、内容完整的，照常结束，但结尾不带费用，改带 `axiom.billing_pending: true`，非流式同样返回 200；费用由后台继续结算，在调用记录里查。只有被截断的流才以 `billing_unavailable` 报错结束。
 - **流开始前就出错也可能收费**（例如已执行的联网搜索，见[计费的「免单规则」](billing.md#免单规则)）：错误体的 `axiom` 对象里带用量和费用。
 - **余额截断**：转发中追加预留失败时，按下文「流中途出错」的方式发错误事件结束回答，说明余额或某个 key 的额度不足、回答已截断（见[计费的「预留与结算」](billing.md#预留与结算)）。
@@ -210,7 +212,7 @@
 
 对外行为要和 new-api 对得上，靠差分测试保证：`just diff`（在 CI 服务器上：`remote-check.sh <worktree> diff`）用 new-api 的官方镜像（按摘要固定，v1.0.0-rc.45，2026-10-17）和一个 Axiom 节点接同一个假上游，上游回放 `internal/protocol/testdata` 的录制样本；同一组请求分别发给两边，比状态码、响应头、JSON 体、SSE 事件。它要拉镜像、起容器，所以不在 `just check` 里，也不在每个 PR 的 CI 里；升级镜像是一个决定：读发布说明、跑一遍、逐条处理新出现的差异。
 
-- **比什么**：Messages 和 Responses 客户端调用同格式的模型（透传），Chat 客户端调用 Messages 和 Responses 的模型（两边都做转换）；各自的文本、工具调用、推理、图片，流式和非流式，上游的 400、429、500，以及请求自己的错误（JSON 不合法、缺必填项、模型不存在、key 错）。每种格式让 new-api 的渠道和 Axiom 的端点说同一种格式，上游收到的是同样的路径，比的是怎么转发回复，不是谁选了哪种格式。Chat 同格式的端点 M1 不提供（见[转发规则](#转发规则)），所以没有 Chat 对 Chat 的比较。
+- **比什么**：Messages 和 Responses 客户端调用同格式的模型（透传），Chat 客户端调用 Messages 和 Responses 的模型（两边都做转换）和调用说 Chat 的模型（DeepSeek 一类，透传）；各自的文本、工具调用、推理、图片，流式和非流式，上游的 400、429、500，以及请求自己的错误（JSON 不合法、缺必填项、模型不存在、key 错）。每种格式让 new-api 的渠道和 Axiom 的端点说同一种格式，上游收到的是同样的路径，比的是怎么转发回复，不是谁选了哪种格式。
 - **怎么比**：JSON 按成员比，不看顺序；数组按位置比；SSE 在 Messages 和 Responses 上按事件对齐后比，Chat 流按累加的结果比（文本、工具调用、结束原因、用量），因为切块是转换器自己的选择。非流式的上游回复是手写的、与录制流内容一致的官方形状（Responses 取流里 `response.completed` 的响应）；Responses 文本样本的增量被截短了，假上游把它补成与最终文本一致。
 - **规则**：每个差异要么被 `cmd/axiom/diff_rules_test.go` 里的一条规则解释（写明理由），要么用例失败；没有匹配任何差异的规则同样使测试失败，修好的差异必须从清单里删掉。规则不只看路径和用例名，还限定两边的值：状态码是具体的一对（new-api 429、Axiom 502），上游身份头必须在 Axiom 一侧缺失，调用编号必须是 UUID，工具参数按解码后的 JSON 比较，措辞必须是 Axiom 的统一说法；退化的值（429 变成 200、参数变成 `{}`、泄露上游头）不被放行，`TestDiffHarness*` 为此给每类规则配了反例。规则只有有意的差异（下表）；还没人拍板的差异不进清单，它让测试失败，直到对应的 Issue 裁定。
 - **Chat 流的结尾**：恰好一个 `[DONE]`，之后不能再有数据；提前的 `[DONE]`、重复的 `[DONE]`、`[DONE]` 之后的数据、其他非 JSON 的数据都是差异。工具参数的碎片先解码、再拼接、最后统一编码，所以切在转义字符中间的分块也算相同。
@@ -219,6 +221,8 @@
 |---|---|
 | 响应里的 `id`（含流里 `message_start`、`response.*` 里的）是 Axiom 的调用编号；请求 ID 头不同 | 见「转发规则」的自己回显和「用量与费用」的调用编号 |
 | 用量里的 `cost`、`cost_currency`、`cost_estimated` | Axiom 每次调用都返回费用 |
+| Chat 用量里 DeepSeek 的 `prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`：new-api 原样带着上游的，Axiom 没有 | Axiom 的用量用格式自己的成员（`prompt_tokens_details.cached_tokens`）报缓存读，见「用量与费用」 |
+| Chat 用量里上游没写 `prompt_tokens_details`、`completion_tokens_details` 时，Axiom 写 `cached_tokens`、`reasoning_tokens` 为 0，new-api 原样不写 | Axiom 的用量按结算写出格式自己的明细，客户端总能读到 |
 | Chat 用量里 new-api 加的 `billing_usage`、`usage_semantic`、`claude_cache_creation_*`、`input_tokens`、`output_tokens` 等；Axiom 的 `prompt_tokens_details.cache_write_tokens` | 前者不属于 Chat 格式；后者与 OpenRouter 一致 |
 | new-api 透传上游的 `cf-ray`、`openai-organization` 等头，Axiom 不放行 | 响应头按白名单放行，不暴露上游身份 |
 | 上游的 429、5xx，new-api 原样返回，Axiom 一律 502 `upstream_error` | 见「错误」：供应商自己的 429 只用来换凭证或换端点 |
@@ -268,6 +272,10 @@
 | 没有可用端点：永久性的返回 404，暂时性的返回 503，满载返回 429 | 开发者按负责人的授权决定（对话中的全权委托）。CONTRIBUTING「产品设计」：行为默认对齐 OpenRouter，它对过滤后没有端点返回 404 "No endpoints found…"（文档与帮助中心，2026-09；价格页 FAQ 的模型下线同为 404，2026-10）；客户端会自动重试 5xx，而永久性的条件重试也不会变。暂时性的保留 503 |
 | Messages 的非流式请求中途失败返回 502、不带内容，用量和费用放在 `axiom` 对象里 | 开发者按负责人的授权决定（对话中的全权委托）。通用规则是把已生成的内容和错误一起返回（上文「非流式请求出错」），但 Messages 的非流式响应没有表示出错的结束原因（`stop_reason` 只有 `end_turn`、`max_tokens`、`stop_sequence`、`tool_use`、`pause_turn`、`refusal` 等），把半截内容当成功返回会让客户端以为完整。这是按格式落实同一条规则；Chat、Responses 照规则返回内容 |
 | 续接在第一版做，排在 M2；M1 对 `previous_response_id` 返回 400 | 开发者按负责人的授权决定（对话中的全权委托）。负责人同意的是第一版要有续接（本表「Responses 会话状态由我们保存」），第一版是 M0–M3，排进哪个里程碑由开发者定。M1 的验收客户端用不到：Codex 的 HTTP 传输每轮发完整历史（OpenAI《Unrolling the Codex agent loop》，2026-01-23："Codex does not use it today"），只有 WebSocket 用它，M1 不支持 WebSocket。M1 的端到端测试用录制样本验证这个前提，不成立就提前到 M1。省四个 PR，不推迟验收 |
+| Chat 请求落在说 Chat 的端点上时同格式转发，端点同时说 Chat 和 Messages、Responses 时也先选 Chat | 转发不改变含义，转换会拒绝表达不了的成员（`NotSupported`，客户端得到 400），所以能不转换就不转换；new-api 的做法相同（`chat_completions_to_responses_policy` 默认关）。代价：此前走 Messages 的 Chat 请求，在同时说 Chat 的端点上改走 Chat，行为按端点的 Chat 实现 |
+| Chat 端点的输出上限写在端点读的那个成员里，按上游模型名定（o1、o3、o4、GPT-5、GPT-6 Astra/Sol/Luna 用 `max_completion_tokens`，其余 `max_tokens`），客户端的两个成员都拿掉再写 | 端点忽略的成员不是预留的上界：客户端只写 `max_completion_tokens:1`、端点只认 `max_tokens`，上游就按自己的默认值生成，超出预留的费用没人付（I1）。规则抄 new-api `relaykit/dto/openai_request.go` 的 `GetOpenAIChatCapabilities`（32e5874）；它按模型名判断，规格里还没有说明这件事的键，所以和「方言是数据、不按名字猜」有出入，规格有了这个键再改用它，待定。代价：名字不在名单里的新 OpenAI 模型会收到 `max_tokens`，被拒绝时按原话返回 |
+| `stream_options.include_usage` 对 Chat 端点一律强制为 `true` | 没有上游报的用量，计量只能估算，收费不准；new-api、sub2api 都强制。代价：不支持 `stream_options` 的上游会拒绝请求，new-api 对非 OpenAI 渠道会删掉它（`ConvertOpenAIRequest`），本站没有这类上游的数据，遇到再按端点加开关 |
+| Chat 端点只写一个推理名字时，本站补另一个 | 「转发规则」的 Chat 回复写两个名字是负责人 2026-10-18 的决定，对 Chat 上游同样适用，否则 DeepSeek 的客户端读得到、OpenRouter 的客户端读不到；补在流的每一块里，聚合的整份回复自然两个都有 |
 | 跨格式时缓存标记按 OpenRouter 转换，表达不了的丢掉，不拒绝请求 | 负责人在对话中授权开发者按推荐自行决定。CONTRIBUTING「产品设计」要求对齐 OpenRouter：它把文本块的 `cache_control` 转成 OpenAI 的 `prompt_cache_breakpoint`，TTL 不转（OpenRouter《Prompt caching》，2026-10-16）。拒绝会让带缓存标记的 Chat 请求到不了任何 Responses 端点；标记不改变模型读到的内容，收费按上游报告的实际缓存用量，丢掉只影响命中率，不会算错钱 |
 | 结算写不进时，内容完整的照常结束、不带费用、带 `billing_pending`；只有截断的才报 `billing_unavailable` | 不发出没入账的费用，也不让客户端把已完成的一轮当失败重发、付两次。没选一律报 `billing_unavailable`：主库切换时，整批在途的请求会被客户端重发、重复收费 |
 | `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查，M1 没有校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |

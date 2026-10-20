@@ -392,7 +392,8 @@ func TestCreditOnce(t *testing.T) {
 	b.balanced()
 }
 
-// TestLedgerProperty drives random sequences of credits, some of them expiring, reservations, settlements with retries
+// TestLedgerProperty drives random sequences of credits, gifts and payments in the site's currency and another, some of
+// them expiring, reservations, settlements with retries
 // and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
 // after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
 // the floor holds, and the credit batches fund exactly the balance without any being over-spent.
@@ -416,7 +417,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
 	switch n := r.IntN(8); {
 	case n == 0:
-		b.creditBatch(r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
+		b.randomCredit(r, r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
 	case n == 6 || n == 7:
 		b.expire()
 	case n == 1 || len(*holds) == 0:

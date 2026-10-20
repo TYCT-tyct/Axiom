@@ -189,7 +189,7 @@ func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error 
 		}
 		e := c.event("attempt_cost", 0)
 		e.seq = *int32p(at.Seq)
-		if _, err := post(ctx, tx, e, line{bookSupplierCost, at.Cost}, line{bookSupplierPrepaid, -at.Cost}); err != nil {
+		if _, err := post(ctx, tx, e, line{bookSupplierCost, at.Cost, siteCredits}, line{bookSupplierPrepaid, -at.Cost, siteCredits}); err != nil {
 			return err
 		}
 	}

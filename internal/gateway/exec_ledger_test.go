@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -84,7 +85,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	}
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
-		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	})
 	if err != nil {
 		r.t.Fatal(err)

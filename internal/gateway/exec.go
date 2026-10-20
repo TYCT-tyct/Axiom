@@ -17,6 +17,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -77,6 +78,8 @@ type ExecDeps struct {
 	// IdentitySecret derives the identifiers sent upstream in place of the client's session and end-user ones; it is
 	// the same for every node, or a session's cache would not follow it from one to another.
 	IdentitySecret []byte
+	// Quality is told how every attempt ended, and measures the endpoints routing ranks by.
+	Quality *quality.Monitor
 	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
 	// observation and a call never depends on it; a node always gives it.
 	Records *observability.Recorder
@@ -96,7 +99,7 @@ const minSecret = 16
 // NewExecutor checks the dependencies.
 func NewExecutor(d ExecDeps) (*Executor, error) {
 	if d.Router == nil || d.Upstreams == nil || d.Limits == nil || d.Memory == nil || d.Logger == nil || d.Ledger == nil ||
-		d.Costs == nil || d.Alive == nil {
+		d.Costs == nil || d.Alive == nil || d.Quality == nil {
 		return nil, errors.New("gateway: the executor needs every dependency")
 	}
 	if len(d.IdentitySecret) < minSecret {

@@ -35,6 +35,8 @@ type chatStream struct {
 	more, failed, rewrites, noChoices bool
 	report                            *openAIUsage
 	reportErr                         error
+	// The reasoning members of the delta being read, to be written under both names.
+	reasoning, reasoningContent reasoningMember
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -61,12 +63,14 @@ var (
 	}
 	choiceFields = map[string]func(*chatStream) error{
 		"index":         (*chatStream).choiceIndex,
-		"delta":         func(s *chatStream) error { return s.walkNoting(chatDeltaFields, true) },
+		"delta":         (*chatStream).delta,
 		"finish_reason": (*chatStream).finishReason,
 	}
 	chatDeltaFields = map[string]func(*chatStream) error{
-		"content": (*chatStream).text, "refusal": (*chatStream).text, "reasoning": (*chatStream).text,
-		"reasoning_content": (*chatStream).text, "reasoning_details": (*chatStream).rawContent,
+		"content": (*chatStream).text, "refusal": (*chatStream).text,
+		"reasoning":         func(s *chatStream) error { return s.reasoningOf(&s.reasoning) },
+		"reasoning_content": func(s *chatStream) error { return s.reasoningOf(&s.reasoningContent) },
+		"reasoning_details": (*chatStream).rawContent,
 		"tool_calls": func(s *chatStream) error {
 			return s.eachElement(func() error { return walk(&s.reader, s, toolCallFields) })
 		},
@@ -92,7 +96,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
-		return event{}, fmt.Errorf("%w: an error chunk", ErrUpstream)
+		return event{}, s.errorEvent("an error chunk")
 	}
 	if len(s.held) > 0 {
 		s.held = append(s.held, "]}"...)
@@ -213,7 +217,14 @@ func (s *chatStream) finishReason() error {
 
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
-	return s.skip()
+	return errorObject(&s.reader, s, chatErrorFields)
+}
+
+// chatErrorFields are what an error chunk's error says of its class: OpenAI's type, and its code, which is the more
+// specific (context_length_exceeded comes with invalid_request_error).
+var chatErrorFields = map[string]func(*chatStream) error{
+	"type": func(s *chatStream) error { return s.class(&s.errClass) },
+	"code": func(s *chatStream) error { return s.class(&s.code) },
 }
 
 func (s *chatStream) rewritten() error {
@@ -254,6 +265,7 @@ func (s *chatStream) meter(m *meter) {
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
 	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
+	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 }
 
 // chatWriter writes the chunks of ours a Chat client gets: the usage chunk and the error chunk, and for a stream
@@ -291,4 +303,54 @@ func (s *chatWriter) usageEvent(dst []byte, u catalog.Usage, cost, top string) [
 func (s *chatWriter) chunk(choices string) []byte {
 	return []byte(`{"id":` + s.id + `,"object":"chat.completion.chunk","created":` + s.created + `,"model":` + s.model +
 		`,"choices":` + choices)
+}
+
+// reasoningMember is a reasoning member of a delta: its value as written, or for a null where it ends, 0 for a member
+// the delta does not have.
+type reasoningMember struct {
+	value   []byte
+	nullEnd int
+}
+
+// reasoningOf counts a reasoning member as content and keeps where it is, to write its text under the other name.
+func (s *chatStream) reasoningOf(m *reasoningMember) error {
+	v, err := s.raw()
+	s.e.content += unquotedLen(v)
+	if err != nil {
+		return err
+	}
+	to := int(s.dec.InputOffset())
+	if v == nil {
+		m.nullEnd = to
+	} else {
+		m.value = s.e.data[to-len(v) : to]
+	}
+	return nil
+}
+
+// delta reads a delta and writes its reasoning under both names. A relay or a vendor writes one of them (DeepSeek's
+// reasoning_content, OpenRouter's reasoning); the client reads either (docs/domains/gateway.md「转发规则」). Both with a
+// value are left as they are, and a name that is null takes the other's text.
+func (s *chatStream) delta() error {
+	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
+	if err := s.walkNoting(chatDeltaFields, true); err != nil {
+		return err
+	}
+	if s.reasoning.value != nil && s.reasoningContent.value == nil {
+		return s.mirror(s.reasoning.value, s.reasoningContent, `,"reasoning_content":`)
+	}
+	if s.reasoningContent.value != nil && s.reasoning.value == nil {
+		return s.mirror(s.reasoningContent.value, s.reasoning, `,"reasoning":`)
+	}
+	return nil
+}
+
+// mirror writes value as the member into: in place of its null, or, when the delta has none, before the delta's
+// closing brace, which the decoder has just read.
+func (s *chatStream) mirror(value []byte, into reasoningMember, name string) error {
+	if into.nullEnd > 0 {
+		return s.editEcho(into.nullEnd-len("null"), into.nullEnd, "", value)
+	}
+	at := int(s.dec.InputOffset()) - 1
+	return s.editEcho(at, at, name, value)
 }

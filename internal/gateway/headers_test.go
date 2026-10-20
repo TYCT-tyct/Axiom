@@ -61,7 +61,10 @@ func TestUpstreamHeaders(t *testing.T) {
 			"X-Session-Affinity": {derivedConv1}, "X-Opencode-Session": {derivedConv1}, "X-Conversation-Id": {derivedConv1},
 			"X-Codex-Turn-State": {"state-1"},
 		}},
-		{"chat", protocol.Chat, http.Header{}},
+		{"chat", protocol.Chat, http.Header{
+			"Session_id": {derivedConv1}, "Session-Id": {derivedConv1}, "Conversation_id": {derivedConv1},
+			"X-Session-Affinity": {derivedConv1}, "X-Opencode-Session": {derivedConv1}, "X-Conversation-Id": {derivedConv1},
+		}},
 	}
 	for _, c := range cases {
 		if diff := cmp.Diff(c.want, upstreamHeaders(t, in, c.format)); diff != "" {
