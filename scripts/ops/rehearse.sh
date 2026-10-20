@@ -339,4 +339,5 @@ echo "   restored $newest from the new prefix with the rotated credentials"
 
 echo
 echo "the rehearsal passed. Row for docs/ops/backup-restore.md「恢复演练记录」:"
-printf '| %s | %s | %ss | 数据库、角色、密钥环、配置一致 | 通过 |\n' "$(date -u '+%Y-%m-%d %H:%M')" "$set_name" "$rto"
+printf '| %s | %s | %ss | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |\n' \
+  "$(date -u '+%Y-%m-%d %H:%M')" "$set_name" "$rto"

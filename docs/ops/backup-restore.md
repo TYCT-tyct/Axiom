@@ -148,16 +148,18 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 更新自己扫到哪）。表本身少一张就失败，所以跳过的是行，不是表。
 
 它要 Docker、go、node、pnpm 和约十五分钟，并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
-机器上只能跑一个。入口在演练里用 `AXIOM_EDGE_TLS_ISSUER=internal`（自己的 CA），域名是 `.example`，没有任何请求离开这台
-机器；网络换成 `172.29.0.0/24`，免得和这台机器上真在跑的入口抢。
+机器上只能跑一个。入口在演练里用 `AXIOM_EDGE_TLS_ISSUER=internal`（自己的 CA，所以检查带 `--insecure`），域名是 `.example`，
+没有任何请求离开这台机器；发布的端口由内核分配，检查用 `--connect-to` 指过去而请求仍走 443，免得端口进了 `Host` 头（程序按它
+比对站点域名）；网络换成 `172.29.0.0/24`，免得和这台机器上真在跑的入口抢。
 
 ### 恢复演练记录
 
-每次演练追加一行：脚本最后打印的那行可以直接粘进来。RTO 从执行恢复脚本算到 `compose up --wait` 返回，不含备份。
+每次演练追加一行：脚本最后打印的那行可以直接粘进来。RTO 从执行恢复脚本算到 `compose up --wait` 返回，不含备份；备份集是那次恢复
+用的 set，它可能随后被同一场演练的保留步骤按份数清掉，记录仍然指它。
 
 | 时间（UTC） | 备份集 | RTO | 自动检查 | 结论 |
 |---|---|---|---|---|
-| 2026-10-19 23:57 | 20261019235707-c8f190 | 20s | 数据库、角色、密钥环、配置一致 | 通过 |
+| 2026-10-20 01:25 | 20261020012452-f9cb80 | 19s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 
 ## 生产入口
 
@@ -180,7 +182,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 用同一个域名兼作两者做不到：程序自己就会拒绝。域名登记为 `console` 时，模型请求经 `internal/gateway/handler.go` 的
 `authenticate` 得到 401；登记为 `api` 时，控制台的路由经 `cmd/axiom/console_guard.go` 的 `admit` 得到 404（`ErrUnknownHost`）。
 两个站点的 `reverse_proxy` 都原样转发请求，Host 不变——程序就是按它找站点和 surface 的，所以域名必须与
-`axiom site init --console --api --admin` 登记的一致。
+`axiom site init --console HOST --api HOST --admin HOST` 登记的一致。
 
 - **TLS**：默认由 Caddy 自己申请和续期证书（ACME HTTP-01，80 端口要能到达这个容器），证书与账号密钥放在 `caddy_data` 卷里；
   失败原因看 `docker compose logs caddy`。没有公网 DNS 的部署（演练、内网）设 `AXIOM_EDGE_TLS_ISSUER=internal`，改用 Caddy
