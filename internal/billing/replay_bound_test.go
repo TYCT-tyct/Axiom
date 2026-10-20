@@ -37,6 +37,16 @@ func TestAdvanceRacesACredit(t *testing.T) {
 // takes the credit up and writes it off as expired.
 func (b *bank) advanceRacedByACredit() {
 	b.t.Helper()
+	account := b.admitted.Account
+	// The bound the replay has to fix is the account's greatest seq, which the credit has not reached yet.
+	var bound int64
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		var err error
+		bound, err = queries.ReplayThrough(b.t.Context(), tx, account)
+		return err
+	}); err != nil {
+		b.t.Fatal(err)
+	}
 	// The credit runs as the superuser, since the application may not lock the table.
 	super, err := pg.Open(b.t.Context(), b.db.Superuser)
 	if err != nil {
@@ -44,7 +54,7 @@ func (b *bank) advanceRacedByACredit() {
 	}
 	defer super.Close()
 	credit := Credit{
-		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 25, ExpiresAt: longAgo,
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: account, Amount: 25, ExpiresAt: longAgo,
 		Actor: audit.System("billing.test"), Reason: "race the replay",
 	}
 	done := make(chan error, 1)
@@ -58,7 +68,7 @@ func (b *bank) advanceRacedByACredit() {
 			return err
 		}
 		go func() {
-			_, err := b.expirer().advance(b.t.Context(), b.admitted.Account)
+			_, err := b.expirer().advance(b.t.Context(), account)
 			done <- err
 		}()
 		b.waitForLockWait()
@@ -70,10 +80,18 @@ func (b *bank) advanceRacedByACredit() {
 	if err := <-done; err != nil {
 		b.t.Fatalf("the replay raced by a credit failed: %v", err)
 	}
-	// The credit is committed by now and still ahead of the place the replay stored: the bound left it to the next one.
-	if n := b.count(`SELECT count(*) FROM billing.transactions t JOIN billing.balances b USING (account_id)
-		WHERE t.seq > b.allocated_seq AND t.request_id = '` + credit.ID.String() + "'"); n != 1 {
-		b.t.Fatal("the replay passed the credit committed after its bound")
+	// The credit is committed by now, at a seq above the bound, and the replay stored the bound as its place: what it
+	// left out is left to the next replay.
+	var place, creditSeq int64
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(b.t.Context(), `SELECT b.allocated_seq, t.seq FROM billing.balances b
+			JOIN billing.transactions t ON t.account_id = b.account_id AND t.request_id = $1
+			WHERE b.account_id = $2`, credit.ID, account).Scan(&place, &creditSeq)
+	}); err != nil {
+		b.t.Fatal(err)
+	}
+	if place != bound || creditSeq <= bound {
+		b.t.Fatalf("the replay stands at %d, want the bound %d, with the credit at %d past it", place, bound, creditSeq)
 	}
 	if written := b.expire(); written != credit.Amount {
 		b.t.Fatalf("the next replay wrote off %d, want the late credit's %d", written, credit.Amount)

@@ -104,14 +104,15 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 }
 
 // TestMovementsReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
-// reads, from the index, not what the history behind or ahead of it holds. 30,000 numbered transactions of an account,
-// 12,000 from before the sequence of another, and as many of a third are seeded, and a page of 100 read from the start
-// and from deep in: the numbered ones at 25,000, the legacy ones at 10,000.
+// reads, from the index, not what the history behind or ahead of it holds, and the replay's bound reads about the same
+// on a long account as on a short one. 30,000 numbered transactions of an account, 12,000 from before the sequence of
+// another, as many of a third and three of a fourth are seeded; a page of 100 is read from the start and from deep in
+// (the numbered ones at 25,000, the legacy ones at 10,000), and the bound of the long accounts against the short one.
 func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
-	legacy, noise := uuid.NewV7(), uuid.NewV7()
+	legacy, noise, short := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	statements := slices.Concat(seedLedger(b.admitted.Site, b.admitted.Account, 30000, false), seedLedger(b.admitted.Site, noise, 30000, false),
-		seedLedger(b.admitted.Site, legacy, 12000, true))
+		seedLedger(b.admitted.Site, legacy, 12000, true), seedLedger(b.admitted.Site, short, 3, false))
 	b.sql(append(statements, "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
 	var farSeq int64
 	var farAt time.Time
@@ -126,20 +127,38 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	}
 	long := epoch.Add(-100 * 365 * 24 * time.Hour)
 	for _, tc := range []struct {
-		name, query, index string
-		first, deep        []any
+		name, query, index, what string
+		first, deep              []any
 	}{
-		{"numbered", movements, "transactions_by_account_seq", []any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)}, []any{b.admitted.Account, farSeq, int64(math.MaxInt64), int32(100)}},
-		{"from before the sequence", legacyMovements, "transactions_legacy_by_account", []any{legacy, long, uuid.UUID{}, int32(100)}, []any{legacy, farAt, farID, int32(100)}},
+		{
+			"numbered", movements, "transactions_by_account_seq", "a page of 100, from the start and 25,000 in",
+			[]any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)},
+			[]any{b.admitted.Account, farSeq, int64(math.MaxInt64), int32(100)},
+		},
+		{
+			"from before the sequence", legacyMovements, "transactions_legacy_by_account", "a page of 100, from the start and 10,000 in",
+			[]any{legacy, long, uuid.UUID{}, int32(100)},
+			[]any{legacy, farAt, farID, int32(100)},
+		},
+		{
+			"the bound", replayThrough, "transactions_by_account_seq", "the bound over an account with 30,000 transactions and one with 3",
+			[]any{short},
+			[]any{b.admitted.Account},
+		},
+		{
+			"the bound over rows from before the sequence", replayThrough, "transactions_by_account_seq", "the bound over an account with 12,000 rows from before the sequence and one with 3",
+			[]any{short},
+			[]any{legacy},
+		},
 	} {
 		first, _ := b.plan(tc.query, tc.first...)
 		deep, deepPlan := b.plan(tc.query, tc.deep...)
-		t.Logf("%s: blocks touched by a page of 100: from the start %d, deep in %d", tc.name, first, deep)
+		t.Logf("%s: %s: blocks touched %d, then %d", tc.name, tc.what, first, deep)
 		if !strings.Contains(deepPlan, tc.index) || strings.Contains(deepPlan, "Seq Scan") {
-			t.Errorf("%s: the page is not read from the index %s: %s", tc.name, tc.index, deepPlan)
+			t.Errorf("%s: %s: not read from the index %s:\n%s", tc.name, tc.what, tc.index, deepPlan)
 		}
 		if deep > first+first/2+50 || deep > 1000 {
-			t.Errorf("%s: a page deep in the history touches %d blocks against %d at the start; the plan:\n%s", tc.name, deep, first, deepPlan)
+			t.Errorf("%s: %s: %d blocks against %d; the plan:\n%s", tc.name, tc.what, deep, first, deepPlan)
 		}
 	}
 }
