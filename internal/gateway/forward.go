@@ -320,6 +320,8 @@ func upstreamRefused(fault protocol.Fault) bool {
 	switch fault {
 	case protocol.FaultBadRequest, protocol.FaultContextTooLong, protocol.FaultModeration:
 		return true
+	case protocol.FaultNone, protocol.FaultBroken, protocol.FaultServer, protocol.FaultRateLimited,
+		protocol.FaultUnrecognised, protocol.FaultToolInput:
 	}
 	return false
 }

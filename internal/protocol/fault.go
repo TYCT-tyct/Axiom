@@ -8,8 +8,9 @@ import (
 
 // Fault is what an upstream failure says of the endpoint it came from: the stream broke, the upstream ended it with an
 // error event of some class, or the model generated a tool call whose input is not JSON. quality judges an endpoint's
-// health by it (docs/domains/quality.md「什么算一次失败」); routing and the gateway decide nothing by it. It carries no
-// text of the upstream's.
+// health by it (docs/domains/quality.md「什么算一次失败」); the gateway asks whether the class is the request's own, which
+// no other endpoint would serve and which the client is answered with the upstream's words (docs/domains/gateway.md
+// 「错误」). The fault itself carries no text of the upstream's; the error event's words travel beside it (RejectionOf).
 type Fault uint8
 
 // The faults. The classes of an error event are those of Anthropic《Errors》and OpenAI《Error codes》(read
@@ -53,17 +54,23 @@ func (*faultError) Is(target error) bool { return target == ErrUpstream }
 
 // errorEventOf reports whether err is an upstream's error event, as opposed to a stream that broke off, broke its format
 // or ran out of memory.
-func errorEventOf(err error) bool {
-	_, ok := errors.AsType[*faultError](err)
-	return ok
+func errorEventOf(err error) bool { return faultErrorOf(err) != nil }
+
+// faultErrorOf is err as the upstream's error event, and nil when it is not one.
+func faultErrorOf(err error) *faultError {
+	f, ok := errors.AsType[*faultError](err)
+	if !ok {
+		return nil
+	}
+	return f
 }
 
 // RejectionOf is what an upstream said when it ended the stream with an error event: its words and the members a client
 // branches on, still holding whatever names the supplier, and nil when the failure says nothing of it, as a stream that
 // broke off, or one whose error event named nothing, does. The words are bounded and are not logged or stored.
 func RejectionOf(err error) *Rejection {
-	f, ok := errors.AsType[*faultError](err)
-	if !ok || f.rejection == (Rejection{}) {
+	f := faultErrorOf(err)
+	if f == nil || f.rejection == (Rejection{}) {
 		return nil
 	}
 	r := f.rejection
@@ -75,7 +82,7 @@ func RejectionOf(err error) *Rejection {
 // node's. A read that failed because the attempt was cancelled is FaultBroken too: the caller knows why it cancelled,
 // and judges that first.
 func FaultOf(err error) Fault {
-	if f, ok := errors.AsType[*faultError](err); ok {
+	if f := faultErrorOf(err); f != nil {
 		return f.fault
 	}
 	if err == nil || errors.Is(err, ErrMemory) {
@@ -119,14 +126,14 @@ const maxErrorText = 2 << 10
 func (s *reader) errorText(v jsontext.Value) string {
 	var b []byte
 	var err error
-	if b, err = s.unquote(s.cutErrorText(v)); err != nil {
+	if b, err = s.unquote(cutErrorText(v)); err != nil {
 		return ""
 	}
 	return string(b)
 }
 
 // cutErrorText is v cut to maxErrorText bytes of text, with the quote that closes it where the cut was.
-func (s *reader) cutErrorText(v jsontext.Value) jsontext.Value {
+func cutErrorText(v jsontext.Value) jsontext.Value {
 	end := len(v) - 1
 	if n := unquotedLen(v); n <= maxErrorText { // the whole of it, escapes and all: nothing to cut
 		return v

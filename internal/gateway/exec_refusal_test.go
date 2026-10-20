@@ -45,29 +45,46 @@ func TestARefusalInTheStreamIsAnsweredWithTheUpstreamsWords(t *testing.T) {
 		{"aggregated", &no},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
-			h := newHarness(t, ctx, options{client: protocol.Responses, entries: 2, stream: c.stream})
-			refusal := failureFrame("context_length_exceeded", "upstream-vendor: the prompt is too long", "input", "null")
-			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(0), beat{data: refusal})}
-			h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
-			h.run()
-			body := h.w.body()
-			switch {
-			case h.w.status != http.StatusBadRequest:
-				t.Errorf("%s: status %d, want 400:\n%s", c.name, h.w.status, body)
-			case h.up.endpoint(2).sends != 0:
-				t.Errorf("%s: another entry was tried for a request the upstream refused", c.name)
-			case h.up.endpoint(1).sanitized != 1:
-				t.Errorf("%s: %d refusals had the supplier's name taken out, want 1", c.name, h.up.endpoint(1).sanitized)
-			case !strings.Contains(body, `"code":"context_length_exceeded"`), !strings.Contains(body, `"param":"input"`),
-				!strings.Contains(body, `"type":"invalid_request_error"`), !strings.Contains(body, `"error_type":"invalid_request"`),
-				!strings.Contains(body, `"[hidden]: the prompt is too long"`), strings.Contains(body, "upstream-vendor"):
-				t.Errorf("%s: the client got:\n%s", c.name, body)
+			body := refusalAnswer(t, ctx, c.stream)
+			for _, want := range []string{
+				`"code":"context_length_exceeded"`, `"param":"input"`,
+				`"type":"invalid_request_error"`, `"error_type":"invalid_request"`, `"[hidden]: the prompt is too long"`,
+			} {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s: the answer has no %s:\n%s", c.name, want, body)
+				}
 			}
-			if a := h.ended().outcome.Attempts[0]; a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishError {
-				t.Errorf("%s: attempt %+v", c.name, a)
+			if strings.Contains(body, "upstream-vendor") {
+				t.Errorf("%s: the answer names the supplier:\n%s", c.name, body)
 			}
 		})
 	}
+}
+
+// refusalAnswer is the answer to the call an upstream refused in its stream, once the second entry is there to be tried
+// and left alone, and once the attempt is known to have failed before the commit point with the supplier's name taken
+// out of its words. It returns the body.
+func refusalAnswer(t *testing.T, ctx context.Context, stream *bool) string {
+	t.Helper()
+	h := newHarness(t, ctx, options{client: protocol.Responses, entries: 2, stream: stream})
+	refusal := failureFrame("context_length_exceeded", "upstream-vendor: the prompt is too long", "input", "null")
+	h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(0), beat{data: refusal})}
+	h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
+	h.run()
+	body := h.w.body()
+	if h.w.status != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400:\n%s", h.w.status, body)
+	}
+	if h.up.endpoint(2).sends != 0 {
+		t.Error("another entry was tried for a request the upstream refused")
+	}
+	if got := h.up.endpoint(1).sanitized; got != 1 {
+		t.Errorf("%d refusals had the supplier's name taken out, want 1", got)
+	}
+	if a := h.ended().outcome.Attempts[0]; a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishError {
+		t.Errorf("attempt %+v", a)
+	}
+	return body
 }
 
 // TestAFailureFrameAfterTheCommitPointIsChargedAsItSays: the usage of the frame that ended the attempt is the upstream's
@@ -96,41 +113,67 @@ func TestAFailureFrameAfterTheCommitPointIsChargedAsItSays(t *testing.T) {
 		words: "[hidden]: too long",
 	}} {
 		run(t, func(t *testing.T, ctx context.Context) {
-			h := newHarness(t, ctx, options{client: protocol.Responses, entries: 2})
-			beats := []beat{h.feed(0, 2, 3, 4)}
-			if c.before != "" {
-				beats = append(beats, beat{data: c.before})
+			body, a, settled := chargedFailure(t, ctx, c.before, c.frame)
+			checkFailureCharge(t, a, 900, 700)
+			if !settled {
+				t.Errorf("%s: the attempt was not settled once", c.name)
 			}
-			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(append(beats, beat{data: c.frame})...)}
-			h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
-			h.run()
-			body, a := h.w.body(), h.ended().outcome.Attempts[0]
-			last := body[strings.LastIndex(body, "event: "):]
-			u := a.Segments[0]
-			switch {
-			case h.w.status != http.StatusOK:
-				t.Errorf("%s: status %d:\n%s", c.name, h.w.status, body)
-			case h.up.endpoint(2).sends != 0:
-				t.Errorf("%s: another entry was tried after the commit point", c.name)
-			case a.Result != billing.Committed || a.Finish != billing.FinishError:
-				t.Errorf("%s: attempt %+v", c.name, a)
-			case u.Usage.Count(catalog.ItemInput) != 900 || u.Usage.OutputTotal() != 700,
-				!u.Reported.Has(catalog.ItemInput), !u.Reported.Has(catalog.ItemOutput):
-				t.Errorf("%s: usage %+v, reported %d", c.name, u.Usage, u.Reported)
-			case !strings.HasPrefix(last, "event: response.failed\n"):
-				t.Errorf("%s: the stream ends with:\n%s", c.name, last)
-			case !strings.Contains(last, `"code":"`+c.code+`"`):
-				t.Errorf("%s: the ending says\n%s", c.name, last)
-			case c.words != "" && !strings.Contains(last, `"message":"`+c.words+`"`):
-				t.Errorf("%s: the ending says\n%s", c.name, last)
-			}
-			h.mu.Lock()
-			settled := len(h.settlements)
-			h.mu.Unlock()
-			if settled != 1 {
-				t.Errorf("%s: %d settlements", c.name, settled)
-			}
+			checkFailureEnding(t, c.name, body, c.code, c.words)
 		})
+	}
+}
+
+// chargedFailure is the call the failure frame ended after the commit point: the body of the answer, the attempt, and
+// whether it was settled exactly once. The second entry is there to be tried and left alone.
+func chargedFailure(t *testing.T, ctx context.Context, before, frame string) (body string, a billing.AttemptResult, settled bool) {
+	t.Helper()
+	h := newHarness(t, ctx, options{client: protocol.Responses, entries: 2})
+	beats := []beat{h.feed(0, 2, 3, 4)}
+	if before != "" {
+		beats = append(beats, beat{data: before})
+	}
+	h.up.eps[uuidOf(ep(1))].script = []scripted{serve(append(beats, beat{data: frame})...)}
+	h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
+	h.run()
+	body, a = h.w.body(), h.ended().outcome.Attempts[0]
+	if h.w.status != http.StatusOK {
+		t.Fatalf("status %d:\n%s", h.w.status, body)
+	}
+	if h.up.endpoint(2).sends != 0 {
+		t.Error("another entry was tried after the commit point")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return body, a, len(h.settlements) == 1
+}
+
+// checkFailureCharge is the attempt the failure frame ended: committed, failed, and charged for the input and output it
+// stated.
+func checkFailureCharge(t *testing.T, a billing.AttemptResult, input, output int64) {
+	t.Helper()
+	u := a.Segments[0]
+	switch {
+	case a.Result != billing.Committed || a.Finish != billing.FinishError:
+		t.Errorf("attempt %+v", a)
+	case u.Usage.Count(catalog.ItemInput) != input || u.Usage.OutputTotal() != output,
+		!u.Reported.Has(catalog.ItemInput), !u.Reported.Has(catalog.ItemOutput):
+		t.Errorf("usage %+v, reported %d", u.Usage, u.Reported)
+	}
+}
+
+// checkFailureEnding is the last event the client reads: the failed response, with the code and the words the attempt is
+// answered with, the supplier's name taken out.
+func checkFailureEnding(t *testing.T, name, body, code, words string) {
+	t.Helper()
+	last := body[strings.LastIndex(body, "event: "):]
+	if !strings.HasPrefix(last, "event: response.failed\n") {
+		t.Errorf("%s: the stream ends with:\n%s", name, last)
+	}
+	if !strings.Contains(last, `"code":"`+code+`"`) {
+		t.Errorf("%s: the ending says\n%s", name, last)
+	}
+	if words != "" && !strings.Contains(last, `"message":"`+words+`"`) {
+		t.Errorf("%s: the ending says\n%s", name, last)
 	}
 }
 
@@ -146,23 +189,24 @@ func TestAnErrorEventThatEndsTheStreamIsItsFailure(t *testing.T) {
 		h.run()
 		body, a := h.w.body(), h.ended().outcome.Attempts[0]
 		u := a.Segments[0]
-		switch {
-		case h.w.status != http.StatusOK:
-			t.Errorf("status %d:\n%s", h.w.status, body)
-		case h.up.endpoint(2).sends != 0:
+		if h.w.status != http.StatusOK {
+			t.Fatalf("status %d:\n%s", h.w.status, body)
+		}
+		if h.up.endpoint(2).sends != 0 {
 			t.Error("another entry was tried after the commit point")
-		case a.Result != billing.Committed || a.Finish != billing.FinishError:
-			t.Errorf("attempt %+v", a)
-		case u.Reported.Has(catalog.ItemOutput), u.Reported.Has(catalog.ItemInput):
+		}
+		if a.Result != billing.Committed || a.Finish != billing.FinishError {
+			t.Errorf("attempt %+v, want the upstream's failure and not our idle timeout", a)
+		}
+		if u.Reported.Has(catalog.ItemOutput) || u.Reported.Has(catalog.ItemInput) {
 			t.Errorf("usage reported %d, want nothing reported: %+v", u.Reported, u.Usage)
-		case u.Usage.OutputTotal() == 0:
+		}
+		if u.Usage.OutputTotal() == 0 {
 			t.Errorf("the output of the content relayed was not estimated: %+v", u.Usage)
-		case !strings.Contains(body, `"delta":"Hi"`):
+		}
+		if !strings.Contains(body, `"delta":"Hi"`) {
 			t.Errorf("the content relayed before the failure is missing:\n%s", body)
 		}
-		if last := body[strings.LastIndex(body, "event: "):]; !strings.HasPrefix(last, "event: response.failed\n") ||
-			!strings.Contains(last, `"code":"upstream_error"`) {
-			t.Errorf("the stream ends with:\n%s", last)
-		}
+		checkFailureEnding(t, "the error event alone", body, "upstream_error", "")
 	})
 }

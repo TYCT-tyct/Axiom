@@ -96,12 +96,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
-		// an error chunk ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
-		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
-		if s.report != nil {
-			s.meter(m, true)
-		}
-		return event{}, s.errorEvent("an error chunk")
+		return event{}, s.failureEvent(m)
 	}
 	if len(s.held) > 0 {
 		s.held = append(s.held, "]}"...)
@@ -124,6 +119,16 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return s.rewrite(chatRewrites)
 	}
 	return s.e, nil
+}
+
+// failureEvent is the chunk that ended the stream with the upstream's failure: the usage it carries is taken first,
+// since it is the upstream's last word on the attempt (docs/domains/billing.md「用量来源与暂估」), and the chunk's
+// members fail the read.
+func (s *chatStream) failureEvent(m *meter) error {
+	if s.report != nil {
+		s.meter(m, true)
+	}
+	return s.errorEvent("an error chunk")
 }
 
 // done is [DONE]: the normal end, once every choice that started has finished.
