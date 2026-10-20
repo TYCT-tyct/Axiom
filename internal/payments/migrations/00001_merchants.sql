@@ -5,29 +5,8 @@
 -- site, which RLS alone cannot: a row's policy sees only that row, so an account of site A could otherwise create a
 -- usage row for site B's merchant under site A and block B's own upsert of that day.
 
--- sees_site is 「范围的站点等于该行的站点」 (docs/security.md「租户隔离」): the platform, a scope listing the site, or a
--- scope holding an account of the site. pg sets no site for an account scope, so the account's site comes from
--- platform.tenants, which only the platform scope reads; a definer function owned by axiom_lookup reads it, as the
--- lookups before sign-in do (internal/platform/README.md「角色」). It scans the site's registrations, so its cost grows
--- with the site's accounts; the tables it guards are small and read by site.
-GRANT USAGE ON SCHEMA platform TO axiom_lookup;
-GRANT SELECT (site_id, tenant_id) ON platform.tenants TO axiom_lookup;
-CREATE POLICY lookup ON platform.tenants FOR SELECT TO axiom_lookup USING (true);
-
--- +goose StatementBegin
-CREATE FUNCTION payments.sees_site(site uuid) RETURNS boolean
-    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp
-    AS $$
-        SELECT platform.in_scope(sees_site.site, NULL) OR EXISTS (SELECT 1 FROM platform.tenants t
-            WHERE t.site_id = sees_site.site AND t.tenant_id <> t.site_id AND platform.in_scope(NULL, t.tenant_id))
-    $$;
--- +goose StatementEnd
-REVOKE EXECUTE ON FUNCTION payments.sees_site FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION payments.sees_site TO axiom_app;
-GRANT CREATE ON SCHEMA payments TO axiom_lookup;
-ALTER FUNCTION payments.sees_site OWNER TO axiom_lookup;
-REVOKE CREATE ON SCHEMA payments FROM axiom_lookup;
-
+-- Site public configuration and the shared counter are read through platform.sees_site: the platform, a scope
+-- listing the site, or an account scope whose home site it is (internal/platform/README.md「范围」).
 GRANT USAGE ON SCHEMA payments TO axiom_app;
 
 -- Never deleted, only disabled: orders keep finding their merchant.
@@ -108,20 +87,20 @@ ALTER TABLE payments.merchant_usage ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL S
 ALTER TABLE payments.settings ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 
 -- Site public configuration: the top-up page of an account reads its site's rows; only the site or the platform writes.
-CREATE POLICY reads ON payments.merchants FOR SELECT USING (payments.sees_site(site_id));
+CREATE POLICY reads ON payments.merchants FOR SELECT USING (platform.sees_site(site_id));
 CREATE POLICY inserts ON payments.merchants FOR INSERT WITH CHECK (platform.in_scope(site_id, NULL));
 CREATE POLICY updates ON payments.merchants FOR UPDATE USING (platform.in_scope(site_id, NULL))
     WITH CHECK (platform.in_scope(site_id, NULL));
 GRANT SELECT, INSERT, UPDATE ON payments.merchants TO axiom_app;
 
-CREATE POLICY reads ON payments.merchant_methods FOR SELECT USING (payments.sees_site(site_id));
+CREATE POLICY reads ON payments.merchant_methods FOR SELECT USING (platform.sees_site(site_id));
 CREATE POLICY inserts ON payments.merchant_methods FOR INSERT WITH CHECK (platform.in_scope(site_id, NULL));
 CREATE POLICY updates ON payments.merchant_methods FOR UPDATE USING (platform.in_scope(site_id, NULL))
     WITH CHECK (platform.in_scope(site_id, NULL));
 CREATE POLICY deletes ON payments.merchant_methods FOR DELETE USING (platform.in_scope(site_id, NULL));
 GRANT SELECT, INSERT, UPDATE, DELETE ON payments.merchant_methods TO axiom_app;
 
-CREATE POLICY reads ON payments.settings FOR SELECT USING (payments.sees_site(site_id));
+CREATE POLICY reads ON payments.settings FOR SELECT USING (platform.sees_site(site_id));
 CREATE POLICY inserts ON payments.settings FOR INSERT WITH CHECK (platform.in_scope(site_id, NULL));
 CREATE POLICY updates ON payments.settings FOR UPDATE USING (platform.in_scope(site_id, NULL))
     WITH CHECK (platform.in_scope(site_id, NULL));
@@ -133,8 +112,8 @@ CREATE POLICY site ON payments.merchant_configs USING (platform.in_scope(site_id
 GRANT SELECT, INSERT, UPDATE ON payments.merchant_configs TO axiom_app;
 
 -- Shared counter: read, created and added to by the site's own scopes; ON CONFLICT's update is held to both checks.
-CREATE POLICY reads ON payments.merchant_usage FOR SELECT USING (payments.sees_site(site_id));
-CREATE POLICY inserts ON payments.merchant_usage FOR INSERT WITH CHECK (payments.sees_site(site_id));
-CREATE POLICY updates ON payments.merchant_usage FOR UPDATE USING (payments.sees_site(site_id))
-    WITH CHECK (payments.sees_site(site_id));
+CREATE POLICY reads ON payments.merchant_usage FOR SELECT USING (platform.sees_site(site_id));
+CREATE POLICY inserts ON payments.merchant_usage FOR INSERT WITH CHECK (platform.sees_site(site_id));
+CREATE POLICY updates ON payments.merchant_usage FOR UPDATE USING (platform.sees_site(site_id))
+    WITH CHECK (platform.sees_site(site_id));
 GRANT SELECT, INSERT (merchant_id, site_id, day, used), UPDATE (used) ON payments.merchant_usage TO axiom_app;

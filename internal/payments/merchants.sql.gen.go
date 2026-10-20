@@ -241,8 +241,56 @@ func (q *Queries) LockMerchant(ctx context.Context, db DBTX, id uuid.UUID) ([]Lo
 	return items, nil
 }
 
+const merchantConfigs = `-- name: MerchantConfigs :many
+SELECT m.id, m.kind, m.currency, m.rev, c.settings, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version
+FROM payments.merchants m JOIN payments.merchant_configs c ON c.merchant_id = m.id
+WHERE m.id = ANY ($1::uuid[])
+`
+
+type MerchantConfigsRow struct {
+	ID         uuid.UUID
+	Kind       string
+	Currency   string
+	Rev        int64
+	Settings   string
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedDek []byte
+	KeyVersion int64
+}
+
+func (q *Queries) MerchantConfigs(ctx context.Context, db DBTX, merchants []uuid.UUID) ([]MerchantConfigsRow, error) {
+	rows, err := db.Query(ctx, merchantConfigs, merchants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MerchantConfigsRow
+	for rows.Next() {
+		var i MerchantConfigsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Currency,
+			&i.Rev,
+			&i.Settings,
+			&i.Ciphertext,
+			&i.Nonce,
+			&i.WrappedDek,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const offers = `-- name: Offers :many
-SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort
+SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev
 FROM payments.merchant_methods x JOIN payments.merchants m ON m.id = x.merchant_id
 WHERE x.site_id = $1 AND x.enabled AND m.enabled AND ($2::text IS NULL OR x.method = $2)
 ORDER BY x.method, m.sort, m.id
@@ -263,6 +311,7 @@ type OffersRow struct {
 	DailyLimit *int64
 	Currency   string
 	Sort       int32
+	Rev        int64
 }
 
 // The enabled merchant methods of a site, with what quoting and choosing need of their merchant.
@@ -285,6 +334,7 @@ func (q *Queries) Offers(ctx context.Context, db DBTX, arg OffersParams) ([]Offe
 			&i.DailyLimit,
 			&i.Currency,
 			&i.Sort,
+			&i.Rev,
 		); err != nil {
 			return nil, err
 		}

@@ -26,13 +26,13 @@ var admin = audit.System("payments.test")
 
 // world is a database with two sites, A and B, each with one account, and a Payments over it.
 type world struct {
-	t               *testing.T
-	db              *pg.DB
-	super           string
-	p               *Payments
-	logs            *lockedBuffer
-	siteA, siteB    uuid.UUID
-	accountA, acctB uuid.UUID
+	t              *testing.T
+	db             *pg.DB
+	super          string
+	p              *Payments
+	logs           *lockedBuffer
+	siteA, siteB   uuid.UUID
+	account, acctB uuid.UUID
 }
 
 type lockedBuffer struct {
@@ -57,10 +57,10 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(db.Close)
 	w := &world{
 		t: t, db: db, super: d.Superuser, logs: &lockedBuffer{},
-		siteA: uuid.NewV7(), siteB: uuid.NewV7(), accountA: uuid.NewV7(), acctB: uuid.NewV7(),
+		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(),
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
-		w.siteA, w.accountA, w.siteB, w.acctB))
+		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
 		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{fakePlugin{}},
 		Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
@@ -93,8 +93,11 @@ func (w *world) exec(statements ...string) {
 	}
 }
 
-func siteScope(site uuid.UUID) pg.Scope       { return pg.NewScope(false, []uuid.UUID{site}, nil) }
-func accountScope(account uuid.UUID) pg.Scope { return pg.NewScope(false, nil, []uuid.UUID{account}) }
+func siteScope(site uuid.UUID) pg.Scope { return pg.NewScope(false, []uuid.UUID{site}, nil) }
+
+// accountA and accountB are the accounts' scopes as the console authorizes them: with their site.
+func (w *world) accountA() pg.Scope { return pg.AccountScopeIn(w.siteA, w.account) }
+func (w *world) accountB() pg.Scope { return pg.AccountScopeIn(w.siteB, w.acctB) }
 
 func (w *world) tx(s pg.Scope, f func(tx pg.Tx) error) error { return w.db.Tx(w.t.Context(), s, f) }
 

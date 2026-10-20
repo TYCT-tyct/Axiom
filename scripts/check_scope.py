@@ -4,9 +4,9 @@ Row-level security catches a forgotten condition, not SQL that widens its own tr
 do, and a role switched for the session stays on a pooled connection. So, anywhere but internal/platform/pg, in Go and
 SQL files, tests and migrations included, committed or new:
 
-- set_config and the scope settings' bare names (scope_platform, scope_sites, scope_accounts) fail wherever they
-  appear, in any case. Matching the names alone, not axiom.<name>, keeps quoting, escapes and line breaks around the
-  dot from hiding them.
+- set_config and the scope settings' bare names (scope_platform, scope_sites, scope_accounts, scope_home) fail
+  wherever they appear, in any case. Matching the names alone, not axiom.<name>, keeps quoting, escapes and line
+  breaks around the dot from hiding them.
 - SET ROLE and RESET ROLE (also SET LOCAL ROLE and SET SESSION ROLE, the role bare or quoted) fail in SQL files and in
   Go string literals, as the database would read them: Go escapes decoded (and carriage returns dropped from raw
   strings), strings read before comments (a comment marker inside a quote, an escape string or a dollar quote is
@@ -24,7 +24,7 @@ import sys
 
 EXEMPT = ":!internal/platform/pg/"
 
-SETTING = re.compile(r"set_config|scope_(platform|sites|accounts)", re.IGNORECASE)
+SETTING = re.compile(r"set_config|scope_(platform|sites|accounts|home)", re.IGNORECASE)
 ROLE_SWITCH = re.compile(r'\b(re)?set\s+((local|session)\s+)?"?role\b', re.IGNORECASE)
 
 # What a Go file is made of, up to its strings: comments and rune literals are matched only to be skipped, so a quote

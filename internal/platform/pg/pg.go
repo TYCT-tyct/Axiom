@@ -108,6 +108,9 @@ func SQLState(err error) string {
 type Scope struct {
 	platform        bool
 	sites, accounts []uuid.UUID
+	// home is the site of an account scope's account, whose public configuration it reads (platform.sees_site); the
+	// zero UUID is none. It widens nothing else: the account's rows are still only its own.
+	home uuid.UUID
 }
 
 // PlatformScope is every row. Only cmd/ builds it, for the modules that maintain platform and public data; a lint rule
@@ -117,7 +120,7 @@ func PlatformScope() Scope { return Scope{platform: true} }
 // NewScope builds any scope, for tests in any module. Production code gets the platform scope from PlatformScope and
 // tenant scopes from authorization; the same lint rule refuses NewScope outside tests.
 func NewScope(platform bool, sites, accounts []uuid.UUID) Scope {
-	return Scope{platform, sites, accounts}
+	return Scope{platform: platform, sites: sites, accounts: accounts}
 }
 
 // SiteScope is the rows of one site. Only internal/accounts builds it, after authorization; the lint rule refuses it
@@ -127,6 +130,13 @@ func SiteScope(site uuid.UUID) Scope { return Scope{sites: []uuid.UUID{site}} }
 // AccountScope is the rows of one account. Only internal/accounts builds it, after authorization or for the account a
 // registration creates; the lint rule refuses it elsewhere.
 func AccountScope(account uuid.UUID) Scope { return Scope{accounts: []uuid.UUID{account}} }
+
+// AccountScopeIn is AccountScope that also reads the public configuration of the account's site, such as the payment
+// methods its top-up page lists (docs/security.md「租户隔离」). The site comes from the authorization that found the
+// account, never from a row the account can write; like AccountScope, only internal/accounts builds it.
+func AccountScopeIn(site, account uuid.UUID) Scope {
+	return Scope{accounts: []uuid.UUID{account}, home: site}
+}
 
 // Tx is a transaction whose scope is already set.
 type Tx struct{ tx pgx.Tx }
@@ -226,9 +236,9 @@ func (r rows) TypeMap() *pgtype.Map                         { return r.inner.Typ
 // Conn is nil, which pgx allows for rows that do not come from a connection.
 func (rows) Conn() *pgx.Conn { return nil }
 
-// setScope sets the three settings the platform schema's scope functions read, local to the transaction.
+// setScope sets the four settings the platform schema's scope functions read, local to the transaction.
 const setScope = `SELECT set_config('axiom.scope_platform', $1, true), set_config('axiom.scope_sites', $2, true),
-	set_config('axiom.scope_accounts', $3, true)`
+	set_config('axiom.scope_accounts', $3, true), set_config('axiom.scope_home', $4, true)`
 
 // Tx runs fn in a transaction limited to scope and commits if fn returns nil. An error, a panic or a cancelled
 // context rolls it back, and pgx drops a connection whose state is unknown instead of returning it to the pool.
@@ -268,7 +278,11 @@ func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn 
 		if scope.platform {
 			platform = "on"
 		}
-		if _, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts)); err != nil {
+		home := ""
+		if scope.home != (uuid.UUID{}) {
+			home = scope.home.String()
+		}
+		if _, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts), home); err != nil {
 			return fmt.Errorf("set the scope: %w", err)
 		}
 		return fn(Tx{tx})

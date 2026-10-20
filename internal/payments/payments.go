@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"sync/atomic"
+	"sync"
+	"uuid"
 
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
@@ -47,7 +48,9 @@ type Payments struct {
 	client   *egress.Client
 	plugins  map[Kind]Plugin
 	logger   *slog.Logger
-	turn     atomic.Uint64 // the round-robin position of merchant selection, per process as in sub2api
+	turns    sync.Map // turnKey to *atomic.Uint64: the round-robin positions, per process as in sub2api
+	mu       sync.Mutex
+	valid    map[uuid.UUID]validity // merchants whose configuration was checked, by ID (usable)
 }
 
 // Open checks the plugins: two plugins of one kind are a mistake in assembling the program and fail the start.
@@ -55,7 +58,7 @@ func Open(c Config) (*Payments, error) {
 	if c.DB == nil || c.Keyring == nil {
 		return nil, errors.New("payments: a database and a keyring are required")
 	}
-	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}}
 	if p.logger == nil {
 		p.logger = slog.Default()
 	}

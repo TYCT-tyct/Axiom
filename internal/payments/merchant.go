@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 	"uuid"
 
@@ -336,14 +337,20 @@ func (p *Payments) unseal(id MerchantID, sealed secret.Sealed, settings string) 
 
 // channel opens a merchant's channel in tx, which must see merchant_configs: the site or the platform scope.
 func (p *Payments) channel(ctx context.Context, tx pg.Tx, id MerchantID) (Channel, error) {
-	rows, err := queries.ReadMerchantConfig(ctx, tx, uuid.UUID(id))
+	rows, err := queries.MerchantConfigs(ctx, tx, []uuid.UUID{uuid.UUID(id)})
 	if err != nil {
 		return nil, fmt.Errorf("payments: read merchant config: %w", err)
 	}
 	if len(rows) == 0 {
 		return nil, ErrNotFound
 	}
-	r := rows[0]
+	return p.open(rows[0])
+}
+
+// open binds a merchant's plugin to its configuration: the plugin must exist, the secrets must open and match the
+// settings, and the plugin must accept them.
+func (p *Payments) open(r MerchantConfigsRow) (Channel, error) {
+	id := MerchantID(r.ID)
 	plugin, ok := p.plugins[Kind(r.Kind)]
 	if !ok {
 		return nil, fmt.Errorf("payments: merchant %s: no plugin of kind %q", id.TypeID(), r.Kind)
@@ -357,4 +364,55 @@ func (p *Payments) channel(ctx context.Context, tx pg.Tx, id MerchantID) (Channe
 		return nil, err
 	}
 	return plugin.Open(MerchantConfig{ID: id, Currency: currency, Settings: []byte(r.Settings), Secrets: secrets, Client: p.client})
+}
+
+// validity is whether a merchant's configuration opened at a revision, and when that was checked.
+type validity struct {
+	rev int64
+	ok  bool
+	at  time.Time
+}
+
+// validFor is how long a check stands: a save changes the revision and is seen at once, while a configuration
+// changed outside a save keeps the revision and is caught at the next check (docs/domains/payments.md「选商户账户」).
+const validFor = time.Minute
+
+// usable keeps the offers whose merchant's configuration opens, in tx, a scope that reads merchant_configs: the
+// account scope a top-up page or an order is quoted in never reads them, so the platform scope checks for it. A
+// merchant that does not open is left out and alerted on, without affecting the others.
+func (p *Payments) usable(ctx context.Context, tx pg.Tx, offers []OffersRow) ([]OffersRow, error) {
+	now := time.Now()
+	var stale []uuid.UUID
+	p.mu.Lock()
+	for _, o := range offers {
+		if v, ok := p.valid[o.MerchantID]; !ok || v.rev != o.Rev || now.Sub(v.at) > validFor {
+			stale = append(stale, o.MerchantID)
+		}
+	}
+	p.mu.Unlock()
+	if len(stale) > 0 {
+		rows, err := queries.MerchantConfigs(ctx, tx, stale)
+		if err != nil {
+			return nil, fmt.Errorf("payments: read merchant configs: %w", err)
+		}
+		checked := make([]validity, len(rows))
+		for i, r := range rows {
+			_, err := p.open(r)
+			if err != nil {
+				p.logger.Error("payments: a merchant account cannot be used", "merchant", MerchantID(r.ID).TypeID(), "error", err)
+			}
+			checked[i] = validity{r.Rev, err == nil, now}
+		}
+		p.mu.Lock()
+		for i, r := range rows {
+			p.valid[r.ID] = checked[i]
+		}
+		p.mu.Unlock()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.DeleteFunc(offers, func(o OffersRow) bool {
+		v, ok := p.valid[o.MerchantID]
+		return !ok || !v.ok || v.rev != o.Rev
+	}), nil
 }

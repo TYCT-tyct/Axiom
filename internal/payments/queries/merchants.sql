@@ -12,6 +12,11 @@ SELECT m.*, c.settings, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version
 FROM payments.merchants m JOIN payments.merchant_configs c ON c.merchant_id = m.id
 WHERE m.id = @id;
 
+-- name: MerchantConfigs :many
+SELECT m.id, m.kind, m.currency, m.rev, c.settings, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version
+FROM payments.merchants m JOIN payments.merchant_configs c ON c.merchant_id = m.id
+WHERE m.id = ANY (@merchants::uuid[]);
+
 -- name: UpdateMerchant :exec
 UPDATE payments.merchants SET name = @name, enabled = @enabled, currency = @currency, ttl_seconds = @ttl_seconds,
     refund_enabled = @refund_enabled, user_refund = @user_refund, sort = @sort, rev = rev + 1, updated_at = clock_timestamp()
@@ -44,7 +49,7 @@ SELECT * FROM payments.settings WHERE site_id = @site_id;
 
 -- The enabled merchant methods of a site, with what quoting and choosing need of their merchant.
 -- name: Offers :many
-SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort
+SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev
 FROM payments.merchant_methods x JOIN payments.merchants m ON m.id = x.merchant_id
 WHERE x.site_id = @site_id AND x.enabled AND m.enabled AND (sqlc.narg(method)::text IS NULL OR x.method = sqlc.narg(method))
 ORDER BY x.method, m.sort, m.id;

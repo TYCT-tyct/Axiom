@@ -16,9 +16,8 @@ var (
 	ErrCreditsRange = errors.New("payments: the amount is outside this site's top-up limits")
 )
 
-// Option is a payment method on the top-up page: what the credits cost through it, fee included. Where several
-// merchant accounts offer the method, it is the cheapest that can take the amount; the order shows the total of the
-// account it is placed with.
+// Option is a payment method on the top-up page: what the credits cost through it, fee included, at the merchant
+// account an order would be placed with now (ranked).
 type Option struct {
 	Method Method
 	Total  Money
@@ -49,42 +48,6 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 	return s, nil
 }
 
-// Options lists what credits cost through each payment method of the site, for the top-up page, in a scope that
-// sees the site: the account's own on the console. A method whose merchants are all over a limit, or in a currency
-// without an exchange rate, is not listed.
-func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) {
-	id := uuid.UUID(site.ID)
-	var set settings
-	var offers []OffersRow
-	var usage []UsageTodayRow
-	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
-		if set, err = readSettings(ctx, tx, id); err != nil || !set.open {
-			return err
-		}
-		if offers, err = queries.Offers(ctx, tx, OffersParams{SiteID: id}); err != nil {
-			return err
-		}
-		usage, err = usageOf(ctx, tx, offers)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err = set.admits(credits); err != nil {
-		return nil, err
-	}
-	currencies := make([]string, len(offers))
-	for i, o := range offers {
-		currencies[i] = o.Currency
-	}
-	pr, err := p.pricing(ctx, id, site.Currency, currencies)
-	if err != nil {
-		return nil, err
-	}
-	cs, err := candidates(pr, credits, offers, usage)
-	return cheapest(cs), err
-}
-
 // admits refuses a top-up the site's settings do not take.
 func (s settings) admits(credits int64) error {
 	switch {
@@ -96,17 +59,31 @@ func (s settings) admits(credits int64) error {
 	return nil
 }
 
-// cheapest is the cheapest candidate of each method; candidates come ordered by method.
-func cheapest(cs []candidate) []Option {
-	var options []Option
-	for _, c := range cs {
-		o := Option{Method(c.offer.Method), c.quote.Total, c.quote.Fee}
-		switch n := len(options); {
-		case n == 0 || options[n-1].Method != o.Method:
-			options = append(options, o)
-		case o.Total.Minor < options[n-1].Total.Minor:
-			options[n-1] = o
-		}
+// Options lists what credits cost through each payment method of the site, for the top-up page, in a scope that
+// sees the site: the account's own on the console (pg.AccountScopeIn). A method whose merchants are all over a limit,
+// unusable, or in a currency without an exchange rate is not listed.
+func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) {
+	m, err := p.menu(ctx, s, site, nil)
+	if err != nil {
+		return nil, err
 	}
-	return options
+	if err = m.settings.admits(credits); err != nil {
+		return nil, err
+	}
+	var options []Option
+	for i := 0; i < len(m.offers); {
+		j := i
+		for j < len(m.offers) && m.offers[j].Method == m.offers[i].Method {
+			j++
+		}
+		cs, err := p.ranked(m, m.offers[i].Method, m.offers[i:j], m.usage, credits, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(cs) > 0 {
+			options = append(options, Option{Method(m.offers[i].Method), cs[0].quote.Total, cs[0].quote.Fee})
+		}
+		i = j
+	}
+	return options, nil
 }

@@ -1,14 +1,15 @@
 package payments
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"slices"
+	"sync/atomic"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
@@ -27,6 +28,45 @@ const (
 	LeastUsed  Strategy = "least_used"
 )
 
+// menu is what quoting and choosing need of a site's merchant accounts, read before the order's transaction: the
+// site's settings, the offers of merchants whose configuration opens, their usage today as read, and the rates.
+type menu struct {
+	site     accounts.Site
+	settings settings
+	offers   []OffersRow // ordered by method, then the merchants' sort
+	usage    []UsageTodayRow
+	pricing  pricing
+}
+
+// menu reads the site's offers of method (nil for all) in scope s, which sees the site but not its merchants'
+// configurations; then, in the platform scope, it drops the merchants whose configuration does not open (usable)
+// and reads the rates.
+func (p *Payments) menu(ctx context.Context, s pg.Scope, site accounts.Site, method *string) (menu, error) {
+	m := menu{site: site}
+	id := uuid.UUID(site.ID)
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
+		if m.settings, err = readSettings(ctx, tx, id); err != nil || !m.settings.open {
+			return err
+		}
+		if m.offers, err = queries.Offers(ctx, tx, OffersParams{SiteID: id, Method: method}); err != nil {
+			return err
+		}
+		m.usage, err = usageOf(ctx, tx, m.offers)
+		return err
+	})
+	if err != nil || !m.settings.open {
+		return m, err
+	}
+	err = p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
+		if m.offers, err = p.usable(ctx, tx, m.offers); err != nil {
+			return err
+		}
+		m.pricing, err = readPricing(ctx, tx, id, site.Currency, m.offers)
+		return err
+	})
+	return m, err
+}
+
 // pricing turns credits into what each merchant charges: the site's currency, and the locked rate to each other
 // currency the site's merchants are in. A currency without a rate has no entry, and its merchants are not offered.
 type pricing struct {
@@ -34,27 +74,24 @@ type pricing struct {
 	rates map[string]billing.Rate
 }
 
-// pricing reads the top-up rate from the site's currency to each of currencies in the platform scope, where the
-// reference rates are. Rate versions never change, so the order that locks one need not read it in its own
+// readPricing reads the top-up rate from the site's currency to each currency of offers, in the platform scope where
+// the reference rates are. Rate versions never change, so the order that locks one need not read it in its own
 // transaction.
-func (p *Payments) pricing(ctx context.Context, site uuid.UUID, siteCurrency platform.Currency, currencies []string) (pricing, error) {
-	pr := pricing{site: siteCurrency, rates: map[string]billing.Rate{}}
-	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
-		for _, c := range currencies {
-			if _, ok := pr.rates[c]; ok || c == siteCurrency.String() {
-				continue
-			}
-			r, ok, err := topUpRate(ctx, tx, site, siteCurrency, c)
-			if err != nil {
-				return err
-			}
-			if ok {
-				pr.rates[c] = r
-			}
+func readPricing(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, offers []OffersRow) (pricing, error) {
+	pr := pricing{site: currency, rates: map[string]billing.Rate{}}
+	for _, o := range offers {
+		if _, ok := pr.rates[o.Currency]; ok || o.Currency == currency.String() {
+			continue
 		}
-		return nil
-	})
-	return pr, err
+		r, ok, err := topUpRate(ctx, tx, site, currency, o.Currency)
+		if err != nil {
+			return pr, err
+		}
+		if ok {
+			pr.rates[o.Currency] = r
+		}
+	}
+	return pr, nil
 }
 
 // topUpRate is billing.TopUpRate to currency; false when the pair has no rate or is not a supported one.
@@ -90,6 +127,17 @@ func (pr pricing) quote(credits int64, o OffersRow) (Quote, billing.Rate, bool, 
 	return q, rate, err == nil, err
 }
 
+// inSite is an amount of a merchant's currency in the site's, at the reference rate without the buffer, exactly: what
+// amounts in different currencies are compared by.
+func (pr pricing) inSite(m Money) *big.Rat {
+	r := new(big.Rat).SetFrac(big.NewInt(m.Minor), minorScale(m.Currency))
+	if m.Currency != pr.site {
+		reference, _ := pr.rates[m.Currency.String()].Reference.Between(pr.site, m.Currency) // quoted, so it has a rate
+		r.Quo(r, reference)
+	}
+	return r
+}
+
 // candidate is a merchant method that can take an order, with what it would charge.
 type candidate struct {
 	offer OffersRow
@@ -107,7 +155,7 @@ func (c candidate) fits() bool {
 }
 
 // candidates quotes offers and keeps those that can take credits given their merchants' usage today.
-func candidates(pr pricing, credits int64, offers []OffersRow, usage []UsageTodayRow) ([]candidate, error) {
+func (pr pricing) candidates(credits int64, offers []OffersRow, usage []UsageTodayRow) ([]candidate, error) {
 	all := make([]candidate, 0, len(offers))
 	for _, o := range offers {
 		q, rate, ok, err := pr.quote(credits, o)
@@ -142,40 +190,63 @@ func usageOf(ctx context.Context, tx pg.Tx, offers []OffersRow) ([]UsageTodayRow
 	return usage, nil
 }
 
+// turnKey is one round-robin rotation: each site's method has its own, so the orders of one never shift another's.
+type turnKey struct {
+	site   accounts.SiteID
+	method string
+}
+
+// ranked is the selection rule Options and choose share: the candidates that can take credits through method, in the
+// order the site's strategy picks them. Options shows the first without moving the rotation; choose moves it and tries
+// them in turn, so the order goes to the merchant the page showed unless another order came between.
+//
+// Round robin takes position n of the candidates that can take the amount now, n counting this site's orders of this
+// method, so a candidate that drops out shifts the rest by one. Least used compares today's usage in the site's
+// currency, since the merchants may be in different ones.
+func (p *Payments) ranked(m menu, method string, offers []OffersRow, usage []UsageTodayRow, credits int64, advance bool) ([]candidate, error) {
+	if err := m.settings.admits(credits); err != nil {
+		return nil, err
+	}
+	cs, err := m.pricing.candidates(credits, offers, usage)
+	if err != nil || len(cs) == 0 {
+		return nil, err
+	}
+	if m.settings.strategy == LeastUsed {
+		slices.SortStableFunc(cs, func(a, b candidate) int {
+			return m.pricing.inSite(Money{a.quote.Total.Currency, a.used}).Cmp(m.pricing.inSite(Money{b.quote.Total.Currency, b.used}))
+		})
+		return cs, nil
+	}
+	v, _ := p.turns.LoadOrStore(turnKey{m.site.ID, method}, new(atomic.Uint64))
+	turn := v.(*atomic.Uint64) //nolint:forcetypeassert // the map holds only these
+	n := turn.Load() + 1
+	if advance {
+		n = turn.Add(1)
+	}
+	start := n % uint64(len(cs))
+	return slices.Concat(cs[start:], cs[:start]), nil
+}
+
 // choose picks the merchant account for an order of credits paid by method, in the order's account-scoped
 // transaction, and adds the order's total to that merchant's usage today. The usage row is the serialization point
 // of the daily limit: AddUsage locks it, re-checks the limit against what the orders before added and adds, so the
 // last of the quota goes only to the orders it fits; a candidate that no longer fits gives way to the next. The
 // transaction's lock and statement timeouts bound the wait (README.md「事务与任务」).
-func (p *Payments) choose(ctx context.Context, tx pg.Tx, site uuid.UUID, pr pricing, strategy Strategy, method Method, credits int64) (candidate, error) {
+func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, credits int64) (candidate, error) {
 	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'"); err != nil {
 		return candidate{}, fmt.Errorf("payments: bound the order's waits: %w", err)
 	}
-	m := string(method)
-	offers, err := queries.Offers(ctx, tx, OffersParams{SiteID: site, Method: &m})
-	if err != nil {
-		return candidate{}, fmt.Errorf("payments: read merchant methods: %w", err)
-	}
+	offers := slices.DeleteFunc(slices.Clone(m.offers), func(o OffersRow) bool { return o.Method != string(method) })
 	usage, err := usageOf(ctx, tx, offers)
 	if err != nil {
 		return candidate{}, err
 	}
-	cs, err := candidates(pr, credits, offers, usage)
+	cs, err := p.ranked(m, string(method), offers, usage, credits, true)
 	if err != nil {
 		return candidate{}, err
 	}
-	if len(cs) == 0 {
-		p.logger.Warn("payments: no merchant account takes a top-up", "site", site, "method", m)
-		return candidate{}, ErrNoMerchant
-	}
-	if strategy == LeastUsed {
-		slices.SortStableFunc(cs, func(a, b candidate) int { return cmp.Compare(a.used, b.used) })
-	} else {
-		start := p.turn.Add(1) % uint64(len(cs))
-		cs = slices.Concat(cs[start:], cs[:start])
-	}
 	for _, c := range cs {
-		added, err := queries.AddUsage(ctx, tx, AddUsageParams{MerchantID: c.offer.MerchantID, SiteID: site, Amount: c.quote.Total.Minor, DailyLimit: c.offer.DailyLimit})
+		added, err := queries.AddUsage(ctx, tx, AddUsageParams{MerchantID: c.offer.MerchantID, SiteID: uuid.UUID(m.site.ID), Amount: c.quote.Total.Minor, DailyLimit: c.offer.DailyLimit})
 		if err != nil {
 			return candidate{}, fmt.Errorf("payments: add merchant usage: %w", err)
 		}
@@ -183,5 +254,6 @@ func (p *Payments) choose(ctx context.Context, tx pg.Tx, site uuid.UUID, pr pric
 			return c, nil
 		}
 	}
+	p.logger.Warn("payments: no merchant account takes a top-up", "site", m.site.ID.TypeID(), "method", string(method))
 	return candidate{}, ErrNoMerchant
 }

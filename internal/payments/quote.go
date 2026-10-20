@@ -40,8 +40,7 @@ func quote(credits int64, applied *big.Rat, currency platform.Currency, fee Fee)
 	if credits <= 0 || fee.PPM < 0 || fee.PPM > maxFeePPM || fee.Fixed < 0 {
 		return Quote{}, ErrOutOfRange
 	}
-	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits(currency))), nil)
-	principal := new(big.Rat).SetFrac(new(big.Int).Mul(big.NewInt(credits), scale), big.NewInt(creditScale))
+	principal := new(big.Rat).SetFrac(new(big.Int).Mul(big.NewInt(credits), minorScale(currency)), big.NewInt(creditScale))
 	if applied != nil {
 		principal.Mul(principal, applied)
 	}
@@ -56,6 +55,11 @@ func quote(credits int64, applied *big.Rat, currency platform.Currency, fee Fee)
 		return Quote{}, ErrOutOfRange
 	}
 	return Quote{Total: Money{currency, total.Int64()}, Fee: total.Int64() - part.Int64()}, nil
+}
+
+// minorScale is how many minor units one unit of currency has.
+func minorScale(currency platform.Currency) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits(currency))), nil)
 }
 
 // ceil rounds a non-negative fraction up to an integer.

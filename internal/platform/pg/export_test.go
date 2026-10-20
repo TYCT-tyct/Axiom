@@ -11,7 +11,8 @@ func (db *DB) SessionScope(ctx context.Context) (string, error) {
 	var scope string
 	err := db.pool.QueryRow(ctx, `SELECT coalesce(current_setting('axiom.scope_platform', true), '') ||
 		coalesce(current_setting('axiom.scope_sites', true), '') ||
-		coalesce(current_setting('axiom.scope_accounts', true), '')`).Scan(&scope)
+		coalesce(current_setting('axiom.scope_accounts', true), '') ||
+		coalesce(current_setting('axiom.scope_home', true), '')`).Scan(&scope)
 	return scope, err
 }
 
