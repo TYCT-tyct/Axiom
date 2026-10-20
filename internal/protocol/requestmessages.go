@@ -250,6 +250,9 @@ func (s *chatMessageBlocks) thinking(o requestObject) error {
 
 func messagesToolResult(o requestObject) (requestObject, error) {
 	id, v := o.take("tool_use_id"), o.take("content")
+	if isNull(v) || string(v) == "[]" {
+		v = jsonValue("") // Anthropic permits omitted content; Chat requires text.
+	}
 	if failed := o.take("is_error"); !isNull(failed) && string(failed) != "false" {
 		return nil, &NotSupported{Reason: "a tool result's is_error has no Chat counterpart"}
 	}

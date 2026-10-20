@@ -93,6 +93,17 @@ func BenchmarkRequestsToChat(b *testing.B) {
 	}
 }
 
+func TestMessagesEmptyToolResultsToChat(t *testing.T) {
+	for _, content := range []string{"", `,"content":null`, `,"content":[ ]`} {
+		body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1"` + content + `}]}]`)
+		up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, `{"model":"up","stream":true,"stream_options":{"include_usage":true},"max_tokens":4096,"messages":[{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c1","content":""}]}`, up.Body)
+	}
+}
+
 func TestResponsesRequestsToChat(t *testing.T) {
 	for _, c := range []struct{ name, members, want string }{
 		{
