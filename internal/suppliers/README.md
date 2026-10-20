@@ -206,6 +206,8 @@ func (s *Service) Acquire(ep EndpointID) (*Attempt, error)     // 内存比较�
 func (a *Attempt) Send(ctx context.Context, c Call) (*http.Response, *Failure) // 内含 Classify；Call{Format, Compact, Body, Header}
 const NotExecuted = adapter.NotExecuted // Failure.Executed 的取值：确知上游没有执行；gateway 够不到适配器的类型，只用这两个
 type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回了“请求过多”，路由据此给端点降权
+// Failure.Cause 的全部 13 种都在本包以同名类型别名导出（Overloaded、UpstreamError、ContextTooLong、ModelNotFound……）：
+// gateway 与 quality 够不到适配器的类型，quality 按每一种原因判定端点健康（docs/domains/quality.md「什么算一次失败」）
 func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键；字段不对外，billing 只原样传回
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
