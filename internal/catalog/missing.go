@@ -9,7 +9,7 @@ type Reportable struct {
 	ServiceTiers ServiceTierSet
 }
 
-// Missing returns the part of r the schedule cannot price, reasoning falling back to output as Cost does: the items
+// Missing returns the part of r the schedule cannot price, using the same effective prices as Cost: the items
 // the standard tier lacks in any band, and the service tiers the schedule lacks or that lack any of r's items in any
 // band. Billing checks its listing threshold with it: a call must never meet an item or tier it cannot price.
 func (s Schedule) Missing(r Reportable) Reportable {

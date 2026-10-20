@@ -265,12 +265,20 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Reports:     reportable.Items,
 		UnknownItem: blockedItem,
 		Price:       routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
-		// Only what suppliers and the spec say: the rest of Target is what a conversion needs of a Messages or
-		// Responses model (thinking, cache breakpoints, mid-conversation system messages), which catalog's spec does
-		// not record yet (internal/routing/README.md「现在的输入类型」).
-		Target: protocol.Target{Model: r.Upstream, Streams: streams},
+		Target:      targetOf(r.Upstream, streams, model.Dialect()),
 	}
 	return e, ""
+}
+
+// targetOf is how an attempt is written for the endpoint: its upstream name and whether it streams, and the spec's
+// dialect as it is. An unset claim stays unset in the Target; protocol decides what a request that needs it is to do
+// (internal/protocol/README.md「跨格式转换」), so no default for the model is made here.
+func targetOf(upstream string, streams bool, d catalog.Dialect) protocol.Target {
+	return protocol.Target{
+		Model: upstream, Streams: streams, Thinking: d.Thinking, EncryptedReasoning: d.EncryptedReasoning, MidSystem: d.MidSystem,
+		UntrustedSystemAfterTools: d.UntrustedSystemAfterTools, DefaultSamplingOnly: d.DefaultSamplingOnly,
+		ForcedToolChoice: d.ForcedToolChoice, CacheBreakpoints: d.CacheBreakpoints,
+	}
 }
 
 // capabilities is a spec's abilities as protocol's bits. The two enumerations happen to be in the same order, but the

@@ -16,11 +16,14 @@ type Target struct {
 	Format Format
 	// Model is the endpoint's name for the model.
 	Model string
-	// EncryptedReasoning is set when the model returns its reasoning encrypted on request, as OpenAI's reasoning
+	// The model's side of the rewrites and conversions is what its spec says (catalog.Dialect), which the gateway
+	// copies here: data, never guessed from the model's name. A claim the spec does not make is catalog.ClaimUnset
+	// and stands for neither answer: a request that needs the answer is refused (*NotSupported), and one that only
+	// profits from a yes is written as for a no (README.md「跨格式转换」).
+	//
+	// EncryptedReasoning is yes when the model returns its reasoning encrypted on request, as OpenAI's reasoning
 	// models do. A model without it refuses a request that asks (README.md「同格式改写」).
-	EncryptedReasoning bool
-	// The rest is what a conversion needs to know of a Messages model (README.md「跨格式转换」). The gateway fills it
-	// from the model's spec: it is data, never guessed from the model's name.
+	EncryptedReasoning catalog.Claim
 	//
 	// MaxOutput is the output cap a request that sets none is sent with, 0 for none: the one it was quoted at, which
 	// the gateway takes from the route's entry. Messages requires one; Responses gets it as max_output_tokens, whether
@@ -35,29 +38,19 @@ type Target struct {
 	// every other byte is copied as the client wrote it (README.md「同格式改写」).
 	Compact bool
 	// Thinking is how the model is asked to reason.
-	Thinking Thinking
-	// MidSystem is set when the model takes a system message after the conversation has started, and
+	Thinking catalog.Thinking
+	// MidSystem is yes when the model takes a system message after the conversation has started, and
 	// UntrustedSystemAfterTools when it reads one right after tool results as text it may not trust (Anthropic
 	// 《Mid-conversation system messages》, read 2026-10-13).
-	MidSystem, UntrustedSystemAfterTools bool
-	// DefaultSamplingOnly is set when the model refuses a temperature or top_p other than the default and a forced
-	// tool choice, as Claude 5.5 models do.
-	DefaultSamplingOnly bool
-	// CacheBreakpoints is set for a Responses model that takes explicit cache breakpoints, as OpenAI's from GPT-5.6
+	MidSystem, UntrustedSystemAfterTools catalog.Claim
+	// DefaultSamplingOnly is yes when the model refuses a temperature or top_p other than the default, as Claude Opus
+	// 4.7 and later do. ForcedToolChoice is yes when it takes a tool choice that forces a call, which Claude Opus 5.5,
+	// Sonnet 5.5 and Fable 5.1 refuse; the vendor decides the two apart.
+	DefaultSamplingOnly, ForcedToolChoice catalog.Claim
+	// CacheBreakpoints is yes for a Responses model that takes explicit cache breakpoints, as OpenAI's from GPT-5.6
 	// on do (OpenAI《Prompt caching》, read 2026-10-16).
-	CacheBreakpoints bool
+	CacheBreakpoints catalog.Claim
 }
-
-// Thinking is how a Messages model is asked to reason.
-type Thinking uint8
-
-// The ways to ask.
-const (
-	// ThinkingAdaptive asks with thinking.type adaptive and output_config.effort.
-	ThinkingAdaptive Thinking = iota
-	// ThinkingManual asks with a thinking budget, budget_tokens, which the newer models refuse.
-	ThinkingManual
-)
 
 // Rewrites are the gateway's values for one request.
 type Rewrites struct {
@@ -97,8 +90,15 @@ type Upstream struct {
 
 // NotSupported reports an endpoint that cannot express the request, such as one of another format for a request
 // the conversion would change. The gateway skips the endpoint without counting an attempt; it is not the client's
-// error, which ErrInvalid is.
-type NotSupported struct{ Reason string }
+// error, which ErrInvalid is. Reason may reach the client, when no endpoint is left; Detail, if there is one, is why for
+// the operator only (the log), such as which spec key is missing, and never leaves the node.
+type NotSupported struct{ Reason, Detail string }
+
+// unspecified is an endpoint whose spec does not say whether the model takes what: the client is told only that the
+// model does not support it yet, and the key to fill in goes to the operator.
+func unspecified(what, detail string) *NotSupported {
+	return &NotSupported{Reason: "the model does not support " + what + " yet", Detail: "the spec does not say " + detail}
+}
 
 func (e *NotSupported) Error() string {
 	return "protocol: the endpoint cannot express the request: " + e.Reason
@@ -450,7 +450,7 @@ func (p *rewriter) outputCap() error {
 
 func (p *rewriter) include() error {
 	p.included = true
-	if !p.t.EncryptedReasoning {
+	if p.t.EncryptedReasoning != catalog.ClaimYes {
 		return p.skip()
 	}
 	if ok, err := p.open('[', "an array"); !ok {
@@ -538,7 +538,7 @@ func (p *rewriter) addResponses() error {
 	if !p.capped && p.t.MaxOutput > 0 {
 		p.out = strconv.AppendInt(append(p.out, addOutputCap...), p.t.MaxOutput, 10)
 	}
-	if p.t.EncryptedReasoning && !p.included {
+	if p.t.EncryptedReasoning == catalog.ClaimYes && !p.included {
 		p.out = append(p.out, addInclude...)
 	}
 	if len(p.w.History) > 0 && !p.hasInput {

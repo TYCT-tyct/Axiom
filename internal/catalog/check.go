@@ -11,7 +11,8 @@ import (
 
 // ModelCheck is the catalog's view of one model of a vendor, for the first-version acceptance check
 // (docs/domains/catalog.md「参考价怎么进入目录」). Problems is empty when the model is listed, has a public name and a
-// price in each currency it has, and the prices cover everything its spec says the upstream may report.
+// price in each currency it has, the prices cover everything its spec says the upstream may report, and the spec says
+// what a request to the model reads of its dialect (dialectProblems).
 type ModelCheck struct {
 	Slug        string      `json:"slug"`
 	Status      Status      `json:"status"`
@@ -35,11 +36,7 @@ func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, er
 			if err != nil {
 				return err
 			}
-			check, err := checkModel(m)
-			if err != nil {
-				return err
-			}
-			checks = append(checks, check)
+			checks = append(checks, checkModel(m))
 		}
 		return nil
 	})
@@ -49,7 +46,7 @@ func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, er
 	return checks, nil
 }
 
-func checkModel(m syncModel) (ModelCheck, error) {
+func checkModel(m syncModel) ModelCheck {
 	check := ModelCheck{Slug: m.row.Slug, Status: Status(m.row.Status), Source: PriceSource(m.row.PriceSource), Currencies: m.heads.priced()}
 	for _, n := range m.names {
 		if Visibility(n.Visibility) == VisibilityPublic {
@@ -66,22 +63,55 @@ func checkModel(m syncModel) (ModelCheck, error) {
 	if len(check.PublicNames) == 0 {
 		problem("it has no public name")
 	}
+	// A spec that does not parse is this model's problem alone: the check goes on to the next model, so one run lists
+	// every row to fix. The snapshot, which cannot be built from it, fails to load (readSnapshot).
 	spec, err := parseSpec(m.row.Spec)
 	if err != nil {
-		return ModelCheck{}, err
-	}
-	if !spec.declared {
-		problem("its spec does not declare the items and service tiers the upstream may report")
+		problem("its spec does not parse: %v", err)
+		return check
 	}
 	if len(check.Currencies) == 0 {
 		problem("it has no current price")
+	}
+	if missing := dialectProblems(m.row.Author, spec); len(missing) > 0 {
+		problem("its spec does not say %s, which a request to the model needs answered", strings.Join(missing, ", "))
+	}
+	if !spec.declared {
+		problem("its spec does not declare the items and service tiers the upstream may report")
 	}
 	for _, currency := range check.Currencies {
 		if err := covers(currency, *m.heads[currency].schedule, spec.reportable); err != nil {
 			problem("%v", err)
 		}
 	}
-	return check, nil
+	return check
+}
+
+// dialectProblems are the dialect keys a request to the model reads that its spec leaves out, which leaves a request
+// that needs the answer refused (internal/protocol/README.md「跨格式转换」). The keys asked for depend on the format
+// the model is sent in, which is a vendor's: Anthropic's models are sent Messages requests converted from Chat ones,
+// OpenAI's Responses requests. A vendor's author is a column of the model, not a guess from its name. The models of
+// the other vendors are not asked for any until they are served by a Messages or Responses endpoint.
+func dialectProblems(author string, s spec) (missing []string) {
+	d := s.dialect
+	need := func(key string, unset bool) {
+		if unset {
+			missing = append(missing, key)
+		}
+	}
+	reasons := s.serving.Abilities.Has(AbilityReasoning)
+	switch author {
+	case "anthropic":
+		need("thinking", reasons && d.Thinking == ThinkingUnset)
+		need("default_sampling_only", d.DefaultSamplingOnly == ClaimUnset)
+		need("forced_tool_choice", d.ForcedToolChoice == ClaimUnset)
+		need("mid_system", d.MidSystem == ClaimUnset)
+		need("untrusted_system_after_tools", d.MidSystem == ClaimYes && d.UntrustedSystemAfterTools == ClaimUnset)
+	case "openai":
+		need("encrypted_reasoning", reasons && d.EncryptedReasoning == ClaimUnset)
+		need("cache_breakpoints", d.CacheBreakpoints == ClaimUnset)
+	}
+	return missing
 }
 
 // Unrecognized lists the text models of the vendors in an OpenRouter list that no name of the catalog stands for, listed

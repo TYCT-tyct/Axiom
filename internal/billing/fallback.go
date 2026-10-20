@@ -174,13 +174,22 @@ func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []s
 // upstream names *tokens, at the model's highest token price at any service tier and band, which a waiver leaves
 // out as model usage; anything else at the dearest per-use default for each use, a count rounded up, which a waiver
 // keeps as an executed per-use item. A value that is no plain non-negative decimal, such as a service tier, is one use.
+// A member of a cached-tokens intersection is neither: those tokens are already in the cached count, so it is recorded
+// and costs nothing.
 func unknownCost(s catalog.Schedule, f fallbacks, u catalog.UnknownUsage) (cost platform.Exact, tokens bool) {
+	if strings.Contains(u.Field, intersectionPath) {
+		return platform.Exact{}, true
+	}
 	n, err := strconv.ParseInt(u.Value, 10, 64)
 	if err == nil && n >= 0 && n <= maxUnknownCount && strings.HasSuffix(u.Field, "tokens") {
 		return tokenPrice(s).Mul(n), true
 	}
 	return f.highest().Mul(uses(u.Value)), false
 }
+
+// intersectionPath is where an OpenAI usage object breaks its cached tokens down by modality. Its members are subsets of
+// cached_tokens, never usage of their own (protocol's openAICachedDetails).
+const intersectionPath = ".cached_tokens_details."
 
 // tokenPrice is one token at the highest price of any token item at any service tier and band: what a schedule that
 // prices a token nowhere near the price of the tier a call was served at still charges, 0 if it prices no token at all.

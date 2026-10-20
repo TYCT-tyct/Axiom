@@ -2,6 +2,10 @@
 # writes the passwords this file reads to deploy/.env; deploy/.env.example describes them. The project name, the image
 # tag, the host ports and the restart policy are variables so that CI jobs sharing a host keep their stacks apart
 # (scripts/ci/deploy-check.sh sets them); local `just up` uses the defaults and the project name axiom.
+#
+# The backup and restore jobs are here under the profile ops, so that neither `just up` nor the deployment check starts
+# or builds them (docs/ops/backup-restore.md). The production edge is not here at all: deploy/compose.edge.yaml adds it
+# and the network it needs, because that network pins a subnet and no deployment without an edge should carry it.
 name: axiom
 
 x-hardened: &hardened
@@ -12,6 +16,40 @@ x-hardened: &hardened
     # Marks the stacks scripts/ci/deploy-check.sh may remove when a killed job left one behind: it touches only
     # projects named axiom-ci-* with this label, and only ones older than its step timeout.
     axiom.ci.deploy-check: "true"
+
+# What both backup jobs share: the same image, the same connection to the database, the same bucket. The variables are
+# passed empty when they are unset and checked by the scripts, because `docker compose up` interpolates every service in
+# this file whether or not its profile starts: a `${VAR:?}` here would stop `just up`, which never runs these jobs.
+#
+# They are not under x-hardened: the restore writes the key ring with the owner the program runs as, which needs the
+# CHOWN capability x-hardened drops, and both write into a temporary directory, which a read-only root would refuse.
+x-ops: &ops
+  profiles: [ops]
+  build: ./ops
+  image: ${DEPLOY_OPS_IMAGE:-axiom-ops:local}
+  # A one-shot job: a failure is a non-zero exit for the scheduler to report, not a container that restarts forever.
+  restart: "no"
+  environment: &ops-env
+    PGHOST: postgres
+    PGDATABASE: axiom
+    PGUSER: postgres
+    # Empty here and checked where it is needed: the restore's first step runs before any password is known (the set
+    # carries them), so a required variable would stop it at the compose level.
+    PGPASSWORD: ${AXIOM_POSTGRES_PASSWORD-}
+    AXIOM_KEYS_DIR: /keys
+    AXIOM_BACKUP_BUCKET: ${AXIOM_BACKUP_BUCKET-}
+    AXIOM_BACKUP_PREFIX: ${AXIOM_BACKUP_PREFIX:-axiom}
+    AXIOM_BACKUP_STATE_DIR: /state
+    # rclone's S3 backend, configured through the environment so no credential is ever an argument: path-style
+    # addressing and this region are what MinIO, R2 and Backblaze want; AWS S3 itself wants the bucket in its own region
+    # and AXIOM_BACKUP_S3_FORCE_PATH_STYLE=false.
+    RCLONE_CONFIG_AXIOM_TYPE: s3
+    RCLONE_CONFIG_AXIOM_PROVIDER: Other
+    RCLONE_CONFIG_AXIOM_ENDPOINT: ${AXIOM_BACKUP_S3_ENDPOINT-}
+    RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID-}
+    RCLONE_CONFIG_AXIOM_SECRET_ACCESS_KEY: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY-}
+    RCLONE_CONFIG_AXIOM_REGION: ${AXIOM_BACKUP_S3_REGION:-us-east-1}
+    RCLONE_CONFIG_AXIOM_FORCE_PATH_STYLE: ${AXIOM_BACKUP_S3_FORCE_PATH_STYLE:-true}
 
 services:
   postgres:
@@ -89,11 +127,48 @@ services:
       # each other's; local `just up` sets neither and gets 8080 and 8082. Both bind this machine only.
       - 127.0.0.1:${DEPLOY_PORT-8080}:8080
       - 127.0.0.1:${DEPLOY_ADMIN_PORT-8082}:8082
+    networks:
+      default: # listed so that deploy/compose.edge.yaml adds a second network instead of replacing this one
     depends_on:
       migrate: {condition: service_completed_successfully}
       keys: {condition: service_completed_successfully}
     <<: *hardened
 
+  # The scheduled backup (docs/ops/backup-restore.md): `docker compose run --rm backup`. It sees the key ring read-only,
+  # the environment file it archives, and a volume for the lock file that keeps two runs from overlapping.
+  backup:
+    <<: *ops
+    entrypoint: [/ops/backup.sh]
+    environment:
+      <<: *ops-env
+      AXIOM_DEPLOY_ENV_FILE: /deploy/.env
+      AXIOM_BACKUP_DB_RECIPIENT: ${AXIOM_BACKUP_DB_RECIPIENT-}
+      AXIOM_BACKUP_SECRETS_RECIPIENT: ${AXIOM_BACKUP_SECRETS_RECIPIENT-}
+      AXIOM_BACKUP_KEEP_SETS: ${AXIOM_BACKUP_KEEP_SETS:-30}
+      AXIOM_BACKUP_KEEP_DAYS: ${AXIOM_BACKUP_KEEP_DAYS:-30}
+      AXIOM_BACKUP_APP_IMAGE: ${DEPLOY_IMAGE:-axiom:local}
+    volumes:
+      - keys:/keys:ro
+      - ${AXIOM_BACKUP_ENV_FILE:-./.env}:/deploy/.env:ro
+      - backup_state:/state
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # The restore's half inside the container, driven by scripts/ops/restore.sh, which adds the identities and the output
+  # directory per run. It has no dependency on postgres: its first step runs before the cluster exists.
+  restore:
+    <<: *ops
+    entrypoint: [/ops/restore.sh]
+    environment:
+      <<: *ops-env
+      AXIOM_RESTORE_OUT_DIR: /out
+      AXIOM_RESTORE_DB_IDENTITY_FILE: /identities/db.key
+      AXIOM_RESTORE_SECRETS_IDENTITY_FILE: /identities/keys.key
+    volumes:
+      - keys:/keys
+
 volumes:
   postgres:
   keys:
+  # The backup's lock file; it has to outlive the container that takes it.
+  backup_state:

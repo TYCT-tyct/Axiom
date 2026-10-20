@@ -29,6 +29,7 @@ func (r *rig) seedCatalog() {
 	r.alpha = r.model("acme/alpha")
 	r.beta = r.model("acme/beta")
 	r.bare = r.model("anthropic/claude-test", "claude-test")
+	r.claude = r.model("anthropic/claude-live", "claude-live")
 	if err := r.catalog.Refresh(r.t.Context()); err != nil {
 		r.t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func (r *rig) model(slug string, names ...string) catalog.ModelID {
 }
 
 // seedRouting installs a routing snapshot: alpha is served by alpha-1 and by alpha-2, which charges twice the output
-// price, and beta by beta-1. The preset the keys have none of, the zero one, puts the cheapest first.
+// price, beta by beta-1 and claude by claude-1; bare by none. The preset the keys have none of, the zero one, puts the cheapest first.
 func (r *rig) seedRouting(o rigOptions) {
 	var err error
 	if r.router, err = routing.New(o.routing); err != nil {
@@ -87,7 +88,7 @@ func (r *rig) seedRouting(o rigOptions) {
 		name  string
 		model catalog.ModelID
 		price string
-	}{{"alpha-1", r.alpha, cheap}, {"alpha-2", r.alpha, dear}, {"beta-1", r.beta, cheap}} {
+	}{{"alpha-1", r.alpha, cheap}, {"alpha-2", r.alpha, dear}, {"beta-1", r.beta, cheap}, {"claude-1", r.claude, cheap}} {
 		schedule, err := catalog.ParseSchedule([]byte(s.price))
 		if err != nil {
 			r.t.Fatal(err)

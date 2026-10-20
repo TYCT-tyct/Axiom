@@ -48,7 +48,7 @@
 | operations | 运营接口（含 MCP 工具）；风险分级与审批（含 AI 审批）、额度上限、审计的检索与回放；运营 agent 的接入与模型代理；部署与节点管理；权限判断调用 accounts 的授权 | 审批策略 |
 | observability | 调用记录、对话内容的保存与清理、指标、告警、通知渠道 | 调用记录、通知渠道、受控导出 |
 
-另有两块不承载业务规则：`platform` 是基础设施（数据库、加密、日志、审计日志、出站客户端、JSON、配置、遥测、HTTP 服务、前端文件、幂等键、ID 写法；缓存和事件尚未实现）、由 `api/` 生成的接口契约（控制台接口的类型和 `StrictServerInterface` 在 `platform/consoleapi`，由 `cmd/axiom` 实现），以及跨层使用的值类型：金额（最小单位的整数）、单价（精确小数）、被下层引用的实体 ID，只有类型和运算，不放业务规则。术语表里对应的概念归 `platform`：审计日志、租户范围、请求 ID、尝试序号、币种、单价、精确金额、金额；`web` 是前端，包括官网、按站点域名换品牌的用户控制台和管理后台。
+另有两块不承载业务规则：`platform` 是基础设施（数据库、加密、日志、审计日志、出站客户端、JSON、配置、遥测、HTTP 服务、前端文件、幂等键、ID 写法；缓存已设计、尚未实现，事件尚未实现）、由 `api/` 生成的接口契约（控制台接口的类型和 `StrictServerInterface` 在 `platform/consoleapi`，由 `cmd/axiom` 实现），以及跨层使用的值类型：金额（最小单位的整数）、单价（精确小数）、被下层引用的实体 ID，只有类型和运算，不放业务规则。术语表里对应的概念归 `platform`：审计日志、租户范围、请求 ID、尝试序号、币种、单价、精确金额、金额；`web` 是前端，包括官网、按站点域名换品牌的用户控制台和管理后台。
 
 ## 模块边界规则
 
@@ -141,7 +141,7 @@
 | 数据库 | PostgreSQL，只支持这一种 | 账本要事务和行锁；按时间分区存调用记录；JSON 类型存灵活属性 | 同时支持 SQLite、MySQL：new-api 为此写了约 111 处原生 SQL 和按库分支，CI 却不测多库（new-api 源码，2026-10） |
 | 数据库访问 | pgx 驱动 + sqlc（把写好的 SQL 自动生成 Go 代码），不用 ORM | SQL 写在文件里，人和 AI 都看得见实际执行的语句；类型由生成保证。管理列表这类动态筛选和排序，用一个小的参数化查询构造包集中处理，禁止拼接用户输入 | GORM：new-api 为迁就多库在 ORM 外写了大量原生 SQL；Ent：表结构真相分在模型定义和迁移两处，生成代码超过 26 万行（sub2api 源码，2026-10） |
 | 数据库迁移 | goose，SQL 文件放在各自模块里，每个模块独立的版本序列，按固定顺序执行；只向前，合并后不改 | MIT 许可；模块之间没有外键，迁移互不依赖 | Atlas：默认安装受专有协议约束，检查与漂移检测收费（Atlas 官网，2026-07）。sub2api 有约 18 个迁移在执行后被改动（sub2api 源码，2026-10），所以由 CI 校验已合并迁移的内容不变 |
-| 缓存与协调 | Valkey（兼容 Redis 协议） | BSD 许可，由 Linux 基金会维护（valkey.io，2026-09）。只放丢了也不影响正确性的数据：限流计数、会话粘性、辅助锁；不存任何余额和预留。分布式锁只做辅助，正确性靠 PostgreSQL 的行锁和防重复编号 | Redis 8：可选 AGPLv3 等三种许可，Valkey 免去许可问题；DragonflyDB：BSL 许可限制用途 |
+| 缓存与协调 | Valkey（兼容 Redis 协议），客户端 valkey-go | BSD 许可，由 Linux 基金会维护（valkey.io，2026-09）。只放丢了也不影响正确性的数据：限流计数、登录前的尝试次数、会话粘性、辅助锁；不存任何余额和预留。分布式锁只做辅助，正确性靠 PostgreSQL 的行锁和防重复编号。不可用时各用途有界地兜底，不持久化；客户端、键、期限、熔断和部署见 [platform/kv 的设计](../internal/platform/kv/README.md) | Redis 8：可选 AGPLv3 等三种许可，Valkey 免去许可问题；DragonflyDB：BSL 许可限制用途 |
 | 后台任务 | River（基于 PostgreSQL 的任务队列） | 任务和业务数据在同一个事务里入队，事件不会丢也不会早发；MPL-2.0 许可。还没到 1.0，固定版本、升级前读变更说明 | Asynq：基于 Redis，无法与数据库事务绑定 |
 | 变更通知 | PostgreSQL LISTEN/NOTIFY（尚未实现，现在是定时轮询） | 事务提交后才送达，快照重建不会读到未提交的数据。通知只带 ID；监听用直连数据库的独立连接，不经事务模式的连接池；断线重连后全量重建快照 | 定时轮询：new-api 改配置后多节点最长 60 秒才生效（new-api 源码，2026-10） |
 | 对象存储 | 只依赖 S3 接口；云厂商的对象存储或自托管 SeaweedFS | 对话内容体量最大，与数据库分开 | MinIO：社区版仓库已于 2026-04 归档、停止维护（GitHub） |
@@ -159,7 +159,7 @@
 
 `just test` 只传 `go test` 可缓存的参数，包及其读到的文件、稳定的环境变量不变时复用测试结果。基准不在 `test` 里跑：主分支由 `just check-ci bench-once` 带竞态检测各跑一次（本地 `just check-all` 同）；PR 上除 Markdown-only 和 `web/`-only 外的改动跑 `just bench-compare` 比较分配（不带竞态），不再另跑 `bench-once`，免得同一批基准每个 PR 跑两遍。CI 的 build 跑 `just check-ci`，即 `just check` 去掉 `secrets` 和 `docs` 里 workflow.yml 已有的部分（`scripts/workflow` 的测试与 `check_docs.py`；`scripts/` 自己的测试仍跑），它们由 workflow.yml 里必需的 `secrets`、`docs` 作业在每个 PR 和主分支上跑；本地 `just check` 是推送前的门，全跑。前端构建按输入哈希（`web/`、版本戳、工具链、`VITE_`/`NODE_`/`AXIOM_` 变量和 `web_cache.py` 自身的哈希）缓存在宿主机的缓存目录；端到端通过按 `web/`、`api/`、全部 Go 代码、`go.mod`/`go.sum`、测试配置、Go 版本和同一组环境变量的哈希复用，任何 Go 变化都会重跑。缓存目录不自动淘汰，定期清理 `<cache>/web-build` 和 `<cache>/e2e`（例如 `find ~/.cache/axiom/web-build -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} +`）。只改 Markdown 的 PR 不跑完整 build，只跑 `just md-checks`（`docs`、`modules` 和读依赖表的 pg 测试），跳过 web、deploy-check 和基准；主分支和其余 PR 全跑。数据库测试的状态由 `pgtest` 每次新建：每个测试复制一个已迁移的模板库，集群本身也是每次运行新起的，连接串不随代码变化，因此不进入缓存键（[平台层的「测试」](../internal/platform/README.md#测试)）。
 
-具体小库（如缓存客户端）在实现时按兼容性测试选定，记在对应模块的 README。
+具体小库在实现时按兼容性测试选定，记在对应模块的 README（缓存客户端见 [platform/kv 的「决策与理由」](../internal/platform/kv/README.md#决策与理由)）。
 
 ## 仓库结构与契约文件
 
@@ -190,7 +190,7 @@ docs/                         文档
   - 预留和结算带防重复编号；账本只追加。
 - **配置有错就不启动**，不把错误留到运行时。
 - **优雅退出**：节点先停止接收新请求，等在途的流结束（有上限时间），处理完结算后再退出。
-- **许可证**：new-api 采用 AGPLv3，sub2api 采用 LGPL-3.0（GitHub，2026-10）。适配器只参考它们的接口行为，不复制代码；复制 AGPL 代码会迫使 Axiom 开源。
+- **参考实现的代码**：new-api 采用 AGPLv3，sub2api 采用 LGPL-3.0（GitHub，2026-10）。负责人 2026-10-20 决定 Axiom 将开源、不受这两个许可证的约束限制，所以可以复制：能原样放进 Axiom 的部分（协议与格式转换、厂商和中转站的特殊处理、签名与验签算法、错误映射、测试样本）直接复制后按 Axiom 的类型改写，并在代码里用一行注释写明来源（仓库、路径、提交）；绑在它们框架（gin、gorm/ent）、钱（Axiom 用精确分数，不用浮点数）、租户（行级安全）或数据模型上的部分，按 Axiom 的结构重写。开源时按复制来源统一整理许可证与版权声明。
 - **日志从第一天内置，指标和链路追踪随第一个调用路径上的模块内置**（[Issue #54](https://github.com/TYCT-tyct/Axiom/issues/54)）；都不记录对话正文和任何密钥。指标与链路的命名、标签上限、采样和导出见 [platform 的「遥测」](../internal/platform/README.md#遥测)。
 - **安全**：威胁模型、安全基线和跨模块的安全规则见[安全](security.md)。
 

@@ -10,6 +10,7 @@
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
+| `clientip` | 客户端地址的唯一一份读法：连接对端的地址，或 `AXIOM_TRUSTED_PROXIES` 里的代理给的最右一个不受信地址（变量见下文「监听」）；控制台守卫和网关都用它，读不出的头一律不信 |
 | `webui` | 提供嵌入程序的前端三个应用：缓存、预压缩、安全头、单页应用回退，见下文「前端文件」；`cmd/serveweb` 给端到端测试起同样的服务 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
@@ -22,6 +23,7 @@
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
+| `kv` | 设计中，随 K1 加入：Valkey 上的限流计数、登录前的尝试次数和会话粘性，期限、熔断与兜底，见 [kv 的 README](kv/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -107,7 +109,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -370,4 +372,4 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 生成的处理器用 `jsonx.Decode` 读请求体，经 oapi-codegen 的用户模板 | 校验器按精确的名字匹配，encoding/json 不分大小写，两者读到的不是同一个请求；项目的 JSON 策略本来就是区分大小写、跳过未知成员 | 契约里给请求体都写 `additionalProperties: false`：新页面比服务器新时多发一个字段就被拒，与"多发的成员被忽略"的现有约定相反；守卫里自己比对大小写：多一套按 schema 走 JSON 的代码，且与解码器的折叠规则可能不一致 |
 | 路径里的 ID 不在守卫里校验，格式不对与不存在同样 404 | 契约写明如此；防枚举：客户端分不出"不存在"与"格式不对" | 守卫按 schema 的 pattern 返回 400 |
 | 处理器返回错误，守卫和生成代码的出错路径经同一张表回答（状态、`ErrorCode`、不含客户端值的英文说明） | 一个操作的失败只有一种写法；模块新增一种拒绝，加一行 | 每个操作各写各的错误响应：生成的响应类型每个操作各有一套，重复 |
-| 客户端 IP 在 `cmd/axiom` 的守卫里解析，accounts 收到的是已经判定的地址 | 谁是受信任的代理是部署的事（`AXIOM_TRUSTED_PROXIES`），模块不该知道部署的网络 | 在 accounts 里读 `X-Forwarded-For`：模块要知道部署的网络 |
+| 客户端 IP 由 `platform/clientip` 解析，控制台守卫和网关读同一份；accounts 收到的是已经判定的地址 | 谁是受信任的代理是部署的事（`AXIOM_TRUSTED_PROXIES`），模块不该知道部署的网络；网关和控制台各写一份就会在代理后各错一处 | 在 accounts 里读 `X-Forwarded-For`：模块要知道部署的网络；在网关里另写一份：同一行为两处维护 |

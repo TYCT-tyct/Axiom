@@ -259,7 +259,7 @@ func (w *callWorld) checkPriority(n runningNode) {
 		},
 		{
 			"Responses", "/v1/responses", responsesCall, strings.Replace(responsesCall, `"input"`, `"service_tier":"default","input"`, 1),
-			"codex_cli_rs/0.50.0", 37*9_000 + 11*45_000, 37*20 + 11*80, 5_625, // an OpenAI input may be billed as a cache write
+			"codex_cli_rs/0.50.0", 37*9_000 + 11*45_000, 37*20 + 11*80, 6_075, // an OpenAI input may be billed as a cache read and a cache write at once: a read's 450 and a write's 5_625 a token
 			booking{charge: responsesCharge, cost: responsesCost, upstream: "up-gpt", input: 37, output: 11, app: "codex"},
 		},
 	} {
@@ -301,7 +301,7 @@ func (w *callWorld) checkBoundedSearch(n runningNode) {
 		}},
 		{"Responses max_tool_calls", "/v1/responses", "codex_cli_rs/0.50.0", func(limit int) string {
 			return fmt.Sprintf(`{"model":"gpt-6-astra","input":"Hello!","max_tool_calls":%d,"tools":[{"type":"web_search"}]}`, limit)
-		}, `"web_search_call"`, 11_250, booking{ // an OpenAI input may be billed as a cache write
+		}, `"web_search_call"`, 12_150, booking{ // as above: 6_075 a token for each reread
 			charge: responsesCharge + searchCharge, cost: responsesCost + searchCost, upstream: "up-gpt", input: 37, output: 11, searches: 1, app: "codex",
 			estimated: true, // Responses does not report the searches in its usage: they are counted from the events
 		}},
@@ -348,4 +348,27 @@ func (w *callWorld) checkSearchLimits(n runningNode, tc searchCase) {
 		t.Errorf("%s: a refused search moved the ledger (%s transactions, then %s) or reached the supplier", tc.name, transactions, got)
 	}
 	w.checkBalanced()
+}
+
+// checkDialect: what the catalog spec says of how the models are written reaches the supplier in the request it is
+// sent. The Claude model's spec says it thinks with a budget, so a Chat call that asks for reasoning is not sent the
+// adaptive form; the GPT model's spec says it returns encrypted reasoning, so a Responses call, which the gateway sends
+// with store false, asks for it.
+func (w *callWorld) checkDialect(n runningNode) {
+	t := w.t
+	t.Helper()
+	before := len(w.supplier.sent())
+	w.served(w.call(n, "/v1/chat/completions", w.richKey,
+		`{"model":"claude-opus-5-5","max_tokens":10000,"reasoning":{"effort":"high"},"messages":[{"role":"user","content":"Hello!"}]}`), "Chat reasoning to Messages")
+	w.served(w.call(n, "/v1/responses", w.richKey, responsesCall), "Responses")
+	sent := w.supplier.sent()
+	if len(sent) != before+2 {
+		t.Fatalf("the supplier was sent %d calls, want 2", len(sent)-before)
+	}
+	if body := sent[before].body; !strings.Contains(body, `"thinking":{"type":"enabled","budget_tokens":8000}`) || strings.Contains(body, "adaptive") {
+		t.Errorf("the Messages model, whose spec says it thinks with a budget, was sent %s", body)
+	}
+	if body := sent[before+1].body; !strings.Contains(body, `"store":false`) || !strings.Contains(body, `"include":["reasoning.encrypted_content"]`) {
+		t.Errorf("the Responses model, whose spec says it returns encrypted reasoning, was sent %s, want store false and the include member", body)
+	}
 }

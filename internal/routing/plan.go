@@ -142,9 +142,11 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
 		target.MaxOutput = out
 	}
+	limits := c.model
+	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
 		Exchange: c.Exchange,
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }
@@ -191,6 +193,8 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return NoPrice, true
 	case c.UnknownItem:
 		return UnknownItem, true
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown, true
 	case c.full():
 		return Full, true
 	}

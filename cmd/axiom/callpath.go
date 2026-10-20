@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -41,8 +42,8 @@ const (
 	drainWait, abortGrace = 15 * time.Second, 5 * time.Second
 )
 
-// callDeps is what a node's call path is built from: the modules it orchestrates and the secret it derives the
-// identifiers sent upstream from.
+// callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
+// identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
 	db       *pg.DB
 	keys     *secret.Keyring   // unseals suppliers' credentials
@@ -55,6 +56,7 @@ type callDeps struct {
 	records  *observability.Recorder // the call log, which the settlements write to
 	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
+	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -139,7 +141,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter,
+		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Proxies: d.proxies,
 	})
 	return callNode{handler: handler, executor: executor}, err
 }
@@ -278,7 +280,7 @@ func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog, logger
 		sold, unpriced := billing.SalePrices(rules, snap, listed, site.Currency)
 		for _, err := range unpriced {
 			// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices.
-			logger.Warn("a sale price the catalog cannot hold; the model is not sold", "err", err)
+			logger.Warn("a model has no sale price; it is not sold", "err", err)
 		}
 		return sold, nil
 	}

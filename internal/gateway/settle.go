@@ -162,12 +162,13 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	for it := range catalog.NumItems {
 		counts[it] = reply.Usage.Count(it)
 	}
-	if reply.Reported&inputSide == 0 {
+	if reply.Reported&catalog.InputSide == 0 { // none of the input was reported, so it is estimated
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
 		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning]
+		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning] -
+			counts[catalog.ItemAudioOut] - counts[catalog.ItemImageOut]
 	}
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
@@ -175,7 +176,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	for it, n := range counts {
 		counts[it] = min(n, maxCount)
 	}
-	usage, err := catalog.NewUsage(counts, reply.Usage.ServiceTier(), reply.Usage.Unknown())
+	usage, err := reply.Usage.Recount(counts, reply.Usage.Unknown())
 	if err != nil {
 		panic(err) // every count is within 0 and maxCount, and the tier and items are the usage's own
 	}
@@ -200,7 +201,3 @@ func tokensOf(bytes, perToken int64) int64 {
 // maxCount is the largest count catalog.NewUsage takes: what an estimate is capped at. The bytes of a stream, which an
 // output estimate counts, have no bound of their own.
 const maxCount = 1e10
-
-// inputSide are the items reported before the reply starts, together: when one of them was, the input is known.
-const inputSide = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite |
-	1<<catalog.ItemCacheWrite1h)

@@ -4,7 +4,7 @@ import "axiom/internal/platform"
 
 // Cost is the exact price, in the schedule's currency, of the usage's priced items, and the items with usage that have
 // no price. It never fails for a missing price: billing prices the missing items at its fallback prices and keeps the
-// priced part (README.md「上架门槛与缺项」). Only reasoning falls back, to output, the way Gemini prices thinking; a
+// priced part (README.md「上架门槛与缺项」). Reasoning falls back to output and images to their side's ordinary price; a
 // cache write without a write price is reported rather than guessed, since guessing the input price would undercharge
 // an Anthropic schedule that left its write premium out. It does not allocate: it runs for every attempt.
 func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err error) {
@@ -25,12 +25,26 @@ func (s Schedule) Cost(u Usage) (total platform.Exact, missing ItemSet, err erro
 	return total, missing, nil
 }
 
-// band is the context tier the prompt length falls in: 0 for the base prices, i+1 above the i-th threshold.
+// band is the context tier the prompt length falls in: 0 for the base prices, i+1 above the i-th threshold. A basis
+// that names input but not image_in counts the images as input, as it did while images were not split out of input.
 func (s Schedule) band(u Usage) int {
 	var length int64 // at most NumItems × 10¹⁰
+	inputBasis := s.basis.Has(ItemInput)
+	whole := inputBasis
 	for it := range NumItems {
-		if s.basis.Has(it) {
+		switch {
+		case s.basis.Has(it), it == ItemImageIn && inputBasis:
 			length += u.q[it]
+		case InputSide.Has(it) && u.q[it] != 0:
+			whole = false
+		}
+	}
+	// A whole-prompt basis reads the physical total directly. A partial basis still counts only its selected items,
+	// capped by the physical prompt so cache overlap cannot turn a short prompt into a long-context request.
+	if u.hasPhysicalInput {
+		length = min(length, u.physicalInput)
+		if whole {
+			length = u.physicalInput
 		}
 	}
 	return s.bandOf(length)
@@ -46,16 +60,22 @@ func (s Schedule) bandOf(length int64) int {
 }
 
 // price is the item's price at the service tier in the band. A service tier inherits nothing from another, and
-// reasoning without a price of its own falls back to the same tier's output price in the same band, the only fallback.
+// reasoning and images without their own price fall back to the same tier and band's ordinary side price.
 func (s Schedule) price(st ServiceTier, band int, it Item) (platform.UnitPrice, bool) {
 	if !s.offered.Has(st) {
 		return platform.UnitPrice{}, false
 	}
 	l := &s.levels[st]
-	if p, ok := l.rate(band, it); ok || it != ItemReasoning {
+	if p, ok := l.rate(band, it); ok {
 		return p, ok
 	}
-	return l.rate(band, ItemOutput)
+	if it == ItemImageIn {
+		return l.rate(band, ItemInput)
+	}
+	if it == ItemReasoning || it == ItemImageOut {
+		return l.rate(band, ItemOutput)
+	}
+	return platform.UnitPrice{}, false
 }
 
 func (l *level) rate(band int, it Item) (platform.UnitPrice, bool) {

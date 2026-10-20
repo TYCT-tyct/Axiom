@@ -18,15 +18,19 @@
 | OpenAI Chat | `POST /v1/chat/completions` | 大多数 SDK、Cursor、OpenRouter 客户端 |
 | OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/compact`；按 ID 删除随续接提供（见下文「Responses 的会话状态」） | Codex |
 | Anthropic Messages | `POST /v1/messages`、`POST /v1/messages/count_tokens` | Claude Code |
-| 模型列表 | `GET /v1/models` | 所有客户端 |
+| 模型列表 | `GET /v1/models`、`GET /v1/models/{model}` | 所有客户端 |
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
-- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 返回 OpenRouter 的模型列表格式（含价格、上下文长度等）。
+- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 要返回 OpenRouter 的模型列表格式（含价格、上下文长度等）；现在它和 `/v1/models` 是同一个列表，只有身份字段（[#311](https://github.com/TYCT-tyct/Axiom/issues/311)）。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
-- **`GET /v1/models`**：
-  - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；
+- **`GET /v1/models` 与 `GET /v1/models/{model}`**：
+  - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；只列这把 key 能调用、且有端点可走的模型，权限用的是与调用相同的判断，不能用的模型、没有端点的模型和不存在的模型一样回 404 `model_not_found`（不是 403）；
   - Anthropic 模型同时列出厂商原生的名字。Claude Code 只认 ID 里含 `claude` 或 `anthropic` 的条目；
+  - `GET /v1/models/{model}` 按调用路径的方式解析别名（`catalog.ResolvePublic`，与 sub2api 从列表项取单个模型的做法一致），返回列表里同一项的形状，`id` 是请求里的名字；
+  - 列表看有没有端点，不看端点的实时状态：没有端点（没接供应商，或缺规格/售价而被路由排除）的模型不列，因为调用它必然失败；端点暂时满载、熔断、暂停或预算用尽不让模型少列，容量由调用自己排队或报错；
+  - OpenRouter 在 `/models` 下的 `count`、`user`、`{author}/{slug}/endpoints` 不提供，回 404 `not_found`；
+  - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
 - **token 计数**：
   - 没有这个接口时，Claude Code 只能按字符数粗估上下文用量；
@@ -58,7 +62,7 @@
 - **跨格式**：M1 只做 Chat 客户端调用 Messages、Responses 端点；Messages、Responses 客户端只走原格式的端点。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
 - **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。
 - **发出的输出上限就是预留用的上限**：请求没写输出上限（或写 `null`）时，发给上游的是该条目报价用的上限，也就是模型的默认值，上下文装不下时则是裁短后的值（Messages 必须有，Responses 加 `max_output_tokens`）；请求写了就照它发。模型的上限未知时不发，由上游自己的默认值管。否则上游可以生成比预留依据更多的输出。
-- **跨格式时缓存标记按 OpenRouter 的做法转换**（OpenRouter《Prompt caching》「OpenAI」、OpenAI《Prompt caching》，2026-10-16）：发往 Messages 时原样带着；发往 Responses 时，支持显式断点的模型（OpenAI 从 GPT-5.6 起）上，用户、系统、开发者、助手和工具结果的文本块的 `cache_control` 写成 `prompt_cache_breakpoint`，TTL 丢掉；不支持断点的模型上的标记，以及工具定义、图片和文件上的标记丢掉，由 OpenAI 自动缓存前缀。对费用的影响：OpenAI 的缓存写入从 GPT-5.6 起按输入价的 1.25 倍收，更早的模型没有写入加价；Responses 只有 30 分钟起的缓存期，Anthropic 的 1 小时 TTL 表达不了，所以发往 Responses 的请求不会产生 1 小时的写入价（Anthropic 是输入价的 2 倍）；丢掉的标记可能让命中率比在 Anthropic 上低。收费始终按上游报告的实际缓存读写，不按请求里的标记。
+- **跨格式时缓存标记按 OpenRouter 的做法转换**（OpenRouter《Prompt caching》「OpenAI」、OpenAI《Prompt caching》，2026-10-16）：发往 Messages 时原样带着；发往 Responses 时，规格写明支持显式断点的模型（OpenAI 从 GPT-5.6 起）上，用户、系统、开发者、助手和工具结果的文本块的 `cache_control` 写成 `prompt_cache_breakpoint`，TTL 丢掉；不支持断点（规格写明不支持，或没写）的模型上的标记，以及工具定义、图片和文件上的标记丢掉，由 OpenAI 自动缓存前缀。对费用的影响：OpenAI 的缓存写入从 GPT-5.6 起按输入价的 1.25 倍收，更早的模型没有写入加价；Responses 只有 30 分钟起的缓存期，Anthropic 的 1 小时 TTL 表达不了，所以发往 Responses 的请求不会产生 1 小时的写入价（Anthropic 是输入价的 2 倍）；丢掉的标记可能让命中率比在 Anthropic 上低。收费始终按上游报告的实际缓存读写，不按请求里的标记。
 - **只认原上游的内容**：请求里带着只有原上游才认的内容时（Claude 推理块的签名、OpenAI 的加密推理内容），优先粘回产生它们的端点。同格式透传时这些内容原样转发、从不删改：删掉中间的思考块会让其后的块全部失效，而换了模型或账户时，Anthropic 自己丢弃读不了的思考块、请求照常成功（Anthropic《Preserved thinking》，2026-10）；OpenAI 的加密推理换了组织是否可用，要录样本确认，被拒时按原话返回。
 - **格式特有的能力只走原格式的端点**，见[路由的「一个请求的路由步骤」](routing.md#一个请求的路由步骤)。
 - **Claude Code 的提示信息**（会话 ID、请求类别、"上下文已压缩"标记）用于会话粘性和路由，见[路由](routing.md)。
@@ -125,6 +129,7 @@
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `request_too_large` | `invalid_request_error`；`request_too_large` | — |
 
+- **没有路由接的路径和方法**：也按上面的外壳作答——`/v1/messages`（含 `/api/v1/messages`）下用 Messages 的外壳，其余用 OpenAI（Chat）的外壳；路径不存在回 404 `not_found`，方法不对回 405 `method_not_allowed` 并保留 `Allow` 响应头，请求 ID 两个头照常带。new-api 对未知路径也回 404 的 OpenAI 外壳（new-api `controller/relay.go` 的 `RelayNotFound`，2026-10-19）。
 - **`Retry-After`** 用整数秒，不超过 60 秒。Claude Code 对超过 60 秒的值不再重试。
 - **429 的原因只进指标**：上表所有 429 的错误码都是 `rate_limited`，客户端程序不必区分；节点按原因（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`）计入指标 `axiom.gateway.rate_limited`，运维凭它判断是哪一道限制在拒绝（逐项含义见 [gateway 模块](../../internal/gateway/README.md#并发背压与共享状态)）。原因不写进响应：OpenRouter 的 429 也只给统一的 `error_type`（`rate_limit_exceeded`），要等的时间放在 `Retry-After`，它对付费模型没有平台级的请求上限，只有免费模型的额度和防 DDoS（OpenRouter《Limits》《Errors and Debugging》，2026-10-18）；sub2api 把原因编进错误码是它自己的做法（`gateway_queue_full`、`gateway_concurrency_limit`，`backend/internal/handler/concurrency_error_response.go`）。
 - **供应商自己的 401、402、403、429** 只用来换凭证（同一端点另一把凭证，没有可用凭证时换下一个端点）或换端点，从不当作我们的认证或钱包错误返回给客户端。
@@ -147,8 +152,8 @@
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；
-  - 模型名后缀 `:floor`、`:nitro`：第一版不支持，带 `:` 的模型名返回"模型不存在"（见[模型目录的「名字解析」](catalog.md#名字解析)），同样的效果用 `provider.sort` 指定；
-  - `@preset/名称`；
+  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`、`:online`、`~…-latest` 别名返回 400，`:free` 一类目录变体返回 404，见下文「模型名变体」；
+  - `@preset/名称`：尚未实现，现在按模型不存在处理（[#313](https://github.com/TYCT-tyct/Axiom/issues/313)）；
   - `session_id`、`prompt_cache_key`；
   - `user`：终端用户标识，用于防滥用和归因。
 
@@ -156,6 +161,26 @@
   - **第一版能兑现的**：`provider` 里的 `sort`（`price`、`throughput`；`latency` 无对应排序，返回 400）、`data_collection`、`zdr`、`max_price` 的 `prompt` 与 `completion`、`preferred_min_throughput`、`preferred_max_latency`；写了名字的 `only`、`ignore`、`order`，`allow_fallbacks: false`，`require_parameters: true`，`quantizations` 和不认识的成员返回 400 `invalid_request` 并指明成员名，不当作没写（原因见「待定问题」）。
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
 - **转发前处理**：路由参数和扩展字段在转发前删除；会话和用户标识换成派生值（见上文「转发规则」）。
+
+### 模型名变体
+
+模型名后面可以跟 `:` 开头的变体，来源是 OpenRouter 的《Model Variants》总览页和各变体页（`openrouter.ai/docs/guides/routing/model-variants/` 下的 overview、nitro、floor、exacto、online、thinking、free，2026-10-19）。网关在查目录之前读掉变体，目录只收到基础名字：目录里没有带 `:` 的名字（见[模型目录的「名字解析」](catalog.md#名字解析)），变体从不新建模型，也不落到基础模型。读法只在 `internal/gateway/variant.go` 一处，调用、`models` 里的备选和 `count_tokens` 共用。响应和调用记录里的 `model` 仍是客户端写的整个名字。
+
+| 变体 | OpenRouter 的行为 | 这里 |
+|---|---|---|
+| `:nitro` | 按吞吐排序，并准入 priority 层的端点（nitro 页） | 等同 `provider.sort: throughput`；层级准入见下 |
+| `:floor` | 按价格排序，并准入 flex 层的端点（floor 页） | 等同 `provider.sort: price`；层级准入见下 |
+| `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（exacto 页） | 400 暂不支持：端点的质量分和工具调用错误率还没有测量（`route.go` 里质量固定为 1），按它排出来是任意的顺序 |
+| `:online` | 已弃用，等于 `web` 插件（online 页） | 400：没有联网搜索插件（`plugins` 现在被丢弃，见[对照表](../openrouter-parity.md)） |
+| `:free` `:batch` `:thinking` `:extended` | 目录变体，在目录里有自己的条目和价格；没有对应条目时不回落到基础模型，查不到（总览页：去掉 `:free` 会得到付费条目） | 目录没有这些条目：404 `model_not_found`，说明写出是哪个变体。`:thinking` 已弃用，OpenRouter 改用 `reasoning` 参数（thinking 页），说明里提示 |
+| 别的后缀 | 总览页：只有列出的才是变体 | 404 `model_not_found` |
+| `~作者/系列-latest` | 解析到该系列最新的具体模型，响应的 `model` 是具体模型（latest-resolution 页） | 400 暂不支持，见「待定问题」 |
+
+- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错。
+- **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
+- **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；目录变体和不认识的后缀，备选按"不存在"略去（与没有变体时一样）；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有显式 `provider.sort`（或它自己名字里后面的排序变体）能替换，主模型名上的排序变体不算，因为它不会按质量排备选。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
+- **名字长度**：整个模型名（含变体）至多 200 字节，超过回 404 `model_not_found`，在准入之前。调用记录保存客户端写的整个名字，列最多 200 个字符；目录原来也不认更长的名字，不能让叠加的后缀绕过这个界限，被服务之后才丢了记录。
+- **层级准入没有做**：nitro 页说它同时准入 priority 层，floor 页说它同时准入 flex 层。这里只做排序一半。不写 `service_tier` 的请求本来就可以由 standard 和 priority 服务（协议 `anyTier`），flex 要客户端自己写 `service_tier`；为 `:floor` 改写发往上游的 `service_tier` 会改变预留和计费依据，另做。
 
 ### 给其他中转站对接的接口
 
@@ -224,6 +249,10 @@
 | 上游 4xx 保留原文，只抹掉供应商身份 | Claude Code 依赖上游错误的原话自动恢复；同时不能暴露货源。负责人 2026-10-18：影响兼容的行为照 new-api、sub2api。实现见「错误」：适配器仍只读代码、不留文字，共用的调用代码在拒绝请求的失败上另存一份清洗过的 `Rejection`，只给这次回复用。不选让适配器带原文：每个适配器各清洗一遍，漏一个就泄露 |
 | Chat、Responses 的错误外壳照 new-api 与 OpenAI（字符串 `code`、`type`、`param`），不照 OpenRouter 的数字 `code` | 负责人 2026-10-18：错误码和外壳影响兼容，照搬 new-api。OpenAI 官方客户端和多数 SDK 读 `error.type`、`error.code` 字符串；OpenRouter 的数字 `code` 重复了状态码，状态码在状态行里本来就有。统一的 `error_type` 仍在 `metadata` 里，两种读法并存，不丢信息。代价：读 OpenRouter 数字 `code` 的客户端要改读状态行 |
 | Chat 回复的推理文本同时写 `reasoning` 和 `reasoning_content` | 负责人 2026-10-18：照 new-api 写 `reasoning_content`。两个名字都有人用：`reasoning_content` 是 DeepSeek、new-api、LiteLLM 的（LiteLLM 文档《Reasoning Content》），`reasoning` 是 OpenRouter 和新版 vLLM 的（OpenRouter《Reasoning Tokens》，vLLM《Reasoning Outputs》，2026-10-19）；读一个的客户端对另一个当作未知字段忽略。同文并存，客户端读哪个都对；只留一个就会让另一半客户端读不到推理。已知风险：若有客户端把两个字段都显示，推理会出现两遍，没有实测过，发现再收回其中一个。代价是推理文本多发一份 |
+| 变体在网关里读，目录和路由都不认识后缀 | 变体是路由开关，不是模型：放进目录会让一个模型分裂成多个条目，也要放宽目录"带 `:` 的名字永远查不到"的不变量，那条不变量正是为了保证带后缀的写法落不到基础模型。读法集中在 `variant.go`，调用、备选和 `count_tokens` 共用，不会各自读出不同的结果 |
+| `:free`、`:thinking` 等目录变体回 404，不改写请求 | 总览页把它们列为目录变体，没有条目就是查不到，也不回落到基础模型：`:free` 落到付费模型会替客户端花钱。做不了的请求回 400、不静默忽略（见「路由参数」）；这里不是做不了而是没有这个模型，所以 404。`:thinking` 若改成"打开推理"要改写请求内容，违反"请求内容不改"，OpenRouter 也已弃用它 |
+| 显式 `provider.sort` 压过变体 | exacto 页明说显式排序覆盖它；请求体里的字段比名字里的后缀更具体，nitro 和 floor 照此处理。代价：写了 `:nitro` 又写 `sort: price` 的客户端得到按价格排序，与 OpenRouter 的实际行为未核对（页面没写） |
+| `~…-latest` 别名回 400，不做 | 要让它成为数据，目录要有可由管理员改指向并留审计的别名（现在名字只追加、公开名字不许 `-latest` 和 `~`，见[目录的决策](catalog.md#决策与理由)），这是数据模型改动，需要负责人同意和独立评审；OpenRouter 的响应 `model` 是具体模型，与本站"回显客户端写的名字"也要先定。认得出写法并明说不支持，好过 404 让客户端以为模型被下线 |
 | 会话、用户标识换成派生值，而不是删除 | 删除会让上游缓存失效；原样转发会串租户、泄露标识 |
 | 响应头按白名单放行 | 上游的请求 ID、组织名等头会暴露货源 |
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
@@ -249,4 +278,6 @@
 - `provider.only`、`ignore`、`order`：用户写的是官方 API 的名称或中转站分组的代号（[术语表](../glossary.md)），路由按供应商 ID 过滤；名称到 ID 的对应还没有模块提供（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上），有了才能支持，在此之前返回 400。`max_price` 的单位按本站记账单位每百万 token，二级站点用人民币记账时与 OpenRouter 的美元不同，是否要换算待负责人定
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
+- `~作者/系列-latest` 别名（需要负责人定）：推荐在目录加一张别名表（别名、指向的模型、版本号），管理员改指向时记审计，公开名字规则对别名单独放行 `~` 前缀；网关像变体一样在查目录前识别 `~`，再用别名表解析。要先定响应的 `model` 回显客户端写的别名还是具体模型（OpenRouter 回具体模型）。不选"按发布时间自动取最新"：目录没有系列和发布时间，自动取会在没人确认时改变用户实际用的模型和价格（见[目录的「切换与迁移」](catalog.md#模型的生命周期)）
+- `:nitro`、`:floor` 的层级准入：为 `:floor` 准入 flex 层要决定是否改写发给上游的 `service_tier`，及其对预留和计费的影响
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做
