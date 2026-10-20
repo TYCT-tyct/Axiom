@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -34,6 +33,17 @@ const events = `{"Action":"start","Package":"x"}
 {"Action":"pass","Package":"x"}
 `
 
+// benchmarkAll runs every benchmark of the probe module in dir, as the gate measures one side when the change reaches
+// every package.
+func benchmarkAll(t *testing.T, dir string) (measurements, error) {
+	t.Helper()
+	targets, err := benchmarkPackages(t.Context(), dir)
+	if err != nil {
+		return measurements{}, err
+	}
+	return benchmarks(t.Context(), dir, "the probe module", targets, make(chan struct{}, packages), new(sync.Mutex))
+}
+
 func TestParse(t *testing.T) {
 	run, err := parse(strings.NewReader(events))
 	if err != nil {
@@ -60,7 +70,7 @@ func TestBenchmarksRunPackagesInParallel(t *testing.T) {
 		"a/a_test.go": overlapBenchmark("a", "b"),
 		"b/b_test.go": overlapBenchmark("b", "a"),
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err != nil {
+	if _, err := benchmarkAll(t, dir); err != nil {
 		t.Fatalf("the packages did not run at the same time: %v", err)
 	}
 }
@@ -87,7 +97,7 @@ func BenchmarkBad(b *testing.B) {
 }
 `,
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "probe/bad") {
+	if _, err := benchmarkAll(t, dir); err == nil || !strings.Contains(err.Error(), "probe/bad") {
 		t.Fatalf("a failing package did not fail the gate: %v", err)
 	}
 }
@@ -103,8 +113,54 @@ func TestNothing(t *testing.T) {
 }
 `,
 	})
-	if _, err := benchmarks(t.Context(), dir, "the probe module"); err == nil || !strings.Contains(err.Error(), "no package has a benchmark") {
+	if _, err := benchmarkAll(t, dir); err == nil || !strings.Contains(err.Error(), "no package has a benchmark") {
 		t.Fatalf("a tree without benchmarks was accepted: %v", err)
+	}
+}
+
+// TestClosure runs the go command: the test closure of a benchmark package is what cmd/go compiles into its test
+// binary, so it holds the package, what its own files import and what only its test files import, and nothing else.
+func TestClosure(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"lib/lib.go":             "package lib\n\nfunc F() {}\n",
+		"testonly/testonly.go":   "package testonly\n\nfunc H() {}\n",
+		"unrelated/unrelated.go": "package unrelated\n\nfunc U() {}\n",
+		"bench/bench.go":         "package bench\n\nimport \"probe/lib\"\n\nvar _ = lib.F\n",
+		"bench/bench_test.go": `package bench
+
+import (
+	"testing"
+
+	"probe/testonly"
+)
+
+func BenchmarkClosure(b *testing.B) {
+	testonly.H()
+	for b.Loop() {
+	}
+}
+`,
+	})
+	found, err := closures(t.Context(), dir, "the probe module", []string{"probe/bench"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := closure{"bench", "lib", "testonly"}
+	if diff := cmp.Diff(want, found["probe/bench"]); diff != "" {
+		t.Errorf("test closure (-want +got):\n%s", diff)
+	}
+}
+
+// TestClosureRejectsAPackageOutsideTheTree: a benchmark package whose directory is not under the tree would get an
+// empty closure and be skipped for good, so the gate fails instead.
+func TestClosureRejectsAPackageOutsideTheTree(t *testing.T) {
+	dir := probeFiles(t, map[string]string{
+		"lib/lib.go":          "package lib\n",
+		"bench/bench.go":      "package bench\n",
+		"bench/bench_test.go": "package bench\n\nimport \"testing\"\n\nfunc BenchmarkX(b *testing.B) {}\n",
+	})
+	if _, err := closures(t.Context(), filepath.Join(dir, "lib"), "the probe module", []string{"probe/bench"}); err == nil {
+		t.Fatal("a benchmark package outside the tree got a closure")
 	}
 }
 
@@ -130,7 +186,7 @@ func TestFails(t *testing.T) {
 }
 `,
 	})
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +223,7 @@ func BenchmarkLate(b *testing.B) {
 }
 `,
 	})
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +348,7 @@ func TestBenchmarksRunFixedIterations(t *testing.T) {
 	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nvar sink []byte\n\n"+
 		"func BenchmarkIters(b *testing.B) {\n\tfor i := 0; i < b.N; i++ {\n\t\tsink = make([]byte, 8)\n\t}\n"+
 		"\tb.ReportMetric(float64(b.N), \"iters\")\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +367,7 @@ func TestBenchmarksQuietTheRuntime(t *testing.T) {
 		"\twas := debug.SetGCPercent(100)\n\tdebug.SetGCPercent(was)\n"+
 		"\tb.ReportMetric(float64(was), \"gcpercent\")\n"+
 		"\tb.ReportMetric(float64(runtime.GOMAXPROCS(0)), \"processors\")\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +404,7 @@ func TestBenchmarksSeeRealSkips(t *testing.T) {
 		"func BenchmarkSkipped(b *testing.B) { b.Skip(\"needs a database\") }\n\n"+
 		"func BenchmarkLate(b *testing.B) {\n\tif b.N > 1 {\n\t\tb.Skip(\"cannot run the calibrated workload\")\n\t}\n"+
 		"\tfor range b.N {\n\t\tsink = make([]byte, 8)\n\t}\n}\n")
-	run, err := benchmarks(t.Context(), dir, "the probe module")
+	run, err := benchmarkAll(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,65 +419,50 @@ func TestBenchmarksSeeRealSkips(t *testing.T) {
 
 func TestBenchmarksKeepCompileErrors(t *testing.T) {
 	dir := probeModule(t, "package probe\n\nimport \"testing\"\n\nfunc BenchmarkBroken(b *testing.B) { undefinedName() }\n")
-	_, err := benchmarks(t.Context(), dir, "the probe module")
+	_, err := benchmarkAll(t, dir)
 	if err == nil || !strings.Contains(err.Error(), "undefinedName") {
 		t.Fatalf("the compile error is lost: %v", err)
 	}
 }
 
-// git runs git in root and returns what it printed, failing the test if git fails.
-func git(t *testing.T, root string, args ...string) []byte {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...).CombinedOutput() // #nosec G204 -- the test's own arguments
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
-	return out
-}
-
-// TestRemoveWorktree runs git: the gate's worktree goes away, also when its directory is already gone; a registration
-// git refuses to remove is reported with git's failure; and another session's worktree, even a stale one, is untouched.
-func TestRemoveWorktree(t *testing.T) {
-	type outcome struct{ Failed, CarriesGitFailure, StillListed, DirectoryGone, StaleKept bool }
-	cases := []struct {
-		name    string
-		prepare func(tree string) error
-		refused bool
-	}{
-		{"intact", func(string) error { return nil }, false},
-		{"directory already gone", os.RemoveAll, false},
-		// Without its .git file, git cannot validate the worktree and refuses to remove it, even with --force twice.
-		{"git refuses", func(tree string) error { return os.Remove(filepath.Join(tree, ".git")) }, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			root, scratch := t.TempDir(), t.TempDir()
-			tree, stale := filepath.Join(scratch, "tree"), filepath.Join(scratch, "stale")
-			git(t, root, "init", "-q")
-			git(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
-			git(t, root, "worktree", "add", "-q", "--detach", tree)
-			git(t, root, "worktree", "add", "-q", "--detach", stale)
-			if err := errors.Join(os.RemoveAll(stale), c.prepare(tree)); err != nil {
+// TestChangedFiles runs git: the change is the difference from the merge base to the working tree, so a commit on a
+// branch of its own is left out, a rename names both of its paths, and a path with a space stays whole.
+func TestChangedFiles(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q")
+	write := func(files map[string]string) {
+		t.Helper()
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-
-			err := removeWorktree(t.Context(), root, tree)
-			list := git(t, root, "worktree", "list", "--porcelain")
-			_, statErr := os.Stat(tree)
-			var exitErr *exec.ExitError
-			got := outcome{err != nil, errors.As(err, &exitErr), listed(list, tree), os.IsNotExist(statErr), listed(list, stale)}
-			want := outcome{c.refused, c.refused, c.refused, true, true}
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("after removal (-want +got):\n%s\nerror: %v", diff, err)
-			}
-		})
+		}
 	}
-}
+	commit := func(message string) {
+		t.Helper()
+		git(t, root, "add", ".")
+		git(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+	}
+	write(map[string]string{"a.txt": "one", "b.txt": "one", "name with space.txt": "one"})
+	commit("base")
+	// The base passed in is this branch, not an ancestor: only what changed since the merge base is under test.
+	git(t, root, "checkout", "-q", "-b", "side")
+	write(map[string]string{"side.txt": "one"})
+	commit("side")
+	git(t, root, "checkout", "-q", "-")
+	git(t, root, "mv", "b.txt", "c.txt")
+	write(map[string]string{"a.txt": "two", "d.txt": "one"})
+	commit("change")
+	// The gate measures the working tree, so an uncommitted change counts too.
+	write(map[string]string{"name with space.txt": "two"})
 
-func TestListed(t *testing.T) {
-	list := []byte("worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/benchgate1/base\nHEAD def\ndetached\nlocked\n")
-	if !listed(list, filepath.FromSlash("/tmp/benchgate1/base")) || listed(list, filepath.FromSlash("/tmp/benchgate2/base")) {
-		t.Error("listed matches the wrong worktree")
+	change, err := changedFiles(t.Context(), root, "side")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a.txt", "b.txt", "c.txt", "d.txt", "name with space.txt"}
+	if diff := cmp.Diff(want, change.files); diff != "" {
+		t.Errorf("changed files (-want +got):\n%s", diff)
 	}
 }
 

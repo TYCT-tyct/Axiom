@@ -435,24 +435,25 @@ func (r *rig) listIDs(a account, path string) []string {
 	return ids
 }
 
-// TestModelList: the list names every model by the name the catalog gives it and by its maker's own where that
-// resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog.
+// TestModelList: the list names every model that has an endpoint by the name the catalog gives it and by its maker's own
+// where that resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog.
 func TestModelList(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-test", "claude-test"}
+	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}
 	for _, path := range []string{"/v1/models", "/api/v1/models"} {
 		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
 			t.Errorf("%s (-want +got):\n%s", path, diff)
 		}
 	}
-	r.model("acme/gamma")
+	gamma := r.model("acme/gamma")
 	if err := r.catalog.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	r.attachEndpoint(gamma)
 	if got := r.listIDs(a, "/v1/models"); len(got) != 5 {
-		t.Errorf("after a model was listed: %v", got)
+		t.Errorf("after a model was listed and given an endpoint: %v", got)
 	}
 	resp, body := r.do(http.MethodGet, "/v1/models", "", nil, "Anthropic-Version", "2023-06-01")
 	if code, typ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" || typ != "authentication_error" {

@@ -196,7 +196,7 @@ func (s *session) adopt(ctx context.Context, resp adapter.Response) error {
 
 // blocked is the error of an answer that said to wait.
 func (s *session) blocked(resp adapter.Response) error {
-	wait := retryAfter(resp.Header)
+	wait := adapter.RetryAfter(resp.Header)
 	if wait == 0 {
 		wait = time.Minute
 	}

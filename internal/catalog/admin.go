@@ -220,7 +220,7 @@ type CreateModelRequest struct {
 
 // CreateModel adds a draft model, visible only to the platform until it is listed.
 func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result, error) {
-	if _, err := parseSpec(r.Spec); err != nil {
+	if _, err := parseSavedSpec(r.Spec); err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return c.apply(ctx, r.Op, "model.create", func(tx pg.Tx) (outcome, error) {
@@ -286,7 +286,7 @@ type UpdateSpecRequest struct {
 // UpdateSpec replaces the spec as of the rev the request was decided on. The old spec stays in the change. A listed
 // model's new spec must still be priced in full by every current reference price.
 func (c *Catalog) UpdateSpec(ctx context.Context, r UpdateSpecRequest) (Result, error) {
-	spec, err := parseSpec(r.Spec)
+	spec, err := parseSavedSpec(r.Spec)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}

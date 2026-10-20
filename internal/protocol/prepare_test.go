@@ -116,6 +116,14 @@ func inspected(t *testing.T, f protocol.Format, body []byte) protocol.Request {
 	return r
 }
 
+// claim is the spec's answer for an endpoint that does, or does not, take what a test asks of it.
+func claim(yes bool) catalog.Claim {
+	if yes {
+		return catalog.ClaimYes
+	}
+	return catalog.ClaimNo
+}
+
 func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte, error) {
 	w := protocol.Rewrites{Identity: derive}
 	if continues {
@@ -125,7 +133,7 @@ func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	u, err := protocol.Prepare(&r, body, protocol.Target{Format: f, Model: "up", EncryptedReasoning: encrypted}, w)
+	u, err := protocol.Prepare(&r, body, protocol.Target{Format: f, Model: "up", EncryptedReasoning: claim(encrypted)}, w)
 	return u.Body, err
 }
 
@@ -177,7 +185,7 @@ func TestPrepareBuffer(t *testing.T) {
 		w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: identityLen, History: history}
 		r := inspected(t, protocol.Responses, body)
 		return testing.AllocsPerRun(5, func() {
-			if _, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Responses, Model: "up", EncryptedReasoning: true}, w); err != nil {
+			if _, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Responses, Model: "up", EncryptedReasoning: catalog.ClaimYes}, w); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -495,7 +503,7 @@ func TestPrepareCost(t *testing.T) {
 			body = rewritten
 		}
 		r := inspected(t, f, []byte(body))
-		target := protocol.Target{Format: f, Model: "up", EncryptedReasoning: true, MaxOutput: math.MaxInt64}
+		target := protocol.Target{Format: f, Model: "up", EncryptedReasoning: catalog.ClaimYes, MaxOutput: math.MaxInt64}
 		u, err := protocol.Prepare(&r, []byte(body), target, w)
 		if err != nil {
 			t.Fatal(err)

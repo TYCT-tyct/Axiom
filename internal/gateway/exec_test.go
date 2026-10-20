@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -126,7 +127,7 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 		{"a group's too", routing.ScopeGroup, false, [3]int{1, 1, 0}, 200, billing.Unknown},
 		{"a supplier's too", routing.ScopeSupplier, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"a credential's tries the entry again", routing.ScopeCredential, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
-		{"the route to it likewise", routing.ScopeEgress, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
+		{"the only egress failing moves to the next entry", routing.ScopeEgress, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"the request's own is the client's", routing.ScopeRequest, true, [3]int{1, 0, 0}, 400, billing.NotExecuted},
 	}
 	for _, tc := range cases {
@@ -265,6 +266,27 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAnUnsetSpecKeyIsTheOperatorsToKnow: when no endpoint can take the request because the spec of its model leaves a
+// key out, the client is told the model does not support the parameter yet, and the log, which the operator reads, names
+// the key.
+func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		var logs bytes.Buffer
+		messages := protocol.Messages
+		h := newHarness(t, ctx, options{client: protocol.Chat, upstream: &messages, logs: &logs, mutate: func(c *Call) {
+			c.Body = []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"top_p":0.5,"stream":true}`)
+		}})
+		h.run()
+		body := h.w.body()
+		if h.w.status != 400 || !strings.Contains(body, "does not support top_p other than the default yet") || strings.Contains(body, "spec") {
+			t.Errorf("the client got %d: %s", h.w.status, body)
+		}
+		if !strings.Contains(logs.String(), "default_sampling_only") {
+			t.Errorf("the log does not name the key: %s", logs.String())
+		}
+	})
 }
 
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {

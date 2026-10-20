@@ -453,7 +453,7 @@ func prepareInspected() func(protocol.Format, []byte) error {
 			}
 			seen[&b[0]] = r
 		}
-		_, err := protocol.Prepare(&r, b, protocol.Target{Format: f, Model: "up", EncryptedReasoning: true}, protocol.Rewrites{Identity: derive})
+		_, err := protocol.Prepare(&r, b, protocol.Target{Format: f, Model: "up", EncryptedReasoning: catalog.ClaimYes}, protocol.Rewrites{Identity: derive})
 		return err
 	}
 }

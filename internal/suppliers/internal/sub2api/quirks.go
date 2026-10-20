@@ -100,9 +100,9 @@ func tooMany(code string, h http.Header) (adapter.Scope, adapter.Cause) {
 	case "API_KEY_QUOTA_EXHAUSTED", "USAGE_LIMIT_EXCEEDED":
 		return adapter.ScopeCredential, adapter.CredentialQuotaExhausted{}
 	case "rate_limit_exceeded":
-		return adapter.ScopeCredential, adapter.RateLimited{RetryAfter: retryAfter(h)}
+		return adapter.ScopeCredential, adapter.RateLimited{RetryAfter: adapter.RetryAfter(h)}
 	default:
-		return adapter.ScopeEndpoint, adapter.RateLimited{RetryAfter: retryAfter(h)}
+		return adapter.ScopeEndpoint, adapter.RateLimited{RetryAfter: adapter.RetryAfter(h)}
 	}
 }
 

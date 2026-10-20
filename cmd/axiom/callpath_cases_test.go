@@ -349,3 +349,26 @@ func (w *callWorld) checkSearchLimits(n runningNode, tc searchCase) {
 	}
 	w.checkBalanced()
 }
+
+// checkDialect: what the catalog spec says of how the models are written reaches the supplier in the request it is
+// sent. The Claude model's spec says it thinks with a budget, so a Chat call that asks for reasoning is not sent the
+// adaptive form; the GPT model's spec says it returns encrypted reasoning, so a Responses call, which the gateway sends
+// with store false, asks for it.
+func (w *callWorld) checkDialect(n runningNode) {
+	t := w.t
+	t.Helper()
+	before := len(w.supplier.sent())
+	w.served(w.call(n, "/v1/chat/completions", w.richKey,
+		`{"model":"claude-opus-5-5","max_tokens":10000,"reasoning":{"effort":"high"},"messages":[{"role":"user","content":"Hello!"}]}`), "Chat reasoning to Messages")
+	w.served(w.call(n, "/v1/responses", w.richKey, responsesCall), "Responses")
+	sent := w.supplier.sent()
+	if len(sent) != before+2 {
+		t.Fatalf("the supplier was sent %d calls, want 2", len(sent)-before)
+	}
+	if body := sent[before].body; !strings.Contains(body, `"thinking":{"type":"enabled","budget_tokens":8000}`) || strings.Contains(body, "adaptive") {
+		t.Errorf("the Messages model, whose spec says it thinks with a budget, was sent %s", body)
+	}
+	if body := sent[before+1].body; !strings.Contains(body, `"store":false`) || !strings.Contains(body, `"include":["reasoning.encrypted_content"]`) {
+		t.Errorf("the Responses model, whose spec says it returns encrypted reasoning, was sent %s, want store false and the include member", body)
+	}
+}

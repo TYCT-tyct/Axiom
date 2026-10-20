@@ -11,6 +11,7 @@ func Module() pg.Module                                   // 迁移，交给 cmd
 func NewRecorder(ctx, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) *Recorder // Config 的各项都必须为正，否则 panic
 func (r *Recorder) Enqueue(rec CallRecord) error          // 从不等待；队列满返回 ErrQueueFull 并计入丢失
 func (r *Recorder) Close(ctx context.Context) error       // 写完队列里的，ctx 到期则报告丢了几条（含入队时丢的）
+func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
