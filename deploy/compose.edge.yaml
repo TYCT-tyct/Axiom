@@ -27,8 +27,10 @@ services:
       AXIOM_EDGE_CONSOLE_HOST: ${AXIOM_EDGE_CONSOLE_HOST:?set it in deploy/.env}
       AXIOM_EDGE_API_HOST: ${AXIOM_EDGE_API_HOST:?set it in deploy/.env}
       AXIOM_EDGE_ADMIN_HOST: ${AXIOM_EDGE_ADMIN_HOST:?set it in deploy/.env}
-      # Empty is Caddy's default, public certificates; `internal` is its own CA, for a deployment with no public DNS.
-      AXIOM_EDGE_TLS_ISSUER: ${AXIOM_EDGE_TLS_ISSUER:-}
+      # The issuer module by name: `acme` is Caddy's own public certificates (the default), `internal` its own CA, for a
+      # deployment with no public DNS. Named here rather than left empty, because the Caddyfile reads it with a default and
+      # an empty value would override that default with nothing.
+      AXIOM_EDGE_TLS_ISSUER: ${AXIOM_EDGE_TLS_ISSUER:-acme}
       AXIOM_EDGE_ADMIN_ALLOW_CIDRS: ${AXIOM_EDGE_ADMIN_ALLOW_CIDRS:-127.0.0.1/32 ::1/128}
       AXIOM_EDGE_CONSOLE_ALLOW_CIDRS: ${AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
     ports:

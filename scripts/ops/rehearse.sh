@@ -123,6 +123,23 @@ AXIOM_EDGE_TLS_ISSUER=internal
 EOF
 
 echo "== 2/10 build the images just up builds, plus the backup job's"
+# The Caddyfile names its issuer as a module, and Caddy substitutes the variable before parsing, so the shape of what it
+# parses depends on the value — a bare `tls` is a parse error. The rehearsal runs with `internal`, so `acme` is the
+# configuration it would otherwise never load, and it is the one every deployment with public certificates gets: compose has
+# to fill it in when the variable is unset, because an empty value would override the Caddyfile's default.
+grep -v '^AXIOM_EDGE_TLS_ISSUER=' "$env_file" > "$work/edge-unset.env"
+edge_default=$(docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file "$work/edge-unset.env" config |
+  sed -n 's/^ *AXIOM_EDGE_TLS_ISSUER: *//p')
+[ "$edge_default" = acme ] || die "with AXIOM_EDGE_TLS_ISSUER unset compose passes the edge '$edge_default', want acme"
+for issuer in internal "$edge_default"; do
+  docker run --rm --network none \
+    -e AXIOM_EDGE_TLS_ISSUER="$issuer" \
+    -e AXIOM_EDGE_CONSOLE_HOST=console.rehearsal.example \
+    -e AXIOM_EDGE_API_HOST=api.rehearsal.example \
+    -e AXIOM_EDGE_ADMIN_HOST=admin.rehearsal.example \
+    --volume "$(docker_path deploy/ingress/Caddyfile):/etc/caddy/Caddyfile:ro" \
+    caddy:2.11.7-alpine caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile || die "the Caddyfile does not parse with issuer $issuer"
+done
 just web-embed
 CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
 # Under the umask above the binary is mode 0700, and the image runs it as another user: without this the container fails

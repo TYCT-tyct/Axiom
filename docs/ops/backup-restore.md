@@ -187,6 +187,9 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 - **TLS**：默认由 Caddy 自己申请和续期证书（ACME HTTP-01，80 端口要能到达这个容器），证书与账号密钥放在 `caddy_data` 卷里；
   失败原因看 `docker compose logs caddy`。没有公网 DNS 的部署（演练、内网）设 `AXIOM_EDGE_TLS_ISSUER=internal`，改用 Caddy
   自己的 CA，根证书在 `caddy_data` 卷的 `pki/authorities/local/root.crt`，客户端要信任它。
+  Caddyfile 里写的是 `tls { issuer {$AXIOM_EDGE_TLS_ISSUER:acme} }`，不是 `tls {$AXIOM_EDGE_TLS_ISSUER}`：后者在值为空时
+  只剩一个 `tls`，Caddy 直接报解析错误，而「公网证书」这一档以前正是用空值表示的。`{$VAR:默认}` 也只在变量**未设置**
+  时生效，空值会盖掉默认——所以 `compose.edge.yaml` 一律把 `acme` 填进去，不让空值传到容器里。
 - **HTTP/2**：`servers { protocols h1 h2 }`。只开 TCP：栈发布的是 TCP 的 80/443，广告 HTTP/3 只会白费第一次 UDP 往返。
 - **端口**：`AXIOM_EDGE_HTTP_PORT` / `AXIOM_EDGE_HTTPS_PORT` 默认 80/443；留空则由内核分配，给同机的第二套栈或演练用。
 - **X-Forwarded-For**：Caddy 是第一个 hop，默认忽略客户端自带的 `X-Forwarded-*`，按连接对端地址重写。程序只在请求来自
