@@ -226,7 +226,7 @@ func TestMeterMemory(t *testing.T) {
 	report := func(prefix string) usageReport {
 		var r usageReport
 		total := int64(100)
-		r.physicalInput, r.outputTotal = &total, &total
+		r.physicalInput, r.outputTotal = tokenTotal{total, true}, tokenTotal{total, true}
 		for i := range maxUnknown {
 			r.unknown = append(r.unknown, unknownAt(prefix, i))
 		}

@@ -16,11 +16,18 @@ type usageReport struct {
 	tier          catalog.ServiceTier
 	tierSet       bool
 	unknown       []catalog.UnknownUsage
-	physicalInput *int64
-	outputTotal   *int64
+	physicalInput tokenTotal
+	outputTotal   tokenTotal
 	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
 	// snapshot even when its total is the same as before.
 	inputDetailed, outputDetailed bool
+}
+
+// tokenTotal is the prompt or output total an upstream reports, and whether it reported one: an explicit 0 is not an
+// absent total. It is a value, not a pointer, so that reading a report allocates nothing.
+type tokenTotal struct {
+	n   int64
+	set bool
 }
 
 // maxCount bounds a count as catalog.NewUsage does, checked before any arithmetic on counts, so none overflows.
@@ -121,7 +128,7 @@ func (m *meter) takeCounts(r usageReport) bool {
 		return false
 	}
 	for it := range catalog.NumItems {
-		if r.physicalInput != nil && catalog.InputSide.Has(it) || r.outputTotal != nil && catalog.OutputSide.Has(it) {
+		if r.physicalInput.set && catalog.InputSide.Has(it) || r.outputTotal.set && catalog.OutputSide.Has(it) {
 			continue // a normalized snapshot must not retain a stale remainder or modality count
 		}
 		n := r.counts[it]
@@ -141,18 +148,18 @@ func (m *meter) takeCounts(r usageReport) bool {
 // without reducing the physical total, and merging their maxima would charge those tokens twice. A report of the same
 // total without the side's details object says nothing about the split, so the earlier one stays: replacing it would
 // turn cached tokens back into ordinary ones. A larger total is a new snapshot, details or not.
-func (m *meter) takeSide(total *int64, detailed bool, kept **int64, side catalog.ItemSet, r usageReport) bool {
-	if total == nil {
+func (m *meter) takeSide(total tokenTotal, detailed bool, kept *tokenTotal, side catalog.ItemSet, r usageReport) bool {
+	if !total.set {
 		return true
 	}
-	if *kept != nil {
+	if kept.set {
 		switch {
-		case *total == 0 && **kept > 0:
+		case total.n == 0 && kept.n > 0:
 			return true // some relays clear totals in later events
-		case *total < **kept:
-			m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", **kept, *total)
+		case total.n < kept.n:
+			m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", kept.n, total.n)
 			return false
-		case *total == **kept && !detailed:
+		case total.n == kept.n && !detailed:
 			return true
 		}
 	}
@@ -224,8 +231,8 @@ func (m *meter) usage(r usageReport) (catalog.Usage, error) {
 		}
 	}
 	u, err := catalog.NewUsage(m.scratch, r.tier, r.unknown)
-	if err == nil && r.physicalInput != nil {
-		u, err = u.WithPhysicalInput(*r.physicalInput)
+	if err == nil && r.physicalInput.set {
+		u, err = u.WithPhysicalInput(r.physicalInput.n)
 	}
 	return u, err
 }

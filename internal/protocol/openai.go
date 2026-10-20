@@ -91,7 +91,7 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 			[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 			return r, err
 		}
-		r.outputTotal, r.outputDetailed = out, outDetails != nil
+		r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, outDetails != nil
 		unknownCounts(&r, "usage."+outName, d.Unknown)
 	}
 	unknownCounts(&r, "usage", u.Unknown)
@@ -128,7 +128,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Image > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
-	r.physicalInput = &total
+	r.physicalInput = tokenTotal{total, true}
 	return nil
 }
 
