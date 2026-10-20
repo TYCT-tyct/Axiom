@@ -130,7 +130,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.conns > 0 {
 		dsn += "&pool_max_conns=" + itoa(int64(o.conns))
 	}
-	if r.db, err = pg.Open(t.Context(), dsn); err != nil {
+	if r.db, err = pg.Open(t.Context(), dsn, pg.WithCompletionReserve(r.cfg.PoolReserve)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.db.Close)

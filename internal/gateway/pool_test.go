@@ -45,41 +45,6 @@ func TestPoolKeepsTheLastConnectionsForCompletion(t *testing.T) {
 	})
 }
 
-// A batch writer holds at most BatchConnections.
-func TestPoolBatchWritersHaveTheirOwnLimit(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		bp, err := New(DefaultConfig(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pool := bp.Pool
-		records := []func(){mustAcquire(t, acquire(ctx, pool, CallRecords)), mustAcquire(t, acquire(ctx, pool, CallRecords))}
-		third := start(acquire(ctx, pool, CallRecords))
-		third.mustWait(t)
-		records[0]()
-		third.mustGranted(t)
-	})
-}
-
-// A batch writer is background work: it may not eat into the connections reserved for completion either.
-func TestPoolBatchWritersStayOutOfTheReserve(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		cfg := DefaultConfig()
-		bp, err := New(cfg, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var admissions []func()
-		for range cfg.PoolSize - cfg.PoolReserve {
-			admissions = append(admissions, mustAcquire(t, acquire(ctx, bp.Pool, Admission)))
-		}
-		write := start(acquire(ctx, bp.Pool, CallRecords))
-		write.mustWait(t)
-		admissions[0]()
-		write.mustGranted(t)
-	})
-}
-
 // A context that has ended never keeps a connection, whether it ended before or while the call waited.
 func TestPoolDeadContextKeepsNothing(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {

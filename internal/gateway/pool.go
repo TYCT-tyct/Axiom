@@ -10,36 +10,31 @@ type Class int
 
 // The classes, in the order Pool grants them.
 const (
-	// Completion is extension, settlement and SettleOrphan: money already committed to, so it may use every
-	// connection.
+	// Completion is extension, settlement and SettleOrphan: money already committed to, so it has priority.
 	Completion Class = iota
-	// CallRecords is the batch writer of call records.
-	CallRecords
 	// Admission is admission, cold-key lookup and the read-only key endpoints.
 	Admission
 	classCount
 )
 
-// Pool divides the N connections of the database pool among the classes. Only Completion may take the last
-// Reserve connections, so settlement and extension always find one however many admissions, cold-key lookups and
-// batch writes are waiting. A waiter holds nothing, so waiting costs no connection.
+// Pool schedules gateway work before it reaches pg. The physical reserve is enforced by pg, including for callers
+// outside the gateway: a permit alone cannot protect connections from background work.
 type Pool struct {
 	mu      sync.Mutex
 	used    int
 	classes [classCount]poolClass
 }
 
-// poolClass grants while the pool's total in use is below ceiling and the class's own count is below max.
+// poolClass grants while the pool's total in use is below ceiling.
 type poolClass struct {
-	ceiling, max, used int
-	waiting            waitList
+	ceiling int
+	waiting waitList
 }
 
-func newPool(size, reserve, batch int) *Pool {
+func newPool(size, reserve int) *Pool {
 	return &Pool{classes: [classCount]poolClass{
-		Completion:  {ceiling: size, max: size},
-		CallRecords: {ceiling: size - reserve, max: batch},
-		Admission:   {ceiling: size - reserve, max: size},
+		Completion: {ceiling: size},
+		Admission:  {ceiling: size - reserve},
 	}}
 }
 
@@ -56,17 +51,16 @@ func (p *Pool) Acquire(ctx context.Context, class Class) (release func(), err er
 		return nil, ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
-		p.release(class)
+		p.release()
 		return nil, err
 	}
-	return sync.OnceFunc(func() { p.release(class) }), nil
+	return sync.OnceFunc(p.release), nil
 }
 
-func (p *Pool) release(class Class) {
+func (p *Pool) release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.used--
-	p.classes[class].used--
 	p.dispatch()
 }
 
@@ -74,9 +68,8 @@ func (p *Pool) release(class Class) {
 func (p *Pool) dispatch() {
 	for i := range p.classes {
 		c := &p.classes[i]
-		for p.used < c.ceiling && c.used < c.max && c.waiting.grant() {
+		for p.used < c.ceiling && c.waiting.grant() {
 			p.used++
-			c.used++
 		}
 	}
 }
