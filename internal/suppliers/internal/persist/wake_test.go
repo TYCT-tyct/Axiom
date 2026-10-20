@@ -30,7 +30,7 @@ func (replaceableLogin) NewLogin(c adapter.Credentials) (adapter.Login, error) {
 	return adapter.Login{Kind: "tokens", Plaintext: []byte(c.AccessToken)}, nil
 }
 
-// Only the catalog fails permanently. Other tasks keep committing without replacing the listing.
+// The balance keeps succeeding while the catalog stops and the other tasks wait beyond the next balance read.
 type unreadableCatalog struct{ adapter.Manager }
 
 func (unreadableCatalog) Account(context.Context) (adapter.Account, error) {
@@ -40,10 +40,10 @@ func (unreadableCatalog) Offer(context.Context) (adapter.Offer, error) {
 	return adapter.Offer{}, adapter.ErrUnrecognised
 }
 func (unreadableCatalog) Keys(context.Context) ([]adapter.KeyState, error) {
-	return nil, adapter.ErrBucketsFull
+	return nil, adapter.Blocked{Until: t0.Add(time.Hour)}
 }
 func (unreadableCatalog) Charges(context.Context, adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
-	return adapter.ChargePage{}, nil, adapter.ErrBucketsFull
+	return adapter.ChargePage{}, nil, adapter.Blocked{Until: t0.Add(time.Hour)}
 }
 
 // An alias added after the replacement must project even if the catalog task never succeeds again.
@@ -92,6 +92,13 @@ func TestAWokenSupplierStillProjectsTheListing(t *testing.T) {
 	c.clock.advance(syncer.Defaults().Interval[syncer.TaskBalance])
 	if err := engine.Round(t.Context()); err != nil {
 		t.Fatalf("the balance round after adding the alias: %v", err)
+	}
+	final, err := s.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Version != st.Version+1 || !final.Tasks[syncer.TaskBalance].LastOK.Equal(c.clock.now()) {
+		t.Fatalf("the balance round did not commit exactly one balance step: %+v", final.Tasks)
 	}
 	same(t, "the endpoint of the name a person mapped",
 		c.column("endpoints", "upstream_name || ' ' || model_id::text", "upstream_name"), []string{"mystery-model " + known.String()})
