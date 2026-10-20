@@ -362,6 +362,11 @@ func TestMailbox(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMailboxRefusals: what the envelope cannot carry is refused, and the refusal never quotes the address.
+func TestMailboxRefusals(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		addr netmail.Address
