@@ -36,6 +36,7 @@ type openAIDetails struct {
 	CacheWrite    int64                     `json:"cache_write_tokens"`
 	Audio         int64                     `json:"audio_tokens"`
 	Image         int64                     `json:"image_tokens"`
+	Video         int64                     `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
 	Text          int64                     `json:"text_tokens"`
 	CachedDetails *openAICachedDetails      `json:"cached_tokens_details"`
 	Reasoning     int64                     `json:"reasoning_tokens"`
@@ -87,6 +88,11 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 		if !countOK(d.Text) || d.Text > *out {
 			return r, fmt.Errorf("usage: invalid output text count")
 		}
+		// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
+		// output total: checked, and billed with that total rather than again on its own.
+		if !countOK(d.Video) || d.Video > *out {
+			return r, fmt.Errorf("usage: invalid output video count")
+		}
 		if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
 			[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 			return r, err
@@ -103,13 +109,14 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 }
 
 // openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
-// uncached remainder: absent intersection detail cannot justify charging a cached image a second time.
+// uncached remainder: absent intersection detail cannot justify charging a cached image a second time. Video has no item
+// of its own, so its input tokens are image_in with the images (catalog README.md「计费项与用量」).
 func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
-	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Text},
+	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Video, d.Text},
 		func(n int64) bool { return !countOK(n) || n > total }) {
 		return fmt.Errorf("usage: input or a part of it is not a count within its total %d", total)
 	}
-	image, audio := d.Image, d.Audio
+	image, audio := d.Image+d.Video, d.Audio // no overflow: each count is at most 10¹⁰
 	if c := d.CachedDetails; c != nil {
 		if !c.within(d) {
 			return fmt.Errorf("usage: cached modality counts exceed their totals")
@@ -125,7 +132,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Audio > 0 {
 		r.set(catalog.ItemAudioIn, audio)
 	}
-	if d.Image > 0 {
+	if d.Image > 0 || d.Video > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
 	r.physicalInput = tokenTotal{total, true}
