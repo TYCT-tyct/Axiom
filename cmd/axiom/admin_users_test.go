@@ -257,6 +257,29 @@ func TestGrantCreditReplay(t *testing.T) {
 	}
 }
 
+// TestGrantCreditReplaysAGiftStoredWithoutSource: a response stored before grants had a source, when every grant was a
+// gift, replays as a gift with its amount, batch and balance, and grants nothing again.
+func TestGrantCreditReplaysAGiftStoredWithoutSource(t *testing.T) {
+	t.Parallel()
+	g := newGrantee(t)
+	body, key := grantBody("5000000000", ""), newKey()
+	var first, again adminapi.CreditGrant
+	decode(t, g.change(g.s, http.MethodPost, g.path, body, key), &first)
+	g.run("UPDATE platform.idempotency SET response = response - 'source' WHERE operation = 'grantCredit'")
+	if g.text("SELECT count(*)::text FROM platform.idempotency WHERE operation = 'grantCredit' AND response ? 'source'") != "0" {
+		t.Fatal("the stored response still has a source")
+	}
+	rec := g.change(g.s, http.MethodPost, g.path, body, key)
+	expectAdmin(t, "the old response again", rec, http.StatusCreated, "")
+	decode(t, rec, &again)
+	if diff := cmp.Diff(first, again); diff != "" || again.Source != adminapi.CreditSourceGift || rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("the replay (-want +got) replayed=%q:\n%s", rec.Header().Get("Idempotency-Replayed"), diff)
+	}
+	if g.text("SELECT count(*)::text FROM billing.credit_batches") != "1" || g.auditCount("credit.add") != "1" || g.balanceOf() != "5000000000" {
+		t.Error("the replay granted again")
+	}
+}
+
 // TestGrantCreditKeyIsTheFirstRequests: a key is bound to the request, the account and the operator it was first used
 // with; another amount, another account or another operator's is refused and changes nothing.
 func TestGrantCreditKeyIsTheFirstRequests(t *testing.T) {

@@ -245,6 +245,9 @@ func (a adminAPI) GrantCredit(ctx context.Context, request adminapi.GrantCreditR
 	if err != nil {
 		return nil, err
 	}
+	if body.Source == "" { // a response stored before grants had a source, when every grant was a gift
+		body.Source = adminapi.CreditSourceGift
+	}
 	return adminapi.GrantCredit201JSONResponse{Body: body, Headers: adminapi.GrantCredit201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
