@@ -252,12 +252,12 @@ func TestLeastUsedComparesInTheSiteCurrency(t *testing.T) {
 		w.exec(fmt.Sprintf("INSERT INTO payments.merchant_usage VALUES ('%s', '%s', %s, %d)", ids[code], w.siteA, today, used[code]))
 	}
 	usd := w.site(w.siteA, "USD")
-	// 10 USD at 7.2 with the 2% buffer is 73.44 CNY.
+	// 10 USD at 7.2 with the 2% buffer is 73.44 CNY, 75.72 with the 3% fee.
 	options, err := w.p.Options(t.Context(), w.accountA(), usd, 10*yuan)
-	if err != nil || fmt.Sprint(options) != "[{alipay {CNY 7344} 0}]" {
+	if err != nil || fmt.Sprint(options) != "[{alipay {CNY 7572} 228}]" {
 		t.Fatalf("options = %v, %v", options, err)
 	}
-	if c, err := w.choose(w.accountA(), usd, "alipay", 10*yuan); err != nil || c.offer.MerchantID != ids["CNY"] || c.quote.Total.Minor != 7344 {
+	if c, err := w.choose(w.accountA(), usd, "alipay", 10*yuan); err != nil || c.offer.MerchantID != ids["CNY"] || c.quote.Total.Minor != 7572 {
 		t.Fatalf("chose %+v, %v; want the CNY merchant", c, err)
 	}
 }
