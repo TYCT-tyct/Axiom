@@ -46,6 +46,8 @@ type PaidCredit struct{ ID, Site, Account uuid.UUID; SiteCurrency platform.Curre
 type Payment struct{ Currency platform.Currency; Paid, Fee int64 } // 已实现；付款币种的最小单位，0 ≤ Fee < Paid
 type Channel struct{ Merchant uuid.UUID; Offline string }            // 已实现；恰好一个非零
 func CreditsFor(p Payment, site platform.Currency, rate *BillingExchangeRate) (int64, error) // 已实现：(实付 − 手续费) 按 rate 折成额度，向下取整一次；CreditPaid 的上限，管理接口按它算线下付款的额度
+func TopUpRate(ctx context.Context, tx pg.Tx, site uuid.UUID, from, to platform.Currency) (Rate, error) // 已实现：充值报价用的当前参考汇率版本加站点的充值缓冲；tx 须是平台范围；没有这对货币的汇率时 ErrNoRate
+type Rate struct{ Reference platform.ExchangeRate; BufferPPM int64; Applied *big.Rat } // 已实现；Applied = 参考汇率 ×（1 + 缓冲），1 from 值多少 to，精确分数，分子分母可能超出 int64
 func MinorUnits(c platform.Currency, billionths int64) (int64, error) // 已实现：十亿分之一单位换成最小单位，不是整数个最小单位就报错
 func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 或 CreditPaid 做的批次（来源、金额、过期、创建时间，付费的还有付款、渠道和汇率版本），管理接口回答加额度时读
 func RegisterExpire(cfg ExpireConfig) error // 已实现：把到期作废登记为队列上的周期任务 billing.expire_credit（`money` 队列，与扣费对账共用，不和同步、归档抢 worker，见 [平台的「任务队列」](../platform/README.md#任务队列)），每分钟，在队列 Start 之前调用（cmd/axiom 的 startSync）；包内的 expirer.run 是一轮，writeOffAccount 是一个账户的作废
@@ -133,6 +135,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **余额行**在开户时由 `OpenBalance` 建；没有余额行就没有锁可取，`Reserve` 直接返回余额不足（零价也一样），什么也不写；追加和 `SettleOrphan` 遇到它报错。
 - **余量**按 `Exact` 精确算（余额 − 在途 − 底线，限额 − 窗口内已用），任何存得下的组合都不会回绕。
 - **墓碑**：`SettleOrphan` 找不到预留行时写一行 `segment = 0`、`amount = 0`、`released` 的行占住请求 ID，丢失的准入不可能再落库。
+- **`top_up_buffers`**（迁移 `00019_top_up_buffers.sql`，查询 `queries/topup.sql`）：`site_id`（主键）、`ppm`（0 到 100000）；站点数据，`in_scope(site_id, NULL)` 读写，应用有 SELECT、INSERT、UPDATE。没有行就用 `topup.go` 里的默认值；`TopUpRate` 在平台范围读它，写入的管理接口随支付的 E1-2a2。
 - **`endpoints`**（迁移 `00005_reservations_endpoints.sql`）：`Reserve` 与 `prices` 一起写，保留条目的端点在路线里的下标处，被删的条目写零 UUID，所以两列等长同序；只在准入写一次，与 `prices` 一样，应用对它没有 UPDATE 的授权。迁移前的预留行是 `'{}'`，与 `prices` 不等长，这样的行清理出的路线为空，只在迁移时的存量里有。清理读它记丢失的请求（[suppliers 的「丢失的请求」](../suppliers/README.md#丢失的请求)），迟到的 `Settle` 用 `prices` 定价，两者出自同一条路线。
 
 ## 结算与账本
@@ -266,6 +269,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
+| 充值缓冲默认 2%，按站点存差值，只作用于充值方向 | 人工参考汇率会滞后于市场，按参考价收会让平台在汇率波动时亏损；2% 约等于卡组织的换汇价差，用户可以接受；站点可在 0 到 10% 之间调 | 不加缓冲（sub2api、new-api 的固定汇率）：汇率一动平台就亏；全局一个值：二级站点的风险不同 |
 | 先锁余额行，计数用同批的下一条语句读 | READ COMMITTED 下新语句才看得到锁前的提交；同批发出不多一次往返 | 一条语句锁读多表：读到旧快照 |
 | 追加按累计目标，已覆盖即成功，写入以锁内读到的段号比较后再写；金额只增不减 | 重发和前一次尝试的追加都不会多扣，回退到便宜条目也不缩小预留 | 按增量追加：重发会多扣 |
 | 尝试成本与对账键在最后的结算事务里写，成本逐次尝试写 | 与收费同成同败：供应商那一行和账上的成本分录一起出现或都不出现；写入是 `unnest` 一条语句，往返与尝试次数无关。崩溃的请求没有尝试可写，由丢失的请求留下路线 | 每次尝试结束各写一次：成本与收费不在一个事务里，崩溃时两边不一致 |
