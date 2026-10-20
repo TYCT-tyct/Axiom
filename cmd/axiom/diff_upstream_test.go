@@ -109,10 +109,13 @@ func (u *diffUpstream) write(w http.ResponseWriter, reply diffReply, model strin
 	}
 }
 
-// wireOf names the format a path is the endpoint of: the upstream is asked in Messages or in Responses.
+// wireOf names the format a path is the endpoint of: the upstream is asked in Messages, in Chat or in Responses.
 func wireOf(path string) string {
-	if strings.HasSuffix(path, "/messages") {
+	switch {
+	case strings.HasSuffix(path, "/messages"):
 		return "messages"
+	case strings.HasSuffix(path, "/chat/completions"):
+		return "chat"
 	}
 	return "responses"
 }
@@ -137,12 +140,24 @@ func diffReplies(t *testing.T) map[string]diffReply {
 		"messages-tools":      {stream: sample("messages/tool-use/upstream.sse"), whole: messagesToolsWhole},
 		"responses-text":      {stream: responsesText, whole: completedResponse(t, responsesText)},
 		"responses-reasoning": {stream: responsesTool, whole: completedResponse(t, responsesTool)},
+		"chat-text":           {stream: chatTextStream(sample("chat/text/upstream.sse")), whole: chatTextWhole},
+		"chat-tools":          {stream: sample("assembled/chat-tool-calls.sse"), whole: chatToolsWhole},
+		"chat-reasoning":      {stream: sample("assembled/chat-reasoning-cache.sse"), whole: chatReasoningWhole},
 	}
 	for name, status := range map[string]int{"429": 429, "500": 500, "400": 400} {
 		replies["responses-"+name] = diffReply{status: status, body: openAIError[name]}
 		replies["messages-"+name] = diffReply{status: status, body: anthropicError[name]}
+		replies["chat-"+name] = diffReply{status: status, body: openAIError[name]}
 	}
 	return replies
+}
+
+// chatTextStream is the Chat sample with the usage chunk that stream_options.include_usage asks for, which the sample
+// (the official Streaming example) lacks, so that both gateways report the upstream's count and not their own.
+func chatTextStream(stream string) string {
+	const usage = `data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"gpt-6-astra","choices":[],` +
+		`"usage":{"prompt_tokens":9,"completion_tokens":12,"total_tokens":21}}` + "\n\n"
+	return strings.Replace(stream, "data: [DONE]", usage+"data: [DONE]", 1)
 }
 
 // completedResponse is the whole reply of a Responses stream: the response its last event carries.
@@ -164,6 +179,25 @@ func completedResponse(t *testing.T, stream string) string {
 	t.Fatal("a Responses stream without response.completed")
 	return ""
 }
+
+// The whole replies of the Chat conversations, in the shape of the official reference and with the content and the usage
+// of the streams they go with (the Chat sample, and testdata/assembled/chat-tool-calls.sse and chat-reasoning-cache.sse).
+const (
+	chatTextWhole = `{"id":"chatcmpl-123","object":"chat.completion","created":1694268190,"model":"gpt-6-astra","choices":[{"index":0,` +
+		`"message":{"role":"assistant","content":"Hello"},"logprobs":null,"finish_reason":"stop"}],` +
+		`"usage":{"prompt_tokens":9,"completion_tokens":12,"total_tokens":21}}`
+	chatToolsWhole = `{"id":"chatcmpl-tool1","object":"chat.completion","created":1760000000,"model":"deepseek-chat","choices":[{"index":0,` +
+		`"message":{"role":"assistant","content":"Let me check.","tool_calls":[` +
+		`{"id":"call_00_Kq3vT9","type":"function","function":{"name":"get_weather","arguments":"{\"location\": \"Paris\"}"}},` +
+		`{"id":"call_01_Zb8mW2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],` +
+		`"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,"prompt_tokens_details":{"cached_tokens":64},` +
+		`"prompt_cache_hit_tokens":64,"prompt_cache_miss_tokens":56}}`
+	chatReasoningWhole = `{"id":"7a1e0c2b","object":"chat.completion","created":1760000100,"model":"deepseek-reasoner","choices":[{"index":0,` +
+		`"message":{"role":"assistant","content":"The GCD is 21.","reasoning_content":"1071 = 2 x 462 + 147. Then 462 = 3 x 147 + 21."},` +
+		`"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":50,"total_tokens":250,` +
+		`"prompt_tokens_details":{"cached_tokens":128},"completion_tokens_details":{"reasoning_tokens":30},` +
+		`"prompt_cache_hit_tokens":128,"prompt_cache_miss_tokens":72}}`
+)
 
 const (
 	messagesTextWhole = `{"id":"msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY","type":"message","role":"assistant","model":"claude-opus-5-5",` +

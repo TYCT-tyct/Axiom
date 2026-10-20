@@ -288,10 +288,7 @@ func (w *callWorld) seedSupplier() {
 	}
 	supplier, group, credential := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	sealed := masterKeys(w.t).Seal(secret.New(supplierKey), secret.Location{Table: "suppliers.credentials", RowID: credential.String(), Purpose: "key"})
-	stmts := []struct {
-		sql  string
-		args []any
-	}{
+	stmts := []statement{
 		{`INSERT INTO suppliers.suppliers (id, owner_scope, name, kind, origin, upstream_account, native_unit,
 			settlement_currency, mgmt_egress_id, status, balance_native)
 			VALUES ($1, 'platform', 'Relay', 'newapi', $2, 'account', 'quota', 'USD', 'direct', 'active', 100)`, []any{supplier, w.supplier.server.URL}},
@@ -307,20 +304,7 @@ func (w *callWorld) seedSupplier() {
 	for _, e := range []struct{ slug, upstream, format string }{
 		{"anthropic/claude-opus-5-5", "up-claude", "messages"}, {"openai/gpt-6-astra", "up-gpt", "responses"},
 	} {
-		endpoint, schedule := uuid.NewV7(), uuid.NewV7()
-		stmts = append(stmts, []struct {
-			sql  string
-			args []any
-		}{
-			{`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
-				VALUES ($1, $2, $3, $4, $5, ARRAY[$6])`, []any{endpoint, supplier, group, w.models[e.slug], e.upstream, e.format}},
-			{
-				`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-				VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`,
-				[]any{schedule, supplier, endpoint, servedCost},
-			},
-			{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
-		}...)
+		stmts = append(stmts, endpointStatements(supplier, group, w.models[e.slug], e.upstream, e.format)...)
 	}
 	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		for _, s := range stmts {
@@ -509,4 +493,25 @@ type nodeLog struct {
 func (l nodeLog) Write(p []byte) (int, error) {
 	l.t.Log(strings.TrimSpace(string(p)))
 	return l.serves.Write(p)
+}
+
+// statement is one SQL statement of a seed and its arguments.
+type statement struct {
+	sql  string
+	args []any
+}
+
+// endpointStatements write an endpoint of a model on the supplier, speaking format and costed from servedCost.
+func endpointStatements(supplier, group, model uuid.UUID, upstream, format string) []statement {
+	endpoint, schedule := uuid.NewV7(), uuid.NewV7()
+	return []statement{
+		{`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+			VALUES ($1, $2, $3, $4, $5, ARRAY[$6])`, []any{endpoint, supplier, group, model, upstream, format}},
+		{
+			`INSERT INTO suppliers.cost_schedules (id, supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
+			VALUES ($1, $2, $3, 'quota', $4::jsonb, 'published', 'v1')`,
+			[]any{schedule, supplier, endpoint, servedCost},
+		},
+		{`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = $1 WHERE id = $2`, []any{schedule, endpoint}},
+	}
 }
