@@ -36,6 +36,15 @@ func (db *DB) Hold(ctx context.Context, name string, every time.Duration) (*Hold
 		return nil, err
 	}
 	conn := borrowed.Hijack()
+	// A process that dies is gone from the server at once, because the system closes its sockets. A host that dies, or a
+	// network that is cut, closes nothing: the server finds the half-open connection by its own keepalive, which is two
+	// hours by default, and the name would be held that long against the node's restart. So the session asks for probes
+	// every 5 s, three of them unanswered, and for unacknowledged data to be given up after 20 s: the server frees the name
+	// within about 20 to 30 s of the host going. A Unix socket ignores the settings, and has no network to be cut.
+	if _, err := conn.Exec(ctx, holdKeepalive); err != nil {
+		_ = conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the setting's error is the one to report
+		return nil, err
+	}
 	var got bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, holdKey(name)).Scan(&got); err != nil {
 		_ = conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the lock query's error is the one to report
@@ -48,6 +57,9 @@ func (db *DB) Hold(ctx context.Context, name string, every time.Duration) (*Hold
 	go h.watch(context.WithoutCancel(ctx), every)
 	return h, nil
 }
+
+// holdKeepalive is what the holder's session sets on itself, in milliseconds for tcp_user_timeout and in seconds for the rest.
+const holdKeepalive = `SET tcp_keepalives_idle = 5; SET tcp_keepalives_interval = 5; SET tcp_keepalives_count = 3; SET tcp_user_timeout = 20000`
 
 // holdKey is the advisory lock key of a name.
 func holdKey(name string) int64 {

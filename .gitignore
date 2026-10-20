@@ -23,3 +23,6 @@ deploy/bin/
 # Logs and scratch output
 *.log
 tmp/
+
+# A program built by hand in the working directory
+/axiom.exe

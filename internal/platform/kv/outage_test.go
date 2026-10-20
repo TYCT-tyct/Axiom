@@ -422,23 +422,44 @@ func TestOOMFallsBack(t *testing.T) {
 	}
 }
 
-// fillUp puts the server over its memory limit, and checks that it is. A write is refused when the server's memory,
-// counting the buffer the write itself arrived in, is over the limit, so filling with writes ends with the data just under
-// the limit and a server that takes a smaller write again once the refused one's buffer is gone. What leaves it over is a
-// small command that makes a big value: SETRANGE at a large offset. Then a small write must be refused, or the test stops.
+// usedMemory is the memory the server reports as used, from INFO memory.
+func usedMemory(t *testing.T, server *kvtest.Server) int64 {
+	t.Helper()
+	info, err := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
+	if err != nil {
+		t.Fatalf("read the server's memory: %v", err)
+	}
+	for line := range strings.SplitSeq(info, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "used_memory:"); ok {
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				t.Fatalf("read used_memory %q: %v", value, err)
+			}
+			return n
+		}
+	}
+	t.Fatal("INFO memory has no used_memory")
+	return 0
+}
+
+// fillUp puts the server's data over its memory limit and checks that it is. A write is refused when the server's memory,
+// counting the buffer the write arrived in, is over the limit, so filling with writes alone ends with the data hovering at
+// the limit, where one write is refused and the next fits again. So it fills to two thirds of the limit with writes, and
+// then makes a value larger than the whole limit with one small command, SETRANGE at a large offset, which the server
+// takes because it is under the limit when the command starts. The data is over the limit then, and stays over: a small
+// write must be refused, or the test stops.
 func fillUp(t *testing.T, server *kvtest.Server) {
 	t.Helper()
 	filler := strings.Repeat("x", 1<<10)
-	for i := range 1 << 14 {
-		if server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build()).Error() != nil {
-			break
+	for i := 0; usedMemory(t, server) < 2<<20; i++ { // 2 MiB of the 3 MiB the test gives the server
+		if i == 1<<14 {
+			t.Fatal("16 MiB of writes did not fill a server limited to 3 MiB")
 		}
+		server.Do(t, t.Context(), server.Admin.B().Set().Key("ax:fill:"+strconv.Itoa(i)).Value(filler).Build())
 	}
-	// Accepted if the server is under its limit, and then it is over; refused if it is over already.
-	_ = server.Admin.Do(t.Context(), server.Admin.B().Setrange().Key("ax:fill:big").Offset(8<<20).Value("x").Build()).Error() //nolint:errcheck // either answer leaves the server over
+	server.Do(t, t.Context(), server.Admin.B().Setrange().Key("ax:fill:big").Offset(8<<20).Value("x").Build())
 	err := server.Admin.Do(t.Context(), server.Admin.B().Set().Key("ax:fill:probe").Value("x").Build()).Error()
 	if err == nil || !strings.HasPrefix(err.Error(), "OOM") {
-		used, infoErr := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
-		t.Fatalf("the server did not go over its limit: a small write got %v (%v): %s", err, infoErr, used)
+		t.Fatalf("the server did not stay over its limit: a small write got %v, with %d bytes used", err, usedMemory(t, server))
 	}
 }

@@ -1,6 +1,7 @@
 package pg_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -43,6 +44,25 @@ func TestHoldIsOneSessionPerName(t *testing.T) {
 	for _, h := range []*pg.Hold{again, other} {
 		if err := h.Release(t.Context()); err != nil {
 			t.Fatalf("release: %v", err)
+		}
+	}
+}
+
+// TestHoldAsksTheServerToDropADeadConnection: the holder's session sets TCP keepalive probes and a user timeout on itself,
+// so that when the host or the network goes without closing anything the server frees the name within about half a minute
+// and not after its two-hour default (the settings are the server's, and a Unix socket ignores them).
+func TestHoldAsksTheServerToDropADeadConnection(t *testing.T) {
+	t.Parallel()
+	held, err := open(t, pgtest.New(t).App).Hold(t.Context(), "node:a", time.Hour)
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the test is over
+	for name, want := range map[string]string{
+		"tcp_keepalives_idle": "5", "tcp_keepalives_interval": "5", "tcp_keepalives_count": "3", "tcp_user_timeout": "20000",
+	} {
+		if got, err := held.Setting(t.Context(), name); err != nil || got != want {
+			t.Errorf("%s = %q (%v), want %q", name, got, err, want)
 		}
 	}
 }
