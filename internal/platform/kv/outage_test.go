@@ -155,7 +155,7 @@ func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
 	clock, seen := &offsetClock{}, newReadings()
-	client := server.Open(t, kv.Deps{Now: clock.Now, Meter: seen.meter})
+	client := server.Open(t, kv.Deps{Now: clock.Now, Meter: seen.meter, AccessTimeout: kv.Timeout})
 	script := kv.NewScript(countScript)
 	if _, err := count(t, client, script, 100); err != nil {
 		t.Fatalf("run the count: %v", err)
@@ -217,7 +217,7 @@ func TestEveryAccessReturns(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
 	frozen := time.Now()
-	client := server.Open(t, kv.Deps{Now: func() time.Time { return frozen }})
+	client := server.Open(t, kv.Deps{Now: func() time.Time { return frozen }, AccessTimeout: kv.Timeout})
 	script := kv.NewScript(countScript)
 	keys := window(client, 100)
 	resume := pauseWrites(t, server)
@@ -376,6 +376,8 @@ func TestOOMFallsBack(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Memory("3mb"))
 	seen := newReadings()
+	// The server's answer is what is under test, not how soon it comes: kvtest gives the client a wide deadline, so a busy
+	// machine cannot turn the answer into a timeout.
 	client := server.Open(t, kv.Deps{Meter: seen.meter})
 	script := kv.NewScript(countScript)
 	kept := window(client, 100)
@@ -384,7 +386,12 @@ func TestOOMFallsBack(t *testing.T) {
 	}
 	fillUp(t, server)
 	const refused = 10 // more than the breaker's streak of unavailable accesses
-	refuseWrites(t, client, script, refused)
+	for i := range refused {
+		_, err := client.Do(t.Context(), kv.Precheck, script.Cmd(window(client, 101+i), "600000"))
+		if !errors.Is(err, kv.ErrUnavailable) || !strings.Contains(err.Error(), "OOM") {
+			t.Fatalf("a full server answered a write with %v", err)
+		}
+	}
 	if got := seen.calls(t, "error"); got != refused {
 		t.Errorf("%d refused writes counted as errors, want %d", got, refused)
 	}
@@ -414,20 +421,4 @@ func fillUp(t *testing.T, server *kvtest.Server) {
 	}
 	used, err := server.Do(t, t.Context(), server.Admin.B().Info().Section("memory").Build())[0].ToString()
 	t.Fatalf("16 MiB went into a server limited to 3 MiB without a refusal (%v): %s", err, used)
-}
-
-// refuseWrites sends writes to a full server until it has answered n of them with OOM. A write that met a busy machine and
-// timed out says nothing about the memory, so it is tried again; only the answers of the server are counted.
-func refuseWrites(t *testing.T, client *kv.Client, script kv.Script, n int) {
-	t.Helper()
-	for answered, attempt := 0, 0; answered < n; attempt++ {
-		_, err := client.Do(t.Context(), kv.Precheck, script.Cmd(window(client, 101+attempt), "600000"))
-		switch {
-		case errors.Is(err, context.DeadlineExceeded) && attempt < 10*n:
-		case errors.Is(err, kv.ErrUnavailable) && strings.Contains(err.Error(), "OOM"):
-			answered++
-		default:
-			t.Fatalf("a full server answered a write with %v", err)
-		}
-	}
 }

@@ -4,6 +4,7 @@
 package kv
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"uuid"
 
 	"github.com/valkey-io/valkey-go"
 	"go.opentelemetry.io/otel/metric"
@@ -30,6 +32,9 @@ type Deps struct {
 	Scope  pg.Scope
 	Meter  metric.Meter // where the client's instruments go; nil for none
 	Logger *slog.Logger // nil for none
+	// AccessTimeout is the deadline of an access, and zero is Timeout. A test of what the server answers, not of how fast,
+	// widens it, so that a busy machine cannot decide the outcome.
+	AccessTimeout time.Duration
 	// HeartbeatTimeout bounds one round of the heartbeat's database work; zero is defaultHeartbeatTimeout. A test shortens it.
 	HeartbeatTimeout time.Duration
 	// Now is the local clock, and nil is time.Now. Tests set one that is wrong to see the clock check, and one they
@@ -41,17 +46,18 @@ type Deps struct {
 // breaker around every access, and the heartbeat that makes a wrong N visible. It holds no business rule: a module keeps
 // its script and builds its keys here (internal/platform/kv/README.md).
 type Client struct {
-	vk     valkey.Client // nil in single-core mode, where every use stays in the process
-	ns     string
-	now    func() time.Time // the local clock, which Now corrects by skew
-	skew   atomic.Int64     // the server's clock less this one's, in nanoseconds
-	live   atomic.Int64     // nodes the heartbeat sees alive, this one included
-	config int              // the configured N
-	logger *slog.Logger
-	m      metrics
-	br     *breaker
-	slots  *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
-	hear   *heartbeat          // nil without a database: a test's client
+	vk      valkey.Client // nil in single-core mode, where every use stays in the process
+	ns      string
+	now     func() time.Time // the local clock, which Now corrects by skew
+	skew    atomic.Int64     // the server's clock less this one's, in nanoseconds
+	live    atomic.Int64     // nodes the heartbeat sees alive, this one included
+	config  int              // the configured N
+	logger  *slog.Logger
+	m       metrics
+	br      *breaker
+	slots   *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
+	hear    *heartbeat          // nil without a database: a test's client
+	timeout time.Duration       // the deadline of an access
 	// beatTimeout bounds one round of the heartbeat's database work.
 	beatTimeout time.Duration
 
@@ -70,15 +76,7 @@ type Client struct {
 // error, and the node starts on its fallbacks; a server that refuses the user, has no memory limit, or disagrees about
 // the time stops the start, because those are deployment mistakes.
 func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
-	if deps.Now == nil {
-		deps.Now = time.Now
-	}
-	if deps.Logger == nil {
-		deps.Logger = slog.New(slog.DiscardHandler)
-	}
-	if deps.HeartbeatTimeout == 0 {
-		deps.HeartbeatTimeout = defaultHeartbeatTimeout
-	}
+	deps.fillDefaults()
 	namespace := cfg.Namespace
 	if namespace == "" {
 		namespace = DefaultNamespace
@@ -88,13 +86,13 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 	}
 	c := &Client{
 		ns: namespace, now: deps.Now, config: cfg.Nodes, logger: deps.Logger, m: newMetrics(deps.Meter),
-		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), beatTimeout: deps.HeartbeatTimeout,
+		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), beatTimeout: deps.HeartbeatTimeout, timeout: deps.AccessTimeout,
 	}
 	c.live.Store(int64(cfg.Nodes))
 	// The heartbeat speaks first: a second node that reached this database, with Valkey or without, or an N set too low,
 	// is found before the server is touched, and this node's row is written only once it may start.
 	if deps.DB != nil {
-		c.hear = newHeartbeat(deps.DB, deps.Scope)
+		c.hear = newHeartbeat(deps.DB, deps.Scope, cmp.Or(cfg.NodeID, uuid.New().String()))
 		if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
 			return nil, err
 		}
@@ -110,6 +108,22 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 		c.done.Go(func() { c.watch(loop) })
 	}
 	return c, nil
+}
+
+// fillDefaults gives the settings a test leaves out their production values.
+func (d *Deps) fillDefaults() {
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	if d.Logger == nil {
+		d.Logger = slog.New(slog.DiscardHandler)
+	}
+	if d.AccessTimeout == 0 {
+		d.AccessTimeout = Timeout
+	}
+	if d.HeartbeatTimeout == 0 {
+		d.HeartbeatTimeout = defaultHeartbeatTimeout
+	}
 }
 
 // connect makes the client and judges the first access. With ForceSingleClient the client comes back even when its first

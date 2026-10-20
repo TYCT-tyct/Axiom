@@ -21,7 +21,14 @@ const (
 	PasswordFileVar = "AXIOM_VALKEY_PASSWORD_FILE" //nolint:gosec // the name of a variable, not a credential
 	// NodesVar is the number of core nodes, N: login's fallback divides by it and the heartbeat checks it.
 	NodesVar = "AXIOM_CORE_NODES"
+	// NodeIDVar names this node: the heartbeat row is its own, so a node that restarts after a crash replaces the row it
+	// left and is not counted beside it, and only a different live node counts against N. serve defaults it to the host
+	// name; two nodes must not share one (README「配置与启动」).
+	NodeIDVar = "AXIOM_NODE_ID"
 )
+
+// maxNodeID bounds the identity: a name longer than this is a setting chosen wrong.
+const maxNodeID = 128
 
 // maxPassword bounds the password file: a password longer than this is a file chosen wrong.
 const maxPassword = 128
@@ -31,6 +38,7 @@ type Config struct {
 	URL          string // URLVar
 	PasswordFile string // PasswordFileVar
 	Nodes        int    // NodesVar: how many core nodes the deployment has, at least 1
+	NodeID       string // NodeIDVar; empty makes a new identity at every start, which tests want
 	// Namespace is the key format version, "v1" in production and one random per test case, so cases that share a
 	// Valkey do not see each other's keys (README「键」). Empty is "v1".
 	Namespace string
@@ -55,6 +63,9 @@ type endpoint struct {
 func (c *Config) Resolve() error {
 	if c.Nodes < 1 {
 		return fmt.Errorf("%s: want a whole number of at least 1", NodesVar)
+	}
+	if len(c.NodeID) > maxNodeID || strings.ContainsFunc(c.NodeID, func(r rune) bool { return r <= ' ' || r > '~' }) {
+		return fmt.Errorf("%s: want a name of at most %d printable characters without spaces", NodeIDVar, maxNodeID)
 	}
 	if c.URL == "" {
 		if c.Nodes > 1 {

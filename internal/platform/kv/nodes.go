@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
-	"uuid"
 
 	"axiom/internal/platform/pg"
 )
@@ -31,11 +30,11 @@ const (
 type heartbeat struct {
 	db    *pg.DB
 	scope pg.Scope
-	id    uuid.UUID // made at every start, so a restart is a new node until the old row goes stale
+	id    string // the node's identity, which a restarted node keeps: its old row is its own, and is replaced
 }
 
-func newHeartbeat(db *pg.DB, scope pg.Scope) *heartbeat {
-	return &heartbeat{db: db, scope: scope, id: uuid.New()}
+func newHeartbeat(db *pg.DB, scope pg.Scope, id string) *heartbeat {
+	return &heartbeat{db: db, scope: scope, id: id}
 }
 
 // startLock is the advisory lock that one node at a time holds while it counts the others and writes its own row. Without

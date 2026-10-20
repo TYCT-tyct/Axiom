@@ -110,7 +110,7 @@ func TestSharedCountMatchesTheProcessCount(t *testing.T) {
 			window := h.Limits.cfg.RateWindow
 			clock.midWindow(h.KV, window)
 			reference := NewRateCounter(window)
-			moment := h.KV.Now()
+			moment := h.KV.Now().Truncate(time.Millisecond) // a whole millisecond, which the shared count reads and the process count must read alike
 			index, _ := reference.slot(moment)
 			reference.now, reference.start = h.KV.Now, time.UnixMilli(index*window.Milliseconds())
 			random := rand.New(rand.NewPCG(seed, 1)) //nolint:gosec // a seeded sequence of inputs, repeatable

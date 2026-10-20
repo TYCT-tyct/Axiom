@@ -402,7 +402,7 @@ func (w *callWorld) start() runningNode {
 	// The story has two nodes of one deployment (checkSecondNode), so this is one: N is 2, and the nodes share a Valkey
 	// for the rate counts, which serveVia lets through where serve, the program's entry, would refuse (singleNodeOnly).
 	cache := kvtest.New(w.t)
-	environ = append(environ, "AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL="+cache.URL, "AXIOM_VALKEY_PASSWORD_FILE="+cache.PasswordFile)
+	environ = append(environ, "AXIOM_NODE_ID="+uuid.New().String(), "AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL="+cache.URL, "AXIOM_VALKEY_PASSWORD_FILE="+cache.PasswordFile)
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(w.t.Context())
 	done := make(chan error, 1)

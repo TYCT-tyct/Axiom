@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -80,12 +81,14 @@ func TestServeRefusesASecondNodeOfOne(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	first := make(chan error, 1)
-	go func() { first <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	go func() {
+		first <- serve(ctx, append(slices.Clone(environ), "AXIOM_NODE_ID=first"), slog.New(slog.NewJSONHandler(logs, nil)))
+	}()
 	servingAddrs(t, logs, first)
 
 	second, stop := context.WithTimeout(t.Context(), 30*time.Second)
 	defer stop()
-	err := serve(second, environ, slog.New(slog.DiscardHandler))
+	err := serve(second, append(slices.Clone(environ), "AXIOM_NODE_ID=second"), slog.New(slog.DiscardHandler))
 	if err == nil {
 		t.Fatal("a second node against N = 1 started")
 	}

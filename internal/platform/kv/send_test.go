@@ -47,7 +47,7 @@ func (*stuckValkey) Close() {}
 func stuckClient(places int64) (*Client, *stuckValkey) {
 	server := &stuckValkey{release: make(chan struct{})}
 	return &Client{
-		vk: server, now: time.Now, logger: slog.New(slog.DiscardHandler), m: newMetrics(nil), br: newBreaker(),
+		vk: server, now: time.Now, logger: slog.New(slog.DiscardHandler), m: newMetrics(nil), br: newBreaker(), timeout: Timeout,
 		slots: semaphore.NewWeighted(places),
 	}, server
 }

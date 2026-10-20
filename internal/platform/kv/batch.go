@@ -98,7 +98,7 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 		return nil, ErrUnavailable
 	}
 	caller := ctx
-	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	values, err := c.send(ctx, caller, c.build(cmds))
 	took := c.now().Sub(started)

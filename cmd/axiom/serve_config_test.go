@@ -126,6 +126,14 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			[]string{"AXIOM_CORE_NODES: 2 nodes are not supported yet"},
 		},
 		{
+			"a node ID that is no name",
+			[]string{
+				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
+				"AXIOM_NODE_ID=planted value",
+			},
+			[]string{"AXIOM_NODE_ID: want a name"},
+		},
+		{
 			"more than one core node and no Valkey",
 			[]string{
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,

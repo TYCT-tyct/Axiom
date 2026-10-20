@@ -8,11 +8,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	mrand "math/rand/v2"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -70,11 +72,6 @@ func Own(t testing.TB, opts ...Option) *Server {
 		opt(&settings)
 	}
 	var err error
-	// Docker gives a restarted container a new port when it is left to choose one, and a client dials the address it
-	// was given: a test that restarts the server needs the same port back.
-	if settings.hostPort, err = freePort(t.Context()); err != nil {
-		t.Fatalf("find a free port: %v", err)
-	}
 	password, admin := newPassword(), newPassword()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "password")
@@ -83,7 +80,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), startTimeout)
 	t.Cleanup(cancel)
-	b, err := startServer(ctx, acl(password, admin), settings)
+	b, err := startOnAPort(ctx, acl(password, admin), settings)
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)
 	}
@@ -139,15 +136,37 @@ const (
 	defaultPolicy = "noeviction"
 )
 
-// freePort is a port nothing listens on now, as a string.
-func freePort(ctx context.Context) (string, error) {
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
+// startOnAPort starts a server of a test's own on a port of this machine that it chooses. Docker gives a restarted
+// container a new port when it is left to choose one, and a client dials the address it was given: a test that restarts the
+// server needs the same port back. The port is picked below the range Docker and the system hand out, and another test
+// may pick the same one between the check and the bind, so a bind that fails is tried again on another port.
+func startOnAPort(ctx context.Context, users string, settings options) (*box, error) {
+	var err error
+	for range 8 {
+		if settings.hostPort, err = unusedPort(ctx); err != nil {
+			return nil, err
+		}
+		b, startErr := startServer(ctx, users, settings)
+		if startErr == nil {
+			return b, nil
+		}
+		if err = startErr; !strings.Contains(startErr.Error(), "programming external connectivity") {
+			break
+		}
 	}
-	defer listener.Close() //nolint:errcheck // nothing was written
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	return port, err
+	return nil, err
+}
+
+// unusedPort is a port from 20000 to 29999 that nothing on this machine listens on now.
+func unusedPort(ctx context.Context) (string, error) {
+	for range 100 {
+		port := strconv.Itoa(20000 + mrand.IntN(10000)) //nolint:gosec // a port to try, not a secret
+		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
+		if err == nil {
+			return port, listener.Close()
+		}
+	}
+	return "", errors.New("no unused port from 20000 to 29999")
 }
 
 // Memory sets maxmemory, for the test that fills the server: a limit small enough to fill in a test.
@@ -174,9 +193,14 @@ func (s *Server) Open(t testing.TB, deps kv.Deps) *kv.Client {
 	return s.OpenIn(t, Namespace(), deps)
 }
 
-// OpenIn is Open in the given namespace: two clients of one namespace are two nodes of one deployment.
+// OpenIn is Open in the given namespace: two clients of one namespace are two nodes of one deployment. The client's
+// access deadline is a minute unless the test sets one: a test of what the server answers must not be decided by how busy
+// the machine is, and the tests of the deadline itself set kv.Timeout.
 func (s *Server) OpenIn(t testing.TB, namespace string, deps kv.Deps) *kv.Client {
 	t.Helper()
+	if deps.AccessTimeout == 0 {
+		deps.AccessTimeout = time.Minute
+	}
 	client, err := kv.Open(t.Context(), s.Config(namespace), deps)
 	if err != nil {
 		t.Fatalf("open valkey: %v", err)

@@ -283,3 +283,32 @@ func TestAStuckDatabaseDoesNotStopTheChecksOfValkey(t *testing.T) {
 		t.Fatalf("the heartbeat that gave up was not reported: %s", logs.String())
 	}
 }
+
+// TestARestartedNodeReplacesItsOwnRow: a node that crashed left its row, and the same node started again, under the same
+// identity, takes the row over at once and is the one node of N = 1; a node under another identity is another node, and
+// is refused while the first is alive. Without that a crash would keep the node out for half a minute (README「节点心跳」).
+func TestARestartedNodeReplacesItsOwnRow(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	open := func(id string) (*kv.Client, error) {
+		return kv.Open(t.Context(), kv.Config{Nodes: 1, NodeID: id}, kv.Deps{DB: db, Scope: scope})
+	}
+	crashed, err := open("node-a")
+	if err != nil {
+		t.Fatalf("the first start: %v", err)
+	}
+	// The crashed process never deletes its row: its loop is left running here, and its row is as fresh as a crash leaves it.
+	t.Cleanup(func() { closeQuietly(t, crashed) })
+	restarted, err := open("node-a")
+	if err != nil {
+		t.Fatalf("the same node started again: %v", err)
+	}
+	t.Cleanup(func() { closeQuietly(t, restarted) })
+	if rows := heartbeats(t, db, scope); rows != 1 {
+		t.Fatalf("%d rows for one node that restarted, want 1", rows)
+	}
+	if _, err := open("node-b"); err == nil || !strings.Contains(err.Error(), kv.NodesVar) {
+		t.Fatalf("another node beside the first under N = 1: %v, want a refusal naming %s", err, kv.NodesVar)
+	}
+}

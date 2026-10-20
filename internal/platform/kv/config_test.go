@@ -46,6 +46,17 @@ func TestConfigRefusesBadSettings(t *testing.T) {
 			name: "no nodes", cfg: Config{Nodes: 0}, want: []string{NodesVar, "at least 1"},
 		},
 		{
+			name: "a node ID with a space", cfg: Config{Nodes: 1, NodeID: "planted value"},
+			want: []string{NodeIDVar, "without spaces"}, never: []string{"planted"},
+		},
+		{
+			name: "a node ID too long", cfg: Config{Nodes: 1, NodeID: strings.Repeat("n", maxNodeID+1)},
+			want: []string{NodeIDVar, "at most"},
+		},
+		{
+			name: "a node ID of the longest allowed length", cfg: Config{Nodes: 1, NodeID: strings.Repeat("n", maxNodeID)},
+		},
+		{
 			name: "a URL that is not one", cfg: Config{URL: "planted-value", PasswordFile: good, Nodes: 1},
 			want: []string{URLVar}, never: []string{planted},
 		},

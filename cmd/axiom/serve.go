@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"time"
 
 	"axiom/internal/accounts"
@@ -92,6 +93,7 @@ func readSettings(environ []string) (nodeSettings, error) {
 			URL:          env.String(kv.URLVar, ""),
 			PasswordFile: env.String(kv.PasswordFileVar, ""),
 			Nodes:        env.Int(kv.NodesVar, 1, 1),
+			NodeID:       env.String(kv.NodeIDVar, hostName()),
 		},
 	}
 	// The cache's own settings are judged with the rest, so a node that is wrong about them does not touch the database.
@@ -99,6 +101,14 @@ func readSettings(environ []string) (nodeSettings, error) {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
+}
+
+// hostName is the node's identity unless AXIOM_NODE_ID names it: a container keeps its host name when it restarts, so a
+// restarted node finds its own heartbeat row and replaces it. A host that cannot say its name gets a new identity at every
+// start (kv.Config.NodeID), which is the cost of a restart being counted beside the old row for half a minute.
+func hostName() string {
+	name, _ := os.Hostname() //nolint:errcheck // the fallback is described above
+	return name
 }
 
 // singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
