@@ -23,9 +23,11 @@ type replaceableLogin struct {
 
 func (replaceableLogin) Kind() adapter.Kind            { return "fake" }
 func (replaceableLogin) Buckets() []adapter.BucketSpec { return nil }
+
 func (replaceableLogin) LoginFields(bool) []adapter.LoginField {
 	return []adapter.LoginField{adapter.FieldAccessToken}
 }
+
 func (replaceableLogin) NewLogin(c adapter.Credentials) (adapter.Login, error) {
 	return adapter.Login{Kind: "tokens", Plaintext: []byte(c.AccessToken)}, nil
 }
@@ -36,12 +38,15 @@ type unreadableCatalog struct{ adapter.Manager }
 func (unreadableCatalog) Account(context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: "10", Funding: adapter.FundingWallet}, nil
 }
+
 func (unreadableCatalog) Offer(context.Context) (adapter.Offer, error) {
 	return adapter.Offer{}, adapter.ErrUnrecognised
 }
+
 func (unreadableCatalog) Keys(context.Context) ([]adapter.KeyState, error) {
 	return nil, adapter.Blocked{Until: t0.Add(time.Hour)}
 }
+
 func (unreadableCatalog) Charges(context.Context, adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 	return adapter.ChargePage{}, nil, adapter.Blocked{Until: t0.Add(time.Hour)}
 }

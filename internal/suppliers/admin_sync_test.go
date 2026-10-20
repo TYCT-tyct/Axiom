@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -156,7 +157,7 @@ func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(firstRound.Close)
-	pids, replaced := make(chan int32, 1), make(chan error, 1)
+	var replaced <-chan error
 	err = firstRound.Tx(ctx, platformScope, func(tx pg.Tx) error {
 		q := store.New()
 		holder, lease := "the first round", at.Add(time.Minute)
@@ -168,29 +169,12 @@ func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 		if _, err := q.LockSupplier(ctx, tx, id); err != nil {
 			return err
 		}
-		go func() {
-			replaced <- a.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
-				var pid int32
-				if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
-					return err
-				}
-				pids <- pid
-				_, err := a.admin.ReplaceLogin(ctx, tx, a.actor, id, Credentials{AccessToken: "new-token"}, "the old login was revoked")
-				return err
-			})
-		}()
-		var pid int32
-		select {
-		case pid = <-pids:
-		case err := <-replaced:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
 		// Release the first sync only once this replacement is waiting, independently of the server's speed.
-		if err := a.waitForLockWait(ctx, pid); err != nil {
+		waiting, err := a.replaceLoginWhileLocked(ctx, id)
+		if err != nil {
 			return err
 		}
+		replaced = waiting
 		stopped := syncer.State{Version: 1, Status: syncer.NeedsAttention, Reason: "the supplier rejected the account credentials"}
 		encoded, err := jsonx.MarshalCanonical(stopped)
 		if err != nil {
@@ -230,6 +214,30 @@ func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 	same(t, "the version the state is stored at", int64(2), woken.Version)
 	same(t, "the status the state is polled in", syncer.Normal, woken.Status)
 	same(t, "the reason the state holds", "", woken.Reason)
+}
+
+// replaceLoginWhileLocked returns only once the replacement is waiting on a lock held by this test's first sync.
+func (a admins) replaceLoginWhileLocked(ctx context.Context, id uuid.UUID) (<-chan error, error) {
+	pids, replaced := make(chan int32, 1), make(chan error, 1)
+	go func() {
+		replaced <- a.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
+			var pid int32
+			if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+				return err
+			}
+			pids <- pid
+			_, err := a.admin.ReplaceLogin(ctx, tx, a.actor, id, Credentials{AccessToken: "new-token"}, "the old login was revoked")
+			return err
+		})
+	}()
+	select {
+	case pid := <-pids:
+		return replaced, a.waitForLockWait(ctx, pid)
+	case err := <-replaced:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // waitForLockWait observes only this replacement's connection, so other transactions cannot release the first sync.
