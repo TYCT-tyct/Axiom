@@ -132,9 +132,7 @@ type credRuntime struct {
 	inflight atomic.Int32
 	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
 
-	// The requests this node has started in the minute it is counting, when the credential has a per-minute limit.
-	// mu holds start and used together, because checking the limit and counting the request one step
-	// (README.md「并发与速率」).
+	// The check and increment share a lock so concurrent callers cannot spend the last request twice.
 	mu    sync.Mutex
 	start time.Time
 	used  int32

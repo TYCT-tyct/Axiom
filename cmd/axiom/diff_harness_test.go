@@ -67,6 +67,13 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		{"reasoning beside reasoning_content", "chat-claude-reasoning-whole", "json.choices[].message.reasoning", absent, `"abc"`, true},
 		{"reasoning_content missing", "chat-claude-reasoning-whole", "json.choices[].message.reasoning_content", `"abc"`, absent, false},
 		{"usage null dropped", "responses-gpt-text-stream", "sse[response.created].response.usage", "null", absent, false},
+		{"deepseek details made 0", "chat-deepseek-text-whole", "json.usage.prompt_tokens_details.cached_tokens", absent, "0", true},
+		{"deepseek details made up", "chat-deepseek-text-whole", "json.usage.prompt_tokens_details.cached_tokens", absent, "5", false},
+		{"deepseek details lost", "chat-deepseek-tools-whole", "json.usage.prompt_tokens_details.cached_tokens", "64", "0", false},
+		{"deepseek cache names dropped", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", absent, true},
+		{"deepseek cache names changed", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", "65", false},
+		{"deepseek cache names made up", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", absent, "64", false},
+		{"deepseek cache names in another case", "chat-gpt-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", absent, false},
 		{"times", "chat-claude-text-whole", "json.created", "1741290958", "1792390509", true},
 		{"time that is no time", "chat-claude-text-whole", "json.created", "1741290958", `"soon"`, false},
 	} {

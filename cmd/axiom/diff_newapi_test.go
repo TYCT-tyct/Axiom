@@ -35,7 +35,7 @@ type newAPI struct {
 // startNewAPI runs the image on SQLite, with the upstream's port reachable from inside it, and sets up what a deployment
 // is set up with: an administrator, a token that spends without limit, and a channel for each model, of the type that
 // speaks the format Axiom's endpoint of that model speaks (relay/channel/claude for Anthropic's, the OpenAI channel
-// for Responses), so that the upstream is asked the same way by both.
+// for Responses and for Chat), so that the upstream is asked the same way by both.
 func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	t.Helper()
 	ctx := t.Context()
@@ -67,9 +67,9 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	for _, channel := range []struct {
 		typ    int
 		models string
-	}{{1, "gpt-6-astra"}, {14, "claude-opus-5-5"}} { // OpenAI's channel type, then Anthropic's (constant/channel.go)
+	}{{1, "gpt-6-astra"}, {14, "claude-opus-5-5"}, {1, "deepseek-v4-chat"}} { // OpenAI's channel type, then Anthropic's (constant/channel.go), then OpenAI's again for the model called in Chat
 		admin.post("/api/channel/", map[string]any{"mode": "single", "channel": map[string]any{
-			"type": channel.typ, "name": "upstream-" + strconv.Itoa(channel.typ), "key": newAPIChannelKey, "base_url": upstream,
+			"type": channel.typ, "name": "upstream-" + channel.models, "key": newAPIChannelKey, "base_url": upstream,
 			"models": channel.models, "group": "default", "status": 1,
 		}})
 	}

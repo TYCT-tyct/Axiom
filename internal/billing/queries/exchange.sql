@@ -17,3 +17,6 @@ SELECT * FROM billing.exchange_rates WHERE base = @base AND quote = @quote ORDER
 INSERT INTO billing.exchange_rates (id, base, quote, version, numerator, denominator, kind, reason, created_by)
 VALUES (@id, @base, @quote, @version, @numerator, @denominator, @kind, @reason, @created_by)
 RETURNING *;
+
+-- name: ExchangeRateByID :many
+SELECT * FROM billing.exchange_rates WHERE id = @id;

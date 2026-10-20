@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { DataState, SelectField, TextField, useFormat } from "@axiom/ui";
+import { DataState, SelectField, TextField } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
@@ -206,96 +206,6 @@ export function SelectGroupDialog({
             <Code>{changed.codename}</Code>
           </p>
         ) : null
-      }
-      onClose={onClose}
-    />
-  );
-}
-
-// How much of a key a node gives out: the calls it has in flight at once, and the requests its minute admits. Zero of
-// the minute's requests is not a setting: the key's status says when it is out of use.
-export function LimitsDialog({
-  supplier,
-  credential,
-  onClose,
-}: {
-  supplier: Supplier;
-  credential: AdminSchemas["SupplierCredential"];
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const count = (value: string | undefined) => {
-    const text = (value ?? "").trim();
-    return /^[1-9]\d*$/.test(text) && Number(text) <= 2147483647 ? Number(text) : undefined;
-  };
-  const read = (
-    values: Record<string, string>,
-  ): { max_concurrency: number; requests_per_minute: number | null } | Problem => {
-    const concurrency = count(values.max_concurrency);
-    if (concurrency === undefined) {
-      return { problem: t("suppliers.limits.concurrencyInvalid") };
-    }
-    if ((values.requests_per_minute ?? "").trim() === "") {
-      return { max_concurrency: concurrency, requests_per_minute: null };
-    }
-    const perMinute = count(values.requests_per_minute);
-    return perMinute === undefined
-      ? { problem: t("suppliers.limits.perMinuteInvalid") }
-      : { max_concurrency: concurrency, requests_per_minute: perMinute };
-  };
-  return (
-    <ChangeDialog
-      title={t("suppliers.limits.title")}
-      intro={
-        <p>
-          {t("suppliers.limits.body")} <Code>{credential.upstream_key_ref}</Code>
-        </p>
-      }
-      action={t("suppliers.limits.action")}
-      fields={() => (
-        <>
-          <TextField
-            label={t("suppliers.limits.concurrency")}
-            hint={t("suppliers.limits.concurrencyHint")}
-            name="max_concurrency"
-            inputMode="numeric"
-            autoComplete="off"
-            defaultValue={String(credential.max_concurrency)}
-          />
-          <TextField
-            label={t("suppliers.limits.perMinute")}
-            hint={t("suppliers.limits.perMinuteHint")}
-            name="requests_per_minute"
-            inputMode="numeric"
-            autoComplete="off"
-            defaultValue={credential.requests_per_minute === null ? "" : String(credential.requests_per_minute)}
-          />
-        </>
-      )}
-      read={read}
-      send={(limits, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", {
-            params: {
-              path: { supplier_id: supplier.id, credential_id: credential.id },
-              header: { "Idempotency-Key": key },
-            },
-            body: { ...limits, reason },
-          }),
-        )
-      }
-      done={(changed) =>
-        changed.requests_per_minute === null ? (
-          <p>{t("suppliers.limits.doneUnbounded", { concurrency: format.number(changed.max_concurrency) })}</p>
-        ) : (
-          <p>
-            {t("suppliers.limits.done", {
-              concurrency: format.number(changed.max_concurrency),
-              perMinute: format.number(changed.requests_per_minute),
-            })}
-          </p>
-        )
       }
       onClose={onClose}
     />

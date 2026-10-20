@@ -6,6 +6,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
 
@@ -55,8 +56,8 @@ func TestSetLimits(t *testing.T) {
 		a.text(`SELECT action || '|' || reason || '|' || (SELECT string_agg(k, ',' ORDER BY k) FROM jsonb_object_keys(detail) k)
 			FROM platform.audit_log WHERE action = 'credential.limits'`))
 	same(t, "the values recorded", fmt.Sprintf("%s|4|8||60", bound.ID), a.text(
-		`SELECT detail->>'credential' || '|' || detail->>'max_concurrency_from' || '|' || detail->>'max_concurrency_to' ||
-			'|' || coalesce(detail->>'requests_per_minute_from', '') || '|' || detail->>'requests_per_minute_to'
+		`SELECT (detail->>'credential') || '|' || (detail->>'max_concurrency_from') || '|' || (detail->>'max_concurrency_to') ||
+			'|' || coalesce(detail->>'requests_per_minute_from', '') || '|' || (detail->>'requests_per_minute_to')
 		 FROM platform.audit_log WHERE action = 'credential.limits'`))
 	again, err := a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 8, RequestsPerMinute: &minute})
 	refuses(t, "the limits it already has", err, nil)
@@ -68,7 +69,7 @@ func TestSetLimits(t *testing.T) {
 	same(t, "the row cleared", "8|",
 		a.text(fmt.Sprintf(`SELECT max_concurrency || '|' || coalesce(requests_per_minute::text, '') FROM suppliers.credentials WHERE id = '%s'`, bound.ID)))
 	same(t, "the clearing recorded", "60|null", a.text(
-		`SELECT detail->>'requests_per_minute_from' || '|' || coalesce(detail->>'requests_per_minute_to', 'null')
+		`SELECT (detail->>'requests_per_minute_from') || '|' || coalesce(detail->>'requests_per_minute_to', 'null')
 		 FROM platform.audit_log WHERE action = 'credential.limits' ORDER BY id DESC LIMIT 1`))
 	same(t, "the configuration generation", generation, a.generation())
 }
@@ -107,5 +108,25 @@ func TestSetLimitsRefusals(t *testing.T) {
 	a.setStatus(id, "removing")
 	_, err = a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 2})
 	refuses(t, "a supplier being removed", err, ErrStatusLocked)
+	same(t, "audit entries", "0", a.text(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'credential.limits'`))
+}
+
+func TestSetLimitsRollsBackWithoutAudit(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	group := a.group(id, "1", true)
+	if _, err := a.choose(id, group, true); err != nil {
+		t.Fatal(err)
+	}
+	bound := a.bindKey(id, group, "key-7")
+	_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Credential, error) {
+		return a.admin.SetLimits(ctx, tx, audit.Actor{}, id, bound.ID, Limits{MaxConcurrency: 8}, "r")
+	})
+	if err == nil {
+		t.Fatal("a change without a valid audit actor succeeded")
+	}
+	same(t, "the rolled-back concurrency", "4", a.text(fmt.Sprintf(
+		`SELECT max_concurrency::text FROM suppliers.credentials WHERE id = '%s'`, bound.ID)))
 	same(t, "audit entries", "0", a.text(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'credential.limits'`))
 }

@@ -81,15 +81,13 @@ const credentialTones = {
   erased: "neutral",
 } as const satisfies Record<AdminSchemas["SupplierCredential"]["status"], "neutral" | "good" | "warn" | "bad">;
 
-// The keys bound to groups: what Axiom sends each group's calls with, and how much of each key a node gives out.
+// The keys bound to groups: what Axiom sends each group's calls with.
 export function Credentials({
   credentials,
   groups,
-  onOpen,
 }: {
   credentials: AdminSchemas["SupplierCredential"][];
   groups: AdminSchemas["SupplierGroup"][];
-  onOpen: OnOpen;
 }) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -105,9 +103,7 @@ export function Credentials({
           [t("suppliers.col.status")],
           [t("suppliers.credentials.until"), "hidden lg:table-cell"],
           [t("suppliers.credentials.concurrency"), "hidden md:table-cell"],
-          [t("suppliers.credentials.perMinute"), "hidden md:table-cell"],
         ]}
-        action={onOpen !== undefined}
       />
       <tbody>
         {credentials.map((credential) => {
@@ -135,16 +131,6 @@ export function Credentials({
                 )}
               </Td>
               <Td className="hidden tabular-nums md:table-cell">{format.number(credential.max_concurrency)}</Td>
-              <Td className="hidden tabular-nums md:table-cell">
-                {credential.requests_per_minute === null ? "—" : format.number(credential.requests_per_minute)}
-              </Td>
-              {onOpen ? (
-                <Td className="whitespace-nowrap">
-                  <Button size="sm" onClick={() => onOpen({ kind: "limits", credential })}>
-                    {t("suppliers.limits.open")}
-                  </Button>
-                </Td>
-              ) : null}
             </tr>
           );
         })}

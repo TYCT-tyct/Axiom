@@ -21,17 +21,20 @@ type LedgerTransaction struct {
 	Entries    []LedgerEntry
 }
 
-// LedgerEntry is one line of a ledger transaction: a book and an amount in billionths of a credit. A debit is positive,
-// a credit negative; a transaction's entries sum to zero.
+// LedgerEntry is one line of a ledger transaction: a book and an amount in billionths of one unit of its currency, which
+// is empty for the site's own credits and otherwise a payment's currency that is not the site's. A debit is positive,
+// a credit negative; a transaction's entries sum to zero in each currency.
 type LedgerEntry struct {
-	Book   string
-	Amount int64
+	Book     string
+	Amount   int64
+	Currency string
 }
 
 // ledgerEntryJSON is an entry as RequestLedger returns it inside the transaction's array.
 type ledgerEntryJSON struct {
-	Book   string `json:"book"`
-	Amount int64  `json:"amount"`
+	Book     string `json:"book"`
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
 }
 
 // LedgerOf returns the ledger transactions of a request, oldest first, each with its entries. Every transaction of a
