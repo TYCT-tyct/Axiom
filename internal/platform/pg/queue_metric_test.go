@@ -73,12 +73,12 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { holder.Close(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the test is over
+	t.Cleanup(func() { holder.Close(context.WithoutCancel(t.Context())) }) //nolint:errcheck,gosec // the test is over
 	lock, err := holder.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { lock.Rollback(context.WithoutCancel(t.Context())) }) //nolint:errcheck // already rolled back, or the test is over
+	t.Cleanup(func() { lock.Rollback(context.WithoutCancel(t.Context())) }) //nolint:errcheck,gosec // already rolled back, or the test is over
 	if _, err := lock.Exec(t.Context(), "LOCK TABLE river.river_job IN ACCESS EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
