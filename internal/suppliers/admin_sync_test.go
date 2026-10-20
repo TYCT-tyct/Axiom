@@ -138,10 +138,8 @@ func TestReplaceLoginWakesAStoppedSync(t *testing.T) {
 	same(t, "the failures the next round counts", 0, st.Tasks[syncer.TaskBalance].Failures)
 }
 
-// TestReplaceLoginWakesAStateTheFirstRoundMakes runs the one interleaving its sibling cannot: a supplier that has never
-// synced has no state row for the wake to lock, so a first round that makes one while the login is being replaced would
-// leave a stopped state behind the supplier the replacement has just set to connecting. The wake makes the row and holds
-// it before the supplier's, so that round waits there and reads what the replacement leaves.
+// The first sync's uncommitted state is invisible to a plain SELECT FOR UPDATE. Replacing the login must wait for its
+// insertion before resetting it, or the sync can leave a stopped state behind the newly connecting supplier.
 func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 	t.Parallel()
 	a := newAdmins(t)
@@ -151,57 +149,69 @@ func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 
 	// The first round, with the login the supplier rejects: it has taken the lease — which made the state row, not yet
 	// committed — and the supplier's row, and is about to write the state that stops the supplier.
-	held, carryOn, round := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	firstRound, err := pg.Open(t.Context(), a.data.App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(firstRound.Close)
-	go func() {
-		round <- firstRound.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-			ctx, q := t.Context(), store.New()
-			holder, lease := "the first round", at.Add(time.Minute)
-			if _, err := q.AcquireSyncLease(ctx, tx, store.AcquireSyncLeaseParams{
-				SupplierID: id, Now: at, Holder: &holder, LeaseUntil: &lease,
-			}); err != nil {
+	pids, replaced := make(chan int32, 1), make(chan error, 1)
+	err = firstRound.Tx(ctx, platformScope, func(tx pg.Tx) error {
+		q := store.New()
+		holder, lease := "the first round", at.Add(time.Minute)
+		if _, err := q.AcquireSyncLease(ctx, tx, store.AcquireSyncLeaseParams{
+			SupplierID: id, Now: at, Holder: &holder, LeaseUntil: &lease,
+		}); err != nil {
+			return err
+		}
+		if _, err := q.LockSupplier(ctx, tx, id); err != nil {
+			return err
+		}
+		go func() {
+			replaced <- a.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
+				var pid int32
+				if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+					return err
+				}
+				pids <- pid
+				_, err := a.admin.ReplaceLogin(ctx, tx, a.actor, id, Credentials{AccessToken: "new-token"}, "the old login was revoked")
 				return err
-			}
-			if _, err := q.LockSupplier(ctx, tx, id); err != nil {
-				return err
-			}
-			close(held)
-			<-carryOn
-			stopped := syncer.State{Version: 1, Status: syncer.NeedsAttention, Reason: "the supplier rejected the account credentials"}
-			encoded, err := jsonx.MarshalCanonical(stopped)
-			if err != nil {
-				return err
-			}
-			if _, err := q.CommitSyncState(ctx, tx, store.CommitSyncStateParams{
-				SupplierID: id, Expect: 0, Version: 1, Format: 1, State: encoded,
-				NextDue: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), LeaseUntil: &lease,
-			}); err != nil {
-				return err
-			}
-			return q.SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{
-				ID: id, Status: "needs_attention", StatusReason: &stopped.Reason,
 			})
+		}()
+		var pid int32
+		select {
+		case pid = <-pids:
+		case err := <-replaced:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		// Release the first sync only once this replacement is waiting, independently of the server's speed.
+		if err := a.waitForLockWait(ctx, pid); err != nil {
+			return err
+		}
+		stopped := syncer.State{Version: 1, Status: syncer.NeedsAttention, Reason: "the supplier rejected the account credentials"}
+		encoded, err := jsonx.MarshalCanonical(stopped)
+		if err != nil {
+			return err
+		}
+		if _, err := q.CommitSyncState(ctx, tx, store.CommitSyncStateParams{
+			SupplierID: id, Expect: 0, Version: 1, Format: 1, State: encoded,
+			NextDue: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), LeaseUntil: &lease,
+		}); err != nil {
+			return err
+		}
+		return q.SetSupplierStatus(ctx, tx, store.SetSupplierStatusParams{
+			ID: id, Status: "needs_attention", StatusReason: &stopped.Reason,
 		})
-	}()
-	<-held
-
-	// The replacement starts and waits on those rows. Where it stopped is only visible in the database, so the test waits
-	// for the backend that waits on a lock instead of guessing with a sleep, and only then lets the round commit.
-	replaced := make(chan error, 1)
-	go func() {
-		_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
-			return a.admin.ReplaceLogin(ctx, tx, a.actor, id, Credentials{AccessToken: "new-token"}, "the old login was revoked")
-		})
-		replaced <- err
-	}()
-	a.waitForLockWait()
-	close(carryOn)
-	refuses(t, "the first round", <-round, nil)
-	refuses(t, "replacing the login", <-replaced, nil)
+	})
+	if err != nil {
+		t.Fatalf("the first round: %v", err)
+	}
+	if err := <-replaced; err != nil {
+		t.Fatalf("replacing the login: %v", err)
+	}
 
 	same(t, "the supplier after the replacement", []string{"connecting", "2"}, []string{
 		a.text(`SELECT status FROM suppliers.suppliers WHERE id = $1`, id),
@@ -222,29 +232,25 @@ func TestReplaceLoginWakesAStateTheFirstRoundMakes(t *testing.T) {
 	same(t, "the reason the state holds", "", woken.Reason)
 }
 
-// waitForLockWait waits until a backend of the test's own database waits on a lock: what tells the test that the
-// transaction it started has reached the row it must wait for.
-func (a admins) waitForLockWait() {
+// waitForLockWait observes only this replacement's connection, so other transactions cannot release the first sync.
+func (a admins) waitForLockWait(ctx context.Context, pid int32) error {
 	a.t.Helper()
-	super, err := pg.Open(a.t.Context(), a.data.Superuser)
+	super, err := pg.Open(ctx, a.data.Superuser)
 	if err != nil {
-		a.t.Fatal(err)
+		return err
 	}
 	defer super.Close()
-	for deadline := time.Now().Add(10 * time.Second); ; {
-		var n int64
-		if err := super.Tx(a.t.Context(), pg.Scope{}, func(tx pg.Tx) error {
-			return tx.QueryRow(a.t.Context(),
-				`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n)
+	for {
+		var waiting bool
+		if err := super.ReadTx(ctx, pg.Scope{}, func(tx pg.Tx) error {
+			return tx.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database() AND pid = $1 AND wait_event_type = 'Lock')`, pid).Scan(&waiting)
 		}); err != nil {
-			a.t.Fatal(err)
+			return err
 		}
-		if n > 0 {
-			return
+		if waiting {
+			return nil
 		}
-		if time.Now().After(deadline) {
-			a.t.Fatal("no backend waits on a lock")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }
