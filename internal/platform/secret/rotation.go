@@ -45,7 +45,7 @@ func (r Rotation) transaction(ctx context.Context, fn func(context.Context, pg.T
 // ensureNoWriters refuses a lifecycle change while any node's heartbeat is recent. A serve that was missed keeps writing
 // envelopes under the version the change is about to move away from, and those rows would then be unreadable. The window
 // is kv's heartbeat window, so a stopped node stops counting after the same missed beats.
-func (r Rotation) ensureNoWriters(ctx context.Context, tx pg.Tx) error {
+func ensureNoWriters(ctx context.Context, tx pg.Tx) error {
 	var alive bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1))`,
 		kv.AliveFor.Seconds()).Scan(&alive)
@@ -255,7 +255,7 @@ func versionState(ctx context.Context, tx pg.Tx, version uint32) (string, error)
 // Activate chooses a distributed readable version for subsequent node starts and rewrap batches.
 func (r Rotation) Activate(ctx context.Context, version uint32) error {
 	return r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
-		if err := r.ensureNoWriters(ctx, tx); err != nil {
+		if err := ensureNoWriters(ctx, tx); err != nil {
 			return err
 		}
 		ring, err := Load(r.Path)
@@ -275,14 +275,22 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 		if !slices.Contains(status.Readable, version) {
 			return fmt.Errorf("keyring: version %d is not readable", version)
 		}
-		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'readable' WHERE state = 'active'"); err != nil {
-			return fmt.Errorf("keyring: cannot deactivate write version: %w", err)
-		}
-		if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'active' WHERE version = $1", int64(version)); err != nil {
-			return fmt.Errorf("keyring: cannot activate write version: %w", err)
+		if err := setActive(ctx, tx, version); err != nil {
+			return err
 		}
 		return rotationAudit(ctx, tx, "activate", version, map[string]any{"previous": status.Active})
 	})
+}
+
+// setActive moves the single write version to version; the partial unique index allows one active row.
+func setActive(ctx context.Context, tx pg.Tx, version uint32) error {
+	if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'readable' WHERE state = 'active'"); err != nil {
+		return fmt.Errorf("keyring: cannot deactivate write version: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE platform.key_versions SET state = 'active' WHERE version = $1", int64(version)); err != nil {
+		return fmt.Errorf("keyring: cannot activate write version: %w", err)
+	}
+	return nil
 }
 
 // Retire refuses an active or referenced version. The tombstone commits before the local file is pruned.
@@ -300,7 +308,7 @@ func (r Rotation) Retire(ctx context.Context, version uint32) error {
 
 // tombstone records the retirement, or finds it already recorded by a run that stopped before pruning its file.
 func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error {
-	if err := r.ensureNoWriters(ctx, tx); err != nil {
+	if err := ensureNoWriters(ctx, tx); err != nil {
 		return err
 	}
 	ring, err := Load(r.Path)

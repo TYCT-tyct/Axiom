@@ -442,7 +442,7 @@ func TestKeyringRemovesLeftoverReplacements(t *testing.T) {
 		t.Fatal(err)
 	}
 	leftover := filepath.Join(filepath.Dir(f.path), ".keyring-crashed")
-	if err := os.WriteFile(leftover, contents, 0o600); err != nil {
+	if err := os.WriteFile(leftover, contents, 0o600); err != nil { //nolint:gosec // the path is the fixture's own temp file
 		t.Fatal(err)
 	}
 	f.run("add", "--version", "2")
