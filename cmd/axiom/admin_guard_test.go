@@ -31,6 +31,9 @@ func (o adminOperation) changes() bool { return o.method != http.MethodGet }
 
 // adminOperations are the operations that need a session and a permission on the platform: all but the Session tag's.
 var adminOperations = []adminOperation{
+	{"listExchangeRates", http.MethodGet, "/pricing/exchange-rates", "", "pricing.view", false},
+	{"setExchangeRate", http.MethodPost, "/pricing/exchange-rates", `{}`, "pricing.manage", true},
+	{"exchangeRateHistory", http.MethodGet, "/pricing/exchange-rates/USD/CNY", "", "pricing.view", false},
 	{"getSiteSettings", http.MethodGet, someSite, "", "sites.manage", false},
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
 	{"listTiers", http.MethodGet, "/tiers", "", "users.view", false},

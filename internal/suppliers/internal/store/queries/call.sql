@@ -31,6 +31,10 @@ INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
 VALUES (@request_id, @site_id, @account_id, @ended_at)
 ON CONFLICT (request_id) DO NOTHING;
 
+-- name: EnabledSupplierCurrencies :many
+-- Include enabled suppliers without a routable endpoint: configuration problems must be visible before a call.
+SELECT id, settlement_currency FROM suppliers.suppliers WHERE status IN ('active', 'low_balance');
+
 -- name: InsertLostRequest :exec
 INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endpoint_ids)
 VALUES (@request_id, @site_id, @account_id, @route_endpoint_ids)

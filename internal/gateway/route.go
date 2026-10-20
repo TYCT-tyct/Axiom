@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -18,8 +19,10 @@ import (
 // snapshot that merges them follows at the same pace (docs/domains/routing.md「快照从哪来」).
 const rebuildEvery = 5 * time.Second
 
-// RouteDeps are the sources of a routing snapshot and the router it is published to. Every one is required.
+// RouteDeps are the sources of a routing snapshot and the router it is published to.
 type RouteDeps struct {
+	// ExchangeRates reads once for the whole build. Nil means no configured pairs; production supplies the reader.
+	ExchangeRates func(context.Context) ([]platform.ExchangeRate, error)
 	// Endpoints are the endpoints suppliers can call now: *suppliers.Service's Routable, which reads the snapshot the
 	// last Reload built and never the database.
 	Endpoints func(context.Context) ([]suppliers.Routable, error)
@@ -62,6 +65,12 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
 // has to say.
 func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
+	// Start time bounds freshness even if reading a source stalls during the build.
+	builtAt := time.Now()
+	rates, err := d.exchangeRates(ctx)
+	if err != nil {
+		return nil, Count{}, err
+	}
 	catalogSnap, err := d.Catalog.Current()
 	if err != nil {
 		return nil, Count{}, fmt.Errorf("gateway: the catalog: %w", err)
@@ -90,15 +99,40 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 			note(left, catalog.ModelID(r.Model), why)
 			continue
 		}
+		e.Exchange = exchangeBasis(rates, r.Currency, e.Price.Schedule.Currency())
 		built = append(built, e)
 	}
 	d.report(left)
-	// Dated after the sources were read, so the snapshot is never older than the state it shows.
-	snap, err := d.Router.NewSnapshot(time.Now(), built, presets())
+	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
 	if err != nil {
 		return nil, Count{}, err
 	}
 	return snap, Count{Endpoints: len(built), Offered: len(routable)}, nil
+}
+
+func (d *RouteDeps) exchangeRates(ctx context.Context) ([]platform.ExchangeRate, error) {
+	if d.ExchangeRates == nil {
+		return nil, nil
+	}
+	rates, err := d.ExchangeRates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: exchange rates: %w", err)
+	}
+	return rates, nil
+}
+
+// exchangeBasis is the configured rate between a supplier's currency and the site's, or the bare pair when none is
+// configured, so that the missing rate is frozen with the route too. Same currency needs none.
+func exchangeBasis(rates []platform.ExchangeRate, from, to platform.Currency) platform.ExchangeRate {
+	if from == to {
+		return platform.ExchangeRate{}
+	}
+	for _, rate := range rates {
+		if _, ok := rate.Between(from, to); ok {
+			return rate
+		}
+	}
+	return platform.ExchangeRate{Base: from.String(), Quote: to.String()}
 }
 
 // Publish replaces the router's snapshot with one Build made and tells Built what it holds. Nothing else takes a

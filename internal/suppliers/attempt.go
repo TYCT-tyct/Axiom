@@ -53,12 +53,19 @@ type Call struct {
 // value it is costed at and the row that value came from, and the supplier's own id of the request once a response
 // header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
+	exchange                                 platform.ExchangeRate
 	supplier, credential, endpoint, schedule uuid.UUID
 	unitValueID                              uuid.UUID
 	ref                                      string
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
+}
+
+// WithExchange attaches the reservation's basis, never the supplier snapshot's current rate.
+func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt {
+	r.exchange = rate
+	return r
 }
 
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in

@@ -72,8 +72,9 @@ const endReservation = `-- name: EndReservation :one
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
     charged = $4, price = $5, waived = $6, estimated = $7,
-    final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries)
-WHERE request_id = $10
+    final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries),
+    profit = $10::bigint
+WHERE request_id = $11
 RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
@@ -87,6 +88,7 @@ type EndReservationParams struct {
 	Estimated      bool
 	FinalUsage     []byte
 	AttemptEntries []int32
+	Profit         *int64
 	RequestID      uuid.UUID
 }
 
@@ -104,6 +106,7 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.Estimated,
 		arg.FinalUsage,
 		arg.AttemptEntries,
+		arg.Profit,
 		arg.RequestID,
 	)
 	var ended_at time.Time
@@ -241,7 +244,7 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit
 FROM billing.reservations r
 WHERE r.request_id = $1
 `
@@ -267,6 +270,7 @@ type LockReservationRow struct {
 	Models          []uuid.UUID
 	AttemptEntries  []int32
 	Endpoints       []uuid.UUID
+	Profit          *int64
 }
 
 // Run after the account's balance row is locked: every change to a reservation happens under that lock.
@@ -294,6 +298,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.Models,
 		&i.AttemptEntries,
 		&i.Endpoints,
+		&i.Profit,
 	)
 	return i, err
 }

@@ -39,6 +39,7 @@ type Outcome struct {
 // (suppliers' Cost estimates it), its usage by sampling, how it ended, and the supplier's side of it, which billing
 // writes with the cost.
 type AttemptResult struct {
+	CostKnown  bool
 	Seq, Entry int
 	Cost       int64
 	Segments   []Segment
@@ -89,6 +90,8 @@ const (
 // Final is what the call ends with: the charged attempt's usage, what the user was charged (capped at the floor) and
 // whether any of it was estimated or waived.
 type Final struct {
+	// Profit is nil if any attempt's converted cost is unknown, or the difference cannot fit an amount.
+	Profit    *int64
 	Segments  []Segment
 	Charged   platform.Exact
 	Estimated bool
@@ -135,7 +138,8 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	if len(o.Attempts) == 0 {
 		switch c.row.State {
 		case "pending":
-			return Final{}, c.release(ctx, tx, "released", c.row.Amount)
+			c.costKnown = true // nothing ran, so the cost is a known 0 and so is the profit
+			return Final{Profit: c.profit()}, c.release(ctx, tx, "released", c.row.Amount)
 		case "cleanup_released":
 			// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
 			// lost is answered, and no charge a supplier reports later is looked for in it.
@@ -166,15 +170,18 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived}, err
+	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
 }
 
 // recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
 // attempt and the ledger's cost of it are both there or neither. The entries the attempts bound are kept on the
 // reservation, for the next settlement to restore.
 func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
+	c.costKnown = true
 	records := make([]suppliers.AttemptRecord, len(o.Attempts))
 	for i, at := range o.Attempts {
+		c.costKnown = c.costKnown && at.CostKnown
+		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
 		records[i] = suppliers.AttemptRecord{
 			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
 			Site: &c.row.SiteID, Account: &c.row.AccountID,
@@ -501,20 +508,34 @@ func decodeUsage(b []byte) ([]Segment, error) {
 
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
-	b       *Billing
-	id      uuid.UUID
-	row     LockReservationRow
-	balance LockBalanceRow
-	charged int64
-	owed    int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
-	seen    []UnknownItem // unknown items first seen in this transaction
-	entries []int32       // the attempts' entries to write, nil to keep the recorded ones
+	cost      platform.Exact
+	costKnown bool
+	b         *Billing
+	id        uuid.UUID
+	row       LockReservationRow
+	balance   LockBalanceRow
+	charged   int64
+	owed      int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
+	seen      []UnknownItem // unknown items first seen in this transaction
+	entries   []int32       // the attempts' entries to write, nil to keep the recorded ones
 }
 
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived}, err
+	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
+}
+
+func (c *locked) profit() *int64 {
+	if !c.costKnown {
+		return nil
+	}
+	difference := sum(platform.AmountExact(c.charged), c.cost.Neg())
+	if difference.Cmp(platform.AmountExact(math.MinInt64)) < 0 || difference.Cmp(platform.AmountExact(math.MaxInt64)) > 0 {
+		return nil
+	}
+	n := difference.CeilAmount()
+	return &n
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
@@ -637,6 +658,7 @@ var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settl
 // the database's clock.
 func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
+		Profit:    c.profit(),
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
 	})
