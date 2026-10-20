@@ -115,6 +115,24 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 				"AXIOM_TRUSTED_PROXIES: want IP addresses and networks", "AXIOM_HASH_CONCURENCY: unknown variable",
 			},
 		},
+		{
+			// K1 to K3 are not all in yet: with login and stickiness still in the process, a second core node would
+			// multiply the login attempts (internal/platform/kv/README.md「落地顺序」).
+			"more than one core node",
+			[]string{
+				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
+				"AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL=valkey://axiom@planted-value:6379", "AXIOM_VALKEY_PASSWORD_FILE=" + good,
+			},
+			[]string{"AXIOM_CORE_NODES: 2 nodes are not supported yet"},
+		},
+		{
+			"more than one core node and no Valkey",
+			[]string{
+				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
+				"AXIOM_CORE_NODES=2",
+			},
+			[]string{"AXIOM_CORE_NODES: 2 nodes need Valkey"},
+		},
 	}
 	if runtime.GOOS != "windows" { // Windows has no mode bits to read
 		cases = append(cases, struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -144,6 +145,7 @@ type Backpressure struct {
 	Rate        *RateCounter
 	IPCalls     *Limiter // requests in flight per client address
 	cfg         Config
+	rateTTL     string // how long a rate count lives in the shared cache, in milliseconds as the script takes it: two windows
 }
 
 // New validates cfg and builds the limits; it is the only way to get them, so no limit runs on a bad relation. The
@@ -174,6 +176,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 		Rate:     NewRateCounter(cfg.RateWindow),
 		IPCalls:  NewLimiter(errIPInFlight),
 		cfg:      cfg,
+		rateTTL:  strconv.FormatInt((2 * cfg.RateWindow).Milliseconds(), 10),
 	}, nil
 }
 

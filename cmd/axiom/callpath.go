@@ -18,6 +18,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -57,6 +58,7 @@ type callDeps struct {
 	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
 	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv       *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -141,7 +143,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Proxies: d.proxies,
+		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Proxies: d.proxies, KV: d.kv,
 	})
 	return callNode{handler: handler, executor: executor}, err
 }

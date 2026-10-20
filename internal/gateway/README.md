@@ -4,7 +4,7 @@
 
 > 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G9（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
 
-M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数和会话粘性移到 Valkey，设计见 [platform/kv 的设计](../platform/kv/README.md)，其余共享状态仍在进程内。出口只有 `platform/egress` 直连。
+M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性随 K3，设计见 [platform/kv 的设计](../platform/kv/README.md)，其余共享状态仍在进程内。出口只有 `platform/egress` 直连。
 
 ## 不变量
 
@@ -275,7 +275,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 - **连接池** N（默认取 [platform 定的连接池上限](../platform/README.md#连接池)），所有入口都经分类的信号量 `Pool`：只有完成类（追加、结算、`SettleOrphan`）能用到最后 16 个，即池内在用的连接数达到 N − 16 之后，准入类（准入、冷 key 查找、只读 key 接口）和批量写都不再授予；冷 key 查找经 `accounts.Config.LookupSlot`（`Backpressure.KeyLookupSlot`）取准入类名额：名额由共享的那一次查库持有，等它的所有请求只占一个，发起的请求中途走了也不提前还；`NewHandler` 检查 accounts 配了名额（`Service.GatesLookups`），没配就不启动；调用记录的批量写最多持有 2 个。批量写也不动保留的 16 个：它是后台任务，让它侵蚀结算的保底得不偿失。各类内部先到先得，等待者不占连接，等待的期限就是调用者给的 context（准入事务合计 1s 是调用者的期限）。心跳与回收用池外的一条专用连接，不会被饿死。
 - **排队**：只在候选端点都满载时，在事务之外；全局最多 256、每 key 最多 16 个等待者，满了 429；FIFO，每释放一个名额调一次 `Queue.Wake`，唤醒一个。调用者在看负载之前先取 `Queue.Epoch()` 并传给 `Wait`：看负载和入队之间释放的名额没有等待者可唤醒，`Epoch` 会记下这种释放，`Wait` 见到就直接返回让调用者重做，不会睡到 20 秒期限；有人在排队时的释放归队首，不计入，新来的不会插队。醒来时 context 已结束的等待者把唤醒转给下一个。排队期限是 `QueueWait`，从调用第一次排队起算一次，之后再排队共用剩余时间，到期 429；调用者的 context 结束则返回它的错误，什么都不写。
 - **调用记录与观测**：`observability.Recorder.Enqueue(CallRecord)` 非阻塞，记录里带这次调用的每次尝试；队列满时丢掉新记录并计数，从不等待，所以在释放名额之前或之后调用都可以，规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Observe(Observation)` 非阻塞，有界缓冲满了丢弃并计数（只是观测）。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
-- **预检计数**：`RateCounter` 按键做滑动窗口计数（当前窗口加上一窗口按重叠比例折算的部分），只计数不判定，不需要释放；两张轮换的表使内存只与最近两个窗口出现过的键成正比。配了 Valkey 时（M2），预检把各维度的计数交给 `count` 脚本，与粘性的读取同批发出、一次往返，`RateCounter` 照常计数作为兜底：Valkey 不可用（出错、超过 20ms、熔断打开）时，用进程内的计数与全额限额比较，不乘 N：故障期间一个 key 合计至多放大到 N 倍，但不会因 Valkey 抖动而误拒流量集中在一个核心的 key（[platform/kv 的设计](../platform/kv/README.md)）。`count_tokens` 的预检只有计数。
+- **预检计数**：`RateCounter` 按键做滑动窗口计数（当前窗口加上一窗口按重叠比例折算的部分），只计数不判定，不需要释放；两张轮换的表使内存只与最近两个窗口出现过的键成正比。配了 Valkey 时（M2），预检把各维度的计数交给 `count` 脚本，一次往返（粘性的读取随 K3 加进同一批），`RateCounter` 照常计数作为兜底：Valkey 不可用（出错、超过 20ms、熔断打开）时，用进程内的计数与全额限额比较，不乘 N：故障期间一个 key 合计至多放大到 N 倍，但不会因 Valkey 抖动而误拒流量集中在一个核心的 key（[platform/kv 的设计](../platform/kv/README.md)）。`count_tokens` 的预检只有计数。
 - **粘性**：排序第 2 位用预检取到的端点；成功端点不同时，结束后写回。收费那次尝试交付了内容（`Committed` 或 `Aggregated`），且它的端点不是预检取到的那个，就 `Stick(会话, 端点, 路线的粘性时间)`，时间取预设的 `StickyTTL`（`Plan.StickyTTL`），预设没设就用路由的默认值；一次尝试都没交付内容的调用什么都不写，也不忘记。写在结算和结尾之前：客户端的下一个请求可能紧跟结尾而来。M1 的粘性表在进程内，写一次是一次 map 写入，不另起协程；M2 配了 Valkey 后经 `kv` 的后台队列写，队列满就丢弃并计数，不等待。请求带 `x-claude-code-context-compacted` 时，读粘性前先 `Forget`，旧缓存已经作废；配了 Valkey 时这一步就是预检那一批里的 `DEL`，代替读取。Valkey 不可用时不粘、写入丢弃，不退回进程内的表。
 
 | 共享状态 | 放在哪 | 理由 |

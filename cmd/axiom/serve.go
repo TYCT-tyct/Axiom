@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
@@ -62,6 +63,7 @@ type nodeSettings struct {
 	hashConcurrency                   int
 	hashWait                          time.Duration
 	trustedProxies                    []netip.Prefix
+	valkey                            kv.Config
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
@@ -84,11 +86,30 @@ func readSettings(environ []string) (nodeSettings, error) {
 		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
 		hashWait:        env.Duration(hashWaitVar, 0),
 		trustedProxies:  env.Prefixes(trustedProxiesVar),
+		// The shared cache: without a URL the three uses stay in this process, as before the cache existed. The password
+		// is read from its file by kv, which reports on it (internal/platform/kv/README.md「配置与启动」).
+		valkey: kv.Config{
+			URL:          env.String(kv.URLVar, ""),
+			PasswordFile: env.String(kv.PasswordFileVar, ""),
+			Nodes:        env.Int(kv.NodesVar, 1, 1),
+		},
 	}
-	if err := env.Err(); err != nil {
+	// The cache's own settings are judged with the rest, so a node that is wrong about them does not touch the database.
+	if err := errors.Join(env.Err(), s.valkey.Check(), singleNodeOnly(s.valkey.Nodes)); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
+}
+
+// singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
+// node would multiply the login attempts. The last of the cache's slices (K3) removes this function
+// (internal/platform/kv/README.md「落地顺序」).
+func singleNodeOnly(nodes int) error {
+	if nodes > 1 {
+		return fmt.Errorf("%s: %d nodes are not supported yet: login and stickiness still live in the process, so more "+
+			"than one node would multiply the login attempts", kv.NodesVar, nodes)
+	}
+	return nil
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
@@ -154,11 +175,25 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger, recorder, exit)
+	cache, err := openCache(ctx, cfg.valkey, cfg.startupTimeout, db, tel, logger)
+	if err != nil {
+		return err
+	}
+	// The heartbeat is deleted on every way out, so a restart is not refused for a row that only a crash would leave. It
+	// runs once the listeners have drained and nothing prechecks any more, and before the database closes.
+	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
+	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache)
 	if err != nil {
 		return err
 	}
 	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
+	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder)
+}
+
+// runNode listens, serves until ctx ends, and then shuts the node down in stopNode's order.
+func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
+	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder,
+) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
 	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
@@ -171,7 +206,8 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	stopped := awaitEnd(ctx, served, routes.calls.reaped)
 	stopAnnouncing()
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	return errors.Join(stopped, stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder))
+	err := stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder)
+	return errors.Join(stopped, err)
 }
 
 // stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
@@ -260,7 +296,7 @@ type nodeRoutes struct {
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
-	recorder *observability.Recorder, exit *egress.Client,
+	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client,
 ) (nodeRoutes, error) {
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
@@ -292,6 +328,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	calls, err := startCallPath(ctx, callDeps{
 		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
+		kv: cache,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -393,6 +430,35 @@ func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeou
 	defer cancel()
 	if err := recorder.Close(ctx); err != nil {
 		logger.Error("closing the call-record writer", "err", err)
+	}
+}
+
+// openCache connects the node's shared cache and checks it within the startup timeout: a server whose user, memory
+// policy or clock is wrong stops the start, and one that does not answer does not
+// (internal/platform/kv/README.md「配置与启动」). Without a URL it is the single-core client, and every use stays in this
+// process.
+func openCache(ctx context.Context, cfg kv.Config, timeout time.Duration, db *pg.DB, tel *telemetry.Telemetry,
+	logger *slog.Logger,
+) (*kv.Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cache, err := kv.Open(ctx, cfg, kv.Deps{
+		DB: db, Scope: pg.PlatformScope(), Meter: tel.Metrics.Meter("axiom/kv"), Logger: logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("shared cache:\n%w", err)
+	}
+	return cache, nil
+}
+
+// closeCache ends the cache's loops and deletes the node's heartbeat within timeout, on a context that outlives the one
+// that ended the node. A second call finds nothing to do, so the shutdown and the defer below may both make it.
+func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := cache.Close(ctx); err != nil {
+		// The row goes stale by itself, and a node that has emptied itself is not a failed shutdown for it.
+		logger.Error("closing the shared cache", "err", err)
 	}
 }
 

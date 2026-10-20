@@ -2,7 +2,7 @@
 
 多个核心节点共用的限流计数、登录前的尝试次数和会话粘性，放在 Valkey 里；这里写放什么、怎么连、键怎么写、Valkey 不可用时每种用途怎么兜底，以及部署和测试。选型的总体理由见[总体架构的「技术选型」](../../../docs/architecture.md#技术选型)。
 
-> 本文先于代码写成，是 [Issue #321](https://github.com/TYCT-tyct/Axiom/issues/321) E8-b 的设计，按下文「落地顺序」的 K1–K4 实现，代码随 K1 加入。代码与本文不一致时，在同一个 PR 里改本文。
+> 本文是 [Issue #321](https://github.com/TYCT-tyct/Axiom/issues/321) E8-b 的设计，按下文「落地顺序」的 K1–K4 实现。已落地的是 K1：访问层、限流计数、节点心跳和部署；登录（K2）、粘性（K3）和主备（K4）还没有，下文属于它们的接口（`Later`）和脚本（`take`、`give`）尚无代码。代码与本文不一致时，在同一个 PR 里改本文。
 
 三样都是**丢了不影响正确性**的数据：丢失只会多放行一点、或让会话重新选一次端点，钱和权限不受影响。
 
@@ -32,15 +32,16 @@
 - **认证**：Valkey 的 ACL 用户 `axiom`，`default` 用户关闭。`AXIOM_VALKEY_URL` 只写地址和用户（`valkey://axiom@valkey:6379`），密码从受保护文件 `AXIOM_VALKEY_PASSWORD_FILE` 读，文件的权限要求同[主密钥文件](../README.md#凭证加密)：环境变量会出现在 `docker inspect` 里，而拿到密码的人能删掉全部登录桶。URL 里带了密码就不启动。同一台机器上走 compose 的内部网络，不加 TLS（与数据库的 `sslmode=disable` 相同）；跨机器（M3）用 `valkeys://`，按系统根证书校验服务端，自签 CA 的变量随那个部署加入。其他写法（`redis://` 等）不接受，一种写法。错误只报变量名，不带取值。
 - **权限**：`axiom` 用户只能碰 `ax:*` 的键，命令只放行 `hello`、`auth`、`ping`、`client|setinfo`、`info`、`time`、`get`、`set`、`del`、`incr`、`pexpire`、`eval`（脚本里执行的命令也按这个用户检查；不放行 `evalsha`，见下文「接口」）。ACL 文件里只写密码的 SHA-256（`#<十六进制>`），不写明文。K1 的测试以这个用户跑完全部用法，出现 NOPERM 即失败；`FLUSHALL`、`KEYS`、`CONFIG`、`EVALSHA` 和 `ax:*` 之外的键必须被拒。
 
-## 接口（草图）
+## 接口
 
-- `kv.Open(ctx, cfg, meter, logger) (*Client, error)`：按下文「配置与启动」检查；没设 URL 时返回单核心模式的 `Client`，`Enabled()` 为假，调用方走进程内的实现。
+- `kv.Open(ctx, cfg, deps) (*Client, error)`：`cfg` 是 `kv.Config`（三个变量的值，加上测试用的键名前缀），`deps` 是 `kv.Deps`（心跳用的 `*pg.DB` 和范围、`Meter`、`Logger`，以及测试用的本机时钟）；按下文「配置与启动」检查。没设 URL 时返回单核心模式的 `Client`，`Enabled()` 为假，调用方走进程内的实现。`Config.Check` 只看配置本身，`serve` 在碰数据库之前就调它。
 - `Client.Nodes() int`：登录兜底等分用的节点数，取配置的 N 与心跳看到的存活节点数中较大的（见「配置与启动」）。
 - `Client.Now() time.Time`：本机时钟加上测得的与 Valkey 的偏差（见「时钟」）。脚本里用到的「现在」和窗口序号都取它。
-- `kv.NewScript(src)`：脚本写在用它的模块里（gateway 的 `count`，accounts 的 `take`、`give`），`kv` 只管执行，不含业务规则。**一律 `EVAL`**，不用 `EVALSHA`：`EVALSHA` 在 Valkey 重启、切换或 `SCRIPT FLUSH` 之后得到 `NOSCRIPT`，要再发一次 `EVAL`，每个节点那一刻在途的全部请求都变成两次往返，打破「一次往返」；脚本只有几百字节，服务端按内容的 SHA 命中自己的脚本缓存，不重新编译。new-api 也是直接 `Eval`（`rate-limit.go:80`）；sub2api 的 `Script.Run` 有同样的两次往返（`rate_limiter.go:30`）。
-- `Client.Do(ctx, use, cmds…)`：一批命令一次往返，统一加期限、过熔断、记指标；任何失败都返回包着原因的 `kv.ErrUnavailable`，调用方据此兜底。
-- `Client.Later(use, cmd)`：后台写入，队列满或内存超过阈值即丢弃（见「会话粘性」）。
-- `Client.Key(use, site, parts…)`：拼出带 `ax:<ns>:` 前缀的键，`ns` 只在这里定。
+- `kv.NewScript(src)` 与 `Script.Cmd(keys, args…)`：脚本写在用它的模块里（gateway 的 `count`，accounts 的 `take`、`give`），`kv` 只管执行，不含业务规则；`Cmd` 是一批命令里的一条，类型不透明，模块只能发自己的脚本。**一律 `EVAL`**，不用 `EVALSHA`：`EVALSHA` 在 Valkey 重启、切换或 `SCRIPT FLUSH` 之后得到 `NOSCRIPT`，要再发一次 `EVAL`，每个节点那一刻在途的全部请求都变成两次往返，打破「一次往返」；脚本只有几百字节，服务端按内容的 SHA 命中自己的脚本缓存，不重新编译。new-api 也是直接 `Eval`（`rate-limit.go:80`）；sub2api 的 `Script.Run` 有同样的两次往返（`rate_limiter.go:30`）。
+- `Client.Do(ctx, use, cmds…) ([]Value, error)`：一批命令一次往返，统一加期限、过熔断、记指标；任何失败都返回包着原因的 `kv.ErrUnavailable`，调用方据此兜底；`Value` 按调用方的需要读成整数列表或文本（「没有这个键」随粘性加入）。
+- `Client.Later(use, cmd)`：后台写入，队列满或内存超过阈值即丢弃（见「会话粘性」）。K3 加入。
+- `Client.Key(space, site, parts…)` 与 `kv.Hex(id)`：拼出 `ax:<ns>:<用途>:<站点>:…` 的键，`ns` 只在这里定，ID 写成 32 位小写十六进制。
+- `Client.Close(ctx)`：停后台循环、放开连接、删掉本节点的心跳行；可以调多次，`serve` 在每条退出路径上都调。
 
 ## 配置与启动
 
@@ -49,7 +50,7 @@
 | 情况 | 结果 |
 |---|---|
 | URL 读不通、写法不对、带了密码；设了 URL 却读不到密码文件；N 不是正整数；N > 1 却没设 URL | 不启动，报变量名（[gateway 的「决策与理由」](../../gateway/README.md#决策与理由)：多核心没有 Valkey 不启动） |
-| N > 1，而 K1–K3 还没全部落地 | 不启动：登录和粘性还在进程内时多核心会放大登录次数（见「落地顺序」）；最后一个 PR 去掉这一条 |
+| N > 1，而 K1–K3 还没全部落地 | 不启动：登录和粘性还在进程内时多核心会放大登录次数（见「落地顺序」）。这一条在 `serve` 读变量时判，不在 `kv.Open` 里，所以 `kv` 本身已经支持 N > 1，心跳和兜底的测试直接用它；K3 去掉这一条 |
 | 节点心跳表里另有存活节点，且它们的数目 ≥ N | 不启动：N 配小了，或者第二个节点没配 Valkey 就连上了同一个库 |
 | 连得上，但认证或权限被拒（`WRONGPASS`、`NOPERM`） | 不启动：这是配置错了 |
 | 连得上，`INFO memory` 里 `maxmemory` 为 0 或 `maxmemory_policy` 不是 `noeviction` | 不启动：内存没有上限，或满了会悄悄删掉登录桶 |
@@ -125,7 +126,7 @@ compose 里 `maxmemory` 默认 256 MB、`maxmemory-policy noeviction`，不持�
 
 new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limit.go:119`、`rate_limiter.go:142`）。我们的期限只有 20ms，没有熔断时 Valkey 一卡，每个请求都多 20ms。
 
-- **记什么**：每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。
+- **记什么**：每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。成功和出错的访问都算窗口里的一次访问（下面「一半以上」「超过 20%」的分母），出错还证明服务器在，连续不可用的计数清零；打开期间才结束的在途访问不再记，不会延长打开的时间。
 - **打开**，在最近 10 秒的滑动窗口上（10 个一秒的桶），满足任一条：
   - 访问至少 20 次，且一半以上不可用；
   - 访问至少 10 次，且超过 20% 是 `kv.Timeout` 到期（耗时触发：部分故障时只有一部分请求变慢，错误率条件看不到它）；
