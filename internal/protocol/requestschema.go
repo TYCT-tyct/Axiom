@@ -36,7 +36,7 @@ type responseToolSchema struct {
 	Definitions map[string]*responseToolSchema `json:"definitions,omitzero"`
 	AnyOf       []*responseToolSchema          `json:"anyOf,omitzero"`
 	Items       *responseToolSchema            `json:"items,omitzero"`
-	Constraints map[string]jsontext.Value      `json:",unknown"`
+	Constraints map[string]jsontext.Value      `json:",embed"`
 }
 
 var normalizableSchemaKeywords = map[string]bool{

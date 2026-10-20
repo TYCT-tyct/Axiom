@@ -106,7 +106,7 @@ func TestResponsesRequestsToChat(t *testing.T) {
 		{
 			"strict normalization recurses through schemas",
 			`"input":"Go","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"rows":{"type":"array","items":{"type":["object","null"],"properties":{"x":{"type":"string"}}}}}}}]`,
-			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","strict":true,"parameters":{"type":"object","required":["rows"],"additionalProperties":false,"properties":{"rows":{"type":"array","items":{"type":["object","null"],"required":["x"],"additionalProperties":false,"properties":{"x":{"type":"string"}}}}}}}]`,
+			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","strict":true,"parameters":{"type":"object","required":["rows"],"additionalProperties":false,"properties":{"rows":{"type":"array","items":{"type":["object","null"],"required":["x"],"additionalProperties":false,"properties":{"x":{"type":"string"}}}}}}}}]`,
 		},
 		{
 			"explicit best effort keeps the schema",
