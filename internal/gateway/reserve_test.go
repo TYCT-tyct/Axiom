@@ -37,7 +37,8 @@ func TestBackgroundAndConsoleCannotTakeTheSettlementReserve(t *testing.T) {
 		o.config = func(c *Config) { c.PoolSize, c.PoolReserve = 5, 1 }
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	defer cancel()
+	// The helpers join held transactions in t.Cleanup; cancelling on return races their COMMITs.
+	t.Cleanup(cancel)
 	var c *Call
 	deps := r.handler.Deps
 	deps.Run = func(_ http.ResponseWriter, _ *http.Request, admitted *Call) { c = admitted }
