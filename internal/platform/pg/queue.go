@@ -149,6 +149,7 @@ func (q *Queue) Start(ctx context.Context) error {
 	if err := river.AddWorkerSafely(q.workers, river.WorkFunc(q.workDiscardedScan)); err != nil {
 		return fmt.Errorf("queue: %w", err)
 	}
+	// River uses only ordinary connections. Its driver detaches one for LISTEN (see the connection budget in README).
 	client, err := river.NewClient(riverpgxv5.New(q.db.pool), &river.Config{
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
 		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: -1, // the scan deletes them, after claiming them

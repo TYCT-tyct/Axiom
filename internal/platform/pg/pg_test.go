@@ -45,10 +45,11 @@ func newDatabase(t *testing.T) pgtest.Database {
 	return db
 }
 
-// open connects as the application with a pool of one connection, so consecutive transactions share it.
+// open connects as the application with one ordinary connection and one for the completion class, so consecutive
+// transactions share a connection and a test can hold the ordinary one.
 func open(t *testing.T, url string) *pg.DB {
 	t.Helper()
-	db, err := pg.Open(t.Context(), url+"&pool_max_conns=1")
+	db, err := pg.Open(t.Context(), url+"&pool_max_conns=2", pg.WithCompletionReserve(1))
 	if err != nil {
 		t.Fatal(err)
 	}
