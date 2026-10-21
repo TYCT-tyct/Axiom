@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
@@ -64,6 +65,7 @@ type admins struct {
 	keys  *secret.Keyring
 	data  pgtest.Database
 	actor audit.Actor
+	clock *testClock // the time the admin has, which the sync of the tests shares
 }
 
 func newAdmins(t *testing.T, list ...adapter.Adapter) admins {
@@ -82,11 +84,12 @@ func newAdmins(t *testing.T, list ...adapter.Adapter) admins {
 		t.Fatal(err)
 	}
 	keys := newKeys(t)
-	admin, err := NewAdmin(AdminConfig{Keys: keys, Egress: egress.NewForTesting(egresstest.Loopback(t)), Registry: r})
+	clock := &testClock{t: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)}
+	admin, err := NewAdmin(AdminConfig{Keys: keys, Egress: egress.NewForTesting(egresstest.Loopback(t)), Registry: r, Clock: clock.now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return admins{t, db, admin, keys, data, audit.User(uuid.NewV7())}
+	return admins{t, db, admin, keys, data, audit.User(uuid.NewV7()), clock}
 }
 
 // inTx runs f in a platform transaction, as the handlers do.
@@ -107,10 +110,10 @@ func (a admins) sql(statements ...string) {
 }
 
 // text is the first column of the query's one row, run as the superuser so row security does not hide it.
-func (a admins) text(query string) string {
+func (a admins) text(query string, args ...any) string {
 	a.t.Helper()
 	v, err := inTx(a, func(ctx context.Context, tx pg.Tx) (v string, err error) {
-		return v, tx.QueryRow(ctx, query).Scan(&v)
+		return v, tx.QueryRow(ctx, query, args...).Scan(&v)
 	})
 	if err != nil {
 		a.t.Fatal(err)
