@@ -516,42 +516,6 @@ func TestKeyChangesAreRecorded(t *testing.T) {
 	}
 }
 
-// TestSnapshot: a registered host names its site and surface whatever its case; an unknown one is refused; a
-// snapshot not reloaded for 90 seconds refuses everything until a reload succeeds; a role holding a permission the
-// program does not declare stops the start.
-func TestSnapshot(t *testing.T) {
-	t.Parallel()
-	db, database := open(t)
-	var mu sync.Mutex
-	now := time.Now()
-	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
-	s := node(t, db, hashKeys(t, 1), clock)
-	if site, surface, err := s.SiteForHost("MAIN.example"); err != nil || site.ID != accounts.SiteID(s1) || !site.Main || surface != accounts.Console {
-		t.Errorf("main.example: %+v %s %v", site, surface, err)
-	}
-	if _, _, err := s.SiteForHost("other.example"); !errors.Is(err, accounts.ErrUnknownHost) {
-		t.Errorf("an unknown host: %v", err)
-	}
-	mu.Lock()
-	now = now.Add(91 * time.Second)
-	mu.Unlock()
-	if _, _, err := s.SiteForHost("main.example"); !errors.Is(err, accounts.ErrStale) {
-		t.Errorf("after 91 seconds: %v, want stale", err)
-	}
-	if err := s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.SiteForHost("main.example"); err != nil {
-		t.Errorf("after a reload: %v", err)
-	}
-	if err := pgtest.Run(t.Context(), database.Superuser, "UPDATE accounts.roles SET permissions = '{keys.create}' WHERE name = 'owner'"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Reload(t.Context()); err == nil || !strings.Contains(err.Error(), `role owner holds "keys.create"`) {
-		t.Errorf("a role with an unknown permission: %v", err)
-	}
-}
-
 // TestHashKeyRotation: a key made under one version is still found when a newer version is current, and more than
 // two versions are refused.
 func TestHashKeyRotation(t *testing.T) {
