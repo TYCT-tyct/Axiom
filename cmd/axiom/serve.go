@@ -120,7 +120,7 @@ func hostName() string {
 }
 
 // singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
-// node would multiply the login attempts. It is the check of the program's own entry, serve, and not of serveVia, which
+// node would multiply the login attempts. It is the check of the program's own entry, serve, and not of serveWith, which
 // the tests that run two nodes of one deployment use. The last of the cache's slices (K3) removes it
 // (internal/platform/kv/README.md「落地顺序」). A value that is no number is for readSettings to report.
 func singleNodeOnly(environ []string) error {
@@ -141,7 +141,7 @@ func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
 	if err := singleNodeOnly(environ); err != nil {
 		return err
 	}
-	return serveVia(ctx, environ, logger, directEgress)
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher)
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -149,16 +149,11 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 }
 
-// serveVia is serve with the client the node reaches its suppliers through: one pool of connections for the call path,
-// the console's admin and the suppliers' sync. A test gives one that may reach a supplier on loopback.
-func serveVia(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error)) error {
-	return serveWith(ctx, environ, logger, outbound, startRecorder)
-}
-
-// serveWith is serveVia with the constructor of the call-record writer, which a test wraps to get the recorder this
-// call created.
+// serveWith lets a test capture its recorder and opt into price syncing with local datasets. A nil prices constructor
+// disables the periodic price job, so tests of the listeners and call path never download the production datasets.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+	prices func(*egress.Client) *catalog.Fetcher,
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -184,7 +179,9 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	queue, recorder, err := startBackground(ctx, db, console.master, cfg.smtp, exit, tel, logger, cfg.shutdownTimeout, record)
+	syncCtx, cancelSync := context.WithCancel(ctx)
+	defer cancelSync()
+	queue, recorder, err := startBackground(syncCtx, db, console.master, cfg.smtp, exit, prices, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -194,7 +191,10 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
 	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
 	// deadline, and a second Stop does nothing.
-	defer stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
+	defer func() {
+		cancelSync()
+		stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
+	}()
 	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
 	if err != nil {
 		return err
@@ -211,12 +211,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
-	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder, cache)
+	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder, cache, cancelSync)
 }
 
 // runNode listens, serves until ctx ends, and then shuts the node down in stopNode's order.
 func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
-	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client,
+	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
 	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
@@ -228,6 +228,7 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 	// rebuild.
 	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
 	stopped := awaitEnd(ctx, served, routes.calls.reaped, cache.Lost())
+	cancelSync()
 	stopAnnouncing()
 	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
 	err := stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder)
@@ -372,11 +373,13 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// startSync starts the queue with supplier syncing on the syncs queue, and charge reconciliation, the ledger's daily
-// check and the expiry of credit on the money queue. Each queue has its own workers, so a burst of syncs cannot hold a
-// money job back (internal/platform/README.md「任务队列」). It reaches the suppliers through exit, the client the whole
-// node shares.
-func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client, tel *telemetry.Telemetry, logger *slog.Logger) (*pg.Queue, error) {
+// startSync starts the queue with supplier syncing and the price datasets' daily round on the syncs queue, and charge
+// reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
+// so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
+// the datasets through exit, the client the whole node shares.
+func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client,
+	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger,
+) (*pg.Queue, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
 	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
@@ -387,6 +390,16 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
 		return nil, err
+	}
+	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
+	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
+	if prices != nil {
+		if err := catalog.RegisterSync(ctx, catalog.SyncJobConfig{
+			DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger,
+			Meter: tel.Metrics.Meter("axiom/catalog"),
+		}); err != nil {
+			return nil, err
+		}
 	}
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
 	// is registered here and not with the call path, which starts after the queue).
@@ -474,11 +487,11 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
 // the recorder it had already started, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, smtp mail.Config, exit *egress.Client,
-	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
+	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 ) (*pg.Queue, *observability.Recorder, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, err := startSync(ctx, db, smtp, keys, exit, tel, logger)
+	queue, err := startSync(ctx, db, smtp, keys, exit, prices, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		return nil, nil, err

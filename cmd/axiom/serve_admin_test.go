@@ -25,7 +25,7 @@ func TestServeAdminListener(t *testing.T) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		go func() { done <- serveForTest(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
 		addrs := servingAddrs(t, logs, done)
 		return addrs.Admin, addrs.Public, func() {
 			cancel()
