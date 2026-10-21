@@ -2,7 +2,7 @@
 
 多个核心节点共用的限流计数、登录前的尝试次数和会话粘性，放在 Valkey 里；这里写放什么、怎么连、键怎么写、Valkey 不可用时每种用途怎么兜底，以及部署和测试。选型的总体理由见[总体架构的「技术选型」](../../../docs/architecture.md#技术选型)。
 
-> 本文先于代码写成，是 [Issue #321](https://github.com/TYCT-tyct/Axiom/issues/321) E8-b 的设计，按下文「落地顺序」的 K1–K4 实现，代码随 K1 加入。代码与本文不一致时，在同一个 PR 里改本文。
+> 本文是 [Issue #321](https://github.com/TYCT-tyct/Axiom/issues/321) E8-b 的设计，按下文「落地顺序」的 K1–K4 实现。已落地的是 K1：访问层、限流计数、节点心跳和部署；登录（K2）、粘性（K3）和主备（K4）还没有，下文属于它们的接口（`Later`）和脚本（`take`、`give`）尚无代码。代码与本文不一致时，在同一个 PR 里改本文。
 
 三样都是**丢了不影响正确性**的数据：丢失只会多放行一点、或让会话重新选一次端点，钱和权限不受影响。
 
@@ -28,28 +28,29 @@
 - **服务端**：`valkey/valkey:9.1.2-alpine`，部署和测试用同一个标签。
 - **连接**：总是流水线（`AlwaysPipelining`），并发的命令共用少量连接（默认每个实例 4 条），不用按并发数配连接池（sub2api 配 1024 条，`repository/redis.go:23`、`config.go:2241`）。不开它时，没有并发的命令走同步路径，期限一到就关掉连接（v1.0.78 `pipe.go` 的 `syncDo`），低流量时每次超时都要重连。关掉客户端缓存（`DisableCache`，不发 `CLIENT TRACKING`）和自动重试（`DisableRetry`：脚本会加计数，不能重发；一次失败只计一次，直接走兜底）。建连 1s；一条连接 1s 内收不到回复就关掉重连（`ConnWriteTimeout`；默认是 `Dialer.KeepAlive` × 10，即 10s，太长）。上面四个字段名与默认值已按 v1.0.78 的 `valkey.go`（第 231、259、261、265 行和 `ConnWriteTimeout` 的默认值计算）核对，升级时重新核对。
 - **期限**：每次同步访问的期限是调用方 context 与 `kv.Timeout`（20ms，[路由的「容量感知」](../../../docs/domains/routing.md#容量感知)）中较早的一个。到期立即返回，连接不断：迟到的回复由客户端的一个 goroutine 收下丢掉（`pipe.go` 的 `abort`），它至多活到 `ConnWriteTimeout`（1s）。登录也用同一个期限，Valkey 在同机房的正常往返在 1ms 以内，20ms 还没回就是它出了问题。
-- **流水线满时会等**：命令先放进每条连接的环（默认 2¹⁰ 格，4 条连接共 4096 格），`ring.PutOne` 不看 context，格子被占满时一直等（v1.0.78 `ring.go:59`）。被放弃的命令在回复到达或连接因 `ConnWriteTimeout` 关闭之前一直占着格子，所以 Valkey 卡住时格子会被耗尽。靠熔断兜住：Valkey 卡住后超时在几十毫秒内就满足下文「熔断」的耗时触发条件，打开后不再放命令进环，被占的格子至多是触发前发出的那些，远少于 4096。K1 的测试在 `CLIENT PAUSE` 下同时发出远多于 4096 个访问，断言每个都返回（测试本身有一个远大于 `kv.Timeout` 的整体期限，只抓「卡住不返回」，不比较墙钟）。
+- **流水线满时会等，所以客户端自己限住在途的命令**：命令先放进每条连接的环（默认 2¹⁰ 格），`ring.PutMulti` 在格子满时等一个不看 context 的条件变量（v1.0.78 `ring.go`），20ms 的期限拦不住它；而熔断打开前已经通过的访问收不回来。所以 `Client.Do` 在发出命令前先拿一个「位置」（`golang.org/x/sync/semaphore`，总数 512 条命令，是一条连接的环的一半，一批落在哪条连接上都有空格）：期限到了还没拿到位置就不发、直接返回不可用。位置在回复到达（或连接因两秒左右没有回应被关闭，上限 `settleBy` 3s）时才还，不是调用方不等了就还，因为被放弃的命令仍占着环里的格子。所以环不会被填满，一次访问最长等 `kv.Timeout`。测试：用一个按测试意愿才应答的假服务端（`send_test.go`，受控的满队列、取消、释放顺序，时间由 synctest 控制），再在真实 Valkey 的 `CLIENT PAUSE … WRITE` 下同时发出 5000 个访问，断言每个都返回、到达服务端的不超过 512 条。
 - **认证**：Valkey 的 ACL 用户 `axiom`，`default` 用户关闭。`AXIOM_VALKEY_URL` 只写地址和用户（`valkey://axiom@valkey:6379`），密码从受保护文件 `AXIOM_VALKEY_PASSWORD_FILE` 读，文件的权限要求同[主密钥文件](../README.md#凭证加密)：环境变量会出现在 `docker inspect` 里，而拿到密码的人能删掉全部登录桶。URL 里带了密码就不启动。同一台机器上走 compose 的内部网络，不加 TLS（与数据库的 `sslmode=disable` 相同）；跨机器（M3）用 `valkeys://`，按系统根证书校验服务端，自签 CA 的变量随那个部署加入。其他写法（`redis://` 等）不接受，一种写法。错误只报变量名，不带取值。
 - **权限**：`axiom` 用户只能碰 `ax:*` 的键，命令只放行 `hello`、`auth`、`ping`、`client|setinfo`、`info`、`time`、`get`、`set`、`del`、`incr`、`pexpire`、`eval`（脚本里执行的命令也按这个用户检查；不放行 `evalsha`，见下文「接口」）。ACL 文件里只写密码的 SHA-256（`#<十六进制>`），不写明文。K1 的测试以这个用户跑完全部用法，出现 NOPERM 即失败；`FLUSHALL`、`KEYS`、`CONFIG`、`EVALSHA` 和 `ax:*` 之外的键必须被拒。
 
-## 接口（草图）
+## 接口
 
-- `kv.Open(ctx, cfg, meter, logger) (*Client, error)`：按下文「配置与启动」检查；没设 URL 时返回单核心模式的 `Client`，`Enabled()` 为假，调用方走进程内的实现。
+- `kv.Open(ctx, cfg, deps) (*Client, error)`：`cfg` 是 `kv.Config`（三个变量的值，加上测试用的键名前缀），`deps` 是 `kv.Deps`（心跳用的 `*pg.DB` 和范围、`Meter`、`Logger`，以及测试用的本机时钟）；按下文「配置与启动」检查。没设 URL 时返回单核心模式的 `Client`，`Enabled()` 为假，调用方走进程内的实现；有数据库就都登记心跳。`Config.Resolve` 检查配置本身、解析 URL、读密码文件并记下结果，`serve` 在碰数据库之前就调它，`Open` 复用它的结果。
 - `Client.Nodes() int`：登录兜底等分用的节点数，取配置的 N 与心跳看到的存活节点数中较大的（见「配置与启动」）。
 - `Client.Now() time.Time`：本机时钟加上测得的与 Valkey 的偏差（见「时钟」）。脚本里用到的「现在」和窗口序号都取它。
-- `kv.NewScript(src)`：脚本写在用它的模块里（gateway 的 `count`，accounts 的 `take`、`give`），`kv` 只管执行，不含业务规则。**一律 `EVAL`**，不用 `EVALSHA`：`EVALSHA` 在 Valkey 重启、切换或 `SCRIPT FLUSH` 之后得到 `NOSCRIPT`，要再发一次 `EVAL`，每个节点那一刻在途的全部请求都变成两次往返，打破「一次往返」；脚本只有几百字节，服务端按内容的 SHA 命中自己的脚本缓存，不重新编译。new-api 也是直接 `Eval`（`rate-limit.go:80`）；sub2api 的 `Script.Run` 有同样的两次往返（`rate_limiter.go:30`）。
-- `Client.Do(ctx, use, cmds…)`：一批命令一次往返，统一加期限、过熔断、记指标；任何失败都返回包着原因的 `kv.ErrUnavailable`，调用方据此兜底。
-- `Client.Later(use, cmd)`：后台写入，队列满或内存超过阈值即丢弃（见「会话粘性」）。
-- `Client.Key(use, site, parts…)`：拼出带 `ax:<ns>:` 前缀的键，`ns` 只在这里定。
+- `kv.NewScript(src)` 与 `Script.Cmd(keys, args…)`：脚本写在用它的模块里（gateway 的 `count`，accounts 的 `take`、`give`），`kv` 只管执行，不含业务规则；`Cmd` 是一批命令里的一条，类型不透明，模块只能发自己的脚本。**一律 `EVAL`**，不用 `EVALSHA`：`EVALSHA` 在 Valkey 重启、切换或 `SCRIPT FLUSH` 之后得到 `NOSCRIPT`，要再发一次 `EVAL`，每个节点那一刻在途的全部请求都变成两次往返，打破「一次往返」；脚本只有几百字节，服务端按内容的 SHA 命中自己的脚本缓存，不重新编译。new-api 也是直接 `Eval`（`rate-limit.go:80`）；sub2api 的 `Script.Run` 有同样的两次往返（`rate_limiter.go:30`）。
+- `Client.Do(ctx, use, cmds…) ([]Value, error)`：一批命令一次往返，统一加期限、过熔断、记指标；任何失败都返回包着原因的 `kv.ErrUnavailable`，调用方据此兜底；`Value` 按调用方的需要读成整数列表或文本（「没有这个键」随粘性加入）。
+- `Client.Later(use, cmd)`：后台写入，队列满或内存超过阈值即丢弃（见「会话粘性」）。K3 加入。
+- `Client.Key(space, site, parts…)` 与 `kv.Hex(id)`：拼出 `ax:<ns>:<用途>:<站点>:…` 的键，`ns` 只在这里定，ID 写成 32 位小写十六进制。
+- `Client.Close(ctx)`：停后台循环、放开连接、删掉本节点的心跳行；可以调多次，`serve` 在每条退出路径上都调。
 
 ## 配置与启动
 
-`serve` 多读三个变量：`AXIOM_VALKEY_URL`（不设就是单核心模式：三样都在进程内，与 M1 相同）、`AXIOM_VALKEY_PASSWORD_FILE` 和 `AXIOM_CORE_NODES`（核心节点数 N，默认 1）。`kv.Open` 在 `AXIOM_STARTUP_TIMEOUT` 之内做下列检查：
+`serve` 多读四个变量：`AXIOM_VALKEY_URL`（不设就是单核心模式：三样都在进程内，与 M1 相同）、`AXIOM_VALKEY_PASSWORD_FILE` `AXIOM_CORE_NODES`（核心节点数 N，默认 1）和 `AXIOM_NODE_ID`（本节点的名字，默认主机名，至多 128 个可见字符、不含空格）。`kv.Open` 在 `AXIOM_STARTUP_TIMEOUT` 之内做下列检查：
 
 | 情况 | 结果 |
 |---|---|
 | URL 读不通、写法不对、带了密码；设了 URL 却读不到密码文件；N 不是正整数；N > 1 却没设 URL | 不启动，报变量名（[gateway 的「决策与理由」](../../gateway/README.md#决策与理由)：多核心没有 Valkey 不启动） |
-| N > 1，而 K1–K3 还没全部落地 | 不启动：登录和粘性还在进程内时多核心会放大登录次数（见「落地顺序」）；最后一个 PR 去掉这一条 |
+| N > 1，而 K1–K3 还没全部落地 | 不启动：登录和粘性还在进程内时多核心会放大登录次数（见「落地顺序」）。这一条在程序入口 `serve` 里判，不在 `kv.Open` 里，也不在测试用的 `serveVia` 里，所以 `kv` 本身已经支持 N > 1，心跳和兜底的测试、两个节点的调用路径测试直接用它；K3 去掉这一条 |
 | 节点心跳表里另有存活节点，且它们的数目 ≥ N | 不启动：N 配小了，或者第二个节点没配 Valkey 就连上了同一个库 |
 | 连得上，但认证或权限被拒（`WRONGPASS`、`NOPERM`） | 不启动：这是配置错了 |
 | 连得上，`INFO memory` 里 `maxmemory` 为 0 或 `maxmemory_policy` 不是 `noeviction` | 不启动：内存没有上限，或满了会悄悄删掉登录桶 |
@@ -58,7 +59,7 @@
 
 就绪检查不看 Valkey：它不可用时节点仍能正确服务。
 
-**节点心跳**：N 是静态配置，因为 `serve` 还没有节点登记（[总体架构的「部署拓扑」](../../../docs/architecture.md#部署拓扑)）；配错了没有别的东西会发现，所以每个节点在 PostgreSQL 里写心跳：平台 schema 的一张小表 `platform.nodes`（节点 ID：进程每次启动生成的 UUID；最近一次心跳的时刻），K1 加迁移，只有平台范围读写。每 10 秒更新自己的一行、删掉 60 秒没更新的行；30 秒内更新过的算存活；优雅退出时删掉自己的行。启动时按上表检查；运行中存活数持续 2 分钟大于 N（滚动发布时新旧进程会短暂重叠）记错误、计入指标 `axiom.kv.nodes_live` 并告警，登录兜底的等分数取两者中较大的。代价：进程崩溃后它的行要 30 秒才过期，紧接着重启的同一节点在 N = 1 时会被拒绝启动，由重启策略重试，至多晚 30 秒。M3 的节点登记（[#322](https://github.com/TYCT-tyct/Axiom/issues/322)）取代这张表和这个变量。
+**节点心跳**：N 是静态配置，因为 `serve` 还没有节点登记（[总体架构的「部署拓扑」](../../../docs/architecture.md#部署拓扑)）；配错了没有别的东西会发现，所以每个核心节点，设不设 Valkey 都一样，在 PostgreSQL 里写心跳：平台 schema 的一张小表 `platform.nodes`（节点 ID：`AXIOM_NODE_ID`，重启不变；最近一次心跳的时刻），K1 加迁移，只有平台范围读写。每 10 秒更新自己的一行、删掉 60 秒没更新的行；30 秒内更新过的算存活；优雅退出时删掉自己的行。启动时数其他存活节点和写自己的一行是同一个事务，持一把事务级 advisory lock，同时启动的几个节点一个一个进，不会各自数到零而都放进来；每一轮心跳有自己的期限（5 秒），排在这一轮对 Valkey 的检查之后，数据库卡住只会拖慢这一轮，不会让 Valkey 的检查停下。启动时按上表检查；运行中存活数持续 2 分钟大于 N（滚动发布时新旧进程会短暂重叠）记错误、计入指标 `axiom.kv.nodes_live` 并告警，登录兜底的等分数取两者中较大的。节点有固定的名字，名字归**一个进程**所有：进程启动时在一条专用的数据库连接上拿一把会话级 advisory lock（`pg.DB.Hold`，`pg_try_advisory_lock`，键由名字哈希而来），活着就一直持有。同名的第二个进程（同一台机器上默认主机名相同）拿不到锁，立刻拒绝启动并报 `AXIOM_NODE_ID`，不看旧行是否新鲜；锁属于连接。进程崩溃时系统关掉它的 socket，数据库随即放掉锁，所以崩溃后立刻重启的同一节点马上拿到名字、覆盖自己留下的行，不等行过期。整台机器挂掉（断电、内核崩溃、虚拟机重置）或网络被切断时没有谁去关 socket，数据库要靠 TCP 保活发现半开的连接，Linux 默认约两小时；所以持有名字的会话拿到锁后给自己设 `tcp_keepalives_idle = 5`、`tcp_keepalives_interval = 5`、`tcp_keepalives_count = 3` 和 `tcp_user_timeout = 20000`（`TestHoldAsksTheServerToDropADeadConnection` 在持有者的连接上 `SHOW` 这些值），数据库在约 20 到 30 秒内放掉锁。所以同名重启被拒绝的时间：进程崩溃时立即可以重启，整机故障时至多约 30 秒（经 Unix socket 连数据库时这些设置无效，也没有网络可切）。名字拿到之后，别的名字的存活行才算「别的节点」计入 N。连接在运行中丢了（数据库重启、网络断），持有者每 5 秒检查一次并发现，`Client.Lost` 关闭，`serve` 随即退出（失败即关闭）：丢了名字就可能已有别的进程以这个名字在跑，不能继续当唯一的节点。这条连接不在连接池里，所以每个节点比池的上限（64）多用一条，数据库的 `max_connections` 按每节点 65 条算（[platform 的「连接池」](../README.md#连接池)）。容器重启保留主机名，默认值够用；两个节点不能用同一个名字，第二个会被拒绝。取不到主机名又没设时，每次启动用新名字，此时名字锁挡不住同一台机器上的第二个进程，只有计数检查在。M3 的节点登记（[#322](https://github.com/TYCT-tyct/Axiom/issues/322)）取代这张表和这个变量。
 
 ## 时钟
 
@@ -125,7 +126,7 @@ compose 里 `maxmemory` 默认 256 MB、`maxmemory-policy noeviction`，不持�
 
 new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limit.go:119`、`rate_limiter.go:142`）。我们的期限只有 20ms，没有熔断时 Valkey 一卡，每个请求都多 20ms。
 
-- **记什么**：每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。
+- **记什么**：每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。成功和出错的访问都算窗口里的一次访问（下面「一半以上」「超过 20%」的分母），出错还证明服务器在，连续不可用的计数清零；打开期间才结束的在途访问不再记，不会延长打开的时间。
 - **打开**，在最近 10 秒的滑动窗口上（10 个一秒的桶），满足任一条：
   - 访问至少 20 次，且一半以上不可用；
   - 访问至少 10 次，且超过 20% 是 `kv.Timeout` 到期（耗时触发：部分故障时只有一部分请求变慢，错误率条件看不到它）；
@@ -135,7 +136,7 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 
 ## 指标与告警
 
-`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（后台写入被丢弃，标签 `reason`：`queue`、`memory`、`account`）、`axiom.kv.memory_used_bytes` 与 `axiom.kv.rejected_oom`（后台每 10 秒读 `INFO memory`、`INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
+`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（后台写入被丢弃，标签 `reason`：`queue`、`memory`、`account`）、`axiom.kv.memory_used_bytes`（后台每 10 秒读 `INFO memory`）与 `axiom.kv.rejected_oom`（访问被服务端以 OOM 拒绝的次数，由客户端在拒绝发生时数，不读 `INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
 
 ## 部署
 
@@ -148,7 +149,7 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 ## 测试
 
 - **真实 Valkey**：`withcluster` 在一次 `just test` 里与 PostgreSQL 一起起一个 Valkey 容器（同一镜像、同一份 ACL 和配置），地址经 `KVTEST_URL` 传入，和 `PGTEST_CLUSTER_URL` 一样用 `os.Environ` 读，不进测试缓存键；没有这个变量时 `kvtest` 自己起容器。用例各用随机的 `ns`。改服务端状态的用例（`CLIENT PAUSE`、重启、填满内存、改 ACL 或配置）用自己的容器。
-- **超时**：另一条连接执行 `CLIENT PAUSE <毫秒> ALL` 让 Valkey 不应答，断言访问返回不可用、用了兜底、熔断按耗时条件打开，暂停结束后半开、关闭；同时发出远多于 4096 个访问，每个都返回（见「客户端与连接」）。调用方先取消的访问记作跳过、不推开熔断。不按墙钟判成败：期限断言的是传给客户端的 context 的截止时间不晚于 `kv.Timeout`，熔断的时钟可注入。
+- **超时**：`send_test.go` 的 `TestTimeoutReturnsAndTheBreakerRecovers` 用 `testing/synctest` 和受控假服务端验证访问恰在生产期限 `kv.Timeout`（20ms）返回不可用、熔断打开后不再发送、迟到回复不提前关闭熔断、打开期后半开探测成功并恢复正常访问，以及 `breaker_open` 从 1 回到 0；生产期限的准确耗时只在虚拟时间里断言。同文件的队列测试验证无空位时仍按期限返回、等到空位才发送，以及在途数上限。真实 Valkey 的集成验证在 `outage_test.go`：另一条连接执行 `CLIENT PAUSE <很长> WRITE` 阻塞写脚本（`INFO`、`TIME` 照常），放行时显式 `CLIENT UNPAUSE`；`TestEveryAccessReturns` 验证大量并发访问都返回、到达服务端的不超过在途上限，`TestCallerGivingUpDoesNotOpenTheBreaker` 验证调用方先取消记作跳过、不推开熔断，这两个用例不验证恢复。真实服务端的正常回复使用 `kvtest` 的一分钟默认期限；熔断和时钟偏差的测试用虚拟时间或可注入时钟，不按墙钟判成败。
 - **重启**：停止再启动容器，断言期间请求照常完成、恢复后重新连上，计数从零开始。
 - **内存满**：把容器的 `maxmemory` 设得很小并写满，断言新写入得到 OOM、按出错走兜底，已有的登录桶仍在；超过 70% 后粘性写入被丢弃。
 - **时钟**：见「时钟」；另测启动时偏差超过 1s 不启动。
@@ -164,13 +165,13 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 | 每个键都有到期时间，且到期时长与节点时钟的绝对值无关 | 计数在同一个脚本里 `INCR` 加 `PEXPIRE`，桶和粘性用 `SET … PX`，都是相对时长；没有不带到期的写入。测试：各用法跑完后 `SCAN` 全部键，`PTTL` 都大于 0；「现在」与服务端相差一小时时同样成立 |
 | 内存满时不丢已有的计数和桶 | `noeviction`，启动时核对；OOM 按出错兜底；粘性在 70% 以上停写。测试见上文「内存满」 |
 | 一次模型调用至多一次同步往返，在准入之前；排队醒来为 0 | 只有预检发一批；脚本一律 `EVAL`，没有 `NOSCRIPT` 的第二次往返。测试按 `axiom.kv.calls` 数：一次调用 1，排队后醒来仍是 1，`SCRIPT FLUSH` 之后仍是 1 |
-| 同步访问至多等 `kv.Timeout`，熔断打开时不做 I/O | 期限由 `kv` 统一加，调用方给不了更长的；流水线的格子靠熔断兜住。测试见上文「超时」 |
-| 调用方的取消不推开熔断 | 只有 `kv.Timeout` 自己到期和连接错误计入；测试见上文「超时」 |
+| 同步访问至多等 `kv.Timeout`，熔断打开时不做 I/O | 期限由 `kv` 统一加，调用方给不了更长的；在途命令数由客户端限在半个环以内，拿不到位置就不发，流水线不会满。`send_test.go` 在虚拟时间中验证准确期限、满队列返回和熔断期间不发送；`outage_test.go` 的 `TestEveryAccessReturns` 用暂停写入的真实 Valkey 验证并发返回和在途上限（见「客户端与连接」） |
+| 调用方的取消不推开熔断 | 只有 `kv.Timeout` 自己到期和连接错误计入；`outage_test.go` 的 `TestCallerGivingUpDoesNotOpenTheBreaker` 用暂停写入的真实 Valkey 验证跳过；`send_test.go` 的 `TestAPlaceGoesToTheCallThatWaitsForIt` 在虚拟时间中验证排队时取消不发送、不推开熔断 |
 | Valkey 不可用本身不会让请求更早被拒或失败 | 限流按本节点计数与全额限额比较，不会比平时更早 429；登录在本节点的份额内照常；不粘。测试：暂停或停掉 Valkey，模型调用照常成功、限流不比单节点更严，登录在份额内成功 |
 | 兜底的放大有明确上界 | 限流：故障期间一个 key 合计至多放大到 N 倍，只持续到 Valkey 恢复后的一个窗口；登录：N 个节点合计回填速度不超过设定值、突发不超过 max(突发, N)，熔断来回切换时速率不超过两倍。测试：N = 2 时暂停 Valkey，单个节点的限流在全额限额处拒绝，登录桶的突发是一半 |
 | 健康时多节点不放大限额 | 计数和桶都在 Valkey 里；测试见上文「多节点」 |
 | 登录的退回只回到扣的那一边 | `failing` 记下 `take` 用的存储；性质测试 |
-| N 配错会被发现 | 节点心跳表；启动检查和运行中的指标、告警；测试见上文「多节点」 |
+| N 配错会被发现 | 节点心跳表（每个核心节点都登记，数人和写行是一个事务）；启动检查和运行中的指标、告警；测试见上文「多节点」 |
 | 配置错了不启动，Valkey 暂时不在照常启动 | 「配置与启动」的表；测试逐行覆盖，连不上用不应答的端口 |
 | 密码、邮箱、IP 不出现在错误、日志、环境变量和键里 | 密码只在受保护文件里，ACL 文件只存它的哈希；错误只报变量名；邮箱和 IP 只以 HMAC 进键。测试：错误文本不含密码，`SCAN` 出的键里没有 `@` 和测试用的 IP |
 

@@ -50,7 +50,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return 0, errUpgrade
 	}
-	_, caller, err := h.authenticate(r)
+	site, caller, err := h.authenticate(r)
 	if err != nil {
 		return 0, err
 	}
@@ -69,7 +69,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.Limits.Rate.Count(countRateKey(caller)) > h.Limits.cfg.CountRate {
+	if h.countRate(r.Context(), site.ID, countDimension, countRateKey(caller), keyHex(caller)) > h.Limits.cfg.CountRate {
 		return 0, errCountRate
 	}
 	snap, err := h.currentCatalog()

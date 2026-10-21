@@ -389,11 +389,17 @@ paths:
       tags: [Users]
       summary: Give an account credit
       description: >-
-        Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense
-        and audited with the reason. The amount is positive and within the limit for one grant (the money limits of
-        the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what
-        is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid
-        for offline comes with the payments design.
+        Adds credit to the account: a credit batch, its ledger entries and an audit entry with the reason and the
+        source (docs/domains/billing.md「额度批次」). The source `gift` (the default) gives `amount` in the site's
+        currency, recorded as a gift expense. The source `offline_payment` records money an administrator received
+        outside the payment channels: `payment` says how much, in which currency, and where it was received; the
+        ledger books it as a top-up (cash, the user's balance, and across currencies the exchange gain or loss), and
+        the credit is what was paid at the current reference exchange rate (none in the site's own currency), rounded
+        down. The credit is positive and within the limit for one grant (the money limits of the control plane,
+        docs/domains/operations.md), else 422; so is a payment that is not whole minor units of its currency, in a
+        currency with no reference rate to the site's, or a gift with a `payment` or a payment with an `amount`. A
+        batch given an `expires_at` expires then, and what is left of it is written off; without one it does not
+        expire.
       security:
         - session: []
           csrf: []
@@ -849,6 +855,52 @@ paths:
       responses:
         "201":
           description: Binding.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits:
+    put:
+      operationId: setSupplierCredentialLimits
+      tags: [Suppliers]
+      summary: Set a credential's concurrency and account RPM ceiling
+      description: >-
+        Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys
+        and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured
+        ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the
+        same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later;
+        concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialLimits"}
+      responses:
+        "200":
+          description: The credential as changed
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
@@ -1928,21 +1980,43 @@ components:
         created_at: {type: string, format: date-time}
     CreditGrantRequest:
       type: object
-      required: [amount, reason]
+      required: [reason]
       properties:
+        source: {$ref: "#/components/schemas/CreditSource"}
         amount: {$ref: "#/components/schemas/Money"}
+        payment: {$ref: "#/components/schemas/OfflinePayment"}
         expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the credit does not expire."}
         reason: {$ref: "#/components/schemas/Reason"}
+      description: "A gift needs `amount`, in the site's currency; an offline payment needs `payment` instead."
+    CreditSource:
+      type: string
+      enum: [gift, offline_payment]
+      description: "Where the credit comes from. Absent in a request: gift."
+    OfflinePayment:
+      type: object
+      required: [amount, channel]
+      description: >-
+        Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange
+        rate can be kept for, and in whole minor units of it.
+      properties:
+        amount: {$ref: "#/components/schemas/Money"}
+        channel: {type: string, minLength: 1, maxLength: 200, description: "Where it was received, such as a bank account."}
     CreditGrant:
       type: object
-      required: [id, account_id, amount, created_at, balance_after]
+      required: [id, account_id, source, amount, created_at, balance_after]
       properties:
         id: {$ref: "#/components/schemas/Uuid"}
         account_id: {$ref: "#/components/schemas/AccountId"}
+        source: {$ref: "#/components/schemas/CreditSource"}
         amount: {$ref: "#/components/schemas/Money"}
+        payment: {$ref: "#/components/schemas/OfflinePayment"}
+        exchange_rate: {$ref: "#/components/schemas/ExchangeRate"}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         balance_after: {$ref: "#/components/schemas/Balance"}
+      description: >-
+        `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it
+        was converted from another currency.
     SupplierStatus:
       type: string
       enum: [connecting, active, low_balance, needs_attention, paused, removing, removed]
@@ -2088,6 +2162,26 @@ components:
         cooldown_until: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         max_concurrency: {type: integer, minimum: 1}
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          description: "The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
+    CredentialLimits:
+      type: object
+      required: [max_concurrency, reason]
+      properties:
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: The calls the key has in flight at once. A new binding starts at 4.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          nullable: true
+          description: "Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling."
+        reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object
       required: [ref, status]

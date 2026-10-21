@@ -1,6 +1,6 @@
-// Command withcluster runs a command, `go test` in `just test`, with one PostgreSQL cluster that every test binary it
-// starts shares (pgtest.ClusterEnv), and removes the cluster when the command ends. Containers are then as many as the
-// runs in progress, not as the test packages of each run.
+// Command withcluster runs a command, `go test` in `just test`, with one PostgreSQL cluster and one Valkey that every
+// test binary it starts shares (pgtest.ClusterEnv, kvtest.URLEnv), and removes both when the command ends. Containers
+// are then as many as the runs in progress, not as the test packages of each run.
 package main
 
 import (
@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"time"
 
+	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pgtest"
 )
 
@@ -32,11 +33,25 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "withcluster:", err)
 		return 1
 	}
-	// Ctrl-C reaches the command too, as it shares the console; this process outlives it to remove the cluster.
+	// The cache is one container for the run, as the cluster is: a test that changes its state starts its own
+	// (internal/platform/kv/README.md「测试」). Its URL and password file go in the environment the same way, so that
+	// neither enters a test's cache key.
+	url, passwordFile, terminateCache, err := kvtest.StartServer(ctx)
+	if err != nil {
+		stop, cancel := context.WithTimeout(context.Background(), terminateTimeout)
+		defer cancel()
+		if err := terminate(stop); err != nil {
+			fmt.Fprintln(os.Stderr, "withcluster: remove the cluster:", err)
+		}
+		fmt.Fprintln(os.Stderr, "withcluster: start valkey:", err)
+		return 1
+	}
+	// Ctrl-C reaches the command too, as it shares the console; this process outlives it to remove the containers.
 	signal.Ignore(os.Interrupt)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // running the command it is given is this tool's job
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = append(os.Environ(), pgtest.ClusterEnv+"="+connection)
+	cmd.Env = append(os.Environ(),
+		pgtest.ClusterEnv+"="+connection, kvtest.URLEnv+"="+url, kvtest.PasswordFileEnv+"="+passwordFile)
 	status := 0
 	if err := cmd.Run(); err != nil {
 		status = 1
@@ -48,8 +63,8 @@ func run(args []string) int {
 	}
 	stop, cancel := context.WithTimeout(context.Background(), terminateTimeout)
 	defer cancel()
-	if err := terminate(stop); err != nil {
-		fmt.Fprintln(os.Stderr, "withcluster: remove the cluster:", err)
+	if err := errors.Join(terminate(stop), terminateCache(stop)); err != nil {
+		fmt.Fprintln(os.Stderr, "withcluster: remove the containers:", err)
 	}
 	return status
 }

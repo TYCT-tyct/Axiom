@@ -39,8 +39,9 @@ const (
 
 // event is one upstream event as the relay sees it.
 type event struct {
-	role role
-	name string
+	role   role
+	framed bool // a conversion may expand one upstream chunk into several complete SSE events
+	name   string
 	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
 	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
 	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.
@@ -54,10 +55,11 @@ type event struct {
 	ends              bool // an ending that is also the normal end, as Responses' response.completed is
 }
 
-// edit replaces data[from:to] with with.
+// edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.
 type edit struct {
 	from, to int
 	with     string
+	echo     []byte
 }
 
 // eventReader is what the readers of the three formats share: one decoder for every event, read in place, and the
@@ -150,12 +152,17 @@ func (s *eventReader) replace(with string) error {
 
 // edit replaces the n bytes just read with with.
 func (s *eventReader) edit(n int, with string) error {
+	to := int(s.dec.InputOffset())
+	return s.editEcho(to-n, to, with, nil)
+}
+
+// editEcho replaces data[from:to] with with and then the bytes of echo, which lie in the event.
+func (s *eventReader) editEcho(from, to int, with string, echo []byte) error {
 	var err error
 	if s.e.edits, err = sse.Grow(s.e.edits, 1, s.charge); err != nil {
 		return err
 	}
-	to := int(s.dec.InputOffset())
-	s.e.edits = append(s.e.edits, edit{to - n, to, with})
+	s.e.edits = append(s.e.edits, edit{from, to, with, echo})
 	return nil
 }
 
@@ -220,7 +227,7 @@ func walk[S any](r *reader, s S, fields map[string]func(S) error) error {
 func editedSize(e *event) int {
 	n := len(e.data)
 	for _, ed := range e.edits {
-		n += len(ed.with) - (ed.to - ed.from)
+		n += len(ed.with) + len(ed.echo) - (ed.to - ed.from)
 	}
 	return n
 }
@@ -229,7 +236,7 @@ func editedSize(e *event) int {
 func edited(dst, data []byte, e *event) []byte {
 	at := 0
 	for _, ed := range e.edits {
-		dst = append(append(dst, data[at:ed.from]...), ed.with...)
+		dst = append(append(append(dst, data[at:ed.from]...), ed.with...), ed.echo...)
 		at = ed.to
 	}
 	return append(dst, data[at:]...)

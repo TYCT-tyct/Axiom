@@ -16,14 +16,15 @@
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」。生成的代码里内嵌的契约是 gzip 后的 base64，会被 gitleaks 的 `generic-api-key` 误报，所以仓库根的 `.gitleaks.toml` 只对这两个包的 `.gen.go` 放行，别处的密钥照常拦下 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
-| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群 |
+| `pg` | 连接池、`Hold`（在池外的一条专用连接上持有会话级 advisory lock，连接断了就知道，节点名用它，见 [kv](kv/README.md#配置与启动)）、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
+| `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群（`withcluster` 同时起一个 Valkey，见 `kvtest`） |
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
-| `kv` | 设计中，随 K1 加入：Valkey 上的限流计数、登录前的尝试次数和会话粘性，期限、熔断与兜底，见 [kv 的 README](kv/README.md) |
+| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`）和指标；限流计数已经在用（K1），登录前的尝试次数和会话粘性随 K2、K3；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
+| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流，见 [mail/README.md](mail/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -69,9 +70,9 @@
 
 ## 凭证加密
 
-`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥和供应商凭证的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
+`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥、供应商凭证和支付商户配置的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
-文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同；数值最大的版本用于写入，读取按记录的 `KeyVersion` 选择，旧版本需保留至存量数据迁移完成。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
+文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同。文件列出可读密钥；数据库 `platform.key_versions` 单独记录唯一的 `active` 写版本，其他版本为 `readable` 或 `retired`，并存 SHA-256 摘要以检查同版本不同材料，绝不存材料。首次启动或首次轮换命令把旧文件的最高版本登记为写版本，以后增加文件行不会激活它；读取按记录的 `KeyVersion` 选择。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 
 `secret.LoadMAC(path)` 读 `AXIOM_KEY_HASH_FILE` 指定的文件，格式、权限和报错方式同主密钥文件（共用一个解析器），用于按哈希存放和查找的秘密（如 API key）：`Versions()` 从新到旧列出版本，`Sum(版本, 数据)` 是该版本密钥的 HMAC-SHA256，传入不存在的版本是调用方的错误，panic。最多几个版本由使用方规定。
 
@@ -81,7 +82,13 @@
 
 `Sealed` 包含 `Ciphertext`（含 16 字节认证标签）、`Nonce`（12 字节）、`WrappedDEK`（12 字节包裹 nonce + 32 字节加密数据密钥 + 16 字节标签）、`KeyVersion`（uint32）。两层 nonce 均由标准库随机生成。位置编码为固定域标识 `axiom/secret/location/v1`、一个零字节，再依次为 `Table`、`RowID`、`Purpose` 各写 4 字节大端字节长度和字段的原始字节；长度前缀保证不同位置编码不同（如 `{"ab","c"}` 与 `{"a","bc"}`）。数据层以位置编码为 AAD；包裹层认证固定域标识 `axiom/secret/dek/v1`、一个零字节、4 字节大端版本号和位置编码：加载器只能查出同一文件里的重复密钥，若有人在后来的文件中把旧密钥换个版本号重新登记，改了 `KeyVersion` 的记录仍然打不开，轮换进度不会被误报。版本不绑定到数据层，后续轮换只需重新包裹数据密钥。
 
-调用方读取时从预期的记录位置重新构造 `Location`，不能使用随密文一起存的位置。整条记录移到另一张表、另一行或另一用途，替换任何密文字段，都必须认证失败。比起一把主密钥直接加密所有凭证，独立数据密钥允许轮换时保留数据密文；比起自行管理随机 nonce，采用标准库 `NewGCMWithRandomNonce` 避免调用方复用 nonce。随机 nonce 的上限按密钥材料计，不按版本计：同一把主密钥在所有版本、进程、节点和重启中合计最多包裹 2³² 个数据密钥，重新包裹也算在内；部署应在达到之前轮换。轮换必须新生成一把独立的随机密钥，不能沿用旧密钥只改版本号。包不持久化计数。每个数据密钥只加密一次，数据层没有这个上限。主密钥轮换命令另做。
+调用方读取时从预期的记录位置重新构造 `Location`，不能使用随密文一起存的位置。整条记录移到另一张表、另一行或另一用途，替换任何密文字段，都必须认证失败。比起一把主密钥直接加密所有凭证，独立数据密钥允许轮换时保留数据密文；比起自行管理随机 nonce，采用标准库 `NewGCMWithRandomNonce` 避免调用方复用 nonce。随机 nonce 的上限按密钥材料计，不按版本计：同一把主密钥在所有版本、进程、节点和重启中合计最多包裹 2³² 个数据密钥，重新包裹也算在内；部署应在达到之前轮换。轮换必须新生成一把独立的随机密钥，不能沿用旧密钥只改版本号。包不持久化计数。每个数据密钥只加密一次，数据层没有这个上限。
+
+`axiom keyring add|activate|rewrap|retire|check` 管理主密钥，操作顺序与停写要求见[运维步骤](../../docs/ops/backup-restore.md#主密钥轮换)。`add --version N` 在本机文件原子加入随机密钥并登记为可读，不改变写版本。`activate --version N` 只改数据库写版本；必须先人工分发并检查全部节点，M3 #322 才做自动分发。`retire --version N` 拒绝当前写版本及仍被信封引用的版本，保留数据库墓碑防止重用版本或材料，提交后移除本机文件行，失败可重试。文件与 PostgreSQL 不能同事务：增加先持久化文件再登记，退役先提交数据库再删文件，崩溃只可能多留一把密钥；重试恢复。文件目录需可写，替换保留文件权限，Unix 同步文件和目录；不能直接替换只读单文件挂载，应挂载密钥目录。
+
+`secret.Rotation` 从 `cmd/axiom` 接收平台范围及信封列清单（账户 TOTP、供应商登录和凭证、支付商户配置）。SQL 只通过 `pg.Tx`，AAD 从清单和行主键重新构造；新增信封存储必须登记清单。`Rewrap` 认证原信封后只重包裹 DEK，保留数据密文与 nonce。每批锁行，修改和计数审计同事务；只挑非当前版本行，提交的版本号就是检查点，中断重跑跳过已完成行，无需另外存游标。一个运行内按主键推进内存游标；完成前在生命周期锁内从头核验一次，避免其他轮换命令使游标之前重新出现旧版本，总扫描量仍保持线性。串行轮换操作用事务 advisory lock，数据库写入版本切换不会穿过一个批次；不使用 `SKIP LOCKED`，避免把被锁的剩余行误报为完成。每批有期限，批大小 1–1000；命令支持限制批次数便于分次维护。
+
+`serve` 在启动后台任务和监听前运行与 `check` 相同的校验：当前写版本、全部可读版本及数据库引用版本都必须在本机存在且摘要一致；缺失或错误只报告版本号，不报告路径、摘要或材料。密钥环不热加载：M2 激活、重包裹和退役期间须停掉所有旧写进程，完成后重新启动；命令的锁不约束旧进程的 `Seal`，不能把它当作在线多节点切换。相比在每次加密时读数据库，这保持了原有加密 API 与调用路径，代价是维护窗口。
 
 `Secret` 的所有输出方法都使用值接收者，嵌入结构体或通过指针输出也脱敏。明文保存在闭包中：`fmt` 的错误动词诊断会绕过格式化方法并递归输出私有字段，普通私有字符串字段仍会泄露；闭包不会被展开。`%T`、`%p` 和非法格式（如 `Sprintf` 的 `%w`）由 `fmt` 自行处理，输出类型、地址或诊断信息；交给 `Format` 的所有动词均输出固定脱敏值。它防止意外输出，不保证进程内存擦除，也不能保护已通过 `Reveal()` 取出的普通字符串。闭包也让 `Secret` 有意不可比较：不能做 map 的键，包含它的结构体不能用 `==`，非零值的 `reflect.DeepEqual` 为 false；比较时用 `Reveal()`，go-cmp 需要 `cmp.Comparer`。
 
@@ -106,10 +113,10 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 监听 | 提供什么 |
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；模型调用接口（`/v1/`、`/api/v1/`，`cmd/axiom` 的 `withModelCalls`）；支付回调以后加 |
-| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
+| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 41 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；现在大于 1 不启动）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -154,7 +161,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | ID | 账户模块的实体用 TypeID（`user_…`、`acct_…`、`key_…`、`ws_…`、`site_…`、`tier_…`）；调用编号、目录、供应商、定价的行用 UUID 文本。路径里格式不对和不存在一样返回 404 | 模式写在契约里 |
 | 缺省与空 | 响应里没有的值就不出现，不写 null（`next_cursor` 是唯一的例外）；`PUT` 整体替换，请求里没写的可选项取「没有限制」或默认值，所以页面把读到的设置连同修改一起送回 | — |
 | 管理接口里 Session 标签以外的写操作 | 带 `Idempotency-Key`（调用方为一次想做的改动选的 UUID；重发返回第一次的结果并带 `Idempotency-Replayed: true`，被别的操作者、别的操作或别的内容用过是 409 `idempotency_key_reused`，存法见「幂等」）和写进审计的 `reason`；读到的 `rev` 随改动送回，已变化返回 409 `stale_revision`。不改数据却要请求体的 POST 标 `x-axiom-safe: true`，不带前两项 | 契约里有 `IdempotencyKey` 参数时检查 |
-| 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同 `//go:generate` 和嵌入一起删掉。控制台的 18 个操作都有处理器，那一套已经删掉；管理接口的 40 个也都有处理器（定价试算补上最后一条），那一套同样已经删掉；下一个契约再加回来 | `just generated` |
+| 没有处理器的操作 | 返回 501 `not_implemented`。契约一加操作，生成的 `StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型，让程序在处理器一个个写出来之前照常编译，处理器声明了同名方法就接管，重新生成后那个桩消失，全部接管后连同 `//go:generate` 和嵌入一起删掉。控制台的 18 个操作都有处理器，那一套已经删掉；管理接口的 41 个也都有处理器（定价试算补上最后一条），那一套同样已经删掉；下一个契约再加回来 | `just generated` |
 | 两份契约共有的部分 | 会话与两步验证的操作和 `Error`、`Money`、`Balance` 等模式在两份契约里各写一遍，不引用外部文件（生成器要为外部引用另做一个包，每份契约才不自成一体）。两份里同名的操作和定义必须完全相同 | 检查 |
 | 契约的约束谁来强制 | **定论**：`cmd/axiom` 的守卫（`guard`）在处理器之前，按嵌入程序的契约本身强制；契约由 oapi-codegen 的 `embedded-spec` 编进生成的 `consoleapi`（`GetSpec`，随 `just generate` 更新，`just generated` 保证不过期），启动时用 kin-openapi 读出每个操作的规则，读不通或有操作的声明程序强制不了（没有 `security`、会话操作缺 `x-axiom-level`、权限名没在 accounts 声明、改数据的会话操作没有 `csrf`）就不启动。守卫在生成的路由之前运行（生成的包装先解析查询参数、后跑中间件，守卫放在中间件里就挡不住"无会话却先得到 400"），整个请求在控制台有 15 秒的期限（`consoleDeadline`），在管理接口有一分钟（`adminDeadline`），到期是 503 `unavailable`，说明工作可能已经做完，让客户端先看再重试。守卫的顺序：站点（Host 是某站点的控制台域名，否则 404）→ 改数据的请求的 Origin 与 JSON → 会话与它的级别、CSRF 令牌（`verifyMfa` 的待验证会话和令牌也先在这里认出，用户行锁内的复核仍在 accounts）→ 账户上的权限 → 请求体先过 `jsonx` 的策略（UTF-8、成员名不重复、嵌套不超过 256 层，生成代码和校验器用的解析器不执行它，所以在守卫里读一遍）→ 查询参数与请求体的 schema。生成的处理器读请求体也用 `jsonx.Decode`（名字区分大小写，未知成员跳过），与校验器按同一条规则读成员名；用 encoding/json 读，`MODELS` 会被校验器当作未知成员放行、又被读进 `models`，绕过 schema 的上限。生成代码走的是 `consoleapi/templates/strict-http.tmpl`，即 oapi-codegen v2.8.0 的同名模板改了解码那一行，升级 oapi-codegen 时按新模板重做这一处。生成的包装自己的解析失败只答"请求读不了"，不重复解析器看到的内容。所以没有会话的客户端只会知道它没有会话；校验失败是 400 `invalid_request`，`fields` 逐条写出出错的位置（请求体的 JSON 指针，或查询参数名）和规则，不写值。路径里的 ID 不在此校验：格式不对与不存在同样是 404。契约表达不了的（跨成员的规则，如 `limit_reset` 要有 `spend_limit`；表的约束，如地址能解析）由处理器的输入检查补上，同样写成 400 和 `fields` | — |
 
@@ -193,9 +200,13 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_records_written_total`、`…_records_lost_total`、`…_attempts_written_total`、`…_attempts_lost_total`、`…_write_retries_total` | 计数 | 无 |
   | `axiom_gateway_rate_limited_total` | 计数 | `reason`：节点回 429 的次数，按拒绝的那道限制（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`，含义见 [gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)；#295；测试：`TestEachRateLimitIsCountedByItsReason` 等） |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
+  | `axiom_pg_queue_oldest_job_wait_seconds` | 仪表 | `queue`：每个队列最老的可用任务已经等了多久，没有在等的为 0（`pg.Queue`；它上升说明这个队列的 worker 跟不上；采集的数据库访问有 2 秒期限，超时这次采集报错、不报数（不伪报 0）。测试：`TestTheOldestWaitingJobOfEachQueueIsMeasured` 经 `telemetry.New` 的处理器读到这个名字和四个队列；`TestACollectionEndsWhileTheDatabaseBlocksAndRecovers` 锁住任务表，采集仍会结束，锁放开后恢复） |
   | `axiom_observability_queue_depth` | 仪表 | 无 |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
+  | `axiom_catalog_sync_last_success_age_seconds` | 仪表 | 无：持久化记录距最后成功的秒数；从未成功则距首次失败，尚未执行为 0；每次采集读数据库时钟，即使没有下一轮也增长，运维按后台阈值判断；2 秒期限，读库失败返回采集错误、不伪报 0（测试：`TestTheSyncStateIsMeasuredWithoutAnotherRound`） |
+  | `axiom_catalog_sync_consecutive_failures` | 仪表 | 无：持久化连续失败轮次数，成功清零；正常取数失败写状态后任务完成（`MaxAttempts=1`），不因同一任务的短退避重试重复计数（测试同上） |
+  | `axiom_catalog_sync_overdue_total` | 计数 | 无：失败轮次超过节点代码默认阈值（48 小时）时的兜底计数，每次执行最多加一；日志为 `catalog.sync.overdue`，运维后台阈值判断使用上述 gauge（测试：`TestTheSyncAlertsWhenThePricesGoUnrefreshed`） |
 
   新指标加进这张表，并在同一个 PR 里加测试读到它的名字。
 - **标签**：只用有界的枚举，**每个指标的标签组合不超过 1000 个**（靠评审核对，暂无自动检查）。公网请求用路由模式（注册的模式，没匹配上的合成一个 `unmatched`）和状态类别（`2xx`、…，连接在发出状态前就断了是 `none`）和结果（`completed`、`aborted`：响应开始后被中止的，状态仍是已发出的那个，但算 `aborted`，跨度标为错误）；方法单独不是标签，路径、查询、请求头、请求 ID、账户、key、用户都不是。按账户的统计从调用记录里算。测试：带标识符的路径请求之后，指标文本里没有这个标识符，`unmatched` 只有一条序列。
@@ -231,20 +242,26 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 连接池
 
-进程最多保持 64 条数据库连接（`pg.PoolSize`，`pg.Open` 里设，不跟机器的核数走；pgx 的默认是 max(4, NumCPU)）。取值按这几条算：
+`pg.Open` 管理两个物理池，共用一个连接预算 N：默认 64（`pg.PoolSize`），连接串 `pool_max_conns` 可覆盖，包括调小。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
 
-- **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
-- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。持有者心跳仍走普通池，专用连接见 #217。
+
+- **和 gateway 的许可同一份数**：`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`，准入和完成类分别限 N−R、R 个许可、各自计数，持有和等待完成许可都不减少准入容量（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。预算调小，许可跟着调小，不必改代码。
+- **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据 N=64 推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
 - **一个账户占不满**：单个账户受账户闸和每秒 151–222 个请求的上限约束，约占 2 条。
 - **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
 
-连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
+默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
+
+部署按**所有进程**计预算：每个 `serve` 节点另有两条不在池里的连接，都从池里取走后 `Hijack`，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），以及 River v0.49.0 的 LISTEN 监听器；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+2 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名和 River 监听合计最多 84 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
+
+集成测试 `TestBackgroundAndConsoleCannotTakeTheSettlementReserve` 用真实 PostgreSQL、River worker、recorder 和普通控制台事务入口占满 N−R 条，通过事务回调、通道和数据库锁等待确认饱和；普通事务无法借用预留，结算和孤儿结算仍在各自期限内完成。没有用睡眠推断饱和。
 
 ### 范围
 
-- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
-- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
-- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope` 构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
+- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts`、`axiom.scope_home` 四个事务级参数里，由 `platform.in_scope(site_id, account_id)` 和 `platform.sees_site(site_id)` 读取。`scope_home` 是账户范围所属的站点，只给「站点的公开配置」和「共享计数」（[安全的「租户隔离」](../../docs/security.md#租户隔离)）用：`sees_site` 是 `in_scope(site, NULL)` 加上这个站点，不放宽账户读写的任何其他行。它由 `pg.AccountScopeIn(站点, 账户)` 设定，站点来自认出这个账户的授权，而不是账户自己能写的行（例如它在 `platform.tenants` 里的登记）。
+- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；站点的公开配置和共享计数读用 `platform.sees_site(site_id)`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
+- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope`（带所属站点时用 `pg.AccountScopeIn`）构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
 - 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移
@@ -253,14 +270,25 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
 - 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - **期限**：每个连接从域名解析到握手结束合计最多等 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒；一个主机有几个地址也合计，URL 里的 `connect_timeout` 只能让它更短），整次执行最多 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟，长 DDL 要的时间）。到期时迁移自己结束它在服务器上的会话：每个连接带着本次执行独有的 `application_name`，期限到后用一个独立的短连接（自己最多 5 秒）对这些会话执行 `pg_terminate_backend`，等它返回才返回。这样结果既不依赖 pgx 在后台发出的取消请求（进程退出可能抢在它前面，语句也可以写成吞掉取消），也不是每条语句各自重新计时的语句超时；按应用名而不是按进程号，是因为进程号可能被别的会话复用。事务回滚，会话级的 goose 锁随会话释放。goose 释放会话锁用的是取消不掉的 context，服务器不应答时解锁会一直等，所以终止之后再给 15 秒宽限，仍未返回就放弃等待、让进程退出。两者都在连接之前校验：必须是正的时长，连接期限必须短于执行期限，拼错的变量名报错。执行期限让一次卡住的迁移不会一直占着 goose 的会话锁，挡住下一次部署。
-- 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务不存租户的行），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
+- 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务行不属于任何租户，也不存租户的数据；要带租户的数据放模块自己的表，见下文），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。
 - 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
 - **收缩迁移晚一个版本**：列或表只在停止使用它的那个版本发布之后的版本里删除，这样滚动发布期间新旧节点可以同时运行（[CONTRIBUTING 的「发布与缓存」](../../CONTRIBUTING.md#检查清单)）。
 
 ### 任务队列
 
-`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。节点只取自己有 worker 的任务种类：滚动发布期间旧节点碰到新版本登记的种类时不取，不消耗尝试次数也不退避，唯一任务因此不会被卡住（代价是领导节点的救援仍会丢弃它不认识的、已运行满 15 分钟的任务，所以新旧版本并存只应持续一次发布的时间）。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点同时做 10 个任务，一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
+`pg.Queue`（`db.NewQueue(logger, scope, meter)`，scope 是平台范围，只有 cmd/ 能构造）是 River 在应用连接池上的封装，River 的类型只经它出入，模块拿不到连接池或 `pgx.Tx`。队列按任务的性质分成四个具名队列：`money`（额度到期、扣费与账本的对账）、`notifications`（邮件和告警，目前只有 `mail.send`）、`syncs`（供应商同步的扫描和一轮同步、价格数据集的一天一轮）、`archive`（丢弃任务的扫描等清理任务）；每个具名队列有自己的 worker 数（资金 3、通知 2、同步 4、归档 1，四个合计仍是原来的 10 个，是代码里的默认值，不设配置项），所以一批同步或归档任务不会挡住资金任务。队列每分钟扫描 `river.river_job` 里 `discarded` 的任务，在 `platform.discarded_jobs` 里按任务 ID 认领后报出告警（最后一次尝试的节点消失时由 River 救援直接丢弃的任务也在内，见 [记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；扫描 worker 和每分钟的扫描任务由队列自己注册，在归档队列上运行。River 对 `discarded` 的自动清理关闭，扫描在认领后、任务终态满 24 小时才删除任务和认领行，未认领的旧任务不会被先删掉。模块在 `Start` 之前用 `river.AddWorker(q.Workers(), …)` 登记 worker、用 `q.Every(间隔, 参数)` 登记周期任务（只有队列的领导节点插入，启动时先插入一次；领导换人或节点重启会重新计时，所以周期任务必须是重复或晚到都没有代价的）；每个任务种类在它的 `InsertOpts` 里写明队列，这是唯一一处；没写队列的任务落在 River 的 `default` 队列，只有排空的 1 个 worker 会做它，丢掉了隔离，所以 `TestEveryJobKindNamesOneOfTheQueues` 从源码里列出全部种类，新增种类没写队列就失败。River 的 `default` 队列也配一个 worker：旧版本把每种任务都入在那里，做完它们才会放掉其唯一键，否则新队列里的同名周期任务再也插不进来（River 的唯一键不含队列）；没有任务种类写这个队列，测试保证这一点。任务在引起它的写入的事务里入队：`q.InsertManyTx(ctx, tx, 任务…)`，事务回滚任务就不存在，提交了才会被取走；`InsertOpts` 的唯一性让已有同样任务时跳过，返回的数量只数新插入的。任务至少执行一次，worker 必须容忍重复。节点只取自己有 worker 的任务种类：滚动发布期间旧节点碰到新版本登记的种类时不取，不消耗尝试次数也不退避，唯一任务因此不会被卡住（代价是领导节点的救援仍会丢弃它不认识的、已运行满 15 分钟的任务，所以新旧版本并存只应持续一次发布的时间）。价格同步另外订阅节点的关停信号，关停或启动失败时立即取消下载，仍给结果记录最多 5 秒；不改变资金和邮件任务的优雅收尾。节点测试默认不登记价格周期任务，仅价格关停测试显式注入本地数据集。`Stop(ctx)` 先等在跑的任务做完，到期后取消它们并再等几秒；第二次调用什么也不做。一个节点在四个具名队列上同时做共 10 个任务（另有排空 `default` 的 1 个），一次任务最多 10 分钟（River 默认的 1 分钟短于一轮同步）；运行满 15 分钟的任务被当作丢失（节点崩溃时它停在运行中，River 的默认是 1 小时，期间唯一的任务入不了队）。每个队列最老的可用任务等了多久由 `axiom_pg_queue_oldest_job_wait_seconds` 按 `queue` 报告（见「遥测」）；它上升或长时间不降，说明这个队列的 worker 跟不上。River 固定在 v0.49.0（2026-10-05）；升级前读变更说明。v0.49 起它的事务辅助函数不再用保存点，出错时调用方必须回滚整个事务，`pg` 的事务出错即回滚，符合；v0.48 对 `ByPeriod` 唯一性按 UTC 计时，这里没用到。
+
+**回滚到拆队列之前的版本**：旧版本只做 `default` 队列，也只在 `default` 里入队；River 的唯一键不含队列，所以留在具名队列里的未结束任务（例如 `money` 里一个 `available` 的额度到期任务）会一直占着唯一键，旧节点既不会去做它，它自己后续插入同样的周期任务也被当作重复跳过，额度到期因此停摆。只看运行中的任务不够，`scheduled`（延迟）和 `retryable`（等重试）的也会留下。按顺序做：
+
+1. **停止新增任务**：先停掉所有新版本节点（`Stop` 会等在跑的任务做完；任务都在引起它的写入的事务里入队，新版本节点停了就不再有新任务），再启动旧版本。
+2. **处理具名队列里全部非终态任务**：先看有哪些，`SELECT queue, state, kind, count(*) FROM river.river_job WHERE queue <> 'default' AND state IN ('available','scheduled','retryable','running') GROUP BY 1,2,3`。`running` 的等它做完；节点已经停了的，由旧版本领导节点的救援在 15 分钟后收回，再按下一条处理。`catalog.sync` 是此后新增的种类，旧版本不认识，不能迁到 `default` 等它执行。确认新节点已停后，删除其未运行的非终态任务：`DELETE FROM river.river_job WHERE kind = 'catalog.sync' AND state IN ('available','pending','scheduled','retryable')`；残留的 running 不动，按上面的救援流程收回后再检查清理。目录价格与 `catalog.sync_state` 保留，重新升级时由 RunOnStart 新开一轮。其余旧版本认识的种类才改放到它能做的队列：`UPDATE river.river_job SET queue = 'default' WHERE queue <> 'default' AND kind <> 'catalog.sync' AND state IN ('available','scheduled','retryable')`。这些任务的种类旧版本都认识，唯一键不受队列影响，所以不会冲突，也不丢任务；`running` 的任务不要改，它的节点会按原队列写回结果。
+3. **验证没有遗留**：重跑上面的查询，`queue <> 'default'` 的行必须是 0；再看 `SELECT queue, kind, count(*) FROM river.river_job WHERE state IN ('available','scheduled','retryable','running') GROUP BY 1,2`，每个周期任务的种类（`billing.expire_credit`、`billing.reconcile`、`suppliers.sync_sweep`、`suppliers.reconcile`、`queue.discard_scan`）都只在 `default`，且每种至多一个，旧版本的下一次周期插入才不会被跳过。 另查 `SELECT count(*) FROM river.river_job WHERE kind = 'catalog.sync' AND state IN ('available','pending','scheduled','retryable','running')`，必须为 0；它不属于旧版本可执行种类。
+4. **新版本起不来、旧版本已经在跑时**：具名队列里又出现了任务（例如新节点停得晚），重做第 2 步和第 3 步；旧节点会在 `default` 里把它们做完。要再升级回新版本，直接部署即可：新版本留着 1 个 `default` 的 worker，会把 `default` 里剩下的任务做完。
+
+任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略写 `platform.in_scope(site_id, account_id)`，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
+
+worker 返回的错误也一样：River 把它的文本写进 `river.river_job.errors`（jsonb 数组，每次尝试一项），这一列和参数一样没有策略覆盖。所以 worker 交给 River 的只能是分类：成功、snooze，和「可重试」「永久失败」两种通用错误；收件人、正文和服务器回复只进日志行，日志本来就不属于任何租户。
 
 ### 查询（sqlc）
 
@@ -325,7 +353,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 全量校验 DNS 结果后按 IP 拨号，连接池仍按原主机复用 | 混合公网/内网结果整体拒绝，DNS 后续变化不能替换已经选择的连接目标；保留 TLS 证书校验和长连接 | 只在 URL 保存时校验或让 Transport 再解析：存在 DNS 重绑定窗口 |
 | 私有测试能力值，只能在测试进程构造 | 类型和未导出字段阻止伪造，测试开关不能在生产启用 | 导出 AllowPrivate、任意 Resolver/Dialer：生产调用方能绕过 SSRF 边界 |
 | RoundTrip 返回第一个响应 | 重定向既不请求也不解析，畸形 Location 也不能把凭证带进重定向错误 | 默认 http.Client：默认跟随重定向；拒绝回调前仍可能解析 Location |
-| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围 |
+| 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开；要带租户数据的任务把数据放模块自己的表、参数只放 id，`pg.TenantTx` 用模块的查找函数换到那个租户的作用域；worker 返回给 River 的错误同样只写分类，`errors` 列也属于没有策略的表 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围；把租户数据放进任务参数或错误：任务行和 `errors` 列都没有策略，谁也管不住它们 |
 | River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |

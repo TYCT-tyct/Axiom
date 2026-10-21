@@ -178,15 +178,23 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 // whether there may be more. Another transaction moving the allocation first ends it: the locked step that follows
 // goes on from wherever the allocation stands.
 //
-// It is safe without the lock because a transaction that moves the user's balance takes its seq under the lock (post),
+// It is safe without the lock because every transaction of an account takes its seq under its balance row lock (post),
 // so any page it reads is a prefix of what the lock will see: nothing can commit later with a place before it.
+// Fix that prefix before loading batches: a later credit does not move the allocation's place, but its batch would
+// be missing from this replay (#361). The next replay loads it along with its batch. The order is what makes the bound
+// work, so it must not be swapped: a bound read after the batches would take in a credit committed while they were
+// read, whose batch is not among them, and the replay would fail on that credit instead.
 func (e *expirer) advance(ctx context.Context, account uuid.UUID) (more bool, err error) {
 	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) error {
+		through, err := queries.ReplayThrough(ctx, tx, account)
+		if err != nil {
+			return fmt.Errorf("billing: read the replay bound of %s: %w", account, err)
+		}
 		a, err := loadAllocation(ctx, tx, account)
 		if err != nil {
 			return err
 		}
-		if more, err = a.catchUpPage(ctx, tx, account, e.movements); err != nil {
+		if more, err = a.catchUpPage(ctx, tx, account, e.movements, through); err != nil {
 			return err
 		}
 		return a.save(ctx, tx, account)
@@ -247,7 +255,7 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 		}
 		w := min(b.remaining(), limit)
 		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
-		if posted, err := post(ctx, tx, e, line{bookUserBalance, w}, line{bookCreditExpired, -w}); err != nil {
+		if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
 			return 0, err
 		} else if !posted {
 			return 0, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)

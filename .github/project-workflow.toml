@@ -2,7 +2,7 @@
 # source: the project-workflow commit the managed files were copied from; only upgrades change it.
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
-source = "545f5d0b560cd7da62eec569d685a4a2a4ac6575"
+source = "c202d85a64284246a126ee8327da31592c0ea18d"
 
 [merge]
 strict = false # PRs merge through the merge train (docs/ops/merge-train.md), which builds the queued PRs merged onto the latest main and gates main on its `merge-train` status, so a PR need not take in main first. manage.py metrics --since 2026-10-14 (measured 2026-10-18): ci median 19.9 min, 1.28 merges/hour, 143 merges; with strict each merge voided the other queued PRs' builds, and two PRs that passed alone broke main together (#150, #182). `merge-train` is added to the ruleset by hand until project-workflow can declare it.

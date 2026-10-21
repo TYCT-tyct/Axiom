@@ -299,7 +299,10 @@ func (a *chatAggregate) readTool() error {
 		dst *[]byte
 		v   []byte
 	}{{&t.id, a.tool.id}, {&t.kind, a.tool.kind}} {
-		if m.v != nil {
+		// An empty id or type is a vendor's filler on the fragments after the first (DashScope, DeepSeek), not a new value that
+		// would empty the call's: sub2api drops them the same way (backend/internal/service/openai_gateway_cc_tool_call_identity.go,
+		// stripEmptyChatToolCallIdentity, 8f2cbb5).
+		if len(m.v) > len(`""`) {
 			if err := a.set(m.dst, m.v, 1); err != nil {
 				return err
 			}

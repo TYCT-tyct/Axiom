@@ -266,7 +266,7 @@ export interface paths {
         put?: never;
         /**
          * Give an account credit
-         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
+         * @description Adds credit to the account: a credit batch, its ledger entries and an audit entry with the reason and the source (docs/domains/billing.md「额度批次」). The source `gift` (the default) gives `amount` in the site's currency, recorded as a gift expense. The source `offline_payment` records money an administrator received outside the payment channels: `payment` says how much, in which currency, and where it was received; the ledger books it as a top-up (cash, the user's balance, and across currencies the exchange gain or loss), and the credit is what was paid at the current reference exchange rate (none in the site's own currency), rounded down. The credit is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422; so is a payment that is not whole minor units of its currency, in a currency with no reference rate to the site's, or a gift with a `payment` or a payment with an `amount`. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire.
          */
         post: operations["grantCredit"];
         delete?: never;
@@ -481,6 +481,26 @@ export interface paths {
          * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
          */
         post: operations["bindSupplierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a credential's concurrency and account RPM ceiling
+         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+         */
+        put: operations["setSupplierCredentialLimits"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1032,8 +1052,11 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /** @description A gift needs `amount`, in the site's currency; an offline payment needs `payment` instead. */
         CreditGrantRequest: {
-            amount: components["schemas"]["Money"];
+            source?: components["schemas"]["CreditSource"];
+            amount?: components["schemas"]["Money"];
+            payment?: components["schemas"]["OfflinePayment"];
             /**
              * Format: date-time
              * @description UTC, in the future. Absent: the credit does not expire.
@@ -1041,10 +1064,25 @@ export interface components {
             expires_at?: string;
             reason: components["schemas"]["Reason"];
         };
+        /**
+         * @description Where the credit comes from. Absent in a request: gift.
+         * @enum {string}
+         */
+        CreditSource: "gift" | "offline_payment";
+        /** @description Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it. */
+        OfflinePayment: {
+            amount: components["schemas"]["Money"];
+            /** @description Where it was received, such as a bank account. */
+            channel: string;
+        };
+        /** @description `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency. */
         CreditGrant: {
             id: components["schemas"]["Uuid"];
             account_id: components["schemas"]["AccountId"];
+            source: components["schemas"]["CreditSource"];
             amount: components["schemas"]["Money"];
+            payment?: components["schemas"]["OfflinePayment"];
+            exchange_rate?: components["schemas"]["ExchangeRate"];
             /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */
@@ -1168,6 +1206,15 @@ export interface components {
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
+            /** @description The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
+            requests_per_minute?: number;
+        };
+        CredentialLimits: {
+            /** @description The calls the key has in flight at once. A new binding starts at 4. */
+            max_concurrency: number;
+            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling. */
+            requests_per_minute?: number | null;
+            reason: components["schemas"]["Reason"];
         };
         /** @description A key the supplier lists that Axiom has not bound to a group. */
         UpstreamKey: {
@@ -2394,6 +2441,44 @@ export interface operations {
         responses: {
             /** @description Binding. */
             201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialLimits"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;
