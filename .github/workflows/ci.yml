@@ -124,7 +124,7 @@ jobs:
       - run: just test
 
   # The frontend's checks and its end-to-end tests. `just web` builds the frontend the program embeds before serving it
-  # to the tests; that build is cached by content on the host, as in the other jobs.
+  # to the tests. Its isolated container starts with cold dependency and build caches.
   web:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
@@ -133,20 +133,30 @@ jobs:
     # Keep the browser and serveweb in one stable network namespace; match web/package.json's Playwright version.
     container:
       image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
-      options: --cpus 8 # Docker jobs do not inherit the runner's shared CPU quota; bound the browser and harness together.
+      # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side job setup.
+      # Keep the container inside that budget and expose its cgroup ancestry so the step below can verify it.
+      options: --cpus 8 --cgroup-parent=axiom-ci.slice --cgroupns=host
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      # checkout trusts this path in its temporary HOME; subsequent steps use the container's HOME.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Verify the shared resource boundary
+        run: |
+          cat /proc/self/cgroup
+          grep -q '/axiom.slice/axiom-ci.slice/' /proc/self/cgroup
+          cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/cpu.max
+          cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/memory.high
+          cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/memory.max
+          cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/cpu.max"
       - uses: ./.github/actions/setup
         with:
           playwright: "true"
-      # The browser image does not guarantee Python, which the content cache scripts need.
-      - run: apt-get update && apt-get install -y --no-install-recommends python3
       - run: just web
       # A later checkout removes test-results on self-hosted runners; keep the failed page and its network evidence.
       - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: web-test-results
           path: web/test-results/
