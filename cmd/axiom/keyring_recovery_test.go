@@ -149,3 +149,38 @@ func TestKeyringRetiredMaterialCannotUseAnotherVersion(t *testing.T) {
 		t.Fatal("registered retired material with a new version")
 	}
 }
+
+func TestKeyringCursorRechecksEarlierRows(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	f.run("add", "--version", "2")
+	f.run("add", "--version", "3")
+	f.run("activate", "--version", "2")
+	count, cursor, err := f.r.RewrapBatch(t.Context(), secret.RewrapCursor{}, 1)
+	if err != nil || count != 1 {
+		t.Fatalf("first batch: %d, %v", count, err)
+	}
+	// Another run moves the completed row to V3, then activation returns to V2: the version alone cannot detect this.
+	f.run("activate", "--version", "3")
+	if count, _, err := f.r.RewrapBatch(t.Context(), secret.RewrapCursor{}, 1); err != nil || count != 1 {
+		t.Fatalf("interleaved batch: %d, %v", count, err)
+	}
+	f.run("activate", "--version", "2")
+	for range 5 {
+		count, next, err := f.r.RewrapBatch(t.Context(), cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = next
+		if count != 0 {
+			continue
+		}
+		for _, row := range f.before {
+			if got := f.read(row); got.KeyVersion != 2 {
+				t.Fatalf("rewrap finished with version %d in %s", got.KeyVersion, row.store.Table)
+			}
+		}
+		return
+	}
+	t.Fatal("rewrap did not finish after the interleaved run")
+}

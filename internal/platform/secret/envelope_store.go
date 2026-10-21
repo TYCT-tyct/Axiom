@@ -139,6 +139,11 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 		}
 		ring.latest = status.Active
 		count, next, err = r.rewrapStores(ctx, tx, ring, cursor, limit)
+		// Another run or activation can leave old rows behind the cursor. Confirm completion from the beginning
+		// under the lifecycle lock; the extra pass is linear, rather than a rescan on every batch.
+		if err == nil && count == 0 && cursor != (RewrapCursor{}) {
+			count, next, err = r.rewrapStores(ctx, tx, ring, RewrapCursor{}, limit)
+		}
 		return err
 	})
 	if err != nil {
