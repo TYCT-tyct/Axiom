@@ -226,6 +226,7 @@ func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
 					t.Fatal(err)
 				}
 			}})
+			t.Logf("allocated %.0f bytes; budget %d bytes", got["prepare"].Bytes, cost)
 			if got["prepare"].Bytes > float64(cost) {
 				t.Fatalf("allocated %.0f bytes within a %d-byte budget", got["prepare"].Bytes, cost)
 			}
