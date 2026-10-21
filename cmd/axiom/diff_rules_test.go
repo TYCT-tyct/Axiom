@@ -121,7 +121,8 @@ func responsePartIs(text string, index int) func(difference) bool {
 		if text == "" {
 			kind = "response.content_part.added"
 		}
-		want := map[string]any{"type": kind, "output_index": index, "content_index": 0,
+		want := map[string]any{
+			"type": kind, "output_index": index, "content_index": 0,
 			"part": map[string]any{"type": "output_text", "text": text, "annotations": []any{}}}
 		return canonical(v) == canonical(want)
 	}

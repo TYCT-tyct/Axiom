@@ -203,14 +203,12 @@ func compareGap(a, b []event, offA, offB int) []difference {
 	var out []difference
 	paired := make([]bool, len(b))
 	for i, x := range a {
-		matches := func(y event) bool { return sameEventItem(x, y) }
-		j := slices.IndexFunc(b, matches)
-		for j >= 0 && paired[j] { // the first event of that name that has no partner yet
-			k := slices.IndexFunc(b[j+1:], matches)
-			if k < 0 {
-				j = -1
-			} else {
-				j += k + 1
+		j := -1
+		var partner event
+		for k, y := range b {
+			if !paired[k] && sameEventItem(x, y) {
+				j, partner = k, y
+				break
 			}
 		}
 		path := "sse[" + x.name + "]"
@@ -219,7 +217,7 @@ func compareGap(a, b []event, offA, offB int) []difference {
 			continue
 		}
 		paired[j] = true
-		out = append(out, compareLeaves(eventLeaves(path, x, offA+i, offB+j), eventLeaves(path, b[j], offA+i, offB+j))...)
+		out = append(out, compareLeaves(eventLeaves(path, x, offA+i, offB+j), eventLeaves(path, partner, offA+i, offB+j))...)
 	}
 	for j, y := range b {
 		if !paired[j] {

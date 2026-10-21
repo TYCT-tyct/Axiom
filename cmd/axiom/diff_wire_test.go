@@ -23,8 +23,8 @@ import (
 
 // TestAxiomMatchesNewAPIOnTheWire sends the same requests to Axiom and to the official new-api image and diffs what
 // comes back: status, headers, JSON bodies, server-sent events. Both are served by one fake upstream that replays the
-// protocol samples, each format by a channel or an endpoint of the same format, so what is compared is how each relays
-// a reply and an error, not how it converts a format. A difference must be explained by a rule (diff_rules_test.go) or
+// protocol samples, each model using the same upstream format on both sides, including client format conversion.
+// A difference must be explained by a rule (diff_rules_test.go) or
 // the case fails, and so must a rule that explains nothing. `just diff` runs it; it is not part of `just check`, which
 // would pull an image and start a container for every run.
 func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {

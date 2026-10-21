@@ -34,8 +34,8 @@ type newAPI struct {
 
 // startNewAPI runs the image on SQLite, with the upstream's port reachable from inside it, and sets up what a deployment
 // is set up with: an administrator, a token that spends without limit, and a channel for each model, of the type that
-// speaks the format Axiom's endpoint of that model speaks (relay/channel/claude for Anthropic's, the OpenAI channel
-// for Responses and for Chat), so that the upstream is asked the same way by both.
+// speaks the format Axiom's endpoint of that model speaks (Anthropic's channel for Messages, OpenAI's for Responses,
+// and explicit advanced-custom routes for Chat), so that the upstream is asked the same way by both.
 func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	t.Helper()
 	ctx := t.Context()
