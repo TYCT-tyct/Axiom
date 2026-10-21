@@ -32,9 +32,11 @@ type listings struct {
 	Keys  adapter.Listing `json:"keys"`
 }
 
-// encodeListings is the column's value, or nothing while neither listing is under way.
+// encodeListings is the column's value, or nothing while neither listing is under way. A position with nothing in it is
+// one that is not under way: the encoder writes an absent []byte as an empty string rather than as null, and reads it
+// back as an empty one, so a listing that ended would otherwise leave an empty position in the column for good (position).
 func encodeListings(gen int64, st syncer.State) ([]byte, error) {
-	if st.OfferAt == nil && st.KeysAt == nil {
+	if len(st.OfferAt) == 0 && len(st.KeysAt) == 0 {
 		return nil, nil
 	}
 	return jsonx.MarshalCanonical(listings{Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
@@ -51,7 +53,16 @@ func decodeListings(row []byte, gen int64) (offer, keys adapter.Listing) {
 	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen {
 		return nil, nil
 	}
-	return l.Offer, l.Keys
+	return position(l.Offer), position(l.Keys)
+}
+
+// position is a stored position, or nothing when the column holds none: an absent one is read back as an empty string,
+// and the engine and the adapters treat an empty position as none, so it is given to them as none.
+func position(p adapter.Listing) adapter.Listing {
+	if len(p) == 0 {
+		return nil
+	}
+	return p
 }
 
 type stateStore struct{ s *Session }

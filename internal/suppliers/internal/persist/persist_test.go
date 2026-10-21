@@ -243,6 +243,29 @@ func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T
 	}
 }
 
+// TestAListingThatEndedLeavesNoPosition: the reads that end the two listings clear their positions, and the column is
+// empty again, rather than keeping empty positions the encoder wrote for a position it was given as nil.
+func TestAListingThatEndedLeavesNoPosition(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	kept := stateAt(1)
+	kept.OfferAt, kept.KeysAt = adapter.Listing(`{"page":2}`), adapter.Listing(`{"page":3}`)
+	if err := c.acquire(c.node("a")).Store().Commit(t.Context(), 0, syncer.Commit{State: kept}); err != nil {
+		t.Fatal(err)
+	}
+	c.clock.advance(ttl + time.Second)
+	if err := c.acquire(c.node("a")).Store().Commit(t.Context(), 1, syncer.Commit{State: stateAt(2)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, listing := c.stored(); listing != "" {
+		t.Errorf("the column after both listings ended: %s, want none", listing)
+	}
+	c.clock.advance(ttl + time.Second)
+	if st, err := c.acquire(c.node("b")).Store().Load(t.Context()); err != nil || st.OfferAt != nil || st.KeysAt != nil {
+		t.Errorf("the positions another node read: %q, %q, %v; want none", st.OfferAt, st.KeysAt, err)
+	}
+}
+
 // stored is the supplier's state and its column of listing positions, as text.
 func (c *cluster) stored() (state, listing string) {
 	c.t.Helper()
