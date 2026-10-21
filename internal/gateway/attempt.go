@@ -160,7 +160,8 @@ func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.Not
 // not a generation: its body is rewritten by the members that must not go upstream as they are (the endpoint's model
 // name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
-	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
+	account := uuid.UUID(s.c.caller.AccountID())
+	w := protocol.Rewrites{Identity: s.x.identity(account), Device: s.x.deviceID(account)}
 	target := entry.Target
 	target.Compact = s.c.Compact
 	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
@@ -210,6 +211,7 @@ type attempt struct {
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
 	content bool              // the upstream sent content: the commit point came
+	state   string            // the turn state the upstream set, passed on with the answer (headers.go)
 	usage   protocol.Usage    // what the stream reported, once it is over
 	seen    protocol.Progress // what the relay had seen last
 
@@ -248,8 +250,9 @@ func (a *attempt) close(ctx context.Context) {
 	a.unhook()
 	a.cancel(nil)
 	a.release()
-	a.result(a.conn.Done())
+	receipt := a.conn.Done()
 	a.s.x.Router.End(a.entry.Endpoint)
+	a.result(receipt)
 	a.observe(ctx)
 }
 
@@ -297,6 +300,7 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 		return s.failed(a, fail)
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
 	if s.c.Compact {
 		return a.pass(ctx, resp)
 	}
@@ -311,7 +315,7 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 	s := a.s
 	defer s.x.Memory.Refund(held)
 	waitFor := s.x.Limits.cfg.HeaderWait
-	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header}
+	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: a.upstreamHeader()}
 	if s.c.Compact {
 		waitFor, call.Compact = s.x.Limits.cfg.CompactHeaderWait, true
 	}
