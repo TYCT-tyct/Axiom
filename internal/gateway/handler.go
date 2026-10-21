@@ -40,6 +40,9 @@ type Deps struct {
 	Run      Run
 	Logger   *slog.Logger
 	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Models is the model list in OpenRouter's shape, which the route builder fills with each snapshot it publishes: the
+	// handler serves it and reads no price of its own, so a client's estimate and a call's charge are one reading.
+	Models *ModelList
 	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
 	// header, so a request is the address it came from.
 	Proxies []netip.Prefix
@@ -59,10 +62,15 @@ type Handler struct {
 	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
+// complete reports whether every dependency is there.
+func (d Deps) complete() bool {
+	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
+		d.Run != nil && d.Logger != nil && d.Models != nil
+}
+
 // NewHandler checks the dependencies and builds the routes.
 func NewHandler(d Deps) (*Handler, error) {
-	if d.Accounts == nil || d.Catalog == nil || d.Router == nil || d.Billing == nil || d.Limits == nil || d.Memory == nil ||
-		d.Run == nil || d.Logger == nil {
+	if !d.complete() {
 		return nil, errors.New("gateway: the handler needs every dependency")
 	}
 	if !d.Accounts.GatesLookups() {

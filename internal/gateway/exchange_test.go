@@ -28,11 +28,11 @@ func exchangeCurrency(t *testing.T, code string) platform.Currency {
 
 func (f *routeFixture) publish() {
 	f.t.Helper()
-	snap, count, err := f.deps.Build(f.t.Context())
+	snap, list, count, err := f.deps.Build(f.t.Context())
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.deps.Publish(snap, count)
+	f.deps.Publish(snap, list, count)
 }
 
 func wantVersion(t *testing.T, entries []routing.Entry, version int64, who string) {
@@ -85,13 +85,17 @@ func TestExchangeRefreshFailureDoesNotExtendFreshness(t *testing.T) {
 	}
 	f.router = router
 	f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
+	before := f.models.published()
 	f.deps.ExchangeRates = func(context.Context) ([]platform.ExchangeRate, error) {
 		return nil, errors.New("configuration unavailable")
 	}
 	for range 3 {
-		if snap, _, err := f.deps.Build(t.Context()); err == nil || snap != nil {
+		if snap, list, _, err := f.deps.Build(t.Context()); err == nil || snap != nil || list != nil {
 			t.Fatal("failed refresh published a snapshot")
 		}
+	}
+	if f.models.published() != before {
+		t.Error("a failed build replaced the model list, which would quote prices the standing snapshot does not charge")
 	}
 	now = now.Add(time.Hour)
 	if router.Fresh() {
