@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/valkey-io/valkey-go"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -75,6 +76,8 @@ func leavesAtTheDeadline(t *testing.T, client *Client) {
 func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client, server := stuckClient(maxOutstanding)
+		reader := sdkmetric.NewManualReader()
+		client.m = newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 		resume := sync.OnceFunc(func() { close(server.release) })
 		defer resume()
 		for range streakAccesses {
@@ -92,11 +95,17 @@ func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 		if err := countOnce(t.Context(), t, client); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("an access before the open period ended: %v", err)
 		}
+		if got := gaugeValue(t, reader, breakerMetric); got != 1 {
+			t.Fatalf("breaker_open = %d while the breaker is open, want 1", got)
+		}
 		time.Sleep(openFor)
 		for range 2 { // the half-open probe, then an ordinary access
 			if err := countOnce(t.Context(), t, client); err != nil {
 				t.Fatalf("an access after the server resumed: %v", err)
 			}
+		}
+		if got := gaugeValue(t, reader, breakerMetric); got != 0 {
+			t.Fatalf("breaker_open = %d after the probe succeeded, want 0", got)
 		}
 		if got := server.sent.Load(); got != streakAccesses+2 {
 			t.Fatalf("%d commands sent, want the timeouts, probe and ordinary access", got)
