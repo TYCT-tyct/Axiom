@@ -20,8 +20,7 @@ import (
 
 // diffUpstream is the one upstream both gateways call in the differential test: new-api through the Docker host
 // gateway in CI or a tunnel on developers' machines, Axiom on loopback. It answers by the reply a request names (a
-// "diff:<reply>" marker in its text, which both
-// gateways forward untouched), as a stream when the request asks for one and whole otherwise, with the model name the
+// "diff:<reply>" marker in its text, which both gateways forward untouched), as a stream when the request asks for one and whole otherwise, with the model name the
 // request used, like a real upstream. The streams are the recorded samples of internal/protocol/testdata; what has no
 // sample (a Chat tool call, the whole replies) is written below in the shape the official reference gives.
 type diffUpstream struct {
