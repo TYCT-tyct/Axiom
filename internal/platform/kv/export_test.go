@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"time"
 )
 
 // MaxOutstanding is how many commands a client lets be out at once, for the test that counts what reached the server.
@@ -21,6 +22,13 @@ func (c *Client) StopChecks() {
 		c.stop()
 	}
 	c.done.Wait()
+}
+
+// SetAccessTimeout lets a deadline test start with the wide test budget and narrow it only after pausing the server.
+// The test must have no accesses running; stopping the background checks here also keeps them from racing the change.
+func (c *Client) SetAccessTimeout(timeout time.Duration) {
+	c.StopChecks()
+	c.timeout = timeout
 }
 
 // Crash ends the client the way a crashed process ends: its loops and connections go and its row stays, and the name it

@@ -26,6 +26,19 @@ type offsetClock struct{ ahead atomic.Int64 }
 
 func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.ahead.Load())) }
 
+// steadyClock is the real clock until stand is called and stands still from then, so that a client measures its offset to
+// a server whose clock runs, and the breaker's open period never ends in a test that wants it to stay open.
+type steadyClock struct{ at atomic.Int64 } // zero while the clock runs
+
+func (c *steadyClock) Now() time.Time {
+	if at := c.at.Load(); at != 0 {
+		return time.Unix(0, at)
+	}
+	return time.Now()
+}
+
+func (c *steadyClock) stand() { c.at.Store(time.Now().UnixNano()) }
+
 // jump moves the clock forward.
 func (c *offsetClock) jump(d time.Duration) { c.ahead.Add(int64(d)) }
 
@@ -180,24 +193,25 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 
 // TestEveryAccessReturns: far more concurrent accesses than a connection's ring has slots, against a server whose scripts
 // wait, must each return, and no more of them may reach the server than the client lets be out: the ring waits for a slot
-// without looking at any context, so what keeps a call from waiting there is that the client never fills it. Calls are
-// bounded by caller deadlines while writes are paused (README「客户端与连接」).
+// without looking at any context, so what keeps a call from waiting there is that the client never fills it. The clock is
+// frozen, so the breaker that opens stays open and nothing is sent after it (README「客户端与连接」).
 func TestEveryAccessReturns(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	client := server.Open(t, kv.Deps{})
+	clock := &steadyClock{}
+	client := server.Open(t, kv.Deps{Now: clock.Now})
+	clock.stand()
 	script := kv.NewScript(countScript)
 	keys := window(client, 100)
 	resume := pauseWrites(t, server)
+	client.SetAccessTimeout(kv.Timeout)
 	const concurrent = 5000
 	var group sync.WaitGroup
 	group.Add(concurrent)
 	for range concurrent {
 		go func() {
 			defer group.Done()
-			ctx, cancel := context.WithTimeout(t.Context(), kv.Timeout)
-			defer cancel()
-			if _, err := client.Do(ctx, kv.Precheck, script.Cmd(keys, "120000")); !errors.Is(err, kv.ErrUnavailable) {
+			if _, err := client.Do(t.Context(), kv.Precheck, script.Cmd(keys, "120000")); !errors.Is(err, kv.ErrUnavailable) {
 				t.Errorf("access: %v", err)
 			}
 		}()
