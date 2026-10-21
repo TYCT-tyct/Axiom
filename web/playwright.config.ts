@@ -13,13 +13,14 @@ const { apps } = await import("./e2e/apps.ts");
 const [website, , admin] = apps;
 const address = (url: string) => `localhost:${new URL(url).port}`;
 
-// Playwright's default is half the machine's cores, 48 on the 96-core CI host, which shares an 80-core quota among up to
-// eight jobs. A check is about one core of work (the browser, the page and the test process), so the cap is the
-// quota's share per job. #297 measured the same suite on that host at a load average of 50 to 108: 48 workers made an
+// A check is about one core of work (the browser, the page and the test process); CI gives this job eight cores.
+// #297 measured the same suite on the 96-core host at a load average of 50 to 108: 48 workers made an
 // axe scan take 5 to 6 s at the median and up to 32 s at worst, and 10 checks crossed Playwright's 30 s timeout;
 // 8 workers took 1.3 to 1.4 s and 4.8 s, with every check passing and the whole run no slower (95 to 110 s against
 // 85 to 127 s).
-const workers = Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)));
+// Node already counts the container's CPU quota. Fill that share on CI; local runs leave half the machine for other work.
+const capacity = availableParallelism();
+const workers = Math.min(8, process.env.CI ? capacity : Math.max(1, Math.floor(capacity / 2)));
 
 export default defineConfig({
   testDir: "e2e",
