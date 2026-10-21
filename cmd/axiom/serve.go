@@ -60,6 +60,7 @@ type nodeSettings struct {
 	publicAddr, adminAddr, probesAddr string
 	startupTimeout, shutdownTimeout   time.Duration
 	databaseURL                       string
+	completionReserve                 int
 	masterKeyFile, keyHashFile        string
 	identityKeyFile                   string
 	hashConcurrency                   int
@@ -73,14 +74,15 @@ type nodeSettings struct {
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		publicAddr:      env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
-		adminAddr:       env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
-		probesAddr:      probesListenAddr(env),
-		startupTimeout:  env.Duration(startupTimeoutVar, defaultStartupTimeout),
-		shutdownTimeout: env.Duration(shutdownTimeoutVar, 30*time.Second),
-		databaseURL:     env.Required(pg.DatabaseURLVar),
-		masterKeyFile:   env.Required(masterKeyFileVar),
-		keyHashFile:     env.Required(keyHashFileVar),
+		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
+		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
+		probesAddr:        probesListenAddr(env),
+		startupTimeout:    env.Duration(startupTimeoutVar, defaultStartupTimeout),
+		shutdownTimeout:   env.Duration(shutdownTimeoutVar, 30*time.Second),
+		databaseURL:       env.Required(pg.DatabaseURLVar),
+		completionReserve: env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1),
+		masterKeyFile:     env.Required(masterKeyFileVar),
+		keyHashFile:       env.Required(keyHashFileVar),
 		// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
 		// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
 		identityKeyFile: env.Required(identityKeyFileVar),
@@ -166,7 +168,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel)
+	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
 	if err != nil {
 		return err
 	}
@@ -328,6 +330,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
 	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
 	gate := gateway.DefaultConfig()
+	gate.PoolSize, gate.PoolReserve = int(db.MaxConns()), db.CompletionConns()
 	limits, err := gateway.New(gate, tel.Metrics.Meter("axiom/gateway"))
 	if err != nil {
 		return nodeRoutes{}, err
@@ -433,10 +436,10 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 // (docs/domains/billing.md「价目表缺项」). One deadline covers the connection and the check, so a database that stops
 // answering, or a lock held on the fallbacks, fails the start instead of holding it. The other commands open the
 // database without the check: save-fallbacks is how a refused row is repaired.
-func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry) (*pg.DB, error) {
+func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry, opts ...pg.Option) (*pg.DB, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()
-	db, err := openDatabase(ctx, url, timeout, pg.WithTracerProvider(tel.Traces))
+	db, err := openDatabase(ctx, url, timeout, append(opts, pg.WithTracerProvider(tel.Traces))...)
 	if err != nil {
 		return nil, err
 	}
@@ -518,20 +521,6 @@ func node(publicAddr string, routes http.Handler, adminAddr string, admin http.H
 	}
 }
 
-// checkPool refuses a pool smaller than the permits the gateway hands out for database work. Its last
-// Config.PoolReserve permits are kept for completions, and that reserve means nothing if the pool cannot answer it;
-// a larger pool is left to the deployment. It runs in openDatabase, so every command that opens the database holds to
-// the one pool configuration; the gateway's settings are its defaults until the call path is wired, so the check reads
-// them there.
-func checkPool(db *pg.DB) error {
-	gate := gateway.DefaultConfig()
-	if have := int(db.MaxConns()); have < gate.PoolSize {
-		return fmt.Errorf("%s: pool_max_conns %d is below the gateway's %d database connections (PoolSize): raise it, or lower PoolSize",
-			pg.DatabaseURLVar, have, gate.PoolSize)
-	}
-	return nil
-}
-
 var errNoAnswer = errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
@@ -541,10 +530,6 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
-		return nil, err
-	}
-	if err := checkPool(db); err != nil {
-		db.Close()
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

@@ -17,7 +17,7 @@ import (
 func (p *Pool) inUse() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.used
+	return p.classes[Admission].used + p.classes[Completion].used
 }
 
 // waitFor polls until cond holds, or fails.
