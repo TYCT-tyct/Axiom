@@ -74,6 +74,11 @@ func (u *diffUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := ""
 	if m := replyMarker.FindSubmatch(body); m != nil {
 		name = string(m[1])
+		if wire, _, _ := strings.Cut(name, "-"); wire != wireOf(r.URL.Path) {
+			u.t.Errorf("upstream received %s for %s fixture", r.URL.Path, name)
+			http.Error(w, "wrong upstream format", http.StatusBadRequest)
+			return
+		}
 	}
 	reply, ok := u.replies[name]
 	if !ok { // a request that carries no marker is one the upstream rejects

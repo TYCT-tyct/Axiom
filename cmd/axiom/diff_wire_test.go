@@ -23,8 +23,8 @@ import (
 
 // TestAxiomMatchesNewAPIOnTheWire sends the same requests to Axiom and to the official new-api image and diffs what
 // comes back: status, headers, JSON bodies, server-sent events. Both are served by one fake upstream that replays the
-// protocol samples, each format by a channel or an endpoint of the same format, so what is compared is how each relays
-// a reply and an error, not how it converts a format. A difference must be explained by a rule (diff_rules_test.go) or
+// protocol samples, each model using the same upstream format on both sides, including client format conversion.
+// A difference must be explained by a rule (diff_rules_test.go) or
 // the case fails, and so must a rule that explains nothing. `just diff` runs it; it is not part of `just check`, which
 // would pull an image and start a container for every run.
 func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
@@ -50,6 +50,7 @@ func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
 		})
 	}
 	for _, r := range rules {
+		t.Logf("%d intended differences for %q: %s", r.hits, r.path, r.reason)
 		if r.hits == 0 {
 			t.Errorf("the rule for %q explains no difference: remove it", r.path)
 		}
@@ -67,14 +68,13 @@ func orKey(override, key string) string {
 	return key
 }
 
-// explainOrFail logs a difference with its rule, or fails the case when no rule explains it.
+// explainOrFail counts intended differences and reports only failures; rule summaries keep large runs readable.
 func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
 	t.Helper()
-	line := fmt.Sprintf("%s: new-api %s, Axiom %s", d.at, d.newAPI, d.axiom)
-	if r := explain(rules, name, d); r != nil {
-		t.Logf("%s [allowed] %s", line, r.reason)
+	if explain(rules, name, d) != nil {
 		return
 	}
+	line := fmt.Sprintf("%s: new-api %s, Axiom %s", d.at, d.newAPI, d.axiom)
 	t.Errorf("%s [unexplained]", line)
 }
 

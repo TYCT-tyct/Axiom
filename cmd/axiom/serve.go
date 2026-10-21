@@ -168,27 +168,27 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
+	db, master, err := openCheckedDatabase(ctx, cfg, tel)
 	if err != nil {
 		return err
 	}
 	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
+	console.master = master
 
 	exit, err := outbound(tel)
 	if err != nil {
 		return err
 	}
-	recorder := record(ctx, db, tel, logger)
+	syncCtx, cancelSync := context.WithCancel(ctx)
+	defer cancelSync()
+	queue, recorder, err := startBackground(syncCtx, db, console.master, cfg.smtp, exit, prices, tel, logger, cfg.shutdownTimeout, record)
+	if err != nil {
+		return err
+	}
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
 	defer closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
-	syncCtx, cancelSync := context.WithCancel(ctx)
-	defer cancelSync()
-	queue, err := startSync(syncCtx, db, cfg.smtp, console.master, exit, prices, tel, logger)
-	if err != nil {
-		return err
-	}
 	// Like the recorder, the queue is stopped on every way out; the normal shutdown stops it earlier, with the shutdown
 	// deadline, and a second Stop does nothing.
 	defer func() {
@@ -278,10 +278,11 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 
 // consoleParts are what the node builds from its configuration before it touches the database: the secrets read from
 // protected files, whose errors name the variable and never the path or the contents, and the contract the guard
-// enforces.
+// enforces. The master key ring is not here: it is read once under the database check (openCheckedDatabase), which
+// gives it the write version the database chose.
 type consoleParts struct {
 	cfg           nodeSettings
-	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials
+	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials; set once the database is checked
 	hashes        *secret.MACKeys // keys API keys are hashed with
 	identity      []byte          // derives what replaces the client's identifiers upstream
 	contract      *contract
@@ -290,10 +291,6 @@ type consoleParts struct {
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
-	master, err := secret.Load(cfg.masterKeyFile)
-	if err != nil {
-		return consoleParts{}, err
-	}
 	hashes, err := secret.LoadMAC(cfg.keyHashFile)
 	if err != nil {
 		return consoleParts{}, err
@@ -311,7 +308,12 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	frontend, err := webui.Embedded()
-	return consoleParts{cfg, master, hashes, identity, console, admin, frontend}, err
+	if err != nil {
+		return consoleParts{}, err
+	}
+	return consoleParts{
+		cfg: cfg, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+	}, nil
 }
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.
@@ -432,6 +434,33 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	}
 }
 
+// openCheckedDatabase opens the node's database and checks that the key ring it needs is complete and agrees with the
+// database, both under one AXIOM_STARTUP_TIMEOUT. The key ring check reads every envelope store, so a lock held on one of
+// them is the database not answering, like a lock held on the fallback prices.
+func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry) (*pg.DB, *secret.Keyring, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
+	defer cancel()
+	// Read before the database, so a file the node cannot use is named as such instead of as a connection failure, and
+	// CheckRing then checks this ring under the lock instead of reading the file again.
+	master, err := secret.Load(cfg.masterKeyFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
+	if err != nil {
+		return nil, nil, err
+	}
+	ring, _, err := keyRotation(db, cfg.masterKeyFile).CheckRing(ctx, master)
+	if err == nil {
+		return db, ring, nil
+	}
+	db.Close()
+	if errors.Is(context.Cause(ctx), errNoAnswer) {
+		return nil, nil, errNoAnswer
+	}
+	return nil, nil, err
+}
+
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
 // (docs/domains/billing.md「价目表缺项」). One deadline covers the connection and the check, so a database that stops
 // answering, or a lock held on the fallbacks, fails the start instead of holding it. The other commands open the
@@ -452,6 +481,22 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 		return nil, err
 	}
 	return db, nil
+}
+
+// startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
+// closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
+// the recorder it had already started, since the caller has no defer of its own yet.
+func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, smtp mail.Config, exit *egress.Client,
+	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+) (*pg.Queue, *observability.Recorder, error) {
+	recorder := record(ctx, db, tel, logger)
+	queue, err := startSync(ctx, db, smtp, keys, exit, prices, tel, logger)
+	if err != nil {
+		closeRecorder(ctx, recorder, timeout, logger)
+		return nil, nil, err
+	}
+	return queue, recorder, nil
 }
 
 // startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not

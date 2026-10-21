@@ -144,16 +144,16 @@ func appendBreakpoint(out []byte, p canonPart, breakpoints bool) []byte {
 func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 	switch {
 	case p.Type == "text":
-		out = append(append(out, `{"type":"input_text","text":`...), p.Text...)
+		out = append(append(out, responsesTextHead...), p.Text...)
 		return append(appendBreakpoint(out, p, breakpoints), '}'), nil
 	case p.Type == "image_url" && p.ImageURL != nil:
-		out = appendQuoted(append(out, `{"type":"input_image","image_url":`...), p.ImageURL.URL)
+		out = appendQuoted(append(out, responsesImageHead...), p.ImageURL.URL)
 		if p.ImageURL.Detail != "" {
 			out = appendQuoted(append(out, `,"detail":`...), p.ImageURL.Detail)
 		}
 		return append(out, '}'), nil
 	case p.Type == "file" && p.File != nil && p.File.FileData != nil:
-		out = appendQuoted(append(out, `{"type":"input_file","file_data":`...), *p.File.FileData)
+		out = appendQuoted(append(out, responsesFileHead...), *p.File.FileData)
 		if !isNull(p.File.Filename) {
 			out = append(append(out, `,"filename":`...), p.File.Filename...)
 		}
@@ -195,7 +195,7 @@ func outputText(msg canonMessage, breakpoints bool) ([]byte, error) {
 	for _, p := range msg.Parts {
 		switch {
 		case p.Type == "refusal":
-			text = append(append(append(commaAfter(text, 0), `{"type":"refusal","refusal":`...), p.Text...), '}')
+			text = append(append(append(commaAfter(text, 0), responsesRefusalHead...), p.Text...), '}')
 		case p.Type != "text":
 			return nil, &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
 		case string(p.Text) == `""`:

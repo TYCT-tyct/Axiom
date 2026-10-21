@@ -74,6 +74,7 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
+		RequestsPerMinute: c.RequestsPerMinute,
 	}
 }
 
@@ -405,6 +406,29 @@ func (a adminAPI) BindSupplierKey(ctx context.Context, request adminapi.BindSupp
 		return nil, err
 	}
 	return adminapi.BindSupplierKey201JSONResponse{Body: bound, Headers: adminapi.BindSupplierKey201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// SetSupplierCredentialLimits sets the calls a credential serves at once and the requests its minute admits.
+func (a adminAPI) SetSupplierCredentialLimits(ctx context.Context, request adminapi.SetSupplierCredentialLimitsRequestObject) (adminapi.SetSupplierCredentialLimitsResponseObject, error) {
+	supplier, err := supplierIDOf(request.SupplierId)
+	if err != nil {
+		return nil, err
+	}
+	credential, err := supplierIDOf(request.CredentialId)
+	if err != nil {
+		return nil, suppliers.ErrNoCredential
+	}
+	b := request.Body
+	limits := suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute}
+	changed, replayed, err := idempotently(ctx, a.db, "setSupplierCredentialLimits", request.Params.IdempotencyKey, []any{request.SupplierId, request.CredentialId, b},
+		func(tx pg.Tx) (adminapi.SupplierCredential, error) {
+			c, err := a.suppliers.SetLimits(ctx, tx, actor(ctx), supplier, credential, limits, b.Reason)
+			return credentialBody(c), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetSupplierCredentialLimits200JSONResponse{Body: changed, Headers: adminapi.SetSupplierCredentialLimits200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 // pendingCursor is where a page of the queue of names to map ended, in the cursor's own form.

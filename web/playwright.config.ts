@@ -19,6 +19,8 @@ const address = (url: string) => `localhost:${new URL(url).port}`;
 // axe scan take 5 to 6 s at the median and up to 32 s at worst, and 10 checks crossed Playwright's 30 s timeout;
 // 8 workers took 1.3 to 1.4 s and 4.8 s, with every check passing and the whole run no slower (95 to 110 s against
 // 85 to 127 s).
+// In the CI container's private cgroup namespace, Node counts its eight-core quota; keep half for browser/harness work.
+// With eight workers in that quota, 71% of CPU periods were throttled and five of 531 checks timed out (#363).
 const workers = Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)));
 
 export default defineConfig({

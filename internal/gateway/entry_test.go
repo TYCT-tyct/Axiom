@@ -374,8 +374,8 @@ func TestAlternateModels(t *testing.T) {
 	}
 }
 
-// TestForwardedHeaders: only the protocol's own headers go upstream, as they were written; the client's credentials
-// and the headers that name its tooling do not.
+// TestForwardedHeaders: the client's headers that a protocol may forward are kept as it wrote them, to be derived per
+// attempt (headers.go); its credentials and the headers that name its tooling are dropped.
 func TestForwardedHeaders(t *testing.T) {
 	t.Parallel()
 	in := http.Header{
@@ -383,10 +383,14 @@ func TestForwardedHeaders(t *testing.T) {
 		"Http-Referer": {"https://app.example"}, "X-Title": {"app"}, "Cookie": {"a=b"}, "Content-Type": {"application/json"},
 		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
 		"Anthropic-Version": {"2023-06-01"},
+		"session_id":        {"s"}, "conversation_id": {"c"}, "x-codex-turn-state": {"t"},
 	}
 	want := http.Header{
-		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
-		"Anthropic-Version": {"2023-06-01"},
+		"Anthropic-Beta":     {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
+		"Anthropic-Version":  {"2023-06-01"},
+		"Session_id":         {"s"},
+		"Conversation_id":    {"c"},
+		"X-Codex-Turn-State": {"t"},
 	}
 	if diff := cmp.Diff(want, forwardable(in)); diff != "" {
 		t.Errorf("forwarded headers (-want +got):\n%s", diff)
