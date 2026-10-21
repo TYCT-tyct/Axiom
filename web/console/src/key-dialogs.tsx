@@ -1,9 +1,11 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey, useErrors } from "@axiom/app";
 import { Button, CopyButton, Dialog, FormError, SubmitButton } from "@axiom/ui";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { KeyForm } from "./key-form";
+import { keyGuide } from "./key-guide";
+import { siteQuery } from "./queries";
 
 type Key = Schemas["Key"];
 
@@ -102,10 +104,62 @@ export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () 
   );
 }
 
+// One piece of the guide: what it is, the text to copy, and where that text goes.
+function Snippet({ name, text, hint }: { name: string; text: string; hint?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-label text-t2">{name}</p>
+        <CopyButton text={text} label={t("keys.guide.copy", { name })} />
+      </div>
+      {/* Wrapped, not scrolled sideways: a scroll region needs its own tab stop, and a focusable `pre` is what the
+          accessibility rules forbid. */}
+      <pre className="rounded-btn border border-b2 bg-s2 p-3 font-mono text-label whitespace-pre-wrap break-words text-t1">
+        {text}
+      </pre>
+      {hint ? <p className="text-label text-t3">{hint}</p> : null}
+    </div>
+  );
+}
+
+// The snippets leave the screen with the dialog that holds the plaintext key.
+function Guide({ apiBase, secret }: { apiBase: string; secret: string }) {
+  const { t } = useTranslation();
+  const guide = keyGuide(apiBase, secret);
+  if (!guide) {
+    return null;
+  }
+  return (
+    <section className="space-y-3 border-t border-b1 pt-4">
+      <h3 className="text-ui font-medium text-t1">{t("keys.guide.title")}</h3>
+      <div className="space-y-3">
+        <p className="text-label text-t3">{t("keys.guide.protocols")}</p>
+        {guide.protocols.map((entry) => (
+          <Snippet key={entry.id} name={t(`keys.guide.protocol.${entry.id}`)} text={entry.text} />
+        ))}
+        <p className="text-label text-t3">{t("keys.guide.model")}</p>
+      </div>
+      <div className="space-y-3">
+        <p className="text-label text-t3">{t("keys.guide.clients")}</p>
+        {guide.clients.map((entry) => (
+          <Snippet
+            key={entry.id}
+            name={t(`keys.guide.client.${entry.id}`)}
+            text={entry.text}
+            hint={t(`keys.guide.hint.${entry.id}`)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // The key's text exists only in this answer. The dialog does not close on Escape or a click outside, so it cannot be
 // lost by accident; the user closes it once the key is copied.
 export function SecretDialog({ created, onClose }: { created: Schemas["CreatedKey"]; onClose: () => void }) {
   const { t } = useTranslation();
+  const site = useQuery(siteQuery);
   return (
     <Dialog title={t("keys.secret.title")} onClose={onClose} dismissible={false}>
       <div className="space-y-4">
@@ -121,6 +175,16 @@ export function SecretDialog({ created, onClose }: { created: Schemas["CreatedKe
             {t("keys.secret.done")}
           </Button>
         </div>
+        {site.isError ? (
+          <div className="space-y-2">
+            <FormError>{t("keys.guide.loadFailed")}</FormError>
+            <Button disabled={site.isFetching} onClick={() => site.refetch()}>
+              {t("state.retry", { ns: "common" })}
+            </Button>
+          </div>
+        ) : (
+          <Guide apiBase={site.data?.api_base_url ?? ""} secret={created.secret} />
+        )}
       </div>
     </Dialog>
   );
