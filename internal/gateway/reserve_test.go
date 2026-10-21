@@ -36,8 +36,9 @@ func TestBackgroundAndConsoleCannotTakeTheSettlementReserve(t *testing.T) {
 		o.conns = 5
 		o.config = func(c *Config) { c.PoolSize, c.PoolReserve = 5, 1 }
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	// The helpers join held transactions in t.Cleanup; cancelling on return races their COMMITs.
+	// Held transactions finish in t.Cleanup, after t.Context is cancelled. Keep the same watchdog,
+	// but let their joins precede cancellation so it cannot race their COMMITs.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Minute)
 	t.Cleanup(cancel)
 	var c *Call
 	deps := r.handler.Deps
