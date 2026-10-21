@@ -123,6 +123,7 @@ func (s *chatToNative) closeResponseItem(i int) error {
 	switch it.kind {
 	case "tool_use":
 		member = "arguments"
+		event["name"] = jsonValue(it.name)
 	case "refusal":
 		member = "refusal"
 	}
@@ -153,6 +154,7 @@ func (s *chatToNative) response(status string, usage []byte) jsontext.Value {
 		"id": jsonValue(s.o.ID), "object": jsonValue("response"), "created_at": jsonValue(s.o.Created),
 		"model": jsonValue(s.o.Model), "status": jsonValue(status), "output": jsonValue(items),
 		"error": jsontext.Value("null"), "incomplete_details": jsontext.Value("null"),
+		"usage": jsontext.Value("null"),
 	}
 	if status == "incomplete" {
 		response["incomplete_details"] = jsonValue(requestObject{"reason": jsonValue(inverseName(responsesIncomplete, strconv.Quote(s.reason)))})

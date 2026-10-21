@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
+	"axiom/internal/protocol/internal/sse"
 	"axiom/internal/protocol/internal/streamcheck"
 )
 
@@ -44,6 +45,33 @@ func TestChatToNativeSamples(t *testing.T) {
 		for ci, c := range chatUpstreamCases {
 			t.Run(format.dir+"/"+c.name, func(t *testing.T) { checkNativeChatSample(t, fi, ci) })
 		}
+	}
+}
+
+func TestChatResponsesLifecycleMembers(t *testing.T) {
+	stream := sample(t, "assembled/chat-tool-calls.sse")
+	got := relayTo(t, protocol.Responses, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	r := sse.NewReader(bytes.NewReader(got.out), 32<<20)
+	var names []string
+	created := false
+	for data, err := r.Next(); err == nil; data, err = r.Next() {
+		switch member(t, data, "type") {
+		case "response.created":
+			response := member(t, data, "response").(map[string]any)
+			usage, ok := response["usage"]
+			if !ok || usage != nil {
+				t.Fatalf("initial usage must be null: %s", data)
+			}
+			created = true
+		case "response.function_call_arguments.done":
+			names = append(names, member(t, data, "name").(string))
+		}
+	}
+	if !created || strings.Join(names, ",") != "get_weather,get_time" {
+		t.Fatalf("created=%v, completed functions=%v", created, names)
 	}
 }
 

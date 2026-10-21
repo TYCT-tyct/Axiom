@@ -203,9 +203,10 @@ func compareGap(a, b []event, offA, offB int) []difference {
 	var out []difference
 	paired := make([]bool, len(b))
 	for i, x := range a {
-		j := slices.IndexFunc(b, func(y event) bool { return y.name == x.name })
+		matches := func(y event) bool { return sameEventItem(x, y) }
+		j := slices.IndexFunc(b, matches)
 		for j >= 0 && paired[j] { // the first event of that name that has no partner yet
-			k := slices.IndexFunc(b[j+1:], func(y event) bool { return y.name == x.name })
+			k := slices.IndexFunc(b[j+1:], matches)
 			if k < 0 {
 				j = -1
 			} else {
@@ -227,6 +228,16 @@ func compareGap(a, b []event, offA, offB int) []difference {
 		}
 	}
 	return out
+}
+
+// Responses may close concurrent items in a different order; compare the same output item, retaining its event position.
+func sameEventItem(a, b event) bool {
+	if a.name != b.name {
+		return false
+	}
+	x, xok := a.doc.(map[string]any)
+	y, yok := b.doc.(map[string]any)
+	return !strings.HasPrefix(a.name, "response.") || !xok || !yok || x["output_index"] == y["output_index"]
 }
 
 // eventLeaves is the leaves of an event's data, placed by the pair the event belongs to, so its partner's are placed alike.
