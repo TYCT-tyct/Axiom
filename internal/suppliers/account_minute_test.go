@@ -101,7 +101,12 @@ func TestMinuteCounterDoesNotWrap(t *testing.T) {
 	t.Parallel()
 	now := time.Time{}
 	rt := minuteRuntime{start: now, used: maxLimit - 1}
-	if !rt.take(now, 0) || !rt.take(now, 0) || rt.take(now, maxLimit) || rt.room(now, maxLimit) {
+	for range 2 {
+		if !rt.take(now, 0) {
+			t.Fatal("an unlimited credential was refused")
+		}
+	}
+	if rt.take(now, maxLimit) || rt.room(now, maxLimit) {
 		t.Fatal("unlimited requests wrapped the shared minute's count")
 	}
 	if !rt.take(now.Add(time.Minute), maxLimit) {
