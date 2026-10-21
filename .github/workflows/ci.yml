@@ -141,6 +141,8 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           playwright: "true"
+      # The browser image does not guarantee Python, which the content cache scripts need.
+      - run: apt-get update && apt-get install -y --no-install-recommends python3
       - run: just web
       # A later checkout removes test-results on self-hosted runners; keep the failed page and its network evidence.
       - if: failure()
