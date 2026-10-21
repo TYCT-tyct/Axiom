@@ -54,7 +54,8 @@ func newDiffUpstream(t *testing.T) *diffUpstream {
 		if err := u.server.Listener.Close(); err != nil {
 			t.Fatal(err)
 		}
-		listener, err := net.Listen("tcp4", "0.0.0.0:0")
+		var config net.ListenConfig
+		listener, err := config.Listen(t.Context(), "tcp4", "0.0.0.0:0") //nolint:gosec // the CI gateway must reach this synthetic fixture; it holds no real credentials or user data
 		if err != nil {
 			t.Fatal(err)
 		}
