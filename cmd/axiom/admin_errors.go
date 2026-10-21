@@ -38,6 +38,7 @@ var adminRefusals = []refusal{
 
 	{suppliers.ErrNoSupplier, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoGroup, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrNoCredential, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrSupplierExists, http.StatusConflict, codeConflict, "that origin and account are already connected"},
 	{suppliers.ErrStatusLocked, http.StatusConflict, codeConflict, "the supplier's status does not allow this"},
 	{suppliers.ErrGroupGone, http.StatusConflict, codeConflict, "the supplier no longer lists that group"},
@@ -48,6 +49,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrUnreachable, http.StatusUnprocessableEntity, codeUnprocessable, "the site did not answer"},
 	{suppliers.ErrGroupNotSelected, http.StatusUnprocessableEntity, codeUnprocessable, "the group is not selected"},
 	{suppliers.ErrUnitValue, http.StatusUnprocessableEntity, codeUnprocessable, "a unit value is above 0 and at most 1000, with at most 15 decimals"},
+	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, "concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none"},
 }
 
 // unprocessable is a request that is well formed but that a rule refuses; message says which.

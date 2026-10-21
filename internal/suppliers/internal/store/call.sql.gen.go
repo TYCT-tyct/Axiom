@@ -288,6 +288,7 @@ const listRoutable = `-- name: ListRoutable :many
 SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
     s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
+    c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
@@ -318,6 +319,7 @@ type ListRoutableRow struct {
 	KeyVersion         *int64
 	MaxConcurrency     int32
 	ExpiresAt          *time.Time
+	RequestsPerMinute  *int32
 	CostScheduleID     uuid.UUID
 	Schedule           []byte
 }
@@ -355,6 +357,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.KeyVersion,
 			&i.MaxConcurrency,
 			&i.ExpiresAt,
+			&i.RequestsPerMinute,
 			&i.CostScheduleID,
 			&i.Schedule,
 		); err != nil {

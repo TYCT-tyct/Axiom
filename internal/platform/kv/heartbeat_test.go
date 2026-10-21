@@ -26,7 +26,7 @@ func TestSecondNodeIsRefused(t *testing.T) {
 	if got := first.Nodes(); got != 1 {
 		t.Fatalf("one node reports %d nodes", got)
 	}
-	_, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope})
+	_, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kvtest.Deps(kv.Deps{DB: db, Scope: scope}))
 	if err == nil {
 		t.Fatal("a second node started against the same N")
 	}
@@ -59,7 +59,7 @@ func TestHeartbeatGoesStale(t *testing.T) {
 		t.Fatalf("%d nodes alive a minute after the last heartbeat", rows)
 	}
 	// And a restart is not refused for the row that went stale.
-	client, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope})
+	client, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kvtest.Deps(kv.Deps{DB: db, Scope: scope}))
 	if err != nil {
 		t.Fatalf("a node restarted after a crash: %v", err)
 	}
@@ -93,7 +93,7 @@ func openNode(t *testing.T, server *kvtest.Server, db *pg.DB, scope pg.Scope, no
 	t.Helper()
 	cfg := server.Config(kvtest.Namespace())
 	cfg.Nodes = nodes
-	client, err := kv.Open(t.Context(), cfg, kv.Deps{DB: db, Scope: scope})
+	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{DB: db, Scope: scope}))
 	if err != nil {
 		t.Fatalf("open the node: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestNodesWithoutValkeyAreCounted(t *testing.T) {
 	if _, err := openBare(t, db, scope); err == nil || !strings.Contains(err.Error(), kv.NodesVar) {
 		t.Fatalf("a second node without Valkey: %v, want a refusal naming %s", err, kv.NodesVar)
 	}
-	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope}); err == nil {
+	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kvtest.Deps(kv.Deps{DB: db, Scope: scope})); err == nil {
 		t.Fatal("a node with Valkey started beside one without")
 	}
 	if err := first.Close(t.Context()); err != nil {
@@ -192,7 +192,7 @@ func TestNodesWithoutValkeyAreCounted(t *testing.T) {
 	if rows := heartbeats(t, db, scope); rows != 0 {
 		t.Fatalf("%d rows after the node stopped, want 0", rows)
 	}
-	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kv.Deps{DB: db, Scope: scope}); err != nil {
+	if _, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()), kvtest.Deps(kv.Deps{DB: db, Scope: scope})); err != nil {
 		t.Fatalf("a node with Valkey after the one without stopped: %v", err)
 	}
 }
@@ -239,9 +239,9 @@ func TestAStuckDatabaseDoesNotStopTheChecksOfValkey(t *testing.T) {
 	scope := pg.PlatformScope()
 	seen, logs := newReadings(), &lockedBuffer{}
 	cfg := server.Config(kvtest.Namespace())
-	client, err := kv.Open(t.Context(), cfg, kv.Deps{
+	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{
 		DB: db, Scope: scope, Meter: seen.meter, Logger: slog.New(slog.NewTextHandler(logs, nil)), HeartbeatTimeout: 200 * time.Millisecond,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

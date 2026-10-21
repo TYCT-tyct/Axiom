@@ -26,7 +26,7 @@ func TestSelectGroupAndBindKey(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
-	group, idle := f.group(supplier, "1", true), f.group(supplier, "2", true)
+	group, idle := f.group(supplier, "1"), f.group(supplier, "2")
 	base := "/suppliers/" + supplier
 	var chosen, off adminapi.SupplierGroup
 	f.send(http.MethodPut, base+"/groups/"+group, `{"selected":true,"reason":"r"}`, http.StatusOK, &chosen)
@@ -103,7 +103,7 @@ func TestMapSupplierModel(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
-	group := f.group(supplier, "1", true)
+	group := f.group(supplier, "1")
 	for i, name := range []string{"oldest", "middle", "newest"} {
 		f.run(fmt.Sprintf(`INSERT INTO suppliers.supplier_models (supplier_id, supplier_group_id, upstream_name, formats, first_seen_at)
 			VALUES ('%s', '%s', '%s', '{chat}', now() - interval '%d hours')`, supplier, group, name, 3-i))
