@@ -73,8 +73,8 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 			"models": channel.models, "group": "default", "status": 1,
 		}})
 	}
-	// new-api sends a Chat request for a Responses model to the Chat route unless it is told to convert, as Axiom does.
-	admin.option("global.chat_completions_to_responses_policy", `{"enabled":true,"all_channels":true,"model_patterns":["^gpt-6-astra$","^deepseek-v4-chat$"]}`)
+	// Only GPT's upstream speaks Responses; DeepSeek must keep receiving Chat requests.
+	admin.option("global.chat_completions_to_responses_policy", `{"enabled":true,"all_channels":true,"model_patterns":["^gpt-6-astra$"]}`)
 	// It refuses requests with 503 while the machine's CPU is above 90%, which a CI server building other branches is.
 	admin.option("performance_setting.monitor_enabled", "false")
 	return newAPI{base: base, key: "sk-" + key}
