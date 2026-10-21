@@ -70,7 +70,10 @@ type Failure struct {
 // until it handles the new case.
 //
 //sumtype:decl
-type Cause interface{ cause() }
+type Cause interface {
+	cause()
+	String() string
+}
 
 // RateLimited means too many requests. RetryAfter is zero when the supplier did not say.
 type RateLimited struct{ RetryAfter time.Duration }
@@ -129,3 +132,18 @@ func (ContentRejected) cause()          {}
 func (ModelNotFound) cause()            {}
 func (Unknown) cause()                  {}
 func (Transport) cause()                {}
+
+// String names each cause in results and API contracts; adding a variant must provide its name.
+func (RateLimited) String() string              { return "rate_limited" }
+func (Overloaded) String() string               { return "overloaded" }
+func (UpstreamError) String() string            { return "upstream_error" }
+func (SupplierBalanceLow) String() string       { return "supplier_balance_low" }
+func (CredentialQuotaExhausted) String() string { return "credential_quota_exhausted" }
+func (CredentialRejected) String() string       { return "credential_rejected" }
+func (NotPermitted) String() string             { return "not_permitted" }
+func (ContextTooLong) String() string           { return "context_too_long" }
+func (BadRequest) String() string               { return "bad_request" }
+func (ContentRejected) String() string          { return "content_rejected" }
+func (ModelNotFound) String() string            { return "model_not_found" }
+func (Unknown) String() string                  { return "unknown" }
+func (Transport) String() string                { return "transport" }

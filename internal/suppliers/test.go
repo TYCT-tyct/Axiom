@@ -107,10 +107,10 @@ type TestResult struct {
 
 // Estimate is what the test is booked at, as the contract and the cost row write an amount: a definite upper bound in
 // the supplier's unit, never what the supplier reported.
-func (r TestResult) Estimate() string { return r.estimate }
+func (r *TestResult) Estimate() string { return r.estimate }
 
 // Outcome is what the test says about the endpoint (docs/domains/quality.md「什么算一次失败」).
-func (r TestResult) Outcome() TestOutcome {
+func (r *TestResult) Outcome() TestOutcome {
 	switch {
 	case r.Failure != nil:
 		return r.failureOutcome()
@@ -127,7 +127,7 @@ func (r TestResult) Outcome() TestOutcome {
 
 // failureOutcome judges the failure of an answer by its scope and cause: the endpoint's own faults fail it, and another
 // scope's say nothing about it.
-func (r TestResult) failureOutcome() TestOutcome {
+func (r *TestResult) failureOutcome() TestOutcome {
 	if r.Failure.Scope != ScopeEndpoint {
 		return TestInconclusive
 	}
@@ -138,9 +138,11 @@ func (r TestResult) failureOutcome() TestOutcome {
 	case Unknown:
 		// A status of 500 and above is the endpoint's; the ones below are mostly the request's (a 413 is a body too
 		// large), so they say nothing.
-		if c.Status >= 500 {
+		if c.Status >= 500 && !c.SuspectedEgressBlock {
 			return TestFailed
 		}
+	case RateLimited, ContextTooLong, BadRequest, ContentRejected, NotPermitted, CredentialRejected,
+		CredentialQuotaExhausted, SupplierBalanceLow:
 	}
 	return TestInconclusive
 }
@@ -148,10 +150,10 @@ func (r TestResult) failureOutcome() TestOutcome {
 // Problem is what went wrong, in the spelling of the admin contract: a cause from ProblemCauses and a scope from
 // ProblemScopes, which is empty when the test's own deadline or the node's memory ended the answer. ok is false when
 // nothing went wrong that can be named.
-func (r TestResult) Problem() (cause, scope string, ok bool) {
+func (r *TestResult) Problem() (cause, scope string, ok bool) {
 	switch {
 	case r.Failure != nil:
-		return causeName(*r.Failure), scopeName(r.Failure.Scope), true
+		return r.Failure.Cause.String(), scopeName(r.Failure.Scope), true
 	case r.cause != "":
 		return r.cause, r.scope, true
 	}
@@ -239,6 +241,7 @@ func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 				first := time.Since(sent)
 				r.FirstToken = &first
 			}
+		case protocol.StepProgress, protocol.StepBuffered, protocol.StepData, protocol.StepHeartbeat:
 		case protocol.StepUpstreamDone:
 			if r.FirstToken == nil {
 				r.cause, r.scope, r.failed = "stream_broken", "endpoint", true
@@ -282,39 +285,6 @@ var faultNames = map[protocol.Fault]string{
 // scopeName is a failure's scope in the admin contract's spelling.
 func scopeName(s Scope) string { return ProblemScopes[s] }
 
-// causeName is a failure's cause in the admin contract's spelling. It takes the failure because the cause's type is the
-// adapter's, which callers outside this module cannot name.
-func causeName(f Failure) string {
-	switch f.Cause.(type) {
-	case RateLimited:
-		return "rate_limited"
-	case Overloaded:
-		return "overloaded"
-	case UpstreamError:
-		return "upstream_error"
-	case SupplierBalanceLow:
-		return "supplier_balance_low"
-	case CredentialQuotaExhausted:
-		return "credential_quota_exhausted"
-	case CredentialRejected:
-		return "credential_rejected"
-	case NotPermitted:
-		return "not_permitted"
-	case ContextTooLong:
-		return "context_too_long"
-	case BadRequest:
-		return "bad_request"
-	case ContentRejected:
-		return "content_rejected"
-	case ModelNotFound:
-		return "model_not_found"
-	case Transport:
-		return "transport"
-	default:
-		return "unknown"
-	}
-}
-
 // testCall is the body of a test in the format it tests. The bodies are new-api's channel test
 // (controller/channel-test.go:702-782, commit 7d8b912, 2026-10-22) with two changes: the output is capped in Responses too, which
 // new-api leaves uncapped, and no member asks for reasoning, which only adds to what the cap must cover. The Chat cap is
@@ -330,8 +300,10 @@ func testCall(f protocol.Format, model, prompt string) ([]byte, error) {
 	case protocol.Responses:
 		body = map[string]any{"model": model, "stream": true, "max_output_tokens": testOutput, "input": []any{message}}
 	case protocol.Chat:
-		body = map[string]any{"model": model, "stream": true, "max_tokens": testOutput, "messages": []any{message},
-			"stream_options": map[string]any{"include_usage": true}}
+		body = map[string]any{
+			"model": model, "stream": true, "max_tokens": testOutput, "messages": []any{message},
+			"stream_options": map[string]any{"include_usage": true},
+		}
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrNoFormat, f)
 	}

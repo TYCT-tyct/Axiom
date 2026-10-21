@@ -110,6 +110,14 @@ func TestATestSendsACappedStreamAndBooksWhatItFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkTestGeneration(t, &result)
+	checkTestRequest(t, up.sent())
+	checkTestCostRow(w, result)
+	checkTestAudit(w)
+}
+
+func checkTestGeneration(t *testing.T, result *TestResult) {
+	t.Helper()
 	if got := result.Outcome(); got != TestPassed {
 		t.Errorf("outcome %v, want passed; failure %+v", got, result.Failure)
 	}
@@ -126,8 +134,11 @@ func TestATestSendsACappedStreamAndBooksWhatItFound(t *testing.T) {
 	if got := result.Estimate(); got != "6.15" {
 		t.Errorf("the estimate is %s, want 6.15", got)
 	}
+}
+
+func checkTestRequest(t *testing.T, body string) {
+	t.Helper()
 	// What was asked for: the cap in the format's own member, a stream, and nothing that asks for reasoning.
-	body := up.sent()
 	for _, want := range []string{`"max_tokens":16`, `"stream":true`, `"model":"gpt"`, `"content":"hi"`, `"include_usage":true`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the call's body %s lacks %s", body, want)
@@ -138,6 +149,11 @@ func TestATestSendsACappedStreamAndBooksWhatItFound(t *testing.T) {
 			t.Errorf("the call's body %s asks for %s", body, unwanted)
 		}
 	}
+}
+
+func checkTestCostRow(w *world, result TestResult) {
+	t := w.t
+	t.Helper()
 
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		return RecordTest(ctx, tx, audit.User(uuid.NewV7()), "test the endpoint", result)
@@ -160,6 +176,11 @@ func TestATestSendsACappedStreamAndBooksWhatItFound(t *testing.T) {
 	if usageRow == nil || !strings.Contains(*usageRow, `"items":{"input":3,"output":2}`) {
 		t.Errorf("the row's usage is %v, want the supplier's 3 and 2", usageRow)
 	}
+}
+
+func checkTestAudit(w *world) {
+	t := w.t
+	t.Helper()
 	// The audit entry ties the estimate to the supplier's own key of the charge.
 	entry := w.auditDetail("endpoint.test")
 	for _, want := range []string{`"outcome": "passed"`, `"estimated_native": "6.15"`, `"upstream_request_id": "ref-1"`, `"format": "chat"`, `"native_unit": "quota"`} {

@@ -43,7 +43,7 @@ func TestAdminEndpointGenerationSurvivesDisconnect(t *testing.T) {
 	defer cancel()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- f.do(http.MethodPost, "/suppliers/endpoint-tests", body, as(f.s), idempotent(key), func(r *http.Request) { *r = *r.WithContext(ctx) })
+		done <- f.doContext(ctx, http.MethodPost, "/suppliers/endpoint-tests", body, as(f.s), idempotent(key))
 	}()
 	<-started
 	cancel()

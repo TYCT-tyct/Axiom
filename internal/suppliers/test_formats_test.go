@@ -30,37 +30,42 @@ func TestEndpointGenerationFormats(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			stream, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", c.name, "text", "upstream.sse"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			w := newWorld(t, 1)
-			bodies := make(chan string, 1)
-			up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-				b, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Error(err)
-				}
-				bodies <- string(b)
-				rw.Header().Set("Content-Type", "text/event-stream")
-				_, _ = rw.Write(stream) //nolint:errcheck // a test server
-			}))
-			t.Cleanup(up.Close)
-			w.pointAt(up.URL)
-			w.svc.snap.Load().endpoints[w.endpoint].formats = []protocol.Format{c.format}
-			r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: c.format})
-			up.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if r.Outcome() != TestPassed || !r.Streamed || r.FirstToken == nil || len(r.Usage) == 0 {
-				t.Fatalf("test result: %+v", r)
-			}
-			body := <-bodies
-			if !strings.Contains(body, `"`+c.cap+`":16`) || !strings.Contains(body, `"stream":true`) {
-				t.Errorf("uncapped or unstreamed request: %s", body)
-			}
+			testGenerationFormat(t, c.format, c.name, c.cap)
 		})
+	}
+}
+
+func testGenerationFormat(t *testing.T, format protocol.Format, name, cap string) {
+	t.Helper()
+	stream, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", name, "text", "upstream.sse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newWorld(t, 1)
+	bodies := make(chan string, 1)
+	up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		bodies <- string(b)
+		rw.Header().Set("Content-Type", "text/event-stream")
+		_, _ = rw.Write(stream) //nolint:errcheck // a test server
+	}))
+	t.Cleanup(up.Close)
+	w.pointAt(up.URL)
+	w.svc.snap.Load().endpoints[w.endpoint].formats = []protocol.Format{format}
+	r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: format})
+	up.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome() != TestPassed || !r.Streamed || r.FirstToken == nil || len(r.Usage) == 0 {
+		t.Fatalf("test result: %+v", r)
+	}
+	body := <-bodies
+	if !strings.Contains(body, `"`+cap+`":16`) || !strings.Contains(body, `"stream":true`) {
+		t.Errorf("uncapped or unstreamed request: %s", body)
 	}
 }
 
@@ -159,5 +164,41 @@ func TestEndpointEmptyAnswerFails(t *testing.T) {
 	}
 	if r.Outcome() != TestFailed || r.FirstToken != nil {
 		t.Errorf("an empty answer passed: %+v", r)
+	}
+}
+
+func TestEndpointFailureOutcomes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		failure Failure
+		want    TestOutcome
+	}{
+		{"upstream", Failure{Scope: ScopeEndpoint, Cause: UpstreamError{Status: 500}}, TestFailed},
+		{"overloaded", Failure{Scope: ScopeEndpoint, Cause: Overloaded{}}, TestFailed},
+		{"missing model", Failure{Scope: ScopeEndpoint, Cause: ModelNotFound{}}, TestFailed},
+		{"transport", Failure{Scope: ScopeEndpoint, Cause: Transport{}}, TestFailed},
+		{"unknown server", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 503}}, TestFailed},
+		{"unknown request", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 413}}, TestInconclusive},
+		{"suspected block", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 503, SuspectedEgressBlock: true}}, TestInconclusive},
+		{"egress", Failure{Scope: ScopeEgress, Cause: Transport{}}, TestInconclusive},
+		{"rate limit", Failure{Scope: ScopeEndpoint, Cause: RateLimited{}}, TestInconclusive},
+		{"context", Failure{Scope: ScopeEndpoint, Cause: ContextTooLong{}}, TestInconclusive},
+		{"request", Failure{Scope: ScopeRequest, Cause: BadRequest{}}, TestInconclusive},
+		{"moderation", Failure{Scope: ScopeEndpoint, Cause: ContentRejected{}}, TestInconclusive},
+		{"permission", Failure{Scope: ScopeGroup, Cause: NotPermitted{}}, TestInconclusive},
+		{"key", Failure{Scope: ScopeCredential, Cause: CredentialRejected{}}, TestInconclusive},
+		{"quota", Failure{Scope: ScopeCredential, Cause: CredentialQuotaExhausted{}}, TestInconclusive},
+		{"balance", Failure{Scope: ScopeSupplier, Cause: SupplierBalanceLow{}}, TestInconclusive},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := TestResult{Failure: &c.failure}
+			if r.Outcome() != c.want {
+				t.Errorf("outcome %v, want %v", r.Outcome(), c.want)
+			}
+			if cause, _, ok := r.Problem(); !ok || cause == "" {
+				t.Errorf("failure has no cause: %+v", r)
+			}
+		})
 	}
 }

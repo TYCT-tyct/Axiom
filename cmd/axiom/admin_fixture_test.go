@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -123,7 +124,12 @@ func (f adminFixture) run(statements ...string) {
 // carries the admin's Origin.
 func (f adminFixture) do(method, path, body string, mods ...mod) *httptest.ResponseRecorder {
 	f.t.Helper()
-	r := httptest.NewRequestWithContext(f.t.Context(), method, "https://"+adminHost+adminBase+path, strings.NewReader(body))
+	return f.doContext(f.t.Context(), method, path, body, mods...)
+}
+
+func (f adminFixture) doContext(ctx context.Context, method, path, body string, mods ...mod) *httptest.ResponseRecorder {
+	f.t.Helper()
+	r := httptest.NewRequestWithContext(ctx, method, "https://"+adminHost+adminBase+path, strings.NewReader(body))
 	r.RemoteAddr = "192.0.2.1:4000"
 	if method != http.MethodGet {
 		r.Header.Set("Origin", adminOrigin)
