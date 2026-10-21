@@ -82,7 +82,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 	if c.rate > h.Limits.cfg.KeyRate {
 		return errKeyRate
 	}
-	plan, wait, err := h.Router.Plan(routing.Input{
+	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; generation can use the protocol conversions.
 		NativeOnly: c.Compact,

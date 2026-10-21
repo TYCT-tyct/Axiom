@@ -65,12 +65,14 @@ type rig struct {
 	server   *httptest.Server
 
 	cfg       Config
-	alpha     catalog.ModelID             // acme/alpha, served by two endpoints
-	beta      catalog.ModelID             // acme/beta, served by one
-	bare      catalog.ModelID             // anthropic/claude-test, listed with its maker's name too, and no endpoint
-	claude    catalog.ModelID             // anthropic/claude-live, listed with its maker's name too, served by one
-	endpoints map[string]routing.Endpoint // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
-	suppliers *suppliers.Service          // the real module, in a rig that has its tables
+	alpha     catalog.ModelID                  // acme/alpha, served by two endpoints
+	beta      catalog.ModelID                  // acme/beta, served by one
+	bare      catalog.ModelID                  // anthropic/claude-test, listed with its maker's name too, and no endpoint
+	claude    catalog.ModelID                  // anthropic/claude-live, listed with its maker's name too, served by one
+	endpoints map[string]routing.Endpoint      // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
+	sold      map[catalog.ModelID]billing.Sold // the sale prices the OpenRouter list shows, by model
+	models    *ModelList                       // the list in OpenRouter's shape, published as a build would publish it
+	suppliers *suppliers.Service               // the real module, in a rig that has its tables
 
 	mu         sync.Mutex
 	admits     []*Call
@@ -78,6 +80,30 @@ type rig struct {
 	settled    int
 	exec       *Executor       // when set, Run is its Run
 	clientGone <-chan struct{} // closed when the server sees the client of the latest call that reached Run go
+}
+
+// publish builds the model list in OpenRouter's shape the way a route build does — from the catalog snapshot, the sale
+// prices and the models the routing snapshot serves — and stores it where the handler reads it. The rig calls it wherever
+// it changes a route, a model or a price, as a build would.
+func (r *rig) publish() {
+	r.t.Helper()
+	snap, err := r.catalog.Current()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	served := make(map[catalog.ModelID]struct{})
+	for m := range snap.Models() {
+		if r.router != nil && r.router.Serves(m.ID) {
+			served[m.ID] = struct{}{}
+		}
+	}
+	l, err := newOpenRouterListing(snap, r.prices(), served)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.models.mu.Lock()
+	r.models.last = l
+	r.models.mu.Unlock()
 }
 
 type rigOptions struct {
@@ -110,7 +136,10 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 			f(&o)
 		}
 	}
-	r := &rig{t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}}
+	r := &rig{
+		t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}, sold: map[catalog.ModelID]billing.Sold{},
+		models: NewModelList(),
+	}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.
 	r.cfg.AdmissionBudget, r.cfg.KeyLookup = 30*time.Second, 30*time.Second
@@ -155,7 +184,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	r.memory = protocol.NewMemory(o.memory)
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
-		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Proxies: o.proxies, KV: o.cache,
+		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
 	}); err != nil {
 		t.Fatal(err)
 	}
