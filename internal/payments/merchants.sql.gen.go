@@ -290,7 +290,7 @@ func (q *Queries) MerchantConfigs(ctx context.Context, db DBTX, merchants []uuid
 }
 
 const offers = `-- name: Offers :many
-SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev
+SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev, m.ttl_seconds
 FROM payments.merchant_methods x JOIN payments.merchants m ON m.id = x.merchant_id
 WHERE x.site_id = $1 AND x.enabled AND m.enabled AND ($2::text IS NULL OR x.method = $2)
 ORDER BY x.method, m.sort, m.id
@@ -312,9 +312,10 @@ type OffersRow struct {
 	Currency   string
 	Sort       int32
 	Rev        int64
+	TtlSeconds int32
 }
 
-// The enabled merchant methods of a site, with what quoting and choosing need of their merchant.
+// The enabled merchant methods of a site, with what quoting, choosing and ordering need of their merchant.
 func (q *Queries) Offers(ctx context.Context, db DBTX, arg OffersParams) ([]OffersRow, error) {
 	rows, err := db.Query(ctx, offers, arg.SiteID, arg.Method)
 	if err != nil {
@@ -335,6 +336,7 @@ func (q *Queries) Offers(ctx context.Context, db DBTX, arg OffersParams) ([]Offe
 			&i.Currency,
 			&i.Sort,
 			&i.Rev,
+			&i.TtlSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -482,7 +484,7 @@ func (q *Queries) SaveMethod(ctx context.Context, db DBTX, arg SaveMethodParams)
 }
 
 const siteSettings = `-- name: SiteSettings :many
-SELECT site_id, open, credits_min, credits_max, strategy FROM payments.settings WHERE site_id = $1
+SELECT site_id, open, credits_min, credits_max, strategy, pending_limit, cancel_limit, cancel_window_seconds, daily_credits, first_credits FROM payments.settings WHERE site_id = $1
 `
 
 func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) ([]PaymentsSetting, error) {
@@ -500,6 +502,11 @@ func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) (
 			&i.CreditsMin,
 			&i.CreditsMax,
 			&i.Strategy,
+			&i.PendingLimit,
+			&i.CancelLimit,
+			&i.CancelWindowSeconds,
+			&i.DailyCredits,
+			&i.FirstCredits,
 		); err != nil {
 			return nil, err
 		}

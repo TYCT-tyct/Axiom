@@ -233,8 +233,8 @@ func (p *Payments) ranked(m menu, method string, offers []OffersRow, usage []Usa
 // last of the quota goes only to the orders it fits; a candidate that no longer fits gives way to the next. The
 // transaction's lock and statement timeouts bound the wait (README.md「事务与任务」).
 func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, credits int64) (candidate, error) {
-	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'"); err != nil {
-		return candidate{}, fmt.Errorf("payments: bound the order's waits: %w", err)
+	if err := boundOrderTx(ctx, tx); err != nil {
+		return candidate{}, err
 	}
 	offers := slices.DeleteFunc(slices.Clone(m.offers), func(o OffersRow) bool { return o.Method != string(method) })
 	usage, err := usageOf(ctx, tx, offers)

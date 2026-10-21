@@ -144,6 +144,9 @@ sql:
         omit_unused_structs: true
         overrides:
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
+          # An exchange rate's terms are exact fractions, wider than int64: they cross as their decimal text.
+          - {db_type: "pg_catalog.numeric", go_type: string}
           - {db_type: timestamptz, go_type: {import: time, type: Time}}
           - {db_type: "pg_catalog.int8", go_type: int64}
           - {db_type: "pg_catalog.int8", nullable: true, go_type: {type: int64, pointer: true}}
