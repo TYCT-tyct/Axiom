@@ -206,6 +206,11 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 }
 
 func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
+	if raceDetector() {
+		// The race build randomly discards sync.Pool entries, including the JSON
+		// decoder's buffers. This bounds production memory, measured without -race.
+		t.Skip("production allocation bound; run without the race detector")
+	}
 	for _, c := range []struct {
 		name, members string
 		f             protocol.Format
