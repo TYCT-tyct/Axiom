@@ -60,10 +60,10 @@
 
 依据 Claude Code 官方的网关兼容指南（Claude Code《Gateway compatibility guide》，2026-10）：
 
-- **请求头按白名单转发**：
-  - 协议需要的头原样转发，例如 `anthropic-beta`、`anthropic-version`。`anthropic-beta` 不筛选具体的值，因为 Claude Code 每个版本发的值都不同，筛选会让长上下文、交替思考等功能悄悄失效或直接报 400；
-  - 客户端的 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title` 一律不转发。其中有用的信息由我们自己记录。
-- **会话和用户标识换成派生值**：`prompt_cache_key`、Anthropic 的 `metadata.user_id` 和会话请求头，替换成用账户密钥派生的不透明标识再转发（见[路由的「会话粘性」](routing.md#会话粘性)），这样上游的缓存仍然有效；`user`、`safety_identifier` 换成哈希值，不把终端用户标识原样发往上游。`session_id` 是 OpenRouter 的路由参数，三种官方格式都没有它，用过后与其他路由参数一样删除。
+- **请求头按目标协议的白名单转发**（`internal/gateway/headers.go` 是唯一的一处表）：
+  - 协议需要的头原样转发，例如 Anthropic 的 `anthropic-beta`、`anthropic-version`，Responses 端点的 `x-codex-turn-state`。`anthropic-beta` 不筛选具体的值，因为 Claude Code 每个版本发的值都不同，筛选会让长上下文、交替思考等功能悄悄失效或直接报 400；
+  - 会话请求头（`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`）发给 Responses 和 Chat 端点（两者都是 OpenAI 的方言，中转站按这些名字定账号），不发给 Messages 端点，值是下面那一条的派生值，中转站据此把两轮对话固定到同一个账号；客户端的 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`User-Agent` 一律不转发，其中有用的信息由我们自己记录。
+- **会话和用户标识换成派生值**：`prompt_cache_key`、Anthropic 的 `metadata.user_id` 和上面的会话请求头，替换成用账户密钥派生的不透明标识再转发（见[路由的「会话粘性」](routing.md#会话粘性)），这样上游的缓存仍然有效。`metadata.user_id` 写成 JSON 字符串，内容是 `{"device_id":"…","account_uuid":"","session_id":"…"}`：`device_id` 每个账户固定，`session_id` 与同值的会话请求头是同一个派生，中转站从中取出会话固定账号（格式见 `internal/protocol/README.md` 的「同格式改写」）；`account_uuid` 留空，中转站接受空值，我们也不把账户标识交给上游。空串或纯空白的 `metadata.user_id`（含 Chat `user` 转换）写为空串，不生成会话结构，让中转站按内容回退。`user`、`safety_identifier` 换成哈希值，不把终端用户标识原样发往上游。`session_id` 作为路由参数用过之后与其他路由参数一样删除；请求头里的那个不是路由参数，它是客户端自己的会话名。
 - **上游一律流式调用**：生成请求都以流式调用上游，路由只保留能流式的端点；客户端要的是非流式也由网关聚合后一次返回，这样计费进度看得见（见[计费的「预留与结算」](billing.md#预留与结算)）。非流式的回答在返回之前没有"已转发内容"这一刻，所以中途失败仍可换端点，各次尝试的内容互不混入。`/responses/compact` 例外：上游不流式，回复原样透传，请求只改必须改的成员，一次预留足。
 - **跨格式**：Chat 客户端调用说 Chat 的端点（DeepSeek、Qwen 等 OpenAI 兼容的模型，同格式转发），也调用 Messages、Responses 端点（转换）；端点同时说 Chat 和别的格式时走 Chat，因为转发不改变含义，而转换会拒绝表达不了的成员。Messages、Responses 客户端只走原格式的端点，还不能调用只说 Chat 的端点（路由答 `format_not_served`）。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
 - **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。Chat 请求里模型方言的成员（`reasoning`、`reasoning_effort`、`cache_control`、助手消息里回传的 `reasoning_content`、图片部件）也照客户端写的发给端点，由端点按它自己的方言处理；按模型规格把推理参数换成端点认的写法，现在没有，待定。
@@ -75,7 +75,7 @@
 - **Claude Code 的提示信息**（会话 ID、请求类别、"上下文已压缩"标记）用于会话粘性和路由，见[路由](routing.md)。
 - **事件流带 `X-Accel-Buffering: no`**：前面有 nginx 时，它据此不缓冲，事件才能及时到达客户端；new-api 的每个流都带这个头（new-api 源码 `relay/helper/common.go`，2026-10-18）。
 - **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
-- **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除。
+- **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
 - **自己回显**：响应里的 `id` 用我们的调用编号，`model` 回显客户端请求的名字。
 
 ### 用量与费用
