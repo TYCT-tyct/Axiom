@@ -248,8 +248,9 @@ func (a *attempt) close(ctx context.Context) {
 	a.unhook()
 	a.cancel(nil)
 	a.release()
-	a.result(a.conn.Done())
+	receipt := a.conn.Done()
 	a.s.x.Router.End(a.entry.Endpoint)
+	a.result(receipt)
 	a.observe(ctx)
 }
 
