@@ -38,6 +38,8 @@ const (
 	aclPath = "/etc/valkey/users.acl"
 	// startTimeout covers a first pull of the image.
 	startTimeout = 2 * time.Minute
+	// wideAccess keeps tests of server replies independent of the production latency budget.
+	wideAccess = time.Minute
 )
 
 // Server is a Valkey a test may use: the settings kv.Open takes, and the password file a deployment reads.
@@ -182,6 +184,15 @@ func Namespace() string {
 	return hex.EncodeToString(raw[:])
 }
 
+// Deps applies the test deadline unless the test sets one. Tests that call kv.Open directly to inspect startup errors
+// use it too; otherwise they inherit the production latency budget even when they only test the server's reply.
+func Deps(deps kv.Deps) kv.Deps {
+	if deps.AccessTimeout == 0 {
+		deps.AccessTimeout = wideAccess
+	}
+	return deps
+}
+
 // Config is this server's settings under namespace: the three variables' values as serve would hold them.
 func (s *Server) Config(namespace string) kv.Config {
 	return kv.Config{URL: s.URL, PasswordFile: s.PasswordFile, Nodes: 1, Namespace: namespace}
@@ -193,15 +204,10 @@ func (s *Server) Open(t testing.TB, deps kv.Deps) *kv.Client {
 	return s.OpenIn(t, Namespace(), deps)
 }
 
-// OpenIn is Open in the given namespace: two clients of one namespace are two nodes of one deployment. The client's
-// access deadline is a minute unless the test sets one: a test of what the server answers must not be decided by how busy
-// the machine is, and the tests of the deadline itself set kv.Timeout.
+// OpenIn is Open in the given namespace: two clients of one namespace are two nodes of one deployment.
 func (s *Server) OpenIn(t testing.TB, namespace string, deps kv.Deps) *kv.Client {
 	t.Helper()
-	if deps.AccessTimeout == 0 {
-		deps.AccessTimeout = time.Minute
-	}
-	client, err := kv.Open(t.Context(), s.Config(namespace), deps)
+	client, err := kv.Open(t.Context(), s.Config(namespace), Deps(deps))
 	if err != nil {
 		t.Fatalf("open valkey: %v", err)
 	}
