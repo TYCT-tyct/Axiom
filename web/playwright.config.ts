@@ -20,7 +20,7 @@ const address = (url: string) => `localhost:${new URL(url).port}`;
 // 8 workers took 1.3 to 1.4 s and 4.8 s, with every check passing and the whole run no slower (95 to 110 s against
 // 85 to 127 s).
 // In the CI container, Node counts its eight-core quota; keep the half-capacity reserve for the browser and harness.
-// Filling that quota with eight workers throttled 71% of CPU periods and made five of 531 checks time out (#363).
+// With eight workers in that quota, 71% of CPU periods were throttled and five of 531 checks timed out (#363).
 const workers = Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)));
 
 export default defineConfig({
