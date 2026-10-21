@@ -120,13 +120,17 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
-// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// Chat and Messages/Responses requests convert in either direction (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		u.Body, err = rewrite(r.Format, body, t, w)
+		return u, err
+	}
+	if t.Format == Chat && !t.Compact && (r.Format == Messages || r.Format == Responses) {
+		u.Body, err = requestToChat(r.Format, body, t, w)
 		return u, err
 	}
 	if r.Format != Chat {
@@ -154,35 +158,6 @@ func usageContext(r *Request) UsageContext {
 	return u
 }
 
-// rewrite is Prepare for an endpoint of the request's format.
-func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	rules := rulesFor(f, t)
-	if rules.members == nil {
-		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
-	}
-	w = w.withDefaults()
-	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
-	}
-	if err := p.top(rules); err != nil {
-		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
-	}
-	return p.out, nil
-}
-
-// rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
-func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
-	w = w.withDefaults()
-	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
-	for _, item := range w.History {
-		size += len(item) + 1
-	}
-	return size
-}
-
 // What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
 // reads them into structures, one for every object or null in an array of them and, in an object whose members it does
 // not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
@@ -206,13 +181,25 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
+		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
+		if r.Format == Responses {
+			cost += replayHistoryCost(w.History)
+		}
+		return cost
 	}
-	if r.Format != Chat {
-		return 0 // Prepare refuses at once: nothing is converted from another format
+	if r.Format != Chat && t.Format != Chat {
+		return 0
 	}
 	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
-	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	if t.Format == Chat {
+		cost := nativeRequestCost(body)
+		for _, item := range w.History {
+			cost += nativeRequestCost(item)
+		}
+		return cost + int64(quoted(len(t.Model))+3*quoted(w.withDefaults().IdentityLen))
+	}
+	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	return cost
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
@@ -339,6 +326,8 @@ type rewriter struct {
 	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
+	replayAssistant, replayEmpty          bool
+	replayMeta                            *aggBase
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }

@@ -242,7 +242,7 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full, nil},
 		{"no endpoint can express it", options{entries: 2, mutate: func(c *Call) {
 			for i := range c.Plan.Entries {
-				c.Plan.Entries[i].Target.Format = protocol.Chat // a Messages request is not converted to Chat
+				c.Plan.Entries[i].Target.Format = protocol.Responses // Messages is not converted to Responses
 			}
 		}}, 400, "", routing.FormatNotServed, nil},
 	}
@@ -288,7 +288,7 @@ func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
 
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Chat }})
+		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Responses }})
 		h.run()
 		if h.w.status != 429 { // a credential may be free in a second; the other entry will not ever do
 			t.Errorf("status %d\n%s", h.w.status, h.w.body())
