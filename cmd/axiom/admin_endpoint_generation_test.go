@@ -95,6 +95,8 @@ func (f supplierFixture) seedTestEndpoint(origin string) string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	// Match the call-path fixture: only this test database accepts the fake supplier's plain HTTP origin.
+	f.run("ALTER TABLE suppliers.suppliers DROP CONSTRAINT suppliers_origin_check")
 	f.run(fmt.Sprintf(`UPDATE suppliers.suppliers SET origin = '%s', status = 'active', balance_native = 100 WHERE id = '%s'`, origin, supplier))
 	f.run(fmt.Sprintf(`INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ('%s', 1, 'test', 'seed')`, supplier))
 	if err := f.upstreams.Reload(f.t.Context()); err != nil {

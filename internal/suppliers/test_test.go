@@ -378,3 +378,18 @@ func TestATestIsNotAnAttemptWaitingForItsCharge(t *testing.T) {
 		t.Errorf("the attempts waiting for a charge are %+v, want only the call's", report.Unmatched)
 	}
 }
+
+func TestATestIgnoresAnAlreadyCancelledCaller(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.pointAt(newTestUpstream(t, answersWhole).URL)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	result, err := w.svc.TestEndpoint(ctx, TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome() != TestPassed || !result.Streamed {
+		t.Errorf("the caller's cancellation reached the paid generation: %+v", result)
+	}
+}
