@@ -68,7 +68,7 @@ func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 		for range 10 {
 			start(admitFunds(ctx, bp.Funds, "hot")).mustWait(t)
 		}
-		for range cfg.PoolSize - cfg.PoolReserve - 1 { // the admission share, less the settlement's connection
+		for range cfg.PoolSize - cfg.PoolReserve {
 			mustAcquire(t, acquire(ctx, bp.Pool, Admission))
 		}
 	})

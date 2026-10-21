@@ -22,6 +22,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/client"
+	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -204,8 +205,15 @@ func (a *Admin) Connect(ctx context.Context, tx pg.Tx, actor audit.Actor, r Conn
 }
 
 // ReplaceLogin seals a new login in place of the old one and has the sync log in with it: the supplier is `connecting`
-// again. The address and the account do not change. The audit entry names the actor and the reason, never the login.
+// again, and the state the old login left behind — a supplier it stopped, a task it halted — is put back to work
+// (persist.Wake). The address and the account do not change. The audit entry names the actor and the reason, never the
+// login.
 func (a *Admin) ReplaceLogin(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, c Credentials, reason string) (Supplier, error) {
+	// The state is woken first, so that its row is taken before the supplier's, the order every writer of the two takes
+	// them in (persist.Wake). A change refused below rolls the wake back with the rest.
+	if err := persist.Wake(ctx, tx, id, a.now()); err != nil {
+		return Supplier{}, fmt.Errorf("wake the sync: %w", err)
+	}
 	row, err := a.locked(ctx, tx, id)
 	if err != nil {
 		return Supplier{}, err
