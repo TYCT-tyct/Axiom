@@ -81,9 +81,31 @@ func replayCandidate(f Format, body []byte) bool {
 		return true
 	}
 	if f == Messages {
-		return bytes.Contains(body, []byte("thinking"))
+		return containsThinkingBlock(body)
 	}
 	return containsGeneratedID(body)
+}
+
+// A thinking setting or a word in a prompt is not a content block and needs no replay buffer.
+func containsThinkingBlock(body []byte) bool {
+	const value = `"thinking"`
+	for from := 0; from < len(body); {
+		next := bytes.Index(body[from:], []byte(value))
+		if next < 0 {
+			return false
+		}
+		at := from + next
+		from = at + len(value)
+		before := bytes.TrimRight(body[:at], " \t\r\n")
+		if len(before) == 0 || before[len(before)-1] != ':' {
+			continue
+		}
+		before = bytes.TrimRight(before[:len(before)-1], " \t\r\n")
+		if bytes.HasSuffix(before, []byte(`"type"`)) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsGeneratedID(body []byte) bool {

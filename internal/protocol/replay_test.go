@@ -30,6 +30,19 @@ func TestUnsignedThinkingReplaysToNativeMessages(t *testing.T) {
 	}
 }
 
+func TestNativeThinkingSettingNeedsNoReplayBuffer(t *testing.T) {
+	body := []byte(`{"model":"m","system":"Explain your thinking","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"Go"}]}`)
+	r := inspected(t, protocol.Messages, body)
+	target, w := protocol.Target{Format: protocol.Messages, Model: "m"}, protocol.Rewrites{Identity: derive}
+	up, err := protocol.Prepare(&r, body, target, w)
+	if err != nil || !bytes.Equal(up.Body, body) {
+		t.Fatalf("ordinary thinking request changed: %v\n%s", err, up.Body)
+	}
+	if cost := protocol.PrepareCost(&r, body, target, w); cost != int64(cap(up.Body)+3*len(body)) {
+		t.Fatalf("ordinary thinking request reserves a cleanup buffer: %d", cost)
+	}
+}
+
 func TestConvertedResponsesIDsAreRemovedFromNativeReplay(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		body := []byte(`{"model":"m","input":[{"type":"message","id":"` + convertedCallID + `_0","role":"assistant","content":"answer"},{"type":"function_call","id":"` + convertedCallID + `_1","call_id":"c1","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":"ok"},{"type":"reasoning","id":"rs_native","encrypted_content":"opaque","summary":[]},{"role":"user","content":"next"}]}`)
