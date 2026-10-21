@@ -18,8 +18,10 @@ import (
 
 func TestAttemptCountsOncePerFamily(t *testing.T) {
 	body := []byte(`{"model":"m","input":"` + strings.Repeat("今天天气很好。", 1000) + `"}`)
-	s := session{c: &Call{Body: body, Request: protocol.Request{TextBytes: int64(len(body))}},
-		logger: slog.New(slog.DiscardHandler)}
+	s := session{
+		c:      &Call{Body: body, Request: protocol.Request{TextBytes: int64(len(body))}},
+		logger: slog.New(slog.DiscardHandler),
+	}
 	a := attempt{s: &s}
 	a.entry.Target.Model = "gpt-4o"
 	a.entry.Limits.ContextLength = 100
@@ -143,15 +145,14 @@ func (c observingCosts) Credits(r suppliers.AttemptReceipt, u []catalog.Usage, c
 func BenchmarkInputTextEstimate(b *testing.B) {
 	billing.WarmTokenizers()
 	for _, size := range []int{1024, maxCountBytes, 1 << 20} {
-		for _, corpus := range []string{"English words with spaces. ", "a"} {
-			name := "english"
-			if corpus == "a" {
-				name = "unbroken"
-			}
-			text := strings.Repeat(corpus, size/len(corpus)+1)[:size]
+		for _, corpus := range []struct{ name, text string }{
+			{"english", "English words with spaces. "},
+			{"unbroken", "a"},
+		} {
+			text := strings.Repeat(corpus.text, size/len(corpus.text)+1)[:size]
 			body := []byte(`{"input":"` + text + `"}`)
 			d := billing.Demand{TextBytes: int64(len(body))}
-			b.Run(name+"/"+strconv.Itoa(size/1024)+"KiB", func(b *testing.B) {
+			b.Run(corpus.name+"/"+strconv.Itoa(size/1024)+"KiB", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(size))
 				for b.Loop() {

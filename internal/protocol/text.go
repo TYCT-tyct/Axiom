@@ -16,7 +16,7 @@ var errTextFull = errors.New("input text counter is full")
 // at most byteLimit raw string bytes; remaining ordinary string bytes are returned for the four-byte fallback.
 // The callback borrows a reused buffer and can stop the walk. Numbers and JSON framing are not model text.
 func Text(body []byte, byteLimit int, text func([]byte) bool) (int64, error) {
-	s := textReader{reader: reader{dec: jsontext.NewDecoder(bytes.NewBuffer(body))}, left: byteLimit, text: text}
+	s := textReader{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), left: byteLimit, text: text}
 	err := s.value()
 	if errors.Is(err, errTextFull) {
 		return 0, nil
@@ -43,14 +43,18 @@ type textReader struct {
 
 func (s *textReader) value() error {
 	switch s.dec.PeekKind() {
-	case '{':
+	case jsontext.KindBeginObject:
 		return s.eachMember(s.memberValue)
-	case '[':
+	case jsontext.KindBeginArray:
 		return s.eachElement(s.value)
-	case '"':
+	case jsontext.KindString:
 		return s.stringValue()
+	case jsontext.KindInvalid, jsontext.KindNull, jsontext.KindFalse, jsontext.KindTrue, jsontext.KindNumber,
+		jsontext.KindEndObject, jsontext.KindEndArray:
+		return s.token()
+	default:
+		panic("protocol: unknown JSON kind")
 	}
-	return s.token()
 }
 
 func (s *textReader) memberValue() error {
