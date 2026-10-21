@@ -140,16 +140,28 @@ func startQueue(t *testing.T, q *pg.Queue) {
 // TestTheSyncRoundRunsOnTheSyncsQueue: registered on a queue, a round runs when the queue starts, without anyone asking,
 // on the syncs queue, and records itself.
 func TestTheSyncRoundRunsOnTheSyncsQueue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failing bool
+	}{{"healthy", false}, {"unavailable", true}} {
+		t.Run(tc.name, func(t *testing.T) { runSyncQueueTest(t, tc.failing) })
+	}
+}
+
+func runSyncQueueTest(t *testing.T, failing bool) {
+	t.Helper()
 	logs := &logBuffer{}
 	s := newStore(t)
 	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
 	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
 	ran := make(chan struct{})
+	var ranOnce sync.Once
+	d.failing.Store(failing)
 	q := s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil)
 	if err := catalog.RegisterSync(catalog.SyncJobConfig{
 		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.logger(),
 		Clock: func() time.Time {
-			close(ran)
+			ranOnce.Do(func() { close(ran) })
 			return now
 		},
 	}); err != nil {
@@ -173,11 +185,18 @@ func TestTheSyncRoundRunsOnTheSyncsQueue(t *testing.T) {
 	if queue := query[string](s, platformScope, "SELECT queue FROM river.river_job WHERE kind = 'catalog.sync'"); queue != "syncs" {
 		t.Errorf("the round ran on queue %q, want syncs", queue)
 	}
-	if got, want := s.record(), "2025-11-01T03:00:00Z|never|0|0"; got != want {
-		t.Errorf("the record after one healthy round is %s, want %s", got, want)
+	if attempts := query[int](s, platformScope, "SELECT max_attempts FROM river.river_job WHERE kind = 'catalog.sync'"); attempts != 1 {
+		t.Errorf("max attempts: %d, want 1", attempts)
+	}
+	want := "2025-11-01T03:00:00Z|never|0|0"
+	if failing {
+		want = "never|2025-11-01T03:00:00Z|1|0"
+	}
+	if got := s.record(); got != want {
+		t.Errorf("the round record is %s, want %s", got, want)
 	}
 	if strings.Contains(logs.String(), "catalog.sync.overdue") {
-		t.Errorf("a healthy round alerted:\n%s", logs.String())
+		t.Errorf("a fresh round alerted:\n%s", logs.String())
 	}
 }
 
@@ -195,14 +214,14 @@ func TestTheSyncRecordsEachRound(t *testing.T) {
 		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: slog.New(slog.DiscardHandler),
 		Clock: func() time.Time { return now },
 	}
-	round := func(wantErr bool) {
+	round := func() {
 		t.Helper()
-		if err := catalog.RunSyncRound(t.Context(), cfg); (err != nil) != wantErr {
-			t.Fatalf("round: %v, want error %t", err, wantErr)
+		if err := catalog.RunSyncRound(t.Context(), cfg); err != nil {
+			t.Fatalf("record round: %v", err)
 		}
 	}
 	// A round that changes nothing is a success, and the change above the limit waits for a person.
-	round(false)
+	round()
 	if got, want := s.record(), "2025-11-01T03:00:00Z|never|0|1"; got != want {
 		t.Fatalf("the record of a healthy round is %s, want %s", got, want)
 	}
@@ -212,20 +231,20 @@ func TestTheSyncRecordsEachRound(t *testing.T) {
 	// A failed round keeps the last success and the pending count, and remembers when the streak began.
 	now = now.Add(25 * time.Hour)
 	d.failing.Store(true)
-	round(true)
+	round()
 	if got, want := s.record(), "2025-11-01T03:00:00Z|2025-11-02T04:00:00Z|1|1"; got != want {
 		t.Fatalf("the record after one failed round is %s, want %s", got, want)
 	}
-	// A second failure extends the streak without moving its start, so the alert measures the outage, not the retry.
+	// A second failure extends the streak without moving its start, so the alert measures the outage, not the next attempt.
 	now = now.Add(time.Hour)
-	round(true)
+	round()
 	if got, want := s.record(), "2025-11-01T03:00:00Z|2025-11-02T04:00:00Z|2|1"; got != want {
 		t.Fatalf("the record after two failed rounds is %s, want %s", got, want)
 	}
 	// A success clears the streak and moves the last success.
 	d.failing.Store(false)
 	now = now.Add(time.Hour)
-	round(false)
+	round()
 	if got, want := s.record(), "2025-11-02T06:00:00Z|never|0|1"; got != want {
 		t.Fatalf("the record after a success is %s, want %s", got, want)
 	}
@@ -247,26 +266,26 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.logger(),
 		Meter: tel.Metrics.Meter("axiom/catalog"), Clock: func() time.Time { return now },
 	}
-	round := func(wantErr bool) {
+	round := func() {
 		t.Helper()
-		if err := catalog.RunSyncRound(t.Context(), cfg); (err != nil) != wantErr {
-			t.Fatalf("round: %v, want error %t", err, wantErr)
+		if err := catalog.RunSyncRound(t.Context(), cfg); err != nil {
+			t.Fatalf("record round: %v", err)
 		}
 	}
-	round(false)
+	round()
 	now = now.Add(25 * time.Hour)
 	d.failing.Store(true)
-	round(true)
+	round()
 	if strings.Contains(logs.String(), "catalog.sync.overdue") {
 		t.Fatalf("one day of failure alerted:\n%s", logs.String())
 	}
 	now = now.Add(23 * time.Hour)
-	round(true)
+	round()
 	if strings.Contains(logs.String(), "catalog.sync.overdue") {
 		t.Fatalf("a round exactly at the threshold alerted:\n%s", logs.String())
 	}
 	now = now.Add(time.Hour)
-	round(true)
+	round()
 	for _, want := range []string{"level=ERROR", "catalog.sync.overdue", "failures=3", "pending=0"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the alert lacks %q:\n%s", want, logs.String())
@@ -277,7 +296,7 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 	}
 	d.failing.Store(false)
 	now = now.Add(time.Minute)
-	round(false)
+	round()
 	if got := scrape(t, tel, "axiom_catalog_sync_overdue_total"); got != "1" {
 		t.Errorf("the counter reads %s after a success, want 1", got)
 	}
@@ -301,8 +320,8 @@ func TestTheSyncAlertsWhenItNeverSucceeded(t *testing.T) {
 	}
 	round := func() {
 		t.Helper()
-		if err := catalog.RunSyncRound(t.Context(), cfg); err == nil {
-			t.Fatal("the round succeeded, want an error: both datasets are down")
+		if err := catalog.RunSyncRound(t.Context(), cfg); err != nil {
+			t.Fatalf("record failed round: %v", err)
 		}
 	}
 	round()

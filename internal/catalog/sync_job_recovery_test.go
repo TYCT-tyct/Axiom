@@ -2,7 +2,6 @@ package catalog_test
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -21,8 +20,8 @@ func TestTheSyncRecordsACancelledRound(t *testing.T) {
 		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: slog.New(slog.DiscardHandler),
 		Clock: func() time.Time { return now },
 	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("round: %v, want context cancellation", err)
+	if err != nil {
+		t.Fatalf("record cancelled round: %v", err)
 	}
 	if got, want := s.record(), "never|2025-11-01T03:00:00Z|1|0"; got != want {
 		t.Fatalf("cancelled round record: %s, want %s", got, want)
@@ -37,35 +36,35 @@ func TestTheSyncRecoversAfterAPartialRound(t *testing.T) {
 	cfg := catalog.SyncJobConfig{
 		DB: s.db, Scope: platformScope, Logger: slog.New(slog.DiscardHandler), Clock: func() time.Time { return now },
 	}
-	round := func(d *datasets, wantErr bool, want string) {
+	round := func(d *datasets, want string) {
 		t.Helper()
 		cfg.Fetcher = d.fetcher(t)
-		if err := catalog.RunSyncRound(t.Context(), cfg); (err != nil) != wantErr {
-			t.Fatalf("round: %v, want error %t", err, wantErr)
+		if err := catalog.RunSyncRound(t.Context(), cfg); err != nil {
+			t.Fatalf("record round: %v", err)
 		}
 		if got := s.record(); got != want {
 			t.Fatalf("record: %s, want %s", got, want)
 		}
 	}
 	held := served(`"gpt-x-2025-01-01"=` + xPrices("5e-06", "9e-06", "1e-07"))
-	round(held, false, "2025-11-01T03:00:00Z|never|0|1")
+	round(held, "2025-11-01T03:00:00Z|never|0|1")
 
-	// LiteLLM publishes before OpenRouter fails to parse. Retries must keep the complete pending count until recovery.
+	// LiteLLM publishes before OpenRouter fails to parse. Later rounds must keep the complete pending count until recovery.
 	partial := served(`"gpt-x-2025-01-01"=` + xPrices("1.1e-06", "2.2e-06", "1e-07"))
 	partial.openrouter = []byte(`{`)
 	now = now.Add(time.Hour)
-	round(partial, true, "2025-11-01T03:00:00Z|2025-11-01T04:00:00Z|1|1")
+	round(partial, "2025-11-01T03:00:00Z|2025-11-01T04:00:00Z|1|1")
 	if s.priceCount(id) != 2 {
 		t.Fatal("the readable dataset did not publish its safe change")
 	}
 	now = now.Add(time.Hour)
-	round(partial, true, "2025-11-01T03:00:00Z|2025-11-01T04:00:00Z|2|1")
+	round(partial, "2025-11-01T03:00:00Z|2025-11-01T04:00:00Z|2|1")
 	if s.priceCount(id) != 2 {
-		t.Fatal("retry published the same price twice")
+		t.Fatal("the next round published the same price twice")
 	}
 	now = now.Add(time.Hour)
 	healthy := served(`"gpt-x-2025-01-01"=` + xPrices("1.1e-06", "2.2e-06", "1e-07"))
-	round(healthy, false, "2025-11-01T06:00:00Z|never|0|0")
+	round(healthy, "2025-11-01T06:00:00Z|never|0|0")
 }
 
 func TestTheScheduledSyncKeepsThePriceGuards(t *testing.T) {

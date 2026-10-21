@@ -1,7 +1,7 @@
 -- +goose Up
 
 -- sync_state is what the scheduled dataset sync leaves for people and for alerting: when a round last read every
--- dataset, how many rounds have failed since, and how many price changes wait for a person's confirmation. One row,
+-- dataset, how many rounds have failed since, and how many held changes with a candidate price wait for confirmation. One row,
 -- platform data. The row is inserted before row-level security is enabled, because a migration runs with no scope; its
 -- timestamps start empty, so a database that has never synced says so. failures and failing_since are set together.
 CREATE TABLE catalog.sync_state (

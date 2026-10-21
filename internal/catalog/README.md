@@ -16,7 +16,7 @@
 
 ### 表（schema `catalog`）
 
-> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`、`sync_state`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。数据集同步仍不落库条目：每一轮取数后条目在内存里与模型对应，没发布的结果在报告和日志里，下一轮重新算，所以不丢；`sync_state` 只记各轮的结果——最后成功、连续失败、待确认改价。`dataset` / `dataset_entry` / `review` 随页面监测与审核项一起加入。
+> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`、`sync_state`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。数据集同步仍不落库条目：每一轮取数后条目在内存里与模型对应，没发布的结果在报告和日志里，下一轮重新算，所以不丢；`sync_state` 只记各轮的结果——最后成功、连续失败、待确认改价（有候选价的 held）。`dataset` / `dataset_entry` / `review` 随页面监测与审核项一起加入。
 
 "只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
 
@@ -28,7 +28,7 @@
 | `reference_price` | `id`、`model_id`、`currency`、`source`、`schedule` jsonb（撤下时为空）、`schedule_sha256`、`published_at`、`supersedes` | PK `id`；UNIQUE `supersedes`；部分唯一索引 `(model_id, currency) WHERE supersedes IS NULL`；UNIQUE `(id, model_id, currency)`，外键 `(supersedes, model_id, currency)` 引用它，只能替代同一条时间线上的行；`supersedes <> id`；`currency ~ '^[A-Z]{3}$'`，`schedule` 与 `schedule_sha256` 同时为空或同时非空，非空时币种等于 `schedule` 里的币种 | 公开，只含 listed 模型的参考价，其余只有平台可见 | 只追加 |
 | `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
 | `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
-| `sync_state` | 单行：`last_success_at`、`failing_since`、`failures`、`pending` | PK `singleton`；`(failing_since IS NULL) = (failures = 0)` | 平台 | 改 |
+| `sync_state` | 单行：`last_success_at`、`failing_since`、`failures`、`pending`（有候选价的 held 数） | PK `singleton`；`(failing_since IS NULL) = (failures = 0)` | 平台 | 改 |
 | `watched_page` | `id`、`author`、`url`、`currency`、`section_start`、`section_end`（截取价格段的标记）、`interval`、`enabled`、`lease_owner`、`lease_gen`、`lease_until`、`last_ok_at`、`failures`、`current_snapshot_id` | PK `id`；`url ~ '^https://'` | 平台 | 改 |
 | `page_snapshot` | `id`、`page_id`、`first_seen_at`、`extractor_version`、`text`（截取并规范化的正文）、`text_sha256` | PK `id`；UNIQUE `(page_id, extractor_version, text_sha256)` | 平台 | 只追加 |
 | `page_observation` | `page_id`、`observed_at`、`snapshot_id` | PK `(page_id, observed_at)`；只在当前内容变化时追加 | 平台 | 只追加 |
@@ -202,7 +202,8 @@
 
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。已实现：`Fetcher` 只读两个固定地址（`raw.githubusercontent.com` 上 LiteLLM 的 `model_prices_and_context_window.json`、`openrouter.ai/api/v1/models`），只收 200，重定向不跟随；超时 60 秒、正文上限 32MB。取数或解析失败时这一数据集整轮不发布，模型保持最后的价格，日志记 error。
-- **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，节点启动或换主也先跑一轮。参数每轮相同，`ByArgs` 的唯一性让还在跑或等着的一轮盖住下一轮，节点反复重启不会堆任务；一轮里有数据集失败就把它交给 River 重试（`MaxAttempts` 3），重试用尽后任务被丢弃，由队列既有的 `queue.job_discarded` 告警覆盖。任务自己 `Open` 一个目录，只用它的取数和发布，不对外提供快照：队列先于调用路径启动，而节点上对外的那份快照由调用路径自己打开。每轮结束把结果写进 `catalog.sync_state`：读全两个数据集才算成功，成功写最后成功时间、清零连续失败、记下这轮留下待确认的改价数（held 的条数）；结果记录使用不继承任务取消、最多 5 秒的独立 context，使超时或关停也能留下失败；记录写不进则连同同步错误交回 River。失败累加连续失败，`failing_since` 只在连续失败的第一轮记下起点，最后成功时间和待确认改价数保持不变——只读到一部分数据集，算不出全部待确认的。距最后成功（从未成功过则距 `failing_since`）超过阈值时，失败的每一轮写 error 日志 `catalog.sync.overdue`（带连续失败数、待确认数、最后成功时间）并累加 `axiom.catalog.sync.overdue`；阈值 `SyncJobConfig.AlertAfter` 默认两个周期，运维节点按增量的上升设规则（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)），单独一轮的失败由 `SyncAll` 的 error 日志带数据集和错误报出。记录放在数据库里而不是节点内存里：它要跨重启和换主，告警量的是「多久没有成功」，不是「这个节点跑了多久」。
+- **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，启动或换主也先跑一轮。参数相同，未结束任务按参数保持唯一，重启不会堆积任务。`MaxAttempts` 为 1；正常取数或解析失败写入 `catalog.sync_state` 后返回 nil，任务完成，等下一日轮次，不因一次短暂上游故障触发 `queue.job_discarded`。只有状态记录写不进才返回错误，队列丢弃信号暴露的是记录设施故障。任务自己打开目录，只做取数和发布；对外快照由调用路径打开。结果记录使用不继承任务取消、最多 5 秒的 context，生产时间来自同一记录事务里的 `clock_timestamp()`，测试可注入时钟。读全两个数据集才写最后成功、清零连续失败，并重算待确认改价数（仅 `OutcomeHeld` 且 `Candidate != nil`）；缺条目、歧义、无法构造价目表的 held 仍留在报告和日志里，但不算待确认改价。失败累加连续失败，首次失败记录 `failing_since`，保留最后成功和上一完整轮次的待确认数，后续成功再重算。
+- **同步状态与告警**（已实现，`sync_metrics.go`）：登记任务时同时登记无标签 gauge `axiom_catalog_sync_last_success_age_seconds` 和 `axiom_catalog_sync_consecutive_failures`。每次采集都以平台范围读持久化状态和数据库时钟（最多 2 秒），距最后成功的秒数即使没有新任务执行也继续增长；从未成功时从 `failing_since` 起算，尚未执行过为 0，时钟倒退时不报负数。连续失败直接取 `failures`。读库失败返回采集错误、不伪报 0；运维节点需同时监测指标缺失。运维节点按后台数据配置时间和连续失败阈值、严重程度及通知渠道（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）。节点仍在执行失败轮次时提供 `catalog.sync.overdue` 日志和 `axiom_catalog_sync_overdue_total` 计数作为兜底；`SyncJobConfig.AlertAfter` 的 48 小时是代码默认值，没有后台配置入口，显式启动配置可覆盖，不能把它当作后台规则。单次取数错误仍由 `SyncAll` 记录，但不走队列丢弃告警。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。已实现的读法：
   - LiteLLM 只读厂商自己的 provider（`openai`、`anthropic`、`gemini`→google、`deepseek`）下 `mode` 为 `chat` 或 `responses` 的条目，不读 `vertex_ai`、`bedrock`、`azure` 这类转售方按自己的价格表的条目；条目名去掉 `<provider>/` 前缀。字段先去服务等级后缀（`_priority`、`_flex`），再去 `_above_<N>k_tokens`（N 千 token），再按字段表认计费项；`_batches` 等不对应计费项的字段不读。联网搜索取 `search_context_cost_per_query`，三种上下文大小同价才取。
   - OpenRouter 取 `pricing` 里单位明确的字段（`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`web_search`）；条目以 `id` 和带日期的 `canonical_slug` 为名；带 `:` 的变体（`:batch`、`:free`）是供应商别名，不当模型。带 `overrides` 的条目不可用：它写了 `min_prompt_tokens` 却没说按什么用量求和、门槛本身算不算进该档，有的还按时段（`utc_start`），所以 OpenRouter 现在只表达无分档的价格。
@@ -253,7 +254,7 @@
 
 ## 不变量
 
-> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下；定时同步的记录跨重启和换主存活，一轮失败不改最后成功和待确认改价，连续失败的起点不随重试移动。尚未实现：过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
+> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下；定时同步的记录跨重启和换主存活，一轮失败不改最后成功和待确认改价，连续失败的起点不随后续轮次移动。尚未实现：过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -345,7 +346,7 @@ func (c *Catalog) Fetch(ctx context.Context, f *Fetcher, src PriceSource) (Fetch
 func ParseLiteLLM(body []byte) ([]Entry, error)                     // 条目；ParseOpenRouter 同；整份不能解析是错误，单条不可用记在 Entry.Err
 func (c *Catalog) SyncDataset(ctx context.Context, f Fetched, publish bool) (SyncReport, error) // publish 为 false 是演习：只报告
 func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]SyncReport, error)  // 一轮的全部数据集；定时任务调的就是它
-type SyncJobConfig struct{ DB *pg.DB; Scope pg.Scope; Queue *pg.Queue; Fetcher *Fetcher; Logger *slog.Logger; Meter metric.Meter; Clock func() time.Time; AlertAfter time.Duration } // 零值：time.Now、两个周期
+type SyncJobConfig struct{ DB *pg.DB; Scope pg.Scope; Queue *pg.Queue; Fetcher *Fetcher; Logger *slog.Logger; Meter metric.Meter; Clock func() time.Time; AlertAfter time.Duration } // Clock 为空用数据库 clock_timestamp()；AlertAfter 为零用 48 小时代码兜底
 func RegisterSync(cfg SyncJobConfig) error // 队列启动前登记：每天一轮 catalog.sync 在 syncs 队列上，结果写进 catalog.sync_state，超过阈值告警
 func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDatasetSourceRequest) (Result, error)
 func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, error)           // 只读
@@ -366,7 +367,8 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
 - 服务等级与档位交叉的用例：标准档输出 2、长上下文 4，priority 输出 3、长上下文 5，四种组合各得其价；priority 没录 `cache_read` 时，priority 请求的缓存读被报告缺价，标准档请求不受影响，`Missing` 返回 priority；priority 漏写长上下文档或门槛与顶层不同的价目表被拒。
 - `Lost` 的表驱动用例：旧 priority 有输入、输出价只缺 `web_search`，新 priority 只有输出价时返回 priority 的 `input`，新价目表没有 priority 时返回 priority 的 `input` 和 `output`；旧价有 `reasoning`、新价没有但有 `output` 时为空；新价目表多一道门槛、高区间缺 `output` 时只返回高区间；新价目表去掉旧门槛时为空（基础价覆盖高区间，档位的丢失由自动发布另查）；两表都只在 200k 以上为 priority 提供 `output`、旧表口径 {`input`, `cache_read`} 而新表 {`input`} 时返回 `ErrTierBasisChanged`（请求 `input=1、cache_read=200000、output=1` 在旧表有输出价、在新表没有），两表都没有分档而口径不同时照常比较。自动发布的条目让 `Lost` 不为空时只开审核项，参考价不变。
-- 定时同步的用例（`sync_job_test.go`，时钟可替换，不等待真实时间）：登记到队列后 `Start` 就跑了这一轮，任务行的 `queue` 是 `syncs`，记录里没有连续失败也没有待确认（`TestTheSyncRoundRunsOnTheSyncsQueue`）；成功写最后成功并清零连续失败、失败累加并保留最后成功与待确认数、再失败不移动起点、成功再清零（`TestTheSyncRecordsEachRound`）；一天失败或恰在 48 小时阈值不告警，超过阈值写 `catalog.sync.overdue` 并让 `axiom_catalog_sync_overdue_total` 加一，成功之后不再加（`TestTheSyncAlertsWhenThePricesGoUnrefreshed`）；从未成功过时从 `failing_since` 起算并标明（`TestTheSyncAlertsWhenItNeverSucceeded`）。队列测试用通道确认任务已开始，再由 `Stop` 等待提交与完成确认，不按睡眠轮询。部分成功后重试不重复发布，失败保持完整的待确认数，恢复后归零（`TestTheSyncRecoversAfterAPartialRound`）；取消任务仍留下失败记录并返回取消错误（`TestTheSyncRecordsACancelledRound`）；定时路径保留 manual/official 来源锁定及涨、跌幅阈值（`TestTheScheduledSyncKeepsThePriceGuards`）。
+- 定时同步的用例（`sync_job_test.go`、`sync_job_recovery_test.go`）：队列启动即执行，健康或上游 503 的轮次均完成，`queue=syncs`、`max_attempts=1`，信号用 `sync.Once`；成功、失败、恢复及部分发布后的下一轮不重复发布；失败保留最后成功和完整待确认数，取消后仍记录并完成；恰在 48 小时不触发兜底、超过后日志和计数上升、恢复停止、从未成功也有兜底；manual/official 来源和涨跌幅安全阀保持不变。
+- 状态指标和边界用例（`sync_metrics_test.go`）：没有下一轮时 gauge 仍按受控时钟增长，从未成功、失败和恢复均能读到；生产记录时间在前后两次数据库 `clock_timestamp()` 之间；缺条目的 held 不计入待确认数且保持价格；记录写入失败仍返回错误。
 
 ## 决策与理由
 
@@ -399,5 +401,5 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 | `SelectPriceSource` 仍只接受 `official`、`manual`，数据集来源另设 `SelectDatasetSource` | 价目表只来自条目这一点由方法保证，不靠证据里写了什么；放开原方法，任何调用者都能把手填的价目表记在数据集名下 | 放开原方法、命令从条目拼请求 |
 | 供应商上游名字的映射在 `syncer.MapUpstream`：先别名，再目录的内部识别，目标必须是上架的模型；未映射则 `EndpointFacts.Mapped` 为假 | 与 docs/domains/suppliers.md 的前两步一致；退役或不存在的模型不能接流量。不带日期的名字只是候选（`Unverified`），端点可建但要先过真伪检测；调用点在写 `supplier_models.model_id` 的同步持久化（#25，见 internal/suppliers/README.md） | 目录里加一个「可路由」查询：suppliers 的映射规则放进了 catalog |
 | 同步的记录放在数据库的一行里，不放在节点的内存里 | 只有领导节点插入周期任务、任何 worker 执行，换主和重启都会清掉内存里的计数；告警量的是「多久没有成功」，记录必须跨这两件事活着，operator 也能直接查 | 节点内存里的计数：重启即归零；告警规则直接查 `river.river_job`：它记不了待确认改价，还把模块的语义搬进运维系统 |
-| 一轮失败写进记录后交回 River 重试，不自己算退避 | 已经有一个带退避和尝试上限的重试器，重试用尽还有被丢弃任务的告警；同步只需把这一轮的结果写下来，重试整轮不会再发布一遍已发布的价格（每条的价目表相同就是 unchanged） | 自己记下次尝试的时间：多一份状态和一套时序，换主之后还要另外接管 |
-| 同步只写 error 日志 `catalog.sync.overdue` 和计数器，不在节点里决定通知 | 阈值、持续时间、严重程度和通知渠道都是后台数据，在运维节点上判断（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）；节点提供可判定的信号：稳定的事件名、按增量上升的计数器、数据库里的记录 | 节点自己发通知：渠道和分级属于运营的控制面，节点会先需要一个它不该有的网络出口 |
+| 取数失败写进状态后完成任务，`MaxAttempts=1`，等待下一日轮次 | 负责人在本 PR 评审后的修复指令中选择方案 (a)。River 默认短退避会在一次短暂上游故障后耗尽尝试并触发丢弃告警，与过久未成功告警重复；状态、gauge 和兜底 overdue 已提供所需信号 | 短间隔重试：过早告警；小时级重试：引入另一套同步时序，当前不采用 |
+| 状态导出为 gauge，运维节点判断后台阈值；节点 overdue 保留代码默认兜底 | gauge 每次采集读持久化状态与数据库时钟，不依赖下一轮执行；运维可设置更早的时间阈值或连续失败阈值。节点的 48 小时只是代码默认值，未接入后台配置；通知仍由运维节点决定 | 只在失败轮次上升的计数：任务不再执行时看不到陈旧；把代码常量称为后台数据：运维无法提前判断 |

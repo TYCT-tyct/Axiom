@@ -20,8 +20,8 @@ import (
 const syncEvery = 24 * time.Hour
 
 // syncAlertAfter is how long the prices may go unrefreshed before every failed round reports it: two intervals, so one
-// bad download is left to the next round and only a lasting outage reaches a person. Thresholds are backend data
-// (docs/domains/observability.md「监控与告警」): this is the default, and SyncJobConfig.AlertAfter is a departure from it.
+// bad download is left to the next round. This code default is a fallback; the ops node applies backend thresholds to
+// the persisted state gauges, independently of whether a round runs.
 const syncAlertAfter = 2 * syncEvery
 
 // Bookkeeping must survive a cancelled download without extending shutdown indefinitely.
@@ -36,7 +36,7 @@ const (
 
 // SyncJobConfig is what the scheduled price sync needs: the database and the platform scope that only cmd/ builds, the
 // queue it runs on, the fetcher of the datasets, where its log goes, and the meter of its counter (nil for none). Clock
-// is nil for time.Now, and AlertAfter zero for syncAlertAfter.
+// is nil for the database clock, and AlertAfter zero for the fallback code default syncAlertAfter.
 type SyncJobConfig struct {
 	DB         *pg.DB
 	Scope      pg.Scope
@@ -62,6 +62,9 @@ func RegisterSync(cfg SyncJobConfig) error {
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(j.work)); err != nil {
 		return fmt.Errorf("catalog: register the price sync: %w", err)
 	}
+	if err := j.registerStatusMetrics(); err != nil {
+		return err
+	}
 	cfg.Queue.Every(syncEvery, func() river.JobArgs { return syncArgs{} })
 	return nil
 }
@@ -71,9 +74,6 @@ func RegisterSync(cfg SyncJobConfig) error {
 func newSyncJob(cfg SyncJobConfig) (*syncJob, error) {
 	if cfg.DB == nil || cfg.Fetcher == nil || cfg.Logger == nil {
 		return nil, errors.New("catalog: the scheduled sync needs a database, a fetcher and a logger")
-	}
-	if cfg.Clock == nil {
-		cfg.Clock = time.Now
 	}
 	if cfg.AlertAfter == 0 {
 		cfg.AlertAfter = syncAlertAfter
@@ -96,6 +96,7 @@ func newSyncJob(cfg SyncJobConfig) (*syncJob, error) {
 	}
 	return &syncJob{
 		cat: cat, fetcher: cfg.Fetcher, logger: cfg.Logger, now: cfg.Clock, alertAfter: cfg.AlertAfter, overdue: overdue,
+		meter: meter,
 	}, nil
 }
 
@@ -107,11 +108,11 @@ type syncArgs struct{}
 func (syncArgs) Kind() string { return "catalog.sync" }
 
 // InsertOpts implements river.JobArgsWithInsertOpts. A round reaches the network and writes the catalog, so it runs on
-// the syncs queue, never behind a settlement, and is retried a few times within the day before the next round takes
-// over.
+// the syncs queue, never behind a settlement. A recorded fetch failure waits for the next daily round; it must not also
+// trigger River's discarded-job alert after a short upstream outage.
 func (syncArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
-		Queue: pg.QueueSyncs, MaxAttempts: 3,
+		Queue: pg.QueueSyncs, MaxAttempts: 1,
 		UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning,
 			rivertype.JobStateRetryable, rivertype.JobStateScheduled,
@@ -128,33 +129,38 @@ type syncJob struct {
 	now        func() time.Time
 	alertAfter time.Duration
 	overdue    metric.Int64Counter
+	meter      metric.Meter
 }
 
 // work runs a round, records how it went and reports prices that have gone unrefreshed for too long. A round that could
-// not read a dataset is returned for River to retry; the record stays either way, so an attempt that fails after
-// publishing part of the catalog is not lost.
+// not read a dataset completes after its failure is recorded; state gauges and the fallback overdue signal cover the
+// outage. Only failure to record the outcome is returned to River.
 func (j *syncJob) work(ctx context.Context, _ *river.Job[syncArgs]) error {
 	reports, syncErr := j.cat.SyncAll(ctx, j.fetcher, true)
-	at := j.now()
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncRecordTimeout)
 	defer cancel()
-	state, err := j.record(recordCtx, reports, syncErr, at)
+	state, at, err := j.record(recordCtx, reports, syncErr)
 	if err != nil {
 		return errors.Join(syncErr, err)
 	}
 	j.report(recordCtx, state, syncErr, at)
-	return syncErr
+	return nil
 }
 
 // record writes the round's outcome to catalog.sync_state and returns the record. A successful round read every
 // dataset: it sets the last success, clears the failure streak and counts the price changes it left for a person. A
 // failed round adds to the streak, remembers when the streak began, and leaves the last success and the pending changes
 // as they were: a round that could not read every dataset knows only part of what waits.
-func (j *syncJob) record(ctx context.Context, reports []SyncReport, syncErr error, at time.Time) (GetSyncStateRow, error) {
+func (j *syncJob) record(ctx context.Context, reports []SyncReport, syncErr error) (GetSyncStateRow, time.Time, error) {
 	var state GetSyncStateRow
+	var at time.Time
 	err := j.cat.db.Tx(ctx, j.cat.scope, func(tx pg.Tx) error {
 		q := New()
 		var err error
+		at, err = j.timestamp(ctx, tx)
+		if err != nil {
+			return err
+		}
 		if syncErr == nil {
 			err = q.RecordSyncSuccess(ctx, tx, RecordSyncSuccessParams{LastSuccessAt: at, Pending: pendingChanges(reports)})
 		} else {
@@ -167,18 +173,28 @@ func (j *syncJob) record(ctx context.Context, reports []SyncReport, syncErr erro
 		return err
 	})
 	if err != nil {
-		return GetSyncStateRow{}, fmt.Errorf("catalog: record the sync: %w", err)
+		return GetSyncStateRow{}, time.Time{}, fmt.Errorf("catalog: record the sync: %w", err)
 	}
-	return state, nil
+	return state, at, nil
 }
 
-// pendingChanges counts the price changes a round left for a person: above the price-change limit, or an entry the
-// dataset cannot express as the model's schedule. Publishing one is an admin operation on the reported candidate.
+func (j *syncJob) timestamp(ctx context.Context, tx pg.Tx) (time.Time, error) {
+	if j.now != nil {
+		return j.now(), nil
+	}
+	var at time.Time
+	if err := tx.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&at); err != nil {
+		return time.Time{}, fmt.Errorf("catalog: read the database clock: %w", err)
+	}
+	return at, nil
+}
+
+// A missing or ambiguous entry has no candidate price to confirm.
 func pendingChanges(reports []SyncReport) int64 {
 	var n int64
 	for _, report := range reports {
 		for _, result := range report.Results {
-			if result.Outcome == OutcomeHeld {
+			if result.Outcome == OutcomeHeld && result.Candidate != nil {
 				n++
 			}
 		}
@@ -190,10 +206,7 @@ func pendingChanges(reports []SyncReport) int64 {
 // stable event, the counter rises by one, and the record says how far behind it is. A round that failed for its own
 // reasons is logged by SyncAll with the dataset and the error; this is the lasting outage.
 func (j *syncJob) report(ctx context.Context, state GetSyncStateRow, syncErr error, at time.Time) {
-	since := state.LastSuccessAt
-	if since == nil {
-		since = state.FailingSince
-	}
+	since := syncStateSince(state)
 	if since == nil || at.Sub(*since) <= j.alertAfter {
 		return
 	}
