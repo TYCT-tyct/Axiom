@@ -39,7 +39,7 @@ SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_
 FROM suppliers.credentials WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: SetCredentialLimits :execrows
--- What the admin set: the calls the key serves at once, and the requests its minute admits. The count itself is each
+-- What the admin set: the calls the key serves at once, and the account minute ceiling for selecting it. The count itself is each
 -- node's own, in memory (internal/suppliers/README.md「并发与速率」).
 UPDATE suppliers.credentials SET max_concurrency = @max_concurrency, requests_per_minute = @requests_per_minute
 WHERE supplier_id = @supplier_id AND id = @id;

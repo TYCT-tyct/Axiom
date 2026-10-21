@@ -115,7 +115,7 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
 			continue
 		}
-		if !best.rt.take(now, best.perMinute) {
+		if !best.rt.requests.take(now, best.perMinute) {
 			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
 			continue
 		}
@@ -129,7 +129,7 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 	var bestLoad float64
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || !c.rt.room(now, c.perMinute) {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || !c.rt.requests.room(now, c.perMinute) {
 			continue
 		}
 		n := c.rt.inflight.Load()

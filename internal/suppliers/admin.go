@@ -206,7 +206,7 @@ type Credential struct {
 	CooldownUntil  *time.Time
 	ExpiresAt      *time.Time
 	MaxConcurrency int
-	// RequestsPerMinute is how many requests the credential's minute admits; nil is no ceiling of Axiom's.
+	// RequestsPerMinute is the account RPM ceiling for selecting this credential; nil adds no ceiling.
 	RequestsPerMinute *int
 }
 

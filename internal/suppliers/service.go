@@ -79,11 +79,12 @@ type Service struct {
 	snap      atomic.Pointer[snapshot]
 	schedules atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
 	reloadMu  sync.Mutex // one Reload at a time; no call takes it
-	// What outlives a snapshot: the in-flight count, the rest and the minute's requests of a credential must not reset
+	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.
 	runtimeMu sync.Mutex
 	runtime   map[uuid.UUID]*credRuntime
+	minutes   map[uuid.UUID]*minuteRuntime
 	cancelsMu sync.RWMutex
 	cancels   map[EndpointID]bool // measured by quality: whether the supplier stops when the client does
 }
@@ -121,6 +122,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	s := &Service{
 		unloadable: counter, cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
+		minutes: map[uuid.UUID]*minuteRuntime{},
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
@@ -131,7 +133,10 @@ func New(cfg Config) (*Service, error) {
 type credRuntime struct {
 	inflight atomic.Int32
 	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
+	requests *minuteRuntime
+}
 
+type minuteRuntime struct {
 	// The check and increment share a lock so concurrent callers cannot spend the last request twice.
 	mu    sync.Mutex
 	start time.Time
@@ -143,7 +148,7 @@ const minute = time.Minute
 
 // room is whether the minute now counting admits another request, or the credential has no per-minute limit. It is a
 // hint for picking a credential: take is the one that decides.
-func (rt *credRuntime) room(now time.Time, limit int32) bool {
+func (rt *minuteRuntime) room(now time.Time, limit int32) bool {
 	if limit == 0 {
 		return true
 	}
@@ -156,19 +161,19 @@ func (rt *credRuntime) room(now time.Time, limit int32) bool {
 // request. The count and the check are one step under mu, so two callers cannot both take the last request of a minute
 // (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier, whose own count
 // it is in.
-func (rt *credRuntime) take(now time.Time, limit int32) bool {
-	if limit == 0 {
-		return true
-	}
+func (rt *minuteRuntime) take(now time.Time, limit int32) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.start.IsZero() || !now.Before(rt.start.Add(minute)) {
+	if rt.used == 0 || !now.Before(rt.start.Add(minute)) {
 		rt.start, rt.used = now, 0
 	}
-	if rt.used >= limit {
+	if limit != 0 && rt.used >= limit {
 		return false
 	}
-	rt.used++
+	// Unlimited keys still consume their account's quota. Saturation preserves every possible int4 ceiling.
+	if rt.used < maxLimit {
+		rt.used++
+	}
 	return true
 }
 
@@ -200,7 +205,7 @@ type credential struct {
 	id        uuid.UUID
 	key       secret.Secret
 	max       int32
-	perMinute int32 // requests a minute this node starts, 0 for no ceiling of ours
+	perMinute int32 // account RPM ceiling for selecting this credential, 0 for none
 	expires   *time.Time
 	rt        *credRuntime
 }
@@ -349,17 +354,24 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	}
 	return &credential{
 		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
-		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID),
+		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID),
 	}, nil
 }
 
 // runtimeOf is the running state of a credential, made when it is first seen and kept after.
-func (s *Service) runtimeOf(id uuid.UUID) *credRuntime {
+func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
 	if !ok {
-		rt = &credRuntime{}
+		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api gateway_scheduling.go (8f2cbb53)
+		// count upstream accounts; another key of the same supplier must not create another quota.
+		requests := s.minutes[supplier]
+		if requests == nil {
+			requests = &minuteRuntime{}
+			s.minutes[supplier] = requests
+		}
+		rt = &credRuntime{requests: requests}
 		s.runtime[id] = rt
 	}
 	return rt

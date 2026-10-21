@@ -377,12 +377,11 @@ func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 	return Credential{ID: id, Group: group, UpstreamKeyRef: keyRef, Status: "binding", MaxConcurrency: defaultMaxConcurrency}, nil
 }
 
-// Limits are how much of a credential one node gives out: how many calls it has in flight at once, and how many requests
-// its minute admits.
+// Limits are a credential's concurrency and its ceiling on the upstream account's shared minute in this node.
 type Limits struct {
 	// MaxConcurrency is the calls in flight at once; at least one, or the key would serve nothing.
 	MaxConcurrency int
-	// RequestsPerMinute is the requests its minute admits; nil is no ceiling of Axiom's, so the supplier's own governs.
+	// RequestsPerMinute is the account RPM ceiling for selecting this credential; nil adds no ceiling.
 	RequestsPerMinute *int
 }
 

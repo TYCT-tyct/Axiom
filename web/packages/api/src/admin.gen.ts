@@ -472,8 +472,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Set how much of a credential a node gives out
-         * @description The calls the key has in flight at once, and the requests its minute admits. Both are counted in a node's memory when a call takes its slot, so the ceiling holds per node until nodes share the count (internal/suppliers/README.md「并发与速率」). A `requests_per_minute` of null is no ceiling of Axiom's: the supplier's own limit then governs, and nothing is counted. A change reaches a node at its next reload, within seconds.
+         * Set a credential's concurrency and account RPM ceiling
+         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
          */
         put: operations["setSupplierCredentialLimits"];
         post?: never;
@@ -1182,13 +1182,13 @@ export interface components {
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
-            /** @description The requests the credential's minute admits; absent when Axiom adds no ceiling. */
+            /** @description The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
             requests_per_minute?: number;
         };
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
             max_concurrency: number;
-            /** @description The requests its minute admits; null is no ceiling of Axiom's. */
+            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; null adds no ceiling. */
             requests_per_minute: number | null;
             reason: components["schemas"]["Reason"];
         };

@@ -6,5 +6,5 @@
 -- disabled credential, which the status column already says.
 ALTER TABLE suppliers.credentials ADD COLUMN requests_per_minute integer CHECK (requests_per_minute > 0);
 
--- The admin sets it after binding a key, on this column only: the key's text, status and identity stay unwritable.
+-- Extend the application's existing credential privileges only to the new limit column.
 GRANT UPDATE (requests_per_minute) ON suppliers.credentials TO axiom_app;

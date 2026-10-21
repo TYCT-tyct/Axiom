@@ -825,13 +825,13 @@ paths:
     put:
       operationId: setSupplierCredentialLimits
       tags: [Suppliers]
-      summary: Set how much of a credential a node gives out
+      summary: Set a credential's concurrency and account RPM ceiling
       description: >-
-        The calls the key has in flight at once, and the requests its minute admits. Both are counted in a node's
-        memory when a call takes its slot, so the ceiling holds per node until nodes share the count
-        (internal/suppliers/README.md「并发与速率」). A `requests_per_minute` of null is no ceiling of Axiom's: the
-        supplier's own limit then governs, and nothing is counted. A change reaches a node at its next reload, within
-        seconds.
+        Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys
+        and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured
+        ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the
+        same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later;
+        concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
       security:
         - session: []
           csrf: []
@@ -2119,7 +2119,7 @@ components:
         requests_per_minute:
           type: integer
           minimum: 1
-          description: "The requests the credential's minute admits; absent when Axiom adds no ceiling."
+          description: "The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
     CredentialLimits:
       type: object
       required: [max_concurrency, requests_per_minute, reason]
@@ -2134,7 +2134,7 @@ components:
           minimum: 1
           maximum: 2147483647
           nullable: true
-          description: "The requests its minute admits; null is no ceiling of Axiom's."
+          description: "Stop selecting this credential when the shared upstream account minute reaches this count; null adds no ceiling."
         reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object
