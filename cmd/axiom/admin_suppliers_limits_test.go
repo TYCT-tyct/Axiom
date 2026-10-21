@@ -5,6 +5,8 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/platform/adminapi"
 )
 
@@ -26,8 +28,10 @@ func TestSetCredentialLimits(t *testing.T) {
 	limits := base + "/credentials/" + bound.Id + "/limits"
 	var changed adminapi.SupplierCredential
 	f.send(http.MethodPut, limits, `{"max_concurrency":8,"requests_per_minute":600,"reason":"more"}`, http.StatusOK, &changed)
-	if changed.Id != bound.Id || changed.MaxConcurrency != 8 || changed.RequestsPerMinute == nil || *changed.RequestsPerMinute != 600 {
-		t.Errorf("the limits set: %+v", changed)
+	want, perMinute := bound, 600
+	want.MaxConcurrency, want.RequestsPerMinute = 8, &perMinute
+	if diff := cmp.Diff(want, changed); diff != "" {
+		t.Errorf("the limits set (-want +got):\n%s", diff)
 	}
 	f.expectAudit("credential.limits", map[string]string{"reason": "more", "target_id": supplier})
 	rec := f.do(http.MethodGet, base, "", as(f.s))
