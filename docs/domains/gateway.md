@@ -246,7 +246,8 @@
 | Chat 转成 Responses 时，new-api 为非图片输出项附加空 `quality`、`size`，为非消息项附加空 `role` 和 null `content`，为推理项附加 `status`；Axiom 省略 | 按输出项自己的类型写成员，推理项的状态是可选的 |
 | Chat 转成 Responses 时，new-api 在 `output_item.added` 顶层另写工具的 `item_id`，Axiom 只在 `item.id` 标识输出项、`item.call_id` 标识调用 | 与 OpenAI 的输出项事件外壳一致，避免混淆输出项和工具调用 |
 | Chat 转成 Responses 时，Axiom 输出 `content_part.added/done` 并按输出项出现顺序结束各项，new-api 省略文本内容块事件且先结束文本再结束推理；事件序号因此不同 | 完整发送 OpenAI 的内容块生命周期；每边的序号必须恰好对应自己的事件位置，内容和工具参数仍逐字段比较 |
-| Chat 转成 Responses 时，new-api 的用量还带 Chat 名称、`billing_usage` 和 `claude_cache_creation_*`；Axiom 使用 Responses 名称，省略 null 的旧明细及为 0 的 `audio/image/text_tokens`，补齐为 0 的缓存写和推理明细 | 复用既有 Responses 结算用量口径，不暴露内部计费外壳，不伪造媒体用量 |
+| Chat 转成 Responses 时，new-api 的用量还带 Chat 名称、`billing_usage` 和 `claude_cache_creation_*`；Axiom 使用 Responses 名称，省略 null 的旧明细及为 0 的 `audio/image/text_tokens`，补齐为 0 的缓存写明细 | 复用既有 Responses 结算用量口径，不暴露内部计费外壳，不伪造媒体用量 |
+| Chat 转成 Responses 流时，new-api 省略 `output_tokens_details.reasoning_tokens`，Axiom 保留上游报告（推理样本为 30，其余样本为 0） | 推理 token 属于真实用量，转换不能丢失；与同格式 Chat 的计费项一致 |
 | 上游没有报用量时（Messages 的思考样本），两边各自估算 token 数 | 估算口径不同，见[计费的「用量来源与暂估」](billing.md#用量来源与暂估) |
 
 ### 版本与兼容
