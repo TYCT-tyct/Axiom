@@ -146,15 +146,14 @@ type minuteRuntime struct {
 // minute is the window a per-minute limit is counted over.
 const minute = time.Minute
 
-// room is whether the minute now counting admits another request, or the credential has no per-minute limit. It is a
-// hint for picking a credential: take is the one that decides.
-func (rt *minuteRuntime) room(now time.Time, limit int32) bool {
-	if limit == 0 {
-		return true
-	}
+// count is a hint shared by an endpoint's credentials; take still decides admission under the lock.
+func (rt *minuteRuntime) count(now time.Time) int32 {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return rt.used < limit || !now.Before(rt.start.Add(minute))
+	if !now.Before(rt.start.Add(minute)) {
+		return 0
+	}
+	return rt.used
 }
 
 // take counts one request at now, and says whether it was below the limit; a credential without one takes every
@@ -364,7 +363,7 @@ func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
 	if !ok {
-		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api gateway_scheduling.go (8f2cbb53)
+		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api repository/user_rpm_cache.go (8f2cbb53)
 		// count upstream accounts; another key of the same supplier must not create another quota.
 		requests := s.minutes[supplier]
 		if requests == nil {

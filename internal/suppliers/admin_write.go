@@ -421,6 +421,9 @@ func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supp
 		return Credential{}, ErrNoCredential
 	}
 	row := rows[0]
+	if row.Status == "erased" {
+		return Credential{}, ErrStatusLocked
+	}
 	if row.MaxConcurrency == concurrency && sameLimit(row.RequestsPerMinute, perMinute) {
 		return credentialOf(row.ID, row.SupplierGroupID, row.UpstreamKeyRef, row.Status, row.CooldownUntil, row.ExpiresAt, row.MaxConcurrency, row.RequestsPerMinute), nil
 	}

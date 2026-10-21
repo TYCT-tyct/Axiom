@@ -106,7 +106,7 @@ func TestMinuteCounterDoesNotWrap(t *testing.T) {
 			t.Fatal("an unlimited credential was refused")
 		}
 	}
-	if rt.take(now, maxLimit) || rt.room(now, maxLimit) {
+	if rt.take(now, maxLimit) || rt.count(now) != maxLimit {
 		t.Fatal("unlimited requests wrapped the shared minute's count")
 	}
 	if !rt.take(now.Add(time.Minute), maxLimit) {

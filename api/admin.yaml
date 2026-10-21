@@ -2122,7 +2122,7 @@ components:
           description: "The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
     CredentialLimits:
       type: object
-      required: [max_concurrency, requests_per_minute, reason]
+      required: [max_concurrency, reason]
       properties:
         max_concurrency:
           type: integer
@@ -2134,7 +2134,7 @@ components:
           minimum: 1
           maximum: 2147483647
           nullable: true
-          description: "Stop selecting this credential when the shared upstream account minute reaches this count; null adds no ceiling."
+          description: "Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling."
         reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object

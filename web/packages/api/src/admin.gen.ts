@@ -1188,8 +1188,8 @@ export interface components {
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
             max_concurrency: number;
-            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; null adds no ceiling. */
-            requests_per_minute: number | null;
+            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling. */
+            requests_per_minute?: number | null;
             reason: components["schemas"]["Reason"];
         };
         /** @description A key the supplier lists that Axiom has not bound to a group. */

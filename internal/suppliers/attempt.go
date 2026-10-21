@@ -127,9 +127,13 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with.
 func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
+	if len(ep.creds) == 0 {
+		return nil, 0
+	}
+	used := ep.creds[0].rt.requests.count(now)
 	var bestLoad float64
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || !c.rt.requests.room(now, c.perMinute) {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= c.perMinute) {
 			continue
 		}
 		n := c.rt.inflight.Load()

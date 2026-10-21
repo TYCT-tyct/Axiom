@@ -105,6 +105,13 @@ func TestSetLimitsRefusals(t *testing.T) {
 		_, err := a.limitsOf(id, bound.ID, c.limits)
 		refuses(t, c.name, err, ErrLimits)
 	}
+	a.sql(fmt.Sprintf(`UPDATE suppliers.credentials SET status = 'erased' WHERE id = '%s'`, bound.ID))
+	for _, concurrency := range []int{defaultMaxConcurrency, 2} {
+		_, err := a.limitsOf(id, bound.ID, Limits{MaxConcurrency: concurrency})
+		refuses(t, "an erased credential", err, ErrStatusLocked)
+	}
+	same(t, "the erased credential's limits", "4", a.text(fmt.Sprintf(
+		`SELECT max_concurrency::text FROM suppliers.credentials WHERE id = '%s'`, bound.ID)))
 	a.setStatus(id, "removing")
 	_, err = a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 2})
 	refuses(t, "a supplier being removed", err, ErrStatusLocked)
