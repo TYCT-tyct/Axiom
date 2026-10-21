@@ -35,7 +35,7 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		"reclaim grace under the TTL":                  {func(c *Config) { c.ReclaimGrace = c.HolderTTL - 1 }, "ReclaimGrace"},
 		"settle grace not above the background retry":  {func(c *Config) { c.SettleGrace = c.SettleBackground }, "SettleGrace"},
 		"settle grace not above both retries":          {func(c *Config) { c.SettleGrace = c.SettleRetry + c.SettleBackground }, "SettleGrace"},
-		"batch writers do not fit outside the reserve": {func(c *Config) { c.BatchConnections = c.PoolSize - c.PoolReserve + 1 }, "BatchConnections"},
+		"reserve leaves no ordinary connections":       {func(c *Config) { c.PoolReserve = c.PoolSize }, "PoolReserve"},
 		"per-key waiters above the queue":              {func(c *Config) { c.QueuePerKey = c.QueueMax + 1 }, "QueuePerKey"},
 		"zero node slots":                              {func(c *Config) { c.NodeInFlight = 0 }, "NodeInFlight"},
 		"negative gate wait":                           {func(c *Config) { c.AccountGateWait = -1 }, "AccountGateWait"},

@@ -110,7 +110,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 40 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；现在大于 1 不启动）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；现在大于 1 不启动）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -233,20 +233,26 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 连接池
 
-进程最多保持 64 条数据库连接（`pg.PoolSize`，`pg.Open` 里设，不跟机器的核数走；pgx 的默认是 max(4, NumCPU)）。取值按这几条算：
+`pg.Open` 管理两个物理池，共用一个连接预算 N：默认 64（`pg.PoolSize`），连接串 `pool_max_conns` 可覆盖，包括调小。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
 
-- **和 gateway 的连接闸一样大**：闸按类发名额，最后 16 条只给完成类（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。连接池更小的话，拿到名额的请求还要再等着取连接，保留的 16 条也就不成立。gateway 的默认值直接取这个常量。
-- **够 5000 路在途用**：一次请求在事务里占用连接的时间约 5–10ms（[性能的「规模与扩展」](../../docs/performance.md#规模与扩展)里热点账户的账）。5000 路都在途时，最坏的情形是每一路都只活 1 秒，也就是每秒 5000 个请求，共需 50 条；真实的流长得多，需要得更少。
+`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。持有者心跳仍走普通池，专用连接见 #217。
+
+- **和 gateway 的许可同一份数**：`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`，准入和完成类分别限 N−R、R 个许可、各自计数，持有和等待完成许可都不减少准入容量（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。预算调小，许可跟着调小，不必改代码。
+- **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据 N=64 推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
 - **一个账户占不满**：单个账户受账户闸和每秒 151–222 个请求的上限约束，约占 2 条。
-- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。每个节点还有一条不在池里的专用连接，持有节点名的 advisory lock（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），所以按每节点 `PoolSize` + 1 条算。
+- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
 
-连接串里的 `pool_max_conns` 覆盖这个默认值，那是部署自己的决定，但不能小于 gateway 的 N：打开数据库时（`openDatabase`，`serve` 和其余命令共用）用 `checkPool` 比较池的上限和 gateway 的连接数，小了就不启动，报 `AXIOM_DATABASE_URL` 和两个数，不带连接串；大一些不拦，多出的连接空着。只改 gateway 的 N、没改池，同样在启动时失败。
+默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
+
+部署按**所有进程**计预算：每个 `serve` 节点另有两条不在池里的连接，都从池里取走后 `Hijack`，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），以及 River v0.49.0 的 LISTEN 监听器；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+2 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名和 River 监听合计最多 84 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
+
+集成测试 `TestBackgroundAndConsoleCannotTakeTheSettlementReserve` 用真实 PostgreSQL、River worker、recorder 和普通控制台事务入口占满 N−R 条，通过事务回调、通道和数据库锁等待确认饱和；普通事务无法借用预留，结算和孤儿结算仍在各自期限内完成。没有用睡眠推断饱和。
 
 ### 范围
 
-- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts` 三个事务级参数里，由 `platform.in_scope(site_id, account_id)` 读取。
-- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
-- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope` 构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
+- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts`、`axiom.scope_home` 四个事务级参数里，由 `platform.in_scope(site_id, account_id)` 和 `platform.sees_site(site_id)` 读取。`scope_home` 是账户范围所属的站点，只给「站点的公开配置」和「共享计数」（[安全的「租户隔离」](../../docs/security.md#租户隔离)）用：`sees_site` 是 `in_scope(site, NULL)` 加上这个站点，不放宽账户读写的任何其他行。它由 `pg.AccountScopeIn(站点, 账户)` 设定，站点来自认出这个账户的授权，而不是账户自己能写的行（例如它在 `platform.tenants` 里的登记）。
+- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；站点的公开配置和共享计数读用 `platform.sees_site(site_id)`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
+- 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope`（带所属站点时用 `pg.AccountScopeIn`）构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
 - 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
 ### 迁移

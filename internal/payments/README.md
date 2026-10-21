@@ -13,15 +13,15 @@ type Method string   // 本站的付款方式代码："alipay"、"wxpay"、"usdt
 type MerchantID, OrderID, RefundID uuid.UUID // 对外写法 mch_、ord_、rfd_
 type Money struct{ Currency platform.Currency; Minor int64 } // 付款币种的最小单位；位数取 ISO 4217 表
 
-func New(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client、告警信号
-func (p *Payments) Options(ctx context.Context, s pg.Scope, credits int64) ([]Option, error)            // 充值页：每种付款方式的总额、手续费、币种
+func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client、告警信号
+func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) // 充值页：每种付款方式的总额、手续费、币种；显示的是此刻下单会选中的商户账户的报价：与 `choose` 共用一条选择规则（`ranked`），中间没有别的订单插进来时，订单就落在页面显示的那个账户上
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
 func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                    // "我已付款"：查一次渠道
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)
 func (p *Payments) Notify() http.Handler                                                                 // GET/POST /api/payments/v1/notify/{merchant}
 func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结 → 发送中 → 渠道 → 落定；r.Key 幂等
 func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 人工结论：附渠道凭证，按风险分级审批
-func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, m MerchantInput) (Merchant, error)        // 调 Plugin.Open 校验后封装密钥；有未完成订单时拒改身份字段
+func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, m MerchantInput) (Merchant, error)        // 调 Plugin.Open 校验后封装密钥；有未完成订单时拒改身份字段
 func Register(q *pg.Queue, p *Payments) error                                                            // 周期任务 payments.poll、payments.reconcile
 ```
 
@@ -74,12 +74,12 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 | 函数 | 用途 | 由谁实现 |
 |---|---|---|
-| `billing.TopUpRate(ctx, tx, from, to platform.Currency) (Rate, error)` | 当前参考汇率版本（ID、分子、分母）与充值方向的缓冲，订单据此锁定；过期后按到账汇率入账时也调它 | E1-2a：读 [#167](https://github.com/TYCT-tyct/Axiom/issues/167) 的参考汇率版本，加上充值缓冲（站点设置，在 billing）；#167 未合并时只开放同币种的付款方式 |
+| `billing.TopUpRate(ctx, tx, site, from, to platform.Currency) (Rate, error)` | 当前参考汇率版本与站点的充值缓冲（`billing.top_up_buffers`，没有行时用代码里的 2%），`Rate.Applied` 是精确分数（分子分母可能超出 int64，订单的成交汇率列不能用 bigint）；参考汇率是平台数据，所以 payments 在平台范围的只读事务里调它，在下单事务 1 之前读好（汇率版本只追加不改，读到的版本 ID 随订单锁定）；过期后按到账汇率入账时也调它 | E1-2a |
 | `billing.CreditPaid(ctx, tx, PaidCredit)` | 锁余额行，写付费额度批次（ID = 订单 ID 或待处理记录 ID，记实付、其中的手续费、入账额度和所用汇率）、"用户充值"分录和审计。同一 ID 再次调用时比较入账额度、实付和手续费：一致就什么也不写，不一致返回错误，调用方转待处理；不用 `ON CONFLICT DO NOTHING`，否则金额不同的第二次调用会被静默丢掉 | E1-1 |
 | `billing.FreezeRefund(ctx, tx, Freeze) (int64, error)` | 锁余额行、补算分配、算可退额度，写一笔带序号的冻结事件，再重放吃进它；返回实际冻结的额度 | E1-6a |
 | `billing.SettleRefund(ctx, tx, refund)` / `ReleaseRefund(ctx, tx, refund)` | 冻结转成"退款"分录（带 payments 算好的退回金额）/ 写一笔解冻事件。重复调用由 payments 在同一事务里对退款行的条件更新挡住 | E1-6a |
 
-`PaidCredit` 带账户、站点、批次 ID、入账额度、商户账户（现金科目按它区分）、付款币种、实付、其中的手续费、所用的参考汇率和成交汇率（锁定的那组，或过期后的到账汇率）。跨币种时两本账（站点 × 货币）各用汇兑损益配平：付款币种的账借现金（实付）、贷手续费收入（手续费）和汇兑损益（其余）；记账货币的账借汇兑损益、贷用户余额（额度）；两边按参考汇率的差额就是充值缓冲带来的汇兑收益。同币种时没有汇兑损益两行。订单上的 `paid_total`、`paid_fee`、`credited` 与批次出自同一个 `PaidCredit`、同一事务写入，退款金额由 payments 按订单上的这三列和自己的退款记录计算；每日对账核对两边一致。
+`PaidCredit` 带账户、站点、批次 ID、入账额度、商户账户（现金科目按它区分）、付款币种、实付、其中的手续费、所用参考汇率的版本 ID（`RateID`；成交汇率由批次的 (实付 − 手续费) ÷ 入账额度 推出，不另传）。跨币种时两本账（站点 × 货币）各用汇兑损益配平：付款币种的账借现金（实付）、贷手续费收入（手续费）和汇兑损益（其余）；记账货币的账借汇兑损益、贷用户余额（额度）；两边按参考汇率的差额就是充值缓冲带来的汇兑收益。同币种时没有汇兑损益两行。订单上的 `paid_total`、`paid_fee`、`credited` 与批次出自同一个 `PaidCredit`、同一事务写入，退款金额由 payments 按订单上的这三列和自己的退款记录计算；每日对账核对两边一致。
 
 ## 不变量
 
@@ -114,7 +114,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
-| `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl`、`mode`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl` 在 1 分钟到 24 小时；`(site_id, sort)`；不删除，只停用 | 站点的公开配置（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读：范围的站点等于该行 `site_id`（范围的站点列表含该行 `site_id` 或为平台范围，账户范围的充值页只读本站，跨站的行读不到；账户范围的事务要带所属站点，E1-2a 核对 platform 现状，没有就在同一迁移里补策略函数）；写 `in_scope(site_id, NULL)`；主站行只有平台范围能改，由管理接口的控制面守卫 |
+| `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl_seconds`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl_seconds` 在 60 到 86400；唯一 `(id, site_id)` 供本模块的子表引用；`(site_id, sort)`；不删除，只停用 | 站点的公开配置（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读：范围的站点等于该行 `site_id`（范围的站点列表含该行 `site_id` 或为平台范围，账户范围的充值页只读本站，跨站的行读不到；账户范围的站点来自 `pg.AccountScopeIn(站点, 账户)`：认出账户的授权把所属站点放进范围，策略用 `platform.sees_site(site_id)`，即 `in_scope(site_id, NULL)` 加上这个站点（[平台的「范围」](../platform/README.md#范围)）；不依据账户自己能写的 `platform.tenants` 登记，那张表的登记账户可以伪造）；它是 `axiom_lookup` 所有的定义者函数，代价随站点的账户数增长，这几张表小、按站点读）；写 `in_scope(site_id, NULL)`；主站行只有平台范围能改，由管理接口的控制面守卫 |
 | `merchant_configs` | `merchant_id` 主键、`site_id`、`settings`（非密配置，规范 JSON，供后台展示）、`ciphertext`/`nonce`/`wrapped_dek`/`key_version`（密钥、轮换中的旧密钥、`settings` 的 SHA-256）、`rev` | 改 `settings` 必须同时重新封装 | 站点数据：`in_scope(site_id, NULL)` 读写，账户范围读不到 |
 | `merchant_methods` | `merchant_id`、`site_id`、`method`、`upstream`、`fee_ppm`、`fee_fixed`、`single_min`、`single_max`、`daily_limit`、`enabled` | 主键 `(merchant_id, method)`；`fee_ppm` 0…500000；`fee_fixed ≥ 0`；`single_min ≤ single_max`（都设了时）；后三项是付款币种的总额（最小单位） | 同 `merchants` |
 | `merchant_usage` | `merchant_id`、`site_id`、`day`（UTC 日）、`used`（付款币种的最小单位） | 主键 `(merchant_id, day)`；`used ≥ 0` | 共享计数（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读、INSERT、UPDATE 的策略都是「范围的站点等于该行 `site_id`」（INSERT 用 `WITH CHECK`，`ON CONFLICT` 的 UPDATE 同受 `USING` 与 `WITH CHECK` 约束）；`axiom_app` 只有 SELECT、INSERT 和 `UPDATE (used)` 的列权限，没有 DELETE。账户范围的下单事务要锁它、加它，却读不到别的账户的订单，也碰不到别的站点的行 |
@@ -128,12 +128,12 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **对外 ID**：订单 ID 的对外写法就是发给渠道的商户订单号，`ord_` 加 26 个字符。
 - **另行入账**：人工把一条待处理的付款（重复付款、有付款没订单）入到某个账户时，额度批次的 ID 用这条待处理记录的 ID，重复提交不会入两次。
 - **账户删除**：订单、退款、订单事件与账本同寿命，不随账户删除（保留期与审计日志一起由负责人定）。
-- **没有外键**：`merchant_id`、`order_id` 只在本模块内引用；账户、站点、汇率版本只按 ID 引用（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)）。
+- **没有外键**：`merchant_id`、`order_id` 只在本模块内引用（`merchant_configs`、`merchant_methods`、`merchant_usage` 以 `(merchant_id, site_id)` 引用 `merchants (id, site_id)`，子行只能在商户账户所在的站点：否则站点 A 的账户能以 A 的站点为 B 的商户账户先造一行当天用量，挡住 B 自己的 upsert）；账户、站点、汇率版本只按 ID 引用（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)）。
 - **对账单**：第一个声明 `Statements` 能力的插件随它加 `statement_lines` 表；易支付没有账单接口，E1-5 不建这张表。
 
 ## 事务与任务
 
-- **下单**：事务 1（账户范围）设 `lock_timeout = 2s`、`statement_timeout = 5s`（超时回 503，订单未建），取账户的事务级咨询锁（`pg_advisory_xact_lock`，键由账户 ID 派生）→ 读设置和这个账户的计数 → 选商户账户 → `INSERT … ON CONFLICT DO UPDATE` 锁住并加上它当天的用量计数 → `TopUpRate` → 算总额 → 插入订单和事件。提交后调 `Create`；事务 2 检查链接，写回 `trade_no` 和 `checkout`。`Create` 返回 `*Rejected` 或链接不合格时事务 2 改为失败并减回用量；未知错误不改，返回 502 给用户，订单由补单和过期收尾。
+- **下单**：先读「菜单」（`menu`）：账户范围的只读事务读设置、这种付款方式的商户账户和当天用量；平台范围的只读事务检查这些商户账户的配置能否打开（插件存在、密钥解得开、设置哈希一致、插件接受；结果按商户账户的 `rev` 缓存一分钟，绕过保存改库的最迟一分钟后被排除并告警，打不开的不参与报价和挑选、不影响别的账户；账户范围从不读密文），再读 `TopUpRate`。事务 1（账户范围）设 `lock_timeout = 2s`、`statement_timeout = 5s`（超时回 503，订单未建），取账户的事务级咨询锁（`pg_advisory_xact_lock`，键由账户 ID 派生）→ 读设置和这个账户的计数 → 选商户账户 → `INSERT … ON CONFLICT DO UPDATE` 锁住并加上它当天的用量计数 → 算总额 → 插入订单和事件。提交后调 `Create`；事务 2 检查链接，写回 `trade_no` 和 `checkout`。`Create` 返回 `*Rejected` 或链接不合格时事务 2 改为失败并减回用量；未知错误不改，返回 502 给用户，订单由补单和过期收尾。
 - **回调**：限流 → 取商户配置（内存缓存，按 `rev` 失效）→ `Verify` → 不加锁读订单，已支付且网关订单号已记下就直接应答 → 查单 → 入账事务 → 提交后 `Ack(true)`。
 - **入账**（回调、补单、"我已付款"、人工）：平台范围的一个事务，`SELECT … FOR UPDATE` 订单行 → 插入 `order_payments`（冲突写待处理记录）→ 条件转移 → `CreditPaid` → 事件；过期后到账的同时加回用量计数。事务里不做网络调用。
 - **退款**：事务 1 锁订单行、检查在途的退款、`FreezeRefund`、算金额、插入退款行（已冻结）；事务 2 置发送中、写 `sent_at`；调渠道；事务 3 锁订单行、退款行，`SettleRefund` 或 `ReleaseRefund`，更新订单。
@@ -154,6 +154,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | 商户订单号就是订单 ID | 唯一、30 个字符、只有字母数字下划线 | 前缀加日期加随机数再查重（sub2api `service/payment_order.go:238-251`） |
 | 非密的商户信息、付款方式、站点设置给任何范围读；密文和网关配置单独一张表，只给站点和平台范围 | 账户范围的充值页要读付款方式和限额；行级安全按行不按列，密文必须在另一张表才读不到 | 整表 `in_scope(site_id, NULL)`：账户范围读到 0 行，充值页没法用；整表放宽：用户读得到密文 |
 | 密钥和 `settings` 的哈希封在同一份密文里，`settings` 明文存放 | 网关地址要能在后台展示，又不能被单独改掉；平台 `secret` 包只按表、行、用途绑定，不收调用方的附加数据 | 整份配置明文（sub2api 现状，`payment/load_balancer.go:317-347`）；把哈希放进绑定的位置：要改 `secret` 包的存储格式 |
+| 报价和下单用同一条选择规则：轮询按（站点，付款方式）各自计数，取能接这笔的候选中的第 n 个；当天已用最少按参考汇率把各账户的用量精确换成站点货币再比 | 页面显示的就是订单落下的那个账户和总额；各站点、各付款方式的轮询互不干扰；不同币种的最小单位不能直接比较 | 页面显示最便宜的、下单另选（显示与扣款不一致）；全进程一个轮询计数（两个站点交替下单时各自永远落在同一个账户上）；按最小单位整数比较用量（100000 分人民币被当成比 18000 美分多） |
 | 商户当天额度用一行计数守 | 账户范围读不到别的账户的订单，也锁不了商户行（加锁要过 UPDATE 策略）；一行计数既是读数又是串行点 | 每次按订单求和（sub2api `load_balancer.go:167-246`）：账户范围求不出，读后写也挡不住并发；咨询锁加平台范围求和：下单事务就得用平台范围 |
 | 回调地址带商户账户 ID，按它找配置 | 验签前不用解析请求体去猜订单（sub2api `handler/payment_webhook_handler.go:155-179` 先解析 `out_trade_no` 再找商户），同一渠道多个商户账户时没有歧义 | 每种渠道一个回调地址加"只有一个账户时才允许回退"（`service/payment_webhook_provider.go:96-113`） |
 | 回调与任务用平台范围 | 回调没有操作者；`CreditPaid` 写 billing 的表，跨模块授权会打破"只写自己的表" | 每个站点一个任务角色 |
@@ -165,7 +166,8 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 | PR | 内容 | 验收测试 |
 |---|---|---|
-| E1-2a `feat(payments): configure merchant accounts and quote top-ups` | 表 `merchants`、`merchant_configs`、`merchant_methods`、`merchant_usage`、`settings` 和迁移；`Channel`、`Plugin`、`Caps`、登记、测试用的假渠道；商户账户的保存（校验、密钥与 `settings` 哈希的封装）；选商户账户与用量计数；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；`Options`；管理接口的商户账户契约 | 总额复算与手续费反推的性质测试；比例超过 50%、额度乘汇率越界被拒；选商户账户的单笔、当天额度、全被过滤和查用量出错都拒绝；并发抢最后的当天额度只放行放得下的；直接改库里的网关地址后商户账户用不了；密钥不出现在日志和响应里；行级安全：账户范围读得到本站的付款方式和费率、读不到 `merchant_configs`，站长只看到本站的商户账户；站点 A 的账户范围读不到、改不了站点 B 的 `merchants` 与 `merchant_usage` 行（含 INSERT … ON CONFLICT 造行） |
+| E1-2a `feat(payments): configure merchant accounts and quote top-ups` | 表 `merchants`、`merchant_configs`、`merchant_methods`、`merchant_usage`、`settings` 和迁移；`Channel`、`Plugin`、`Caps`、登记、测试用的假渠道；商户账户的保存（校验、密钥与 `settings` 哈希的封装）；选商户账户与用量计数；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；`Options` | 总额复算与手续费反推的性质测试；比例超过 50%、额度乘汇率越界被拒；选商户账户的单笔、当天额度、全被过滤和查用量出错都拒绝；并发抢最后的当天额度只放行放得下的；直接改库里的网关地址后商户账户用不了；密钥不出现在日志和响应里；行级安全：账户范围读得到本站的付款方式和费率、读不到 `merchant_configs`，站长只看到本站的商户账户；站点 A 的账户范围读不到、改不了站点 B 的 `merchants` 与 `merchant_usage` 行（含 INSERT … ON CONFLICT 造行） |
+| E1-2a2 `feat(payments): manage merchant accounts in the admin API` | 管理接口的商户账户契约与处理器（列出、读取、创建、修改；密钥只写不读，响应只有非密配置），站点支付设置与充值缓冲的读写；从 E1-2a 拆出，它已接近 2000 行 | 契约测试；密钥不出现在响应和审计里；主站行只有平台范围能改；修订号过期 409、字段错误 422 带指针 |
 | E1-2b `feat(payments): take orders and credit them from callbacks` | 表 `orders`、`order_payments`、`order_events`、`discrepancies` 和迁移；转移表；下单（账户锁与计数上限、链接检查、服务端生成的返回地址）、取消、"我已付款"；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；过期（`payments.poll` 的第 2 步）与过期后到账（宽限期、到账汇率、自动入账期限）；有未完成订单时拒改商户身份字段；控制台的订单契约 | 转移表的全部（从，到）组合；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变；10 个并发下单不突破待支付上限和每天上限；`//`、`javascript:`、`data:` 链接被拒；行级安全：账户只看到自己的订单 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
 | E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户保存失败 |
