@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ type testUpstream struct {
 	mode int
 	// started is closed once the first event is written; goOn lets the held answer go on.
 	started, goOn chan struct{}
+	finished      chan struct{}
 
 	mu    sync.Mutex
 	body  string
@@ -40,8 +42,9 @@ type testUpstream struct {
 
 func newTestUpstream(t *testing.T, mode int) *testUpstream {
 	t.Helper()
-	u := &testUpstream{mode: mode, started: make(chan struct{}), goOn: make(chan struct{})}
+	u := &testUpstream{mode: mode, started: make(chan struct{}), goOn: make(chan struct{}), finished: make(chan struct{})}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		defer close(u.finished)
 		body, _ := io.ReadAll(r.Body) //nolint:errcheck // a test server
 		u.mu.Lock()
 		u.body = string(body)
@@ -268,6 +271,12 @@ func TestATestIsReadToItsEndThoughTheCallerGoesAway(t *testing.T) {
 		done <- answer{result, err}
 	}()
 	<-up.started
+	if other, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoSlot) {
+		if other != nil {
+			other.Done()
+		}
+		t.Errorf("another call acquired the streaming test's only slot: %v", err)
+	}
 	cancel()
 	close(up.goOn)
 	got := <-done
@@ -276,6 +285,12 @@ func TestATestIsReadToItsEndThoughTheCallerGoesAway(t *testing.T) {
 	}
 	if !got.result.Streamed || got.result.Outcome() != TestPassed {
 		t.Errorf("outcome %v, streamed %v; want the answer read to its end", got.result.Outcome(), got.result.Streamed)
+	}
+	<-up.finished
+	if other, err := w.svc.Acquire(w.endpoint); err != nil {
+		t.Errorf("the completed test kept its slot: %v", err)
+	} else {
+		other.Done()
 	}
 	up.mu.Lock()
 	wrote, ended := up.wrote, up.ended

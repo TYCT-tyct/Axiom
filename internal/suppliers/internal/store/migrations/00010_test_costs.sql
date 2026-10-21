@@ -1,7 +1,5 @@
 -- +goose Up
 
--- A cost row of a test generation (docs/domains/quality.md「试探」): the platform's own probe, whose estimate is a
--- deliberate upper bound and whose charge, when the supplier bills it, may never be matched to it. Reconciliation skips
--- these rows, so a probe never moves an endpoint's cost state (H-I9). The column is defaulted, so the insert privilege
--- already granted covers it and no existing row changes meaning.
+-- Test generations are paid by the platform. Match their charges normally, but never judge the endpoint by their
+-- deliberately bounded estimate (H-I9). Existing calls keep their meaning through the default.
 ALTER TABLE suppliers.attempt_costs ADD COLUMN test boolean NOT NULL DEFAULT false;

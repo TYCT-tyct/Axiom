@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 	"uuid"
 
@@ -22,7 +23,7 @@ const (
 	// than the admin request's own deadline, so that a slow answer is still recorded instead of being cut off.
 	TestDeadline = 45 * time.Second
 	// TestPrompt is what a test asks for when the caller names no prompt: the shortest thing a model answers, as
-	// new-api's channel test sends it (controller/channel-test.go:703, read 2026-11-20).
+	// new-api's channel test sends it (controller/channel-test.go:703, commit 7d8b912 (2026-10-22)).
 	TestPrompt = "hi"
 	// testOutput is the most tokens a test asks the model to generate.
 	testOutput = 16
@@ -168,9 +169,14 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if prompt == "" {
 		prompt = TestPrompt
 	}
-	ep, err := s.testable(req.Endpoint, req.Format)
+	attempt, err := s.Acquire(req.Endpoint)
 	if err != nil {
 		return TestResult{}, err
+	}
+	defer attempt.Done()
+	ep := attempt.ep
+	if !slices.Contains(ep.formats, req.Format) {
+		return TestResult{}, fmt.Errorf("%w: %d", ErrNoFormat, req.Format)
 	}
 	body, err := testCall(req.Format, ep.upstream, prompt)
 	if err != nil {
@@ -180,6 +186,9 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	cost, err := s.testCost(ep.schedule, prompt)
 	if err != nil {
 		return TestResult{}, err
+	}
+	if cost.Flag != CostComplete {
+		return TestResult{}, ErrTestCost
 	}
 	estimate, err := decimal(cost.Native)
 	if err != nil {
@@ -193,17 +202,16 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	// the whole generation, and the row must say so.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TestDeadline)
 	defer cancel()
-	attempt, err := s.Acquire(ep.id)
-	if err != nil {
-		return TestResult{}, err
-	}
 	sent := time.Now()
 	resp, failure := attempt.Send(ctx, Call{Format: req.Format, Body: body})
-	result.receipt = attempt.Done()
+	result.receipt = attempt.receipt()
+	result.Status = result.receipt.status
 	result.UpstreamRequest = result.receipt.ref
 	if failure != nil {
 		result.Failure, result.Total, result.FinishedAt = failure, time.Since(sent), s.now()
-		result.Status = statusOf(*failure)
+		if ctx.Err() != nil {
+			result.Failure, result.cause = nil, "timeout"
+		}
 		return result, nil
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing more to learn from a body that fails to close
@@ -211,31 +219,6 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.read(ctx, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
-}
-
-// statusOf is the HTTP status a failure names: the supplier's own when it answered, 0 when nothing came back.
-func statusOf(f Failure) int {
-	switch c := f.Cause.(type) {
-	case UpstreamError:
-		return c.Status
-	case Unknown:
-		return c.Status
-	}
-	return 0
-}
-
-// testable is the endpoint a test may call, if it serves the format asked for.
-func (s *Service) testable(id EndpointID, format protocol.Format) (*endpoint, error) {
-	ep, ok := s.snap.Load().endpoints[id]
-	if !ok {
-		return nil, ErrNoEndpoint
-	}
-	for _, f := range ep.formats {
-		if f == format {
-			return ep, nil
-		}
-	}
-	return nil, fmt.Errorf("%w: %d", ErrNoFormat, format)
 }
 
 // read reads the answer's stream to its end or its failure, and nothing else: a test has no client to write to, so the
@@ -257,6 +240,9 @@ func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 				r.FirstToken = &first
 			}
 		case protocol.StepUpstreamDone:
+			if r.FirstToken == nil {
+				r.cause, r.scope, r.failed = "stream_broken", "endpoint", true
+			}
 			r.Streamed = true
 			relay.Finish(protocol.Final{}) // the ending belongs to a client a test does not have; this frees its buffers
 		}
@@ -330,9 +316,9 @@ func causeName(f Failure) string {
 }
 
 // testCall is the body of a test in the format it tests. The bodies are new-api's channel test
-// (controller/channel-test.go:702-782, read 2026-11-20) with two changes: the output is capped in Responses too, which
-// new-api leaves uncapped, and no member asks for reasoning, which only adds to what the cap must cover. The cap is
-// max_tokens in both OpenAI formats, so a model that refuses it in favour of max_completion_tokens answers 400 and the
+// (controller/channel-test.go:702-782, commit 7d8b912, 2026-10-22) with two changes: the output is capped in Responses too, which
+// new-api leaves uncapped, and no member asks for reasoning, which only adds to what the cap must cover. The Chat cap is
+// max_tokens, so a model that refuses it in favour of max_completion_tokens answers 400 and the
 // test is inconclusive rather than a failure the endpoint did not commit (internal/suppliers/README.md「用真实生成测试
 // 端点」).
 func testCall(f protocol.Format, model, prompt string) ([]byte, error) {
@@ -392,6 +378,9 @@ func (s *Service) testCost(schedule uuid.UUID, prompt string) (AttemptCost, erro
 
 // ErrNoFormat is the error for a test in a format the endpoint does not serve.
 var ErrNoFormat = errors.New("suppliers: the endpoint does not serve that call format")
+
+// ErrTestCost refuses a paid test whose input or output has no price to bound it by.
+var ErrTestCost = errors.New("suppliers: the test cost cannot be bounded")
 
 // RecordTest writes the cost row of one test generation and its audit entry, in the transaction of the request that asked
 // for it: the platform's own cost, with no tenant and no reservation, marked as a test so that reconciliation matches the

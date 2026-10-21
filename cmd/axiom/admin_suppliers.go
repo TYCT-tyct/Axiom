@@ -222,6 +222,9 @@ func (a adminAPI) TestSupplierEndpoint(ctx context.Context, request adminapi.Tes
 	if err != nil {
 		return nil, err
 	}
+	// Keep the claim and cost commit alive when the browser disconnects, with time to record a timed-out generation.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
 	body, replayed, err := idempotently(ctx, a.db, "testSupplierEndpoint", request.Params.IdempotencyKey,
 		[]any{id, string(request.Body.Format), request.Body.Reason},
 		func(tx pg.Tx) (adminapi.EndpointTest, error) {
