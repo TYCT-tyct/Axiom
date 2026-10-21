@@ -656,7 +656,7 @@ type SetCredentialLimitsParams struct {
 	ID                uuid.UUID
 }
 
-// What the admin set: the calls the key serves at once, and the requests its minute admits. The count itself is each
+// What the admin set: the calls the key serves at once, and the account minute ceiling for selecting it. The count itself is each
 // node's own, in memory (internal/suppliers/README.md「并发与速率」).
 func (q *Queries) SetCredentialLimits(ctx context.Context, db DBTX, arg SetCredentialLimitsParams) (int64, error) {
 	result, err := db.Exec(ctx, setCredentialLimits,
