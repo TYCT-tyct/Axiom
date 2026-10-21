@@ -26,8 +26,8 @@ type offsetClock struct{ ahead atomic.Int64 }
 
 func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.ahead.Load())) }
 
-// steadyClock is the real clock until stand is called and stands still from then, so that a client measures its offset to
-// a server whose clock runs, and the breaker's open period never ends in a test that wants it to stay open.
+// steadyClock follows the real clock until stand, then advances only on jump: startup can measure a real offset,
+// and a test can keep the breaker open until it explicitly probes.
 type steadyClock struct{ at atomic.Int64 } // zero while the clock runs
 
 func (c *steadyClock) Now() time.Time {
@@ -38,6 +38,8 @@ func (c *steadyClock) Now() time.Time {
 }
 
 func (c *steadyClock) stand() { c.at.Store(time.Now().UnixNano()) }
+
+func (c *steadyClock) jump(d time.Duration) { c.at.Add(int64(d)) }
 
 // jump moves the clock forward.
 func (c *offsetClock) jump(d time.Duration) { c.ahead.Add(int64(d)) }
@@ -291,7 +293,8 @@ func TestDeferredChecksReportOnly(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Policy("allkeys-lru"))
 	server.Stop(t)
-	clock, logs := &offsetClock{}, &lockedBuffer{}
+	clock, logs := &steadyClock{}, &lockedBuffer{}
+	clock.stand()
 	client, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()),
 		kvtest.Deps(kv.Deps{Now: clock.Now, Logger: slog.New(slog.NewTextHandler(logs, nil))}))
 	if err != nil {
@@ -300,8 +303,8 @@ func TestDeferredChecksReportOnly(t *testing.T) {
 	t.Cleanup(func() { closeQuietly(t, client) })
 	client.StopChecks()
 	server.Start(t)
-	// The failed initial dial is not cached by valkey-go. Start waits for readiness, and stopping the background checks
-	// leaves the half-open probe to this measurement; neither retries nor elapsed time decide when to check the policy.
+	// The frozen clock prevents background probes before StopChecks returns. Start waits for readiness, and valkey-go
+	// does not cache the failed initial dial, so this measurement owns the first probe and reconnects without polling.
 	clock.jump(pastOpen)
 	if err := client.Measure(t.Context()); err != nil {
 		t.Fatalf("measure the restarted server: %v", err)
