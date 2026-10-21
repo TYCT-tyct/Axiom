@@ -27,6 +27,7 @@ slice=axiom-ci.slice
 parent_dropin=/etc/systemd/system/axiom.slice.d/axiom-ci.conf
 runners=${RUNNERS:-8} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
 train_runners=${TRAIN_RUNNERS:-4}
+[ "$train_runners" -ge 0 ] 2>/dev/null || { echo 'TRAIN_RUNNERS must be a nonnegative integer' >&2; exit 2; }
 cpu_weight=${CPU_WEIGHT:-20}
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
