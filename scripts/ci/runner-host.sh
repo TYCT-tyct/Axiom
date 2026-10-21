@@ -50,7 +50,8 @@ runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNER
 }
 
 runner_api() { # method runner-id [curl args]: registration tokens cannot update an existing runner's labels
-  curl -fsSL -X "$1" -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+  curl -fsSL --connect-timeout 10 --max-time 60 -X "$1" \
+    -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
     "https://api.github.com/repos/TYCT-tyct/Axiom/actions/runners/$2/labels" "${@:3}"
 }
 
