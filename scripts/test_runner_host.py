@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 
+BASH = r"D:\Git\bin\bash.exe" if os.name == "nt" else "bash"
 SCRIPT = (Path(__file__).parent / "ci" / "runner-host.sh").read_text(encoding="utf-8")
 
 
@@ -25,7 +26,7 @@ class RunnerLabels(unittest.TestCase):
                 if count is not None:
                     env["TRAIN_RUNNERS"] = count
                 result = subprocess.run(
-                    ["bash", "-eu", "-c", default + '\nlabels=$LABELS\n' + selector +
+                    [BASH, "-eu", "-c", default + '\nlabels=$LABELS\n' + selector +
                      '\nfor i in {1..8}; do runner_labels "$i"; done'],
                     env=env, text=True, capture_output=True, check=True,
                 )

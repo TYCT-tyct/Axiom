@@ -4,14 +4,14 @@
 # hand failed 22 builds on a missing gcc, a pnpm installer that needs a newer Node than the system's, and Playwright
 # downloads timing out. Run as root from a checkout of this repository on the host; it holds no address or secret.
 #
-#   GH_TOKEN=<actions-write-token> RUNNER_TOKEN=<token> scripts/ci/runner-host.sh install
+#   GH_TOKEN=<administration-write-token> RUNNER_TOKEN=<token> scripts/ci/runner-host.sh install
 #       token: gh api -X POST repos/TYCT-tyct/Axiom/actions/runners/registration-token --jq .token (valid one hour)
 #   scripts/ci/runner-host.sh check     # what install sets up is present and works; exits 1 naming what is not
 #   scripts/ci/runner-host.sh remove    # then delete the runner registrations it prints on GitHub
 #
 # Settings, from the environment: RUNNERS (8), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
 # TRAIN_RUNNERS (4: the first runners also get axiom-train; this label is managed separately from LABELS).
-# install also needs GH_TOKEN with repository Actions write permission to reconcile existing runners' labels.
+# install also needs GH_TOKEN with repository Administration write permission to reconcile existing runners' labels.
 # PROCS (6: GOMAXPROCS of each job), CPU_QUOTA (8000%: of the whole host), CPU_WEIGHT (20: against 100 for the host's
 # own services, so CI yields to them), MEMORY_HIGH (45G), MEMORY_MAX (50G). Docker must already be installed.
 set -euo pipefail
@@ -155,7 +155,7 @@ GOLANGCI_LINT_CACHE=$dir/_lintcache"; then
 
 install() {
   [ -n "${RUNNER_TOKEN:-}" ] || { echo "RUNNER_TOKEN is not set; see the top of this script" >&2; exit 1; }
-  [ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set; existing runner labels need Actions write permission" >&2; exit 1; }
+  [ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set; existing runner labels need Administration write permission" >&2; exit 1; }
   command -v docker >/dev/null || { echo "install docker first" >&2; exit 1; }
   # gcc and libc6-dev: go test -race needs cgo
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade gcc libc6-dev jq curl git sudo
