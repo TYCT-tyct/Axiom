@@ -86,3 +86,27 @@ func TestResponsesReasoningKeepsItsHistoryPosition(t *testing.T) {
 		sameJSON(t, tc.want, mustMarshal(t, member(t, up.Body, "messages")))
 	}
 }
+
+func TestResponsesDanglingReasoningInResolvedHistory(t *testing.T) {
+	history := [][]byte{
+		[]byte(`{"role":"user","content":"old"}`),
+		[]byte(`{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]}`),
+	}
+	up, err := prepareNativeChat(protocol.Responses, chatBody(`"previous_response_id":"last","input":"next"`), "up", history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, `[{"role":"user","content":"old"},{"role":"assistant","content":"","reasoning_content":"why"},{"role":"user","content":"next"}]`, mustMarshal(t, member(t, up.Body, "messages")))
+}
+
+func TestSuccessfulToolResultHasNoErrorMarker(t *testing.T) {
+	body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":false,"content":"ok"}]}]`)
+	up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := member(t, up.Body, "messages").([]any)[1].(map[string]any)
+	if tool["content"] != "ok" {
+		t.Fatalf("successful result changed: %s", up.Body)
+	}
+}

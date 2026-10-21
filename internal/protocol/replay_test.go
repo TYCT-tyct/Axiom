@@ -80,12 +80,13 @@ func TestConvertedOutputCanReturnToNativeEndpoints(t *testing.T) {
 }
 
 func TestNativeReplayCleanupFitsPrepareCost(t *testing.T) {
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, format := range formats[:2] {
+		f := format.f
 		members := `"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"why"},{"type":"text","text":"yes"}]}]`
 		if f == protocol.Responses {
 			members = `"input":[{"id":"` + convertedCallID + `_0","role":"assistant","content":"answer"}]`
 		}
-		t.Run(string(rune('0'+f)), func(t *testing.T) {
+		t.Run(format.dir, func(t *testing.T) {
 			body := []byte(chatBody(members))
 			r := inspected(t, f, body)
 			target, w := protocol.Target{Format: f, Model: "up"}, protocol.Rewrites{Identity: derive}
