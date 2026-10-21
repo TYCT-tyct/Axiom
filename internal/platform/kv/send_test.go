@@ -75,6 +75,8 @@ func leavesAtTheDeadline(t *testing.T, client *Client) {
 func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client, server := stuckClient(maxOutstanding)
+		resume := sync.OnceFunc(func() { close(server.release) })
+		defer resume()
 		for range streakAccesses {
 			leavesAtTheDeadline(t, client)
 		}
@@ -84,7 +86,7 @@ func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 		if got := server.sent.Load(); got != streakAccesses {
 			t.Fatalf("%d commands sent, want only the %d before the breaker opened", got, streakAccesses)
 		}
-		close(server.release)
+		resume()
 		synctest.Wait()
 		// Replies arriving after their callers left must not close the breaker before its probe.
 		if err := countOnce(t.Context(), t, client); !errors.Is(err, ErrUnavailable) {
