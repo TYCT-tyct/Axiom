@@ -191,7 +191,7 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 		return err
 	}
 	defer release()
-	return h.Billing.SettleOrphan(ctx, c.Admitted, c.ID)
+	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
 }
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is

@@ -39,7 +39,7 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 		return err
 	}
 	defer release()
-	return write(ctx)
+	return write(pg.CompletionContext(ctx))
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One
