@@ -87,8 +87,13 @@ func replayCandidate(f Format, body []byte) bool {
 }
 
 func containsGeneratedID(body []byte) bool {
-	for at, b := range body {
-		if b == '_' && at >= 36 {
+	for from := 0; from < len(body); {
+		next := bytes.IndexByte(body[from:], '_')
+		if next < 0 {
+			return false
+		}
+		at := from + next
+		if at >= 36 {
 			end := at + 1
 			for end < len(body) && body[end] >= '0' && body[end] <= '9' {
 				end++
@@ -97,6 +102,7 @@ func containsGeneratedID(body []byte) bool {
 				return true
 			}
 		}
+		from = at + 1
 	}
 	return false
 }
@@ -135,7 +141,7 @@ func (p *rewriter) replayMessages() error {
 	return p.replayArray(func(p *rewriter) (bool, error) {
 		p.replayAssistant, p.replayEmpty = false, false
 		err := object(replayMessageRules)(p)
-		return !(p.replayAssistant && p.replayEmpty), err
+		return !p.replayAssistant || !p.replayEmpty, err
 	})
 }
 

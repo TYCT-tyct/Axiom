@@ -80,25 +80,29 @@ func TestConvertedOutputCanReturnToNativeEndpoints(t *testing.T) {
 }
 
 func TestNativeReplayCleanupFitsPrepareCost(t *testing.T) {
-	for _, format := range formats[:2] {
-		f := format.f
-		members := `"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"why"},{"type":"text","text":"yes"}]}]`
-		if f == protocol.Responses {
-			members = `"input":[{"id":"` + convertedCallID + `_0","role":"assistant","content":"answer"}]`
-		}
-		t.Run(format.dir, func(t *testing.T) {
-			body := []byte(chatBody(members))
-			r := inspected(t, f, body)
-			target, w := protocol.Target{Format: f, Model: "up"}, protocol.Rewrites{Identity: derive}
-			cost := protocol.PrepareCost(&r, body, target, w)
-			got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
-				if _, err := protocol.Prepare(&r, body, target, w); err != nil {
-					t.Fatal(err)
+	for _, c := range []struct {
+		name, members string
+		format        protocol.Format
+	}{
+		{"unsigned thinking", `"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"payload"},{"type":"text","text":"yes"}]}]`, protocol.Messages},
+		{"signed thinking", `"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"why","signature":"payload"},{"type":"text","text":"yes"}]}]`, protocol.Messages},
+		{"output ID", `"input":[{"id":"` + convertedCallID + `_0","role":"assistant","content":"payload"}]`, protocol.Responses},
+	} {
+		for _, size := range []struct{ name, text string }{{"short", "x"}, {"long", strings.Repeat("x", 1<<16)}} {
+			t.Run(c.name+"/"+size.name, func(t *testing.T) {
+				body := []byte(chatBody(strings.ReplaceAll(c.members, "payload", size.text)))
+				r := inspected(t, c.format, body)
+				target, w := protocol.Target{Format: c.format, Model: "up"}, protocol.Rewrites{Identity: derive}
+				cost := protocol.PrepareCost(&r, body, target, w)
+				got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
+					if _, err := protocol.Prepare(&r, body, target, w); err != nil {
+						t.Fatal(err)
+					}
+				}})
+				if got["prepare"].Bytes > float64(cost) {
+					t.Fatalf("cleanup allocated %.0f, budget %d", got["prepare"].Bytes, cost)
 				}
-			}})
-			if got["prepare"].Bytes > float64(cost) {
-				t.Fatalf("cleanup allocated %.0f, budget %d", got["prepare"].Bytes, cost)
-			}
-		})
+			})
+		}
 	}
 }

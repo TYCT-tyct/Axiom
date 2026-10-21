@@ -41,9 +41,9 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 }
 
 func responsesChatDefaults(src requestObject) error {
-	for name, want := range map[string]string{"truncation": `"disabled"`, "background": "false"} {
-		if v := src.take(name); !isNull(v) && string(v) != want {
-			return &NotSupported{Reason: name + " has no Chat counterpart"}
+	for _, field := range [...]struct{ name, value string }{{"truncation", `"disabled"`}, {"background", "false"}} {
+		if v := src.take(field.name); !isNull(v) && string(v) != field.value {
+			return &NotSupported{Reason: field.name + " has no Chat counterpart"}
 		}
 	}
 	include, err := requestArray(src.take("include"))
