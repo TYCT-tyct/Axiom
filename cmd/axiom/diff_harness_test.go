@@ -90,11 +90,11 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		},
 		{
 			"the prompt new-api counts itself", "messages-deepseek-text-stream",
-			"sse[message_start]#0/0.message.usage.input_tokens", "532", "0", true,
+			"sse[message_start].message.usage.input_tokens", "532", "0", true,
 		},
 		{
 			"an input count that is Axiom's", "messages-deepseek-text-stream",
-			"sse[message_start]#0/0.message.usage.input_tokens", "532", "9", false,
+			"sse[message_start].message.usage.input_tokens", "532", "9", false,
 		},
 		{
 			"a stop sequence neither matched", "messages-deepseek-text-whole", "json.stop_sequence", absent, "null", true,
@@ -104,15 +104,15 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		},
 		{
 			"a block stopped elsewhere", "messages-deepseek-tools-stream",
-			"sse[content_block_stop]#8/-", `{"index":1,"type":"content_block_stop"}`, absent, true,
+			"sse[content_block_stop]", `{"index":1,"type":"content_block_stop"}`, absent, true,
 		},
 		{
 			"a block stopped in the other stream", "messages-deepseek-tools-stream",
-			"sse[content_block_stop]#-/10", absent, `{"index":2,"type":"content_block_stop"}`, true,
+			"sse[content_block_stop]", absent, `{"index":2,"type":"content_block_stop"}`, true,
 		},
 		{
 			"a block stop that became something else", "messages-deepseek-tools-stream",
-			"sse[content_block_stop]#8/-", `{"index":1,"type":"content_block_stop"}`, `{"index":1,"type":"content_block_delta"}`, false,
+			"sse[content_block_stop]", `{"index":1,"type":"content_block_stop"}`, `{"index":1,"type":"content_block_delta"}`, false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
