@@ -112,14 +112,14 @@ func TestResponsesRequestsToChat(t *testing.T) {
 			`"messages":[{"role":"system","content":"Rules"},{"role":"user","content":"Hi"}],"max_tokens":7,"user":"h(u)","safety_identifier":"h(s)","prompt_cache_key":"h(k)"`,
 		},
 		{
-			"tools default to strict",
+			"tools default to best effort",
 			`"input":"Go","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"f"},"parallel_tool_calls":false`,
-			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","required":[],"additionalProperties":false},"strict":true}}],"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false`,
+			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"},"strict":false}}],"tool_choice":{"type":"function","function":{"name":"f"}},"parallel_tool_calls":false`,
 		},
 		{
-			"strict normalization recurses through schemas",
+			"implicit best effort preserves nested schemas",
 			`"input":"Go","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"rows":{"type":"array","items":{"type":["object","null"],"properties":{"x":{"type":"string"}}}}}}}]`,
-			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","strict":true,"parameters":{"type":"object","required":["rows"],"additionalProperties":false,"properties":{"rows":{"type":"array","items":{"type":["object","null"],"required":["x"],"additionalProperties":false,"properties":{"x":{"type":"string"}}}}}}}}]`,
+			`"messages":[{"role":"user","content":"Go"}],"max_tokens":4096,"tools":[{"type":"function","function":{"name":"f","strict":false,"parameters":{"type":"object","properties":{"rows":{"type":"array","items":{"type":["object","null"],"properties":{"x":{"type":"string"}}}}}}}}]`,
 		},
 		{
 			"explicit best effort keeps the schema",
@@ -166,7 +166,6 @@ func TestNativeChatRejectsUnrepresentableMembers(t *testing.T) {
 		{protocol.Responses, `"input":"Hi","metadata":{"tenant":"private"}`},
 		{protocol.Responses, `"input":"Hi","reasoning":{"summary":"detailed"}`},
 		{protocol.Responses, `"input":"Hi","tools":[{"type":"web_search"}]`},
-		{protocol.Responses, `"input":"Hi","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"x":{"type":"string","default":"X"}}}}]`},
 		{protocol.Responses, `"input":[{"type":"item_reference","id":"remote"}]`},
 		{protocol.Responses, `"input":[{"type":"function_call_output","call_id":"c1","output":[{"type":"input_image","image_url":"https://example.test/image.png"}]}]`},
 		{protocol.Responses, `"input":"Hi","text":{"format":{"type":"json_object","unknown":true}}`},
@@ -215,6 +214,7 @@ func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
 		{"messages/many turns", `"messages":[` + strings.Repeat(`{"role":"user","content":"a"},`, 1000) + `{"role":"user","content":"b"}]`, protocol.Messages},
 		{"responses/long text", `"input":"` + strings.Repeat("x", 1<<16) + `"`, protocol.Responses},
 		{"responses/many turns", `"input":[` + strings.Repeat(`{"role":"user","content":"a"},`, 1000) + `{"role":"user","content":"b"}]`, protocol.Responses},
+		{"messages/large conversation", `"messages":[` + strings.Repeat(`{"role":"user","content":[{"type":"text","text":"a"}]},`, 10000) + `{"role":"user","content":"b"}]`, protocol.Messages},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			body := []byte(chatBody(c.members))
@@ -229,6 +229,9 @@ func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
 			t.Logf("allocated %.0f bytes; budget %d bytes", got["prepare"].Bytes, cost)
 			if got["prepare"].Bytes > float64(cost) {
 				t.Fatalf("allocated %.0f bytes within a %d-byte budget", got["prepare"].Bytes, cost)
+			}
+			if float64(cost) > 2*got["prepare"].Bytes {
+				t.Fatalf("budget %d exceeds twice the measured %.0f bytes", cost, got["prepare"].Bytes)
 			}
 		})
 	}

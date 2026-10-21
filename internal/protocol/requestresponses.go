@@ -8,6 +8,9 @@ import (
 )
 
 func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject, error) {
+	if err := responsesChatDefaults(src); err != nil {
+		return nil, err
+	}
 	src.move(dst, "max_output_tokens", "max_completion_tokens")
 	for _, name := range []string{"parallel_tool_calls", "user", "safety_identifier", "prompt_cache_key"} {
 		src.move(dst, name, name)
@@ -35,6 +38,24 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 		return nil, err
 	}
 	return responsesItemsToChat(items, out)
+}
+
+func responsesChatDefaults(src requestObject) error {
+	for name, want := range map[string]string{"truncation": `"disabled"`, "background": "false"} {
+		if v := src.take(name); !isNull(v) && string(v) != want {
+			return &NotSupported{Reason: name + " has no Chat counterpart"}
+		}
+	}
+	include, err := requestArray(src.take("include"))
+	if err != nil {
+		return err
+	}
+	for _, v := range include {
+		if string(v) != `"reasoning.encrypted_content"` {
+			return &NotSupported{Reason: "include member has no Chat counterpart"}
+		}
+	}
+	return nil // Chat supplies plaintext reasoning, so an encrypted-content hint adds no output.
 }
 
 // responsesInput combines resolved history with the current input before item conversion.
@@ -132,9 +153,7 @@ func responsesItemsToChat(items []jsontext.Value, out []requestObject) ([]reques
 			return nil, err
 		}
 	}
-	if s.reasoning.pieces > 0 {
-		s.out = append(s.out, requestObject{"role": jsonValue("assistant"), "content": jsonValue(""), "reasoning_content": s.reasoning.value(nil)})
-	}
+	s.flushReasoning()
 	for index, calls := range s.calls {
 		s.out[index]["tool_calls"] = jsonValue(calls)
 	}
@@ -153,6 +172,7 @@ func (s *chatInputItems) item(o requestObject) error {
 	case `"function_call"`:
 		s.call(o)
 	case `"function_call_output"`:
+		s.reasoning = joined{} // A tool result must immediately follow the assistant call it answers.
 		v, err := nativeContent(o.take("output"), Responses, "tool")
 		if err != nil {
 			return err
@@ -181,6 +201,8 @@ func (s *chatInputItems) message(o requestObject) error {
 	msg := requestObject{"role": jsonValue(role), "content": v}
 	if role == "assistant" {
 		s.attachReasoning(msg)
+	} else {
+		s.flushReasoning()
 	}
 	s.out = append(s.out, msg)
 	return nil
@@ -202,6 +224,14 @@ func (s *chatInputItems) call(o requestObject) {
 func (s *chatInputItems) attachReasoning(msg requestObject) {
 	if s.reasoning.pieces > 0 {
 		msg["reasoning_content"], s.reasoning = s.reasoning.value(nil), joined{}
+	}
+}
+
+func (s *chatInputItems) flushReasoning() {
+	if s.reasoning.pieces > 0 {
+		msg := requestObject{"role": jsonValue("assistant"), "content": jsonValue("")}
+		s.attachReasoning(msg)
+		s.out = append(s.out, msg)
 	}
 }
 

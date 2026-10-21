@@ -31,7 +31,7 @@ var nativeChatContent = map[string][2]string{
 		`[{"id":"gen-01_0","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"A single pixel.","annotations":[]}]}]`,
 	},
 	"chat-reasoning-cache": {
-		`[{"type":"thinking","thinking":"1071 = 2 x 462 + 147. Then 462 = 3 x 147 + 21."},{"type":"text","text":"The GCD is 21."}]`,
+		`[{"type":"thinking","thinking":"1071 = 2 x 462 + 147. Then 462 = 3 x 147 + 21.","signature":""},{"type":"text","text":"The GCD is 21."}]`,
 		`[{"id":"gen-01_0","type":"reasoning","summary":[{"type":"summary_text","text":"1071 = 2 x 462 + 147. Then 462 = 3 x 147 + 21."}]},{"id":"gen-01_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"The GCD is 21.","annotations":[]}]}]`,
 	},
 	"chat-tool-calls": {
@@ -213,7 +213,7 @@ func TestChatConversionFailureBeforeClientPrelude(t *testing.T) {
 }
 
 func TestChatToMessagesRejectsInvalidToolInput(t *testing.T) {
-	stream := chatPiece(`{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`, `"length"`) + ev("[DONE]")
+	stream := chatPiece(`{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`, `"tool_calls"`) + ev("[DONE]")
 	got := relayTo(t, protocol.Messages, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
 	if protocol.FaultOf(got.err) != protocol.FaultToolInput {
 		t.Fatalf("invalid generated arguments were not classified as tool input: %v", got.err)

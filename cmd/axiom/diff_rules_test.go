@@ -88,7 +88,7 @@ func newAPIIs(pattern string) func(difference) bool {
 }
 
 // aStopEitherWay holds when each value the difference has is a content_block_stop of a block: the two streams stop a
-// block at different places, which is a difference of order, not of content.
+// block at different places. compareEvents separately requires the exact same multiset of stopped block indexes.
 func aStopEitherWay(d difference) bool {
 	re := regexp.MustCompile(`^\{"index":\d+,"type":"content_block_stop"\}$`)
 	return (d.newAPI == absent || re.MatchString(d.newAPI)) && (d.axiom == absent || re.MatchString(d.axiom))
@@ -224,6 +224,8 @@ func diffRules() []*diffRule {
 			"Anthropic's message and message_delta carry stop_reason and stop_sequence, null until a stop sequence matches; new-api's conversion omits them"),
 		rule(`sse\[content_block_stop\]`, `messages-deepseek-tools-stream`, aStopEitherWay,
 			"a parallel tool call's block closes when its arguments end, before the next block opens; new-api keeps every tool block of the turn open and stops them together at the end"),
+		rule(`json\.content\[\]\.signature|sse\[content_block_start\]\.content_block\.signature`, `messages-deepseek-reasoning-.*`, values(absent, `""`),
+			"a thinking block starts with Anthropic's empty signature; plaintext Chat reasoning supplies no provider signature"),
 		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(error|incomplete_details)`, `responses-deepseek-.*`, values(absent, "null"),
 			"successful Responses have null error and incomplete_details, as OpenAI's response object"),
 		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(instructions|metadata|previous_response_id|reasoning|tool_choice|tools|truncation|user)`,

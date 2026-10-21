@@ -235,12 +235,13 @@
 | Chat 回复里 Axiom 写 `logprobs: null`、`message.refusal: null`，只有工具调用的消息 `content` 是 `null`，new-api 写空字符串，`created` 取调用时间，工具参数是流里的原文，Responses 转换成 Chat 时带上推理 token 数 | 与 OpenAI 的回复形状一致；new-api 的转换丢了这些 |
 | Chat 流里 Claude 思考块的推理文本，new-api 在末尾多一个换行 | new-api 的转换自己加的；非流式没有这个差异 |
 | `reasoning_details`（带签名和加密内容） | OpenRouter 的格式，后续请求要把它们带回去 |
+| Chat 转成 Messages 时，thinking 块以空 signature 开始；不伪造思考签名，再次调用原生端点前删除无签名思考 | Chat 明文推理没有 Anthropic 签名，不能制造可回放的签名 |
 | Chat 转成 Messages 时，message_start 的用量从 0 开始，结算后的 message_delta 才携带输入、缓存、输出的完整计数 | Chat 上游通常在最后一块才报用量；不能把尚未收到的计数写成真实值。内部计费沿用 Chat 的原始报告 |
 | Chat 转成 Messages 时，new-api 在用量里附加 `billing_usage`、`claude_cache_creation_*` 等内部计费成员，Axiom 不写这些成员 | 客户端只接收 Messages 格式的用量，内部计费不改变协议外壳 |
 | Chat 转成 Messages 时，Axiom 在最终用量里补齐为 0 的 `cache_creation.ephemeral_*_input_tokens`、`server_tool_use.web_search_requests`，new-api 省略 | 与既有 Messages 结算用量形状一致，不把缺报解释为实际使用 |
 | Chat 转成 Messages 时，Axiom 写 `stop_sequence: null`，message_start 也写 `stop_reason: null`，new-api 省略 | 与 Anthropic 的消息生命周期一致，尚未结束或未匹配停止串时使用 null |
 | Chat 转成 Messages 时，并行工具块在下一个块开始前关闭，new-api 到回合末尾才统一关闭 | Messages 的内容块依次输出；工具参数保持各自归属 |
-| Chat 转成 Responses 时，输出项 ID 由调用编号和输出序号组成，created_at 为调用时间；不伪造 Messages 思考签名 | 不泄露上游身份；Chat 的明文推理没有 Anthropic 签名，不能制造一个可回放的签名 |
+| Chat 转成 Responses 时，输出项 ID 由调用编号和输出序号组成，created_at 为调用时间 | 不泄露上游身份；再次调用原生 Responses 端点时删除本站输出项 id |
 | Chat 转成 Responses 时，成功响应的 `error`、`incomplete_details` 为 null，new-api 省略 | 与 [OpenAI 的响应事件定义](https://developers.openai.com/api/reference/resources/responses/streaming-events)一致 |
 | Chat 转成 Responses 时，new-api 附加 null 的 `instructions`、`metadata`、`previous_response_id`、`reasoning`、`tool_choice`、`tools`、`truncation`、`user`，以及 0 的 `max_output_tokens`、`temperature`、`top_p`、false 的 `parallel_tool_calls`、`store`；Axiom 省略 | Chat 上游没有回报这些设置，转换器不凭空声称请求采用了这些值 |
 | Chat 转成 Responses 时，new-api 为非图片输出项附加空 `quality`、`size`，为非消息项附加空 `role` 和 null `content`，为推理项附加 `status`；Axiom 省略 | 按输出项自己的类型写成员，推理项的状态是可选的 |

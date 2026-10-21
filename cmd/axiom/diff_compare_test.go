@@ -158,12 +158,29 @@ func readEvent(name, data string) event {
 // leaf; what is left over is an event only one stream has.
 func compareEvents(newAPI, axiom []event) []difference {
 	var out []difference
+	if theirs, ours := stopIndexes(newAPI), stopIndexes(axiom); theirs != ours {
+		out = append(out, difference{"sse[content_block_stop].indexes", "sse[content_block_stop].indexes", theirs, ours})
+	}
 	i, j := 0, 0
 	for _, m := range anchors(newAPI, axiom) {
 		out = append(out, compareGap(newAPI[i:m[0]], axiom[j:m[1]], i, j)...)
 		i, j = m[0]+1, m[1]+1
 	}
 	return append(out, compareGap(newAPI[i:], axiom[j:], i, j)...)
+}
+
+// A moved stop may be paired as two unmatched events, but a lost or duplicated block must still fail the comparison.
+func stopIndexes(events []event) string {
+	var indexes []string
+	for _, e := range events {
+		if e.name == "content_block_stop" {
+			if doc, ok := e.doc.(map[string]any); ok {
+				indexes = append(indexes, canonical(doc["index"]))
+			}
+		}
+	}
+	slices.Sort(indexes)
+	return canonical(indexes)
 }
 
 // anchors is the longest run of events both streams have, in order, as pairs of positions.

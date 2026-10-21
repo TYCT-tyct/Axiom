@@ -6,7 +6,7 @@ import (
 )
 
 func (s *chatToNative) itemID(i int) string {
-	return s.o.ID + "_" + strconv.Itoa(i)
+	return s.items[i].responseID
 }
 
 func (s *chatToNative) responsePart(i int, whole bool) requestObject {
@@ -84,16 +84,7 @@ func (s *chatToNative) responseDelta(i int) error {
 		return nil
 	}
 	name, index := responseDeltaName(it.kind)
-	event := s.responsePosition(i)
-	if index != "" {
-		event[index] = jsonValue(0)
-	}
-	event["delta"] = quotedContents(it.text[it.sent:])
-	if err := s.emit(name+".delta", event); err != nil {
-		return err
-	}
-	it.sent = len(it.text)
-	return nil
+	return s.responseIncrement(i, name, index)
 }
 
 func responseDeltaName(kind string) (name, index string) {

@@ -47,12 +47,7 @@ func (s *chatToNative) flushMessageBlock(i int) error {
 	case "tool_use":
 		kind, member = "input_json_delta", "partial_json"
 	}
-	delta := requestObject{"type": jsonValue(kind), member: quotedContents(it.text[it.sent:])}
-	if err := s.emit("content_block_delta", requestObject{"index": jsonValue(i), "delta": jsonValue(delta)}); err != nil {
-		return err
-	}
-	it.sent = len(it.text)
-	return nil
+	return s.messageIncrement(i, kind, member)
 }
 
 func messageBlock(it *chatOutput) requestObject {
@@ -62,6 +57,7 @@ func messageBlock(it *chatOutput) requestObject {
 		block["type"], block["text"] = jsonValue("text"), jsonValue("")
 	case "thinking":
 		block["thinking"] = jsonValue("")
+		block["signature"] = jsonValue("")
 	case "tool_use":
 		block["id"], block["name"], block["input"] = jsonValue(toolUseID(it.id)), jsonValue(it.name), jsontext.Value("{}")
 	}

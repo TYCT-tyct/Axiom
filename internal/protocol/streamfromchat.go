@@ -1,13 +1,11 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"fmt"
 	"strconv"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -31,18 +29,15 @@ type chatToNative struct {
 	published         bool // at least one batch has been handed to Relay, including its buffered prelude
 	reason            string
 	out               []byte
-	scratch           int
+	chunk             nativeChatChoice
 }
 
 type chatOutput struct {
 	kind, id, name  string
+	responseID      string
 	text            []byte // JSON string contents, with escapes intact
 	sent            int
 	started, closed bool
-}
-
-type nativeChatChunk struct {
-	Choices []nativeChatChoice `json:"choices"`
 }
 
 type nativeChatChoice struct {
@@ -52,18 +47,20 @@ type nativeChatChoice struct {
 		Reasoning        jsontext.Value   `json:"reasoning"`
 		ReasoningContent jsontext.Value   `json:"reasoning_content"`
 		Refusal          jsontext.Value   `json:"refusal"`
-		Details          []jsontext.Value `json:"reasoning_details"`
-		Tools            []struct {
-			Index    int64  `json:"index"`
-			ID       string `json:"id"`
-			Type     string `json:"type"`
-			Function struct {
-				Name      string         `json:"name"`
-				Arguments jsontext.Value `json:"arguments"`
-			} `json:"function"`
-		} `json:"tool_calls"`
+		Tools            []nativeChatTool `json:"tool_calls"`
 	} `json:"delta"`
 	Finish string `json:"finish_reason"`
+}
+
+type nativeChatTool struct {
+	Index    int64
+	ID, Type string
+	Function nativeChatFunction
+}
+
+type nativeChatFunction struct {
+	Name      string
+	Arguments jsontext.Value
 }
 
 func newChatToMessages(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -101,15 +98,9 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 		out.role = end
 		return out, nil
 	}
-	chunk, err := s.readChunk(data)
-	if err != nil {
-		return event{}, err
-	}
 	s.out = s.out[:0]
-	for _, choice := range chunk.Choices {
-		if err := s.choice(choice); err != nil {
-			return event{}, err
-		}
+	if err := s.readChunk(data); err != nil {
+		return event{}, upstreamFailure(err)
 	}
 	if len(s.out) > 0 {
 		s.published = true
@@ -119,23 +110,6 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 		}
 	}
 	return out, nil
-}
-
-func (s *chatToNative) readChunk(data []byte) (nativeChatChunk, error) {
-	// The typed decoder's transient structures are bounded by the input's bytes
-	// and objects, just as PrepareCost bounds request conversion.
-	n := len(data)*convertPerByte + bytes.Count(data, []byte("{"))*convertPerObject
-	if n > s.scratch {
-		if err := s.draw(n - s.scratch); err != nil {
-			return nativeChatChunk{}, err
-		}
-		s.scratch = n
-	}
-	var chunk nativeChatChunk
-	if err := jsonx.Unmarshal(data, &chunk); err != nil {
-		return nativeChatChunk{}, upstreamFailure(err)
-	}
-	return chunk, nil
 }
 
 func (s *chatToNative) choice(choice nativeChatChoice) error {
@@ -159,7 +133,7 @@ func (s *chatToNative) choice(choice nativeChatChoice) error {
 		}
 	}
 	if choice.Finish != "" {
-		if inverseName(messagesFinish, strconv.Quote(choice.Finish)) == "" {
+		if chatMessagesStop(choice.Finish, false) == "" {
 			return fmt.Errorf("%w: unknown Chat finish reason %q", ErrUpstream, choice.Finish)
 		}
 		s.finished, s.reason = true, choice.Finish
@@ -169,9 +143,6 @@ func (s *chatToNative) choice(choice nativeChatChoice) error {
 
 func (s *chatToNative) choiceText(choice nativeChatChoice) error {
 	d := choice.Delta
-	if len(d.Details) > 0 {
-		return fmt.Errorf("%w: Chat reasoning_details cannot be represented by this client", ErrUpstream)
-	}
 	for _, text := range []struct {
 		kind string
 		v    jsontext.Value
@@ -188,14 +159,18 @@ func (s *chatToNative) choiceText(choice nativeChatChoice) error {
 func (s *chatToNative) addOutput(kind, id, name string) (int, error) {
 	// The final Responses snapshot materializes a map and encoded item per entry;
 	// empty tools still need that room, independent of their argument byte count.
-	if err := s.take(len(id)+len(name)+2048, 2); err != nil {
+	if err := s.take(len(id)+len(name)+len(s.o.ID)+20+2048, 2); err != nil {
 		return 0, err
 	}
 	items, err := grow(&s.aggBase, s.items, 1, 2)
 	if err != nil {
 		return 0, err
 	}
-	s.items = append(items, chatOutput{kind: kind, id: id, name: name})
+	item := chatOutput{kind: kind, id: id, name: name}
+	if s.client == Responses {
+		item.responseID = s.o.ID + "_" + strconv.Itoa(len(items))
+	}
+	s.items = append(items, item)
 	return len(s.items) - 1, nil
 }
 
@@ -315,7 +290,7 @@ func (s *chatToNative) completeTool(i int) error {
 		it.text = append(it.text, "{}"...)
 		return nil
 	}
-	if s.client != Messages {
+	if s.client != Messages || s.reason == "length" {
 		return nil
 	}
 	if _, err := arguments(quotedContents(it.text)); err != nil {
@@ -328,6 +303,7 @@ func (s *chatToNative) dropBuffers() {
 	s.inner.dropBuffers()
 	s.items, s.tools, s.toolIDs, s.out = nil, nil, nil, nil
 	s.reader = reader{}
+	s.chunk = nativeChatChoice{}
 }
 
 func (s *chatToNative) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
@@ -342,7 +318,7 @@ func (s *chatToNative) failure(dst []byte, e Error, u catalog.Usage, cost string
 func (s *chatToNative) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
 	dst = append(dst, s.out...)
 	if s.client == Messages {
-		reason := inverseName(messagesFinish, strconv.Quote(s.reason))
+		reason := chatMessagesStop(s.reason, len(s.tools) > 0)
 		data := appendQuoted([]byte(`{"type":"message_delta","delta":{"stop_reason":`), reason)
 		data = append(data, `,"stop_sequence":null},"usage":`...)
 		data = append(appendMessagesUsage(data, u, cost), top+"}"...)
@@ -357,4 +333,20 @@ func (s *chatToNative) usageEvent(dst []byte, u catalog.Usage, cost, top string)
 	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,"response":`, name, s.seq)
 	data = append(data, s.response(status, appendOpenAIUsage(nil, responsesNames, u, cost))...)
 	return sse.AppendEvent(dst, name, append(data, top+"}"...))
+}
+
+// Adapted from sub2api chatcompletions_anthropic_bridge.go (8f2cbb5): compatible providers may finish tools with stop.
+// stop and length have multiple inverse names; keep their canonical Messages meanings independent of map order.
+func chatMessagesStop(reason string, tools bool) string {
+	switch reason {
+	case "stop":
+		if tools {
+			return "tool_use"
+		}
+		return "end_turn"
+	case "length":
+		return "max_tokens"
+	default:
+		return inverseName(messagesFinish, strconv.Quote(reason))
+	}
 }

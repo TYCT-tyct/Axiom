@@ -158,6 +158,17 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
+	var err error
+	body, err = replayBody(f, body, false)
+	if err != nil {
+		return nil, err
+	}
+	if f == Responses {
+		w.History, err = replayHistory(w.History)
+		if err != nil {
+			return nil, err
+		}
+	}
 	w = w.withDefaults()
 	p := &rewriter{
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
@@ -204,7 +215,11 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
+		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
+		if r.Format == Responses {
+			cost += replayHistoryCost(w.History)
+		}
+		return cost
 	}
 	if r.Format != Chat && t.Format != Chat {
 		return 0
@@ -345,6 +360,8 @@ type rewriter struct {
 	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
+	replayAssistant, replayEmpty          bool
+	replayMeta                            *aggBase
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }

@@ -140,8 +140,8 @@ func checkNativeChat(chat []byte) error {
 // encoding they are written into, and the structures validating it, all alive together; history sums one per item
 // (PrepareCost).
 func nativeRequestCost(body []byte) int64 {
-	return 32*int64(len(body)) + 8192*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
-		2048*int64(bytes.Count(body, []byte(":")))
+	return 12*int64(len(body)) + 3072*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
+		512*int64(bytes.Count(body, []byte(":")))
 }
 
 func nativeTools(v jsontext.Value, f Format, dst requestObject) error {
@@ -180,11 +180,7 @@ func nativeTool(raw jsontext.Value, f Format) (requestObject, error) {
 	}
 	o.move(fn, parameters, "parameters")
 	if f == Responses && isNull(fn["strict"]) {
-		schema, err := responsesDefaultSchema(fn["parameters"])
-		if err != nil {
-			return nil, err
-		}
-		fn["parameters"], fn["strict"] = schema, jsontext.Value("true")
+		fn["strict"] = jsontext.Value("false") // Chat cannot promise Responses' implicit schema normalization.
 	}
 	tool := requestObject{"type": jsontext.Value(`"function"`), "function": jsonValue(fn)}
 	o.move(tool, "cache_control", "cache_control")

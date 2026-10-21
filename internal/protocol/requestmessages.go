@@ -253,12 +253,30 @@ func messagesToolResult(o requestObject) (requestObject, error) {
 	if isNull(v) || string(v) == "[]" {
 		v = jsonValue("") // Anthropic permits omitted content; Chat requires text.
 	}
-	if failed := o.take("is_error"); !isNull(failed) && string(failed) != "false" {
-		return nil, &NotSupported{Reason: "a tool result's is_error has no Chat counterpart"}
+	var failed bool
+	if v := o.take("is_error"); !isNull(v) && jsonx.Unmarshal(v, &failed) != nil {
+		return nil, shapeError("tool result is_error must be boolean")
 	}
 	content, err := nativeContent(v, Messages, "tool")
 	if err != nil {
 		return nil, err
+	}
+	if failed {
+		// Chat has no failure bit; preserve the tool's error signal in its text.
+		if content.Kind() == '"' {
+			text, err := requestString(content)
+			if err != nil {
+				return nil, err
+			}
+			content = jsonValue("Error: " + text)
+		} else {
+			parts, err := requestArray(content)
+			if err != nil {
+				return nil, err
+			}
+			marker := jsonValue(requestObject{"type": jsonValue("text"), "text": jsonValue("Error: ")})
+			content = jsonValue(append([]jsontext.Value{marker}, parts...))
+		}
 	}
 	return requestObject{"role": jsonValue("tool"), "tool_call_id": id, "content": content}, nil
 }
