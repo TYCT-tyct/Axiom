@@ -50,12 +50,12 @@ func (b *bank) checkStored(account uuid.UUID) {
 			b.t.Errorf("stored allocation at %v unfunded %d, a replay from nothing gives %v %d", stored.at, stored.unfunded, fresh.at, fresh.unfunded)
 		}
 		for id, batch := range fresh.batches {
-			var consumed, expired int64
-			if err := tx.QueryRow(b.t.Context(), "SELECT consumed, expired FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired); err != nil {
+			var consumed, expired, frozen, released, refunded int64
+			if err := tx.QueryRow(b.t.Context(), "SELECT consumed, expired, freeze_total, unfreeze_total, refunded FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired, &frozen, &released, &refunded); err != nil {
 				return err
 			}
-			if consumed != batch.consumed || expired != batch.expired {
-				b.t.Errorf("batch %s stores consumed %d expired %d, a replay from nothing gives %d %d", id, consumed, expired, batch.consumed, batch.expired)
+			if consumed != batch.consumed || expired != batch.expired || frozen != batch.freezeTotal || released != batch.unfreezeTotal || refunded != batch.refunded {
+				b.t.Errorf("batch %s stores consumed %d expired %d freeze %d release %d refund %d, replay gives %+v", id, consumed, expired, frozen, released, refunded, *batch)
 			}
 		}
 		return nil
@@ -98,8 +98,11 @@ func (b *bank) replayed(account uuid.UUID) *allocation {
 	if got, want := a.funded(), b.count("SELECT balance FROM billing.balances WHERE account_id = '"+account.String()+"'"); got != want {
 		b.t.Errorf("the batches of %s fund %d of a balance of %d", account, got, want)
 	}
+	if got, want := a.frozen(), b.count("SELECT frozen FROM billing.balances WHERE account_id = '"+account.String()+"'"); got != want {
+		b.t.Errorf("replay freezes %d, stored balance freezes %d", got, want)
+	}
 	for _, batch := range a.batches {
-		if batch.consumed+batch.expired > batch.amount {
+		if batch.remaining() < batch.frozen() || batch.frozen() < 0 {
 			b.t.Errorf("batch %+v is over-spent", *batch)
 		}
 	}
@@ -135,7 +138,7 @@ func (b *bank) charge(n int64) {
 // batchLeft is what the batch holds: its amount less what was consumed and what expired, as stored.
 func (b *bank) batchLeft(id uuid.UUID) int64 {
 	b.t.Helper()
-	return b.count("SELECT amount - consumed - expired FROM billing.credit_batches WHERE id = '" + id.String() + "'")
+	return b.count("SELECT amount - consumed - expired - refunded FROM billing.credit_batches WHERE id = '" + id.String() + "'")
 }
 
 // balanceOf is the balance of the account.

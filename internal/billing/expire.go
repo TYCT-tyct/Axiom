@@ -210,28 +210,18 @@ func (e *expirer) advance(ctx context.Context, account uuid.UUID) (more bool, er
 // the latest movement, writes off, and stores the allocation.
 //
 // What counts as unspent is what the replay leaves at the moment the lock is taken, so credit spent after its expiry
-// and before the write-off is used, not lapsed. The write-off is capped at the balance less the reservations, and not
+// and before the write-off is used, not lapsed. The write-off is capped at the balance less reservations and freezes, and not
 // by the floor: the floor is an allowance for charges, and an expiry that used it would put the user in debt for credit
 // that the calls in flight could have used. With that cap, the balance stays at least what is reserved, so every
 // reservation admitted before it can still be settled in full (its charge is capped by cap, which is at least its own
 // amount). What the cap holds back is written off by a later run, when the reservations have settled. A second run
 // finds nothing left to write off.
 func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (written int64, err error) {
-	balance, err := lockAccount(ctx, tx, account)
+	balance, a, err := replayAccount(ctx, tx, account, size)
 	if err != nil {
 		return 0, err
 	}
-	a, err := loadAllocation(ctx, tx, account)
-	if err != nil {
-		return 0, err
-	}
-	if err := a.catchUp(ctx, tx, account, size); err != nil {
-		return 0, err
-	}
-	if got := a.funded(); got != balance.Balance {
-		return 0, fmt.Errorf("billing: the allocation of %s funds %d of a balance of %d; nothing is written off", account, got, balance.Balance)
-	}
-	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved}, 0)); err != nil {
+	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved, Frozen: balance.Frozen}, 0)); err != nil {
 		return 0, err
 	}
 	if written > 0 {
@@ -253,7 +243,10 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 		if b.expiresAt == nil || b.expiresAt.After(now) || limit == 0 {
 			break
 		}
-		w := min(b.remaining(), limit)
+		w := min(b.available(), limit)
+		if w == 0 {
+			continue
+		}
 		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
 		if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
 			return 0, err

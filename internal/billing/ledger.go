@@ -54,9 +54,9 @@ const lateRevision = -1
 //
 // Every transaction of an account is numbered while its balance row lock is held, so the seqs of one account follow the
 // order they commit, which the allocation replays by and the unlocked replay bounds itself with (#361). A transaction
-// that moves the user's balance takes that lock in the statement that makes it, whether or not the caller holds it
-// already; one that moves nothing is numbered without the lock, so its caller has to hold it, as the flows that post
-// such an event do: settlement, cleanup and expiry lock the account first (putTransaction).
+// that moves the user's balance or freezes/unfreezes credit takes that lock in the statement that makes it, whether
+// or not the caller holds it already; other events rely on their callers holding it. Settlement, cleanup and expiry
+// lock the account before posting such events (putTransaction).
 func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error) {
 	id := uuid.NewV7()
 	params := InsertEntriesParams{TransactionID: id, SiteID: e.site, AccountID: e.account}
@@ -78,7 +78,7 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 			panic(fmt.Sprintf("billing: the %s entries of %s sum to %d in %q", e.kind, e.request, sum, x.currency))
 		}
 	}
-	n, err := putTransaction(ctx, tx, e, id, params.UserDebit != 0)
+	n, err := putTransaction(ctx, tx, e, id, params.UserDebit != 0 || e.kind == "freeze" || e.kind == "unfreeze")
 	if err != nil || n == 0 {
 		return false, wrapPost(e, err)
 	}
@@ -90,7 +90,7 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 }
 
 // putTransaction inserts the transaction row; locked takes the balance row lock with it, and is set exactly when the
-// transaction moves the user's balance. When it is not set the caller must hold that lock already, so that the account's
+// event moves the user's balance or freezes/unfreezes credit. Otherwise the caller must hold that lock, so the account's
 // transactions are numbered in the order they commit whichever of the two it takes (post). Of no row inserted, a
 // transaction that locks says whether the event was posted already or the account has no balance row to lock.
 func putTransaction(ctx context.Context, tx pg.Tx, e event, id uuid.UUID, locked bool) (int64, error) {

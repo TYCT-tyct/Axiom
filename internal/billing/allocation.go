@@ -22,8 +22,8 @@ import (
 // Invariants, which allocation_test.go and expire_test.go check after every step:
 //   - funded() equals the user's balance once every movement is replayed: the batches' leftovers less what charges took
 //     beyond them;
-//   - a batch is never over-spent: consumed + expired <= amount, so leftovers are never negative;
-//   - unfunded > 0 only when no batch holds anything, since a credit pays it off before anything else.
+//   - a batch is never over-spent: consumed + expired + refunded + frozen <= amount, so leftovers are never negative;
+//   - unfunded > 0 only when no batch holds unfrozen credit, since a credit pays it off before anything else.
 //
 // A movement that gives the user's balance back, other than a credit, is not allocated: nothing in the ledger makes one
 // yet, and what the first will need is written in docs/domains/billing.md「额度批次」 (#277). The replay stops on it with
@@ -43,15 +43,20 @@ func (a orderKey) compare(b orderKey) int {
 
 // batchState is a credit batch as the replay sees it.
 type batchState struct {
-	id, site                  uuid.UUID
-	source                    string
-	expiresAt                 *time.Time
-	amount, consumed, expired int64
-	opened                    orderKey // its credit transaction: the batch holds nothing before it
-	touched                   bool     // consumed or expired changed since it was loaded
+	id, site                             uuid.UUID
+	source                               string
+	expiresAt                            *time.Time
+	amount, consumed, expired            int64
+	freezeTotal, unfreezeTotal, refunded int64
+	opened                               orderKey // its credit transaction: the batch holds nothing before it
+	touched                              bool     // replay state changed since it was loaded
 }
 
-func (b *batchState) remaining() int64 { return b.amount - b.consumed - b.expired }
+func (b *batchState) remaining() int64 { return b.amount - b.consumed - b.expired - b.refunded }
+
+func (b *batchState) frozen() int64 { return b.freezeTotal - b.unfreezeTotal - b.refunded }
+
+func (b *batchState) available() int64 { return b.remaining() - b.frozen() }
 
 // spendOrder is the order charges take from batches: the earliest expiry first, a batch that does not expire last; of
 // the same expiry a gift before paid credit (so a paid batch stays refundable longest); then the older credit, which
@@ -87,7 +92,7 @@ type allocation struct {
 	was     orderKey // where the stored state stood when it was loaded
 	batches map[uuid.UUID]*batchState
 	open    []*batchState // the credited batches that hold something, in spendOrder
-	// unfunded is what charges took beyond every batch: the balance below zero.
+	// unfunded is what charges took beyond unfrozen credit; frozen credit can still keep the balance positive.
 	unfunded int64
 	changed  bool // the place or the debt moved since it was loaded
 }
@@ -95,10 +100,11 @@ type allocation struct {
 // movement is one ledger transaction's effect on the user's balance: debit is positive when it takes from the user,
 // 0 when the transaction did not touch it.
 type movement struct {
-	key     orderKey
-	kind    string
-	request uuid.UUID
-	debit   int64
+	key      orderKey
+	kind     string
+	request  uuid.UUID
+	debit    int64
+	revision int64
 }
 
 // placeOf is where a stored allocation stands: the last movement it replayed.
@@ -113,6 +119,7 @@ func newAllocation(state AllocationStateRow, loaded []LiveBatchesRow) *allocatio
 		b := &batchState{
 			id: r.ID, site: r.SiteID, source: r.Source, expiresAt: r.ExpiresAt, amount: r.Amount, consumed: r.Consumed,
 			expired: r.Expired, opened: orderKey{seq: r.OpenedSeq, at: r.OpenedAt, id: r.OpenedID},
+			freezeTotal: r.FreezeTotal, unfreezeTotal: r.UnfreezeTotal, refunded: r.Refunded,
 		}
 		a.batches[b.id] = b
 		if b.opened.compare(at) <= 0 {
@@ -132,6 +139,14 @@ func (a *allocation) funded() int64 {
 	return total
 }
 
+func (a *allocation) frozen() int64 {
+	var total int64
+	for _, b := range a.open {
+		total += b.frozen()
+	}
+	return total
+}
+
 // apply replays one movement. Movements come in order, once each.
 func (a *allocation) apply(m movement) error {
 	if m.key.compare(a.at) <= 0 {
@@ -143,6 +158,8 @@ func (a *allocation) apply(m movement) error {
 		err = a.credit(m)
 	case m.kind == "expire":
 		err = a.writeOff(m)
+	case m.kind == "freeze" || m.kind == "unfreeze" || m.kind == "refund":
+		err = a.refund(m)
 	case m.debit > 0:
 		a.spend(m.debit)
 	case m.debit < 0:
@@ -162,10 +179,7 @@ func (a *allocation) credit(m movement) error {
 	if !ok || b.opened.id != m.key.id || m.debit != -b.amount {
 		return fmt.Errorf("billing: credit transaction %s does not match a batch %s", m.key.id, m.request)
 	}
-	paid := min(a.unfunded, b.amount)
-	a.unfunded -= paid
-	b.consumed += paid
-	b.touched = b.touched || paid > 0
+	a.payDebt(b, b.amount)
 	if b.remaining() > 0 {
 		a.open = append(a.open, b)
 		slices.SortFunc(a.open, spendOrder)
@@ -173,10 +187,18 @@ func (a *allocation) credit(m movement) error {
 	return nil
 }
 
+// payDebt uses newly available credit before it can be spent again, whether credited or released from a freeze.
+func (a *allocation) payDebt(b *batchState, available int64) {
+	paid := min(a.unfunded, available)
+	a.unfunded -= paid
+	b.consumed += paid
+	b.touched = b.touched || paid > 0
+}
+
 // writeOff takes an expiry from the batch it names.
 func (a *allocation) writeOff(m movement) error {
 	b, ok := a.batches[m.request]
-	if !ok || m.debit <= 0 || m.debit > b.remaining() {
+	if !ok || m.debit <= 0 || m.debit > b.available() {
 		return fmt.Errorf("billing: expiry transaction %s of %d does not fit batch %s", m.key.id, m.debit, m.request)
 	}
 	b.expired += m.debit
@@ -190,7 +212,7 @@ func (a *allocation) writeOff(m movement) error {
 // 「额度批次」「到期」).
 func (a *allocation) spend(n int64) {
 	for _, b := range a.open {
-		take := min(b.remaining(), n)
+		take := min(b.available(), n)
 		b.consumed += take
 		b.touched = b.touched || take > 0
 		n -= take
@@ -207,7 +229,7 @@ func (a *allocation) dropSpent() {
 const movementPage = 5000
 
 // loadAllocation reads the stored state of an account: where the replay stood, then the batches, then the place again,
-// and returns errStale when it moved. The batches' consumed and expired are written only by save, in the transaction
+// and returns errStale when it moved. The batches' replay state is written only by save, in the transaction
 // that moves the place, and the place only moves forward; so a place that did not move across the batches' read means
 // they are the ones stored with it. A replay that started from batches newer than its place would miss a batch another
 // replay spent up in between, and fail on its credit, or on an expiry that no longer fits, before save's check of the
@@ -242,7 +264,7 @@ func (a *allocation) catchUpPage(ctx context.Context, tx pg.Tx, account uuid.UUI
 			return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
 		}
 		for _, r := range rows {
-			if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit); err != nil {
+			if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit, r.Revision); err != nil {
 				return false, err
 			}
 		}
@@ -255,15 +277,15 @@ func (a *allocation) catchUpPage(ctx context.Context, tx pg.Tx, account uuid.UUI
 		return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
 	}
 	for _, r := range rows {
-		if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit); err != nil {
+		if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit, r.Revision); err != nil {
 			return false, err
 		}
 	}
 	return len(rows) == int(size), nil
 }
 
-func (a *allocation) applyRow(account uuid.UUID, seq int64, at time.Time, id uuid.UUID, kind string, request uuid.UUID, debit int64) error {
-	m := movement{key: orderKey{seq: seq, at: at, id: id}, kind: kind, request: request, debit: debit}
+func (a *allocation) applyRow(account uuid.UUID, seq int64, at time.Time, id uuid.UUID, kind string, request uuid.UUID, debit, revision int64) error {
+	m := movement{key: orderKey{seq: seq, at: at, id: id}, kind: kind, request: request, debit: debit, revision: revision}
 	if err := a.apply(m); err != nil {
 		return fmt.Errorf("billing: replay %s: %w", account, err)
 	}
@@ -302,6 +324,9 @@ func (a *allocation) save(ctx context.Context, tx pg.Tx, account uuid.UUID) erro
 	for _, b := range a.batches {
 		if b.touched {
 			batches.Ids, batches.Consumed, batches.Expired = append(batches.Ids, b.id), append(batches.Consumed, b.consumed), append(batches.Expired, b.expired)
+			batches.FreezeTotal = append(batches.FreezeTotal, b.freezeTotal)
+			batches.UnfreezeTotal = append(batches.UnfreezeTotal, b.unfreezeTotal)
+			batches.Refunded = append(batches.Refunded, b.refunded)
 		}
 	}
 	if len(batches.Ids) == 0 {
@@ -311,4 +336,24 @@ func (a *allocation) save(ctx context.Context, tx pg.Tx, account uuid.UUID) erro
 		return fmt.Errorf("billing: save the batches of %s: %w", account, err)
 	}
 	return nil
+}
+
+// replayAccount takes the money lock and checks both ledger-derived totals before a freeze or expiry can move money.
+func replayAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (LockBalanceRow, *allocation, error) {
+	balance, err := lockAccount(ctx, tx, account)
+	if err != nil {
+		return balance, nil, err
+	}
+	a, err := loadAllocation(ctx, tx, account)
+	if err != nil {
+		return balance, nil, err
+	}
+	if err := a.catchUp(ctx, tx, account, size); err != nil {
+		return balance, nil, err
+	}
+	if a.funded() != balance.Balance || a.frozen() != balance.Frozen {
+		return balance, nil, fmt.Errorf("billing: allocation of %s funds %d frozen %d, balance %d frozen %d", account,
+			a.funded(), a.frozen(), balance.Balance, balance.Frozen)
+	}
+	return balance, a, nil
 }
