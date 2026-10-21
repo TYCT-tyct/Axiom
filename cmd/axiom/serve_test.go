@@ -33,7 +33,7 @@ func TestServe(t *testing.T) {
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	go func() { done <- serveForTest(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
 	addrs := servingAddrs(t, logs, done)
 	awaitRecord(t, logs, done, "ready") // /readyz turns 200 on a goroutine of its own, after "serving"
 
@@ -199,7 +199,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
 			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		}, c.environ...)
-		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
+		err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
@@ -352,7 +352,7 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	served := make(chan error, 1)
-	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
+	go func() { served <- serveForTest(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
 	select {
 	case err := <-served:
 		if !errors.Is(err, errNoAnswer) {
@@ -386,7 +386,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 		recorder = startRecorder(ctx, db, tel, logger)
 		return recorder
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record); err == nil {
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
 		t.Fatal("the node started on a taken address")
 	}
 	if recorder == nil {

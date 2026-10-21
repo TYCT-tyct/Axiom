@@ -202,7 +202,7 @@
 
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。已实现：`Fetcher` 只读两个固定地址（`raw.githubusercontent.com` 上 LiteLLM 的 `model_prices_and_context_window.json`、`openrouter.ai/api/v1/models`），只收 200，重定向不跟随；超时 60 秒、正文上限 32MB。取数或解析失败时这一数据集整轮不发布，模型保持最后的价格，日志记 error。
-- **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，启动或换主也先跑一轮。参数相同，未结束任务按参数保持唯一，重启不会堆积任务。`MaxAttempts` 为 1；正常取数或解析失败写入 `catalog.sync_state` 后返回 nil，任务完成，等下一日轮次，不因一次短暂上游故障触发 `queue.job_discarded`。只有状态记录写不进才返回错误，队列丢弃信号暴露的是记录设施故障。任务自己打开目录，只做取数和发布；对外快照由调用路径打开。结果记录使用不继承任务取消、最多 5 秒的 context，生产时间来自同一记录事务里的 `clock_timestamp()`，测试可注入时钟。读全两个数据集才写最后成功、清零连续失败，并重算待确认改价数（仅 `OutcomeHeld` 且 `Candidate != nil`）；缺条目、歧义、无法构造价目表的 held 仍留在报告和日志里，但不算待确认改价。失败累加连续失败，首次失败记录 `failing_since`，保留最后成功和上一完整轮次的待确认数，后续成功再重算。
+- **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，启动或换主也先跑一轮。参数相同，未结束任务按参数保持唯一，重启不会堆积任务。`MaxAttempts` 为 1；正常取数或解析失败写入 `catalog.sync_state` 后返回 nil，任务完成，等下一日轮次，不因一次短暂上游故障触发 `queue.job_discarded`。只有状态记录写不进才返回错误，队列丢弃信号暴露的是记录设施故障。任务自己打开目录，只做取数和发布；对外快照由调用路径打开。价格 worker 同时响应 River 任务和登记时传入的节点 context；节点开始关停即取消网络取数，启动失败也在停止队列前取消，不等通用队列的优雅收尾期限。结果记录使用不继承任务取消、最多 5 秒的 context，生产时间来自同一记录事务里的 `clock_timestamp()`，测试可注入时钟。读全两个数据集才写最后成功、清零连续失败，并重算待确认改价数（仅 `OutcomeHeld` 且 `Candidate != nil`）；缺条目、歧义、无法构造价目表的 held 仍留在报告和日志里，但不算待确认改价。失败累加连续失败，首次失败记录 `failing_since`，保留最后成功和上一完整轮次的待确认数，后续成功再重算。
 - **同步状态与告警**（已实现，`sync_metrics.go`）：登记任务时同时登记无标签 gauge `axiom_catalog_sync_last_success_age_seconds` 和 `axiom_catalog_sync_consecutive_failures`。每次采集都以平台范围读持久化状态和数据库时钟（最多 2 秒），距最后成功的秒数即使没有新任务执行也继续增长；从未成功时从 `failing_since` 起算，尚未执行过为 0，时钟倒退时不报负数。连续失败直接取 `failures`。读库失败返回采集错误、不伪报 0；运维节点需同时监测指标缺失。运维节点按后台数据配置时间和连续失败阈值、严重程度及通知渠道（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）。节点仍在执行失败轮次时提供 `catalog.sync.overdue` 日志和 `axiom_catalog_sync_overdue_total` 计数作为兜底；`SyncJobConfig.AlertAfter` 的 48 小时是代码默认值，没有后台配置入口，显式启动配置可覆盖，不能把它当作后台规则。单次取数错误仍由 `SyncAll` 记录，但不走队列丢弃告警。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。已实现的读法：
   - LiteLLM 只读厂商自己的 provider（`openai`、`anthropic`、`gemini`→google、`deepseek`）下 `mode` 为 `chat` 或 `responses` 的条目，不读 `vertex_ai`、`bedrock`、`azure` 这类转售方按自己的价格表的条目；条目名去掉 `<provider>/` 前缀。字段先去服务等级后缀（`_priority`、`_flex`），再去 `_above_<N>k_tokens`（N 千 token），再按字段表认计费项；`_batches` 等不对应计费项的字段不读。联网搜索取 `search_context_cost_per_query`，三种上下文大小同价才取。
@@ -341,13 +341,14 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 
 type Fetched struct{ Source PriceSource; Body []byte; At time.Time } // 一份取回的数据集
 func NewFetcher(client *egress.Client) *Fetcher                     // 固定地址、60 秒、32MB、只收 200
+func NewTestFetcher(t testing.TB, client *egress.Client, urls map[PriceSource]string) *Fetcher // 仅测试二进制能覆盖地址，节点集成测试用本地数据集
 func (f *Fetcher) Fetch(ctx context.Context, src PriceSource) (Fetched, error) // At 为零
 func (c *Catalog) Fetch(ctx context.Context, f *Fetcher, src PriceSource) (Fetched, error) // 取数，At 取自取数前数据库的时钟
 func ParseLiteLLM(body []byte) ([]Entry, error)                     // 条目；ParseOpenRouter 同；整份不能解析是错误，单条不可用记在 Entry.Err
 func (c *Catalog) SyncDataset(ctx context.Context, f Fetched, publish bool) (SyncReport, error) // publish 为 false 是演习：只报告
 func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]SyncReport, error)  // 一轮的全部数据集；定时任务调的就是它
 type SyncJobConfig struct{ DB *pg.DB; Scope pg.Scope; Queue *pg.Queue; Fetcher *Fetcher; Logger *slog.Logger; Meter metric.Meter; Clock func() time.Time; AlertAfter time.Duration } // Clock 为空用数据库 clock_timestamp()；AlertAfter 为零用 48 小时代码兜底
-func RegisterSync(cfg SyncJobConfig) error // 队列启动前登记：每天一轮 catalog.sync 在 syncs 队列上，结果写进 catalog.sync_state，超过阈值告警
+func RegisterSync(ctx context.Context, cfg SyncJobConfig) error // 队列启动前登记：每天一轮 catalog.sync 在 syncs 队列上；ctx 结束立即取消取数，结果仍有独立的记录期限
 func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDatasetSourceRequest) (Result, error)
 func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, error)           // 只读
 func (c *Catalog) Unrecognized(entries []Entry, authors []string) ([]string, error)           // OpenRouter 列出而目录不认识的纯文本模型
@@ -367,6 +368,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
 - 服务等级与档位交叉的用例：标准档输出 2、长上下文 4，priority 输出 3、长上下文 5，四种组合各得其价；priority 没录 `cache_read` 时，priority 请求的缓存读被报告缺价，标准档请求不受影响，`Missing` 返回 priority；priority 漏写长上下文档或门槛与顶层不同的价目表被拒。
 - `Lost` 的表驱动用例：旧 priority 有输入、输出价只缺 `web_search`，新 priority 只有输出价时返回 priority 的 `input`，新价目表没有 priority 时返回 priority 的 `input` 和 `output`；旧价有 `reasoning`、新价没有但有 `output` 时为空；新价目表多一道门槛、高区间缺 `output` 时只返回高区间；新价目表去掉旧门槛时为空（基础价覆盖高区间，档位的丢失由自动发布另查）；两表都只在 200k 以上为 priority 提供 `output`、旧表口径 {`input`, `cache_read`} 而新表 {`input`} 时返回 `ErrTierBasisChanged`（请求 `input=1、cache_read=200000、output=1` 在旧表有输出价、在新表没有），两表都没有分档而口径不同时照常比较。自动发布的条目让 `Lost` 不为空时只开审核项，参考价不变。
+- 节点集成测试默认不登记价格周期任务；`TestServeCancelsAPriceFetchOnShutdown` 显式使用本地数据集，在等待响应头和读取响应体两种阶段暂停取数，取消节点后验证请求立即取消、节点无错误退出、失败记账且任务完成，不等 30 秒队列期限。
 - 定时同步的用例（`sync_job_test.go`、`sync_job_recovery_test.go`）：队列启动即执行，健康或上游 503 的轮次均完成，`queue=syncs`、`max_attempts=1`，信号用 `sync.Once`；成功、失败、恢复及部分发布后的下一轮不重复发布；失败保留最后成功和完整待确认数，取消后仍记录并完成；恰在 48 小时不触发兜底、超过后日志和计数上升、恢复停止、从未成功也有兜底；manual/official 来源和涨跌幅安全阀保持不变。
 - 状态指标和边界用例（`sync_metrics_test.go`）：没有下一轮时 gauge 仍按受控时钟增长，从未成功、失败和恢复均能读到；生产记录时间在前后两次数据库 `clock_timestamp()` 之间；缺条目的 held 不计入待确认数且保持价格；记录写入失败仍返回错误。
 

@@ -37,7 +37,7 @@ func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
 	t.Run("below the gate", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		err := serve(ctx, withPool(gate-1), slog.New(slog.DiscardHandler))
+		err := serveForTest(ctx, withPool(gate-1), slog.New(slog.DiscardHandler))
 		if err == nil {
 			t.Fatal("the node started with fewer connections than the gateway hands out")
 		}
@@ -55,7 +55,7 @@ func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, withPool(gate), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		go func() { done <- serveForTest(ctx, withPool(gate), slog.New(slog.NewJSONHandler(logs, nil))) }()
 		servingAddrs(t, logs, done)
 		cancel()
 		select {
@@ -182,7 +182,7 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 	for _, c := range cases {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0"}, c.environ...)
-		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
+		err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)

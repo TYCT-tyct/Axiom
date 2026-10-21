@@ -24,7 +24,7 @@ func TestTheSyncStateIsMeasuredWithoutAnotherRound(t *testing.T) {
 		Queue: s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil),
 		Meter: tel.Metrics.Meter("axiom/catalog"), Clock: func() time.Time { return now },
 	}
-	if err := catalog.RegisterSync(cfg); err != nil {
+	if err := catalog.RegisterSync(t.Context(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	check := func(age, failures string) {

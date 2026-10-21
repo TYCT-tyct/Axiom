@@ -87,7 +87,7 @@ func (d *datasets) fetcher(t *testing.T) *catalog.Fetcher {
 	t.Cleanup(litellm.Close)
 	openrouter := httptest.NewServer(serve(d.openrouter))
 	t.Cleanup(openrouter.Close)
-	return catalog.NewTestFetcher(egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{
+	return catalog.NewTestFetcher(t, egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{
 		catalog.SourceLiteLLM: litellm.URL, catalog.SourceOpenRouter: openrouter.URL,
 	})
 }
@@ -158,7 +158,7 @@ func runSyncQueueTest(t *testing.T, failing bool) {
 	var ranOnce sync.Once
 	d.failing.Store(failing)
 	q := s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil)
-	if err := catalog.RegisterSync(catalog.SyncJobConfig{
+	if err := catalog.RegisterSync(t.Context(), catalog.SyncJobConfig{
 		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.logger(),
 		Clock: func() time.Time {
 			ranOnce.Do(func() { close(ran) })

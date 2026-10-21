@@ -50,8 +50,9 @@ type SyncJobConfig struct {
 
 // RegisterSync adds the daily dataset sync to the queue, before it starts. It cannot take a *Catalog: the queue starts
 // before the call path opens its own, and a round needs only the database and the fetcher. Only the leader schedules a
-// round; any worker may run one.
-func RegisterSync(cfg SyncJobConfig) error {
+// round; any worker may run one. ctx is the node's lifetime: unlike money jobs, a price download can stop as soon as the
+// node shuts down, without waiting for the queue's drain deadline.
+func RegisterSync(ctx context.Context, cfg SyncJobConfig) error {
 	if cfg.Queue == nil {
 		return errors.New("catalog: the scheduled sync needs a queue")
 	}
@@ -59,7 +60,17 @@ func RegisterSync(cfg SyncJobConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(j.work)); err != nil {
+	worker := river.WorkFunc(func(jobCtx context.Context, job *river.Job[syncArgs]) error {
+		roundCtx, cancel := context.WithCancel(jobCtx)
+		stop := context.AfterFunc(ctx, cancel)
+		defer stop()
+		defer cancel()
+		if ctx.Err() != nil {
+			cancel()
+		}
+		return j.work(roundCtx, job)
+	})
+	if err := river.AddWorkerSafely(cfg.Queue.Workers(), worker); err != nil {
 		return fmt.Errorf("catalog: register the price sync: %w", err)
 	}
 	if err := j.registerStatusMetrics(); err != nil {
