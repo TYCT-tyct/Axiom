@@ -133,7 +133,7 @@ jobs:
     # Keep the browser and serveweb in one stable network namespace; match web/package.json's Playwright version.
     container:
       image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
-      options: --cpus 8 # Docker jobs do not inherit the runner's shared CPU quota; keep the existing eight-worker share.
+      options: --cpus 8 # Docker jobs do not inherit the runner's shared CPU quota; bound the browser and harness together.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
