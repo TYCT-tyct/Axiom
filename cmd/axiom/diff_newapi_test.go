@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -41,10 +43,18 @@ type newAPI struct {
 func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	t.Helper()
 	ctx := t.Context()
+	hostAccess := testcontainers.WithHostPortAccess(up.port())
+	if os.Getenv("AXIOM_TEST_CGROUP_PARENT") != "" {
+		// The library's SSHD sidecar has no HostConfig hook. On the CI Docker host, reach the fixture directly so
+		// every test service stays in the slice; without the CI setting, keep the portable tunnel for developers.
+		hostAccess = testcontainers.WithHostConfigModifier(func(host *container.HostConfig) {
+			host.ExtraHosts = append(host.ExtraHosts, testcontainers.HostInternal+":host-gateway")
+		})
+	}
 	container, err := testcontainers.Run(ctx, newAPIImage,
 		containertest.WithCgroupParent(),
 		testcontainers.WithExposedPorts("3000/tcp"),
-		testcontainers.WithHostPortAccess(up.port()),
+		hostAccess,
 		testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}), //nolint:gosec // a throwaway container's, not a credential
 		testcontainers.WithWaitStrategy(wait.ForHTTP("/api/status").WithPort("3000/tcp").WithStartupTimeout(2*time.Minute)),
 	)
