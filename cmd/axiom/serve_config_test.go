@@ -13,35 +13,64 @@ import (
 	"testing"
 	"time"
 
-	"axiom/internal/gateway"
+	"axiom/internal/accounts"
+	"axiom/internal/catalog"
+	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
-// TestServeRefusesAPoolBelowTheGate: the gateway hands out Config.PoolSize database connections and keeps the last
-// Config.PoolReserve of them for completions, so a connection string that shrinks the pool below them would queue the
-// ones the reserve promised. The node refuses to start and names the variable and both sizes, not the string; a pool
-// of exactly that size starts.
-func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
+func TestCommandsUseTheConfiguredConnectionBudget(t *testing.T) {
+	t.Parallel()
+	environ := []string{
+		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App + "&pool_max_conns=8",
+		"AXIOM_DB_COMPLETION_RESERVE=2",
+	}
+	for name, run := range map[string]func() error{
+		"billing": func() error {
+			return withDatabase(t.Context(), environ, func(db *pg.DB) error {
+				if db.MaxConns() != 8 || db.CompletionConns() != 2 {
+					t.Errorf("budget = %d, reserve = %d", db.MaxConns(), db.CompletionConns())
+				}
+				return nil
+			})
+		},
+		"operator": func() error {
+			return withOperator(t.Context(), environ, func(*accounts.Operator) error { return nil })
+		},
+		"catalog": func() error {
+			return withCatalog(t.Context(), environ, func(*catalog.Catalog, *catalog.Fetcher) error { return nil })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestServeChecksTheConnectionBudget refuses an impossible reserve and starts with a smaller deployment budget.
+func TestServeChecksTheConnectionBudget(t *testing.T) {
 	t.Parallel()
 	url := pgtest.New(t, modules()...).App
-	gate := gateway.DefaultConfig().PoolSize
+	const reserve = 2
 	base := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DB_COMPLETION_RESERVE=2",
 	}
 	withPool := func(size int) []string {
 		return append(slices.Clone(base), fmt.Sprintf("AXIOM_DATABASE_URL=%s&pool_max_conns=%d", url, size))
 	}
 
-	t.Run("below the gate", func(t *testing.T) {
+	t.Run("reserve consumes the budget", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		err := serve(ctx, withPool(gate-1), slog.New(slog.DiscardHandler))
+		err := serve(ctx, withPool(reserve), slog.New(slog.DiscardHandler))
 		if err == nil {
-			t.Fatal("the node started with fewer connections than the gateway hands out")
+			t.Fatal("the node started without ordinary connections")
 		}
-		for _, want := range []string{"AXIOM_DATABASE_URL", fmt.Sprintf("pool_max_conns %d", gate-1), fmt.Sprintf("%d database connections", gate)} {
+		for _, want := range []string{pg.DatabaseURLVar, "pool_max_conns 2", "completion reserve"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("%q does not say %q", err, want)
 			}
@@ -51,11 +80,11 @@ func TestServeRefusesAPoolBelowTheGate(t *testing.T) {
 		}
 	})
 
-	t.Run("at the gate", func(t *testing.T) {
+	t.Run("smaller than the default", func(t *testing.T) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, withPool(gate), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		go func() { done <- serve(ctx, withPool(8), slog.New(slog.NewJSONHandler(logs, nil))) }()
 		servingAddrs(t, logs, done)
 		cancel()
 		select {
@@ -108,10 +137,10 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			"settings that are no settings",
 			[]string{
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
-				"AXIOM_HASH_CONCURRENCY=0", "AXIOM_HASH_WAIT=planted-value", "AXIOM_TRUSTED_PROXIES=planted-value", "AXIOM_HASH_CONCURENCY=4",
+				"AXIOM_DB_COMPLETION_RESERVE=0", "AXIOM_HASH_CONCURRENCY=0", "AXIOM_HASH_WAIT=planted-value", "AXIOM_TRUSTED_PROXIES=planted-value", "AXIOM_HASH_CONCURENCY=4",
 			},
 			[]string{
-				"AXIOM_HASH_CONCURRENCY: want a whole number of at least 1", "AXIOM_HASH_WAIT: want a positive duration",
+				"AXIOM_DB_COMPLETION_RESERVE: want a whole number of at least 1", "AXIOM_HASH_CONCURRENCY: want a whole number of at least 1", "AXIOM_HASH_WAIT: want a positive duration",
 				"AXIOM_TRUSTED_PROXIES: want IP addresses and networks", "AXIOM_HASH_CONCURENCY: unknown variable",
 			},
 		},
