@@ -95,18 +95,14 @@ func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
 		if err := countOnce(t.Context(), t, client); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("an access before the open period ended: %v", err)
 		}
-		if got := gaugeValue(t, reader, breakerMetric); got != 1 {
-			t.Fatalf("breaker_open = %d while the breaker is open, want 1", got)
-		}
+		checkGauge(t, reader, breakerMetric, 1)
 		time.Sleep(openFor)
 		for range 2 { // the half-open probe, then an ordinary access
 			if err := countOnce(t.Context(), t, client); err != nil {
 				t.Fatalf("an access after the server resumed: %v", err)
 			}
 		}
-		if got := gaugeValue(t, reader, breakerMetric); got != 0 {
-			t.Fatalf("breaker_open = %d after the probe succeeded, want 0", got)
-		}
+		checkGauge(t, reader, breakerMetric, 0)
 		if got := server.sent.Load(); got != streakAccesses+2 {
 			t.Fatalf("%d commands sent, want the timeouts, probe and ordinary access", got)
 		}
