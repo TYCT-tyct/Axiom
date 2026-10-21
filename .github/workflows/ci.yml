@@ -175,12 +175,15 @@ jobs:
               cpus=$(node -p "require(\"node:os\").availableParallelism()")
               echo "Node availableParallelism=$cpus"
               test "$cpus" -le 8
+              if [ "$GATE_STRESS" = true ]; then
+                gate=(e2e/gate.spec.ts -g "admin (price-publish|supplier-connect-details|account|model-name) ")
+                pnpm --dir web exec playwright test "${gate[@]}" --list
+              fi
               just web
               if [ "$GATE_STRESS" = true ]; then
                 AXIOM_VERSION=$(just axiom-version)
                 export AXIOM_VERSION
-                pnpm --dir web exec playwright test e2e/gate.spec.ts \
-                  -g "^admin (price-publish|supplier-connect-details|account|model-name) " \
+                pnpm --dir web exec playwright test "${gate[@]}" \
                   --repeat-each=50 --max-failures=1 --reporter=line
               fi
             '
