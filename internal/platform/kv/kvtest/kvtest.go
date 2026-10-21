@@ -38,8 +38,7 @@ const (
 	aclPath = "/etc/valkey/users.acl"
 	// startTimeout covers a first pull of the image.
 	startTimeout = 2 * time.Minute
-	// wideAccess is the deadline of a test's access: a minute, far beyond what a server needs to answer, so that a busy
-	// machine cannot turn the answer into a timeout (Deps).
+	// wideAccess keeps tests of server replies independent of the production latency budget.
 	wideAccess = time.Minute
 )
 
@@ -185,11 +184,8 @@ func Namespace() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// Deps is what a test's client reaches the server with: the access deadline is wideAccess unless the test sets one,
-// because a test of what the server answers must not be decided by how busy the machine is, and only a test of the
-// deadline itself sets kv.Timeout. A test that calls kv.Open itself, to see the error a start returns, wraps its deps
-// here, so that every client of a test gets the same deadline; a client without a URL never reaches a server and needs
-// nothing here.
+// Deps applies the test deadline unless the test sets one. Tests that call kv.Open directly to inspect startup errors
+// use it too; otherwise they inherit the production latency budget even when they only test the server's reply.
 func Deps(deps kv.Deps) kv.Deps {
 	if deps.AccessTimeout == 0 {
 		deps.AccessTimeout = wideAccess

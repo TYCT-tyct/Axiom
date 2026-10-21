@@ -70,6 +70,38 @@ func leavesAtTheDeadline(t *testing.T, client *Client) {
 	}
 }
 
+// TestTimeoutReturnsAndTheBreakerRecovers uses the controlled server and virtual time: healthy accesses must not race
+// a real server against the production deadline, and a timeout must happen before the test releases the replies.
+func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, server := stuckClient(maxOutstanding)
+		for range streakAccesses {
+			leavesAtTheDeadline(t, client)
+		}
+		if err := countOnce(t.Context(), t, client); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("an access while the breaker is open: %v", err)
+		}
+		if got := server.sent.Load(); got != streakAccesses {
+			t.Fatalf("%d commands sent, want only the %d before the breaker opened", got, streakAccesses)
+		}
+		close(server.release)
+		synctest.Wait()
+		// Replies arriving after their callers left must not close the breaker before its probe.
+		if err := countOnce(t.Context(), t, client); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("an access before the open period ended: %v", err)
+		}
+		time.Sleep(openFor)
+		for range 2 { // the half-open probe, then an ordinary access
+			if err := countOnce(t.Context(), t, client); err != nil {
+				t.Fatalf("an access after the server resumed: %v", err)
+			}
+		}
+		if got := server.sent.Load(); got != streakAccesses+2 {
+			t.Fatalf("%d commands sent, want the timeouts, probe and ordinary access", got)
+		}
+	})
+}
+
 // TestAFullQueueNeverHoldsACallPastItsDeadline: with every place taken by a command the server has not answered, a call
 // leaves at kv.Timeout without sending, the commands that hold the places count as still out after their callers left, and
 // a place is free again only when the reply comes (README「客户端与连接」).

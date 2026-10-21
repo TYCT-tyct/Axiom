@@ -26,19 +26,6 @@ type offsetClock struct{ ahead atomic.Int64 }
 
 func (c *offsetClock) Now() time.Time { return time.Now().Add(time.Duration(c.ahead.Load())) }
 
-// steadyClock is the real clock until stand is called and stands still from then, so that a client measures its offset to
-// a server whose clock runs, and the breaker's open period never ends in a test that wants it to stay open.
-type steadyClock struct{ at atomic.Int64 } // zero while the clock runs
-
-func (c *steadyClock) Now() time.Time {
-	if at := c.at.Load(); at != 0 {
-		return time.Unix(0, at)
-	}
-	return time.Now()
-}
-
-func (c *steadyClock) stand() { c.at.Store(time.Now().UnixNano()) }
-
 // jump moves the clock forward.
 func (c *offsetClock) jump(d time.Duration) { c.ahead.Add(int64(d)) }
 
@@ -160,37 +147,6 @@ func untilCounts(t *testing.T, clock *offsetClock, client *kv.Client, script kv.
 	}
 }
 
-// TestTimeoutReturnsAndTheBreakerRecovers: a server whose scripts wait does not answer them, so every access returns
-// unavailable at the deadline, the breaker opens, and once the server answers the half-open probe closes it. The test does
-// not time the deadline: an access that waited for the server instead would succeed only after the resume, which the test
-// has not given yet (internal/platform/kv/README.md「测试」).
-func TestTimeoutReturnsAndTheBreakerRecovers(t *testing.T) {
-	t.Parallel()
-	server := kvtest.Own(t)
-	clock, seen := &offsetClock{}, newReadings()
-	client := server.Open(t, kv.Deps{Now: clock.Now, Meter: seen.meter, AccessTimeout: kv.Timeout})
-	script := kv.NewScript(countScript)
-	if _, err := count(t, client, script, 100); err != nil {
-		t.Fatalf("run the count: %v", err)
-	}
-	resume := pauseWrites(t, server)
-	for i := range 32 {
-		if _, err := count(t, client, script, 100); !errors.Is(err, kv.ErrUnavailable) {
-			t.Fatalf("access %d against a server that does not answer: %v", i, err)
-		}
-	}
-	if got := seen.breakerOpen(t); got != 1 {
-		t.Fatalf("breaker_open = %d after 32 accesses that timed out", got)
-	}
-	resume()
-	if counts := untilCounts(t, clock, client, script); len(counts) != 2 {
-		t.Fatalf("count after the resume = %v", counts)
-	}
-	if got := seen.breakerOpen(t); got != 0 {
-		t.Fatalf("breaker_open = %d after the probe succeeded", got)
-	}
-}
-
 // TestCallerGivingUpDoesNotOpenTheBreaker: accesses the caller abandons, by its own deadline or its own cancel, are
 // skipped and say nothing about the server, or a client that sends requests and hangs up could open the breaker for
 // everyone (README「熔断」).
@@ -202,7 +158,7 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 	script := kv.NewScript(countScript)
 	pauseWrites(t, server)
 	for range 20 {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond) // earlier than kv.Timeout, so the caller's
+		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond) // earlier than the client's deadline
 		_, err := client.Do(ctx, kv.Precheck, script.Cmd(window(client, 100), "120000"))
 		cancel()
 		if !errors.Is(err, kv.ErrUnavailable) {
@@ -224,14 +180,12 @@ func TestCallerGivingUpDoesNotOpenTheBreaker(t *testing.T) {
 
 // TestEveryAccessReturns: far more concurrent accesses than a connection's ring has slots, against a server whose scripts
 // wait, must each return, and no more of them may reach the server than the client lets be out: the ring waits for a slot
-// without looking at any context, so what keeps a call from waiting there is that the client never fills it. The clock is
-// frozen, so the breaker that opens stays open and nothing is sent after it (README「客户端与连接」).
+// without looking at any context, so what keeps a call from waiting there is that the client never fills it. Calls are
+// bounded by caller deadlines while writes are paused (README「客户端与连接」).
 func TestEveryAccessReturns(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
-	clock := &steadyClock{}
-	client := server.Open(t, kv.Deps{Now: clock.Now, AccessTimeout: kv.Timeout})
-	clock.stand()
+	client := server.Open(t, kv.Deps{})
 	script := kv.NewScript(countScript)
 	keys := window(client, 100)
 	resume := pauseWrites(t, server)
@@ -241,7 +195,9 @@ func TestEveryAccessReturns(t *testing.T) {
 	for range concurrent {
 		go func() {
 			defer group.Done()
-			if _, err := client.Do(t.Context(), kv.Precheck, script.Cmd(keys, "120000")); !errors.Is(err, kv.ErrUnavailable) {
+			ctx, cancel := context.WithTimeout(t.Context(), kv.Timeout)
+			defer cancel()
+			if _, err := client.Do(ctx, kv.Precheck, script.Cmd(keys, "120000")); !errors.Is(err, kv.ErrUnavailable) {
 				t.Errorf("access: %v", err)
 			}
 		}()
@@ -316,8 +272,7 @@ func TestRestartRecovers(t *testing.T) {
 
 // TestDeferredChecksReportOnly: a start that could not reach the server owes the checks that need one; the first answer
 // runs them, and a server that would fail them is reported and not refused, because a node may not stop serving over a
-// mistake it already survived the start with (README「配置与启动」). The client's deadline is kvtest's wide one, so the
-// count at the end asserts the server's answer and not how fast the machine was (CONTRIBUTING「时序」).
+// mistake it already survived the start with (README「配置与启动」).
 func TestDeferredChecksReportOnly(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Policy("allkeys-lru"))
@@ -329,21 +284,13 @@ func TestDeferredChecksReportOnly(t *testing.T) {
 		t.Fatalf("a node whose server is stopped refused to start: %v", err)
 	}
 	t.Cleanup(func() { closeQuietly(t, client) })
+	client.StopChecks()
 	server.Start(t)
-	// The start's failed dial leaves a connection the client replaces at the access after it finds it dead, and a dial may
-	// find a server that has listened but not yet entered its loop: three accesses cover both. server.Start returns once
-	// the server accepts connections, and the jump passes the breaker's open period for each, so nothing here waits on the
-	// clock (CONTRIBUTING「时序」).
-	const accesses = 3
-	var missed error
-	for range accesses {
-		clock.jump(pastOpen)
-		if missed = client.Measure(t.Context()); missed == nil {
-			break
-		}
-	}
-	if missed != nil {
-		t.Fatalf("the client never reached the server in %d accesses: %v", accesses, missed)
+	// The failed initial dial is not cached by valkey-go. Start waits for readiness, and stopping the background checks
+	// leaves the half-open probe to this measurement; neither retries nor elapsed time decide when to check the policy.
+	clock.jump(pastOpen)
+	if err := client.Measure(t.Context()); err != nil {
+		t.Fatalf("measure the restarted server: %v", err)
 	}
 	if !strings.Contains(logs.String(), "maxmemory_policy") {
 		t.Errorf("the policy the start would have refused was not reported: %s", logs.String())

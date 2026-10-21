@@ -14,13 +14,19 @@ func (c *Client) Measure(ctx context.Context) error {
 	return err
 }
 
-// Crash ends the client the way a crashed process ends: its loops and connections go and its row stays, and the name it
-// held is freed with the connection, which is all a restart needs.
-func (c *Client) Crash(ctx context.Context) error {
+// StopChecks waits for the background checks to finish, so a test can run the next measurement itself without racing
+// the loop for the breaker's half-open probe.
+func (c *Client) StopChecks() {
 	if c.stop != nil {
 		c.stop()
 	}
 	c.done.Wait()
+}
+
+// Crash ends the client the way a crashed process ends: its loops and connections go and its row stays, and the name it
+// held is freed with the connection, which is all a restart needs.
+func (c *Client) Crash(ctx context.Context) error {
+	c.StopChecks()
 	if c.vk != nil {
 		c.vk.Close()
 	}

@@ -14,8 +14,8 @@
 
 ## 测试客户端的访问期限漏过了 kvtest 的宽默认
 
-`TestDeferredChecksReportOnly` 要断言启动返回的错误，所以没走 `kvtest` 的 `Open`/`OpenIn`，而是 `server.Config` 加 `kv.Open` 自己建客户端；放宽期限的代码只在 `kvtest` 那两个构造函数里，这条路拿到的仍是生产期限 `kv.Timeout`（20ms），末尾那次 `count` 于是在 CI 负载下超时。现在放宽只在 `kvtest.Deps` 一处，包内每个连服务端的 `kv.Open` 都经过它；那条等待循环也改成固定的几次访问，不再按墙钟睡和超时。待加的检查：lint 禁止 `internal/platform/kv` 的测试用未包 `kvtest.Deps` 的 `kv.Deps` 调 `kv.Open`。
+`TestDeferredChecksReportOnly` 为了断言启动错误，用 `server.Config` 加 `kv.Open` 建客户端，绕过了 `kvtest.Open`/`OpenIn` 的一分钟默认期限；`TestTimeoutReturnsAndTheBreakerRecovers` 则把预热、超时和恢复都交给同一个 20ms 客户端。两条路径都让正常回复在 CI 负载下与生产期限竞速。现在真实服务端的测试客户端统一经过 `kvtest.Deps`，未指定时用一分钟；生产期限和熔断恢复由已有受控假服务端及 `synctest` 验证。真实服务端的暂停期间用调用方期限验证并发访问会返回，启动不受短期限影响。延迟策略检查先等待后台检查退出，再推进注入的时钟并执行一次测量，避免争抢半开探测，不靠睡眠或重试次数。
 
-证据：合并车 run 39439661276 的 go-test 失败（`internal/platform/kv/outage_test.go:347`：`the node stopped serving over a policy it only reports: valkey unavailable: context deadline exceeded`）
-哪一层没拦住：PR #358 把宽期限只放进了 `kvtest` 的客户端构造函数，测试自己调 `kv.Open` 的启动路径没走它，也没有检查能发现这条路径；CONTRIBUTING「时序」只禁止按墙钟判成败，没写测试客户端该用哪个期限
+证据：合并车 run 39439661276 的 go-test 失败（`internal/platform/kv/outage_test.go:347`：`the node stopped serving over a policy it only reports: valkey unavailable: context deadline exceeded`）；PR #372 的 `47f2d7e` CI 在同一文件第 174 行失败（`TestTimeoutReturnsAndTheBreakerRecovers`：`run the count: valkey unavailable: context deadline exceeded`）
+哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复，测试和评审没有隔离这两种断言。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；真实服务端的正常回复不得用生产期限断言，生产期限用受控服务端及虚拟时间验证。
 出现：2026-10-20
