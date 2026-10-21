@@ -30,17 +30,17 @@ func TestEndpointGenerationFormats(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			testGenerationFormat(t, c.format, c.name, c.cap)
+			stream, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", c.name, "text", "upstream.sse"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			testGenerationFormat(t, c.format, c.cap, stream)
 		})
 	}
 }
 
-func testGenerationFormat(t *testing.T, format protocol.Format, name, cap string) {
+func testGenerationFormat(t *testing.T, format protocol.Format, cap string, stream []byte) {
 	t.Helper()
-	stream, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", name, "text", "upstream.sse"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	w := newWorld(t, 1)
 	bodies := make(chan string, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
