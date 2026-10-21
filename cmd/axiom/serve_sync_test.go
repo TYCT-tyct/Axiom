@@ -88,6 +88,12 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 		t.Fatal("the startup round never fetched")
 	}
 	cancel()
+	awaitPriceFetchShutdown(t, done, cancelled)
+	checkCancelledPriceRound(t, database.App)
+}
+
+func awaitPriceFetchShutdown(t *testing.T, done <-chan error, cancelled <-chan struct{}) {
+	t.Helper()
 	// The upstream has not supplied its response. Cancellation and node exit must precede the 30s queue drain deadline.
 	select {
 	case <-cancelled:
@@ -102,7 +108,6 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the node did not shut down after cancelling the fetch")
 	}
-	checkCancelledPriceRound(t, database.App)
 }
 
 func checkCancelledPriceRound(t *testing.T, url string) {
