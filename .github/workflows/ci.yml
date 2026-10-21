@@ -20,6 +20,10 @@ on:
         description: the commit a train branch was assembled on
         type: string
         default: ""
+      gate_stress:
+        description: run only web and repeat the four admin scenes from issue 363 fifty times
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -83,7 +87,7 @@ jobs:
   # two PRs whose docs pass alone can break a link together.
   static:
     needs: changes
-    if: needs.changes.result == 'success'
+    if: needs.changes.result == 'success' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
@@ -114,7 +118,7 @@ jobs:
   # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
   go-test:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,6 +144,7 @@ jobs:
       - name: Run web in its network namespace
         env:
           WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+          GATE_STRESS: ${{ inputs.gate_stress || false }}
         run: |
           go_cache=$(go env GOCACHE)
           module_cache=$(go env GOMODCACHE)
@@ -158,7 +163,7 @@ jobs:
             --volume "$go_cache:$go_cache" --volume "$module_cache:$module_cache" \
             --volume "$pnpm_store:$pnpm_store" \
             --volume "$web_cache:/ci/axiom" \
-            --env PATH --env CI --env HOME=/tmp/axiom-web-home \
+            --env PATH --env CI --env GATE_STRESS --env HOME=/tmp/axiom-web-home \
             --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
             --env npm_config_store_dir="$(dirname "$pnpm_store")" \
             "$WEB_IMAGE" bash -e -c '
@@ -167,8 +172,17 @@ jobs:
               cat /proc/self/cgroup
               cat /sys/fs/cgroup/cpu.max
               id
-              node -p "require(\"node:os\").availableParallelism()"
+              cpus=$(node -p "require(\"node:os\").availableParallelism()")
+              echo "Node availableParallelism=$cpus"
+              test "$cpus" -le 8
               just web
+              if [ "$GATE_STRESS" = true ]; then
+                AXIOM_VERSION=$(just axiom-version)
+                export AXIOM_VERSION
+                pnpm --dir web exec playwright test e2e/gate.spec.ts \
+                  -g "^admin (price-publish|supplier-connect-details|account|model-name) " \
+                  --repeat-each=50 --max-failures=1 --reporter=line
+              fi
             '
           docker start "$name"
           pid=$(docker inspect --format '{{.State.Pid}}' "$name")
@@ -204,6 +218,7 @@ jobs:
     needs: changes
     if: >-
       github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.bench == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -223,6 +238,7 @@ jobs:
     needs: changes
     if: >-
       github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
