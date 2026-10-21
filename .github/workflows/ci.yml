@@ -131,7 +131,7 @@ jobs:
   # to the tests. Only execution is isolated: setup and private caches stay with the runner.
   web:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true')
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -257,13 +257,26 @@ jobs:
   # check counts as passed on GitHub; a part that was skipped (a Markdown-only change, a PR's bench and deploy) is fine.
   build:
     # A diagnostic web-only run must never publish the required full-build status for the same commit.
-    name: ${{ inputs.gate_stress && 'gate-stress' || 'build' }}
+    name: build
     needs: [changes, static, go-test, web, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
+      # GitHub accepts a skipped required check, so diagnostics must fail this check rather than skip it.
+      - if: inputs.gate_stress
+        run: |
+          echo "gate-stress is a diagnostic; run the full build to satisfy the required check"
+          exit 1
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
       - run: echo "every job this build needs passed or was skipped"
+
+  gate-stress:
+    name: gate-stress
+    needs: [changes, web]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - run: test '${{ needs.changes.result }}' = success && test '${{ needs.web.result }}' = success
