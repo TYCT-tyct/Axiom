@@ -30,7 +30,10 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {
-		out = appendQuoted(append(out, `,"metadata":{"user_id":`...), w.Identity(*c.User))
+		out, err = appendMetadataUserID(append(out, `,"metadata":{"user_id":`...), w, *c.User)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, '}')
 	}
 	return append(out, '}'), nil

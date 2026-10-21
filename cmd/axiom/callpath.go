@@ -78,6 +78,7 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
+	billing.WarmTokenizers()
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
 	// stamps it on every plan and the executor reads it from there, not from the configuration.
 	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy})

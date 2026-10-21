@@ -38,6 +38,8 @@
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
 
+`Text(body, byteLimit, callback)` 顺序扫描已校验的请求，只回调解码后的字符串值，不计 JSON 键、外壳或数值；跳过 `data`、`file_data`、`image_url`、`url`、`signature`、`encrypted_content` 的不透明字符串，图片/文件仍由各自的估计覆盖，音频和隐藏上下文的精确估计仍待 #203。普通字符串最多解码 `byteLimit` 个原始字节，边界不切断 UTF-8、转义或代理对，余下普通字符串的原始字节数返回给字节比例兜底。回调借用复用的解码缓冲，不应保留它；返回 false 可停止。只有缺输入用量的结算使用此接口，不建立完整请求对象，也不声称还原供应商的消息框架 token。
+
 ## 同格式改写
 
 `Prepare(f, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它和 `Inspect` 一样按 token 走一遍，只认顶层成员和 Messages 的 `metadata`，按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写见下表之后的「Chat 的改写」：模型方言的成员（推理参数、`cache_control`、回传的 `reasoning_content`）不改写，由端点按它自己的方言处理（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
@@ -47,7 +49,7 @@
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
 | `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | OpenRouter 的路由参数和本站扩展，gateway 已经用过；官方接口拒绝不认识的成员 |
 | `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路由对生成请求只保留能流式的端点，`Streams` 为假时保持客户端的写法是协议层的约定（压缩请求用不到它，见下） |
-| 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`null` 不动 |
+| 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`metadata.user_id` 例外，它把派生的会话和设备写进一个结构，是那个结构的 JSON 字符串，`{"device_id":"…","account_uuid":"","session_id":"…"}`，中转站从中取出会话固定账号，设备和空账户见接入的那一条；空串和纯空白写为空串，不派生公共会话（Chat 转换共用此规则）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
 | `store` | — | 一律 `false`，没有就加上 | 状态由本站保存 |
 | `max_output_tokens` | — | 没有或 `null` 时设为 `Target.MaxOutput`（大于 0 才设）；写了的不动 | 预留按条目的输出上限算，发出去的必须是同一个值（I1）；Messages 的 `max_tokens` 上游必须有，请求没写就是上游的错，不补 |
@@ -69,7 +71,7 @@
 - 出错：标识不是字符串、`stream_options` 不是对象（端点流式时）返回 `ErrInvalid`。
 - 其余成员一律原样，包括准入读过的 `max_tokens`、`max_uses`、`cache_control`、`service_tier`：预留按 `Inspect` 读到的值算，发出去的必须是同一份。`compaction` 项和 `context_management` 也原样：压缩项要原样带入下一次请求（OpenAI《Compaction》）。
 - **压缩请求**（`Target.Compact`）：它不是生成，只改必须改的三样——`model` 换成端点的名字，`prompt_cache_key`、`user`、`safety_identifier` 换成派生值，路由参数删除——其余成员原样，`store`、`include`、`max_output_tokens`、`stream`、`input` 既不补也不改，也不拼历史，因为压缩请求没有这些语义（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream` 逐字节核对。
-- **输出缓冲**：一次分配，容量是原请求体加模型名、每个可换标识的 `Rewrites.IdentityLen`（`Identity` 返回的最大字节数，转义前；不写按 128；返回更长的值是 gateway 的错，`Prepare` 拒绝，这样不论客户端原来写了什么，容量都能事先定下），两者都按 JSON 编码后最坏的长度算（每字节最多 6 字节）、以及表里新增成员的字节数（`store`、`include`、`max_output_tokens`、包住字符串 `input` 或补出 `input` 的字节），所以改写不会因为缓冲不够把整个请求体再拷一遍；`TestPrepareBuffer`、`TestPrepareBufferEscapes`（模型名和标识全是要转义的字节）、`TestPrepareBufferDefaultIdentityLen`（不写 `IdentityLen`，标识是 128 个要转义的字节）用带长派生标识和历史的大请求核对分配次数与短标识时相同。
+- **输出缓冲**：一次分配，容量是原请求体加模型名、每个可换标识的 `Rewrites.IdentityLen`（派生值的最大字节数，外层转义前，`metadata.user_id` 按内层 JSON 编码后的字节数算，含结构、设备、会话及其转义；不写按 128；返回更长的值是 gateway 的错，`Prepare` 拒绝，这样不论客户端原来写了什么，容量都能事先定下），两者都按 JSON 编码后最坏的长度算（每字节最多 6 字节）、以及表里新增成员的字节数（`store`、`include`、`max_output_tokens`、包住字符串 `input` 或补出 `input` 的字节），所以改写不会因为缓冲不够把整个请求体再拷一遍。`metadata.user_id` 的内层对象直接写进输出缓冲，按编码后的长度检查上限，再在不重叠的尾部编码外层字符串并原地压回；两层同时占用至多内层长度的三倍加两个引号，在六倍预留内，不另建对象缓冲或字符串（`TestMetadataUserIDAllocs` 核对有预留时零分配）；`TestPrepareBuffer`、`TestPrepareBufferEscapes`（模型名和标识全是要转义的字节）、`TestPrepareBufferDefaultIdentityLen`（不写 `IdentityLen`，派生值连同结构正好 128 字节，身份全是要转义的字节，内层转义也计入上限）用带长派生标识和历史的大请求核对分配次数与短标识时相同。
 - **`PrepareCost(r, body, t, w)`**：`Prepare` 一次最多同时占用多少内存（不含请求体本身），让 gateway 在 `Prepare` 分配之前就向节点的内存预算申请，申请不到就不调用。同格式改写是输出缓冲的容量加请求体的三倍：缓冲的容量事先定得下，另外对标识和 `previous_response_id` 去转义要一块临时缓冲、再转成字符串、缓冲翻倍增长，最坏的是一个很长的标识，实测（2026-10-16）为请求体的 2.5 倍。跨格式转换是 6 × 请求体字节数 + 2048 × （`{` 与 `null` 的个数）+ 1024 × `:` 的个数：转换把字符串多拷几份，并把每个对象读进一个结构（`canonMessage` 224 字节，所在的切片翻倍增长），对象里不认识的成员每个进一个映射项；请求体不说有几个对象和成员，但数括号、`null` 和冒号给出上界（字符串里的只会多算；`null` 元素也各解出一个零值的结构，数组里其他非对象的元素在原地就被拒绝，`Inspect` 先拒绝了）。实测每个 `{}` 消息分配约 1.3 KiB、每个不认识的成员约 485 字节，都在常数之内；评审 #157 指出过只按字节数的 32 倍不是上界（一堆 `{}` 是 74 倍）。结果保留的是 `Upstream.Body` 的容量。不是从别的格式转换的请求不分配，成本为 0。`TestPrepareCost` 用最坏形状的请求体（全是空对象、最小的消息、不认识的成员、全是转义的标识）核对实际分配不超过成本。
 - **出错**：标识不是字符串、`metadata` 不是对象、要加 `include` 时它不是数组或含非字符串的元素、有历史时 `input` 不是字符串、数组或 `null`，返回 `ErrInvalid`；`previous_response_id` 非空与是否给了历史不一致是 gateway 的错，返回另一个错误，不当成客户端的 400。历史条目是本站存下的原样 JSON，不再校验。
 
@@ -107,7 +109,7 @@
 | `stop` | `stop_sequences` | `*NotSupported` |
 | `verbosity` | `*NotSupported` | `text.verbosity` |
 | 输出上限 | `max_tokens`：`max_tokens`、`max_completion_tokens` 取大，都没有用 `Target.MaxOutput` | `max_output_tokens`，没有时用 `Target.MaxOutput`（大于 0 才写） |
-| `user`、`safety_identifier`、`prompt_cache_key` | `user` 的派生值写进 `metadata.user_id`，另两个不写 | 都换成派生值 |
+| `user`、`safety_identifier`、`prompt_cache_key` | `user` 写进 `metadata.user_id`，结构见同格式改写的那一行 | 都换成派生值 |
 | `service_tier` | `auto` 照写，`default` 写成 `standard_only`，其余 `*NotSupported` | 照写 |
 | `stream` | `Target.Streams` 或客户端要流时写 `"stream": true` | 同左 |
 | 存储 | — | `store: false`，加密推理的模型带 `include`，与同格式改写相同 |

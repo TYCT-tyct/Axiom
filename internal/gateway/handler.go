@@ -161,7 +161,7 @@ type Call struct {
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
-	Header    http.Header // the request headers that may go upstream
+	Header    http.Header // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	Session   routing.SessionKey
 	Admission accounts.Admission
 	Admitted  billing.Admitted
@@ -344,21 +344,6 @@ func accountKey(c accounts.Caller) string {
 func keyKey(c accounts.Caller) string {
 	id := uuid.UUID(c.KeyID())
 	return string(id[:])
-}
-
-// forwarded are the request headers that go upstream; every other one is dropped, which includes the client's
-// credentials, x-axiom-*, x-claude-code-*, HTTP-Referer and X-Title (docs/domains/gateway.md「转发规则」). The values
-// are copied as they are: anthropic-beta is not filtered, because Claude Code's value changes with every version.
-var forwarded = []string{"Anthropic-Beta", "Anthropic-Version"}
-
-func forwardable(in http.Header) http.Header {
-	out := make(http.Header, len(forwarded))
-	for _, name := range forwarded {
-		if v := in.Values(name); len(v) > 0 {
-			out[name] = append([]string(nil), v...)
-		}
-	}
-	return out
 }
 
 // read reads the body and everything the request says: its summary, the models, its session and its count in the
