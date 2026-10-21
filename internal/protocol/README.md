@@ -38,7 +38,7 @@
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
 
-`Text(f, body, callback)` 用同一个扫描器给暂估提供 `TextBytes` 对应的原始字节：去掉图片和文件数据，保留 JSON 外壳和转义。只在缺输入用量的结算路径使用，不建立完整请求对象；扫描时记录媒体范围，计数回调返回 false 后停止提供字节。回调消费原请求缓冲区的切片，不应保留它。此接口用于暂估，不声称还原供应商的消息框架 token。
+`Text(body, byteLimit, callback)` 顺序扫描已校验的请求，只回调解码后的字符串值，不计 JSON 键、外壳或数值；跳过 `data`、`file_data`、`image_url`、`url`、`signature`、`encrypted_content` 的不透明字符串，图片/文件仍由各自的估计覆盖，音频和隐藏上下文的精确估计仍待 #203。普通字符串最多解码 `byteLimit` 个原始字节，边界不切断 UTF-8、转义或代理对，余下普通字符串的原始字节数返回给字节比例兜底。回调借用复用的解码缓冲，不应保留它；返回 false 可停止。只有缺输入用量的结算使用此接口，不建立完整请求对象，也不声称还原供应商的消息框架 token。
 
 ## 同格式改写
 

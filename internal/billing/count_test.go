@@ -33,7 +33,12 @@ func TestTokenizerOf(t *testing.T) {
 		{"gpt-4", TokenizerCl100k},
 		{"gpt-3.5-turbo-0125", TokenizerCl100k},
 		{"gpt-35-turbo", TokenizerCl100k}, // Azure's name for gpt-3.5-turbo
-		{"gpt-50", TokenizerNone},         // no version and no variant follows: another model
+		{"gpt-6-astra", TokenizerNone},    // no encoding in OpenAI's published tiktoken model map (2026-10-20)
+		{"gpt-6-sol", TokenizerNone},
+		{"gpt-6.1-sol", TokenizerNone},
+		{"gpt-6-luna", TokenizerNone},
+		{"deployment-name", TokenizerNone},
+		{"gpt-50", TokenizerNone}, // no version and no variant follows: another model
 		{"gpt-4x", TokenizerNone},
 		{"o5", TokenizerNone},
 		{"claude-sonnet-4-5", TokenizerNone},

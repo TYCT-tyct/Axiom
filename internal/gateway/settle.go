@@ -148,34 +148,54 @@ func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.C
 // case the count is used in.
 func (a *attempt) demand() billing.Demand {
 	d := routing.DemandOf(&a.s.c.Request)
-	if !inputReported(a.usage) {
+	if inputReported(a.usage) {
+		return d
+	}
+	tok := billing.TokenizerOf(a.entry.Target.Model)
+	if tok == billing.TokenizerNone {
+		return d
+	}
+	cached := &a.s.textCounts[int(tok)-1]
+	if !cached.counted {
 		var err error
-		d.TextTokens, err = textTokens(a.s.c.Format, a.s.c.Body, d, a.entry.Limits, billing.TokenizerOf(a.entry.Target.Model))
+		cached.tokens, err = textTokens(a.s.c.Body, d, tok)
+		cached.counted = true
 		if err != nil {
 			a.s.logger.Warn("input token count failed; using byte estimate", "err", err)
 		}
 	}
+	d.TextTokens = cached.tokens
 	return d
 }
 
-// inputReported reports whether the reply reported any of the input side, which billing keeps rather than estimate.
+type textEstimate struct {
+	tokens  int64
+	counted bool
+}
+
+// inputReported keeps input/cache reports authoritative, including explicitly reported zero counts.
 func inputReported(u protocol.Usage) bool {
 	return len(u.Segments) > 0 && u.Segments[0].Reported&catalog.InputSide != 0
 }
 
-// textTokens counts the request's text in the tokens of the entry's model family, up to what the estimate can take of
-// it: the context, which clips it anyway, and never more than the text's bytes, which the estimate's bound holds. It
-// is 0, keeping the bytes-per-token rule, when the family has no tokenizer, when the body cannot be walked again, or
-// when the text is empty.
-func textTokens(f protocol.Format, body []byte, d billing.Demand, m billing.Model, tok billing.Tokenizer) (int64, error) {
-	c := billing.NewTextCount(tok, min(m.ContextLength, d.TextBytes))
+// maxCountBytes bounds per-family BPE and unquoting work, independently of a route's context window. The cached count
+// can therefore serve another attempt of the same family with a different context limit.
+const maxCountBytes = 256 << 10
+
+func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, error) {
+	c := billing.NewTextCount(tok, d.TextBytes)
 	if c == nil {
 		return 0, nil
 	}
-	if err := protocol.Text(f, body, c.Add); err != nil {
+	remaining, err := protocol.Text(body, maxCountBytes, c.Add)
+	if err != nil {
 		return 0, fmt.Errorf("extract input text: %w", err)
 	}
-	return c.Total()
+	count, err := c.Total()
+	if err != nil {
+		return 0, err
+	}
+	return min(d.TextBytes, count+tokensOf(remaining, billing.InputBytesPerToken)), nil
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the

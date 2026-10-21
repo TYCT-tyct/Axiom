@@ -362,7 +362,7 @@ func FuzzInspect(f *testing.F) {
 		if r.TextBytes < 0 || r.TextBytes > int64(len(body)) {
 			t.Fatalf("TextBytes %d of a %d-byte body", r.TextBytes, len(body))
 		}
-		checkTextBytes(t, protocol.Format(format%3), body, r.TextBytes)
+		checkTextBytes(t, body, r.TextBytes)
 	})
 }
 

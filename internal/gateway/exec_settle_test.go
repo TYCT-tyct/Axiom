@@ -373,7 +373,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 	rule := (req.TextBytes + billing.InputBytesPerToken - 1) / billing.InputBytesPerToken
 	d := billing.Demand{TextBytes: req.TextBytes}
 	cl100k := billing.Model{ContextLength: 100000}
-	counted, err := textTokens(protocol.Messages, body, d, cl100k, billing.TokenizerCl100k)
+	counted, err := textTokens(body, d, billing.TokenizerCl100k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, billing.TokenizerNone, rule},
 	} {
 		d := d
-		d.TextTokens, err = textTokens(protocol.Messages, body, d, tc.model, tc.tok)
+		d.TextTokens, err = textTokens(body, d, tc.tok)
 		if err != nil {
 			t.Fatal(err)
 		}

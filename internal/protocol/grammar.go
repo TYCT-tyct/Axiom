@@ -222,10 +222,7 @@ func (s *scanner) contentPart() error {
 		s.r.Documents++
 	}
 	if p.binary {
-		s.r.TextBytes -= int64(p.payload)
-		if s.text != nil { // recorded only for the walk that hands the text out
-			s.spans = append(s.spans, span{p.at, p.at + p.payload})
-		}
+		s.r.TextBytes -= p.payload
 	}
 	return nil
 }
@@ -238,7 +235,7 @@ func (s *scanner) partType() error {
 
 func (s *scanner) data() error {
 	v, err := s.raw()
-	s.place(v)
+	s.p.payload = int64(len(v))
 	return err
 }
 
@@ -252,7 +249,7 @@ func (s *scanner) fileData() error {
 // as text, which only raises the bound.
 func (s *scanner) imageURL() error {
 	v, err := s.raw()
-	s.place(v)
+	s.p.payload = int64(len(v))
 	s.p.binary = hasPrefix(v, `"data:`)
 	return err
 }

@@ -18,7 +18,7 @@ type Tokenizer uint8
 // bytes-per-token rule rather than use an unrelated vocabulary.
 const (
 	TokenizerNone Tokenizer = iota
-	// TokenizerO200k is OpenAI's o200k_base, which counts from GPT-4o and GPT-4.1 on, and o1, o3 and o4.
+	// TokenizerO200k is OpenAI's o200k_base for GPT-4o, GPT-4.1, GPT-4.5, GPT-5, o1, o3 and o4.
 	TokenizerO200k
 	// TokenizerCl100k is OpenAI's cl100k_base, which counts up to GPT-4 and GPT-3.5.
 	TokenizerCl100k
@@ -27,6 +27,7 @@ const (
 // TokenizerOf reads which tokenizer counts a model's text from the name its endpoint calls it by, as the vendor or a
 // relay spells it: openai/gpt-4o and ft:gpt-4o-2024-08-06:acme::1 are gpt-4o. A name of no known family has none: a
 // supplier's own name for a model costs the count, never a wrong tokenizer.
+// OpenAI's tiktoken/model.py publishes no GPT-6 encoding yet (2026-10-20), so those names also keep the byte rule.
 func TokenizerOf(name string) Tokenizer {
 	name = strings.ToLower(name)
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
@@ -60,6 +61,12 @@ var (
 	o200k  = sync.OnceValue(func() tokenizer.Codec { return codec.NewO200kBase() })
 	cl100k = sync.OnceValue(func() tokenizer.Codec { return codec.NewCl100kBase() })
 )
+
+// WarmTokenizers builds the two immutable vocabularies before a node accepts calls.
+func WarmTokenizers() {
+	o200k()
+	cl100k()
+}
 
 // NewTextCount starts counting a request's text in the tokens of a family, up to limit tokens: the most of the text the
 // estimate can take, which the context clips anyway. It returns nil when the family has no tokenizer, and the
