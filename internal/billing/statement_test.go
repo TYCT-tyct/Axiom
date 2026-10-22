@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -356,10 +357,40 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 	deep, plan := b.plan(statementPage, b.admitted.Account, far, int32(100), statementNewest.At, uuid.Max())
 	t.Logf("EXPLAIN blocks: first=%d deep=%d", first, deep)
 	t.Logf("first plan: %s\ndeep plan: %s", firstPlan, plan)
-	if !strings.Contains(plan, "transactions_by_account_seq") || strings.Contains(plan, "Seq Scan on transactions") || strings.Contains(plan, "Bitmap Index Scan") {
+	checkStatementIndexPlan(t, plan)
+	if !strings.Contains(plan, "transactions_by_account_seq") {
 		t.Errorf("the deep page is not read from the index:\n%s", plan)
 	}
-	if deep > first+first/2+50 || deep > 1000 {
+	if deep > first+first/2+50 || deep > 1000 || first > 1000 {
 		t.Errorf("the deep page touched %d blocks against the first page's %d:\n%s", deep, first, plan)
 	}
+}
+
+// Entry lookups may use tiny bitmap scans. Only the transaction scan must preserve keyset order before LIMIT.
+type statementQueryPlan struct {
+	NodeType  string               `json:"Node Type"`
+	Relation  string               `json:"Relation Name"`
+	Direction string               `json:"Scan Direction"`
+	Loops     float64              `json:"Actual Loops"`
+	Plans     []statementQueryPlan `json:"Plans"`
+}
+
+func checkStatementIndexPlan(t *testing.T, raw string) {
+	t.Helper()
+	var plans []struct{ Plan statementQueryPlan }
+	if err := jsonx.Unmarshal([]byte(raw), &plans); err != nil {
+		t.Fatal(err)
+	}
+	var check func(statementQueryPlan)
+	check = func(p statementQueryPlan) {
+		if p.Relation == "transactions" && p.Loops > 0 {
+			if p.NodeType != "Index Scan" || p.Direction != "Backward" {
+				t.Errorf("unordered transaction scan: %s %s", p.NodeType, p.Direction)
+			}
+		}
+		for _, child := range p.Plans {
+			check(child)
+		}
+	}
+	check(plans[0].Plan)
 }

@@ -116,14 +116,12 @@ WITH page AS MATERIALIZED (
         (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
         FROM billing.transactions t
         WHERE t.account_id = $1 AND t.seq < $2::bigint
-            AND t.kind NOT IN ('attempt_cost', 'cost_adjust')
         ORDER BY t.seq DESC
         LIMIT $3)
         UNION ALL
         (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
         FROM billing.transactions t
         WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) < ($4::timestamptz, $5::uuid)
-            AND t.kind NOT IN ('attempt_cost', 'cost_adjust')
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT $3)
     ) candidates
