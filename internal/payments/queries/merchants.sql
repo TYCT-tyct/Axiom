@@ -47,9 +47,9 @@ SELECT * FROM payments.merchant_methods WHERE merchant_id = ANY (@merchants::uui
 -- name: SiteSettings :many
 SELECT * FROM payments.settings WHERE site_id = @site_id;
 
--- The enabled merchant methods of a site, with what quoting and choosing need of their merchant.
+-- The enabled merchant methods of a site, with what quoting, choosing and ordering need of their merchant.
 -- name: Offers :many
-SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev
+SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev, m.ttl_seconds
 FROM payments.merchant_methods x JOIN payments.merchants m ON m.id = x.merchant_id
 WHERE x.site_id = @site_id AND x.enabled AND m.enabled AND (sqlc.narg(method)::text IS NULL OR x.method = sqlc.narg(method))
 ORDER BY x.method, m.sort, m.id;

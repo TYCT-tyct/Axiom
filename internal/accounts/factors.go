@@ -40,12 +40,12 @@ func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, i
 	if err != nil {
 		return Issued{}, err
 	}
-	if err := s.fromIP(d.site, ip); err != nil {
+	if err := s.fromIP(ctx, d.site, ip); err != nil {
 		return Issued{}, err
 	}
 	l := s.snapshot.Load().sites[d.site].limits
 	var issued Issued
-	err = failing(s, s.guards.users, found.UserID, l.codeFailures, codeWindow, func() error {
+	err = failing(s, ctx, s.userLimit(d.site, found.UserID, l), func() error {
 		issued, err = s.verifyMFA(ctx, r, code, found, tokenHash, d, l.challengeAttempts, ip, userAgent)
 		return err
 	})
@@ -166,7 +166,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 	var issued Issued
 	var codes []string
 	var refused error
-	err := failing(s, s.guards.users, uuid.UUID(p.user), l.codeFailures, codeWindow, func() error {
+	err := failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		issued, codes, refused = s.confirmTOTP(ctx, p, c)
 		if errors.Is(refused, ErrBadCode) || errors.Is(refused, ErrBadCredentials) {
 			return refused // a wrong guess is the only thing that counts; the bucket is the user's, shared with sign-in's
@@ -209,7 +209,7 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 // as ConfirmTOTP does. A wrong code counts among the user's code failures, as in VerifyMFA.
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (issued Issued, codes []string, err error) {
 	l := s.snapshot.Load().sites[p.site].limits
-	err = failing(s, s.guards.users, uuid.UUID(p.user), l.codeFailures, codeWindow, func() error {
+	err = failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		issued, codes, err = s.regenerateRecoveryCodes(ctx, p, c)
 		return err
 	})

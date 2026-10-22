@@ -138,10 +138,11 @@ func withCatalog(ctx context.Context, environ []string, do func(*catalog.Catalog
 	env := config.New(environ)
 	databaseURL := env.Required(pg.DatabaseURLVar)
 	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
+	reserve := env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout)
+	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve))
 	if err != nil {
 		return err
 	}

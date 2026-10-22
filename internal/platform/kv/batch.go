@@ -27,18 +27,24 @@ type Use string
 const (
 	Precheck    Use = "precheck" // the precheck of a model call, before admission
 	StickyWrite Use = "sticky_write"
+	// Login is what a sign-in spends and gives back: the attempts before it.
+	Login Use = "login"
 	// check is the client's own reading of the server: the startup checks and the loop's measurements.
 	check Use = "check"
 )
 
 // uses is every Use, in the order the metrics prebuild their options.
-var uses = [...]Use{Precheck, check, StickyWrite}
+var uses = [...]Use{Precheck, Login, check, StickyWrite}
 
 // Space is the purpose a key serves, its third field (README「键」).
 type Space string
 
-// RateSpace is a rate counter's.
-const RateSpace Space = "rate"
+const (
+	// RateSpace is a rate counter's.
+	RateSpace Space = "rate"
+	// LoginSpace is an attempt before sign-in's.
+	LoginSpace Space = "login"
+)
 
 // StickySpace holds routing's session-to-endpoint bindings.
 const StickySpace Space = "stick"

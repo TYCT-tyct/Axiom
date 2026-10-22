@@ -34,8 +34,8 @@ type newAPI struct {
 
 // startNewAPI runs the image on SQLite, with the upstream's port reachable from inside it, and sets up what a deployment
 // is set up with: an administrator, a token that spends without limit, and a channel for each model, of the type that
-// speaks the format Axiom's endpoint of that model speaks (relay/channel/claude for Anthropic's, the OpenAI channel
-// for Responses and for Chat), so that the upstream is asked the same way by both.
+// speaks the format Axiom's endpoint of that model speaks (Anthropic's channel for Messages, OpenAI's for Responses,
+// and explicit advanced-custom routes for Chat), so that the upstream is asked the same way by both.
 func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	t.Helper()
 	ctx := t.Context()
@@ -67,13 +67,22 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 	for _, channel := range []struct {
 		typ    int
 		models string
-	}{{1, "gpt-6-astra"}, {14, "claude-opus-5-5"}, {1, "deepseek-v4-chat"}} { // OpenAI's channel type, then Anthropic's (constant/channel.go), then OpenAI's again for the model called in Chat
+	}{{1, "gpt-6-astra"}, {14, "claude-opus-5-5"}} { // OpenAI's and Anthropic's channel types (constant/channel.go)
 		admin.post("/api/channel/", map[string]any{"mode": "single", "channel": map[string]any{
 			"type": channel.typ, "name": "upstream-" + channel.models, "key": newAPIChannelKey, "base_url": upstream,
 			"models": channel.models, "group": "default", "status": 1,
 		}})
 	}
-	// new-api sends a Chat request for a Responses model to the Chat route unless it is told to convert, as Axiom does.
+	// The OpenAI channel passes Responses through; explicit routes exercise new-api's Chat-only upstream converters.
+	admin.post("/api/channel/", map[string]any{"mode": "single", "channel": map[string]any{
+		"type": 58, "name": "upstream-deepseek", "key": newAPIChannelKey, "base_url": upstream,
+		"models": "deepseek-v4-chat", "group": "default", "status": 1,
+		"settings": `{"advanced_custom":{"advanced_routes":[` +
+			`{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","converter":"none"},` +
+			`{"incoming_path":"/v1/messages","upstream_path":"/v1/chat/completions","converter":"anthropic_messages_to_openai_chat_completions"},` +
+			`{"incoming_path":"/v1/responses","upstream_path":"/v1/chat/completions","converter":"openai_responses_to_openai_chat_completions"}]}}`,
+	}})
+	// Only GPT's upstream speaks Responses; DeepSeek must keep receiving Chat requests.
 	admin.option("global.chat_completions_to_responses_policy", `{"enabled":true,"all_channels":true,"model_patterns":["^gpt-6-astra$"]}`)
 	// It refuses requests with 503 while the machine's CPU is above 90%, which a CI server building other branches is.
 	admin.option("performance_setting.monitor_enabled", "false")

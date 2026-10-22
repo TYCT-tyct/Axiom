@@ -27,9 +27,8 @@ type Config struct {
 	KeyRate    int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
 	CountRate  int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
-	PoolSize         int // N, database connections: the pool's size, so that every permit has a connection (DefaultConfig)
-	PoolReserve      int // connections only the Completion class may take
-	BatchConnections int // most connections the batch writer of call records holds
+	PoolSize    int // N, gateway permits, derived from the combined database pool ceiling
+	PoolReserve int // completion permits; admission permits are PoolSize - PoolReserve
 
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key
@@ -68,8 +67,7 @@ func DefaultConfig() Config {
 		KeyLookup:         time.Second,
 		RateWindow:        time.Minute,
 		PoolSize:          pg.PoolSize,
-		PoolReserve:       16,
-		BatchConnections:  2,
+		PoolReserve:       pg.CompletionReserve,
 		QueueMax:          256,
 		QueuePerKey:       16,
 		AccountGateWait:   5 * time.Second,
@@ -108,8 +106,7 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf(format, args...))
 		}
 	}
-	// A batch writer that could never be granted would wait forever.
-	relation(c.PoolSize-c.PoolReserve >= c.BatchConnections, "PoolSize %d - PoolReserve %d must leave room for BatchConnections %d", c.PoolSize, c.PoolReserve, c.BatchConnections)
+	relation(c.PoolReserve < c.PoolSize, "PoolReserve %d must be below PoolSize %d", c.PoolReserve, c.PoolSize)
 	relation(c.QueuePerKey <= c.QueueMax, "QueuePerKey %d must not exceed QueueMax %d", c.QueuePerKey, c.QueueMax)
 	relation(c.LockTimeout < c.AdmissionBudget && c.StatementTimeout < c.AdmissionBudget,
 		"LockTimeout %v and StatementTimeout %v must be below AdmissionBudget %v", c.LockTimeout, c.StatementTimeout, c.AdmissionBudget)
@@ -152,7 +149,7 @@ type Backpressure struct {
 	byReason    map[string][]metric.AddOption // one slice per reason, built once: options passed one by one make a slice for each call
 	InFlight    *InFlight
 	Funds       *Funds
-	Pool        *Pool // for the connections that need no account gate: cold-key lookup, batch writers
+	Pool        *Pool // for the connections that need no account gate: cold-key lookup
 	Queue       *Queue
 	Rate        *RateCounter
 	IPCalls     *Limiter // requests in flight per client address
@@ -178,7 +175,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	for _, r := range rateLimits {
 		byReason[r.Reason] = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
 	}
-	pool := newPool(cfg.PoolSize, cfg.PoolReserve, cfg.BatchConnections)
+	pool := newPool(cfg.PoolSize, cfg.PoolReserve)
 	return &Backpressure{
 		rateLimited: rateLimited, byReason: byReason,
 		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},

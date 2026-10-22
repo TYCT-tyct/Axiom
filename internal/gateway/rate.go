@@ -110,6 +110,7 @@ func (h *Handler) precheck(ctx context.Context, site accounts.SiteID, dimension,
 	n := 1
 	if call != nil {
 		// One store for the whole call, its eventual write included: the shared one, never the process table.
+		call.sticky = routing.EndpointID{}
 		call.stickyCache, call.stickyKey = h.KV, routing.StickyKey(h.KV, uuid.UUID(site), call.Session)
 		cmds[1] = kv.Get(call.stickyKey)
 		if compacted {

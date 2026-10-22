@@ -374,8 +374,8 @@ func TestAlternateModels(t *testing.T) {
 	}
 }
 
-// TestForwardedHeaders: only the protocol's own headers go upstream, as they were written; the client's credentials
-// and the headers that name its tooling do not.
+// TestForwardedHeaders: the client's headers that a protocol may forward are kept as it wrote them, to be derived per
+// attempt (headers.go); its credentials and the headers that name its tooling are dropped.
 func TestForwardedHeaders(t *testing.T) {
 	t.Parallel()
 	in := http.Header{
@@ -383,10 +383,14 @@ func TestForwardedHeaders(t *testing.T) {
 		"Http-Referer": {"https://app.example"}, "X-Title": {"app"}, "Cookie": {"a=b"}, "Content-Type": {"application/json"},
 		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
 		"Anthropic-Version": {"2023-06-01"},
+		"session_id":        {"s"}, "conversation_id": {"c"}, "x-codex-turn-state": {"t"},
 	}
 	want := http.Header{
-		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
-		"Anthropic-Version": {"2023-06-01"},
+		"Anthropic-Beta":     {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
+		"Anthropic-Version":  {"2023-06-01"},
+		"Session_id":         {"s"},
+		"Conversation_id":    {"c"},
+		"X-Codex-Turn-State": {"t"},
 	}
 	if diff := cmp.Diff(want, forwardable(in)); diff != "" {
 		t.Errorf("forwarded headers (-want +got):\n%s", diff)
@@ -408,11 +412,11 @@ func (m listedModel) complete() bool {
 	return m.Object == "model" && m.Type == "model" && m.OwnedBy != "" && m.DisplayName != "" && m.CreatedAt != "" && m.Created != nil
 }
 
-// listIDs reads the model list at path and returns the IDs, checking every model carries the members OpenAI's and
-// Anthropic's clients read.
-func (r *rig) listIDs(a account, path string) []string {
+// listIDs reads GET /v1/models and returns the IDs, checking every model carries the members OpenAI's and Anthropic's
+// clients read.
+func (r *rig) listIDs(a account) []string {
 	r.t.Helper()
-	resp, body := r.do(http.MethodGet, path, a.key, nil)
+	resp, body := r.do(http.MethodGet, "/v1/models", a.key, nil)
 	var list struct {
 		Object  string        `json:"object"`
 		HasMore bool          `json:"has_more"`
@@ -436,23 +440,27 @@ func (r *rig) listIDs(a account, path string) []string {
 }
 
 // TestModelList: the list names every model that has an endpoint by the name the catalog gives it and by its maker's own
-// where that resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog.
+// where that resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog. Under /api/v1 the same
+// models are OpenRouter's objects, one entry each under the catalog's name.
 func TestModelList(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}
-	for _, path := range []string{"/v1/models", "/api/v1/models"} {
-		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
-			t.Errorf("%s (-want +got):\n%s", path, diff)
-		}
+	if diff := cmp.Diff([]string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}, r.listIDs(a)); diff != "" {
+		t.Errorf("/v1/models (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"acme/alpha", "acme/beta", "anthropic/claude-live"}, r.orIDs(a)); diff != "" {
+		t.Errorf("/api/v1/models (-want +got):\n%s", diff)
 	}
 	gamma := r.model("acme/gamma")
 	if err := r.catalog.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	r.attachEndpoint(gamma)
-	if got := r.listIDs(a, "/v1/models"); len(got) != 5 {
+	if got := r.listIDs(a); len(got) != 5 {
+		t.Errorf("after a model was listed and given an endpoint: %v", got)
+	}
+	if got := r.orIDs(a); len(got) != 4 {
 		t.Errorf("after a model was listed and given an endpoint: %v", got)
 	}
 	resp, body := r.do(http.MethodGet, "/v1/models", "", nil, "Anthropic-Version", "2023-06-01")

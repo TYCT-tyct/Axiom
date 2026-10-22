@@ -80,7 +80,7 @@ func TestWrongPasswordRefusesTheStart(t *testing.T) {
 	server := kvtest.Own(t)
 	cfg := server.Config(kvtest.Namespace())
 	cfg.PasswordFile = writePassword(t, "wrong-password\n")
-	_, err := kv.Open(t.Context(), cfg, kv.Deps{})
+	_, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{}))
 	if err == nil {
 		t.Fatal("a client with the wrong password started")
 	}
@@ -101,7 +101,7 @@ func TestUnreachableStartsOnFallbacks(t *testing.T) {
 		Namespace: kvtest.Namespace(),
 	}
 	seen := newReadings()
-	client, err := kv.Open(t.Context(), cfg, kv.Deps{Meter: seen.meter})
+	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{Meter: seen.meter}))
 	if err != nil {
 		t.Fatalf("a node whose server is not there refused to start: %v", err)
 	}

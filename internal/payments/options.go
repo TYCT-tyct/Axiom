@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -29,11 +30,28 @@ type settings struct {
 	open                   bool
 	creditsMin, creditsMax *int64
 	strategy               Strategy
+	// The order limits of one account: how many orders may wait for payment at once, how many cancellations are
+	// allowed in cancelWindow, the credits it may buy in a UTC day, and the credits of its first top-up.
+	pending, cancels int64
+	cancelWindow     time.Duration
+	daily            *int64
+	first            int64
 }
+
+// The limits of a site that sets none (docs/domains/payments.md「后台配置」): 3 orders waiting, 5 cancellations an hour,
+// no daily limit, 100 credits for a first top-up.
+const (
+	defaultPending  = 3
+	defaultCancels  = 5
+	defaultFirstTop = 100 * creditScale
+)
 
 func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, error) {
 	rows, err := queries.SiteSettings(ctx, tx, site)
-	s := settings{strategy: RoundRobin}
+	s := settings{
+		strategy: RoundRobin, pending: defaultPending, cancels: defaultCancels, cancelWindow: time.Hour,
+		first: defaultFirstTop,
+	}
 	if err != nil || len(rows) == 0 {
 		return s, err
 	}
@@ -45,6 +63,19 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 		s.strategy = Strategy(*r.Strategy)
 	}
 	s.creditsMin, s.creditsMax = r.CreditsMin, r.CreditsMax
+	if r.PendingLimit != nil {
+		s.pending = *r.PendingLimit
+	}
+	if r.CancelLimit != nil {
+		s.cancels = *r.CancelLimit
+	}
+	if r.CancelWindowSeconds != nil {
+		s.cancelWindow = time.Duration(*r.CancelWindowSeconds) * time.Second
+	}
+	s.daily = r.DailyCredits
+	if r.FirstCredits != nil {
+		s.first = *r.FirstCredits
+	}
 	return s, nil
 }
 
@@ -55,6 +86,21 @@ func (s settings) admits(credits int64) error {
 		return ErrClosed
 	case credits <= 0 || s.creditsMin != nil && credits < *s.creditsMin || s.creditsMax != nil && credits > *s.creditsMax:
 		return ErrCreditsRange
+	}
+	return nil
+}
+
+// admitsCounts refuses a top-up the account's own limits do not take, against the counts read under its lock.
+func (s settings) admitsCounts(c OrderCountsRow, credits int64) error {
+	switch {
+	case c.Pending >= s.pending:
+		return ErrTooManyOrders
+	case c.Cancelled >= s.cancels:
+		return ErrTooManyCancels
+	case s.daily != nil && credits > *s.daily-c.Daily:
+		return ErrDailyLimit
+	case c.Paid == 0 && credits > s.first:
+		return ErrFirstLimit
 	}
 	return nil
 }

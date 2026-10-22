@@ -41,9 +41,7 @@ func TestMoreLiveNodesThanConfigured(t *testing.T) {
 	if got := node.Nodes(); got != 2 {
 		t.Fatalf("Nodes = %d with two nodes alive and one configured, want the larger", got)
 	}
-	if got := liveGauge(t, reader); got != 2 {
-		t.Fatalf("nodes_live = %d, want 2", got)
-	}
+	checkGauge(t, reader, nodesMetric, 2)
 	if logs.Len() != 0 {
 		t.Fatalf("a rolling deploy's overlap was reported at once: %s", logs.String())
 	}
@@ -56,8 +54,7 @@ func TestMoreLiveNodesThanConfigured(t *testing.T) {
 	}
 }
 
-// liveGauge is axiom.kv.nodes_live as last written.
-func liveGauge(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+func checkGauge(t *testing.T, reader *sdkmetric.ManualReader, name string, want int64) {
 	t.Helper()
 	var data metricdata.ResourceMetrics
 	if err := reader.Collect(t.Context(), &data); err != nil {
@@ -65,11 +62,13 @@ func liveGauge(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 	}
 	for _, scope := range data.ScopeMetrics {
 		for _, m := range scope.Metrics {
-			if gauge, ok := m.Data.(metricdata.Gauge[int64]); ok && m.Name == nodesMetric && len(gauge.DataPoints) > 0 {
-				return gauge.DataPoints[len(gauge.DataPoints)-1].Value
+			if gauge, ok := m.Data.(metricdata.Gauge[int64]); ok && m.Name == name && len(gauge.DataPoints) > 0 {
+				if got := gauge.DataPoints[len(gauge.DataPoints)-1].Value; got != want {
+					t.Fatalf("%s = %d, want %d", name, got, want)
+				}
+				return
 			}
 		}
 	}
-	t.Fatal("nodes_live was not written")
-	return 0
+	t.Fatalf("%s was not written", name)
 }
