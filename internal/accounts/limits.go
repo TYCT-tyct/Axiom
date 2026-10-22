@@ -47,7 +47,7 @@ const (
 
 // buckets are token buckets by key, each holding size tokens and refilling one every per. A bucket is kept as the
 // time it is full again (GCRA), so one that has filled up is the same as none: the entry expires then, and the LRU
-// bounds how many are kept. Counted per node, so several nodes multiply a limit by their number.
+// bounds how many are kept. Shared-store fallback divides the limits between nodes before using these buckets.
 type buckets[K comparable] struct {
 	mu   sync.Mutex // the LRU's get and put are one step here
 	full *lru[K, time.Time]

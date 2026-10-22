@@ -97,7 +97,21 @@ func emailWindowPerFailure(n int) time.Duration { return 15 * time.Minute / time
 // does not buy more guesses; at the default ten an hour even a right code waits, until one has refilled.
 func TestCodeFailuresSpanChallenges(t *testing.T) {
 	t.Parallel()
+	for _, shared := range []bool{false, true} {
+		name := "local"
+		if shared {
+			name = "shared"
+		}
+		t.Run(name, func(t *testing.T) { codeFailuresSpanChallenges(t, shared) })
+	}
+}
+
+func codeFailuresSpanChallenges(t *testing.T, shared bool) {
+	t.Helper()
 	x := newTestSite(t)
+	if shared {
+		x.s = cachedNode(t, x.db, kvtest.New(t).Open(t, kv.Deps{Now: clientClock(x.clock)}), x.clock.Now)
+	}
 	_, _, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	// Turning it on tried a wrong password and a wrong code, which count against the user as wrong codes do (2 of the
 	// 10); two failures refill in 12 minutes.

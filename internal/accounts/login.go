@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"strconv"
 	"time"
@@ -63,7 +64,7 @@ var (
 
 // deriveLoginKey is the HMAC key of the subjects in the login keys: HKDF-SHA256 from the master key's current version.
 func deriveLoginKey(master []byte) ([loginKeyLen]byte, error) {
-	if len(master) < loginKeyLen {
+	if len(master) != loginKeyLen {
 		return [loginKeyLen]byte{}, errors.New("accounts: a shared cache needs the master key, which the login keys are derived from")
 	}
 	key, err := hkdf.Key(sha256.New, master, nil, loginLabel, loginKeyLen)
@@ -188,7 +189,11 @@ func takeAttempt[K comparable](s *Service, ctx context.Context, l loginLimit[K])
 		}
 	}
 	nodes := s.nodes()
-	interval := l.per * time.Duration(nodes)
+	interval := time.Duration(math.MaxInt64)
+	// N is a deployment setting without an upper bound; overflow must not turn the fallback into a full bucket.
+	if int64(nodes) <= math.MaxInt64/int64(l.per) {
+		interval = l.per * time.Duration(nodes)
+	}
 	if wait := l.bucket.take(l.key, max(1, l.size/nodes), interval, now); wait > 0 {
 		return spent{}, wait
 	}

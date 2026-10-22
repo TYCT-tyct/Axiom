@@ -47,16 +47,15 @@ func cachedNode(t *testing.T, db *pg.DB, cache *kv.Client, now func() time.Time)
 
 // deadCache is a client of a server that is not there, with nodes in the configuration: a node starts through an
 // outage with the breaker open, and counts with its share of the limits (internal/platform/kv/README.md「不可用」).
-func deadCache(t *testing.T, nodes int) *kv.Client {
+func deadCache(t *testing.T, nodes int, now func() time.Time) *kv.Client {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "password")
 	if err := os.WriteFile(file, []byte(strings.Repeat("p", 32)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Nothing listens on port 1: the connection is refused at once, and an access that somehow waits is bounded by
-	// kv.Timeout rather than the minute a test's deadline would give it.
+	// A refused connection exercises startup fallback without racing a healthy server against the production budget.
 	cache, err := kv.Open(t.Context(), kv.Config{URL: "valkey://axiom@127.0.0.1:1", PasswordFile: file, Nodes: nodes},
-		kv.Deps{AccessTimeout: kv.Timeout})
+		kvtest.Deps(kv.Deps{Now: now}))
 	if err != nil {
 		t.Fatalf("a node must start with its shared store away: %v", err)
 	}
@@ -165,7 +164,7 @@ func TestLoginLimitsFallBackToTheShare(t *testing.T) {
 		(site_id, ip_attempt_burst, ip_attempts_per_minute, email_sign_in_failures) VALUES (:s1, 3, 1, 2)`)); err != nil {
 		t.Fatal(err)
 	}
-	s := cachedNode(t, x.db, deadCache(t, 2), x.clock.Now)
+	s := cachedNode(t, x.db, deadCache(t, 2, x.clock.Now), x.clock.Now)
 	signIn := func(from byte, pw string) error {
 		_, err := s.SignIn(t.Context(), accounts.SignInRequest{
 			Host: console, Email: x.email, Password: pw, ClientIP: netip.AddrFrom4([4]byte{198, 51, 100, from}),
@@ -187,6 +186,20 @@ func TestLoginLimitsFallBackToTheShare(t *testing.T) {
 			t.Errorf("%d %s: %v, want %v", i, c.name, err, c.want)
 		}
 	}
+	x.clock.Advance(emailWindowPerFailure(2))
+	if err := s.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := signIn(1, password); !errors.Is(err, accounts.ErrTooManyAttempts) {
+		t.Fatalf("one global refill interval must not refill a node's share: %v", err)
+	}
+	x.clock.Advance(emailWindowPerFailure(2)) // a fallback token refills after N global intervals
+	if err := s.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := signIn(1, password); err != nil {
+		t.Fatalf("fallback refills under the controlled clock: %v", err)
+	}
 }
 
 // TestLoginKeysCarryNoPersonalData: what the shared store keeps of a sign-in names neither the email nor the address; a
@@ -203,9 +216,17 @@ func TestLoginKeysCarryNoPersonalData(t *testing.T) {
 	}); !errors.Is(err, accounts.ErrBadCredentials) {
 		t.Fatalf("a wrong password: %v", err)
 	}
-	keys, err := server.Do(t, t.Context(), server.Admin.B().Keys().Pattern("ax:*").Build())[0].AsStrSlice()
-	if err != nil {
-		t.Fatal(err)
+	var keys []string
+	var cursor uint64
+	for {
+		page, err := server.Do(t, t.Context(), server.Admin.B().Scan().Cursor(cursor).Match("ax:"+namespace+":*").Build())[0].AsScanEntry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, page.Elements...)
+		if cursor = page.Cursor; cursor == 0 {
+			break
+		}
 	}
 	if len(keys) != 2 {
 		t.Fatalf("the store holds %d keys, want the email's bucket and the IP's: %v", len(keys), keys)

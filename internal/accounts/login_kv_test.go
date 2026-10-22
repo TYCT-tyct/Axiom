@@ -1,9 +1,9 @@
 package accounts
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
-	"net/netip"
 	"testing"
 	"time"
 	"uuid"
@@ -33,7 +33,7 @@ func TestSharedAttemptsMatchTheProcessBuckets(t *testing.T) {
 		at := time.UnixMilli(1_760_000_000_000)
 		for op := range 200 {
 			key := keys[rng.IntN(len(keys))]
-			per := time.Duration(rng.IntN(90)+1) * time.Second
+			per := time.Duration(rng.IntN(90)+1) * time.Minute
 			size := rng.IntN(4) + 1
 			if rng.IntN(4) == 0 {
 				s.giveShared(t.Context(), attemptKey(namespace, key), per, at)
@@ -59,36 +59,59 @@ func TestSharedAttemptsMatchTheProcessBuckets(t *testing.T) {
 // (internal/platform/kv/README.md「退回到扣的那一边」).
 func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t) // its server stops between the two steps of the second case
+	server := kvtest.New(t)
 	namespace := kvtest.Namespace()
-	// The deadline is the server's answers, not this machine's speed, but the second case reads a server that is not
-	// there, and a connection that is not refused at once must not hold the test for a minute.
-	s := &Service{cache: server.OpenIn(t, namespace, kv.Deps{AccessTimeout: 2 * time.Second}), guards: newGuards(1, time.Second)}
+	s := &Service{cache: server.OpenIn(t, namespace, kv.Deps{}), guards: newGuards(1, time.Second)}
 	site := SiteID(uuid.MustParse("6f1b2f14-3a4c-4bd0-9d1e-2f5a7c8b9d10"))
-	limit := func(ip string) loginLimit[siteIP] {
-		addr := netip.MustParseAddr(ip)
-		return loginLimit[siteIP]{
-			bucket: s.guards.ips, key: siteIP{site, addr}, site: site, kind: ipKind, value: addr.String(),
-			size: 1, per: time.Minute,
+	// A canceled access deterministically uses fallback without a race against a real server's deadline.
+	away, cancel := context.WithCancel(t.Context())
+	cancel()
+	rng := rand.New(rand.NewPCG(321, 2)) //nolint:gosec // G404: test data
+	for op := range 100 {
+		l := s.emailLimit(site, fmt.Sprintf("%d@example.com", op), defaultLimits)
+		l.size = 2
+		now := s.attemptNow()
+		key := s.sharedKey(site, l.kind, l.value)
+		if wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now); !ok || wait != 0 {
+			t.Fatal("seed the other caller's shared attempt", wait, ok)
 		}
-	}
-	ctx := t.Context()
-	succeed := func() error { return nil }
-
-	shared := limit("198.51.100.1")
-	if err := failing(s, ctx, shared, succeed); err != nil {
-		t.Fatalf("an attempt in the shared store: %v", err)
-	}
-	if wait, ok := s.spendShared(ctx, s.sharedKey(site, shared.kind, shared.value), shared.size, shared.per, s.attemptNow()); !ok || wait != 0 {
-		t.Errorf("the shared store after an attempt that succeeded: waited %v (answered %v), want the attempt given back", wait, ok)
-	}
-
-	server.Stop(t)
-	here := limit("198.51.100.2")
-	if err := failing(s, ctx, here, succeed); err != nil {
-		t.Fatalf("an attempt with the shared store away: %v", err)
-	}
-	if wait := here.bucket.take(here.key, here.size, here.per, s.attemptNow()); wait != 0 {
-		t.Errorf("this node's bucket after an attempt that succeeded while the shared store was away: waited %v, want the attempt given back", wait)
+		if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
+			t.Fatal("seed the other caller's local attempt", wait)
+		}
+		takeCtx, giveCtx := t.Context(), t.Context()
+		localTake, localGive := rng.IntN(2) == 0, rng.IntN(2) == 0
+		if localTake {
+			takeCtx = away
+		}
+		if localGive {
+			giveCtx = away
+		}
+		at, wait := takeAttempt(s, takeCtx, l)
+		if wait != 0 {
+			t.Fatalf("op %d: take waited %v", op, wait)
+		}
+		giveAttempt(s, giveCtx, l, at)
+		// Local takes always return locally. A shared take whose give failed stays spent; the other store is untouched.
+		localWant := 1
+		sharedWant := 1
+		if !localTake && localGive {
+			sharedWant = 0
+		}
+		for range localWant {
+			if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
+				t.Fatalf("op %d: local refund missing: %v", op, wait)
+			}
+		}
+		if wait := l.bucket.take(l.key, l.size, l.per, now); wait == 0 {
+			t.Fatalf("op %d: refunded an unspent local attempt", op)
+		}
+		for range sharedWant {
+			if wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now); !ok || wait != 0 {
+				t.Fatalf("op %d: shared refund missing: %v, %v", op, wait, ok)
+			}
+		}
+		if wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now); !ok || wait == 0 {
+			t.Fatalf("op %d: refunded an unspent shared attempt: %v, %v", op, wait, ok)
+		}
 	}
 }
