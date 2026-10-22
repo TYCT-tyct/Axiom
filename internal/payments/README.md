@@ -12,17 +12,20 @@ type Kind string     // 收款渠道的种类："easypay"、"stripe"……
 type Method string   // 本站的付款方式代码："alipay"、"wxpay"、"usdt.tron"
 type MerchantID, OrderID, RefundID uuid.UUID // 对外写法 mch_、ord_、rfd_
 type Money struct{ Currency platform.Currency; Minor int64 } // 付款币种的最小单位；位数取 ISO 4217 表
+type State string    // 订单状态："pending"、"paid"……；转移表是 payments.transitions
+type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳
+type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
 func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client、告警信号
 func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) // 充值页：每种付款方式的总额、手续费、币种；显示的是此刻下单会选中的商户账户的报价：与 `choose` 共用一条选择规则（`ranked`），中间没有别的订单插进来时，订单就落在页面显示的那个账户上
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
-func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                    // "我已付款"：查一次渠道
-func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)
-func (p *Payments) Notify() http.Handler                                                                 // GET/POST /api/payments/v1/notify/{merchant}
-func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结 → 发送中 → 渠道 → 落定；r.Key 幂等
-func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 人工结论：附渠道凭证，按风险分级审批
+func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 待支付 → 已取消，减回用量，之后请渠道关单
+func RegisterPoll(c PollConfig) error                // 周期任务 payments.poll 的第 2 步（过期）；E1-2c 加入账后的补单，E1-5 加对账
+func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, error)   // "我已付款"：查一次渠道（E1-2c）
+func (p *Payments) Notify() http.Handler                                               // GET/POST /api/payments/v1/notify/{merchant}（E1-2c）
+func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结 → 发送中 → 渠道 → 落定；r.Key 幂等（E1-6b）
+func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 人工结论：附渠道凭证，按风险分级审批（E1-6b）
 func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, m MerchantInput) (Merchant, error)        // 调 Plugin.Open 校验后封装密钥；有未完成订单时拒改身份字段
-func Register(q *pg.Queue, p *Payments) error                                                            // 周期任务 payments.poll、payments.reconcile
 ```
 
 ### 渠道接口
@@ -51,7 +54,7 @@ type Channel interface {
 	QueryRefund(ctx context.Context, r RefundCall) (RefundState, error)
 	Ack(ok bool) (status int, body []byte) // 渠道要求的应答，sub2api handler/payment_webhook_handler.go:215-226；ok 只在事务提交后为真
 }
-type CreateRequest struct{ Order OrderID; Method Method; Total Money; Subject, ReturnURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由核心按站点域名生成
+type CreateRequest struct{ Order OrderID; Method Method; Total Money; Subject, ReturnURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由控制台处理器按站点域名生成（E1-2c），核心校验 https
 type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string } // 存库前去掉 NUL（sub2api payment_order.go:509-523）；ClientSecret 只交给浏览器，不存库
 type Callback struct{ Method string; RawQuery string; Body []byte; Header http.Header }
 type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; Raw string }
@@ -120,10 +123,10 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | `merchant_usage` | `merchant_id`、`site_id`、`day`（UTC 日）、`used`（付款币种的最小单位） | 主键 `(merchant_id, day)`；`used ≥ 0` | 共享计数（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读、INSERT、UPDATE 的策略都是「范围的站点等于该行 `site_id`」（INSERT 用 `WITH CHECK`，`ON CONFLICT` 的 UPDATE 同受 `USING` 与 `WITH CHECK` 约束）；`axiom_app` 只有 SELECT、INSERT 和 `UPDATE (used)` 的列权限，没有 DELETE。账户范围的下单事务要锁它、加它，却读不到别的账户的订单，也碰不到别的站点的行 |
 | `settings` | `site_id` 主键，加「后台配置」表里站点级的各项 | 各项范围 CHECK；没有行就用代码里的默认值 | 同 `merchants` |
 | `orders` | `id`、`site_id`、`account_id`、`user_id`、`merchant_id`、`method`、`state`、`idem_key`、`fingerprint`、`credits`、`site_currency`、`pay_currency`、`total`、`fee`、`fee_ppm`、`fee_fixed`、`rate_id`、`ref_num`/`ref_den`、`applied_num`/`applied_den`、`arrival_rate_id`、`arrival_ref_num`/`arrival_ref_den`、`arrival_num`/`arrival_den`、`trade_no`（下单时网关给的，可空）、`checkout`（支付链接或二维码，不含 `ClientSecret`）、`expires_at`、`paid_total`、`paid_fee`、`credited`、`paid_at`、`refund_with_fee`（第一笔退款成功时定下，之后沿用，失败不设，E1-6b 加）、`next_query_at`（E1-5 加）、`client_ip`、`created_at`、`updated_at` | `credits > 0`；`total > 0`；`0 ≤ fee ≤ total`；`(rate_id IS NULL) = (pay_currency = site_currency)`；`arrival_*` 同空同非空；`state` 枚举；`state = 'paid' → paid_at, paid_total, paid_fee, credited` 非空、`credited > 0`、`0 ≤ paid_fee ≤ paid_total`；唯一 `(account_id, idem_key)`；`(merchant_id, trade_no)` 普通索引；部分索引 `(expires_at) WHERE state = 'pending'`；`(account_id, created_at DESC)`；`(merchant_id, created_at)` 供对账复算用量 | 账户数据：`in_scope(site_id, account_id)` |
-| `order_payments` | `id`、`order_id`、`site_id`、`account_id`、`merchant_id`、`trade_no`、`amount`、`currency`、`source`（notify、query、admin）、`at` | 唯一 `(merchant_id, trade_no)`，冲突时进待处理记录、不报错；`amount > 0`；`(order_id)` | 账户数据 |
+| `order_payments` | `id`、`order_id`、`site_id`、`account_id`、`merchant_id`、`trade_no`、`amount`、`currency`、`source`（notify、query、admin）、`at` | 唯一 `(merchant_id, trade_no)`，冲突时进待处理记录、不报错；`amount > 0`；`(order_id)` | 账户数据（E1-2c 加） |
 | `order_events` | `id`、`order_id`、`site_id`、`account_id`、`at`、`source`（notify、query、user、admin、job）、`kind`、`from_state`、`to_state`、`trade_no`、`amount`、`raw`（截到 8 KiB） | 只插入：`axiom_app` 只有 INSERT、SELECT；`(order_id, at)` | 账户数据 |
 | `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、sending、pending、succeeded、failed）、`via`（channel、offline）、`credits`、`amount`、`provider_ref`、`reason`、`evidence`、`requested_by`、`approved_by`、`idem_key`、`attempts`、`sent_at`、`next_query_at`、`created_at`、`finished_at` | `credits > 0`；`amount > 0`；`state IN ('sending','pending') → sent_at` 非空；唯一 `(order_id, idem_key)`；部分索引 `(next_query_at) WHERE state IN ('frozen','sending','pending')` | 账户数据 |
-| `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、multiple_payment、duplicate_payment、unmatched_payment、trade_no_conflict、statement、refund_unknown、ledger、usage）、`dedupe`（同一事实的键：网关订单号、退款 ID 或对账日期）、`detail`、`state`（open、resolved）、`resolution`、`evidence`、`resolved_by`、`approved_by`、`created_at`、`resolved_at` | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据 |
+| `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、multiple_payment、duplicate_payment、unmatched_payment、trade_no_conflict、statement、refund_unknown、ledger、usage）、`dedupe`（同一事实的键：网关订单号、退款 ID 或对账日期）、`detail`、`state`（open、resolved）、`resolution`、`evidence`、`resolved_by`、`approved_by`、`created_at`、`resolved_at` | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据（E1-2c 加） |
 
 - **对外 ID**：订单 ID 的对外写法就是发给渠道的商户订单号，`ord_` 加 26 个字符。
 - **另行入账**：人工把一条待处理的付款（重复付款、有付款没订单）入到某个账户时，额度批次的 ID 用这条待处理记录的 ID，重复提交不会入两次。
@@ -133,7 +136,10 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 ## 事务与任务
 
-- **下单**：先读「菜单」（`menu`）：账户范围的只读事务读设置、这种付款方式的商户账户和当天用量；平台范围的只读事务检查这些商户账户的配置能否打开（插件存在、密钥解得开、设置哈希一致、插件接受；结果按商户账户的 `rev` 缓存一分钟，绕过保存改库的最迟一分钟后被排除并告警，打不开的不参与报价和挑选、不影响别的账户；账户范围从不读密文），再读 `TopUpRate`。事务 1（账户范围）设 `lock_timeout = 2s`、`statement_timeout = 5s`（超时回 503，订单未建），取账户的事务级咨询锁（`pg_advisory_xact_lock`，键由账户 ID 派生）→ 读设置和这个账户的计数 → 选商户账户 → `INSERT … ON CONFLICT DO UPDATE` 锁住并加上它当天的用量计数 → 算总额 → 插入订单和事件。提交后调 `Create`；事务 2 检查链接，写回 `trade_no` 和 `checkout`。`Create` 返回 `*Rejected` 或链接不合格时事务 2 改为失败并减回用量；未知错误不改，返回 502 给用户，订单由补单和过期收尾。
+- **下单**：先按账户幂等键读已存在的订单，重放不受当前充值开关、费率和限额影响；新请求再读「菜单」（`menu`）：账户范围的只读事务读设置、这种付款方式的商户账户和当天用量；平台范围的只读事务检查这些商户账户的配置能否打开（插件存在、密钥解得开、设置哈希一致、插件接受；结果按商户账户的 `rev` 缓存一分钟，绕过保存改库的最迟一分钟后被排除并告警，打不开的不参与报价和挑选、不影响别的账户；账户范围从不读密文），再读 `TopUpRate`。事务 1（账户范围）设 `lock_timeout = 2s`、`statement_timeout = 5s`（超时回 503，订单未建），取账户的事务级咨询锁（`pg_advisory_xact_lock`，键由整个账户 ID 的 SHA-256 派生，避免 UUIDv7 的时间前缀把无关账户串行化）→ 读这个账户的计数与待支付、取消、当天、首笔上限 → 选商户账户，持有商户身份的共享咨询锁并核对报价修订号（保存配置先取同键的排他锁，再检查在途订单；旧报价拒绝重试；身份锁用完整商户 ID 的散列、独立命名空间 0x4d，账户订单锁用 0x4f，锁与修订查询均经 sqlc）→ `INSERT … ON CONFLICT DO UPDATE` 锁住并加上它当天的用量计数 → 算总额 → 插入订单和事件。创建、有效期都取数据库事务时钟（`transaction_timestamp() + ttl`），通过 `RETURNING` 交回时间；checkout 保存后也返回实际的 `updated_at`。提交后调 `Create`；事务 2 检查链接，写回 `trade_no` 和 `checkout`。调用 `Create` 之前配置打不开（确定未发送）、`Create` 返回 `*Rejected` 或链接不合格时事务 2 改为失败并减回用量；链接不合格的订单提交失败状态后还会按网关单号关单；未知错误不改，返回 502 给用户，订单由补单和过期收尾。
+  返回地址（`CreateRequest.ReturnURL`）是控制台按站点域名生成后传进来的，核心只检查它是 https：`accounts` 现在只有按域名反查站点（`SiteForHost`），没有站点域名的读取函数，核心自己拼不出来。幂等键是请求头的值，`(account_id, idem_key)` 唯一，指纹是（付款方式，额度），同键同请求返回原订单与已存的 checkout（没有 `ClientSecret`，它从不入库；与首次下单并发时 checkout 可能尚未保存），同键异请求返回 409。重放返回 nil 错误只表示找到了同一请求，不重放首次错误：处理器必须按 `State` 和 `Checkout` 是否为空映射应答；`failed` 展示失败，待支付且 checkout 为空表示尚无可展示的支付凭据（首次可能仍在调用渠道或结果未知），不能仅凭 err 为 nil 展示付款成功。
+- **取消**：账户范围的事务锁订单行 → 待支付变已取消 → 减回用量 → 事件；已取消的再取消就返回原订单、不重复关单。仅本次实际取消的，提交后请渠道关单（`Close`），不声明这个能力的跳过，失败只记日志：订单已经不能在本站付款，渠道那边还能付的由补单兜住。E1-2b 还不先查单（它没有入账，查了也只能拒绝取消），查单随 E1-2c 加在锁订单之前。
+- **过期**（`payments.poll` 的第 2 步）：每分钟一轮，按 `expires_at` 取一批已过有效期的待支付订单（最老的先，一轮 30 秒预算）→ 逐个锁行，状态仍是待支付就变已过期、减回用量、写事件 → 先提交本批全部过期事务，再逐个请渠道关单。每次关单（含打开配置）最多 5 秒，本轮超时过的商户不再关单；整个过程仍受 30 秒预算约束。网络阻塞不会占住本批其他订单的待支付名额或用量。失败的一个不挡后面的。E1-2c 在锁行之前加一次查单：已付的按到账处理，不整单作废（docs/domains/payments.md「订单」的两行过渡）。
 - **回调**：限流 → 取商户配置（内存缓存，按 `rev` 失效）→ `Verify` → 不加锁读订单，已支付且网关订单号已记下就直接应答 → 查单 → 入账事务 → 提交后 `Ack(true)`。
 - **入账**（回调、补单、"我已付款"、人工）：平台范围的一个事务，`SELECT … FOR UPDATE` 订单行 → 插入 `order_payments`（冲突写待处理记录）→ 条件转移 → `CreditPaid` → 事件；过期后到账的同时加回用量计数。事务里不做网络调用。
 - **退款**：在订单事务之前先 `PrepareRefund` 无锁分页预放；事务 1 锁订单行、检查在途的退款、`FreezeRefund`、`QuoteRefund` 算金额与手续费、插入退款行（已冻结）；事务 2 置发送中、写 `sent_at`；调渠道；事务 3 锁订单行、退款行，`SettleRefund` 或 `ReleaseRefund`，更新订单。
@@ -162,13 +168,14 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 ## 实现拆分
 
-按顺序；每个 PR 交付一件能单独评审、回滚的事，非生成代码不超过约 2000 行，超了按能力边界再拆：E1-2b 超了时，订单表、下单、取消、"我已付款"和不入账的过期留在 E1-2b，回调处理器、`order_payments`、`discrepancies`、入账和过期后到账拆成 E1-2c。表的迁移随第一个用到它的 PR。E1-1（billing 的付费额度批次，`CreditPaid`）是 E1-2a 的前提；E1-2b 之后 E1-3、E1-4、E1-5 可以并行；E1-6a 改 billing 的写路径，不与其他改 billing 写路径的 PR 同时开，E1-6b 在它之后。
+按顺序；每个 PR 交付一件能单独评审、回滚的事，非生成代码不超过约 2000 行，超了按能力边界再拆：E1-2b 超了时，订单表、下单、取消和不入账的过期留在 E1-2b，回调处理器、`order_payments`、`discrepancies`、入账和过期后到账拆成 E1-2c。E1-2b 这一行就这么拆了：只下单、取消、不入账的过期和它们的测试已接近 2000 行非生成代码，加上回调、入账、待处理、过期后到账和控制台契约会明显超过 2000 行。与设计原话的两处差别：「我已付款」随 E1-2c，它要把渠道的已付变成入账，而 E1-2b 不入账；控制台的订单契约也随 E1-2c，应答要和回调、补单一起定。表的迁移随第一个用到它的 PR。E1-1（billing 的付费额度批次，`CreditPaid`）是 E1-2a 的前提；E1-3、E1-4 的渠道端到端验收和 E1-5 的补单入账均依赖 E1-2c；E1-2c 之后这三项可以并行；E1-6a 改 billing 的写路径，不与其他改 billing 写路径的 PR 同时开，E1-6b 在它之后。
 
 | PR | 内容 | 验收测试 |
 |---|---|---|
 | E1-2a `feat(payments): configure merchant accounts and quote top-ups` | 表 `merchants`、`merchant_configs`、`merchant_methods`、`merchant_usage`、`settings` 和迁移；`Channel`、`Plugin`、`Caps`、登记、测试用的假渠道；商户账户的保存（校验、密钥与 `settings` 哈希的封装）；选商户账户与用量计数；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；`Options` | 总额复算与手续费反推的性质测试；比例超过 50%、额度乘汇率越界被拒；选商户账户的单笔、当天额度、全被过滤和查用量出错都拒绝；并发抢最后的当天额度只放行放得下的；直接改库里的网关地址后商户账户用不了；密钥不出现在日志和响应里；行级安全：账户范围读得到本站的付款方式和费率、读不到 `merchant_configs`，站长只看到本站的商户账户；站点 A 的账户范围读不到、改不了站点 B 的 `merchants` 与 `merchant_usage` 行（含 INSERT … ON CONFLICT 造行） |
 | E1-2a2 `feat(payments): manage merchant accounts in the admin API` | 管理接口的商户账户契约与处理器（列出、读取、创建、修改；密钥只写不读，响应只有非密配置），站点支付设置与充值缓冲的读写；从 E1-2a 拆出，它已接近 2000 行 | 契约测试；密钥不出现在响应和审计里；主站行只有平台范围能改；修订号过期 409、字段错误 422 带指针 |
-| E1-2b `feat(payments): take orders and credit them from callbacks` | 表 `orders`、`order_payments`、`order_events`、`discrepancies` 和迁移；转移表；下单（账户锁与计数上限、链接检查、服务端生成的返回地址）、取消、"我已付款"；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；过期（`payments.poll` 的第 2 步）与过期后到账（宽限期、到账汇率、自动入账期限）；有未完成订单时拒改商户身份字段；控制台的订单契约 | 转移表的全部（从，到）组合；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变；10 个并发下单不突破待支付上限和每天上限；`//`、`javascript:`、`data:` 链接被拒；行级安全：账户只看到自己的订单 |
+| E1-2b `feat(payments): take orders and cancel them before payment` | 表 `orders`、`order_events` 和 `settings` 的限额列与迁移；转移表；下单（账户咨询锁、待支付/取消/当天/首笔上限、链接检查、幂等键、校验服务端传入的 https 返回地址）、取消、不入账的过期（`payments.poll` 的第 2 步）与减回用量；有未完成订单时拒改商户身份字段 | 转移表的全部（从，到）组合；同键同请求返回同一订单（充值关闭后仍可重放）、同键异请求 409，同键并发只调用一次渠道；10 个并发下单只放行 3 个待支付，取消空出名额，取消 5 次后拒新单；当天上限与首笔上限，已付过的账户不再受首笔限制；`//`、`javascript:`、`data:`、相对链接被拒且订单失败、用量减回，NUL 被清掉；渠道答不上时订单留在待支付、用量不减、返回结果未知，写 checkout 的事务失败时不回成功（故障注入）；过期只发生一次、之后请渠道关单；取消与过期竞争只释放一次用量，跨 UTC 日释放创建日用量；有订单在途时改币种、设置、密钥被拒，改名可以；行级安全：账户只看到自己的订单与事件，也取消不了别人的 |
+| E1-2c `feat(payments): credit orders from callbacks and queries` | 表 `order_payments`、`discrepancies` 和迁移；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；"我已付款"；过期前的查单与过期后到账（宽限期、到账汇率、自动入账期限）；控制台的订单契约与处理器（按站点域名生成返回地址；每 IP 下单/失败限流，默认每小时 20/10 次，计数失败不放行）；补查窗口内已过期、已取消及有网关单号的失败订单的商户身份保护（[#390](https://github.com/TYCT-tyct/Axiom/issues/390)，真实渠道启用前完成） | IP 限流的边界、并发及计数故障，返回地址不接受浏览器输入；身份保护的窗口边界、关单失败/不支持与晚付；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
 | E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户保存失败 |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `orders.next_query_at` 的迁移；`payments.poll` 的补单（每单退避、每商户并发上限与熔断）与过期后补查；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |

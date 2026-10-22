@@ -16,6 +16,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
+	"axiom/internal/payments"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
@@ -417,6 +418,18 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
+		return nil, err
+	}
+	// Orders past their deadline expire every minute, on whichever node leads the queue
+	// (docs/domains/payments.md「补单与过期」). The module has no channel compiled in yet, so it is opened with none and the
+	// run only closes orders whose channel it can open.
+	store, err := payments.Open(payments.Config{
+		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
 		return nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
