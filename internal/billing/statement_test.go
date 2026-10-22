@@ -353,8 +353,13 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	first, firstPlan := b.plan(statementPage, b.admitted.Account, int64(math.MaxInt64), int32(100), statementNewest.At, uuid.Max())
-	deep, plan := b.plan(statementPage, b.admitted.Account, far, int32(100), statementNewest.At, uuid.Max())
+	// The page query is planned in the transaction ListStatement has read a page in, so the plan is the one it gets.
+	listed := func(tx pg.Tx) error {
+		_, _, err := ListStatement(t.Context(), tx, StatementQuery{Account: b.admitted.Account, PageSize: 1})
+		return err
+	}
+	first, firstPlan := b.plan(listed, statementPage, b.admitted.Account, int64(math.MaxInt64), int32(100), statementNewest.At, uuid.Max())
+	deep, plan := b.plan(listed, statementPage, b.admitted.Account, far, int32(100), statementNewest.At, uuid.Max())
 	t.Logf("EXPLAIN blocks: first=%d deep=%d", first, deep)
 	t.Logf("first plan: %s\ndeep plan: %s", firstPlan, plan)
 	checkStatementIndexPlan(t, plan)

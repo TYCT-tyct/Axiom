@@ -104,11 +104,22 @@ var statementNewest = StatementCursor{Seq: math.MaxInt64, At: time.Date(9999, 1,
 // empty page with a continuation cursor; the cursor advances past every examined transaction.
 const statementRounds = 8
 
+// statementScansInOrder keeps the planner from sorting a page's transactions, so it walks the indexes in order and stops
+// at the limit. The row-level security filter on billing.transactions is estimated at a sliver of the account's rows
+// (0.5% in the platform scope; in an account's scope its share of the table, counted a second time), so with a sort
+// allowed a long account's page is planned as a bitmap scan of its whole history and a sort of it: 25,000 transactions
+// read for 101 (README.md「控制台的读取」). Like plan_cache_mode in observability's lists, it is set for the rest of the
+// transaction, which the console's statement reads hold for nothing else.
+const statementScansInOrder = "SET LOCAL enable_sort = off"
+
 // ListStatement reads account-scoped balance and refund-hold events in commit order. Entry aggregation happens only
 // after limiting candidate transactions; zero-effect transactions are skipped here, within statementRounds reads.
 func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) {
 	if q.PageSize < 1 || q.PageSize > MaxStatementPage {
 		return nil, nil, fmt.Errorf("billing: a page of %d movements", q.PageSize)
+	}
+	if _, err := tx.Exec(ctx, statementScansInOrder); err != nil {
+		return nil, nil, fmt.Errorf("billing: plan the statement in index order: %w", err)
 	}
 	after := statementNewest
 	if q.After != nil {
