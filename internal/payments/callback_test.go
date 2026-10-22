@@ -110,14 +110,19 @@ func (w *world) receive(c confirmed) {
 
 func (w *world) assertCredit(o Order, want int64) {
 	w.t.Helper()
-	var got int64
+	var got, balance, ledger int64
 	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(w.t.Context(), "SELECT coalesce(sum(amount), 0)::bigint FROM billing.credit_batches WHERE id = $1", uuid.UUID(o.ID)).Scan(&got)
+		return tx.QueryRow(w.t.Context(), `SELECT coalesce((SELECT amount FROM billing.credit_batches WHERE id = $1), 0), b.balance,
+			coalesce((SELECT -sum(amount) FROM billing.entries WHERE account_id = $2 AND book = 'user_balance'), 0)::bigint
+			FROM billing.balances b WHERE b.account_id = $2`, uuid.UUID(o.ID), o.AccountID).Scan(&got, &balance, &ledger)
 	}); err != nil {
 		w.t.Fatal(err)
 	}
 	if got != want {
 		w.t.Fatalf("credited %d, want %d", got, want)
+	}
+	if balance != ledger {
+		w.t.Fatalf("balance %d differs from ledger %d", balance, ledger)
 	}
 }
 

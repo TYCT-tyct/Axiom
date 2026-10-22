@@ -52,7 +52,8 @@ WHERE o.id = @id AND (o.state = 'pending' OR
 -- name: QueryOrders :many
 SELECT o.id FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
 WHERE (o.next_query_at <= transaction_timestamp() OR (o.state = 'pending' AND o.expires_at <= transaction_timestamp())) AND
-    (o.state = 'pending' OR (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
+    (o.state = 'pending' OR o.expires_at >= transaction_timestamp() - interval '30 days' AND
+        (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
         AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= transaction_timestamp())
 ORDER BY o.next_query_at, o.id LIMIT @batch;
 

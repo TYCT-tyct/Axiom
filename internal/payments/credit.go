@@ -12,6 +12,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/idem"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -27,7 +28,7 @@ type confirmed struct {
 }
 
 func (p *Payments) receive(ctx context.Context, c confirmed) error {
-	if strings.ContainsRune(c.order+c.payment.TradeNo, 0) {
+	if strings.ContainsRune(c.order, 0) || strings.ContainsRune(c.payment.TradeNo, 0) {
 		c.reason = "invalid_payment"
 		c.order = strings.ReplaceAll(c.order, "\x00", "")
 		c.payment.TradeNo = strings.ReplaceAll(c.payment.TradeNo, "\x00", "")
@@ -69,26 +70,12 @@ func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c
 	if c.payment.Paid.Minor <= 0 || c.payment.Paid.Currency == (platform.Currency{}) || c.payment.TradeNo == "" || len(c.payment.TradeNo) > 1024 {
 		return p.reviewPayment(ctx, tx, o, c, "invalid_payment")
 	}
-	if err := queries.RecordPayment(ctx, tx, RecordPaymentParams{
-		ID: uuid.NewV7(), OrderID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID,
-		MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo, Amount: c.payment.Paid.Minor,
-		Currency: c.payment.Paid.Currency.String(), Source: c.source,
-	}); err != nil {
-		return fmt.Errorf("payments: insert payment: %w", err)
-	}
-	previous, err := queries.RecordedPayment(ctx, tx, RecordedPaymentParams{MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo})
+	kind, err := recordReceipt(ctx, tx, o, c)
 	if err != nil {
 		return err
 	}
-	if previous[0].OrderID != o.ID || previous[0].Amount != c.payment.Paid.Minor || previous[0].Currency != c.payment.Paid.Currency.String() {
-		return p.reviewPayment(ctx, tx, o, c, "trade_no_conflict")
-	}
-	n, err := queries.PaymentCount(ctx, tx, o.ID)
-	if err != nil {
-		return err
-	}
-	if n > 1 {
-		return p.reviewPayment(ctx, tx, o, c, "multiple_payment")
+	if kind != "" {
+		return p.reviewPayment(ctx, tx, o, c, kind)
 	}
 	if c.reason != "" {
 		return p.reviewPayment(ctx, tx, o, c, c.reason)
@@ -96,14 +83,38 @@ func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c
 	if o.Total != c.payment.Paid.Minor || o.PayCurrency != c.payment.Paid.Currency.String() {
 		return p.reviewPayment(ctx, tx, o, c, "amount_mismatch")
 	}
-	if !State(o.State).canMoveTo(Paid) {
+	// A held payment requires a human conclusion; a repeated query cannot clear an earlier discrepancy.
+	if !State(o.State).canMoveTo(Paid) || State(o.State) == Review {
 		return paymentEvent(ctx, tx, o, c, State(o.State))
 	}
-	// A held payment requires a human conclusion; a repeated query cannot clear an earlier discrepancy.
-	if State(o.State) == Review {
-		return paymentEvent(ctx, tx, o, c, Review)
-	}
 	return p.creditOrder(ctx, tx, o, c)
+}
+
+// recordReceipt preserves a gateway trade's first identity and amount. Conflicts are facts to resolve, never INSERT
+// errors that keep the gateway retrying; a fresh read after ON CONFLICT sees the other transaction's committed row.
+func recordReceipt(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) (string, error) {
+	if err := queries.RecordPayment(ctx, tx, RecordPaymentParams{
+		ID: uuid.NewV7(), OrderID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID,
+		MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo, Amount: c.payment.Paid.Minor,
+		Currency: c.payment.Paid.Currency.String(), Source: c.source,
+	}); err != nil {
+		return "", fmt.Errorf("payments: insert payment: %w", err)
+	}
+	previous, err := queries.RecordedPayment(ctx, tx, RecordedPaymentParams{MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo})
+	if err != nil {
+		return "", err
+	}
+	if previous[0].OrderID != o.ID || previous[0].Amount != c.payment.Paid.Minor || previous[0].Currency != c.payment.Paid.Currency.String() {
+		return "trade_no_conflict", nil
+	}
+	n, err := queries.PaymentCount(ctx, tx, o.ID)
+	if err != nil {
+		return "", err
+	}
+	if n > 1 {
+		return "multiple_payment", nil
+	}
+	return "", nil
 }
 
 func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) error {
@@ -127,7 +138,7 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 		return err
 	}
 	if err = billing.CreditPaid(ctx, tx, credit); err != nil {
-		if !errors.Is(err, billing.ErrCreditConflict) && !isPaidError(err) {
+		if _, paidErr := errors.AsType[*billing.PaidError](err); !errors.Is(err, billing.ErrCreditConflict) && !paidErr {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT paid_credit"); err != nil {
@@ -146,11 +157,6 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 		return errors.New("payments: locked order could not become paid")
 	}
 	return paymentEvent(ctx, tx, o, c, Paid)
-}
-
-func isPaidError(err error) bool {
-	_, ok := errors.AsType[*billing.PaidError](err)
-	return ok
 }
 
 func arrivalCredit(ctx context.Context, tx pg.Tx, o LockOrderRow, t PaymentTermsRow, payment Payment) (billing.PaidCredit, CreditOrderParams, error) {
@@ -242,8 +248,12 @@ func (p *Payments) discrepancy(ctx context.Context, tx pg.Tx, c confirmed, o *Lo
 	if err != nil {
 		return err
 	}
+	key, err := idem.Fingerprint(c.order, c.payment.TradeNo)
+	if err != nil {
+		return err
+	}
 	r := RecordDiscrepancyParams{ID: uuid.NewV7(), MerchantID: uuid.UUID(c.merchant), Kind: kind,
-		Dedupe: c.order + ":" + c.payment.TradeNo, Detail: detail}
+		Dedupe: fmt.Sprintf("%x", key), Detail: detail}
 	if o != nil {
 		r.OrderID, r.AccountID = &o.ID, &o.AccountID
 	}

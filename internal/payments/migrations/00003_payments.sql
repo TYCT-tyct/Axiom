@@ -11,6 +11,9 @@ ALTER TABLE payments.orders
     ADD COLUMN next_verify_at timestamptz NOT NULL DEFAULT transaction_timestamp();
 CREATE INDEX orders_query_due ON payments.orders (next_query_at, id)
     WHERE state IN ('pending', 'expired', 'cancelled', 'failed');
+-- The largest configurable query window is 30 days; historical terminal orders need not be scanned each minute.
+CREATE INDEX orders_late_window ON payments.orders (expires_at, next_query_at)
+    WHERE state IN ('expired', 'cancelled', 'failed');
 
 CREATE TABLE payments.order_payments (
     id uuid PRIMARY KEY,
