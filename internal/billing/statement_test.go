@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"math"
 	"slices"
 	"strings"
@@ -69,7 +70,7 @@ func TestStatementCursorSurvivesTheConsole(t *testing.T) {
 		}
 	}
 	for _, text := range []string{"", "nonsense", wantShort()} {
-		if _, err := ParseStatementCursor(text); err != ErrBadStatementCursor {
+		if _, err := ParseStatementCursor(text); !errors.Is(err, ErrBadStatementCursor) {
 			t.Errorf("%q read as a cursor: %v", text, err)
 		}
 	}
@@ -116,6 +117,15 @@ func TestStatement(t *testing.T) {
 	// The balance after each movement, newest first: 1000 left now, 1200 before the expiry, 1500 before the charge,
 	// and 1000 before the top-up.
 	after := []int64{1000, 1200, 1500, 1000}
+	checkStatementRows(t, rows, want, after, waived)
+}
+
+func checkStatementRows(t *testing.T, rows []StatementRow, want []struct {
+	kind   StatementKind
+	amount int64
+	ref    uuid.UUID
+}, after []int64, waived uuid.UUID) {
+	t.Helper()
 	for i, w := range want {
 		row := rows[i]
 		if row.Kind != w.kind || row.Amount != w.amount || row.Balance != after[i] {
@@ -162,18 +172,34 @@ func TestStatementPages(t *testing.T) {
 	if len(all) != 26 {
 		t.Fatalf("%d movements in the statement, want the gift and 25 charges", len(all))
 	}
+	checkStatementChain(t, all)
+	if all[0].Balance != b.balanceOf(b.admitted.Account) || all[len(all)-1].Kind != StatementGift {
+		t.Errorf("the statement starts with %+v and ends with %+v", all[0], all[len(all)-1])
+	}
+}
+
+// checkStatementChain verifies opening + changes = closing for both counters and unique row identities.
+func checkStatementChain(t *testing.T, rows []StatementRow) {
+	t.Helper()
+	if len(rows) == 0 {
+		t.Fatal("empty statement")
+	}
 	seen := map[uuid.UUID]bool{}
-	for i, row := range all {
+	for i, row := range rows {
 		if seen[row.ID] {
 			t.Errorf("row %d is a repeat", i)
 		}
 		seen[row.ID] = true
-		if i > 0 && all[i-1].Balance-all[i-1].Amount != row.Balance {
-			t.Errorf("row %d leaves %d, and the one above it %d: the column does not add up", i, row.Balance, all[i-1].Balance-all[i-1].Amount)
+		if i > 0 {
+			previous := rows[i-1]
+			if previous.Balance-previous.Amount != row.Balance || previous.Frozen-previous.FrozenChange != row.Frozen {
+				t.Errorf("row %d does not reconcile with the preceding row", i)
+			}
 		}
 	}
-	if all[0].Balance != b.balanceOf(b.admitted.Account) || all[len(all)-1].Kind != StatementGift || all[len(all)-1].Balance != all[len(all)-1].Amount {
-		t.Errorf("the statement starts with %+v and ends with %+v", all[0], all[len(all)-1])
+	last := rows[len(rows)-1]
+	if last.Balance-last.Amount != 0 || last.Frozen-last.FrozenChange != 0 {
+		t.Errorf("statement does not reconcile to zero opening funds: %+v", last)
 	}
 }
 
@@ -221,27 +247,7 @@ func TestStatementFromBeforeTheSequence(t *testing.T) {
 	b.charge(50)
 	b.sql("UPDATE billing.transactions SET seq = NULL")
 	b.charge(20) // numbered, and so above every row from before the sequence
-	legacy := func() []uuid.UUID {
-		var ids []uuid.UUID
-		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-			rows, err := tx.Query(t.Context(), "SELECT id FROM billing.transactions WHERE account_id = $1 AND seq IS NULL ORDER BY created_at DESC, id DESC", b.admitted.Account)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var id uuid.UUID
-				if err := rows.Scan(&id); err != nil {
-					return err
-				}
-				ids = append(ids, id)
-			}
-			return rows.Err()
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return ids
-	}()
+	legacy := b.legacyStatementIDs()
 	rows, next := b.statement(b.admitted, 50, nil)
 	if next != nil {
 		t.Errorf("the last page gave a cursor %v", next)
@@ -258,6 +264,30 @@ func TestStatementFromBeforeTheSequence(t *testing.T) {
 			t.Errorf("row %d does not continue the balance above it", i)
 		}
 	}
+}
+
+func (b *bank) legacyStatementIDs() []uuid.UUID {
+	b.t.Helper()
+
+	var ids []uuid.UUID
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		rows, err := tx.Query(b.t.Context(), "SELECT id FROM billing.transactions WHERE account_id = $1 AND seq IS NULL ORDER BY created_at DESC, id DESC", b.admitted.Account)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		b.t.Fatal(err)
+	}
+	return ids
 }
 
 // TestStatementIsTheAccountsOwn: another account's scope reads nothing of this one's statement, and a page size the

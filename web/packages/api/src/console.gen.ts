@@ -473,10 +473,11 @@ export interface components {
             /** @description 10 one-time codes, each written xxxx-xxxx-xxxx-xxxx. They are shown only here. */
             recovery_codes: string[];
         };
-        /** @description An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month. */
+        /** @description An account's money in its site's accounting currency. `available` is `balance - reserved - frozen`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month. */
         Balance: {
             balance: components["schemas"]["Money"];
             reserved: components["schemas"]["Money"];
+            frozen: components["schemas"]["Money"];
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];

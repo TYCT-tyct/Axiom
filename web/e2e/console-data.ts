@@ -103,6 +103,7 @@ export function usualState(): MockState {
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
+      frozen: nano("0"),
       floor: usd("0"),
       available: nano("11750000000"),
       spent_this_month: nano("3141592653"),
@@ -133,6 +134,7 @@ export function worstState(): MockState {
   state.balance = {
     balance: nano("-1500000000"),
     reserved: nano("9223372036854775807"),
+    frozen: nano("0"),
     floor: nano("-5000000000"),
     available: nano("-9223372036854775807"),
     spent_this_month: nano("9223372036854775807"),

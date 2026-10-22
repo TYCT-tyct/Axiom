@@ -41,7 +41,7 @@ export default {
   balance: {
     description: "What your account can spend now, and why.",
     available: "Available balance",
-    availableNote: "Balance minus what’s held in reserve.",
+    availableNote: "Balance minus pending call reservations and refund holds.",
     spentThisMonth: "Spent this month",
     monthNote: "Settled calls, by UTC calendar month.",
     breakdown: "Breakdown",
@@ -49,6 +49,8 @@ export default {
     balanceNote: "All the credit in the account.",
     reserved: "Reserved",
     reservedNote: "Held for calls in progress; when a call ends it settles for what it used and the rest returns.",
+    frozen: "Refund holds",
+    frozenNote: "Included in the balance, held for refunds and unavailable for new calls.",
     floor: "Balance floor",
     floorNote: "The lowest the available balance may go. 0 means no overdraft.",
     topUp: "There’s no online top-up yet; an admin adds credit.",

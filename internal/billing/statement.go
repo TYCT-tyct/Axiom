@@ -16,6 +16,7 @@ import (
 // StatementKind is what a movement of an account's credits was, as the user reads it.
 type StatementKind string
 
+// User-facing credit events; internal ledger kinds never appear on a statement.
 const (
 	StatementTopUp    StatementKind = "top_up" // paid credit, from a payment or an offline channel
 	StatementGift     StatementKind = "gift"

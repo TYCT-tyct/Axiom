@@ -39,7 +39,7 @@ export default {
   balance: {
     description: "你的账户现在能花多少，以及为什么。",
     available: "可用余额",
-    availableNote: "余额减去正在预留的部分。",
+    availableNote: "余额减去在途调用预留和退款冻结。",
     spentThisMonth: "本月花费",
     monthNote: "按 UTC 自然月，已结算的调用。",
     breakdown: "构成",
@@ -47,6 +47,8 @@ export default {
     balanceNote: "账户里的全部额度。",
     reserved: "预留中",
     reservedNote: "正在进行的调用先预留的金额；调用结束后按实际用量结算，多余的退回。",
+    frozen: "退款冻结",
+    frozenNote: "包含在余额内，退款处理期间不能用于新调用。",
     floor: "余额底线",
     floorNote: "可用余额允许降到的最低值。0 表示不能透支。",
     topUp: "目前没有在线充值，额度由管理员添加。",

@@ -1,6 +1,7 @@
 import { Stat } from "@axiom/app";
 import { DataState, PageHeader, Panel, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { balanceQuery } from "../queries";
 
@@ -33,6 +34,7 @@ export default function Balance() {
                     [
                       ["balance", data.balance],
                       ["reserved", data.reserved],
+                      ["frozen", data.frozen],
                       ["floor", data.floor],
                     ] as const
                   ).map(([name, money]) => (
@@ -47,6 +49,9 @@ export default function Balance() {
                 </dl>
               </Panel>
               <p className="max-w-prose text-ui text-t3">{t("balance.topUp")}</p>
+              <Link to="/statement" className="text-ui text-accent underline-offset-4 hover:underline">
+                {t("nav.statement")}
+              </Link>
             </>
           )}
         </DataState>

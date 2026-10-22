@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"axiom/internal/billing"
+	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/pg"
@@ -129,6 +130,65 @@ func TestStatementCSV(t *testing.T) {
 		if diff := cmp.Diff(w, got); diff != "" {
 			t.Errorf("line %d (-want +got):\n%s", i, diff)
 		}
+	}
+}
+
+func TestStatementRefundMatchesBalance(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := uuid.NewV7()
+	hold := billing.Freeze{Account: account, Batch: batch, Amount: 500_000_000}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.CreditPaid(t.Context(), tx, billing.PaidCredit{
+			ID: batch, Site: site, Account: account, SiteCurrency: currency, Credited: 1_000_000_000,
+			Payment: billing.Payment{Currency: currency, Paid: 200, Fee: 10}, Channel: billing.Channel{Offline: "test"},
+			Actor: audit.System("test"), Reason: "statement refund",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := billing.PrepareRefund(t.Context(), f.db, pg.PlatformScope(), hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		n, err := billing.FreezeRefund(t.Context(), tx, hold)
+		if err == nil && n != hold.Amount {
+			t.Errorf("froze %d, want %d", n, hold.Amount)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.checkRefundStatement(s, 2, consoleapi.Freeze, "0", batch.String())
+	if balance := f.balance(s); balance.Frozen.Amount != "500000000" || balance.Available.Amount != "500000000" {
+		t.Fatalf("refund hold not reflected in available balance: %+v", balance)
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.SettleRefund(t.Context(), tx, billing.Refund{Freeze: hold, WithFee: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.checkRefundStatement(s, 3, consoleapi.Refund, "-500000000", batch.String())
+	if csv := f.do(http.MethodGet, "/statement.csv", "", as(s)); csv.Code != http.StatusOK || !strings.Contains(csv.Body.String(), ",refund,-0.500000000,0.500000000,USD,"+batch.String()+",-0.500000000,0.000000000") {
+		t.Fatalf("refund export = %d %s", csv.Code, csv.Body)
+	}
+}
+
+func (f consoleFixture) checkRefundStatement(s session, count int, kind consoleapi.StatementKind, delta, batch string) {
+	f.t.Helper()
+	page, balance := f.statementRows(s, ""), f.balance(s)
+	if len(page.Data) != count {
+		f.t.Fatalf("statement has %d rows, want %d", len(page.Data), count)
+	}
+	row := page.Data[0]
+	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter != balance.Balance || row.FrozenAfter != balance.Frozen {
+		f.t.Fatalf("statement %+v disagrees with balance %+v", page, balance)
 	}
 }
 

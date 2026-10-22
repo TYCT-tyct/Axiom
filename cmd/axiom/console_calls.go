@@ -39,6 +39,7 @@ func (c consoleAPI) GetBalance(ctx context.Context, _ consoleapi.GetBalanceReque
 	currency := cl.site.Currency
 	return consoleapi.GetBalance200JSONResponse{
 		Balance: moneyOf(view.Balance, currency), Reserved: moneyOf(view.Reserved, currency), Floor: moneyOf(view.Floor, currency),
+		Frozen:         moneyOf(view.Frozen, currency),
 		Available:      consoleapi.Money{Amount: available.String(), Currency: currency.String()},
 		SpentThisMonth: moneyOf(view.SpentThisMonth, currency),
 	}, nil

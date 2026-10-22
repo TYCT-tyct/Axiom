@@ -51,10 +51,15 @@ func TestStatementRefundEvents(t *testing.T) {
 			t.Errorf("row %d lost its paid batch/order reference", i)
 		}
 	}
+	b.checkStatementRefundPaging(f, len(rows))
+}
+
+func (b *bank) checkStatementRefundPaging(f Freeze, count int) {
+	b.t.Helper()
 	// Every possible small page size must preserve both columns, even when a new freeze commits above it.
-	for size := 1; size <= len(rows); size++ {
+	for size := 1; size <= count; size++ {
 		first, next := b.statement(b.admitted, size, nil)
-		if size < len(rows) {
+		if size < count {
 			b.freeze(Freeze{Account: f.Account, Batch: f.Batch, Amount: 1})
 		}
 		all := first
@@ -63,15 +68,7 @@ func TestStatementRefundEvents(t *testing.T) {
 			page, next = b.statement(b.admitted, size, next)
 			all = append(all, page...)
 		}
-		for i := 1; i < len(all); i++ {
-			if all[i-1].Balance-all[i-1].Amount != all[i].Balance || all[i-1].Frozen-all[i-1].FrozenChange != all[i].Frozen {
-				t.Fatalf("page size %d, row %d breaks the opening + changes = closing identity", size, i)
-			}
-		}
-		last := all[len(all)-1]
-		if last.Balance-last.Amount != 0 || last.Frozen-last.FrozenChange != 0 {
-			t.Fatalf("page size %d does not reconcile to zero opening funds: %+v", size, last)
-		}
+		checkStatementChain(b.t, all)
 	}
 }
 
