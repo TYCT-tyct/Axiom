@@ -124,7 +124,8 @@ func checkStatementRows(t *testing.T, rows []StatementRow, want []struct {
 	kind   StatementKind
 	amount int64
 	ref    uuid.UUID
-}, after []int64, waived uuid.UUID) {
+}, after []int64, waived uuid.UUID,
+) {
 	t.Helper()
 	for i, w := range want {
 		row := rows[i]
