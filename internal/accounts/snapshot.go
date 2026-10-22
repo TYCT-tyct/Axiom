@@ -239,6 +239,13 @@ func (s *Service) SiteForHost(host string) (Site, Surface, error) {
 	return snap.sites[d.site], d.surface, nil
 }
 
+// Origin is the origin registered for the request's Host: where a page of that domain lives, which a link the server
+// builds for it (a payment's return address) must start with, never the Host or Origin header as the request wrote it.
+func (s *Service) Origin(host string) (string, error) {
+	d, _, err := s.domain(host)
+	return d.origin, err
+}
+
 // domain is host's registered domain in a snapshot fresh enough to use.
 func (s *Service) domain(host string) (domain, *snapshot, error) {
 	snap := s.snapshot.Load()

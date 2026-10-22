@@ -81,7 +81,7 @@ func TestChannelRejectionFreesReservation(t *testing.T) {
 	}})
 	m := w.waiting()
 	o, _, err := w.place(yuan, "rejected")
-	if !errors.Is(err, errRefused) || errors.Is(err, ErrUnconfirmed) {
+	if !errors.Is(err, ErrRefused) || errors.Is(err, ErrUnconfirmed) {
 		t.Fatalf("definite rejection became unknown: %v", err)
 	}
 	if state, _, _ := w.stored(o.ID); state != "failed" {

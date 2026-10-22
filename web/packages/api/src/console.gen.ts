@@ -325,6 +325,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/payment-methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What some credits cost through each payment method
+         * @description For the top-up page: every payment method the site takes for this amount that has a merchant account able to take it now, with what the user would pay through it, fee included, in the currency that method is paid in (not the site's). A method whose accounts are all over a limit, unusable, or in a currency without an exchange rate is left out. The price is a quote: `createOrder` locks the rate and the merchant account when it places the order. A site that has not opened top-ups is `not_ready`; an amount outside the site's limits is `unprocessable`.
+         *
+         *     Needs `balance.view`, like every operation of the account's money in this version of the roles.
+         */
+        get: operations["listPaymentMethods"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Place a top-up order
+         * @description Places an order for credits paid by a method and, in the same request, asks the payment channel for the page to pay on. The server picks the merchant account and locks the price and the exchange rate for the order's lifetime. The address the browser comes back to is built by the server from the console's registered origin; the request cannot carry one. Needs `balance.view`, like every operation of the account's money in this version of the roles.
+         *
+         *     `Idempotency-Key` makes the request happen once per account: the same key with the same request returns the order it made, even if top-ups were closed since, and the same key with another method or amount is `idempotency_key_reused`. A new key is a new order. Read the answer by its status, never by "no error": `201` is a waiting order with `checkout` to send the user to (its `client_secret`, when the channel gives one, is in this response only and never in a replay); `202` is a waiting order the channel has not confirmed (the request failed in transit or is still running, so the order may exist at the gateway, and a replay of the key answers `202` again): it has no `checkout`, the user must not pay it, and the page cancels it or lets it expire; `200` is an order that is no longer waiting (paid, cancelled, expired, in review, ...), shown as its `state` says and without `checkout`; `422` is an order the channel refused, which stays refused for this key, so the page starts a new top-up with a new key (and another method if it happens again).
+         *
+         *     Limits (each refuses the request, with what to do next): at most a few orders waiting for payment per account (`conflict`: pay or cancel one first); cancellations per account per hour (`rate_limited`); the site's daily limit per account and the limit of a first top-up (`unprocessable`); and per IP group, orders per hour and failed orders per hour (`rate_limited`, `Retry-After` the time until the hour is over). An IPv6 address counts by its /64. If the counting itself fails, the request is refused (`internal`), never let through.
+         */
+        post: operations["createOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * One top-up order
+         * @description The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is a 404 like one that does not exist.
+         */
+        get: operations["getOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/orders/{order_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel an order that waits for payment
+         * @description The order stops being payable here and frees its place among the account's waiting orders; the channel is then asked to close it. Cancelling a cancelled order answers with it again. An order that is paid, expired or otherwise past waiting is `conflict`. Cancellations count against the account's hourly limit.
+         */
+        post: operations["cancelOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/orders/{order_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the payment channel about an order now
+         * @description The page's "I have paid" button. Asks the payment channel once whether the order was paid and credits it if so; the answer is the order as it is afterwards, so a payment that has not arrived yet leaves it waiting. The page shows success only when `state` is `paid`. Each order may be asked about once a minute (`rate_limited`, `Retry-After` 60). A channel that does not answer is `unavailable`; the payment is not lost, the callback or the next query credits it.
+         */
+        post: operations["verifyOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -576,6 +688,60 @@ export interface components {
             data: components["schemas"]["Call"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
+        };
+        /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
+        OrderId: string;
+        /** @description An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY). */
+        PayAmount: {
+            /** @example 7300 */
+            amount: string;
+            /** @example CNY */
+            currency: string;
+        };
+        PaymentMethod: {
+            /**
+             * @description The method's code, which `createOrder` takes.
+             * @example alipay
+             */
+            method: string;
+            total: components["schemas"]["PayAmount"];
+            fee: components["schemas"]["PayAmount"];
+        };
+        PaymentMethodList: {
+            data: components["schemas"]["PaymentMethod"][];
+        };
+        OrderCreate: {
+            /** @example alipay */
+            method: string;
+            credits: components["schemas"]["Money"];
+        };
+        /**
+         * @description `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person (the amount did not match, among others) and the user needs do nothing; the rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
+         * @enum {string}
+         */
+        OrderState: "pending" | "paid" | "expired" | "cancelled" | "failed" | "review" | "partially_refunded" | "refunded" | "charged_back";
+        /** @description Where to send the user to pay: a link to open (`pay_url`), a code to show (`qr_code`), or what the channel's own page needs (`client_secret`, in the response that made the order only). */
+        Checkout: {
+            /** Format: uri */
+            pay_url?: string;
+            qr_code?: string;
+            client_secret?: string;
+        };
+        Order: {
+            id: components["schemas"]["OrderId"];
+            state: components["schemas"]["OrderState"];
+            method: string;
+            credits: components["schemas"]["Money"];
+            total: components["schemas"]["PayAmount"];
+            fee: components["schemas"]["PayAmount"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When a waiting order stops being payable.
+             */
+            expires_at: string;
+            checkout?: components["schemas"]["Checkout"];
         };
     };
     responses: {
@@ -1148,6 +1314,166 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaymentMethods: {
+        parameters: {
+            query: {
+                /** @description The credits to buy, in billionths of one unit of the site's currency, as a positive integer in decimal text. */
+                credits: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The methods, in the order the site lists them */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentMethodList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createOrder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended top-up, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderCreate"];
+            };
+        };
+        responses: {
+            /** @description The order is no longer waiting (a replay), without a checkout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            /** @description A waiting order with the page to pay on. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            /** @description A waiting order the channel has not confirmed. It has no checkout and is not to be paid. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    cancelOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order, cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    verifyOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
     };
