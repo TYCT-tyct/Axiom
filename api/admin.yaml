@@ -705,10 +705,11 @@ paths:
     get:
       operationId: getSupplier
       tags: [Suppliers]
-      summary: One supplier with its groups and keys
+      summary: One supplier with its groups, keys and endpoints
       description: >-
-        The supplier, its groups with their ratios, the keys bound to groups, and the keys the supplier lists that are
-        bound to none. Read from what the sync last stored, not from the supplier, so it is cheap.
+        The supplier, its groups with their ratios, the keys bound to groups, the keys the supplier lists that are
+        bound to none, and its endpoints, by upstream name. Read from what the sync last stored, not from the supplier,
+        so it is cheap.
       security:
         - session: []
       x-axiom-level: mfa
@@ -2325,9 +2326,26 @@ components:
         ref: {type: string}
         group_ref: {type: string, description: "The supplier's ID of the group the key is for."}
         status: {type: string, enum: [active, disabled, quota_exhausted, expired]}
+    SupplierEndpoint:
+      type: object
+      required: [id, group_id, model_id, upstream_name, formats, cost_state, enabled]
+      description: >-
+        One model in one of the supplier's groups, as the sync projected it: what testSupplierEndpoint is given. Only an
+        enabled endpoint whose cost is `known` can be called, and so tested.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_name: {type: string, description: "The model's name at the supplier."}
+        formats:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/ModelFormat"}
+        cost_state: {type: string, enum: [known, unknown, conflict]}
+        enabled: {type: boolean}
     SupplierDetail:
       type: object
-      required: [supplier, groups, credentials, unbound_keys]
+      required: [supplier, groups, credentials, unbound_keys, endpoints]
       properties:
         supplier: {$ref: "#/components/schemas/Supplier"}
         groups:
@@ -2336,6 +2354,9 @@ components:
         credentials:
           type: array
           items: {$ref: "#/components/schemas/SupplierCredential"}
+        endpoints:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierEndpoint"}
         unbound_keys:
           type: array
           items: {$ref: "#/components/schemas/UpstreamKey"}

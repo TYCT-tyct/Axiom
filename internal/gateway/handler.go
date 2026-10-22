@@ -168,15 +168,17 @@ type Call struct {
 	Hold      *billing.Hold
 	Plan      routing.Plan
 
-	site   accounts.Site
-	caller accounts.Caller
-	host   string
-	ip     netip.Addr
-	snap   *catalog.Snapshot
-	models []catalog.ModelID
-	sticky routing.EndpointID
-	over   routing.Override // what the request's provider object narrows the route by
-	rate   int              // requests of the key in the rate window, counted before admission
+	site        accounts.Site
+	caller      accounts.Caller
+	host        string
+	ip          netip.Addr
+	snap        *catalog.Snapshot
+	models      []catalog.ModelID
+	sticky      routing.EndpointID
+	stickyCache *kv.Client
+	stickyKey   string
+	over        routing.Override // what the request's provider object narrows the route by
+	rate        int              // requests of the key in the rate window, counted before admission
 
 	mu       sync.Mutex
 	releases []func()
@@ -377,11 +379,8 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	}
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
-	if r.Header.Get("X-Claude-Code-Context-Compacted") != "" { // the cache it stuck for is gone: choose afresh
-		h.Router.Forget(c.Session)
-	}
-	c.sticky, _ = h.Router.Stuck(c.Session)
-	c.rate = h.countRate(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller))
+	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),
+		c, r.Header.Get("X-Claude-Code-Context-Compacted") != "")
 	return nil
 }
 

@@ -53,6 +53,7 @@ func (c *Client) watch(ctx context.Context) {
 // deadline at most and never stops the checks of Valkey.
 func (c *Client) beat(ctx context.Context, over *since, clockDue bool) {
 	if c.vk != nil {
+		c.accounts.prune(c.now())
 		if _, _, err := c.measure(ctx, clockDue); err != nil &&
 			ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
 			// An outage is the breaker's to report; what reaches here answered, but not as one of our deployments must.
@@ -129,6 +130,7 @@ func (c *Client) measure(ctx context.Context, withClock bool) (time.Duration, me
 		return 0, memory{}, err
 	}
 	c.m.memory.Record(ctx, mem.used)
+	c.checkMemory(mem)
 	// The checks the start could not make. A failure is reported and the node keeps serving: an outage may not turn into
 	// a refusal to start later (README「配置与启动」).
 	if c.deferred.CompareAndSwap(true, false) {
