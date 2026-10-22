@@ -226,49 +226,66 @@ export function Endpoints({
         action={onOpen !== undefined}
       />
       <tbody>
-        {endpoints.map((endpoint) => {
-          const group = groupName(groups, endpoint.group_id);
-          const state = endpointState(endpoint);
-          return (
-            <tr key={endpoint.id}>
-              <Td className={mainCell}>
-                <p className="truncate" title={endpoint.upstream_name}>
-                  <Code>{endpoint.upstream_name}</Code>
-                </p>
-                <p className="truncate text-label text-t3 md:hidden" title={group}>
-                  {group}
-                </p>
-              </Td>
-              <Td className="hidden max-w-48 truncate md:table-cell">{group}</Td>
-              <Td className="hidden lg:table-cell">
-                <div className="flex flex-wrap gap-1">
-                  {endpoint.formats.map((format) => (
-                    <span key={format} className="rounded-xs bg-s3 px-1.5 py-0.5 text-label text-t2">
-                      {t(`suppliers.test.format_${format}`)}
-                    </span>
-                  ))}
-                </div>
-              </Td>
-              <Td className="whitespace-nowrap">
-                <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
-              </Td>
-              {onOpen ? (
-                <Td className="whitespace-nowrap">
-                  {state === "ready" ? (
-                    <Button
-                      size="sm"
-                      aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
-                      onClick={() => onOpen({ kind: "test", endpoint, group })}
-                    >
-                      {t("suppliers.test.open")}
-                    </Button>
-                  ) : null}
-                </Td>
-              ) : null}
-            </tr>
-          );
-        })}
+        {endpoints.map((endpoint) => (
+          <EndpointRow
+            key={endpoint.id}
+            endpoint={endpoint}
+            group={groupName(groups, endpoint.group_id)}
+            onOpen={onOpen}
+          />
+        ))}
       </tbody>
     </Table>
+  );
+}
+
+function EndpointRow({
+  endpoint,
+  group,
+  onOpen,
+}: {
+  endpoint: AdminSchemas["SupplierEndpoint"];
+  group: string;
+  onOpen: OnOpen;
+}) {
+  const { t } = useTranslation();
+  const state = endpointState(endpoint);
+  return (
+    <tr>
+      <Td className={mainCell}>
+        <p className="truncate" title={endpoint.upstream_name}>
+          <Code>{endpoint.upstream_name}</Code>
+        </p>
+        <p className="truncate text-label text-t3 md:hidden" title={group}>
+          {group}
+        </p>
+      </Td>
+      <Td className="hidden max-w-48 truncate md:table-cell">{group}</Td>
+      <Td className="hidden lg:table-cell">
+        <div className="flex flex-wrap gap-1">
+          {endpoint.formats.map((format) => (
+            <span key={format} className="rounded-xs bg-s3 px-1.5 py-0.5 text-label text-t2">
+              {t(`suppliers.test.format_${format}`)}
+            </span>
+          ))}
+        </div>
+      </Td>
+      <Td className="whitespace-nowrap">
+        <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
+      </Td>
+      {onOpen ? (
+        <Td className="whitespace-nowrap">
+          {state === "ready" ? (
+            <Button
+              size="sm"
+              aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
+              onClick={() => onOpen({ kind: "test", endpoint, group })}
+            >
+              {t("suppliers.test.open")}
+            </Button>
+          ) : null}
+        </Td>
+      ) : null}
+    </tr>
   );
 }
