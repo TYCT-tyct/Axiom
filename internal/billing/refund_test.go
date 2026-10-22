@@ -308,6 +308,51 @@ func TestFreezeConcurrentSettlement(t *testing.T) {
 	b.balanced()
 }
 
+func TestFreezeAfterSpending(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	f := b.refundable(500)
+	b.creditBatch(500, nil)
+	b.charge(600)
+	// The gift pays the first 500; only the paid batch's remaining 400 can be frozen.
+	if got := b.freeze(f); got != 400 {
+		t.Fatalf("froze %d after spending, want 400", got)
+	}
+	f.Amount = 400
+	b.finishRefund(f, 800, false)
+	if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != 0 {
+		t.Fatal("refund included consumed credit")
+	}
+}
+
+func TestConcurrentFreezes(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	f := b.refundable(500)
+	f.Amount = 400
+	amounts, errs := make([]int64, 8), make([]error, 8)
+	var wg sync.WaitGroup
+	for i := range amounts {
+		wg.Go(func() {
+			errs[i] = b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
+				amounts[i], err = FreezeRefund(t.Context(), tx, f)
+				return err
+			})
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, n := range amounts {
+		total += n
+	}
+	if total != 500 || b.count("SELECT frozen FROM billing.balances") != 500 {
+		t.Fatalf("concurrent freezes held %d, want exactly 500", total)
+	}
+	b.checkStored(f.Account)
+	b.balanced()
+}
+
 func TestRefundBooks(t *testing.T) {
 	for _, cross := range []bool{false, true} {
 		t.Run(fmt.Sprint(cross), func(t *testing.T) {
