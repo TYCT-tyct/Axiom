@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"math"
 	"strconv"
 	"testing"
 	"uuid"
@@ -86,5 +87,34 @@ func TestKeysUsed(t *testing.T) {
 	}
 	if used[a.Key] != 500 {
 		t.Errorf("a limit that never resets counts every day: %v, want 500", used)
+	}
+}
+
+func TestReadFrozenBalance(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	f := b.refundable(1000)
+	if _, err := b.reserve(b.admitted, 300); err != nil {
+		t.Fatal(err)
+	}
+	f.Amount = 700
+	b.freeze(f)
+	got := b.readBalance()
+	if got.Balance != 1000 || got.Reserved != 300 || got.Frozen != 700 || got.Available().Sign() != 0 {
+		t.Fatalf("frozen balance: %+v, available %s", got, got.Available())
+	}
+}
+
+func TestAvailableBalanceExtremes(t *testing.T) {
+	for _, tc := range []struct {
+		view BalanceView
+		want string
+	}{
+		{BalanceView{Balance: 100, Reserved: 20, Frozen: 30}, "50"},
+		{BalanceView{Balance: math.MinInt64, Reserved: math.MaxInt64, Frozen: math.MaxInt64}, "-27670116110564327422"},
+		{BalanceView{Balance: math.MaxInt64, Frozen: math.MaxInt64}, "0"},
+	} {
+		if got := tc.view.Available().String(); got != tc.want {
+			t.Errorf("available %+v = %s, want %s", tc.view, got, tc.want)
+		}
 	}
 }

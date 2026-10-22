@@ -266,3 +266,14 @@ func TestGetCall(t *testing.T) {
 		expect(t, "GET "+path, c.f.do(http.MethodGet, path, "", as(c.s)), http.StatusNotFound, consoleapi.ErrorCodeNotFound)
 	}
 }
+
+func TestFrozenBalance(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, _ := f.account(s)
+	f.run("UPDATE billing.balances SET balance=100, reserved=20, frozen=30 WHERE account_id='" + account.String() + "'")
+	if got := f.balance(s); got.Available.Amount != "50" || got.Balance.Amount != "100" {
+		t.Errorf("frozen console balance: %+v", got)
+	}
+}

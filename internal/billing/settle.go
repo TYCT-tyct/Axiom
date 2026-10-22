@@ -539,16 +539,15 @@ func (c *locked) profit() *int64 {
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
-// the floor, less what is reserved apart from what this reservation still holds. It is computed exactly, as Reserve's
-// headroom is, and clamped to what an amount can hold.
+// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like Reserve,
+// it computes headroom exactly and clamps it to what an amount can hold.
 func (c *locked) cap(held int64) int64 { return room(c.balance, held) }
 
-// room is how far the balance may fall without passing the floor, the reservations other than held kept covered. A
-// charge is capped by it (cap), and so is the write-off of expired credit (expire.go): both leave every reservation
-// admitted payable.
+// room is how far the balance may fall while covering frozen credit and reservations other than held. Charges use
+// the floor; refunds and expiry use zero, so they cannot put the account in debt.
 func room(b LockBalanceRow, held int64) int64 {
 	left := sum(platform.AmountExact(b.Balance), platform.AmountExact(b.Floor).Neg(), platform.AmountExact(b.Reserved).Neg(),
-		platform.AmountExact(held))
+		platform.AmountExact(b.Frozen).Neg(), platform.AmountExact(held))
 	if left.Cmp(platform.Exact{}) < 0 {
 		return 0
 	}
