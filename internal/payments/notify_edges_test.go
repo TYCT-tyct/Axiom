@@ -32,29 +32,34 @@ func TestFakeChannelSignatureVector(t *testing.T) {
 func TestCallbackAcknowledgesUnmatchedAndDoesNotCreditWrongMerchant(t *testing.T) {
 	for _, wrongMerchant := range []bool{false, true} {
 		t.Run(fmt.Sprint(wrongMerchant), func(t *testing.T) {
-			var o Order
-			w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil }})
-			w.waiting()
-			o = w.mustPlace(yuan, "unmatched")
-			merchant := o.MerchantID
-			v := callbackValues(o)
-			if wrongMerchant {
-				m := w.mustSave(siteScope(w.siteB), w.input(w.siteB))
-				merchant = MerchantID(m.ID)
-			} else {
-				v.Set("out_trade_no", "foreign-order")
-				v.Set("sign", epaySignature(v, theKey))
-			}
-			for range 2 {
-				if r := w.callback(merchant, http.MethodGet, v); r.Code != 200 {
-					t.Fatalf("unknown order kept gateway retrying: %d %s", r.Code, r.Body)
-				}
-			}
-			w.assertCredit(o, 0)
-			if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 1 || w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 {
-				t.Fatal("unmatched payment was lost or credited")
-			}
+			testUnmatchedCallback(t, wrongMerchant)
 		})
+	}
+}
+
+func testUnmatchedCallback(t *testing.T, wrongMerchant bool) {
+	t.Helper()
+	var o Order
+	w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil }})
+	w.waiting()
+	o = w.mustPlace(yuan, "unmatched")
+	merchant := o.MerchantID
+	v := callbackValues(o)
+	if wrongMerchant {
+		m := w.mustSave(siteScope(w.siteB), w.input(w.siteB))
+		merchant = MerchantID(m.ID)
+	} else {
+		v.Set("out_trade_no", "foreign-order")
+		v.Set("sign", epaySignature(v, theKey))
+	}
+	for range 2 {
+		if r := w.callback(merchant, http.MethodGet, v); r.Code != 200 {
+			t.Fatalf("unknown order kept gateway retrying: %d %s", r.Code, r.Body)
+		}
+	}
+	w.assertCredit(o, 0)
+	if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 1 || w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 {
+		t.Fatal("unmatched payment was lost or credited")
 	}
 }
 
@@ -84,7 +89,7 @@ func TestCallbackBodyBoundAndIngressLimit(t *testing.T) {
 	var verified atomic.Int64
 	w := newTestWorld(t, fakePlugin{verify: func(Callback, string) (Notice, error) { verified.Add(1); return Notice{}, nil }})
 	m := w.waiting()
-	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", callbackMax+1)))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(strings.Repeat("x", callbackMax+1)))
 	r.SetPathValue("merchant", MerchantID(m.ID).TypeID())
 	rw := httptest.NewRecorder()
 	w.p.Notify().ServeHTTP(rw, r)

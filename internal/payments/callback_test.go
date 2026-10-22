@@ -58,17 +58,20 @@ func signedNotice(cb Callback, key string) (Notice, error) {
 	if err != nil {
 		return Notice{}, err
 	}
-	value, ok := new(big.Rat).SetString(v.Get("money"))
+	n.Paid.Minor, err = fakeMinor(v.Get("money"))
+	return n, err
+}
+
+func fakeMinor(text string) (int64, error) {
+	value, ok := new(big.Rat).SetString(text)
 	if !ok {
-		return Notice{}, errors.New("fake: invalid money")
+		return 0, errors.New("fake: invalid money")
 	}
 	value.Mul(value, big.NewRat(100, 1))
 	if !value.IsInt() || !value.Num().IsInt64() {
-		n.Paid.Minor = -1 // preserve a verified but unrepresentable amount for the core's discrepancy path
-	} else {
-		n.Paid.Minor = value.Num().Int64()
+		return -1, nil // preserve a verified but unrepresentable amount for the core's discrepancy path
 	}
-	return n, nil
+	return value.Num().Int64(), nil
 }
 
 func callbackValues(o Order) url.Values {
@@ -86,12 +89,11 @@ func (w *world) callback(merchant MerchantID, method string, v url.Values) *http
 	path := "/api/payments/v1/notify/" + merchant.TypeID()
 	var r *http.Request
 	if method == http.MethodGet {
-		r = httptest.NewRequest(method, path+"?"+v.Encode(), nil)
+		r = httptest.NewRequestWithContext(w.t.Context(), method, path+"?"+v.Encode(), nil)
 	} else {
-		r = httptest.NewRequest(method, path, strings.NewReader(v.Encode()))
+		r = httptest.NewRequestWithContext(w.t.Context(), method, path, strings.NewReader(v.Encode()))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	r = r.WithContext(w.t.Context())
 	rw := httptest.NewRecorder()
 	mux.ServeHTTP(rw, r)
 	return rw
@@ -181,30 +183,35 @@ func TestUnsignedOrAmbiguousCallbackWritesNothing(t *testing.T) {
 func TestCallbackQueryFailureAndMismatch(t *testing.T) {
 	for _, failure := range []bool{true, false} {
 		t.Run(fmt.Sprint(failure), func(t *testing.T) {
-			var o Order
-			w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) {
-				if failure {
-					return Payment{}, errors.New("fake timeout")
-				}
-				p := receipt(o).payment
-				p.Paid.Minor++
-				return p, nil
-			}})
-			w.waiting()
-			o = w.mustPlace(yuan, "confirm")
-			r := w.callback(o.MerchantID, http.MethodPost, callbackValues(o))
-			if failure && r.Code != 502 || !failure && r.Code != 200 {
-				t.Fatalf("callback: %d %s", r.Code, r.Body)
-			}
-			w.assertCredit(o, 0)
-			want := 1
-			if failure {
-				want = 0
-			}
-			if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != want {
-				t.Fatal("query failure or mismatch was dropped")
-			}
+			testCallbackQueryOutcome(t, failure)
 		})
+	}
+}
+
+func testCallbackQueryOutcome(t *testing.T, failure bool) {
+	t.Helper()
+	var o Order
+	w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) {
+		if failure {
+			return Payment{}, errors.New("fake timeout")
+		}
+		p := receipt(o).payment
+		p.Paid.Minor++
+		return p, nil
+	}})
+	w.waiting()
+	o = w.mustPlace(yuan, "confirm")
+	r := w.callback(o.MerchantID, http.MethodPost, callbackValues(o))
+	if failure && r.Code != 502 || !failure && r.Code != 200 {
+		t.Fatalf("callback: %d %s", r.Code, r.Body)
+	}
+	w.assertCredit(o, 0)
+	want := 1
+	if failure {
+		want = 0
+	}
+	if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != want {
+		t.Fatal("query failure or mismatch was dropped")
 	}
 }
 
@@ -254,36 +261,41 @@ func TestPaymentConflictsAreRecordedAndAcknowledged(t *testing.T) {
 func TestPaymentAndCreditRollbackTogether(t *testing.T) {
 	for _, phase := range []string{"billing", "commit"} {
 		t.Run(phase, func(t *testing.T) {
-			var o Order
-			w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil }})
-			w.waiting()
-			o = w.mustPlace(yuan, "rollback")
-			events := w.events(o.ID)
-			w.exec(`CREATE FUNCTION payments.reject_paid() RETURNS trigger LANGUAGE plpgsql AS $$
-				BEGIN RAISE EXCEPTION 'injected payment failure'; END $$`)
-			if phase == "billing" {
-				w.exec(`CREATE TRIGGER reject_paid BEFORE INSERT ON billing.credit_batches FOR EACH ROW EXECUTE FUNCTION payments.reject_paid()`)
-			} else {
-				w.exec(`CREATE CONSTRAINT TRIGGER reject_paid AFTER INSERT ON payments.order_payments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION payments.reject_paid()`)
-			}
-			if r := w.callback(o.MerchantID, http.MethodGet, callbackValues(o)); r.Code < 300 {
-				t.Fatalf("acknowledged a failed %s: %d", phase, r.Code)
-			}
-			w.assertCredit(o, 0)
-			if state, _, _ := w.stored(o.ID); state != "pending" || w.events(o.ID) != events || w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 {
-				t.Fatal("partial receipt survived rollback")
-			}
-			table := "payments.order_payments"
-			if phase == "billing" {
-				table = "billing.credit_batches"
-			}
-			w.exec("DROP TRIGGER reject_paid ON " + table)
-			if r := w.callback(o.MerchantID, http.MethodGet, callbackValues(o)); r.Code != 200 {
-				t.Fatal(r.Code, r.Body)
-			}
-			w.assertCredit(o, o.Credits)
+			testPaymentRollback(t, phase)
 		})
 	}
+}
+
+func testPaymentRollback(t *testing.T, phase string) {
+	t.Helper()
+	var o Order
+	w := newTestWorld(t, fakePlugin{create: goodCheckout, verify: signedNotice, query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil }})
+	w.waiting()
+	o = w.mustPlace(yuan, "rollback")
+	events := w.events(o.ID)
+	w.exec(`CREATE FUNCTION payments.reject_paid() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected payment failure'; END $$`)
+	if phase == "billing" {
+		w.exec(`CREATE TRIGGER reject_paid BEFORE INSERT ON billing.credit_batches FOR EACH ROW EXECUTE FUNCTION payments.reject_paid()`)
+	} else {
+		w.exec(`CREATE CONSTRAINT TRIGGER reject_paid AFTER INSERT ON payments.order_payments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION payments.reject_paid()`)
+	}
+	if r := w.callback(o.MerchantID, http.MethodGet, callbackValues(o)); r.Code < 300 {
+		t.Fatalf("acknowledged a failed %s: %d", phase, r.Code)
+	}
+	w.assertCredit(o, 0)
+	if state, _, _ := w.stored(o.ID); state != "pending" || w.events(o.ID) != events || w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 {
+		t.Fatal("partial receipt survived rollback")
+	}
+	table := "payments.order_payments"
+	if phase == "billing" {
+		table = "billing.credit_batches"
+	}
+	w.exec("DROP TRIGGER reject_paid ON " + table)
+	if r := w.callback(o.MerchantID, http.MethodGet, callbackValues(o)); r.Code != 200 {
+		t.Fatal(r.Code, r.Body)
+	}
+	w.assertCredit(o, o.Credits)
 }
 
 func TestCallbackPollAndVerifyRace(t *testing.T) {

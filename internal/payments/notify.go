@@ -81,9 +81,11 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 	if !n.Success {
 		return p.receive(ctx, c)
 	}
-	replay, err := p.replayedPayment(ctx, c)
-	if err != nil || replay {
-		return err
+	if id, parseErr := orderPrefix.Decode(c.order); parseErr == nil {
+		replay, err := p.replayedPayment(ctx, c, OrderID(id))
+		if err != nil || replay {
+			return err
+		}
 	}
 	if ch.Caps().Has(CapQuery) {
 		payment, err := ch.Query(ctx, n.Order, n.TradeNo)
@@ -102,23 +104,19 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 }
 
 // A replay bypasses the gateway only when both identity and exact amounts match a committed, credited receipt.
-func (p *Payments) replayedPayment(ctx context.Context, c confirmed) (bool, error) {
-	id, err := orderPrefix.Decode(c.order)
-	if err != nil {
-		return false, nil
-	}
+func (p *Payments) replayedPayment(ctx context.Context, c confirmed, id OrderID) (bool, error) {
 	var replay bool
-	err = p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
-		o, err := loadOrder(ctx, tx, OrderID(id))
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
+		o, err := loadOrder(ctx, tx, id)
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
-		if err != nil || o.MerchantID != c.merchant || State(o.State).canMoveTo(Paid) {
+		if err != nil || o.MerchantID != c.merchant || o.State.canMoveTo(Paid) {
 			return err
 		}
 		r, err := queries.RecordedPayment(ctx, tx, RecordedPaymentParams{MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo})
 		if err == nil && len(r) == 1 {
-			replay = r[0].OrderID == id && r[0].Amount == c.payment.Paid.Minor && r[0].Currency == c.payment.Paid.Currency.String()
+			replay = r[0].OrderID == uuid.UUID(id) && r[0].Amount == c.payment.Paid.Minor && r[0].Currency == c.payment.Paid.Currency.String()
 		}
 		return err
 	})

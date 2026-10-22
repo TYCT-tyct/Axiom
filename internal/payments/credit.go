@@ -34,28 +34,7 @@ func (p *Payments) receive(ctx context.Context, c confirmed) error {
 		c.payment.TradeNo = strings.ReplaceAll(c.payment.TradeNo, "\x00", "")
 	}
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
-		if err := boundOrderTx(ctx, tx); err != nil {
-			return err
-		}
-		if err := queries.HoldMerchantIdentity(ctx, tx, merchantKey(c.merchant)); err != nil {
-			return err
-		}
-		id, parseErr := orderPrefix.Decode(c.order)
-		rows, err := queries.PaymentOrder(ctx, tx, PaymentOrderParams{ID: id, MerchantID: uuid.UUID(c.merchant)})
-		if err != nil {
-			return err
-		}
-		if parseErr != nil || len(rows) == 0 {
-			if c.payment.State != PayPaid {
-				return nil
-			}
-			return p.discrepancy(ctx, tx, c, nil, "unmatched_payment")
-		}
-		o, err := lockForChange(ctx, tx, OrderID(id))
-		if err != nil {
-			return err
-		}
-		return p.receiveOrder(ctx, tx, o, c)
+		return p.receiveTx(ctx, tx, c)
 	})
 	if err != nil {
 		return fmt.Errorf("payments: record confirmed payment: %w", err)
@@ -63,11 +42,36 @@ func (p *Payments) receive(ctx context.Context, c confirmed) error {
 	return nil
 }
 
+func (p *Payments) receiveTx(ctx context.Context, tx pg.Tx, c confirmed) error {
+	if err := boundOrderTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := queries.HoldMerchantIdentity(ctx, tx, merchantKey(c.merchant)); err != nil {
+		return err
+	}
+	id, parseErr := orderPrefix.Decode(c.order)
+	rows, err := queries.PaymentOrder(ctx, tx, PaymentOrderParams{ID: id, MerchantID: uuid.UUID(c.merchant)})
+	if err != nil {
+		return err
+	}
+	if parseErr != nil || len(rows) == 0 {
+		if c.payment.State != PayPaid {
+			return nil
+		}
+		return p.discrepancy(ctx, tx, c, nil, "unmatched_payment")
+	}
+	o, err := lockForChange(ctx, tx, OrderID(id))
+	if err != nil {
+		return err
+	}
+	return p.receiveOrder(ctx, tx, o, c)
+}
+
 func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) error {
 	if c.payment.State != PayPaid {
 		return paymentEvent(ctx, tx, o, c, State(o.State))
 	}
-	if c.payment.Paid.Minor <= 0 || c.payment.Paid.Currency == (platform.Currency{}) || c.payment.TradeNo == "" || len(c.payment.TradeNo) > 1024 {
+	if !validPayment(c.payment) {
 		return p.reviewPayment(ctx, tx, o, c, "invalid_payment")
 	}
 	kind, err := recordReceipt(ctx, tx, o, c)
@@ -88,6 +92,10 @@ func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c
 		return paymentEvent(ctx, tx, o, c, State(o.State))
 	}
 	return p.creditOrder(ctx, tx, o, c)
+}
+
+func validPayment(p Payment) bool {
+	return p.Paid.Minor > 0 && p.Paid.Currency != (platform.Currency{}) && p.TradeNo != "" && len(p.TradeNo) <= 1024
 }
 
 // recordReceipt preserves a gateway trade's first identity and amount. Conflicts are facts to resolve, never INSERT
@@ -132,18 +140,11 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 		}
 		return err
 	}
-	// Billing's validation can discover a conflicting historical batch. A savepoint keeps its partial writes out of
-	// the committed discrepancy while ordinary database failures still roll back the whole receipt for a retry.
-	if _, err = tx.Exec(ctx, "SAVEPOINT paid_credit"); err != nil {
+	conflict, err := creditBatch(ctx, tx, credit)
+	if err != nil {
 		return err
 	}
-	if err = billing.CreditPaid(ctx, tx, credit); err != nil {
-		if _, paidErr := errors.AsType[*billing.PaidError](err); !errors.Is(err, billing.ErrCreditConflict) && !paidErr {
-			return err
-		}
-		if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT paid_credit"); err != nil {
-			return err
-		}
+	if conflict {
 		return p.reviewPayment(ctx, tx, o, c, "credit_conflict")
 	}
 	if err = restoreReservation(ctx, tx, o); err != nil {
@@ -157,6 +158,26 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 		return errors.New("payments: locked order could not become paid")
 	}
 	return paymentEvent(ctx, tx, o, c, Paid)
+}
+
+// A savepoint keeps a rejected batch's writes out of the committed discrepancy. Operational failures still roll
+// back the whole receipt for a retry; validation and historical conflicts are confirmed facts for a human to resolve.
+func creditBatch(ctx context.Context, tx pg.Tx, credit billing.PaidCredit) (bool, error) {
+	if _, err := tx.Exec(ctx, "SAVEPOINT paid_credit"); err != nil {
+		return false, err
+	}
+	err := billing.CreditPaid(ctx, tx, credit)
+	if err == nil {
+		return false, nil
+	}
+	var invalid *billing.PaidError
+	if !errors.Is(err, billing.ErrCreditConflict) && !errors.As(err, &invalid) {
+		return false, err
+	}
+	if _, err = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT paid_credit"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func arrivalCredit(ctx context.Context, tx pg.Tx, o LockOrderRow, t PaymentTermsRow, payment Payment) (billing.PaidCredit, CreditOrderParams, error) {

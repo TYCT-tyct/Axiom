@@ -78,6 +78,7 @@ func (p *Payments) queryPending(ctx context.Context) error {
 		}
 		if err := p.pollOrder(ctx, OrderID(id)); err != nil {
 			p.logger.Warn("payments: order query failed", "order", OrderID(id).TypeID(), "error", err)
+			continue
 		}
 	}
 	return nil

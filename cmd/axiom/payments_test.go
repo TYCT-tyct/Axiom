@@ -25,7 +25,7 @@ func TestPaymentCallbacksBypassOnlyConsoleAuthentication(t *testing.T) {
 		{http.MethodPost, "/api/payments/v1/orders", 401},
 	} {
 		rw := httptest.NewRecorder()
-		routes.ServeHTTP(rw, httptest.NewRequest(tc.method, tc.path, nil))
+		routes.ServeHTTP(rw, httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil))
 		if rw.Code != tc.status {
 			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rw.Code, tc.status)
 		}
