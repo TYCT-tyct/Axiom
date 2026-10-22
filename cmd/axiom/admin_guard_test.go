@@ -43,6 +43,7 @@ var adminOperations = []adminOperation{
 	{"listSuppliers", http.MethodGet, "/suppliers", "", "suppliers.view", false},
 	{"createSupplier", http.MethodPost, "/suppliers", `{}`, "suppliers.manage", true},
 	{"detectSupplier", http.MethodPost, "/suppliers/detections", `{"origin":"https://api.example.com"}`, "suppliers.manage", false},
+	{"testSupplierEndpoint", http.MethodPost, "/suppliers/endpoint-tests", `{"endpoint_id":"0198c0a8-0000-7000-8000-000000000001","format":"chat","reason":"r"}`, "suppliers.manage", true},
 	{"getSupplier", http.MethodGet, someSupplier, "", "suppliers.view", false},
 	{"setSupplierStatus", http.MethodPut, someSupplier + "/status", `{"status":"paused","reason":"r"}`, "suppliers.manage", true},
 	{"removeSupplier", http.MethodPost, someSupplier + "/removal", `{"reason":"r"}`, "suppliers.manage", true},
