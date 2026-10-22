@@ -3,6 +3,7 @@ package secret
 import (
 	"bufio"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,19 +18,22 @@ const keyFileVariable = "AXIOM_MASTER_KEY_FILE"
 
 // Keyring is immutable after Load so encryption and decryption can share it across goroutines.
 type Keyring struct {
-	keys   map[uint32]cipher.AEAD
-	latest uint32
+	keys         map[uint32]cipher.AEAD
+	latest       uint32
+	fingerprints map[uint32][32]byte
 }
 
-// Load validates the entire file before publishing a usable keyring, so configuration errors stop startup.
+// Load validates the entire file and uses its legacy highest write version. A database-backed node must use
+// Rotation.Check before sealing: the database's active version overrides this legacy default.
 func Load(path string) (*Keyring, error) {
 	keys, latest, err := readKeyFile(keyFileVariable, path)
 	if err != nil {
 		return nil, err
 	}
-	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest}
+	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest, fingerprints: make(map[uint32][32]byte, len(keys))}
 	for version, key := range keys {
 		ring.keys[version] = newGCM(key[:])
+		ring.fingerprints[version] = sha256.Sum256(key[:])
 	}
 	return ring, nil
 }

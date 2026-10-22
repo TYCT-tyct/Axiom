@@ -23,6 +23,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	want := map[string]string{
 		"billing.expire_credit": QueueMoney,
 		"billing.reconcile":     QueueMoney,
+		"catalog.sync":          QueueSyncs,
 		"mail.send":             QueueNotifications,
 		"queue.discard_scan":    QueueArchive,
 		"suppliers.reconcile":   QueueMoney,

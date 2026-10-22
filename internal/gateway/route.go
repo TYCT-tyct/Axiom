@@ -29,8 +29,12 @@ type RouteDeps struct {
 	Endpoints func(context.Context) ([]suppliers.Routable, error)
 	Catalog   *catalog.Catalog
 	// Prices is each model's sale price in the main site's currency: billing.SalePrices over the site's pricing rules
-	// and the catalog's reference prices.
+	// and the catalog's reference prices. One build's reading prices both the routing snapshot and the model list, so
+	// the price a client reads is the price a call is charged at.
 	Prices func(context.Context) (map[catalog.ModelID]billing.Sold, error)
+	// Models is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
+	// and it is built in the same build as the snapshot from the same reading (docs/domains/gateway.md「模型列表」).
+	Models *ModelList
 	// UnknownItems is billing.UnknownItems: the usage fields nothing prices, one of which takes its model out of
 	// routing until an administrator prices it (docs/domains/billing.md「价目表缺项」).
 	UnknownItems func(context.Context) ([]billing.UnknownItem, error)
@@ -57,9 +61,9 @@ type Count struct {
 // has not reached it yet. Anything else is a model whose spec or price is missing, which is no state to serve in.
 func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 
-// Build assembles the snapshot from one reading of every source and returns it with what it holds. Nothing is published:
-// the caller either publishes it (Publish, which Run does) or decides from the count whether the node may report itself
-// ready (cmd/axiom).
+// Build assembles the snapshot from one reading of every source and returns it with the model list built beside it and
+// what it holds. Nothing is published: the caller either publishes it (Publish, which Run does) or decides from the count
+// whether the node may report itself ready (cmd/axiom).
 //
 // An endpoint whose model the catalog cannot describe is left out, and so are all of the model's endpoints: one whose
 // model has no spec, one no pricing rule gives a sale price. A model whose upstream reported a field nothing prices is
@@ -67,34 +71,39 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // in the log, since a model that cannot be routed is a price list or a spec to fix. A snapshot with no endpoint at all
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
 // has to say.
-func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error) {
+//
+// The model list comes from this same reading — the endpoints that made the snapshot, the catalog they were read from and
+// the sale prices they were priced with — so the price a client reads is the price routing charges, and a build that fails
+// publishes neither (Publish).
+func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterListing, Count, error) {
 	// Start time bounds freshness even if reading a source stalls during the build.
 	builtAt := time.Now()
 	rates, err := d.exchangeRates(ctx)
 	if err != nil {
-		return nil, Count{}, err
+		return nil, nil, Count{}, err
 	}
 	catalogSnap, err := d.Catalog.Current()
 	if err != nil {
-		return nil, Count{}, fmt.Errorf("gateway: the catalog: %w", err)
+		return nil, nil, Count{}, fmt.Errorf("gateway: the catalog: %w", err)
 	}
 	routable, err := d.Endpoints(ctx)
 	if err != nil {
-		return nil, Count{}, fmt.Errorf("gateway: the endpoints: %w", err)
+		return nil, nil, Count{}, fmt.Errorf("gateway: the endpoints: %w", err)
 	}
 	prices, err := d.Prices(ctx)
 	if err != nil {
-		return nil, Count{}, fmt.Errorf("gateway: the sale prices: %w", err)
+		return nil, nil, Count{}, fmt.Errorf("gateway: the sale prices: %w", err)
 	}
 	items, err := d.UnknownItems(ctx)
 	if err != nil {
-		return nil, Count{}, fmt.Errorf("gateway: the unknown billing items: %w", err)
+		return nil, nil, Count{}, fmt.Errorf("gateway: the unknown billing items: %w", err)
 	}
 	blocked := make(map[catalog.ModelID]struct{}, len(items))
 	for _, u := range items {
 		blocked[u.Model] = struct{}{}
 	}
 	built := make([]routing.Endpoint, 0, len(routable))
+	served := make(map[catalog.ModelID]struct{}, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	now := time.Now()
 	for _, r := range routable {
@@ -105,13 +114,19 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, Count, error)
 		}
 		e.Exchange = exchangeBasis(rates, r.Currency, e.Price.Schedule.Currency())
 		built = append(built, e)
+		served[e.Model] = struct{}{}
 	}
 	d.report(left)
 	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
 	if err != nil {
-		return nil, Count{}, err
+		return nil, nil, Count{}, err
 	}
-	return snap, Count{Endpoints: len(built), Offered: len(routable)}, nil
+	list, err := newOpenRouterListing(catalogSnap, prices, served)
+	if err != nil {
+		return nil, nil, Count{}, err
+	}
+	list.built = builtAt // the same stamp the snapshot takes, so the two are published and refused together
+	return snap, list, Count{Endpoints: len(built), Offered: len(routable)}, nil
 }
 
 func (d *RouteDeps) exchangeRates(ctx context.Context) ([]platform.ExchangeRate, error) {
@@ -139,18 +154,31 @@ func exchangeBasis(rates []platform.ExchangeRate, from, to platform.Currency) pl
 	return platform.ExchangeRate{Base: from.String(), Quote: to.String()}
 }
 
-// Publish replaces the router's snapshot with one Build made and tells Built what it holds. Nothing else takes a
-// snapshot to the router, so what Built hears of is always a snapshot routing already plans with.
-func (d *RouteDeps) Publish(s *routing.Snapshot, c Count) {
+// Publish replaces the router's snapshot with one Build made, publishes the model list built with it, and tells Built
+// what it holds. Nothing else takes a snapshot to the router, so what Built hears of is always a snapshot routing already
+// plans with, and the list a client reads was built from the same reading of the catalog and the sale prices: the price it
+// shows is the price that snapshot routes at.
+//
+// A build that finished late is refused as a whole, its list with it: the router keeps the newer snapshot it holds
+// (Router.Replace refuses the older one), and a list of that older reading standing beside it would quote prices no call is
+// charged. Only Publish hands snapshots to the router, so the newest it took is the newest published here.
+func (d *RouteDeps) Publish(s *routing.Snapshot, l *openRouterListing, c Count) {
+	d.Models.mu.Lock()
+	defer d.Models.mu.Unlock()
+	if old := d.Models.last; old != nil && !l.built.After(old.built) {
+		return
+	}
 	d.Router.Replace(s)
+	d.Models.last = l
 	if d.Built != nil {
 		d.Built(c)
 	}
 }
 
 // Run rebuilds the snapshot every Every and replaces the router's with it, until ctx ends. A failed build is logged and
-// the previous snapshot stays, which then goes stale on its own after routing's MaxStale: a node that cannot read its
-// endpoints stops routing rather than routing to the endpoints it had.
+// the previous snapshot stands, which then goes stale on its own after routing's MaxStale: a node that cannot read its
+// endpoints stops routing rather than routing to the endpoints it had. The model list stands with it, at the prices of
+// that same snapshot, so a build that fails cannot leave the list quoting prices routing does not charge.
 func (d *RouteDeps) Run(ctx context.Context) {
 	every := d.Every
 	if every <= 0 {
@@ -159,12 +187,12 @@ func (d *RouteDeps) Run(ctx context.Context) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
-		if s, n, err := d.Build(ctx); err != nil {
+		if s, l, n, err := d.Build(ctx); err != nil {
 			if ctx.Err() == nil {
 				d.Logger.Error("gateway: the routing snapshot was not rebuilt; the last one stands until it is stale", "err", err)
 			}
 		} else {
-			d.Publish(s, n)
+			d.Publish(s, l, n)
 		}
 		select {
 		case <-ctx.Done():
@@ -239,6 +267,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	served := native
 	if native.Has(protocol.Messages) || native.Has(protocol.Responses) {
 		served |= routing.Of(protocol.Chat) // a Chat request is converted to the first of those the endpoint speaks
+	}
+	if native.Has(protocol.Chat) {
+		served |= routing.Of(protocol.Messages, protocol.Responses)
 	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:

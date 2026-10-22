@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -20,6 +21,62 @@ func TestAChatCallToAChatEndpointIsForwardedAsChat(t *testing.T) {
 	no := false
 	checkChatCall(t, "streamed", options{client: protocol.Chat})
 	checkChatCall(t, "aggregated", options{client: protocol.Chat, stream: &no})
+}
+
+func TestNativeClientsUseChatEndpoints(t *testing.T) {
+	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		for _, stream := range []bool{true, false} {
+			checkNativeClientOnChat(t, client, stream)
+		}
+	}
+}
+
+// checkNativeClientOnChat: a Messages or Responses request is converted for a Chat endpoint, which gets a Chat request
+// that streams and reports usage, and the client gets its own format back, held before the settlement.
+func checkNativeClientOnChat(t *testing.T, client protocol.Format, stream bool) {
+	t.Helper()
+	run(t, func(t *testing.T, ctx context.Context) {
+		chat := protocol.Chat
+		h := newHarness(t, ctx, options{
+			client: client, upstream: &chat, stream: &stream,
+			final: billing.Final{Charged: platform.AmountExact(3703701)},
+		})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+		h.run()
+		checkChatUpstreamRequest(t, h, client, stream)
+		checkNativeClientReply(t, h)
+	})
+}
+
+func checkChatUpstreamRequest(t *testing.T, h *harness, client protocol.Format, stream bool) {
+	t.Helper()
+	if h.w.status != http.StatusOK {
+		t.Fatalf("client %v streaming %v: %d %s", client, stream, h.w.status, h.w.body())
+	}
+	call := h.up.endpoint(1).calls[0]
+	if call.Format != protocol.Chat {
+		t.Fatalf("called format %v", call.Format)
+	}
+	var body map[string]any
+	if err := jsonx.Unmarshal(call.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	options, _ := body["stream_options"].(map[string]any)
+	if body["stream"] != true || options["include_usage"] != true || body["messages"] == nil {
+		t.Fatalf("Chat request: %s", call.Body)
+	}
+}
+
+// checkNativeClientReply holds the client's own format, with the cost, and no success ending before the settlement.
+func checkNativeClientReply(t *testing.T, h *harness) {
+	t.Helper()
+	checkContains(t, "client reply", h.w.body(), h.call.ID.String(), "Hello", `"cost":0.003703701`)
+	before := h.ended().body
+	for _, early := range []string{"message_stop", "response.completed", `"cost"`} {
+		if strings.Contains(before, early) {
+			t.Fatalf("%s was written before the settlement: %s", early, before)
+		}
+	}
 }
 
 func checkChatCall(t *testing.T, name string, o options) {

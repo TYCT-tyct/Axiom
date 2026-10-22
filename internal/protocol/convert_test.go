@@ -79,7 +79,7 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	if change != nil {
 		change(&target)
 	}
-	u, err := protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+	u, err := protocol.Prepare(&r, []byte(body), target, rewrites())
 	return u.Body, err
 }
 
@@ -225,7 +225,7 @@ func TestConvertToMessages(t *testing.T) {
 		{"a member not converted", chatBody(`"messages":[` + userHi + `],"prediction":{"type":"content","content":"x"}`), nil, "unsupported"},
 		{
 			"identity, routing and tier", chatBody(`"messages":[` + userHi + `],"user":"u1","prompt_cache_key":"k","provider":{"order":["x"]},"service_tier":"default"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"h(u1)"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(u1)\"}"}}`,
 		},
 		{"priority", chatBody(`"messages":[` + userHi + `],"service_tier":"priority"`), nil, "unsupported"},
 		{"verbosity", chatBody(`"messages":[` + userHi + `],"verbosity":"low"`), nil, "unsupported"},
@@ -489,7 +489,7 @@ func FuzzConvert(f *testing.F) {
 		}
 		target := claudeLike(to)
 		target.MaxOutput = 4096
-		u, err := protocol.Prepare(&r, body, target, protocol.Rewrites{Identity: derive})
+		u, err := protocol.Prepare(&r, body, target, rewrites())
 		ns, _ := errors.AsType[*protocol.NotSupported](err)
 		switch {
 		case ns != nil, errors.Is(err, protocol.ErrInvalid):

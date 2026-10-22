@@ -321,6 +321,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/endpoint-tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test one of a supplier's endpoints with a real generation
+         * @description Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit, with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate is never compared with the supplier's charge, so no test can move the endpoint's cost state.
+         *
+         *     `passed`: a 2xx answer read to its normal end. `failed`: a failure the endpoint is at fault for. `inconclusive`: anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the request itself — says nothing about the endpoint.
+         *
+         *     Limits: 10 a minute per session, because each test is a generation the platform pays for.
+         */
+        post: operations["testSupplierEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/suppliers/{supplier_id}": {
         parameters: {
             query?: never;
@@ -457,6 +481,26 @@ export interface paths {
          * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
          */
         post: operations["bindSupplierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a credential's concurrency and account RPM ceiling
+         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+         */
+        put: operations["setSupplierCredentialLimits"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1162,6 +1206,15 @@ export interface components {
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
+            /** @description The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
+            requests_per_minute?: number;
+        };
+        CredentialLimits: {
+            /** @description The calls the key has in flight at once. A new binding starts at 4. */
+            max_concurrency: number;
+            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling. */
+            requests_per_minute?: number | null;
+            reason: components["schemas"]["Reason"];
         };
         /** @description A key the supplier lists that Axiom has not bound to a group. */
         UpstreamKey: {
@@ -1184,6 +1237,56 @@ export interface components {
         };
         /** @enum {string} */
         ModelFormat: "messages" | "responses" | "chat";
+        EndpointTestRequest: {
+            endpoint_id: components["schemas"]["Uuid"];
+            /** @description The format to test it in; it must be one the endpoint serves. */
+            format: components["schemas"]["ModelFormat"];
+            reason: components["schemas"]["Reason"];
+        };
+        /**
+         * @description `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+         * @enum {string}
+         */
+        EndpointTestOutcome: "passed" | "failed" | "inconclusive";
+        /**
+         * @description Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+         * @enum {string}
+         */
+        EndpointTestCause: "timeout" | "memory" | "stream_broken" | "upstream_error" | "overloaded" | "rate_limited" | "context_too_long" | "content_rejected" | "bad_request" | "model_not_found" | "not_permitted" | "credential_rejected" | "credential_quota_exhausted" | "supplier_balance_low" | "transport" | "tool_input" | "unknown";
+        EndpointTestProblem: {
+            cause: components["schemas"]["EndpointTestCause"];
+            /**
+             * @description Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to the supplier. Absent when the test's own limit ended it.
+             * @enum {string}
+             */
+            scope?: "request" | "egress" | "endpoint" | "credential" | "group" | "supplier";
+        };
+        EndpointTest: {
+            /** @description The platform's own ID of the test, which its cost row and its audit entry are keyed by. */
+            request_id: components["schemas"]["Uuid"];
+            endpoint_id: components["schemas"]["Uuid"];
+            model_id: components["schemas"]["Uuid"];
+            /** @description The model's name at the supplier, which the call sent. */
+            upstream_model: string;
+            format: components["schemas"]["ModelFormat"];
+            outcome: components["schemas"]["EndpointTestOutcome"];
+            problem?: components["schemas"]["EndpointTestProblem"];
+            /** @description The supplier's HTTP status; 0 when it answered nothing. */
+            upstream_status?: number;
+            /** @description The supplier's own ID of the call, when it gave one: the key its charge carries. */
+            upstream_request_id?: string;
+            /** @description Absent when no content came. */
+            first_token_ms?: number;
+            /** @description The whole test: waiting for the answer and reading it. */
+            total_ms: number;
+            /** @description Zero when the supplier is known not to have executed the call; otherwise the highest price of the prompt's tokens and of the 16-token cap over every reachable context band, in the supplier's unit. A definite upper bound, never what the supplier reported. */
+            estimated_native: components["schemas"]["Decimal"];
+            /**
+             * @description The unit the supplier counts its balance in, which the estimate is in.
+             * @enum {string}
+             */
+            native_unit: "quota" | "usd";
+        };
         PendingMapping: {
             supplier_id: components["schemas"]["Uuid"];
             group_id: components["schemas"]["Uuid"];
@@ -2075,6 +2178,41 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    testSupplierEndpoint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EndpointTestRequest"];
+            };
+        };
+        responses: {
+            /** @description What the test found, and what it was booked at. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointTest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getSupplier: {
         parameters: {
             query?: never;
@@ -2303,6 +2441,44 @@ export interface operations {
         responses: {
             /** @description Binding. */
             201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialLimits"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;

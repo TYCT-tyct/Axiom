@@ -228,6 +228,38 @@ func (w *world) insertValue(v string) error {
 	})
 }
 
+// perMinute sets a credential's per-minute limit and reloads, as the admin's change and the node's next Reload do.
+func (w *world) perMinute(credential uuid.UUID, n int32) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, "UPDATE suppliers.credentials SET requests_per_minute = $1 WHERE id = $2", n, credential)
+		return err
+	})
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// anotherKey binds another key of the same group, as the sync does, and returns its id: a second credential of the
+// endpoint, which the least busy of the two is chosen among.
+func (w *world) anotherKey(maxConcurrency int32) uuid.UUID {
+	w.t.Helper()
+	id := uuid.NewV7()
+	sealed := w.keys.Seal(secret.New("sk-second-key"), secret.Location{Table: "suppliers.credentials", RowID: id.String(), Purpose: "key"})
+	version := int64(sealed.KeyVersion)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return store.New().InsertCredential(ctx, tx, store.InsertCredentialParams{
+			ID: id, SupplierID: w.supplier, SupplierGroupID: w.group, UpstreamKeyRef: id.String(),
+			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
+			Status: "active", MaxConcurrency: maxConcurrency,
+		})
+	})
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
 // pointAt makes the endpoint's calls go to a test server instead of the supplier's address.
 func (w *world) pointAt(serverURL string) {
 	w.t.Helper()

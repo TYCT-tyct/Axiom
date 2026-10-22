@@ -2,6 +2,16 @@
 -- Where the allocation of an account stands: the key of the last transaction replayed, and the debt.
 SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances WHERE account_id = @account_id;
 
+-- name: ReplayThrough :one
+-- Fix the unlocked replay's upper bound before reading batches. Every transaction of an account takes its seq under that
+-- account's balance row lock (InsertLockedTransaction), in the order the lock is taken and released at commit, so by the
+-- time this reads B every transaction of the account with a seq at or below B has committed, and the batches read after
+-- it see theirs. A credit committed later gets a higher seq, and so stays out of this replay: the next one loads it
+-- along with its batch (#361). Rows from before the sequence cannot arrive later, so they need no bound of their own.
+-- The account's maximum is served by transactions_by_account_seq, whose NULL seqs sort after the numbered ones: an
+-- account that has rows from before the release pays one pass over them here, frozen and never longer.
+SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = @account_id;
+
 -- name: LiveBatches :many
 -- The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
 -- before the sequence). consumed and expired are what the allocation has stored: they trail the ledger until the
@@ -32,11 +42,11 @@ ORDER BY p.created_at, p.id;
 
 -- name: Movements :many
 -- A page of the account's numbered transactions after the seq given, in the order of seq, each with its net debit on
--- the user's balance as for LegacyMovements. Bounded by the index transactions_by_account_seq.
+-- the user's balance as for LegacyMovements, never past through_seq. Bounded by the index transactions_by_account_seq.
 WITH page AS (
     SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
     FROM billing.transactions t
-    WHERE t.account_id = @account_id AND t.seq > @after_seq::bigint
+    WHERE t.account_id = @account_id AND t.seq > @after_seq::bigint AND t.seq <= @through_seq::bigint
     ORDER BY t.seq
     LIMIT @max
 )

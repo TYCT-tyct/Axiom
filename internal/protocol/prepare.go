@@ -60,17 +60,23 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
-	// IdentityLen is the most bytes Identity may return, before JSON escaping; 0 means defaultIdentityLen. It sizes the
-	// output, so that identifiers that are longer than the ones they replace, or need escaping, do not make Prepare
-	// copy the body again; a longer value is refused (errIdentity).
+	// Device is the value that stands for the client's machine in Anthropic's metadata.user_id, whose session member is
+	// Identity's value for the same request: a relay of this deployment reads the session out of it to pin a
+	// conversation to one account (docs/domains/gateway.md「转发规则」). It is written into the object as it is, so it
+	// must be an opaque identifier, as the ones Identity returns are. Both components are JSON-encoded.
+	Device string
+	// IdentityLen is the most bytes a derived identifier may take before outer JSON escaping; for metadata.user_id,
+	// this includes the inner JSON encoding of the structure and both components. 0 means
+	// defaultIdentityLen. It sizes the output, so that identifiers that are longer than the ones they replace, or need
+	// escaping, do not make Prepare copy the body again; a longer value is refused (errIdentity).
 	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
 }
 
-// defaultIdentityLen is what Identity may return when Rewrites.IdentityLen is 0: derived identifiers are short opaque
-// values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
+// defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short
+// opaque values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
 const defaultIdentityLen = 128
 
 // withDefaults fills in what a zero Rewrites value leaves to its defaults.
@@ -82,7 +88,7 @@ func (w Rewrites) withDefaults() Rewrites {
 }
 
 // errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
-var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
+var errIdentity = errors.New("protocol: a derived value is longer than Rewrites.IdentityLen bytes")
 
 // Upstream is a request ready for an endpoint: its body, and what the body tells the relay about the usage the
 // endpoint will report.
@@ -114,13 +120,17 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
-// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// Chat and Messages/Responses requests convert in either direction (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		u.Body, err = rewrite(r.Format, body, t, w)
+		return u, err
+	}
+	if t.Format == Chat && !t.Compact && (r.Format == Messages || r.Format == Responses) {
+		u.Body, err = requestToChat(r.Format, body, t, w)
 		return u, err
 	}
 	if r.Format != Chat {
@@ -148,35 +158,6 @@ func usageContext(r *Request) UsageContext {
 	return u
 }
 
-// rewrite is Prepare for an endpoint of the request's format.
-func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	rules := rulesFor(f, t)
-	if rules.members == nil {
-		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
-	}
-	w = w.withDefaults()
-	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
-	}
-	if err := p.top(rules); err != nil {
-		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
-	}
-	return p.out, nil
-}
-
-// rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
-func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
-	w = w.withDefaults()
-	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
-	for _, item := range w.History {
-		size += len(item) + 1
-	}
-	return size
-}
-
 // What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
 // reads them into structures, one for every object or null in an array of them and, in an object whose members it does
 // not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
@@ -200,13 +181,25 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
+		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
+		if r.Format == Responses {
+			cost += replayHistoryCost(w.History)
+		}
+		return cost
 	}
-	if r.Format != Chat {
-		return 0 // Prepare refuses at once: nothing is converted from another format
+	if r.Format != Chat && t.Format != Chat {
+		return 0
 	}
 	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
-	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	if t.Format == Chat {
+		cost := nativeRequestCost(body)
+		for _, item := range w.History {
+			cost += nativeRequestCost(item)
+		}
+		return cost + int64(quoted(len(t.Model))+3*quoted(w.withDefaults().IdentityLen))
+	}
+	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	return cost
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
@@ -271,7 +264,7 @@ var (
 		},
 		Chat: {}, // spelled out so that the array covers every format, as rewriteRules does: rulesFor never indexes past it
 	}
-	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
+	metadataRules = map[string]rule{"user_id": (*rewriter).userID}
 )
 
 // rulesFor is how a request of format f is rewritten for the endpoint t: a compaction request is the one that is not a
@@ -333,6 +326,8 @@ type rewriter struct {
 	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
+	replayAssistant, replayEmpty          bool
+	replayMeta                            *aggBase
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }
@@ -409,7 +404,12 @@ func (p *rewriter) model() error {
 	return p.replaceString(len(v), p.t.Model)
 }
 
-func (p *rewriter) identity() error {
+// identity replaces the identifier just read with the gateway's opaque value of it.
+func (p *rewriter) identity() error { return p.replaceDerived(p.w.Identity) }
+
+// replaceDerived reads the string just read and writes derive's value of it in its place, refusing one longer than
+// Rewrites.IdentityLen.
+func (p *rewriter) replaceDerived(derive func(string) string) error {
 	v, err := p.raw()
 	if v == nil || err != nil {
 		return err
@@ -418,7 +418,7 @@ func (p *rewriter) identity() error {
 	if err != nil {
 		return err
 	}
-	derived := p.w.Identity(string(s))
+	derived := derive(string(s))
 	if p.w.IdentityLen > 0 && len(derived) > p.w.IdentityLen {
 		return errIdentity
 	}
