@@ -24,6 +24,7 @@ const pollEvery = time.Minute
 const (
 	expireBatch  = 100
 	pollDeadline = 30 * time.Second
+	closeTimeout = 5 * time.Second
 )
 
 // pollArgs is the job of one run.
@@ -81,21 +82,38 @@ func (p *Payments) poll(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("payments: read the orders to expire: %w", err)
 	}
+	var closing []Order
 	for _, r := range due {
-		if err := p.expire(ctx, r); err != nil {
+		o, err := p.expire(ctx, r)
+		if err != nil {
 			p.logger.Error("payments: an order did not expire", "order", OrderID(r.ID).TypeID(), "error", err)
+		} else if o != nil {
+			closing = append(closing, *o)
 		}
 	}
+	p.closeExpired(ctx, closing)
 	return nil
 }
 
-// expire moves one order past its deadline to expired, which gives its reservation of the merchant's daily limit back,
-// and then asks the channel to close it. The channel is asked afterwards and its refusal is only logged: whether an
-// order is payable here is our decision, and one our database no longer offers cannot hold the account's place for
-// ever because a gateway is misconfigured.
-func (p *Payments) expire(ctx context.Context, r ExpiringOrdersRow) error {
+// closeExpired runs only after the whole batch has released its places and reservations. A stalled merchant gets
+// one bounded attempt per run, so its other orders cannot exhaust the closing budget of unrelated merchants.
+func (p *Payments) closeExpired(ctx context.Context, orders []Order) {
+	timedOut := make(map[MerchantID]bool)
+	for _, o := range orders {
+		if ctx.Err() != nil {
+			return
+		}
+		if !timedOut[o.MerchantID] {
+			timedOut[o.MerchantID] = p.closeOrder(ctx, o)
+		}
+	}
+}
+
+// expire commits the local state and reservation independently of the gateway. A nil order means another caller
+// already changed its state, so this run must not issue another close.
+func (p *Payments) expire(ctx context.Context, r ExpiringOrdersRow) (*Order, error) {
 	id := OrderID(r.ID)
-	moved := false
+	var expired *Order
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
 		locked, err := lockForChange(ctx, tx, id)
 		if err != nil {
@@ -104,12 +122,11 @@ func (p *Payments) expire(ctx context.Context, r ExpiringOrdersRow) error {
 		if State(locked.State) != Pending { // paid or cancelled while the run read it
 			return nil
 		}
-		moved = true
+		expired = &Order{ID: id, MerchantID: MerchantID(locked.MerchantID), TradeNo: locked.TradeNo}
 		return move(ctx, tx, locked, Expired, event{source: sourceJob, kind: kindExpire})
 	})
-	if err != nil || !moved {
-		return err
+	if err != nil {
+		return nil, err
 	}
-	p.closeOrder(ctx, Order{ID: id, MerchantID: MerchantID(r.MerchantID), TradeNo: r.TradeNo})
-	return nil
+	return expired, nil
 }

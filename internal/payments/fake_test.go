@@ -12,7 +12,8 @@ import (
 // create, close and caps let a test decide what its channel does, so it can watch the order reach the channel.
 type fakePlugin struct {
 	create func(CreateRequest) (Checkout, error)
-	close  func(OrderID, string) error
+	close  func(context.Context, OrderID, string) error
+	open   func() error
 	caps   Caps
 }
 
@@ -24,6 +25,11 @@ type fakeSettings struct {
 func (fakePlugin) Kind() Kind { return "fake" }
 
 func (p fakePlugin) Open(c MerchantConfig) (Channel, error) {
+	if p.open != nil {
+		if err := p.open(); err != nil {
+			return nil, err
+		}
+	}
 	var s fakeSettings
 	if err := jsonx.UnmarshalKnown(c.Settings, &s); err != nil {
 		return nil, errors.New("settings do not parse")
@@ -42,7 +48,7 @@ type fakeChannel struct {
 	settings fakeSettings
 	key      string
 	create   func(CreateRequest) (Checkout, error)
-	close    func(OrderID, string) error
+	close    func(context.Context, OrderID, string) error
 	caps     Caps
 }
 
@@ -60,9 +66,9 @@ func (fakeChannel) Query(context.Context, string, string) (Payment, error) {
 	return Payment{State: PayPending}, nil
 }
 
-func (c fakeChannel) Close(_ context.Context, id OrderID, tradeNo string) error {
+func (c fakeChannel) Close(ctx context.Context, id OrderID, tradeNo string) error {
 	if c.close != nil {
-		return c.close(id, tradeNo)
+		return c.close(ctx, id, tradeNo)
 	}
 	return nil
 }

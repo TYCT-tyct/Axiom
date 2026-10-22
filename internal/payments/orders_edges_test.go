@@ -216,8 +216,7 @@ func TestMerchantIdentityIsHeldUntilOrderCommit(t *testing.T) {
 		}
 		return w.tx(siteScope(w.siteA), func(save pg.Tx) error {
 			var locked bool
-			err := save.QueryRow(t.Context(), "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))",
-				"payments.merchant:"+MerchantID(m.ID).TypeID()).Scan(&locked)
+			err := save.QueryRow(t.Context(), "SELECT pg_try_advisory_xact_lock($1)", merchantKey(MerchantID(m.ID))).Scan(&locked)
 			if err == nil && locked {
 				return errors.New("merchant identity can change before the order commits")
 			}

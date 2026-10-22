@@ -164,7 +164,8 @@ func (r CreateOrder) check() error {
 // The same Key with the same request returns the order it made, and the checkout that was stored: the client secret
 // the channel gave the first time is never stored, so a replay carries none. A channel that refuses the order fails it
 // and gives the merchant's daily reservation back; any other channel error leaves it waiting for payment and returns
-// ErrUnconfirmed, because the order may exist at the gateway.
+// ErrUnconfirmed, because the order may exist at the gateway. A replay reports stored State and Checkout rather than
+// the first error; callers must distinguish failed orders and pending orders without a checkout.
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error) {
 	if err := r.check(); err != nil {
 		return Order{}, Checkout{}, err
@@ -192,9 +193,10 @@ func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (
 	if !placed {
 		return order, order.Checkout, nil
 	}
-	checkout, err := p.checkout(ctx, s, order, r)
+	checkout, err := p.checkout(ctx, s, &order, r)
 	switch {
 	case errors.Is(err, errRefused):
+		order.TradeNo = checkout.TradeNo
 		return order, Checkout{}, p.refuseOrder(ctx, s, order, err)
 	case err != nil:
 		return order, Checkout{}, fmt.Errorf("%w: %w", ErrUnconfirmed, err)
@@ -263,24 +265,23 @@ func placeOrder(ctx context.Context, tx pg.Tx, r CreateOrder, site platform.Curr
 		refNum, refDen = reference.Num().String(), reference.Denom().String()
 		appliedNum, appliedDen = c.rate.Applied.Num().String(), c.rate.Applied.Denom().String()
 	}
-	now := time.Now()
 	o := Order{
 		ID: OrderID(uuid.NewV7()), SiteID: uuid.UUID(r.Site.ID), AccountID: r.Account, UserID: r.User,
 		MerchantID: MerchantID(c.offer.MerchantID), Method: r.Method, State: Pending, Credits: r.Credits,
-		Total: c.quote.Total, Fee: c.quote.Fee, ExpiresAt: now.Add(time.Duration(c.offer.TtlSeconds) * time.Second),
-		CreatedAt: now, UpdatedAt: now,
+		Total: c.quote.Total, Fee: c.quote.Fee,
 	}
-	err = queries.InsertOrder(ctx, tx, InsertOrderParams{
+	times, err := queries.InsertOrder(ctx, tx, InsertOrderParams{
 		ID: uuid.UUID(o.ID), SiteID: o.SiteID, AccountID: o.AccountID, UserID: o.UserID, MerchantID: uuid.UUID(o.MerchantID),
 		Method: string(o.Method), IdemKey: r.Key, Fingerprint: fingerprint[:], Credits: o.Credits,
 		SiteCurrency: site.String(), PayCurrency: pay.String(), Total: o.Total.Minor, Fee: o.Fee,
 		FeePpm: c.offer.FeePpm, FeeFixed: c.offer.FeeFixed, RateID: rateID,
 		RefNum: refNum, RefDen: refDen, AppliedNum: appliedNum, AppliedDen: appliedDen,
-		ExpiresAt: o.ExpiresAt, ClientIp: r.ClientIP,
+		TtlSeconds: c.offer.TtlSeconds, ClientIp: r.ClientIP,
 	})
 	if err != nil {
 		return Order{}, false, fmt.Errorf("payments: write the order: %w", err)
 	}
+	o.CreatedAt, o.ExpiresAt, o.UpdatedAt = times.CreatedAt, times.ExpiresAt, times.UpdatedAt
 	err = queries.OrderEvent(ctx, tx, OrderEventParams{
 		ID: uuid.NewV7(), OrderID: uuid.UUID(o.ID), SiteID: o.SiteID, AccountID: o.AccountID,
 		Source: sourceUser, Kind: kindCreate, FromState: "", ToState: string(Pending),
@@ -348,10 +349,10 @@ func orderOf(r ReadOrderRow) (Order, error) {
 
 // checkout asks the order's channel for a checkout and stores what outlives the request. A channel that refuses, or a
 // link the browser must not follow, is errRefused; the order stays as it is for any other outcome.
-func (p *Payments) checkout(ctx context.Context, s pg.Scope, o Order, r CreateOrder) (Checkout, error) {
+func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateOrder) (Checkout, error) {
 	ch, err := p.channelOf(ctx, o.MerchantID)
 	if err != nil {
-		return Checkout{}, err
+		return Checkout{}, fmt.Errorf("%w: open the channel before creating an order: %w", errRefused, err)
 	}
 	c, err := ch.Create(ctx, CreateRequest{
 		Order: o.ID, Method: o.Method, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL,
@@ -365,20 +366,22 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o Order, r CreateOr
 	}
 	c = c.withoutNUL()
 	if err = c.check(); err != nil {
-		return Checkout{}, fmt.Errorf("%w: %w", errRefused, err)
+		return Checkout{TradeNo: c.TradeNo}, fmt.Errorf("%w: %w", errRefused, err)
 	}
 	stored, err := jsonx.MarshalCanonical(c.stored())
 	if err != nil {
 		return Checkout{}, fmt.Errorf("payments: encode the checkout that is stored: %w", err)
 	}
+	var updatedAt time.Time
 	err = p.db.Tx(ctx, s, func(tx pg.Tx) error {
 		saved, err := queries.SaveCheckout(ctx, tx, SaveCheckoutParams{ID: uuid.UUID(o.ID), TradeNo: c.TradeNo, Checkout: stored})
 		if err != nil {
 			return fmt.Errorf("payments: save the order's checkout: %w", err)
 		}
-		if saved == 0 {
+		if len(saved) == 0 {
 			return fmt.Errorf("payments: order %s is no longer waiting for its checkout", o.ID.TypeID())
 		}
+		updatedAt = saved[0]
 		return queries.OrderEvent(ctx, tx, OrderEventParams{
 			ID: uuid.NewV7(), OrderID: uuid.UUID(o.ID), SiteID: o.SiteID, AccountID: o.AccountID,
 			Source: sourceUser, Kind: kindCheckout, FromState: string(Pending), ToState: string(Pending), TradeNo: c.TradeNo,
@@ -387,6 +390,7 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o Order, r CreateOr
 	if err != nil {
 		return Checkout{}, err
 	}
+	o.UpdatedAt = updatedAt
 	return c, nil
 }
 
@@ -398,10 +402,13 @@ func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, cause e
 		if err != nil {
 			return err
 		}
-		return move(ctx, tx, locked, Failed, event{source: sourceUser, kind: kindReject, raw: cause.Error()})
+		return move(ctx, tx, locked, Failed, event{source: sourceUser, kind: kindReject, tradeNo: o.TradeNo, raw: cause.Error()})
 	})
 	if err != nil {
 		return errors.Join(cause, err)
+	}
+	if errors.Is(cause, ErrUnsafeLink) {
+		p.closeOrder(ctx, o)
 	}
 	return cause
 }
@@ -412,6 +419,7 @@ func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, cause e
 // arrives is what the query is for (README.md「实现拆分」E1-2c).
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error) {
 	var order Order
+	moved := false
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) error {
 		locked, err := lockForChange(ctx, tx, id)
 		if err != nil {
@@ -421,6 +429,7 @@ func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 			if err = move(ctx, tx, locked, Cancelled, event{source: sourceUser, kind: kindCancel}); err != nil {
 				return err
 			}
+			moved = true
 		} else if State(locked.State) != Cancelled {
 			return ErrNotWaiting
 		}
@@ -430,24 +439,30 @@ func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 	if err != nil {
 		return Order{}, err
 	}
-	p.closeOrder(ctx, order)
+	if moved {
+		p.closeOrder(ctx, order)
+	}
 	return order, nil
 }
 
 // closeOrder asks the channel to close an order that can no longer be paid here. A failure is logged and goes no
 // further: the order has already moved, and a gateway that keeps it payable is covered by the expiry's query.
-func (p *Payments) closeOrder(ctx context.Context, o Order) {
+// The result tells the poll to skip further closes at a merchant whose deadline expired.
+func (p *Payments) closeOrder(ctx context.Context, o Order) bool {
+	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	defer cancel()
 	ch, err := p.channelOf(ctx, o.MerchantID)
 	if err != nil {
 		p.logger.Error("payments: a cancelled order's channel does not open", "order", o.ID.TypeID(), "error", err)
-		return
+		return errors.Is(err, context.DeadlineExceeded)
 	}
 	if !ch.Caps().Has(CapClose) {
-		return
+		return false
 	}
 	if err = ch.Close(ctx, o.ID, o.TradeNo); err != nil {
 		p.logger.Warn("payments: could not close the order at the channel", "order", o.ID.TypeID(), "error", err)
 	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
 // move changes an order along an edge of the transition table in tx and appends the event that says so. An order that
@@ -458,7 +473,7 @@ func move(ctx context.Context, tx pg.Tx, o LockOrderRow, to State, e event) erro
 	if !from.canMoveTo(to) {
 		return fmt.Errorf("payments: order %s cannot go from %s to %s", OrderID(o.ID).TypeID(), from, to)
 	}
-	changed, err := queries.MoveOrder(ctx, tx, MoveOrderParams{State: string(to), ID: o.ID, FromStates: predecessors(to)})
+	changed, err := queries.MoveOrder(ctx, tx, MoveOrderParams{State: string(to), ID: o.ID, FromStates: predecessors(to), TradeNo: e.tradeNo})
 	if err != nil {
 		return fmt.Errorf("payments: move order %s to %s: %w", OrderID(o.ID).TypeID(), to, err)
 	}
@@ -525,8 +540,15 @@ func boundOrderTx(ctx context.Context, tx pg.Tx) error {
 // two orders at once cannot both take the last place. The leading namespace byte separates these keys from the
 // exchange rate's pairs.
 func accountKey(account uuid.UUID) int64 {
-	hash := sha256.Sum256(account[:])
-	return int64(binary.BigEndian.Uint64(hash[:8])>>8) | 0x4f<<56
+	return advisoryKey(0x4f, account)
+}
+
+// merchantKey keeps merchant identity locks separate from order (0x4f) and exchange-rate (0x46) locks.
+func merchantKey(id MerchantID) int64 { return advisoryKey(0x4d, uuid.UUID(id)) }
+
+func advisoryKey(namespace byte, id uuid.UUID) int64 {
+	hash := sha256.Sum256(id[:])
+	return int64(binary.BigEndian.Uint64(hash[:8])>>8) | int64(namespace)<<56
 }
 
 // channelOf opens a merchant account's channel in the platform scope, which alone reads merchant_configs.

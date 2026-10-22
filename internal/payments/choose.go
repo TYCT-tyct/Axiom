@@ -233,9 +233,6 @@ func (p *Payments) ranked(m menu, method string, offers []OffersRow, usage []Usa
 // last of the quota goes only to the orders it fits; a candidate that no longer fits gives way to the next. The
 // transaction's lock and statement timeouts bound the wait (README.md「事务与任务」).
 func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, credits int64) (candidate, error) {
-	if err := boundOrderTx(ctx, tx); err != nil {
-		return candidate{}, err
-	}
 	offers := slices.DeleteFunc(slices.Clone(m.offers), func(o OffersRow) bool { return o.Method != string(method) })
 	usage, err := usageOf(ctx, tx, offers)
 	if err != nil {
@@ -265,11 +262,11 @@ func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, 
 // rereading the revision here rejects a menu built before a concurrent save. Row locks would require UPDATE rights
 // that an account scope deliberately lacks on merchant configuration.
 func holdOffer(ctx context.Context, tx pg.Tx, o OffersRow) error {
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))", "payments.merchant:"+MerchantID(o.MerchantID).TypeID()); err != nil {
+	if err := queries.HoldMerchantIdentity(ctx, tx, merchantKey(MerchantID(o.MerchantID))); err != nil {
 		return fmt.Errorf("payments: hold merchant identity: %w", err)
 	}
-	var current bool
-	if err := tx.QueryRow(ctx, "SELECT rev = $2 AND enabled FROM payments.merchants WHERE id = $1", o.MerchantID, o.Rev).Scan(&current); err != nil {
+	current, err := queries.MerchantOfferCurrent(ctx, tx, MerchantOfferCurrentParams{ID: o.MerchantID, Rev: o.Rev})
+	if err != nil {
 		return fmt.Errorf("payments: check merchant revision: %w", err)
 	}
 	if !current {

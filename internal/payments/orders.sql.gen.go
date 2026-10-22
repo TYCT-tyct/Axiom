@@ -46,14 +46,24 @@ func (q *Queries) ExpiringOrders(ctx context.Context, db DBTX, batch int32) ([]E
 	return items, nil
 }
 
-const insertOrder = `-- name: InsertOrder :exec
+const holdMerchantIdentity = `-- name: HoldMerchantIdentity :exec
+SELECT pg_advisory_xact_lock_shared($1::bigint)
+`
+
+func (q *Queries) HoldMerchantIdentity(ctx context.Context, db DBTX, key int64) error {
+	_, err := db.Exec(ctx, holdMerchantIdentity, key)
+	return err
+}
+
+const insertOrder = `-- name: InsertOrder :one
 INSERT INTO payments.orders (id, site_id, account_id, user_id, merchant_id, method, state, idem_key, fingerprint,
     credits, site_currency, pay_currency, total, fee, fee_ppm, fee_fixed, rate_id, ref_num, ref_den, applied_num,
     applied_den, expires_at, client_ip)
 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9,
     $10, $11, $12, $13, $14, $15, $16,
     $17::numeric, $18::numeric, $19::numeric, $20::numeric,
-    $21, $22::inet)
+    transaction_timestamp() + make_interval(secs => $21::integer), $22::inet)
+RETURNING created_at, expires_at, updated_at
 `
 
 type InsertOrderParams struct {
@@ -77,12 +87,18 @@ type InsertOrderParams struct {
 	RefDen       string
 	AppliedNum   string
 	AppliedDen   string
-	ExpiresAt    time.Time
+	TtlSeconds   int32
 	ClientIp     netip.Addr
 }
 
-func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParams) error {
-	_, err := db.Exec(ctx, insertOrder,
+type InsertOrderRow struct {
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParams) (InsertOrderRow, error) {
+	row := db.QueryRow(ctx, insertOrder,
 		arg.ID,
 		arg.SiteID,
 		arg.AccountID,
@@ -103,10 +119,12 @@ func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParam
 		arg.RefDen,
 		arg.AppliedNum,
 		arg.AppliedDen,
-		arg.ExpiresAt,
+		arg.TtlSeconds,
 		arg.ClientIp,
 	)
-	return err
+	var i InsertOrderRow
+	err := row.Scan(&i.CreatedAt, &i.ExpiresAt, &i.UpdatedAt)
+	return i, err
 }
 
 const lockAccountOrders = `-- name: LockAccountOrders :exec
@@ -117,6 +135,16 @@ SELECT pg_advisory_xact_lock($1::bigint)
 // place free.
 func (q *Queries) LockAccountOrders(ctx context.Context, db DBTX, key int64) error {
 	_, err := db.Exec(ctx, lockAccountOrders, key)
+	return err
+}
+
+const lockMerchantIdentity = `-- name: LockMerchantIdentity :exec
+SELECT pg_advisory_xact_lock($1::bigint)
+`
+
+// Configuration saves exclude new orders until their revision and in-flight checks commit.
+func (q *Queries) LockMerchantIdentity(ctx context.Context, db DBTX, key int64) error {
+	_, err := db.Exec(ctx, lockMerchantIdentity, key)
 	return err
 }
 
@@ -181,20 +209,43 @@ func (q *Queries) LockOrder(ctx context.Context, db DBTX, id uuid.UUID) ([]LockO
 	return items, nil
 }
 
+const merchantOfferCurrent = `-- name: MerchantOfferCurrent :one
+SELECT EXISTS (SELECT 1 FROM payments.merchants WHERE id = $1 AND rev = $2 AND enabled) AS current
+`
+
+type MerchantOfferCurrentParams struct {
+	ID  uuid.UUID
+	Rev int64
+}
+
+func (q *Queries) MerchantOfferCurrent(ctx context.Context, db DBTX, arg MerchantOfferCurrentParams) (bool, error) {
+	row := db.QueryRow(ctx, merchantOfferCurrent, arg.ID, arg.Rev)
+	var current bool
+	err := row.Scan(&current)
+	return current, err
+}
+
 const moveOrder = `-- name: MoveOrder :execrows
-UPDATE payments.orders SET state = $1, updated_at = clock_timestamp()
-WHERE id = $2 AND state = ANY ($3::text[])
+UPDATE payments.orders SET state = $1, updated_at = clock_timestamp(),
+    trade_no = CASE WHEN $2::text <> '' THEN $2 ELSE trade_no END
+WHERE id = $3 AND state = ANY ($4::text[])
 `
 
 type MoveOrderParams struct {
 	State      string
+	TradeNo    string
 	ID         uuid.UUID
 	FromStates []string
 }
 
 // The conditional transition: a row changes only from a state the transition table allows, and reports whether it did.
 func (q *Queries) MoveOrder(ctx context.Context, db DBTX, arg MoveOrderParams) (int64, error) {
-	result, err := db.Exec(ctx, moveOrder, arg.State, arg.ID, arg.FromStates)
+	result, err := db.Exec(ctx, moveOrder,
+		arg.State,
+		arg.TradeNo,
+		arg.ID,
+		arg.FromStates,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -407,9 +458,10 @@ func (q *Queries) ReleaseUsage(ctx context.Context, db DBTX, id uuid.UUID) (int6
 	return result.RowsAffected(), nil
 }
 
-const saveCheckout = `-- name: SaveCheckout :execrows
+const saveCheckout = `-- name: SaveCheckout :many
 UPDATE payments.orders SET trade_no = $1, checkout = $2::jsonb, updated_at = clock_timestamp()
 WHERE id = $3 AND state = 'pending'
+RETURNING updated_at
 `
 
 type SaveCheckoutParams struct {
@@ -418,10 +470,22 @@ type SaveCheckoutParams struct {
 	ID       uuid.UUID
 }
 
-func (q *Queries) SaveCheckout(ctx context.Context, db DBTX, arg SaveCheckoutParams) (int64, error) {
-	result, err := db.Exec(ctx, saveCheckout, arg.TradeNo, arg.Checkout, arg.ID)
+func (q *Queries) SaveCheckout(ctx context.Context, db DBTX, arg SaveCheckoutParams) ([]time.Time, error) {
+	rows, err := db.Query(ctx, saveCheckout, arg.TradeNo, arg.Checkout, arg.ID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	var items []time.Time
+	for rows.Next() {
+		var updated_at time.Time
+		if err := rows.Scan(&updated_at); err != nil {
+			return nil, err
+		}
+		items = append(items, updated_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

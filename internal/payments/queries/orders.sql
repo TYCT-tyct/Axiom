@@ -15,23 +15,26 @@ SELECT id, site_id, account_id, user_id, merchant_id, method, state, credits, si
     trade_no, expires_at, created_at
 FROM payments.orders WHERE id = @id FOR UPDATE;
 
--- name: InsertOrder :exec
+-- name: InsertOrder :one
 INSERT INTO payments.orders (id, site_id, account_id, user_id, merchant_id, method, state, idem_key, fingerprint,
     credits, site_currency, pay_currency, total, fee, fee_ppm, fee_fixed, rate_id, ref_num, ref_den, applied_num,
     applied_den, expires_at, client_ip)
 VALUES (@id, @site_id, @account_id, @user_id, @merchant_id, @method, 'pending', @idem_key, @fingerprint, @credits,
     @site_currency, @pay_currency, @total, @fee, @fee_ppm, @fee_fixed, sqlc.narg(rate_id),
     @ref_num::numeric, @ref_den::numeric, @applied_num::numeric, @applied_den::numeric,
-    @expires_at, @client_ip::inet);
+    transaction_timestamp() + make_interval(secs => @ttl_seconds::integer), @client_ip::inet)
+RETURNING created_at, expires_at, updated_at;
 
 -- The conditional transition: a row changes only from a state the transition table allows, and reports whether it did.
 -- name: MoveOrder :execrows
-UPDATE payments.orders SET state = @state, updated_at = clock_timestamp()
+UPDATE payments.orders SET state = @state, updated_at = clock_timestamp(),
+    trade_no = CASE WHEN @trade_no::text <> '' THEN @trade_no ELSE trade_no END
 WHERE id = @id AND state = ANY (@from_states::text[]);
 
--- name: SaveCheckout :execrows
+-- name: SaveCheckout :many
 UPDATE payments.orders SET trade_no = @trade_no, checkout = @checkout::jsonb, updated_at = clock_timestamp()
-WHERE id = @id AND state = 'pending';
+WHERE id = @id AND state = 'pending'
+RETURNING updated_at;
 
 -- name: OrderEvent :exec
 INSERT INTO payments.order_events (id, order_id, site_id, account_id, source, kind, from_state, to_state, trade_no, amount, raw)
@@ -52,6 +55,16 @@ FROM payments.orders WHERE account_id = @account_id;
 -- place free.
 -- name: LockAccountOrders :exec
 SELECT pg_advisory_xact_lock(@key::bigint);
+
+-- Configuration saves exclude new orders until their revision and in-flight checks commit.
+-- name: LockMerchantIdentity :exec
+SELECT pg_advisory_xact_lock(@key::bigint);
+
+-- name: HoldMerchantIdentity :exec
+SELECT pg_advisory_xact_lock_shared(@key::bigint);
+
+-- name: MerchantOfferCurrent :one
+SELECT EXISTS (SELECT 1 FROM payments.merchants WHERE id = @id AND rev = @rev AND enabled) AS current;
 
 -- The reservation belongs to the day the order was created, even when it ends after UTC midnight.
 -- name: ReleaseUsage :execrows

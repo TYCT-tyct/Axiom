@@ -34,7 +34,8 @@ type settings struct {
 	// allowed in cancelWindow, the credits it may buy in a UTC day, and the credits of its first top-up.
 	pending, cancels int64
 	cancelWindow     time.Duration
-	daily, first     *int64
+	daily            *int64
+	first            int64
 }
 
 // The limits of a site that sets none (docs/domains/payments.md「后台配置」): 3 orders waiting, 5 cancellations an hour,
@@ -49,7 +50,7 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 	rows, err := queries.SiteSettings(ctx, tx, site)
 	s := settings{
 		strategy: RoundRobin, pending: defaultPending, cancels: defaultCancels, cancelWindow: time.Hour,
-		first: new(int64(defaultFirstTop)),
+		first: defaultFirstTop,
 	}
 	if err != nil || len(rows) == 0 {
 		return s, err
@@ -71,9 +72,9 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 	if r.CancelWindowSeconds != nil {
 		s.cancelWindow = time.Duration(*r.CancelWindowSeconds) * time.Second
 	}
-	s.daily, s.first = r.DailyCredits, r.FirstCredits
-	if s.first == nil {
-		s.first = new(int64(defaultFirstTop))
+	s.daily = r.DailyCredits
+	if r.FirstCredits != nil {
+		s.first = *r.FirstCredits
 	}
 	return s, nil
 }
@@ -98,7 +99,7 @@ func (s settings) admitsCounts(c OrderCountsRow, credits int64) error {
 		return ErrTooManyCancels
 	case s.daily != nil && credits > *s.daily-c.Daily:
 		return ErrDailyLimit
-	case c.Paid == 0 && s.first != nil && credits > *s.first:
+	case c.Paid == 0 && credits > s.first:
 		return ErrFirstLimit
 	}
 	return nil

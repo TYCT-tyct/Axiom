@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -405,7 +406,7 @@ func TestCreateOrderAnswersNoSuccessWithoutItsCheckout(t *testing.T) {
 func TestCancelGivesThePlaceBack(t *testing.T) {
 	var mu sync.Mutex
 	var closed []OrderID
-	w := newTestWorld(t, fakePlugin{caps: CapClose, create: goodCheckout, close: func(id OrderID, _ string) error {
+	w := newTestWorld(t, fakePlugin{caps: CapClose, create: goodCheckout, close: func(_ context.Context, id OrderID, _ string) error {
 		mu.Lock()
 		defer mu.Unlock()
 		closed = append(closed, id)
@@ -436,6 +437,11 @@ func TestCancelGivesThePlaceBack(t *testing.T) {
 	if n := w.events(o.ID); n != 3 {
 		t.Fatalf("%d events after a second cancel", n)
 	}
+	mu.Lock()
+	if len(closed) != 1 {
+		t.Errorf("repeated cancellation issued %d gateway closes", len(closed))
+	}
+	mu.Unlock()
 	// A paid order is not ours to cancel any more: its money is the query's (E1-2c).
 	paid := w.mustPlace(10*yuan, "paid")
 	w.paid(paid.ID)
@@ -451,7 +457,7 @@ func TestCancelGivesThePlaceBack(t *testing.T) {
 func TestExpiryFreesThePlaceOnce(t *testing.T) {
 	var mu sync.Mutex
 	var closed []OrderID
-	w := newTestWorld(t, fakePlugin{caps: CapClose, create: goodCheckout, close: func(id OrderID, _ string) error {
+	w := newTestWorld(t, fakePlugin{caps: CapClose, create: goodCheckout, close: func(_ context.Context, id OrderID, _ string) error {
 		mu.Lock()
 		defer mu.Unlock()
 		closed = append(closed, id)
