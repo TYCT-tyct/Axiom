@@ -96,7 +96,7 @@ func TestStickyAcrossNodesInOnePrecheck(t *testing.T) {
 }
 
 // TestSharedCompactedHeader: the header is what makes the precheck of the call delete the shared binding instead of
-// reading it, so the call starts afresh and the binding that follows it names the endpoint that served.
+// reading it, so the call starts afresh. This admission-only rig releases calls without delivering content.
 func TestSharedCompactedHeader(t *testing.T) {
 	t.Parallel()
 	cache := kvtest.New(t).Open(t, kv.Deps{})
@@ -106,18 +106,6 @@ func TestSharedCompactedHeader(t *testing.T) {
 		t.Fatalf("%d %s", resp.StatusCode, body)
 	}
 	key := r.calls()[0].stickyKey
-	// The first call offered its own binding from the background. A later offer on the same queue is a barrier for it,
-	// so the binding below is what the compacted request reads rather than one the queue may replace.
-	barrier := routing.StickyKey(cache, uuid.UUID{}, routing.SessionKey{9})
-	cache.Later(uuid.UUID{9}, kv.Set(barrier, "sent", time.Hour))
-	waitFor(t, "the first call's binding", func() bool {
-		values, err := cache.Do(t.Context(), kv.Precheck, kv.Get(barrier))
-		if err != nil {
-			t.Fatal(err)
-		}
-		text, err := values[0].String()
-		return err == nil && text == "sent"
-	})
 	if _, err := cache.Do(t.Context(), kv.StickyWrite, r.router.StickyWrite(key, r.endpoints["alpha-2"].ID, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +123,9 @@ func TestSharedCompactedHeader(t *testing.T) {
 	if cheapest := uuid.UUID(r.endpoints["alpha-1"].ID).String(); out.Entries[0] != cheapest {
 		t.Fatalf("a compacted request started on %s, not the cheapest: the shared binding was not deleted", out.Entries[0])
 	}
-	waitFor(t, "the binding the compacted request wrote", func() bool {
-		return stickyValue(t, cache, key) == r.endpoints["alpha-1"].ID
-	})
+	if stickyValue(t, cache, key) != (routing.EndpointID{}) {
+		t.Fatal("the compacted header did not delete the shared binding")
+	}
 }
 
 func TestStickyOutageDoesNotUseLocalBindings(t *testing.T) {
