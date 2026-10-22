@@ -145,8 +145,8 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			},
 		},
 		{
-			// K1 to K3 are not all in yet: with login and stickiness still in the process, a second core node would
-			// multiply the login attempts (internal/platform/kv/README.md「落地顺序」).
+			// K3 is not in yet: with stickiness still in the process, a second core node would lose a session's
+			// endpoint (internal/platform/kv/README.md「落地顺序」).
 			"more than one core node",
 			[]string{
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
