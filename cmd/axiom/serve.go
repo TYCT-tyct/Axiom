@@ -369,7 +369,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
-	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
+	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }

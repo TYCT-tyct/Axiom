@@ -1,0 +1,226 @@
+package suppliers
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+	"uuid"
+
+	"axiom/internal/catalog"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
+)
+
+func TestEndpointGenerationFormats(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		format    protocol.Format
+		name, cap string
+	}{
+		{protocol.Messages, "messages", "max_tokens"},
+		{protocol.Responses, "responses", "max_output_tokens"},
+		{protocol.Chat, "chat", "max_tokens"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			stream, err := os.ReadFile(filepath.Join("..", "protocol", "testdata", c.name, "text", "upstream.sse"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			testGenerationFormat(t, c.format, c.cap, stream)
+		})
+	}
+}
+
+func testGenerationFormat(t *testing.T, format protocol.Format, cap string, stream []byte) {
+	t.Helper()
+	w := newWorld(t, 1)
+	bodies := make(chan string, 1)
+	up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		bodies <- string(b)
+		rw.Header().Set("Content-Type", "text/event-stream")
+		_, _ = rw.Write(stream) //nolint:errcheck // a test server
+	}))
+	t.Cleanup(up.Close)
+	w.pointAt(up.URL)
+	w.svc.snap.Load().endpoints[w.endpoint].formats = []protocol.Format{format}
+	r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: format})
+	up.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome() != TestPassed || !r.Streamed || r.FirstToken == nil || len(r.Usage) == 0 {
+		t.Fatalf("test result: %+v", r)
+	}
+	body := <-bodies
+	if !strings.Contains(body, `"`+cap+`":16`) || !strings.Contains(body, `"stream":true`) {
+		t.Errorf("uncapped or unstreamed request: %s", body)
+	}
+}
+
+func TestEndpointRefusalsKeepTheirStatus(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{400, 401, 403, 429} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t, 1)
+			up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) { rw.WriteHeader(status) }))
+			t.Cleanup(up.Close)
+			w.pointAt(up.URL)
+			r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Status != status || r.Outcome() != TestInconclusive || r.Failure == nil {
+				t.Errorf("status %d: %+v", status, r)
+			}
+		})
+	}
+}
+
+func TestEndpointCostAndAuditRollBackTogether(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.pointAt(newTestUpstream(t, answersWhole).URL)
+	r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("roll back the test result")
+	err = w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		if err := RecordTest(t.Context(), tx, audit.User(uuid.NewV7()), "r", r); err != nil {
+			return err
+		}
+		return stop
+	})
+	if !errors.Is(err, stop) {
+		t.Fatal(err)
+	}
+	if w.count(`SELECT count(*) FROM suppliers.attempt_costs`) != 0 || w.count(`SELECT count(*) FROM platform.audit_log WHERE action = 'endpoint.test'`) != 0 {
+		t.Fatal("the rolled-back test left a cost or audit row")
+	}
+	w.ingest(w.charge("ref-1", "400", w.clock.now()))
+	report := w.reconcile(w.clock.now().Add(time.Hour))
+	if len(report.Held) != 1 {
+		t.Errorf("a charge whose transaction rolled back was not held: %+v", report)
+	}
+}
+
+func TestEndpointOwnLimitsAreInconclusive(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		err    error
+		cancel bool
+	}{
+		{"timeout", io.ErrUnexpectedEOF, true},
+		{"memory", protocol.ErrMemory, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if c.cancel {
+				cancel()
+			}
+			r := TestResult{}
+			r.endOf(ctx, c.err)
+			cause, scope, ok := r.Problem()
+			if r.Outcome() != TestInconclusive || cause != c.name || scope != "" || !ok {
+				t.Errorf("own limit judged the endpoint: %+v", r)
+			}
+		})
+	}
+}
+
+func TestEndpointWithoutAPriceDoesNotGenerate(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	up := newTestUpstream(t, answersWhole)
+	w.pointAt(up.URL)
+	w.svc.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
+	_, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+	if !errors.Is(err, ErrTestCost) || up.sent() != "" {
+		t.Errorf("unpriced test: error %v, upstream body %s", err, up.sent())
+	}
+}
+
+func TestEndpointEmptyBodyFailsButNormalEndPasses(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		format protocol.Format
+		body   string
+		want   TestOutcome
+	}{
+		{"empty body", protocol.Chat, "", TestFailed},
+		{"chat normal end", protocol.Chat, chatEvent(`"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":0}`) + "data: [DONE]\n\n", TestPassed},
+		{"chat hidden reasoning cap", protocol.Chat, chatEvent(`"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":16,"completion_tokens_details":{"reasoning_tokens":16}}`) + "data: [DONE]\n\n", TestPassed},
+		{"responses output cap", protocol.Responses, "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"r\",\"status\":\"incomplete\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":16}}}\n\n", TestPassed},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t, 1)
+			up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(rw, c.body) //nolint:errcheck // a test server
+			}))
+			t.Cleanup(up.Close)
+			w.pointAt(up.URL)
+			w.svc.snap.Load().endpoints[w.endpoint].formats = []protocol.Format{c.format}
+			r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: c.format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Outcome() != c.want || r.FirstToken != nil {
+				t.Errorf("completion: %+v, want %v", r, c.want)
+			}
+		})
+	}
+}
+
+func TestEndpointFailureOutcomes(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		failure Failure
+		want    TestOutcome
+	}{
+		{"upstream", Failure{Scope: ScopeEndpoint, Cause: UpstreamError{Status: 500}}, TestFailed},
+		{"overloaded", Failure{Scope: ScopeEndpoint, Cause: Overloaded{}}, TestFailed},
+		{"missing model", Failure{Scope: ScopeEndpoint, Cause: ModelNotFound{}}, TestFailed},
+		{"transport", Failure{Scope: ScopeEndpoint, Cause: Transport{}}, TestFailed},
+		{"unknown server", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 503}}, TestFailed},
+		{"unknown request", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 413}}, TestInconclusive},
+		{"suspected block", Failure{Scope: ScopeEndpoint, Cause: Unknown{Status: 503, SuspectedEgressBlock: true}}, TestInconclusive},
+		{"egress", Failure{Scope: ScopeEgress, Cause: Transport{}}, TestInconclusive},
+		{"rate limit", Failure{Scope: ScopeEndpoint, Cause: RateLimited{}}, TestInconclusive},
+		{"context", Failure{Scope: ScopeEndpoint, Cause: ContextTooLong{}}, TestInconclusive},
+		{"request", Failure{Scope: ScopeRequest, Cause: BadRequest{}}, TestInconclusive},
+		{"moderation", Failure{Scope: ScopeEndpoint, Cause: ContentRejected{}}, TestInconclusive},
+		{"permission", Failure{Scope: ScopeGroup, Cause: NotPermitted{}}, TestInconclusive},
+		{"key", Failure{Scope: ScopeCredential, Cause: CredentialRejected{}}, TestInconclusive},
+		{"quota", Failure{Scope: ScopeCredential, Cause: CredentialQuotaExhausted{}}, TestInconclusive},
+		{"balance", Failure{Scope: ScopeSupplier, Cause: SupplierBalanceLow{}}, TestInconclusive},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := TestResult{Failure: &c.failure}
+			if r.Outcome() != c.want {
+				t.Errorf("outcome %v, want %v", r.Outcome(), c.want)
+			}
+			if cause, _, ok := r.Problem(); !ok || cause == "" {
+				t.Errorf("failure has no cause: %+v", r)
+			}
+		})
+	}
+}

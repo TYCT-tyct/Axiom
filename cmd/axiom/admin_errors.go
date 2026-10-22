@@ -49,6 +49,11 @@ var adminRefusals = []refusal{
 	{suppliers.ErrUnreachable, http.StatusUnprocessableEntity, codeUnprocessable, "the site did not answer"},
 	{suppliers.ErrGroupNotSelected, http.StatusUnprocessableEntity, codeUnprocessable, "the group is not selected"},
 	{suppliers.ErrUnitValue, http.StatusUnprocessableEntity, codeUnprocessable, "a unit value is above 0 and at most 1000, with at most 15 decimals"},
+	{suppliers.ErrNoEndpoint, http.StatusConflict, codeConflict, "the endpoint cannot be called now: it is not in this node's snapshot"},
+	{suppliers.ErrNoSlot, http.StatusConflict, codeConflict, "no credential of the endpoint has a slot free now"},
+	{suppliers.ErrTestOwner, http.StatusUnprocessableEntity, codeUnprocessable, "only platform endpoints may be tested"},
+	{suppliers.ErrTestCost, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint has no complete price for a test generation"},
+	{suppliers.ErrNoFormat, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint does not serve that call format"},
 	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, "concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none"},
 }
 

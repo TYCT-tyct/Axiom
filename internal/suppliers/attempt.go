@@ -57,6 +57,7 @@ type AttemptReceipt struct {
 	supplier, credential, endpoint, schedule uuid.UUID
 	unitValueID                              uuid.UUID
 	ref                                      string
+	status                                   int
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
@@ -93,9 +94,10 @@ type Attempt struct {
 	cred   *credential
 	priced time.Time
 
-	mu   sync.Mutex
-	ref  string
-	once sync.Once
+	mu     sync.Mutex
+	ref    string
+	status int
+	once   sync.Once
 }
 
 // Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose minute
@@ -193,7 +195,7 @@ func (a *Attempt) receipt() AttemptReceipt {
 	defer a.mu.Unlock()
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
-		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
+		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
 	}
 }
 
@@ -240,7 +242,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if err != nil {
 		return nil, transportFailure(wrote.Load())
 	}
-	a.noteRef(resp.Header)
+	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
@@ -254,11 +256,12 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	return nil, &f
 }
 
-func (a *Attempt) noteRef(h http.Header) {
+func (a *Attempt) noteResponse(status int, h http.Header) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status = status
 	if ref, ok := a.ep.quirks.ChargeRef(h); ok {
-		a.mu.Lock()
 		a.ref = string(ref)
-		a.mu.Unlock()
 	}
 }
 
