@@ -153,7 +153,7 @@ func TestCreateOrderStoresWhatWasBought(t *testing.T) {
 		t.Fatal(err)
 	}
 	for field, v := range map[string]struct{ got, want any }{
-		"state": {o.State, Pending}, "credits": {o.Credits, int64(10 * yuan)},
+		"state": {o.State, Pending}, "credits": {o.Credits, 10 * yuan},
 		"merchant": {o.MerchantID, MerchantID(m.ID)}, "total": {o.Total, want.Total},
 		"fee": {o.Fee, want.Fee}, "client secret": {o.Checkout.ClientSecret, ""},
 	} {

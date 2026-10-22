@@ -25,6 +25,46 @@ func TestOrderReplaySurvivesClosedTopUps(t *testing.T) {
 	}
 }
 
+func TestOrderPersistsTheExactBufferedRate(t *testing.T) {
+	w := newTestWorld(t, fakePlugin{create: goodCheckout})
+	w.open(w.siteA, RoundRobin)
+	in := w.input(w.siteA)
+	in.Currency = currency(t, "USD")
+	w.mustSave(siteScope(w.siteA), in)
+	w.setRate("CNY", "USD", "5", "36")
+	o := w.mustPlace(10*yuan, "fraction")
+	// 10 CNY at (5/36)*(51/50) USD/CNY, then a 3% fee, rounds once to 147 cents.
+	if o.Total != (Money{currency(t, "USD"), 147}) || o.Fee != 5 {
+		t.Fatalf("total %+v, fee %d", o.Total, o.Fee)
+	}
+	w.setRate("CNY", "USD", "1", "6")
+	var refNum, refDen, appliedNum, appliedDen string
+	err := w.tx(w.accountA(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT ref_num::text, ref_den::text, applied_num::text, applied_den::text
+			FROM payments.orders WHERE id = $1`, uuid.UUID(o.ID)).Scan(&refNum, &refDen, &appliedNum, &appliedDen)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if [4]string{refNum, refDen, appliedNum, appliedDen} != [4]string{"5", "36", "17", "120"} {
+		t.Fatalf("locked rate %s/%s applied %s/%s", refNum, refDen, appliedNum, appliedDen)
+	}
+}
+
+func TestCancellationReleasesTheCreationDay(t *testing.T) {
+	w := newTestWorld(t, fakePlugin{create: goodCheckout})
+	m := w.waiting()
+	o := w.mustPlace(yuan, "yesterday")
+	w.exec(fmt.Sprintf(`UPDATE payments.orders SET created_at = transaction_timestamp() - interval '1 day' WHERE id = '%s';
+		UPDATE payments.merchant_usage SET day = day - 1 WHERE merchant_id = '%s'`, uuid.UUID(o.ID), m.ID))
+	if _, err := w.p.Cancel(t.Context(), w.accountA(), o.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(w.accountA(), "SELECT count(*) FROM payments.merchant_usage WHERE used <> 0"); n != 0 {
+		t.Fatalf("%d reservations survived cancellation across midnight", n)
+	}
+}
+
 func TestConcurrentOrderReplayCreatesOneCheckout(t *testing.T) {
 	var calls atomic.Int32
 	w := newTestWorld(t, fakePlugin{create: func(r CreateRequest) (Checkout, error) {
