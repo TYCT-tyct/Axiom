@@ -428,6 +428,7 @@ func TestRowsAreNeverDeletedAndIdentityNeverChanges(t *testing.T) {
 	for _, statement := range []string{
 		"UPDATE suppliers.suppliers SET status = 'paused', config_gen = config_gen + 1",
 		"UPDATE suppliers.credentials SET status = 'disabled'",
+		"UPDATE suppliers.credentials SET max_concurrency = 2, requests_per_minute = 60",
 		"UPDATE suppliers.supplier_logins SET version = version + 1",
 		"DELETE FROM suppliers.supplier_logins",
 	} {
@@ -455,6 +456,10 @@ func TestRowRules(t *testing.T) {
 	group := func(set string) string {
 		return fmt.Sprintf("UPDATE suppliers.supplier_groups SET %s WHERE id = '%s'", set, g)
 	}
+	bound := func(perMinute string) string {
+		return fmt.Sprintf(`INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status,
+			max_concurrency, requests_per_minute) VALUES (gen_random_uuid(), '%s', '%s', gen_random_uuid()::text, 'binding', 4, %s)`, s, g, perMinute)
+	}
 	supplierSet := func(set string) string {
 		return fmt.Sprintf("UPDATE suppliers.suppliers SET %s WHERE id = '%s'", set, s)
 	}
@@ -479,6 +484,9 @@ func TestRowRules(t *testing.T) {
 		{"a codename once set stays", []string{group("codename = 'maple-{group}'"), group("codename = 'oak-{group}'")}, checkViolation},
 		{"a codename may be set again to itself", []string{group("codename = 'maple-{group}'"), group("codename = 'maple-{group}', present = false")}, ""},
 		{"a known cost needs a schedule", []string{endpoint(", cost_state", ", 'known'")}, checkViolation},
+		{"a credential with no requests a minute", []string{bound("NULL")}, ""},
+		{"a requests a minute of zero", []string{bound("0")}, checkViolation},
+		{"a requests a minute below zero", []string{bound("-1")}, checkViolation},
 		{"a known cost with a schedule that does not exist", []string{endpoint(", cost_state, cost_schedule_id", ", 'known', gen_random_uuid()")}, foreignKeyViolation},
 		{"a known cost with its schedule", []string{
 			endpoint("", ""),

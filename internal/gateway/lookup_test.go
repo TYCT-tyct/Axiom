@@ -97,7 +97,7 @@ func TestColdKeyFloodLeavesTheReservedConnections(t *testing.T) {
 		} else {
 			release()
 		}
-		if err := r.db.Tx(ctx, platformScope, func(tx pg.Tx) error { _, err := tx.Exec(ctx, "SELECT 1"); return err }); err != nil {
+		if err := r.db.Tx(pg.CompletionContext(ctx), platformScope, func(tx pg.Tx) error { _, err := tx.Exec(ctx, "SELECT 1"); return err }); err != nil {
 			t.Errorf("a transaction found no free database connection: %v", err)
 		}
 		unlock()

@@ -114,6 +114,29 @@ export default {
       body: "“{{name}}”的完整 key 只显示这一次，关闭后无法再找回。请现在复制并妥善保存。",
       done: "我已保存",
     },
+    guide: {
+      title: "接入",
+      loadFailed: "接入地址加载失败",
+      protocols: "调用格式",
+      clients: "客户端",
+      model: "示例里的 <model> 换成 /v1/models 里列出的名字，形如 厂商/模型。",
+      protocol: {
+        chat: "OpenAI Chat Completions",
+        responses: "OpenAI Responses",
+        messages: "Anthropic Messages",
+      },
+      client: {
+        "claude-code": "Claude Code",
+        codex: "Codex",
+        cursor: "Cursor",
+      },
+      hint: {
+        "claude-code": "在 Bash 或 Zsh 中执行这三行，再用 /model 选站点提供的模型。",
+        codex: "写进 ~/.codex/config.toml，再把 key 设成 AXIOM_API_KEY 环境变量。",
+        cursor: "Settings → Models：Override OpenAI Base URL 填这个地址，OpenAI API Key 填上面那把 key。",
+      },
+      copy: "复制 {{name}}",
+    },
   },
   calls: {
     description: "每次调用的结果、用量和费用。不含对话内容。",

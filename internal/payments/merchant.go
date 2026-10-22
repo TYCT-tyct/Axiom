@@ -157,7 +157,7 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 		if in.Secrets == nil {
 			return Merchant{}, &FieldError{"/secrets", "are required"}
 		}
-	} else if rev, err = p.lockForSave(ctx, tx, &in); err != nil {
+	} else if rev, err = p.lockForSave(ctx, tx, &in, settings); err != nil {
 		return Merchant{}, err
 	}
 	if err = p.validate(plugin, in, settings); err != nil {
@@ -169,9 +169,13 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 	return recordSave(ctx, tx, actor, in, created)
 }
 
-// lockForSave locks the merchant, checks the revision and, when no secrets are given, takes the sealed ones: their
-// hash must match the stored settings, or a tampered gateway address would be sealed in as genuine.
-func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput) (int64, error) {
+// lockForSave locks the merchant, checks the revision, refuses a change of its identity while an order of it is still
+// in flight and, when no secrets are given, takes the sealed ones: their hash must match the stored settings, or a
+// tampered gateway address would be sealed in as genuine.
+func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput, settings []byte) (int64, error) {
+	if err := queries.LockMerchantIdentity(ctx, tx, merchantKey(in.ID)); err != nil {
+		return 0, fmt.Errorf("payments: lock merchant identity: %w", err)
+	}
 	rows, err := queries.LockMerchant(ctx, tx, uuid.UUID(in.ID))
 	if err != nil {
 		return 0, fmt.Errorf("payments: lock merchant: %w", err)
@@ -187,12 +191,40 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput)
 		return 0, &FieldError{"/kind", "cannot change"}
 	}
 	in.Site = r.SiteID
+	if err = checkIdentity(ctx, tx, r, *in, settings); err != nil {
+		return 0, err
+	}
 	if in.Secrets == nil {
 		if in.Secrets, err = p.unseal(in.ID, sealedOf(r.Ciphertext, r.Nonce, r.WrappedDek, r.KeyVersion), r.Settings); err != nil {
 			return 0, err
 		}
 	}
 	return r.Rev + 1, nil
+}
+
+// checkIdentity refuses a change of what a merchant account is while one of its orders is still in flight: the keys,
+// the gateway address and the currency it is paid in must keep working for that order, and the same account must be
+// what the callback and the query reach (docs/domains/payments.md「后台配置」).
+func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in MerchantInput, settings []byte) error {
+	open, err := queries.OpenMerchantOrders(ctx, tx, uuid.UUID(in.ID))
+	if err != nil {
+		return fmt.Errorf("payments: read the merchant account's orders in flight: %w", err)
+	}
+	if !open {
+		return nil
+	}
+	var field string
+	switch {
+	case stored.Currency != in.Currency.String():
+		field = "/currency"
+	case stored.Settings != string(settings):
+		field = "/settings"
+	case in.Secrets != nil:
+		field = "/secrets"
+	default:
+		return nil
+	}
+	return &FieldError{field, "cannot change while the merchant account has orders still in flight"}
 }
 
 // validate has the plugin open the configuration it would run with; every method must be one the channel offers.

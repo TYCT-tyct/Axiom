@@ -25,6 +25,10 @@ type Demand struct {
 	Compaction                 bool         // server-side compaction or context management is on
 	InputItems                 catalog.ItemSet
 	ServiceTiers               catalog.ServiceTierSet
+	// TextTokens is the request's text counted in the tokens of the model family's own tokenizer, when the caller
+	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
+	// InputBound goes by TextBytes alone.
+	TextTokens int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -314,7 +318,8 @@ func InputBound(d Demand, m Model) (first, longest int64) {
 
 // The interim estimate of the input a charge takes when the upstream reported none (docs/domains/billing.md「用量来源与
 // 暂估」): text runs about 4 bytes a token, an image is taken at 1600 tokens and a file at 4096, unless the model's bound
-// is smaller.
+// is smaller. The text bytes are the rule only for a request counted in no tokenizer of its family; one that was counted
+// (Demand.TextTokens) takes its count instead.
 const (
 	InputBytesPerToken   = 4
 	estimatedImageTokens = 1600
@@ -322,11 +327,15 @@ const (
 )
 
 // InputEstimate is the input tokens of the request's first sampling as a charge takes them when the upstream reported
-// none: the text at InputBytesPerToken, each image and file at the lesser of its bound and the estimate, held to the
-// context. It never exceeds InputBound's first, which the reservation covers: every part is the lesser of the part's
-// bound and something. d.TextBytes is bytes.
+// none: the text at its own count when the caller counted it and at InputBytesPerToken otherwise, each image and file at
+// the lesser of its bound and the estimate, held to the context. It never exceeds InputBound's first, which the
+// reservation covers: every part is the lesser of the part's bound and something, and a token covers a byte or more, so
+// the text's count never passes its bytes. d.TextBytes is bytes.
 func InputEstimate(d Demand, m Model) int64 {
-	text := ceilDiv(d.TextBytes, InputBytesPerToken) // a token begun is charged
+	text := min(d.TextTokens, d.TextBytes) // a token covers a byte or more, and nothing counted keeps the rule below
+	if text <= 0 {
+		text = ceilDiv(d.TextBytes, InputBytesPerToken) // a token begun is charged
+	}
 	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
 	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
 	return min(m.ContextLength, add(text, add(images, files)))

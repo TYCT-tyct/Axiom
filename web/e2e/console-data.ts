@@ -90,7 +90,13 @@ function aMovement(n: number, over: Partial<Schemas["StatementRow"]> = {}): Sche
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
-    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
+    site: {
+      name: "Axiom",
+      currency: "USD",
+      key_prefix: "sk-ax-v1-",
+      api_base_url: "https://api.example.com",
+      registration: "invite",
+    },
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
@@ -115,10 +121,12 @@ export function emptyState(): MockState {
 const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
 
 // The longest values the contract allows, mixed over the rows: a 100-character key name, 200-character model names, a
-// 254-character email, the biggest amounts, a debt, and a lot of rows.
+// 254-character email, a 200-character API address, the biggest amounts, a debt, and a lot of rows.
 export function worstState(): MockState {
   const state = usualState();
   state.user.email = `${long("bartholomew.fitzgerald-", 200)}@northwind-industries-holdings.example.com`;
+  const host = [long("a", 63), long("b", 63), long("c", 63)].join(".");
+  state.site.api_base_url = `https://${host}.example.com`;
   state.balance = {
     balance: nano("-1500000000"),
     reserved: nano("9223372036854775807"),

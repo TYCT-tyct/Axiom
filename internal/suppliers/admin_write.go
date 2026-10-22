@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net/url"
 	"regexp"
@@ -22,6 +23,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/client"
+	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -204,8 +206,15 @@ func (a *Admin) Connect(ctx context.Context, tx pg.Tx, actor audit.Actor, r Conn
 }
 
 // ReplaceLogin seals a new login in place of the old one and has the sync log in with it: the supplier is `connecting`
-// again. The address and the account do not change. The audit entry names the actor and the reason, never the login.
+// again, and the state the old login left behind — a supplier it stopped, a task it halted — is put back to work
+// (persist.Wake). The address and the account do not change. The audit entry names the actor and the reason, never the
+// login.
 func (a *Admin) ReplaceLogin(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, c Credentials, reason string) (Supplier, error) {
+	// The state is woken first, so that its row is taken before the supplier's, the order every writer of the two takes
+	// them in (persist.Wake). A change refused below rolls the wake back with the rest.
+	if err := persist.Wake(ctx, tx, id, a.now()); err != nil {
+		return Supplier{}, fmt.Errorf("wake the sync: %w", err)
+	}
 	row, err := a.locked(ctx, tx, id)
 	if err != nil {
 		return Supplier{}, err
@@ -366,6 +375,82 @@ func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 		return Credential{}, err
 	}
 	return Credential{ID: id, Group: group, UpstreamKeyRef: keyRef, Status: "binding", MaxConcurrency: defaultMaxConcurrency}, nil
+}
+
+// Limits are a credential's concurrency and its ceiling on the upstream account's shared minute in this node.
+type Limits struct {
+	// MaxConcurrency is the calls in flight at once; at least one, or the key would serve nothing.
+	MaxConcurrency int
+	// RequestsPerMinute is the account RPM ceiling for selecting this credential; nil adds no ceiling.
+	RequestsPerMinute *int
+}
+
+// maxLimit is the largest limit both columns can hold: they are int4, and a number above it would fail there.
+const maxLimit = math.MaxInt32
+
+// valid is whether the columns can hold these limits: concurrency 1 to 2³¹-1, and requests a minute the same or none.
+func (l Limits) valid() bool {
+	if l.MaxConcurrency < 1 || l.MaxConcurrency > maxLimit {
+		return false
+	}
+	return l.RequestsPerMinute == nil || *l.RequestsPerMinute >= 1 && *l.RequestsPerMinute <= maxLimit
+}
+
+// SetLimits sets how much of a credential this node gives out, and records it. A credential already as asked changes
+// nothing and records nothing. The counts themselves are each node's own, in memory (README.md「并发与速率」), so the
+// change reaches this node at its next Reload and the others at theirs.
+func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, credentialID uuid.UUID, limits Limits, reason string) (Credential, error) {
+	if !limits.valid() {
+		return Credential{}, ErrLimits
+	}
+	if _, err := a.locked(ctx, tx, supplier); err != nil {
+		return Credential{}, err
+	}
+	concurrency := int32(limits.MaxConcurrency) //nolint:gosec // valid checked it is 1 to 2³¹-1
+	var perMinute *int32
+	if limits.RequestsPerMinute != nil {
+		n := int32(*limits.RequestsPerMinute) //nolint:gosec // valid checked it is 1 to 2³¹-1
+		perMinute = &n
+	}
+	q := store.New()
+	rows, err := q.GetCredentialOf(ctx, tx, store.GetCredentialOfParams{SupplierID: supplier, ID: credentialID})
+	if err != nil {
+		return Credential{}, fmt.Errorf("read the credential: %w", err)
+	}
+	if len(rows) == 0 {
+		return Credential{}, ErrNoCredential
+	}
+	row := rows[0]
+	if row.Status == "erased" {
+		return Credential{}, ErrStatusLocked
+	}
+	if row.MaxConcurrency == concurrency && sameLimit(row.RequestsPerMinute, perMinute) {
+		return credentialOf(row.ID, row.SupplierGroupID, row.UpstreamKeyRef, row.Status, row.CooldownUntil, row.ExpiresAt, row.MaxConcurrency, row.RequestsPerMinute), nil
+	}
+	changed, err := q.SetCredentialLimits(ctx, tx, store.SetCredentialLimitsParams{
+		SupplierID: supplier, ID: credentialID, MaxConcurrency: concurrency, RequestsPerMinute: perMinute,
+	})
+	if err != nil {
+		return Credential{}, fmt.Errorf("set the limits: %w", err)
+	}
+	if changed == 0 { // the row was there a moment ago, and the supplier's lock is held
+		return Credential{}, ErrNoCredential
+	}
+	if err := a.record(ctx, tx, actor, "credential.limits", supplier, reason, map[string]any{
+		"credential":               row.ID.String(),
+		"max_concurrency_from":     int(row.MaxConcurrency),
+		"max_concurrency_to":       int(concurrency),
+		"requests_per_minute_from": limited(row.RequestsPerMinute),
+		"requests_per_minute_to":   limited(perMinute),
+	}); err != nil {
+		return Credential{}, err
+	}
+	return credentialOf(row.ID, row.SupplierGroupID, row.UpstreamKeyRef, row.Status, row.CooldownUntil, row.ExpiresAt, concurrency, perMinute), nil
+}
+
+// sameLimit is whether two per-minute limits are the same, absent counting as a value.
+func sameLimit(a, b *int32) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 // Mapping is an alias: the supplier's name for a model, in a group or in the whole supplier.

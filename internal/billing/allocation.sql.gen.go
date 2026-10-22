@@ -38,7 +38,8 @@ func (q *Queries) AllocationState(ctx context.Context, db DBTX, accountID uuid.U
 
 const dueAccounts = `-- name: DueAccounts :many
 SELECT b.account_id FROM billing.credit_batches b
-WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > $2
+WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount
+    AND b.freeze_total - b.unfreeze_total < b.amount - b.consumed - b.expired AND b.account_id > $2
 GROUP BY b.account_id
 ORDER BY b.account_id
 LIMIT $3
@@ -85,13 +86,13 @@ func (q *Queries) ExpiryCursor(ctx context.Context, db DBTX) (uuid.UUID, error) 
 
 const legacyMovements = `-- name: LegacyMovements :many
 WITH page AS (
-    SELECT t.id, t.created_at, t.kind, t.request_id
+    SELECT t.id, t.created_at, t.kind, t.request_id, t.revision
     FROM billing.transactions t
     WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) > ($2::timestamptz, $3::uuid)
     ORDER BY t.created_at, t.id
     LIMIT $4
 )
-SELECT 0::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
+SELECT 0::bigint AS seq, p.created_at, p.id, p.kind, p.request_id, p.revision,
     coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
 FROM page p
 ORDER BY p.created_at, p.id
@@ -110,6 +111,7 @@ type LegacyMovementsRow struct {
 	ID        uuid.UUID
 	Kind      string
 	RequestID uuid.UUID
+	Revision  int64
 	Debit     int64
 }
 
@@ -138,6 +140,7 @@ func (q *Queries) LegacyMovements(ctx context.Context, db DBTX, arg LegacyMoveme
 			&i.ID,
 			&i.Kind,
 			&i.RequestID,
+			&i.Revision,
 			&i.Debit,
 		); err != nil {
 			return nil, err
@@ -151,28 +154,31 @@ func (q *Queries) LegacyMovements(ctx context.Context, db DBTX, arg LegacyMoveme
 }
 
 const liveBatches = `-- name: LiveBatches :many
-SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
-WHERE b.account_id = $1 AND b.consumed + b.expired < b.amount
+WHERE b.account_id = $1 AND b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired
 `
 
 type LiveBatchesRow struct {
-	ID        uuid.UUID
-	SiteID    uuid.UUID
-	Source    string
-	ExpiresAt *time.Time
-	Amount    int64
-	Consumed  int64
-	Expired   int64
-	OpenedSeq int64
-	OpenedAt  time.Time
-	OpenedID  uuid.UUID
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	Source        string
+	ExpiresAt     *time.Time
+	Amount        int64
+	Consumed      int64
+	Expired       int64
+	FreezeTotal   int64
+	UnfreezeTotal int64
+	Refunded      int64
+	OpenedSeq     int64
+	OpenedAt      time.Time
+	OpenedID      uuid.UUID
 }
 
 // The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
-// before the sequence). consumed and expired are what the allocation has stored: they trail the ledger until the
+// before the sequence). Consumption, expiry and freeze totals are the replay cache: they trail the ledger until the
 // account is replayed. Served by credit_batches_by_account.
 func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]LiveBatchesRow, error) {
 	rows, err := db.Query(ctx, liveBatches, accountID)
@@ -191,6 +197,9 @@ func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID)
 			&i.Amount,
 			&i.Consumed,
 			&i.Expired,
+			&i.FreezeTotal,
+			&i.UnfreezeTotal,
+			&i.Refunded,
 			&i.OpenedSeq,
 			&i.OpenedAt,
 			&i.OpenedID,
@@ -207,13 +216,13 @@ func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID)
 
 const movements = `-- name: Movements :many
 WITH page AS (
-    SELECT t.id, t.created_at, t.seq, t.kind, t.request_id
+    SELECT t.id, t.created_at, t.seq, t.kind, t.request_id, t.revision
     FROM billing.transactions t
     WHERE t.account_id = $1 AND t.seq > $2::bigint AND t.seq <= $3::bigint
     ORDER BY t.seq
     LIMIT $4
 )
-SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id,
+SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id, p.revision,
     coalesce((SELECT sum(e.amount) FROM billing.entries e WHERE e.transaction_id = p.id AND e.book = 'user_balance'), 0)::bigint AS debit
 FROM page p
 ORDER BY p.seq
@@ -232,6 +241,7 @@ type MovementsRow struct {
 	ID        uuid.UUID
 	Kind      string
 	RequestID uuid.UUID
+	Revision  int64
 	Debit     int64
 }
 
@@ -257,6 +267,7 @@ func (q *Queries) Movements(ctx context.Context, db DBTX, arg MovementsParams) (
 			&i.ID,
 			&i.Kind,
 			&i.RequestID,
+			&i.Revision,
 			&i.Debit,
 		); err != nil {
 			return nil, err
@@ -324,19 +335,32 @@ func (q *Queries) SaveAllocation(ctx context.Context, db DBTX, arg SaveAllocatio
 }
 
 const saveBatches = `-- name: SaveBatches :exec
-UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired
-FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::bigint[]) AS consumed, unnest($3::bigint[]) AS expired) v
+UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired,
+    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded
+FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::bigint[]) AS consumed, unnest($3::bigint[]) AS expired,
+    unnest($4::bigint[]) AS freeze_total, unnest($5::bigint[]) AS unfreeze_total,
+    unnest($6::bigint[]) AS refunded) v
 WHERE b.id = v.id
 `
 
 type SaveBatchesParams struct {
-	Ids      []uuid.UUID
-	Consumed []int64
-	Expired  []int64
+	Ids           []uuid.UUID
+	Consumed      []int64
+	Expired       []int64
+	FreezeTotal   []int64
+	UnfreezeTotal []int64
+	Refunded      []int64
 }
 
 func (q *Queries) SaveBatches(ctx context.Context, db DBTX, arg SaveBatchesParams) error {
-	_, err := db.Exec(ctx, saveBatches, arg.Ids, arg.Consumed, arg.Expired)
+	_, err := db.Exec(ctx, saveBatches,
+		arg.Ids,
+		arg.Consumed,
+		arg.Expired,
+		arg.FreezeTotal,
+		arg.UnfreezeTotal,
+		arg.Refunded,
+	)
 	return err
 }
 

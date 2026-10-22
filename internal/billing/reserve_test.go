@@ -110,7 +110,7 @@ func (b *bank) consistent() {
 		"windows": `SELECT count(*) FROM billing.spend s WHERE s.reserved <> coalesce((SELECT sum(` + held + `)
 			FROM billing.reservations r WHERE ` + window + `), 0)
 			OR s.spent <> coalesce((SELECT sum(r.charged) FROM billing.reservations r WHERE ` + window + `), 0)`,
-		"floor": `SELECT count(*) FROM billing.balances WHERE balance - reserved < floor`,
+		"floor": `SELECT count(*) FROM billing.balances WHERE balance - frozen - reserved < floor`,
 	} {
 		if n := b.count(query); n != 0 {
 			b.t.Errorf("%s inconsistent: %d", name, n)

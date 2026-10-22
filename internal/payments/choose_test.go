@@ -126,9 +126,9 @@ func TestChooseGivesTheLastQuotaOnlyToWhatFits(t *testing.T) {
 	}
 }
 
-// TestChooseBoundsTheWaitForTheUsageRow holds the usage row in one transaction: another order gives up at the lock
+// TestCreateOrderBoundsTheWaitForUsageRow holds the usage row in one transaction: another order gives up at the lock
 // timeout instead of queueing behind it.
-func TestChooseBoundsTheWaitForTheUsageRow(t *testing.T) {
+func TestCreateOrderBoundsTheWaitForUsageRow(t *testing.T) {
 	w := newWorld(t)
 	w.open(w.siteA, RoundRobin)
 	m := w.mustSave(siteScope(w.siteA), w.input(w.siteA))
@@ -142,7 +142,7 @@ func TestChooseBoundsTheWaitForTheUsageRow(t *testing.T) {
 		})
 	}()
 	<-held
-	_, err := w.choose(w.accountA(), w.site(w.siteA, "CNY"), "alipay", yuan)
+	_, _, err := w.place(yuan, "locked-usage")
 	close(release)
 	if pg.SQLState(err) != "55P03" {
 		t.Fatalf("waited for the row: %v", err)

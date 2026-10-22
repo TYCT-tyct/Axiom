@@ -40,6 +40,12 @@ type chatStream struct {
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	return newChatStreamReader(u, o, charge)
+}
+
+// newChatStreamReader is the reader behind newChatStream, for the converters that hold it directly: theirs is not the
+// format the client reads, so it rewrites nothing and they set converting (README.md「跨格式的流」).
+func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error) *chatStream {
 	s := &chatStream{choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
 	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"} // quoted by init already

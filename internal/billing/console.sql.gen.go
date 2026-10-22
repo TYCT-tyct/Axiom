@@ -14,13 +14,14 @@ import (
 
 const readBalance = `-- name: ReadBalance :many
 
-SELECT balance, floor, reserved FROM billing.balances WHERE account_id = $1
+SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = $1
 `
 
 type ReadBalanceRow struct {
 	Balance  int64
 	Floor    int64
 	Reserved int64
+	Frozen   int64
 }
 
 // What the console reads of an account's money (README.md「控制台的读取」). They run in the account's scope and take no
@@ -34,7 +35,12 @@ func (q *Queries) ReadBalance(ctx context.Context, db DBTX, accountID uuid.UUID)
 	var items []ReadBalanceRow
 	for rows.Next() {
 		var i ReadBalanceRow
-		if err := rows.Scan(&i.Balance, &i.Floor, &i.Reserved); err != nil {
+		if err := rows.Scan(
+			&i.Balance,
+			&i.Floor,
+			&i.Reserved,
+			&i.Frozen,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
