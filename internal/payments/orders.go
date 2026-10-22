@@ -493,6 +493,7 @@ type event struct {
 
 // cut is raw as far as the event's column holds.
 func cut(raw string) string {
+	raw = strings.ReplaceAll(raw, "\x00", "")
 	if len(raw) <= maxRaw {
 		return strings.ToValidUTF8(raw, "")
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"uuid"
@@ -55,13 +56,41 @@ func TestCancellationReleasesTheCreationDay(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})
 	m := w.waiting()
 	o := w.mustPlace(yuan, "yesterday")
-	w.exec(fmt.Sprintf(`UPDATE payments.orders SET created_at = transaction_timestamp() - interval '1 day' WHERE id = '%s';
+	w.exec(fmt.Sprintf(`UPDATE payments.orders SET created_at = created_at - interval '1 day' WHERE id = '%s';
 		UPDATE payments.merchant_usage SET day = day - 1 WHERE merchant_id = '%s'`, uuid.UUID(o.ID), m.ID))
 	if _, err := w.p.Cancel(t.Context(), w.accountA(), o.ID); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(w.accountA(), "SELECT count(*) FROM payments.merchant_usage WHERE used <> 0"); n != 0 {
 		t.Fatalf("%d reservations survived cancellation across midnight", n)
+	}
+}
+
+func TestChannelRejectionFreesReservation(t *testing.T) {
+	w := newTestWorld(t, fakePlugin{create: func(CreateRequest) (Checkout, error) {
+		return Checkout{}, &Rejected{"declined", "bad\x00" + strings.Repeat("中", maxRaw)}
+	}})
+	m := w.waiting()
+	o, _, err := w.place(yuan, "rejected")
+	if !errors.Is(err, errRefused) || errors.Is(err, ErrUnconfirmed) {
+		t.Fatalf("definite rejection became unknown: %v", err)
+	}
+	if state, _, _ := w.stored(o.ID); state != "failed" {
+		t.Fatalf("state %s", state)
+	}
+	if w.used(m.ID) != 0 || w.events(o.ID) != 2 {
+		t.Fatalf("usage %d, events %d", w.used(m.ID), w.events(o.ID))
+	}
+	var raw string
+	err = w.tx(w.accountA(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT raw FROM payments.order_events WHERE order_id = $1 AND kind = 'reject'",
+			uuid.UUID(o.ID)).Scan(&raw)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > maxRaw || strings.ContainsRune(raw, 0) {
+		t.Fatalf("unsafe rejection event: %d bytes", len(raw))
 	}
 }
 
