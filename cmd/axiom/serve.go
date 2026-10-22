@@ -377,6 +377,13 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
+	pay, err := payments.Open(payments.Config{
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Proxies: p.cfg.trustedProxies,
+	})
+	if err != nil {
+		return nodeRoutes{}, err
+	}
+	public = withPaymentCallbacks(public, pay.Notify())
 	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil

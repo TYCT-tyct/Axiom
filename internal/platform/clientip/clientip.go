@@ -9,6 +9,15 @@ import (
 	"strings"
 )
 
+// Group is the source address a rate budget counts: mapped IPv4 is IPv4, and an IPv6 allocation shares its /64.
+func Group(ip netip.Addr) netip.Addr {
+	ip = ip.Unmap().WithZone("")
+	if ip.Is6() {
+		return netip.PrefixFrom(ip, 64).Masked().Addr()
+	}
+	return ip
+}
+
 // Addr is the address r came from. Only the connection's own address is believed, unless it is a trusted proxy
 // (AXIOM_TRUSTED_PROXIES): then X-Forwarded-For is read from its right, past the proxies, to the first address that is
 // not one (a client can put anything at the left of the header, but not past the proxy that appends to it). trusted is

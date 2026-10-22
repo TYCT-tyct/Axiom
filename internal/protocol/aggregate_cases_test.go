@@ -355,6 +355,53 @@ func TestAggregateResponsesTypes(t *testing.T) {
 	}
 }
 
+// TestAggregateMessagesTypes: a block's type counts as the type it spells, escapes included, so a delta of that kind
+// is the block's own; the type reaches the reply as the upstream wrote it, and one that is null names no kind of block
+// and is written as it came (README.md「非流式聚合」).
+func TestAggregateMessagesTypes(t *testing.T) {
+	head := messageStart(`{"input_tokens":3}`)
+	tail := messageDelta(`{"output_tokens":2}`) + messageStop
+	for _, c := range []struct {
+		name   string
+		stream string
+		want   map[string]any
+	}{
+		{
+			"an escaped text type",
+			head + startBlock(0, `{"type":"te\u0078t","text":""}`) + deltaOf(0, `{"type":"text_delta","text":"Hi"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "text", "text": "Hi"},
+		},
+		{
+			"an escaped thinking type",
+			head + startBlock(0, `{"type":"think\u0069ng","thinking":"","signature":""}`) +
+				deltaOf(0, `{"type":"thinking_delta","thinking":"hm"}`) + deltaOf(0, `{"type":"signature_delta","signature":"S"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "thinking", "thinking": "hm", "signature": "S"},
+		},
+		{
+			"an escaped tool use type",
+			head + startBlock(0, `{"type":"tool_\u0075se","id":"t","name":"f","input":{}}`) + input(0, `{\"q\":1}`) + stopBlock(0) + tail,
+			map[string]any{"type": "tool_use", "id": "t", "name": "f", "input": map[string]any{"q": 1.0}},
+		},
+		{
+			"an escaped server tool use type",
+			head + startBlock(0, `{"type":"server_tool_\u0075se","id":"s","name":"web_search","input":{}}`) + input(0, `{\"query\":\"q\"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "server_tool_use", "id": "s", "name": "web_search", "input": map[string]any{"query": "q"}},
+		},
+		{
+			"a type that is null",
+			head + startBlock(0, `{"type":null,"text":"x"}`) + stopBlock(0) + tail,
+			map[string]any{"type": nil, "text": "x"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			content := objects(aggregateAll(t, protocol.Messages, c.stream)["content"])
+			if len(content) != 1 || !cmp.Equal(content[0], c.want) {
+				t.Errorf("content %v, want %v", content, c.want)
+			}
+		})
+	}
+}
+
 // finishOnly is a Chat stream of n choices that only finish, per chunk of them.
 func finishOnly(n, per int) string {
 	var s strings.Builder

@@ -261,6 +261,10 @@ func TestNativeChatUsesJSONValuesRegardlessOfSpelling(t *testing.T) {
 	}{
 		{protocol.Messages, `"messages":[{"role":"user","content":[{"type":"t\u0065xt","text":"hi"}]}],"service_tier":"stand\u0061rd_only","thinking":{"type":"dis\u0061bled"},"tool_choice":{"type":"\u0061ny"}`},
 		{protocol.Responses, `"input":[{"type":"mess\u0061ge","role":"assistant","content":[{"type":"output_t\u0065xt","text":"hi","annotations":[ ]}],"status":"compl\u0065ted"}],"reasoning":{"summary":"\u0061uto"},"tools":[{"type":"funct\u0069on","name":"f","strict":false}]`},
+		{protocol.Messages, `"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[{"type":"think\u0069ng","thinking":"why","signature":"opaque"},{"type":"tool_\u0075se","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_\u0072esult","tool_use_id":"c1","content":"ok"}]}],"service_tier":"\u0061uto"`},
+		{protocol.Messages, `"messages":[{"role":"user","content":"Hi"}],"output_config":{"format":{"type":"json_sch\u0065ma","schema":{"type":"object"}}}`},
+		{protocol.Responses, `"input":"Hi","reasoning":{"summary":"\u0061uto"},"text":{"format":{"type":"te\u0078t"}}`},
+		{protocol.Responses, `"input":"Hi","text":{"format":{"type":"json_sch\u0065ma","name":"r","schema":{"type":"object"}}}`},
 	} {
 		body := []byte(chatBody(tc.members))
 		canonical, err := jsonx.MarshalCanonical(jsonx.Raw(body))
