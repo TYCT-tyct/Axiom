@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
@@ -41,6 +44,33 @@ func keySettingsOf(t *testing.T, database pgtest.Database, held, perHour int) {
 	}
 }
 
+// createRacing makes a call key of a1 and, once the checks have passed, keeps its transaction open until every other
+// create has either passed them too or is waiting on a lock: so creates that the checks do not order are all in the
+// transaction together, and creates that they do order are seen waiting. Nothing here waits for time to pass.
+func createRacing(t *testing.T, db *pg.DB, s *accounts.Service, arrived *atomic.Int32, creates int) error {
+	t.Helper()
+	return db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error {
+		if _, err := s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
+			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), CreatedBy: accounts.UserID(u1), Name: "At once",
+		}); err != nil {
+			return err
+		}
+		arrived.Add(1)
+		for t.Context().Err() == nil {
+			waiting, err := strconv.Atoi(texts(t, db, platform,
+				"SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")[0])
+			if err != nil {
+				return err
+			}
+			if int(arrived.Load())+waiting >= creates {
+				return nil
+			}
+			runtime.Gosched()
+		}
+		return t.Context().Err()
+	})
+}
+
 // TestKeyCapHoldsUnderConcurrentCreates: a site that allows two call keys an account, whose account holds one, makes
 // one more when four creates arrive at once: the count that admits a key is read in the account's row's turn, in the
 // transaction that inserts, so the other three wait and then see the key the first one made.
@@ -51,10 +81,11 @@ func TestKeyCapHoldsUnderConcurrentCreates(t *testing.T) {
 	s := node(t, db, hashKeys(t, 1), nil)
 	const at = 4
 	errs := make([]error, at)
+	var arrived atomic.Int32
 	var wg sync.WaitGroup
 	for i := range errs {
 		wg.Go(func() {
-			errs[i] = tryKey(t, db, s, "At once", accounts.WorkspaceID(w1))
+			errs[i] = createRacing(t, db, s, &arrived, at)
 		})
 	}
 	wg.Wait()
