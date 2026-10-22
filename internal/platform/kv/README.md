@@ -166,7 +166,7 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 ## 测试
 
 - **真实 Valkey**：`withcluster` 在一次 `just test` 里与 PostgreSQL 一起起一个 Valkey 容器（同一镜像、同一份 ACL 和配置），地址经 `KVTEST_URL` 传入，和 `PGTEST_CLUSTER_URL` 一样用 `os.Environ` 读，不进测试缓存键；没有这个变量时 `kvtest` 自己起容器。用例各用随机的 `ns`。改服务端状态的用例（`CLIENT PAUSE`、重启、填满内存、改 ACL 或配置）用自己的容器。
-- **超时**：`send_test.go` 的 `TestTimeoutReturnsAndTheBreakerRecovers` 用 `testing/synctest` 和受控假服务端验证访问恰在生产期限 `kv.Timeout`（20ms）返回不可用、熔断打开后不再发送、迟到回复不提前关闭熔断、打开期后半开探测成功并恢复正常访问，以及 `breaker_open` 从 1 回到 0；生产期限的准确耗时只在虚拟时间里断言。同文件的队列测试验证无空位时仍按期限返回、等到空位才发送，以及在途数上限。真实 Valkey 的集成验证在 `outage_test.go`：另一条连接执行 `CLIENT PAUSE <很长> WRITE` 阻塞写脚本（`INFO`、`TIME` 照常），放行时显式 `CLIENT UNPAUSE`；`TestEveryAccessReturns` 验证大量并发访问都返回、到达服务端的不超过在途上限，`TestCallerGivingUpDoesNotOpenTheBreaker` 验证调用方先取消记作跳过、不推开熔断，这两个用例不验证恢复。真实服务端的正常回复使用 `kvtest` 的一分钟默认期限；熔断和时钟偏差的测试用虚拟时间或可注入时钟，不按墙钟判成败。
+- **超时**：`send_test.go` 的 `TestTimeoutReturnsAndTheBreakerRecovers` 用 `testing/synctest` 和受控假服务端验证访问恰在生产期限 `kv.Timeout`（20ms）返回不可用、熔断打开后不再发送、迟到回复不提前关闭熔断、打开期后半开探测成功并恢复正常访问，以及 `breaker_open` 从 1 回到 0；生产期限的准确耗时只在虚拟时间里断言。同文件的队列测试验证无空位时仍按期限返回、等到空位才发送，以及在途数上限。真实 Valkey 的集成验证在 `outage_test.go`：另一条连接执行 `CLIENT PAUSE <很长> WRITE` 阻塞写脚本（`INFO`、`TIME` 照常），放行时显式 `CLIENT UNPAUSE`；`TestEveryAccessReturns` 验证大量并发访问都返回、到达服务端的不超过在途上限，`TestCallerGivingUpDoesNotOpenTheBreaker` 验证调用方先取消记作跳过、不推开熔断，这两个用例不验证恢复。`TestLaterDoesNotWaitForStalledWrites` 用同一个受控服务端扣住全部 512 个在途位置，验证继续投递不推进虚拟时钟、队列最多 4096 条且溢出计数。真实服务端的正常回复使用 `kvtest` 的一分钟默认期限；熔断和时钟偏差的测试用虚拟时间或可注入时钟，不按墙钟判成败。
 - **重启**：停止再启动容器，断言期间请求照常完成、恢复后重新连上，计数从零开始。
 - **内存满**：把容器的 `maxmemory` 设得很小并写满，断言新写入得到 OOM、按出错走兜底，已有的登录桶仍在；超过 70% 后粘性写入被丢弃。
 - **时钟**：见「时钟」；另测启动时偏差超过 1s 不启动。

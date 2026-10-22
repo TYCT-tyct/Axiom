@@ -258,8 +258,8 @@ func (s *session) conclude(ctx context.Context, e ended) {
 // stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
 // was not already there (docs/domains/routing.md「会话粘性」). A call that delivered nothing writes nothing and forgets
 // nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
-// ending, so the client's next request, which can follow the ending at once, finds the entry; while the table is in the
-// process it is one map write, not worth a goroutine (a table in the cache is written from the background, README.md「并发、背压与共享状态」).
+// ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
+// next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
 func (s *session) stick() {
 	if len(s.ends) == 0 {
 		return

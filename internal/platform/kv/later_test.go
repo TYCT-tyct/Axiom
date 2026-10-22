@@ -195,3 +195,36 @@ func TestLaterSplitsAtTheOutstandingLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, server := stuckClient(maxOutstanding)
+		c.later = make(chan Cmd, laterCapacity)
+		c.accounts.fullAt = make(map[uuid.UUID]time.Time)
+		reader := sdkmetric.NewManualReader()
+		c.m = newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+		cmd := Set("ax:test", "endpoint", time.Hour)
+		for range maxOutstanding {
+			c.later <- cmd
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		c.done.Go(func() { c.writeLater(ctx) })
+		synctest.Wait() // the first batch is waiting for replies the server has withheld
+		if server.sent.Load() != maxOutstanding {
+			t.Fatal("the writer did not reach the stalled server")
+		}
+		start := time.Now()
+		for n := range laterCapacity + 1 {
+			c.Later(uuid.UUID{byte(n), byte(n >> 8)}, cmd)
+		}
+		if time.Now() != start || len(c.later) != laterCapacity || dropped(t, reader, dropQueue) != 1 {
+			t.Fatal("offers waited, grew the queue, or failed to count the overflow")
+		}
+		if server.sent.Load() != maxOutstanding {
+			t.Fatal("a second batch escaped while all command slots were held")
+		}
+		cancel()
+		close(server.release)
+		c.done.Wait()
+	})
+}

@@ -38,6 +38,7 @@ var buildable = func() valkey.Builder {
 		ClientSetInfo: valkey.DisableClientSetInfo,
 	}
 	client, _ := valkey.NewClient(option) //nolint:errcheck // the refusal is what is wanted: nothing is sent through it
+	defer client.Close()
 	return client.B()
 }()
 
