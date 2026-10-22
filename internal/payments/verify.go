@@ -73,8 +73,8 @@ func (p *Payments) queryPending(ctx context.Context) error {
 		return fmt.Errorf("payments: read orders to query: %w", err)
 	}
 	for _, id := range due {
-		if ctx.Err() != nil {
-			break
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		p.pollOrder(ctx, OrderID(id))
 	}
