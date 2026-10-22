@@ -5,8 +5,7 @@ import { consoleApi, unwrap } from "@axiom/api";
 // statementCsv is the account's statement as the server gives it: comma-separated text, newest first.
 export const statementCsv = () => unwrap(consoleApi.GET("/api/console/v1/statement.csv", { parseAs: "text" }));
 
-// statementName is what the saved file is called, the day it was taken, so two exports of one account do not overwrite
-// each other. It matches the name the server gives the download itself.
+// The filename uses the same UTC day as the server's Content-Disposition.
 export function statementName(now = new Date()) {
   return `statement-${now.toISOString().slice(0, 10)}.csv`;
 }

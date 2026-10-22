@@ -15,8 +15,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// statementExport is how many movements a download holds: enough for months of a busy account's charges, and still a
-// file of about a megabyte. An account with more pages through the list for the rest.
+// statementExport bounds response memory independently of the account's history.
 const statementExport = 10_000
 
 // statementRowOf is a statement row as the contract gives it.

@@ -25,8 +25,8 @@ LEFT JOIN billing.spend s ON s.subject = k.key_id
 GROUP BY k.key_id;
 
 -- name: StatementPage :many
--- Balance and refund-hold events share the ledger's account commit order. Both index regions are bounded before
--- summing entries. Freeze/unfreeze revisions are cumulative per batch and kind: the unique event index finds the
+-- Balance and refund-hold events share the ledger's account commit order. Both index regions stop at a page of
+-- visible events. Freeze/unfreeze revisions are cumulative per batch and kind: the unique event index finds the
 -- previous revision without scanning the account history. Lateral aggregation keeps entry lookups on the transaction
 -- index even before ANALYZE has statistics; a hash of all entries per CSV page can exceed the request deadline.
 -- The counters and rows use one snapshot.
