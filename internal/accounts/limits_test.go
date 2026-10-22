@@ -68,7 +68,7 @@ func attemptLimits(t *testing.T, email string, clock *clock, s *accounts.Service
 		{"a second wrong password", 0, ip(4), email, "wrong password!", accounts.ErrBadCredentials},
 		{"the right password after two failures", 0, ip(5), email, password, accounts.ErrTooManyAttempts},
 		{"another email", 0, ip(5), "nobody@example.com", password, accounts.ErrBadCredentials},
-		{"the right password once one failure has refilled", emailWindowPerFailure(2), ip(6), email, password, nil},
+		{"the right password once one failure has refilled", emailFailureInterval, ip(6), email, password, nil},
 		{"1st from a fresh IP", 0, ip(7), email, password, nil},
 		{"2nd from that IP", 0, ip(7), email, password, nil},
 		{"3rd from that IP", 0, ip(7), email, password, nil},
@@ -90,8 +90,8 @@ func attemptLimits(t *testing.T, email string, clock *clock, s *accounts.Service
 	}
 }
 
-// emailWindowPerFailure is how long one of n failures in the email's 15 minutes takes to refill.
-func emailWindowPerFailure(n int) time.Duration { return 15 * time.Minute / time.Duration(n) }
+// emailFailureInterval is one refill under the tests' two-failure limit.
+const emailFailureInterval = 15 * time.Minute / 2
 
 // TestCodeFailuresSpanChallenges: wrong codes count against the user across pending sessions, so signing in again
 // does not buy more guesses; at the default ten an hour even a right code waits, until one has refilled.

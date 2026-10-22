@@ -107,7 +107,7 @@ func TestFailedSignInsAreCountedAcrossNodes(t *testing.T) {
 		}
 	}
 	// A second more than one failure's refill, so that the two nodes' clocks, milliseconds apart, cannot decide it.
-	x.clock.Advance(emailWindowPerFailure(2) + time.Second)
+	x.clock.Advance(emailFailureInterval + time.Second)
 	if err := b.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -186,14 +186,14 @@ func TestLoginLimitsFallBackToTheShare(t *testing.T) {
 			t.Errorf("%d %s: %v, want %v", i, c.name, err, c.want)
 		}
 	}
-	x.clock.Advance(emailWindowPerFailure(2))
+	x.clock.Advance(emailFailureInterval)
 	if err := s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := signIn(1, password); !errors.Is(err, accounts.ErrTooManyAttempts) {
 		t.Fatalf("one global refill interval must not refill a node's share: %v", err)
 	}
-	x.clock.Advance(emailWindowPerFailure(2)) // a fallback token refills after N global intervals
+	x.clock.Advance(emailFailureInterval) // a fallback token refills after N global intervals
 	if err := s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}

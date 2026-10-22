@@ -66,6 +66,7 @@ func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 	// A canceled access deterministically uses fallback without a race against a real server's deadline.
 	away, cancel := context.WithCancel(t.Context())
 	cancel()
+	contexts := []context.Context{t.Context(), away}
 	rng := rand.New(rand.NewPCG(321, 2)) //nolint:gosec // G404: test data
 	for op := range 100 {
 		l := s.emailLimit(site, fmt.Sprintf("%d@example.com", op), defaultLimits)
@@ -78,14 +79,7 @@ func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 		if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
 			t.Fatal("seed the other caller's local attempt", wait)
 		}
-		takeCtx, giveCtx := t.Context(), t.Context()
-		localTake, localGive := rng.IntN(2) == 0, rng.IntN(2) == 0
-		if localTake {
-			takeCtx = away
-		}
-		if localGive {
-			giveCtx = away
-		}
+		takeCtx, giveCtx := contexts[rng.IntN(2)], contexts[rng.IntN(2)]
 		at, wait := takeAttempt(s, takeCtx, l)
 		if wait != 0 {
 			t.Fatalf("op %d: take waited %v", op, wait)
@@ -93,22 +87,28 @@ func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 		giveAttempt(s, giveCtx, l, at)
 		// Local takes always return locally. A shared take whose give failed stays spent; the other store is untouched.
 		sharedWant := 1
-		if !localTake && localGive {
+		if takeCtx != away && giveCtx == away {
 			sharedWant = 0
 		}
-		if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
-			t.Fatalf("op %d: local refund missing: %v", op, wait)
-		}
-		if wait := l.bucket.take(l.key, l.size, l.per, now); wait == 0 {
-			t.Fatalf("op %d: refunded an unspent local attempt", op)
-		}
-		for range sharedWant {
-			if wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now); !ok || wait != 0 {
-				t.Fatalf("op %d: shared refund missing: %v, %v", op, wait, ok)
+		assertAttemptsRemaining(t, 1, func() time.Duration { return l.bucket.take(l.key, l.size, l.per, now) })
+		assertAttemptsRemaining(t, sharedWant, func() time.Duration {
+			wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now)
+			if !ok {
+				t.Fatalf("op %d: shared store did not answer", op)
 			}
+			return wait
+		})
+	}
+}
+
+func assertAttemptsRemaining(t *testing.T, n int, take func() time.Duration) {
+	t.Helper()
+	for range n {
+		if wait := take(); wait != 0 {
+			t.Fatalf("missing refund: waited %v", wait)
 		}
-		if wait, ok := s.spendShared(t.Context(), key, l.size, l.per, now); !ok || wait == 0 {
-			t.Fatalf("op %d: refunded an unspent shared attempt: %v, %v", op, wait, ok)
-		}
+	}
+	if wait := take(); wait == 0 {
+		t.Fatal("refunded an unspent attempt")
 	}
 }

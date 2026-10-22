@@ -16,7 +16,7 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 )
 
-func TestLoginKeyDerivationAndSubjects(t *testing.T) {
+func TestLoginKeyDerivation(t *testing.T) {
 	t.Parallel()
 	for _, size := range []int{0, 31, 33} {
 		if _, err := deriveLoginKey(make([]byte, size)); err == nil {
@@ -37,6 +37,11 @@ func TestLoginKeyDerivationAndSubjects(t *testing.T) {
 	if err != nil || key == other || key == [loginKeyLen]byte(master) {
 		t.Fatalf("login key must be derived and change with the master: %v", err)
 	}
+}
+
+func TestLoginKeysSeparateSubjects(t *testing.T) {
+	t.Parallel()
+	key, other := [loginKeyLen]byte{1}, [loginKeyLen]byte{2}
 	s := &Service{cache: kvtest.New(t).Open(t, kv.Deps{}), loginKey: key}
 	site := SiteID(uuid.New())
 	seen := make(map[string]bool)
@@ -62,8 +67,10 @@ func TestLoginKeyDerivationAndSubjects(t *testing.T) {
 func TestAttemptIPNormalization(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ input, want string }{
-		{"203.0.113.1", "203.0.113.1"}, {"::ffff:203.0.113.1", "203.0.113.1"},
-		{"2001:db8:1:2:ffff::1", "2001:db8:1:2::"}, {"fe80::1234%eth0", "fe80::"},
+		{"203.0.113.1", "203.0.113.1"},
+		{"::ffff:203.0.113.1", "203.0.113.1"},
+		{"2001:db8:1:2:ffff::1", "2001:db8:1:2::"},
+		{"fe80::1234%eth0", "fe80::"},
 	} {
 		if got := normalIP(netip.MustParseAddr(c.input)); got != netip.MustParseAddr(c.want) {
 			t.Errorf("normalIP(%q) = %s, want %s", c.input, got, c.want)
