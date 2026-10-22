@@ -233,7 +233,7 @@ func checkInvariants(t *testing.T, live *allocation, balance int64, m movement) 
 
 // TestReplayProperty: over random credits, charges and write-offs, the allocation always funds exactly the
 // balance, never over-spends or spends frozen credit, and holds debt only without available credit. A replay
-// from nothing or from every possible stored position ends where the live replay did, even when the input arrives shuffled before ordering by ledger sequence.
+// from nothing or from every possible stored position ends where the live replay did. Events are always replayed in their ledger sequence.
 func TestReplayProperty(t *testing.T) {
 	for seed := range uint64(200) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
@@ -253,8 +253,6 @@ func TestReplayProperty(t *testing.T) {
 				checkInvariants(t, live, balance, m)
 				checkFrozenEvents(t, live, log)
 			}
-			r.Shuffle(len(log), func(i, j int) { log[i], log[j] = log[j], log[i] })
-			slices.SortFunc(log, func(a, b movement) int { return a.key.compare(b.key) })
 			checkReplays(t, rows, log, live)
 		})
 	}

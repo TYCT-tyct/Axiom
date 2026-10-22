@@ -19,6 +19,7 @@ ALTER TABLE billing.credit_batches
     ADD COLUMN IF NOT EXISTS freeze_total bigint NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS unfreeze_total bigint NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS refunded bigint NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS refund_with_fee boolean,
     DROP CONSTRAINT IF EXISTS credit_batches_within_amount,
     DROP CONSTRAINT IF EXISTS credit_batches_freezes_check,
     ADD CONSTRAINT credit_batches_freezes_check CHECK (
@@ -26,8 +27,8 @@ ALTER TABLE billing.credit_batches
         AND unfreeze_total <= freeze_total AND refunded <= freeze_total - unfreeze_total
         AND consumed <= amount - expired
         AND freeze_total - unfreeze_total <= amount - expired - consumed
-        AND (source = 'paid' OR freeze_total = 0)) NOT VALID;
-GRANT UPDATE (freeze_total, unfreeze_total, refunded) ON billing.credit_batches TO axiom_app;
+        AND (source = 'paid' OR freeze_total = 0 AND refund_with_fee IS NULL)) NOT VALID;
+GRANT UPDATE (freeze_total, unfreeze_total, refunded, refund_with_fee) ON billing.credit_batches TO axiom_app;
 
 ALTER TABLE billing.balances VALIDATE CONSTRAINT balances_frozen_check;
 ALTER TABLE billing.transactions VALIDATE CONSTRAINT transactions_kind_check;

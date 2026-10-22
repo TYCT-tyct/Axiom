@@ -25,3 +25,51 @@ func (q *Queries) AddFrozen(ctx context.Context, db DBTX, arg AddFrozenParams) e
 	_, err := db.Exec(ctx, addFrozen, arg.Delta, arg.AccountID)
 	return err
 }
+
+const refundHistory = `-- name: RefundHistory :one
+SELECT coalesce(b.refund_with_fee, $1::boolean)::boolean AS with_fee,
+    coalesce(h.returned, 0)::bigint AS returned, coalesce(h.fee, 0)::bigint AS fee
+FROM billing.credit_batches b
+LEFT JOIN LATERAL (
+    SELECT -sum(e.amount) FILTER (WHERE e.book = 'cash') AS returned,
+        sum(e.amount) FILTER (WHERE e.book = 'fee_income') AS fee
+    FROM billing.transactions t JOIN billing.entries e ON e.transaction_id = t.id
+    WHERE t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'refund'
+) h ON true
+WHERE b.id = $2
+`
+
+type RefundHistoryParams struct {
+	WithFee bool
+	Batch   uuid.UUID
+}
+
+type RefundHistoryRow struct {
+	WithFee  bool
+	Returned int64
+	Fee      int64
+}
+
+// Read under the balance lock. The ledger is authoritative for cash and fees; the first successful refund fixes policy.
+func (q *Queries) RefundHistory(ctx context.Context, db DBTX, arg RefundHistoryParams) (RefundHistoryRow, error) {
+	row := db.QueryRow(ctx, refundHistory, arg.WithFee, arg.Batch)
+	var i RefundHistoryRow
+	err := row.Scan(&i.WithFee, &i.Returned, &i.Fee)
+	return i, err
+}
+
+const setRefundPolicy = `-- name: SetRefundPolicy :exec
+WITH policy AS (SELECT $2::boolean AS with_fee)
+UPDATE billing.credit_batches b SET refund_with_fee = p.with_fee FROM policy p
+WHERE b.id = $1 AND b.refund_with_fee IS NULL
+`
+
+type SetRefundPolicyParams struct {
+	Batch   uuid.UUID
+	WithFee bool
+}
+
+func (q *Queries) SetRefundPolicy(ctx context.Context, db DBTX, arg SetRefundPolicyParams) error {
+	_, err := db.Exec(ctx, setRefundPolicy, arg.Batch, arg.WithFee)
+	return err
+}

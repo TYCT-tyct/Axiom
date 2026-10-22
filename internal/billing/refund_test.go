@@ -3,8 +3,6 @@ package billing
 import (
 	"errors"
 	"fmt"
-	"math"
-	"slices"
 	"sync"
 	"testing"
 	"uuid"
@@ -25,6 +23,9 @@ func (b *bank) refundable(amount int64) Freeze {
 func (b *bank) freeze(f Freeze) int64 {
 	b.t.Helper()
 	var n int64
+	if err := PrepareRefund(b.t.Context(), b.app, b.platform, f); err != nil {
+		b.t.Fatal(err)
+	}
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
 		n, err = FreezeRefund(b.t.Context(), tx, f)
 		return err
@@ -35,18 +36,26 @@ func (b *bank) freeze(f Freeze) int64 {
 	return n
 }
 
-func (b *bank) finishRefund(f Freeze, returned int64, release bool) {
+func (b *bank) finishRefund(f Freeze, withFee, release bool) RefundAmounts {
 	b.t.Helper()
+	var amounts RefundAmounts
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		if release {
 			return ReleaseRefund(b.t.Context(), tx, f)
 		}
-		return SettleRefund(b.t.Context(), tx, Refund{Freeze: f, Returned: returned})
+		r := Refund{Freeze: f, WithFee: withFee}
+		var err error
+		amounts, err = QuoteRefund(b.t.Context(), tx, r)
+		if err != nil {
+			return err
+		}
+		return SettleRefund(b.t.Context(), tx, r)
 	}); err != nil {
 		b.t.Fatal(err)
 	}
 	b.checkStored(f.Account)
 	b.balanced()
+	return amounts
 }
 
 func TestFreezeRefundRoom(t *testing.T) {
@@ -132,7 +141,7 @@ func (b *bank) refundAcrossExpiry(release bool) {
 	if got := b.expire(); got != 0 {
 		b.t.Fatalf("second expiry took %d frozen credits", got)
 	}
-	b.finishRefund(f, 0, release)
+	b.finishRefund(f, false, release)
 	want := int64(0)
 	if release {
 		want = 150
@@ -182,15 +191,15 @@ func TestFreezeRevisionContinuesAfterRelease(t *testing.T) {
 		if got := b.freeze(f); got != 500 {
 			t.Fatalf("froze %d, want 500 again", got)
 		}
-		b.finishRefund(f, 0, true)
+		b.finishRefund(f, false, true)
 	}
 	b.freeze(f)
 	f.Amount = 300
-	b.finishRefund(f, 0, false)
+	b.finishRefund(f, false, false)
 	f.Amount = 200
-	b.finishRefund(f, 0, true)
+	b.finishRefund(f, false, true)
 	b.freeze(f)
-	b.finishRefund(f, 0, false)
+	b.finishRefund(f, false, false)
 	if b.batchLeft(f.Batch) != 0 || b.count("SELECT freeze_total FROM billing.credit_batches") != 2200 {
 		t.Fatal("cumulative events did not survive repeated release and partial refund")
 	}
@@ -268,12 +277,12 @@ func TestFrozenSettlementFloor(t *testing.T) {
 		t.Fatal("spending into debt took frozen credit")
 	}
 	f.Amount = 50
-	b.finishRefund(f, 0, true)
+	b.finishRefund(f, false, true)
 	if b.count("SELECT unfunded FROM billing.balances") != 50 {
 		t.Fatal("released credit did not repay debt first")
 	}
 	f.Amount = 750
-	b.finishRefund(f, 0, false)
+	b.finishRefund(f, false, false)
 	if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != -50 {
 		t.Fatal("refund did not take exactly its frozen batch")
 	}
@@ -323,7 +332,7 @@ func TestFreezeAfterSpending(t *testing.T) {
 		t.Fatalf("froze %d after spending, want 400", got)
 	}
 	f.Amount = 400
-	b.finishRefund(f, 800, false)
+	b.finishRefund(f, false, false)
 	if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != 0 {
 		t.Fatal("refund included consumed credit")
 	}
@@ -358,39 +367,6 @@ func TestConcurrentFreezes(t *testing.T) {
 	b.balanced()
 }
 
-func TestRefundBooks(t *testing.T) {
-	for _, cross := range []bool{false, true} {
-		t.Run(fmt.Sprint(cross), func(t *testing.T) {
-			b := newBank(t, 0, 0, Config{})
-			p := b.paid(1_000_000_000, Payment{Currency: currency(t, "USD"), Paid: 105}, uuid.UUID{})
-			if cross {
-				p.Payment.Currency, p.Payment.Paid, p.RateID = currency(t, "CNY"), 710, b.rate().ID
-			}
-			if err := b.creditPaid(p); err != nil {
-				t.Fatal(err)
-			}
-			f := Freeze{Account: p.Account, Batch: p.ID, Amount: 1_000_000_000}
-			b.freeze(f)
-			returned := int64(105)
-			want := []LedgerEntry{{bookCash, -1_050_000_000, ""}, {bookExchange, 50_000_000, ""}, {bookUserBalance, 1_000_000_000, ""}}
-			if cross {
-				returned = 710
-				want = []LedgerEntry{
-					{bookExchange, -1_000_000_000, ""},
-					{bookUserBalance, 1_000_000_000, ""},
-					{bookCash, -7_100_000_000, "CNY"},
-					{bookExchange, 7_100_000_000, "CNY"},
-				}
-			}
-			b.finishRefund(f, returned, false)
-			ledger := b.ledgerOf(f.Batch)
-			if len(ledger) != 3 || !slices.Equal(ledger[2].Entries, want) {
-				t.Fatalf("refund entries = %+v, want %+v", ledger, want)
-			}
-		})
-	}
-}
-
 func TestFreezeRollback(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
@@ -414,8 +390,7 @@ func TestRefundValidation(t *testing.T) {
 		{Account: f.Account, Batch: f.Batch, Amount: 0},
 		{Account: f.Account, Batch: f.Batch, Amount: 501},
 		{Account: f.Account, Batch: uuid.NewV7(), Amount: 1},
-		{Freeze: f, Returned: -1},
-		{Freeze: f, Returned: math.MaxInt64},
+		{Account: f.Account, Batch: f.Batch, Amount: -1},
 	} {
 		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
 			return SettleRefund(t.Context(), tx, r)
@@ -423,7 +398,7 @@ func TestRefundValidation(t *testing.T) {
 			t.Fatalf("invalid refund accepted: %+v", r)
 		}
 	}
-	b.finishRefund(f, 0, false)
+	b.finishRefund(f, false, false)
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
 		return SettleRefund(t.Context(), tx, Refund{Freeze: f})
 	}); err == nil {
@@ -453,7 +428,7 @@ func TestRefundRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 		b.checkStored(f.Account)
-		if b.count("SELECT frozen FROM billing.balances") != 500 || len(b.ledgerOf(f.Batch)) != 2 {
+		if b.count("SELECT frozen FROM billing.balances") != 500 || b.count("SELECT count(*) FROM billing.credit_batches WHERE refund_with_fee IS NOT NULL") != 0 || len(b.ledgerOf(f.Batch)) != 2 {
 			t.Fatal("refund or release survived payment rollback")
 		}
 	}

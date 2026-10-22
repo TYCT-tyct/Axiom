@@ -15,16 +15,16 @@ type Freeze struct {
 	Amount         int64
 }
 
-// Refund settles Amount frozen credits for Returned minor units of the batch's original payment currency.
-// Payments calculates Returned from the order's paid amount, fee policy and previous refunds, including rounding.
+// Refund settles frozen credit using the original payment and the first successful refund's fee policy.
 type Refund struct {
 	Freeze
-	Returned int64
+	WithFee bool
 }
 
 // FreezeRefund holds up to f.Amount refundable credits in tx, the payment's platform-scope transaction. Payments
 // guards retries with its order/refund row updates in this same transaction; these functions do not deduplicate calls.
 // Reservations and existing freezes are protected, without using the balance floor's allowance for debt.
+// Call PrepareRefund before opening tx or taking an order lock, so only the recent ledger tail needs this lock.
 func FreezeRefund(ctx context.Context, tx pg.Tx, f Freeze) (int64, error) {
 	balance, a, credit, err := f.load(ctx, tx)
 	if err != nil {
@@ -67,37 +67,59 @@ func ReleaseRefund(ctx context.Context, tx pg.Tx, f Freeze) error {
 // in the original payment currency; exchange gain/loss balances each currency without using today's exchange rate.
 // The caller must change its refund's state in tx so retries cannot settle a different freeze.
 func SettleRefund(ctx context.Context, tx pg.Tx, r Refund) error {
-	_, a, credit, err := r.load(ctx, tx)
+	a, credit, amounts, err := r.quote(ctx, tx)
 	if err != nil {
 		return err
 	}
-	b := a.batches[r.Batch]
-	if b == nil || r.Amount > b.frozen() {
-		return fmt.Errorf("billing: refund of %d exceeds the freeze of batch %s", r.Amount, r.Batch)
-	}
-	entries, err := r.entries(credit)
+	entries, err := r.entries(credit, amounts)
 	if err != nil {
 		return err
+	}
+	if err := queries.SetRefundPolicy(ctx, tx, SetRefundPolicyParams{Batch: r.Batch, WithFee: r.WithFee}); err != nil {
+		return fmt.Errorf("billing: fix the refund policy of %s: %w", r.Batch, err)
 	}
 	return a.postRefund(ctx, tx, r.Freeze, credit.Site, "refund", entries)
 }
 
 func (f Freeze) load(ctx context.Context, tx pg.Tx) (LockBalanceRow, *allocation, CreditBatch, error) {
-	if f.Amount <= 0 {
-		return LockBalanceRow{}, nil, CreditBatch{}, fmt.Errorf("billing: refund credit must be positive: %d", f.Amount)
+	credit, err := f.credit(ctx, tx)
+	if err != nil {
+		return LockBalanceRow{}, nil, credit, err
 	}
 	balance, a, err := replayAccount(ctx, tx, f.Account, movementPage)
-	if err != nil {
-		return balance, nil, CreditBatch{}, err
+	return balance, a, credit, err
+}
+
+func (f Freeze) credit(ctx context.Context, tx pg.Tx) (CreditBatch, error) {
+	if f.Amount <= 0 {
+		return CreditBatch{}, fmt.Errorf("billing: refund credit must be positive: %d", f.Amount)
 	}
 	credit, ok, err := ReadCredit(ctx, tx, f.Batch)
 	if err != nil {
-		return balance, nil, credit, err
+		return credit, err
 	}
 	if !ok || credit.Account != f.Account || credit.Source != "paid" {
-		return balance, nil, credit, fmt.Errorf("billing: batch %s is not paid credit of account %s", f.Batch, f.Account)
+		return credit, fmt.Errorf("billing: batch %s is not paid credit of account %s", f.Batch, f.Account)
 	}
-	return balance, a, credit, nil
+	return credit, nil
+}
+
+// PrepareRefund advances an account in short transactions before payments opens its order/refund transaction.
+// Scope must see the account; the caller supplies its deadline. Expiry and refunds share the same bounded replay.
+func PrepareRefund(ctx context.Context, db *pg.DB, scope pg.Scope, f Freeze) error {
+	if err := db.ReadTx(ctx, scope, func(tx pg.Tx) error {
+		_, err := f.credit(ctx, tx)
+		return err
+	}); err != nil {
+		return err
+	}
+	for more := true; more; {
+		var err error
+		if more, err = advanceAllocation(ctx, db, scope, f.Account, movementPage); err != nil {
+			return fmt.Errorf("billing: prepare refund of %s: %w", f.Batch, err)
+		}
+	}
+	return nil
 }
 
 // postRefund updates the synchronous admission counter and replays the event into the allocation cache atomically.
@@ -127,27 +149,27 @@ func (a *allocation) postRefund(ctx context.Context, tx pg.Tx, f Freeze, site uu
 	return a.save(ctx, tx, f.Account)
 }
 
-func (r Refund) entries(credit CreditBatch) ([]line, error) {
+func (r Refund) entries(credit CreditBatch, amounts RefundAmounts) ([]line, error) {
+	// CreditPaid already checked that the whole payment fits the ledger, so both bounded parts fit too.
 	scale, err := unitScale(credit.Payment.Currency)
 	if err != nil {
 		return nil, err
 	}
-	if r.Returned < 0 || r.Returned > credit.Payment.Paid || r.Returned > math.MaxInt64/scale {
-		return nil, fmt.Errorf("billing: refund cash of %d does not fit payment of batch %s", r.Returned, r.Batch)
-	}
-	cash := r.Returned * scale
+	cash, fee := amounts.Returned*scale, amounts.Fee*scale
 	if credit.RateID == (uuid.UUID{}) {
 		return []line{
 			{bookUserBalance, r.Amount, siteCredits},
+			{bookFeeIncome, fee, siteCredits},
 			{bookCash, -cash, siteCredits},
-			{bookExchange, cash - r.Amount, siteCredits},
+			{bookExchange, cash - fee - r.Amount, siteCredits},
 		}, nil
 	}
 	in := credit.Payment.Currency.String()
 	return []line{
 		{bookUserBalance, r.Amount, siteCredits},
 		{bookExchange, -r.Amount, siteCredits},
+		{bookFeeIncome, fee, in},
 		{bookCash, -cash, in},
-		{bookExchange, cash, in},
+		{bookExchange, cash - fee, in},
 	}, nil
 }

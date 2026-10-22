@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"math/big"
 	"strconv"
 	"time"
 	"uuid"
@@ -35,8 +34,8 @@ func (c consoleAPI) GetBalance(ctx context.Context, _ consoleapi.GetBalanceReque
 	if err != nil {
 		return nil, err
 	}
-	// The balance less what is reserved can leave 64 bits when the figures are at their limits; text does not.
-	available := new(big.Int).Sub(big.NewInt(view.Balance), big.NewInt(view.Reserved))
+	// The balance less reservations and freezes can leave 64 bits when the figures are at their limits; text does not.
+	available := view.Available()
 	currency := cl.site.Currency
 	return consoleapi.GetBalance200JSONResponse{
 		Balance: moneyOf(view.Balance, currency), Reserved: moneyOf(view.Reserved, currency), Floor: moneyOf(view.Floor, currency),

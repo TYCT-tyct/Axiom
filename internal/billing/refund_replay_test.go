@@ -91,9 +91,9 @@ func TestRefundReplayUsesSequence(t *testing.T) {
 	b.freeze(f)
 	b.charge(260)
 	f.Amount = 200
-	b.finishRefund(f, 0, true)
+	b.finishRefund(f, false, true)
 	f.Amount = 300
-	b.finishRefund(f, 300, false)
+	b.finishRefund(f, false, false)
 	// Wall clocks can run backwards. Neither SQL pagination nor a stored checkpoint may use their order.
 	b.sql("UPDATE billing.transactions SET created_at = '2026-01-01'::timestamptz - seq * interval '1 second'",
 		"UPDATE billing.balances b SET allocated_at = t.created_at FROM billing.transactions t WHERE t.seq = b.allocated_seq")

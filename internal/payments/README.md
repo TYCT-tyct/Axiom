@@ -76,8 +76,8 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 |---|---|---|
 | `billing.TopUpRate(ctx, tx, site, from, to platform.Currency) (Rate, error)` | 当前参考汇率版本与站点的充值缓冲（`billing.top_up_buffers`，没有行时用代码里的 2%），`Rate.Applied` 是精确分数（分子分母可能超出 int64，订单的成交汇率列不能用 bigint）；参考汇率是平台数据，所以 payments 在平台范围的只读事务里调它，在下单事务 1 之前读好（汇率版本只追加不改，读到的版本 ID 随订单锁定）；过期后按到账汇率入账时也调它 | E1-2a |
 | `billing.CreditPaid(ctx, tx, PaidCredit)` | 锁余额行，写付费额度批次（ID = 订单 ID 或待处理记录 ID，记实付、其中的手续费、入账额度和所用汇率）、"用户充值"分录和审计。同一 ID 再次调用时比较入账额度、实付和手续费：一致就什么也不写，不一致返回错误，调用方转待处理；不用 `ON CONFLICT DO NOTHING`，否则金额不同的第二次调用会被静默丢掉 | E1-1 |
-| `billing.FreezeRefund(ctx, tx, Freeze) (int64, error)` | 锁余额行、补算分配、算可退额度，写一笔带序号的冻结事件，再重放吃进它；返回实际冻结的额度 | E1-6a |
-| `billing.SettleRefund(ctx, tx, refund)` / `ReleaseRefund(ctx, tx, refund)` | 冻结转成"退款"分录（带 payments 算好的退回金额）/ 写一笔解冻事件。重复调用由 payments 在同一事务里对退款行的条件更新挡住 | E1-6a |
+| `billing.PrepareRefund(ctx, db, scope, Freeze) error` / `billing.FreezeRefund(ctx, tx, Freeze) (int64, error)` | 订单事务和订单锁之前先无锁分页准备；锁余额行后补尾、算可退额度，写一笔带序号的冻结事件，再重放吃进它；返回实际冻结的额度 | E1-6a |
+| `billing.SettleRefund(ctx, tx, refund)` / `ReleaseRefund(ctx, tx, refund)` | 冻结转成"退款"分录（billing 根据原付款、账本历史和手续费政策算现金与手续费；冻结后先用 `QuoteRefund` 取得并保存报价）/ 写一笔解冻事件。重复调用由 payments 在同一事务里对退款行的条件更新挡住 | E1-6a |
 
 `PaidCredit` 带账户、站点、批次 ID、入账额度、商户账户（现金科目按它区分）、付款币种、实付、其中的手续费、所用参考汇率的版本 ID（`RateID`；成交汇率由批次的 (实付 − 手续费) ÷ 入账额度 推出，不另传）。跨币种时两本账（站点 × 货币）各用汇兑损益配平：付款币种的账借现金（实付）、贷手续费收入（手续费）和汇兑损益（其余）；记账货币的账借汇兑损益、贷用户余额（额度）；两边按参考汇率的差额就是充值缓冲带来的汇兑收益。同币种时没有汇兑损益两行。订单上的 `paid_total`、`paid_fee`、`credited` 与批次出自同一个 `PaidCredit`、同一事务写入，退款金额由 payments 按订单上的这三列和自己的退款记录计算；每日对账核对两边一致。
 
@@ -136,7 +136,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **下单**：先读「菜单」（`menu`）：账户范围的只读事务读设置、这种付款方式的商户账户和当天用量；平台范围的只读事务检查这些商户账户的配置能否打开（插件存在、密钥解得开、设置哈希一致、插件接受；结果按商户账户的 `rev` 缓存一分钟，绕过保存改库的最迟一分钟后被排除并告警，打不开的不参与报价和挑选、不影响别的账户；账户范围从不读密文），再读 `TopUpRate`。事务 1（账户范围）设 `lock_timeout = 2s`、`statement_timeout = 5s`（超时回 503，订单未建），取账户的事务级咨询锁（`pg_advisory_xact_lock`，键由账户 ID 派生）→ 读设置和这个账户的计数 → 选商户账户 → `INSERT … ON CONFLICT DO UPDATE` 锁住并加上它当天的用量计数 → 算总额 → 插入订单和事件。提交后调 `Create`；事务 2 检查链接，写回 `trade_no` 和 `checkout`。`Create` 返回 `*Rejected` 或链接不合格时事务 2 改为失败并减回用量；未知错误不改，返回 502 给用户，订单由补单和过期收尾。
 - **回调**：限流 → 取商户配置（内存缓存，按 `rev` 失效）→ `Verify` → 不加锁读订单，已支付且网关订单号已记下就直接应答 → 查单 → 入账事务 → 提交后 `Ack(true)`。
 - **入账**（回调、补单、"我已付款"、人工）：平台范围的一个事务，`SELECT … FOR UPDATE` 订单行 → 插入 `order_payments`（冲突写待处理记录）→ 条件转移 → `CreditPaid` → 事件；过期后到账的同时加回用量计数。事务里不做网络调用。
-- **退款**：事务 1 锁订单行、检查在途的退款、`FreezeRefund`、算金额、插入退款行（已冻结）；事务 2 置发送中、写 `sent_at`；调渠道；事务 3 锁订单行、退款行，`SettleRefund` 或 `ReleaseRefund`，更新订单。
+- **退款**：在订单事务之前先 `PrepareRefund` 无锁分页预放；事务 1 锁订单行、检查在途的退款、`FreezeRefund`、`QuoteRefund` 算金额与手续费、插入退款行（已冻结）；事务 2 置发送中、写 `sent_at`；调渠道；事务 3 锁订单行、退款行，`SettleRefund` 或 `ReleaseRefund`，更新订单。
 - **`payments.poll`**（每分钟，队列的周期任务，只有领导节点插入）：一轮有时间预算，按 `next_query_at` 依次处理 (1) 待支付订单：查单；(2) 已过有效期的待支付订单：查单、关单、过期、减回用量；(3) 渠道不能关单的已过期、已取消订单：在补查窗口内按退避查单；(4) 停在已冻结超过一分钟的退款：置发送中再发；(5) 发送中、待确认的退款：声明 `RefundKey` 的用同一单号重发或查退款，其余只查退款，超过 24 小时记待处理记录。每次查询后按退避写下一次的 `next_query_at`；同一商户账户同时最多 2 个调用，连续 5 次未知就暂停这个账户 5 分钟并告警。失败的不挡后面的（与 billing 的到期任务同一做法）。
 - **`payments.reconcile`**（每天）：每个商户账户的现金分录合计对订单与退款；用量计数对按订单复算的值；订单的 `paid_total`、`paid_fee`、`credited` 对批次；声明 `Statements` 的拉账单逐笔比对，含"网关有、订单无"；其余把前一天非终态和有变化的订单、补查窗口内的已过期和已取消订单再查一次。差额写 `discrepancies` 并告警。
 - **范围**：回调和两个任务用 `cmd/axiom` 交来的平台范围；控制台用 accounts 交出的账户范围，站长后台用站点范围。

@@ -101,6 +101,10 @@ func TestBalance(t *testing.T) {
 	if got.Balance.Amount != "5000000000" || got.Available.Amount != "5000000000" || got.SpentThisMonth.Amount != "123" || got.Balance.Currency != "USD" {
 		t.Errorf("after a gift and a charge: %+v", got)
 	}
+	f.run("UPDATE billing.balances SET reserved=1000000000, frozen=2000000000 WHERE account_id='" + account.String() + "'")
+	if got := f.balance(s); got.Available.Amount != "2000000000" || got.Balance.Amount != "5000000000" {
+		t.Errorf("frozen console balance: %+v", got)
+	}
 }
 
 // TestKeyLimitRemaining: what a key may still spend is its limit less what it has spent and holds reserved in the
