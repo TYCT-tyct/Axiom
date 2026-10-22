@@ -51,11 +51,12 @@ func newDiffUpstream(t *testing.T) *diffUpstream {
 	u.server = httptest.NewUnstartedServer(u)
 	if os.Getenv("AXIOM_TEST_CGROUP_PARENT") != "" {
 		// The CI container reaches the host gateway, while Axiom's fixture URL stays on loopback for its egress policy.
+		// Listening on every interface is safe: the synthetic fixture holds no real credentials or user data.
 		if err := u.server.Listener.Close(); err != nil {
 			t.Fatal(err)
 		}
 		var config net.ListenConfig
-		listener, err := config.Listen(t.Context(), "tcp4", "0.0.0.0:0") //nolint:gosec // the CI gateway must reach this synthetic fixture; it holds no real credentials or user data
+		listener, err := config.Listen(t.Context(), "tcp4", "0.0.0.0:0")
 		if err != nil {
 			t.Fatal(err)
 		}
