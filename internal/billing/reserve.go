@@ -271,7 +271,7 @@ func (a Admitted) usage(ctx context.Context, tx pg.Tx, day *time.Time) (ReadUsag
 	return u, nil
 }
 
-// available is what each source still allows: the balance less its reservations down to the floor, and each limit
+// available is what each source still allows: the balance less its reservations and freezes down to the floor, and each limit
 // less what its window has spent and holds reserved. Exact, so no combination of stored values can wrap.
 func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64) []Available {
 	left := func(have int64, less ...int64) platform.Exact {
@@ -281,7 +281,7 @@ func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64
 		}
 		return e
 	}
-	avail := []Available{{SourceBalance, left(balance.Balance, balance.Reserved, balance.Floor)}}
+	avail := []Available{{SourceBalance, left(balance.Balance, balance.Reserved, balance.Frozen, balance.Floor)}}
 	if a.WorkspaceBudget != nil {
 		avail = append(avail, Available{SourceWorkspace, left(a.WorkspaceBudget.Amount, workspaceUsed)})
 	}

@@ -160,7 +160,7 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 	ctx, cancel := context.WithTimeout(ctx, e.accountBudget)
 	defer cancel()
 	for more := true; more; {
-		if more, err = e.advance(ctx, account); err != nil {
+		if more, err = advanceAllocation(ctx, e.db, e.scope, account, e.movements); err != nil {
 			return 0, err
 		}
 	}
@@ -174,64 +174,23 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 	return written, nil
 }
 
-// advance replays one page of the account's history in a transaction of its own and without the lock, and reports
-// whether there may be more. Another transaction moving the allocation first ends it: the locked step that follows
-// goes on from wherever the allocation stands.
-//
-// It is safe without the lock because every transaction of an account takes its seq under its balance row lock (post),
-// so any page it reads is a prefix of what the lock will see: nothing can commit later with a place before it.
-// Fix that prefix before loading batches: a later credit does not move the allocation's place, but its batch would
-// be missing from this replay (#361). The next replay loads it along with its batch. The order is what makes the bound
-// work, so it must not be swapped: a bound read after the batches would take in a credit committed while they were
-// read, whose batch is not among them, and the replay would fail on that credit instead.
-func (e *expirer) advance(ctx context.Context, account uuid.UUID) (more bool, err error) {
-	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) error {
-		through, err := queries.ReplayThrough(ctx, tx, account)
-		if err != nil {
-			return fmt.Errorf("billing: read the replay bound of %s: %w", account, err)
-		}
-		a, err := loadAllocation(ctx, tx, account)
-		if err != nil {
-			return err
-		}
-		if more, err = a.catchUpPage(ctx, tx, account, e.movements, through); err != nil {
-			return err
-		}
-		return a.save(ctx, tx, account)
-	})
-	if errors.Is(err, errStale) {
-		return false, nil
-	}
-	return more, err
-}
-
 // writeOffAccount writes off the expired part of the account's batches in tx, which must be in the platform scope, and
 // returns the amount. It holds the account's balance row lock to the end of the transaction, replays the allocation to
 // the latest movement, writes off, and stores the allocation.
 //
 // What counts as unspent is what the replay leaves at the moment the lock is taken, so credit spent after its expiry
-// and before the write-off is used, not lapsed. The write-off is capped at the balance less the reservations, and not
+// and before the write-off is used, not lapsed. The write-off is capped at the balance less reservations and freezes, and not
 // by the floor: the floor is an allowance for charges, and an expiry that used it would put the user in debt for credit
 // that the calls in flight could have used. With that cap, the balance stays at least what is reserved, so every
 // reservation admitted before it can still be settled in full (its charge is capped by cap, which is at least its own
 // amount). What the cap holds back is written off by a later run, when the reservations have settled. A second run
 // finds nothing left to write off.
 func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (written int64, err error) {
-	balance, err := lockAccount(ctx, tx, account)
+	balance, a, err := replayAccount(ctx, tx, account, size)
 	if err != nil {
 		return 0, err
 	}
-	a, err := loadAllocation(ctx, tx, account)
-	if err != nil {
-		return 0, err
-	}
-	if err := a.catchUp(ctx, tx, account, size); err != nil {
-		return 0, err
-	}
-	if got := a.funded(); got != balance.Balance {
-		return 0, fmt.Errorf("billing: the allocation of %s funds %d of a balance of %d; nothing is written off", account, got, balance.Balance)
-	}
-	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved}, 0)); err != nil {
+	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved, Frozen: balance.Frozen}, 0)); err != nil {
 		return 0, err
 	}
 	if written > 0 {
@@ -253,7 +212,10 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 		if b.expiresAt == nil || b.expiresAt.After(now) || limit == 0 {
 			break
 		}
-		w := min(b.remaining(), limit)
+		w := min(b.available(), limit)
+		if w == 0 {
+			continue
+		}
 		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
 		if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
 			return 0, err
