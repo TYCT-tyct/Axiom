@@ -36,7 +36,7 @@ const (
 	dropAccount dropReason = "account"
 )
 
-// dropReasons is every reason, so a reason the metrics do not know cannot compile.
+// dropReasons lists the bounded label set whose measurement options are built at startup.
 var dropReasons = [...]dropReason{dropQueue, dropMemory, dropAccount}
 
 // metrics is the client's instruments, with the option slices built once: passing attributes one by one allocates a

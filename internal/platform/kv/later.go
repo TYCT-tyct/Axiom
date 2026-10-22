@@ -95,7 +95,6 @@ func (c *Client) writeLater(ctx context.Context) {
 		if c.memoryStop.Load() {
 			c.m.drop(ctx, dropMemory, int64(n))
 		} else {
-			// Do records every failure; a cache write must never affect the call that produced it.
 			_, _ = c.Do(ctx, StickyWrite, batch[:n]...) //nolint:errcheck // Do records failures; this disposable write has no caller to fail.
 		}
 		clear(batch[:n])
