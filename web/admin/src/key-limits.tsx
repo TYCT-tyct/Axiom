@@ -16,7 +16,7 @@ const min = 1;
 const max = 10_000;
 
 // The limits as typed: a limit left empty is left out, and one that is not a whole number in the bounds is a problem.
-export function readKeyLimits(values: Record<string, string>, problem: string): Limits | Problem {
+function readKeyLimits(values: Record<string, string>, problem: string): Limits | Problem {
   const read: Limits = {};
   for (const { name } of limits) {
     const typed = (values[name] ?? "").trim();
