@@ -24,6 +24,23 @@ func formatOf(f adminapi.ModelFormat) (protocol.Format, error) {
 	return 0, invalidField("/format", "must be one of messages, responses or chat")
 }
 
+// endpointBody is an endpoint as getSupplier lists it, for a person to pick one to test.
+func endpointBody(e suppliers.Endpoint) adminapi.SupplierEndpoint {
+	return adminapi.SupplierEndpoint{
+		Id: e.ID.String(), GroupId: e.Group.String(), ModelId: e.Model.String(), UpstreamName: e.UpstreamName,
+		Formats: modelFormats(e.Formats), CostState: adminapi.SupplierEndpointCostState(e.CostState), Enabled: e.Enabled,
+	}
+}
+
+// modelFormats are the call formats as the store names them, which are the contract's names.
+func modelFormats(formats []string) []adminapi.ModelFormat {
+	out := make([]adminapi.ModelFormat, len(formats))
+	for i, f := range formats {
+		out[i] = adminapi.ModelFormat(f)
+	}
+	return out
+}
+
 // TestSupplierEndpoint runs one real generation against an endpoint of the node's call path, which the platform pays
 // for: 10 a minute per session, as detectSupplier, because each one is a call to a third party.
 func (a adminAPI) TestSupplierEndpoint(ctx context.Context, request adminapi.TestSupplierEndpointRequestObject) (adminapi.TestSupplierEndpointResponseObject, error) {

@@ -70,22 +70,6 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 	return body
 }
 
-func endpointBody(e suppliers.Endpoint) adminapi.SupplierEndpoint {
-	return adminapi.SupplierEndpoint{
-		Id: e.ID.String(), GroupId: e.Group.String(), ModelId: e.Model.String(), UpstreamName: e.UpstreamName,
-		Formats: modelFormats(e.Formats), CostState: adminapi.SupplierEndpointCostState(e.CostState), Enabled: e.Enabled,
-	}
-}
-
-// modelFormats are the call formats as the store names them, which are the contract's names.
-func modelFormats(formats []string) []adminapi.ModelFormat {
-	out := make([]adminapi.ModelFormat, len(formats))
-	for i, f := range formats {
-		out[i] = adminapi.ModelFormat(f)
-	}
-	return out
-}
-
 func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
