@@ -198,6 +198,10 @@ type endpoint struct {
 	creds                  []*credential
 	currency               platform.Currency
 	unitValue              platform.UnitPrice
+	// nativeUnit is the unit the supplier counts its balance in, which its prices and its charges are in: what a test's
+	// estimate is read as.
+	nativeUnit string
+	ownerScope string
 }
 
 type credential struct {
@@ -334,6 +338,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope,
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil

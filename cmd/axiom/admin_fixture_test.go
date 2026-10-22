@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -30,10 +31,11 @@ const (
 // `axiom user` makes them.
 type adminFixture struct {
 	commandLine
-	svc    *accounts.Service
-	routes http.Handler
-	clock  *testClock
-	logs   *bytes.Buffer
+	svc       *accounts.Service
+	routes    http.Handler
+	clock     *testClock
+	logs      *bytes.Buffer
+	upstreams *suppliers.Service
 }
 
 // newAdminFixture is the main site with its admin domain and one operator, the owner, who holds the admin role.
@@ -83,8 +85,14 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, c.db, logger), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
-	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
+	upstreams, err := suppliers.New(suppliers.Config{
+		DB: c.db, Scope: pg.PlatformScope(), Keys: masterKeys(c.t), Egress: exit, Logger: logger, Clock: clock.Now,
+	})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	routes := adminRoutes(newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger), &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
+	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, upstreams: upstreams}
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds.
@@ -116,7 +124,12 @@ func (f adminFixture) run(statements ...string) {
 // carries the admin's Origin.
 func (f adminFixture) do(method, path, body string, mods ...mod) *httptest.ResponseRecorder {
 	f.t.Helper()
-	r := httptest.NewRequestWithContext(f.t.Context(), method, "https://"+adminHost+adminBase+path, strings.NewReader(body))
+	return f.doContext(f.t.Context(), method, path, body, mods...)
+}
+
+func (f adminFixture) doContext(ctx context.Context, method, path, body string, mods ...mod) *httptest.ResponseRecorder {
+	f.t.Helper()
+	r := httptest.NewRequestWithContext(ctx, method, "https://"+adminHost+adminBase+path, strings.NewReader(body))
 	r.RemoteAddr = "192.0.2.1:4000"
 	if method != http.MethodGet {
 		r.Header.Set("Origin", adminOrigin)
