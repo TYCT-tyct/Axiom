@@ -237,19 +237,25 @@ func (q *Queries) InsertTombstone(ctx context.Context, db DBTX, arg InsertTombst
 }
 
 const lockBalance = `-- name: LockBalance :one
-SELECT balance, floor, reserved FROM billing.balances WHERE account_id = $1 FOR UPDATE
+SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = $1 FOR UPDATE
 `
 
 type LockBalanceRow struct {
 	Balance  int64
 	Floor    int64
 	Reserved int64
+	Frozen   int64
 }
 
 func (q *Queries) LockBalance(ctx context.Context, db DBTX, accountID uuid.UUID) (LockBalanceRow, error) {
 	row := db.QueryRow(ctx, lockBalance, accountID)
 	var i LockBalanceRow
-	err := row.Scan(&i.Balance, &i.Floor, &i.Reserved)
+	err := row.Scan(
+		&i.Balance,
+		&i.Floor,
+		&i.Reserved,
+		&i.Frozen,
+	)
 	return i, err
 }
 

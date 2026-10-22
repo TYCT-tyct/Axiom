@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -61,10 +60,10 @@ func (a adminAPI) ListUsers(ctx context.Context, request adminapi.ListUsersReque
 	return adminapi.ListUsers200JSONResponse(list), nil
 }
 
-// balanceBody is an account's money as the contract gives it. Available is the balance less what is reserved, which
+// balanceBody is an account's money as the contract gives it. Available is the balance less reservations and freezes, which
 // can leave 64 bits when the figures are at their limits; text does not.
 func balanceBody(v billing.BalanceView, currency platform.Currency) adminapi.Balance {
-	available := new(big.Int).Sub(big.NewInt(v.Balance), big.NewInt(v.Reserved))
+	available := v.Available()
 	return adminapi.Balance{
 		Balance: adminMoney(v.Balance, currency), Reserved: adminMoney(v.Reserved, currency), Floor: adminMoney(v.Floor, currency),
 		Available:      adminapi.Money{Amount: available.String(), Currency: currency.String()},
