@@ -100,6 +100,14 @@ type StatementQuery struct {
 // sequence.
 var statementNewest = StatementCursor{Seq: math.MaxInt64, At: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), ID: uuid.Max()}
 
+// start is where the page begins: after its cursor, or at the newest movement.
+func (q StatementQuery) start() StatementCursor {
+	if q.After != nil {
+		return *q.After
+	}
+	return statementNewest
+}
+
 // statementRounds bounds work even when a long history contains only waived charges. Such a segment can return an
 // empty page with a continuation cursor; the cursor advances past every examined transaction.
 const statementRounds = 8
@@ -121,10 +129,7 @@ func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]Statement
 	if _, err := tx.Exec(ctx, statementScansInOrder); err != nil {
 		return nil, nil, fmt.Errorf("billing: plan the statement in index order: %w", err)
 	}
-	after := statementNewest
-	if q.After != nil {
-		after = *q.After
-	}
+	after := q.start()
 	statement := make([]StatementRow, 0, q.PageSize)
 	for round := range statementRounds {
 		rows, err := queries.StatementPage(ctx, tx, StatementPageParams{
