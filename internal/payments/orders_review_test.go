@@ -12,17 +12,12 @@ import (
 
 func TestPollExpiresBatchBeforeBlockedClose(t *testing.T) {
 	var w *world
-	var orders []Order
+	merchants := make(map[OrderID]MerchantID)
 	calls := make(map[MerchantID]int)
 	var stalled MerchantID
 	pendingAtClose := -1
 	w = newTestWorld(t, fakePlugin{caps: CapClose, create: goodCheckout, close: func(ctx context.Context, id OrderID, _ string) error {
-		var merchant MerchantID
-		for _, o := range orders {
-			if o.ID == id {
-				merchant = o.MerchantID
-			}
-		}
+		merchant := merchants[id]
 		calls[merchant]++
 		if stalled == (MerchantID{}) {
 			stalled = merchant
@@ -40,7 +35,8 @@ func TestPollExpiresBatchBeforeBlockedClose(t *testing.T) {
 	w.waiting()
 	w.mustSave(siteScope(w.siteA), w.input(w.siteA))
 	for i := range 3 {
-		orders = append(orders, w.mustPlace(yuan, fmt.Sprintf("due-%d", i)))
+		o := w.mustPlace(yuan, fmt.Sprintf("due-%d", i))
+		merchants[o.ID] = o.MerchantID
 	}
 	w.exec("UPDATE payments.orders SET expires_at = created_at - interval '1 minute'")
 	if err := w.p.poll(t.Context()); err != nil {
