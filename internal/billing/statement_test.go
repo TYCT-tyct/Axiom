@@ -242,29 +242,29 @@ func TestStatementPagesAcrossNewMovements(t *testing.T) {
 // themselves by the key the ledger fixes for them, and the numbered ones come first. Only the numbered rows say what
 // the balance was after them: the key of the older rows is not the order they were posted in when a clock stepped back
 // or two of them share a microsecond, and a balance walked back along it would show one the account never had (a gift
-// of 100 and a later charge of 20 stamped an hour earlier would read 80 after the gift and -20 after the charge).
+// of 1000 and a later charge of 200 stamped an hour earlier would read 800 after the gift and -200 after the charge).
 func TestStatementFromBeforeTheSequence(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, restamp string }{
 		{"a clock that stepped back", `UPDATE billing.transactions t SET created_at = t.created_at - interval '1 hour'
-			WHERE t.seq IS NULL AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance' AND e.amount = 20)`},
+			WHERE t.seq IS NULL AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance' AND e.amount = 200)`},
 		{"one microsecond", "UPDATE billing.transactions SET created_at = '2026-01-01T00:00:00Z' WHERE seq IS NULL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := newBank(t, 0, 0, Config{})
-			b.credit(100)
-			b.charge(20)
-			b.charge(30)
+			b.credit(1000)
+			b.charge(200)
+			b.charge(300)
 			b.sql("UPDATE billing.transactions SET seq = NULL", tc.restamp)
-			b.charge(7) // numbered, and so above every row from before the sequence
+			b.charge(70) // numbered, and so above every row from before the sequence
 			legacy := b.legacyStatementIDs()
 			rows, next := b.statement(b.admitted, 50, nil)
 			if next != nil || len(rows) != len(legacy)+1 {
 				t.Fatalf("the statement is %+v with a cursor %v; want the numbered charge and %d more", rows, next, len(legacy))
 			}
-			if rows[0].Amount != -7 || rows[0].Balance == nil || *rows[0].Balance != b.balanceOf(b.admitted.Account) {
-				t.Errorf("the numbered charge reads %+v; want -7 and the balance %d", rows[0], b.balanceOf(b.admitted.Account))
+			if rows[0].Amount != -70 || rows[0].Balance == nil || *rows[0].Balance != b.balanceOf(b.admitted.Account) {
+				t.Errorf("the numbered charge reads %+v; want -70 and the balance %d", rows[0], b.balanceOf(b.admitted.Account))
 			}
 			var sum int64
 			for i, row := range rows[1:] {
@@ -273,8 +273,8 @@ func TestStatementFromBeforeTheSequence(t *testing.T) {
 				}
 				sum += row.Amount
 			}
-			if sum != 50 {
-				t.Errorf("the rows from before the sequence add up to %d, want 100 - 20 - 30", sum)
+			if sum != 500 {
+				t.Errorf("the rows from before the sequence add up to %d, want 1000 - 200 - 300", sum)
 			}
 		})
 	}
@@ -366,6 +366,13 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
 			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 300)`},
 	), "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
+	// Every account has its balance row from registration; the statement starts from it.
+	legacyScope := pg.NewScope(false, nil, []uuid.UUID{legacy})
+	if err := b.app.Tx(t.Context(), legacyScope, func(tx pg.Tx) error {
+		return OpenBalance(t.Context(), tx, b.admitted.Site, legacy, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	newest := statementNewest
 	far, farLegacy := newest, StatementCursor{}
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
@@ -385,7 +392,7 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 	}{
 		{"numbered, every row in view", b.platform, b.admitted.Account, "transactions_by_account_seq", newest, far},
 		{"numbered, in the account's scope", b.admitted.Scope, b.admitted.Account, "transactions_by_account_seq", newest, far},
-		{"from before the sequence, in the account's scope", pg.NewScope(false, nil, []uuid.UUID{legacy}), legacy, "transactions_legacy_by_account", newest, farLegacy},
+		{"from before the sequence, in the account's scope", legacyScope, legacy, "transactions_legacy_by_account", newest, farLegacy},
 	} {
 		// The page query is planned in the transaction ListStatement has read a page in, so the plan is the one it gets.
 		listed := func(tx pg.Tx) error {
