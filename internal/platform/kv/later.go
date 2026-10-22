@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	laterCapacity   = 4096
-	accountCapacity = 65536
-	writeInterval   = time.Second / 10
-	writeBurst      = 100
+	laterCapacity     = 4096
+	stickyOutstanding = 32
+	accountCapacity   = 65536
+	writeInterval     = time.Second / 10
+	writeBurst        = 100
 )
 
 // writeAccounts bounds both the writes one account can create and the memory used to remember accounts. A full table
@@ -54,7 +55,13 @@ func (c *Client) Later(account uuid.UUID, cmd Cmd) {
 	if cmd.kind != setCmd {
 		panic("kv: Later only accepts expiring bindings")
 	}
-	if c.closed.Load() || c.later == nil {
+	if c.later == nil {
+		return
+	}
+	c.laterMu.RLock()
+	defer c.laterMu.RUnlock()
+	if c.closed {
+		c.m.drop(context.Background(), dropShutdown, 1)
 		return
 	}
 	switch {
@@ -72,11 +79,28 @@ func (c *Client) Later(account uuid.UUID, cmd Cmd) {
 	}
 }
 
-// writeLater drains a bounded batch through the same deadline, slots, breaker and metrics as foreground accesses.
+// writeLater gives up immediately on busy slots; it must never queue ahead of foreground accesses.
 // An unavailable write is discarded, never retried: a stale retry could replace a newer binding from another node.
 func (c *Client) writeLater(ctx context.Context) {
-	var batch [maxOutstanding]Cmd
+	defer func() {
+		var pending int64
+		for {
+			select {
+			case <-c.later:
+				pending++
+			default:
+				if pending > 0 {
+					c.m.drop(context.WithoutCancel(ctx), dropShutdown, pending)
+				}
+				return
+			}
+		}
+	}()
+	var batch [stickyOutstanding]Cmd
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -92,7 +116,9 @@ func (c *Client) writeLater(ctx context.Context) {
 				break drain
 			}
 		}
-		if c.memoryStop.Load() {
+		if ctx.Err() != nil {
+			c.m.drop(context.WithoutCancel(ctx), dropShutdown, int64(n))
+		} else if c.memoryStop.Load() {
 			c.m.drop(ctx, dropMemory, int64(n))
 		} else {
 			_, _ = c.Do(ctx, StickyWrite, batch[:n]...) //nolint:errcheck // Do records failures; this disposable write has no caller to fail.

@@ -60,7 +60,7 @@ func makeDrop(c *Client, reason dropReason) {
 }
 
 func TestLaterDropsAndCounts(t *testing.T) {
-	for _, reason := range dropReasons {
+	for _, reason := range []dropReason{dropQueue, dropMemory, dropAccount} {
 		t.Run(string(reason), func(t *testing.T) {
 			c := queuedClient()
 			reader := sdkmetric.NewManualReader()
@@ -162,14 +162,27 @@ func TestLaterStopsWithClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c, server := stuckClient(maxOutstanding)
 		c.later = make(chan Cmd, laterCapacity)
+		reader := sdkmetric.NewManualReader()
+		c.m = newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+		for range 17 {
+			c.later <- Set("ax:test", "value", time.Hour)
+		}
 		ctx, cancel := context.WithCancel(t.Context())
 		c.stop = cancel
-		c.done.Go(func() { c.writeLater(ctx) })
-		if err := c.Close(t.Context()); err != nil {
-			t.Fatal(err)
+		c.done.Go(func() {
+			<-ctx.Done()
+			c.writeLater(ctx)
+		})
+		for range 2 {
+			if err := c.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := dropped(t, reader, dropShutdown); got != 17 {
+			t.Fatalf("shutdown counted %d drops, want the 17 pending writes exactly once", got)
 		}
 		c.Later(uuid.UUID{}, Set("ax:test", "value", time.Hour))
-		if len(c.later) != 0 || server.sent.Load() != 0 {
+		if len(c.later) != 0 || server.sent.Load() != 0 || dropped(t, reader, dropShutdown) != 18 {
 			t.Fatal("a closed client retained or sent a write")
 		}
 	})
@@ -179,7 +192,7 @@ func TestLaterSplitsAtTheOutstandingLimit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c, server := stuckClient(maxOutstanding)
 		c.later = make(chan Cmd, laterCapacity)
-		const writes = 2*maxOutstanding + 1
+		const writes = 2*stickyOutstanding + 1
 		for range writes {
 			c.later <- Set("ax:test", "value", time.Hour)
 		}
@@ -192,7 +205,7 @@ func TestLaterSplitsAtTheOutstandingLimit(t *testing.T) {
 		server.mu.Lock()
 		most := server.mostOut
 		server.mu.Unlock()
-		if server.sent.Load() != writes || server.batches.Load() != 3 || most > maxOutstanding {
+		if server.sent.Load() != writes || server.batches.Load() != 3 || most > stickyOutstanding {
 			t.Fatalf("sent %d in %d batches, most outstanding %d", server.sent.Load(), server.batches.Load(), most)
 		}
 	})
@@ -206,7 +219,7 @@ func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
 		reader := sdkmetric.NewManualReader()
 		c.m = newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 		cmd := Set("ax:test", "endpoint", time.Hour)
-		for range maxOutstanding {
+		for range stickyOutstanding {
 			c.later <- cmd
 		}
 		ctx, cancel := context.WithCancel(t.Context())
@@ -217,7 +230,7 @@ func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
 		}()
 		c.done.Go(func() { c.writeLater(ctx) })
 		synctest.Wait() // the first batch is waiting for replies the server has withheld
-		if server.sent.Load() != maxOutstanding {
+		if server.sent.Load() != stickyOutstanding {
 			t.Fatal("the writer did not reach the stalled server")
 		}
 		start := time.Now()
@@ -227,8 +240,34 @@ func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
 		if time.Now() != start || len(c.later) != laterCapacity || dropped(t, reader, dropQueue) != 1 {
 			t.Fatal("offers waited, grew the queue, or failed to count the overflow")
 		}
-		if server.sent.Load() != maxOutstanding {
-			t.Fatal("a second batch escaped while all command slots were held")
+		if server.sent.Load() != stickyOutstanding {
+			t.Fatal("a second batch escaped while the sticky budget was held")
+		}
+	})
+}
+
+func TestLaterCountsOffersRacingWithClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, server := priorityClient()
+		c.accounts.fullAt = make(map[uuid.UUID]time.Time)
+		reader := sdkmetric.NewManualReader()
+		c.m = newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
+		ctx, cancel := context.WithCancel(t.Context())
+		c.stop = cancel
+		c.done.Go(func() {
+			<-ctx.Done()
+			c.writeLater(ctx)
+		})
+		var group sync.WaitGroup
+		for n := range 64 {
+			group.Go(func() { c.Later(uuid.UUID{byte(n)}, Set("ax:test", "value", time.Hour)) })
+		}
+		if err := c.Close(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		group.Wait()
+		if dropped(t, reader, dropShutdown) != 64 || len(c.later) != 0 || server.sent.Load() != 0 {
+			t.Fatal("offers racing with shutdown were lost, double-counted, or sent")
 		}
 	})
 }

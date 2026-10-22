@@ -46,19 +46,20 @@ type Deps struct {
 // breaker around every access, and the heartbeat that makes a wrong N visible. It holds no business rule: a module keeps
 // its script and builds its keys here (internal/platform/kv/README.md).
 type Client struct {
-	vk      valkey.Client // nil in single-core mode, where every use stays in the process
-	ns      string
-	now     func() time.Time // the local clock, which Now corrects by skew
-	skew    atomic.Int64     // the server's clock less this one's, in nanoseconds
-	live    atomic.Int64     // nodes the heartbeat sees alive, this one included
-	config  int              // the configured N
-	logger  *slog.Logger
-	m       metrics
-	br      *breaker
-	slots   *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
-	hear    *heartbeat          // nil without a database: a test's client
-	hold    *pg.Hold            // the node's name, held by a session of the database; nil when hear is
-	timeout time.Duration       // the deadline of an access
+	vk         valkey.Client // nil in single-core mode, where every use stays in the process
+	ns         string
+	now        func() time.Time // the local clock, which Now corrects by skew
+	skew       atomic.Int64     // the server's clock less this one's, in nanoseconds
+	live       atomic.Int64     // nodes the heartbeat sees alive, this one included
+	config     int              // the configured N
+	logger     *slog.Logger
+	m          metrics
+	br         *breaker
+	slots      *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
+	writeSlots *semaphore.Weighted // a subset of slots: sticky writes cannot fill the foreground budget
+	hear       *heartbeat          // nil without a database: a test's client
+	hold       *pg.Hold            // the node's name, held by a session of the database; nil when hear is
+	timeout    time.Duration       // the deadline of an access
 	// beatTimeout bounds one round of the heartbeat's database work.
 	beatTimeout time.Duration
 
@@ -68,7 +69,8 @@ type Client struct {
 	stop       context.CancelFunc
 	done       sync.WaitGroup
 	closing    sync.Once
-	closed     atomic.Bool
+	laterMu    sync.RWMutex // closes admission before the writer counts and discards the remaining queue
+	closed     bool
 	later      chan Cmd
 	accounts   writeAccounts
 	memoryStop atomic.Bool
@@ -91,7 +93,8 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 	}
 	c := &Client{
 		ns: namespace, now: deps.Now, config: cfg.Nodes, logger: deps.Logger, m: newMetrics(deps.Meter),
-		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), beatTimeout: deps.HeartbeatTimeout, timeout: deps.AccessTimeout,
+		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), writeSlots: semaphore.NewWeighted(stickyOutstanding),
+		beatTimeout: deps.HeartbeatTimeout, timeout: deps.AccessTimeout,
 	}
 	c.live.Store(int64(cfg.Nodes))
 	// The node registers first: a second node that reached this database, with Valkey or without, or an N set too low, is
@@ -293,7 +296,9 @@ func (c *Client) Now() time.Time {
 // only a crash would leave. ctx bounds the deletion, and a returned error is the row's alone.
 func (c *Client) Close(ctx context.Context) error {
 	c.closing.Do(func() {
-		c.closed.Store(true)
+		c.laterMu.Lock()
+		c.closed = true
+		c.laterMu.Unlock()
 		if c.stop != nil {
 			c.stop()
 			c.done.Wait()

@@ -31,13 +31,15 @@ type dropReason string
 
 // The reasons for a discarded write, in the order the metrics prebuild their options.
 const (
-	dropQueue   dropReason = "queue"
-	dropMemory  dropReason = "memory"
-	dropAccount dropReason = "account"
+	dropQueue    dropReason = "queue"
+	dropMemory   dropReason = "memory"
+	dropAccount  dropReason = "account"
+	dropSlots    dropReason = "slots"
+	dropShutdown dropReason = "shutdown"
 )
 
 // dropReasons lists the bounded label set whose measurement options are built at startup.
-var dropReasons = [...]dropReason{dropQueue, dropMemory, dropAccount}
+var dropReasons = [...]dropReason{dropQueue, dropMemory, dropAccount, dropSlots, dropShutdown}
 
 // metrics is the client's instruments, with the option slices built once: passing attributes one by one allocates a
 // slice on every access, and the precheck is on the first token's path (internal/gateway's BenchmarkPrecheck).

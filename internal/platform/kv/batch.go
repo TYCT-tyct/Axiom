@@ -20,6 +20,8 @@ const Timeout = 20 * time.Millisecond
 // caller takes its fallback (README「每种用途」).
 var ErrUnavailable = errors.New("valkey unavailable")
 
+var errWriteSlots = errors.New("sticky write slots are busy")
+
 // Use is what a batch of commands is for: the label of the metrics and of the log line (README「指标与告警」).
 type Use string
 
@@ -123,7 +125,12 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 		return nil, ErrUnavailable
 	}
 	started := c.now()
-	probe, allowed := c.br.allow(started)
+	var probe, allowed bool
+	if use == StickyWrite {
+		allowed = c.br.allowWrite()
+	} else {
+		probe, allowed = c.br.allow(started)
+	}
 	if !allowed {
 		c.m.recordCall(ctx, use, unavailable)
 		return nil, ErrUnavailable
@@ -131,13 +138,17 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	values, err := c.send(ctx, caller, c.build(cmds))
+	values, err := c.send(ctx, caller, use, cmds)
 	took := c.now().Sub(started)
 	result := outcomeOf(caller, err)
 	c.m.duration.Record(caller, took.Seconds(), c.m.useOption(use))
 	c.m.recordCall(caller, use, result)
-	if changed, open := c.br.done(started, probe, result); changed {
-		c.m.recordBreaker(caller, open)
+	if use != StickyWrite {
+		if changed, open := c.br.done(started, probe, result); changed {
+			c.m.recordBreaker(caller, open)
+		}
+	} else if errors.Is(err, errWriteSlots) {
+		c.m.drop(caller, dropSlots, int64(len(cmds)))
 	}
 	if err != nil {
 		if result == failed {
@@ -172,17 +183,34 @@ type flight struct {
 // send puts the batch on the wire and waits for its replies for as long as ctx lasts. The batch is sent by a goroutine of
 // its own that holds its place until the replies come, not until the caller stops waiting: the place stands for the ring
 // slot, which an abandoned command keeps. Without a place by the deadline nothing is sent.
-func (c *Client) send(ctx, caller context.Context, built []valkey.Completed) ([]Value, error) {
-	weight := int64(len(built))
-	if err := c.slots.Acquire(ctx, weight); err != nil {
+func (c *Client) send(ctx, caller context.Context, use Use, cmds []Cmd) ([]Value, error) {
+	weight := int64(len(cmds))
+	if use == StickyWrite {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// The private budget also covers abandoned writes until their replies arrive. TryAcquire never joins
+		// the foreground semaphore's FIFO queue, or passes a request already waiting there.
+		if !c.writeSlots.TryAcquire(weight) {
+			return nil, errWriteSlots
+		}
+		if !c.slots.TryAcquire(weight) {
+			c.writeSlots.Release(weight)
+			return nil, errWriteSlots
+		}
+	} else if err := c.slots.Acquire(ctx, weight); err != nil {
 		return nil, err
 	}
+	built := c.build(cmds)
 	sent := &flight{done: make(chan struct{})}
 	go func() {
 		work, cancel := context.WithTimeout(context.WithoutCancel(caller), settleBy)
 		defer cancel()
 		sent.values, sent.err = c.run(work, built)
 		c.slots.Release(weight)
+		if use == StickyWrite {
+			c.writeSlots.Release(weight)
+		}
 		close(sent.done)
 	}()
 	select {

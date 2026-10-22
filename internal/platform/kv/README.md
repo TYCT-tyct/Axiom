@@ -28,7 +28,7 @@
 - **服务端**：`valkey/valkey:9.1.2-alpine`，部署和测试用同一个标签。
 - **连接**：总是流水线（`AlwaysPipelining`），并发的命令共用少量连接（默认每个实例 4 条），不用按并发数配连接池（sub2api 配 1024 条，`repository/redis.go:23`、`config.go:2241`）。不开它时，没有并发的命令走同步路径，期限一到就关掉连接（v1.0.78 `pipe.go` 的 `syncDo`），低流量时每次超时都要重连。关掉客户端缓存（`DisableCache`，不发 `CLIENT TRACKING`）和自动重试（`DisableRetry`：脚本会加计数，不能重发；一次失败只计一次，直接走兜底）。建连 1s；一条连接 1s 内收不到回复就关掉重连（`ConnWriteTimeout`；默认是 `Dialer.KeepAlive` × 10，即 10s，太长）。上面四个字段名与默认值已按 v1.0.78 的 `valkey.go`（第 231、259、261、265 行和 `ConnWriteTimeout` 的默认值计算）核对，升级时重新核对。
 - **期限**：每次同步访问的期限是调用方 context 与 `kv.Timeout`（20ms，[路由的「容量感知」](../../../docs/domains/routing.md#容量感知)）中较早的一个。到期立即返回，连接不断：迟到的回复由客户端的一个 goroutine 收下丢掉（`pipe.go` 的 `abort`），它至多活到 `ConnWriteTimeout`（1s）。登录也用同一个期限，Valkey 在同机房的正常往返在 1ms 以内，20ms 还没回就是它出了问题。
-- **流水线满时会等，所以客户端自己限住在途的命令**：命令先放进每条连接的环（默认 2¹⁰ 格），`ring.PutMulti` 在格子满时等一个不看 context 的条件变量（v1.0.78 `ring.go`），20ms 的期限拦不住它；而熔断打开前已经通过的访问收不回来。所以 `Client.Do` 在发出命令前先拿一个「位置」（`golang.org/x/sync/semaphore`，总数 512 条命令，是一条连接的环的一半，一批落在哪条连接上都有空格）：期限到了还没拿到位置就不发、直接返回不可用。位置在回复到达（或连接因两秒左右没有回应被关闭，上限 `settleBy` 3s）时才还，不是调用方不等了就还，因为被放弃的命令仍占着环里的格子。所以环不会被填满，一次访问最长等 `kv.Timeout`。测试：用一个按测试意愿才应答的假服务端（`send_test.go`，受控的满队列、取消、释放顺序，时间由 synctest 控制），再在真实 Valkey 的 `CLIENT PAUSE … WRITE` 下同时发出 5000 个访问，断言每个都返回、到达服务端的不超过 512 条。
+- **流水线满时会等，所以客户端自己限住在途的命令**：命令先放进每条连接的环（默认 2¹⁰ 格），`ring.PutMulti` 在格子满时等一个不看 context 的条件变量（v1.0.78 `ring.go`），20ms 的期限拦不住它；而熔断打开前已经通过的访问收不回来。所以 `Client.Do` 在发出命令前先拿一个「位置」（`golang.org/x/sync/semaphore`，总数 512 条命令，是一条连接的环的一半，一批落在哪条连接上都有空格；其中后台粘性写入最多占 32 条，含调用方已超时而回复尚未返回的命令）：期限到了还没拿到位置就不发、直接返回不可用。位置在回复到达（或连接因两秒左右没有回应被关闭，上限 `settleBy` 3s）时才还，不是调用方不等了就还，因为被放弃的命令仍占着环里的格子。所以环不会被填满，一次访问最长等 `kv.Timeout`。测试：用一个按测试意愿才应答的假服务端（`send_test.go`，受控的满队列、取消、释放顺序，时间由 synctest 控制），再在真实 Valkey 的 `CLIENT PAUSE … WRITE` 下同时发出 5000 个访问，断言每个都返回、到达服务端的不超过 512 条。
 - **认证**：Valkey 的 ACL 用户 `axiom`，`default` 用户关闭。`AXIOM_VALKEY_URL` 只写地址和用户（`valkey://axiom@valkey:6379`），密码从受保护文件 `AXIOM_VALKEY_PASSWORD_FILE` 读，文件的权限要求同[主密钥文件](../README.md#凭证加密)：环境变量会出现在 `docker inspect` 里，而拿到密码的人能删掉全部登录桶。URL 里带了密码就不启动。同一台机器上走 compose 的内部网络，不加 TLS（与数据库的 `sslmode=disable` 相同）；跨机器（M3）用 `valkeys://`，按系统根证书校验服务端，自签 CA 的变量随那个部署加入。其他写法（`redis://` 等）不接受，一种写法。错误只报变量名，不带取值。
 - **权限**：`axiom` 用户只能碰 `ax:*` 的键，命令只放行 `hello`、`auth`、`ping`、`client|setinfo`、`info`、`time`、`get`、`set`、`del`、`incr`、`pexpire`、`eval`（脚本里执行的命令也按这个用户检查；不放行 `evalsha`，见下文「接口」）。ACL 文件里只写密码的 SHA-256（`#<十六进制>`），不写明文。测试以这个用户跑完全部用法，出现 NOPERM 即失败；`FLUSHALL`、`KEYS`、`CONFIG`、`EVALSHA` 和 `ax:*` 之外的键必须被拒。
 
@@ -75,8 +75,8 @@ K1–K3 已共享设计中放进 Valkey 的三类状态，但生产入口仍拒�
 | 钱、预留、授权、控制台会话、幂等键、同步租约、任务认领 | PostgreSQL；不依赖进程内缓存决定资金或权限 |
 | 在途、账户闸、查库桶、argon2id、连接池、粘性写桶 | 每进程资源保护，按节点设限是本意 |
 | 端点负载、暂停、重试预算、凭证冷却 | 进程内的路由反馈；健康熔断与试探由 quality 经 PostgreSQL 后台共享；不是全局硬额度 |
-| **供应商凭证并发与账号 RPM** | **仍是每进程全额上限**：`suppliers.Service` 的 `credRuntime.inflight` 与 `minuteRuntime.used`，`Acquire` 未分节点份额；两个节点会乘二。必须先落地静态份额/共享限额与接线，才可移除入口限制。详见 [suppliers 的并发与速率](../../suppliers/README.md#并发与速率) |
-| 邮件按收件人限流 | worker 内的进程桶，跨节点发送频率仍可能放大；不属于 K1–K3，后续共享前不能宣称全局限流 |
+| **供应商凭证并发与账号 RPM** | **仍是每进程全额上限**：`suppliers.Service` 的 `credRuntime.inflight` 与 `minuteRuntime.used`，`Acquire` 未分节点份额；两个节点会乘二。必须先完成 [#313 E3-3 凭证并发静态份额](https://github.com/TYCT-tyct/Axiom/issues/313) 和 [#382 RPM 滑动窗口与多节点分配](https://github.com/TYCT-tyct/Axiom/issues/382) 的接线与验收，才可移除入口限制。详见 [suppliers 的并发与速率](../../suppliers/README.md#并发与速率) |
+| 邮件按收件人限流 | worker 内的进程桶，跨节点发送频率仍可能放大；不属于 K1–K3，由 [#399 收件人跨节点限流](https://github.com/TYCT-tyct/Axiom/issues/399) 跟踪，落地前不能宣称全局限流 |
 
 ## 时钟
 
@@ -134,7 +134,7 @@ compose 里 `maxmemory` 默认 256 MB、`maxmemory-policy noeviction`，不持�
 **会话粘性**
 
 - **读**：预检那一批里 `GET`。请求带「上下文已压缩」标记时换成 `DEL`，不读，等于先忘记再选。
-- **写**：规则不变（[gateway 的「并发、背压与共享状态」](../../gateway/README.md#并发背压与共享状态)），`SET 键 端点 PX 粘性时间`，先过按账户的限速（见「内存」），再交给后台队列（4096 条）。一个 goroutine 每次取队列中至多 512 条（沿用 K1 的在途命令上限），用一次 `Do` / `DoMulti` 批量发出（期限同样 20ms），有剩余继续下一批，吞吐不受「一条一次往返」限制。队列满、内存超过阈值、账户超速都丢弃并计数，不等待队列空位或网络；出队时再检查内存停写，防止已排队的写入越过停写。失败不重试，避免旧写入在恢复后覆盖别的节点的新绑定；关闭客户端时停止后台循环，未发送的绑定可以丢失。
+- **写**：规则不变（[gateway 的「并发、背压与共享状态」](../../gateway/README.md#并发背压与共享状态)），`SET 键 端点 PX 粘性时间`，先过按账户的限速（见「内存」），再交给后台队列（4096 条）。一个 goroutine 每次取队列中至多 32 条，用一次 `Do` / `DoMulti` 批量发出（期限同样 20ms）。先 `TryAcquire` 一个至多 32 条的后台在途预算，再 `TryAcquire` K1 共用的 512 条位置；任一取不到就立即丢弃该批、计 `slots`，不排进前台的 FIFO 等待队列，也不越过已有的等待者。两个预算都保留到回复返回或底层超时；调用方自己到期不归还，因此后续批次不能累积占满 512 条位置。相比静态切走 32 个位置，这样前台在无后台写时仍可用全部 512 条。队列满、内存超过阈值、账户超速都丢弃并计数，不等待队列空位或网络；出队时再检查内存停写，防止已排队的写入越过停写。失败不重试，避免旧写入在恢复后覆盖别的节点的新绑定；关闭客户端时先锁住入队边界、停止接受新绑定，再停止后台循环；队列中尚未出队的绑定及关闭后投递的绑定按 `shutdown` 计数并丢弃，不等待网络写完；在途批次的取消仍由 `calls{use=sticky_write,result=skipped}` 记录。
 - **不可用**：读不到就不粘，写丢掉。配了 Valkey 时不用进程内的表：别的节点看不到它，恢复后以 Valkey 为准，两份只会互相打架。sub2api 读粘性出错时同样当作没有（`service/gateway_scheduling.go:137`）。
 - 单核心模式（没设 URL）照旧用 routing 进程内的表。
 - 有效期从写入算起，用着不续期，与进程内表相同；K3 的写放大比较与结论见[路由的「会话粘性」](../../../docs/domains/routing.md#会话粘性)。
@@ -143,17 +143,17 @@ compose 里 `maxmemory` 默认 256 MB、`maxmemory-policy noeviction`，不持�
 
 new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limit.go:119`、`rate_limiter.go:142`）。我们的期限只有 20ms，没有熔断时 Valkey 一卡，每个请求都多 20ms。
 
-- **记什么**：每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。成功和出错的访问都算窗口里的一次访问（下面「一半以上」「超过 20%」的分母），出错还证明服务器在，连续不可用的计数清零；打开期间才结束的在途访问不再记，不会延长打开的时间。
+- **记什么**：前台访问和平台检查参与熔断；`StickyWrite` 的所有结果只记访问指标，不改变错误率、连续失败数或熔断状态，后台流量也不能把前台故障的连续计数清零。每次访问的结果是成功、不可用（`kv.Timeout` 自己到期、连接错误）、出错（脚本或命令被拒，是程序错误，记错误日志；OOM 也在这里，见「内存」），或跳过。只有「不可用」计入熔断。**调用方的原因不算**：调用方 context 被取消，或调用方的期限早于 `kv.Timeout` 而先到，记作跳过（`skipped`），不计入。否则攻击者快速发请求再断开，就能替我们推开熔断。成功和出错的访问都算窗口里的一次访问（下面「一半以上」「超过 20%」的分母），出错还证明服务器在，连续不可用的计数清零；打开期间才结束的在途访问不再记，不会延长打开的时间。
 - **打开**，在最近 10 秒的滑动窗口上（10 个一秒的桶），满足任一条：
   - 访问至少 20 次，且一半以上不可用；
   - 访问至少 10 次，且超过 20% 是 `kv.Timeout` 到期（耗时触发：部分故障时只有一部分请求变慢，错误率条件看不到它）；
   - 连续 5 次不可用。
-- 打开后 5 秒内的访问不做任何 I/O，直接返回不可用；之后半开：放一次试探出去，其余仍直接返回，试探成功即关闭，失败再打开 5 秒。后台的粘性写入同样受它约束。
+- 打开后 5 秒内的访问不做任何 I/O，直接返回不可用；之后半开：放一次试探出去，其余仍直接返回，试探成功即关闭，失败再打开 5 秒。后台粘性写入在熔断打开及半开期间全部跳过，不认领探测；由前台访问或平台检查探测成功后才恢复。
 - **代价**：打开之前，在途的每个访问都可能等满 20ms，同一时刻约有「每秒请求数 × 20ms」个（每秒 5000 个时约 100 个）；高流量时条件在几十毫秒内满足。10 秒内不到 10 次访问的安静节点永远不会熔断，它的每次访问至多多 20ms，量小，可以接受。首字延迟里给这一步的预算是 2ms（[性能的「延迟预算」](../../../docs/performance.md#延迟预算)），所以部分故障也要靠耗时触发尽快打开。
 
 ## 指标与告警
 
-`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（发送前因队列、内存或账户限制被丢弃，标签 `reason`：`queue`、`memory`、`account`）、`axiom.kv.memory_used_bytes`（后台每 10 秒读 `INFO memory`）与 `axiom.kv.rejected_oom`（访问被服务端以 OOM 拒绝的次数，由客户端在拒绝发生时数，不读 `INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
+`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（发送前因队列、内存、账户、在途位置或关闭被丢弃，标签 `reason`：`queue`、`memory`、`account`、`slots`、`shutdown`）、`axiom.kv.memory_used_bytes`（后台每 10 秒读 `INFO memory`）与 `axiom.kv.rejected_oom`（访问被服务端以 OOM 拒绝的次数，由客户端在拒绝发生时数，不读 `INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
 
 ## 部署
 
@@ -166,7 +166,8 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 ## 测试
 
 - **真实 Valkey**：`withcluster` 在一次 `just test` 里与 PostgreSQL 一起起一个 Valkey 容器（同一镜像、同一份 ACL 和配置），地址经 `KVTEST_URL` 传入，和 `PGTEST_CLUSTER_URL` 一样用 `os.Environ` 读，不进测试缓存键；没有这个变量时 `kvtest` 自己起容器。用例各用随机的 `ns`。改服务端状态的用例（`CLIENT PAUSE`、重启、填满内存、改 ACL 或配置）用自己的容器。
-- **超时**：`send_test.go` 的 `TestTimeoutReturnsAndTheBreakerRecovers` 用 `testing/synctest` 和受控假服务端验证访问恰在生产期限 `kv.Timeout`（20ms）返回不可用、熔断打开后不再发送、迟到回复不提前关闭熔断、打开期后半开探测成功并恢复正常访问，以及 `breaker_open` 从 1 回到 0；生产期限的准确耗时只在虚拟时间里断言。同文件的队列测试验证无空位时仍按期限返回、等到空位才发送，以及在途数上限。真实 Valkey 的集成验证在 `outage_test.go`：另一条连接执行 `CLIENT PAUSE <很长> WRITE` 阻塞写脚本（`INFO`、`TIME` 照常），放行时显式 `CLIENT UNPAUSE`；`TestEveryAccessReturns` 验证大量并发访问都返回、到达服务端的不超过在途上限，`TestCallerGivingUpDoesNotOpenTheBreaker` 验证调用方先取消记作跳过、不推开熔断，这两个用例不验证恢复。`TestLaterDoesNotWaitForStalledWrites` 用同一个受控服务端扣住全部 512 个在途位置，验证继续投递不推进虚拟时钟、队列最多 4096 条且溢出计数。真实服务端的正常回复使用 `kvtest` 的一分钟默认期限；熔断和时钟偏差的测试用虚拟时间或可注入时钟，不按墙钟判成败。
+- **超时**：`send_test.go` 的 `TestTimeoutReturnsAndTheBreakerRecovers` 用 `testing/synctest` 和受控假服务端验证访问恰在生产期限 `kv.Timeout`（20ms）返回不可用、熔断打开后不再发送、迟到回复不提前关闭熔断、打开期后半开探测成功并恢复正常访问，以及 `breaker_open` 从 1 回到 0；生产期限的准确耗时只在虚拟时间里断言。同文件的队列测试验证无空位时仍按期限返回、等到空位才发送，以及在途数上限。真实 Valkey 的集成验证在 `outage_test.go`：另一条连接执行 `CLIENT PAUSE <很长> WRITE` 阻塞写脚本（`INFO`、`TIME` 照常），放行时显式 `CLIENT UNPAUSE`；`TestEveryAccessReturns` 验证大量并发访问都返回、到达服务端的不超过在途上限，`TestCallerGivingUpDoesNotOpenTheBreaker` 验证调用方先取消记作跳过、不推开熔断，这两个用例不验证恢复。`TestLaterDoesNotWaitForStalledWrites` 用同一个受控服务端扣住后台 32 个在途位置，验证继续投递不推进虚拟时钟、队列最多 4096 条且溢出计数。真实服务端的正常回复使用 `kvtest` 的一分钟默认期限；熔断和时钟偏差的测试用虚拟时间或可注入时钟，不按墙钟判成败。
+- **后台与前台隔离**：`later_priority_test.go` 用受控写入回复与虚拟时间，验证后台取不到位置时立即丢弃、持位与超时后仍保留最多 32 个位置，并发的两命令预检立即返回；连续后台超时不改前台熔断，半开只由前台探测。关闭测试验证非空队列、重复关闭及并发投递的 `shutdown` 计数恰好一次。
 - **重启**：停止再启动容器，断言期间请求照常完成、恢复后重新连上，计数从零开始。
 - **内存满**：把容器的 `maxmemory` 设得很小并写满，断言新写入得到 OOM、按出错走兜底，已有的登录桶仍在；超过 70% 后粘性写入被丢弃。
 - **时钟**：见「时钟」；另测启动时偏差超过 1s 不启动。

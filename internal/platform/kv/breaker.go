@@ -55,6 +55,13 @@ type breaker struct {
 
 func newBreaker() *breaker { return &breaker{} }
 
+// allowWrite keeps disposable writes out of the half-open probe, which must report a foreground outcome.
+func (b *breaker) allowWrite() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.open
+}
+
 // allow reports whether an access may do I/O now, and whether it is the half-open probe, whose outcome closes or opens
 // the breaker again. The clock can be injected, so a test opens and closes it without waiting.
 func (b *breaker) allow(now time.Time) (probe, allowed bool) {
