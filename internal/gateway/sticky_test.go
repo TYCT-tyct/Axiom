@@ -193,11 +193,10 @@ func TestTheStickyTimeIsTheRoutes(t *testing.T) {
 	})
 }
 
-// TestACompactedContextForgetsTheSession: a request that says its context was compacted is not sent to the endpoint
-// the session stuck to, and the session is forgotten.
-func TestACompactedContextForgetsTheSession(t *testing.T) {
-	t.Parallel()
-	r := newRig(t, func(o *rigOptions) {
+// withDearAlpha2 prices alpha-2 above its twin, so a session that is not stuck to alpha-2 starts on alpha-1: what a
+// binding is worth reading shows up as which endpoint serves first.
+func withDearAlpha2(t *testing.T) func(*rigOptions) {
+	return func(o *rigOptions) {
 		o.endpoints = func(name string, e *routing.Endpoint) {
 			price := cacheCheap
 			if name == "alpha-2" {
@@ -209,7 +208,14 @@ func TestACompactedContextForgetsTheSession(t *testing.T) {
 			}
 			e.Price.Schedule = schedule
 		}
-	})
+	}
+}
+
+// TestACompactedContextForgetsTheSession: a request that says its context was compacted is not sent to the endpoint
+// the session stuck to, and the session is forgotten.
+func TestACompactedContextForgetsTheSession(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, withDearAlpha2(t))
 	a := r.newAccount(100_000_000)
 	firstOf := func(headers ...string) string {
 		t.Helper()

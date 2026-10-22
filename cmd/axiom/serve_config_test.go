@@ -145,8 +145,7 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 			},
 		},
 		{
-			// K3 is not in yet: with stickiness still in the process, a second core node would lose a session's
-			// endpoint (internal/platform/kv/README.md「落地顺序」).
+			// Each supplier service still uses the full credential ceilings; cache sharing alone is insufficient.
 			"more than one core node",
 			[]string{
 				database, "AXIOM_MASTER_KEY_FILE=" + good, "AXIOM_KEY_HASH_FILE=" + good, "AXIOM_IDENTITY_KEY_FILE=" + good,
