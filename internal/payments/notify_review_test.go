@@ -57,7 +57,7 @@ func TestCallbackFullTableEvictsOldestAndGroupsIPv6(t *testing.T) {
 	oldest := callbackKey{ip: netip.MustParseAddr("192.0.2.1")}
 	w.p.allowCallback(oldest, callbackIPLimit, now)
 	for i := 1; i < callbackBuckets; i++ {
-		ip := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		ip := netip.MustParseAddr(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 		w.p.allowCallback(callbackKey{ip: ip}, callbackIPLimit, now)
 	}
 	if r := w.callbackFrom(MerchantID(m.ID), "198.51.100.1:1234", nil); r.Code != 200 {

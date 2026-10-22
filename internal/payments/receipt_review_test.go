@@ -48,21 +48,26 @@ func testIncompletePayment(t *testing.T, field string, failures int) {
 		t.Fatalf("incomplete query did not retry once: status=%d calls=%d", r.Code, calls)
 	}
 	if failures == 2 {
-		if state, _, _ := w.stored(o.ID); state != string(Pending) {
-			t.Fatal("transient empty receipt permanently held the order", state)
-		}
-		if w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 || w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 0 {
-			t.Fatal("transient empty receipt became a permanent money fact")
-		}
-		if !strings.Contains(w.logs.String(), "paid receipt is incomplete") {
-			t.Fatal("incomplete receipt was not warned")
-		}
-		w.assertCredit(o, 0)
+		w.assertIncompleteReceipt(o)
 		if _, err := w.p.Verify(t.Context(), w.accountA(), o.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	w.assertCredit(o, o.Credits)
+}
+
+func (w *world) assertIncompleteReceipt(o Order) {
+	w.t.Helper()
+	if state, _, _ := w.stored(o.ID); state != string(Pending) {
+		w.t.Fatal("transient empty receipt permanently held the order", state)
+	}
+	if w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 0 || w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 0 {
+		w.t.Fatal("transient empty receipt became a permanent money fact")
+	}
+	if !strings.Contains(w.logs.String(), "paid receipt is incomplete") {
+		w.t.Fatal("incomplete receipt was not warned")
+	}
+	w.assertCredit(o, 0)
 }
 
 func TestIncompleteNoticeUsesCompleteQuery(t *testing.T) {
