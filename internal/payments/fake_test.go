@@ -46,7 +46,7 @@ type fakeChannel struct {
 	caps     Caps
 }
 
-func (c fakeChannel) Caps() Caps          { return CapQuery | c.caps }
+func (c fakeChannel) Caps() Caps        { return CapQuery | c.caps }
 func (c fakeChannel) Methods() []Method { return c.settings.Methods }
 func (c fakeChannel) Create(_ context.Context, r CreateRequest) (Checkout, error) {
 	if c.create != nil {

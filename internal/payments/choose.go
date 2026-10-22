@@ -246,6 +246,9 @@ func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, 
 		return candidate{}, err
 	}
 	for _, c := range cs {
+		if err := holdOffer(ctx, tx, c.offer); err != nil {
+			return candidate{}, err
+		}
 		added, err := queries.AddUsage(ctx, tx, AddUsageParams{MerchantID: c.offer.MerchantID, SiteID: uuid.UUID(m.site.ID), Amount: c.quote.Total.Minor, DailyLimit: c.offer.DailyLimit})
 		if err != nil {
 			return candidate{}, fmt.Errorf("payments: add merchant usage: %w", err)
@@ -256,4 +259,21 @@ func (p *Payments) choose(ctx context.Context, tx pg.Tx, m menu, method Method, 
 	}
 	p.logger.Warn("payments: no merchant account takes a top-up", "site", m.site.ID.TypeID(), "method", string(method))
 	return candidate{}, ErrNoMerchant
+}
+
+// holdOffer shares the identity lock until the order commits. Saves take it exclusively before checking open orders;
+// rereading the revision here rejects a menu built before a concurrent save. Row locks would require UPDATE rights
+// that an account scope deliberately lacks on merchant configuration.
+func holdOffer(ctx context.Context, tx pg.Tx, o OffersRow) error {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))", "payments.merchant:"+MerchantID(o.MerchantID).TypeID()); err != nil {
+		return fmt.Errorf("payments: hold merchant identity: %w", err)
+	}
+	var current bool
+	if err := tx.QueryRow(ctx, "SELECT rev = $2 AND enabled FROM payments.merchants WHERE id = $1", o.MerchantID, o.Rev).Scan(&current); err != nil {
+		return fmt.Errorf("payments: check merchant revision: %w", err)
+	}
+	if !current {
+		return ErrStale
+	}
+	return nil
 }

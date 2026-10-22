@@ -107,11 +107,11 @@ func TestOrderStatesFollowTheTable(t *testing.T) {
 		{Expired, Paid}:   true, {Expired, Review}: true,
 		{Cancelled, Paid}: true, {Cancelled, Review}: true,
 		{Failed, Paid}: true, {Failed, Review}: true,
-		{Review, Paid}:   true, {Review, Refunded}: true,
+		{Review, Paid}: true, {Review, Refunded}: true,
 		{Paid, PartiallyRefunded}: true, {Paid, Refunded}: true, {Paid, ChargedBack}: true,
 		{PartiallyRefunded, PartiallyRefunded}: true, {PartiallyRefunded, Refunded}: true,
 		{PartiallyRefunded, ChargedBack}: true,
-		{Refunded, ChargedBack}: true,
+		{Refunded, ChargedBack}:          true,
 	}
 	for _, from := range states {
 		for _, to := range states {
@@ -237,11 +237,12 @@ func TestCreateOrderKeepsTheAccountToItsPlaces(t *testing.T) {
 	}
 	// A cancelled order gives its place back, and the cancellations themselves become the next limit.
 	for i := range defaultCancels {
-		if _, err := w.p.Cancel(w.t.Context(), w.accountA(), placed[i].ID); err != nil {
-			t.Fatal(err)
+		id := placed[0].ID
+		if i > 0 {
+			id = w.mustPlace(10*yuan, fmt.Sprintf("cancel-%d", i)).ID
 		}
-		if i == 0 && w.mustPlace(10*yuan, "after-a-cancel").State != Pending {
-			t.Fatal("a cancelled order did not give its place back")
+		if _, err := w.p.Cancel(w.t.Context(), w.accountA(), id); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if _, _, err := w.place(10*yuan, "after-five-cancels"); !errors.Is(err, ErrTooManyCancels) {

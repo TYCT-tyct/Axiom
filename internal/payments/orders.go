@@ -2,6 +2,8 @@ package payments
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -66,7 +68,7 @@ func predecessors(next State) []string {
 }
 
 // The sources and kinds of the order events this module writes; the callback and the query add theirs (README.md
-//「实现拆分」E1-2c).
+// 「实现拆分」E1-2c).
 const (
 	sourceUser = "user"
 	sourceJob  = "job"
@@ -166,6 +168,14 @@ func (r CreateOrder) check() error {
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error) {
 	if err := r.check(); err != nil {
 		return Order{}, Checkout{}, err
+	}
+	var replayed Order
+	var replay bool
+	if err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
+		replayed, replay, err = readPlacedOrder(ctx, tx, r)
+		return err
+	}); err != nil || replay {
+		return replayed, replayed.Checkout, err
 	}
 	method := string(r.Method)
 	m, err := p.menu(ctx, s, r.Site, &method)
@@ -511,11 +521,8 @@ func boundOrderTx(ctx context.Context, tx pg.Tx) error {
 // two orders at once cannot both take the last place. The leading namespace byte separates these keys from the
 // exchange rate's pairs.
 func accountKey(account uuid.UUID) int64 {
-	key := int64(0x4f)
-	for _, b := range account[:7] {
-		key = key<<8 | int64(b)
-	}
-	return key
+	hash := sha256.Sum256(account[:])
+	return int64(binary.BigEndian.Uint64(hash[:8])>>8) | 0x4f<<56
 }
 
 // channelOf opens a merchant account's channel in the platform scope, which alone reads merchant_configs.

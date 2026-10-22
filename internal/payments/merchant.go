@@ -173,6 +173,9 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 // in flight and, when no secrets are given, takes the sealed ones: their hash must match the stored settings, or a
 // tampered gateway address would be sealed in as genuine.
 func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput, settings []byte) (int64, error) {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "payments.merchant:"+in.ID.TypeID()); err != nil {
+		return 0, fmt.Errorf("payments: lock merchant identity: %w", err)
+	}
 	rows, err := queries.LockMerchant(ctx, tx, uuid.UUID(in.ID))
 	if err != nil {
 		return 0, fmt.Errorf("payments: lock merchant: %w", err)
