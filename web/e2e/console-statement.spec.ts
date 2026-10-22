@@ -45,16 +45,10 @@ test.describe("statement", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/statement");
-    const hold = page
-      .getByRole("row")
-      .filter({ has: page.getByRole("cell", { name: /^退款冻结/ }) })
-      .first();
+    const hold = page.getByRole("row").filter({ hasText: "退款冻结" }).first();
     await expect(hold).toContainText("冻结额变动");
     await expect(hold).toContainText("冻结：US$0.0015");
-    const refund = page
-      .getByRole("row")
-      .filter({ has: page.getByRole("cell", { name: /^退款完成/ }) })
-      .first();
+    const refund = page.getByRole("row").filter({ hasText: "退款完成" }).first();
     await expect(refund).toContainText("-US$0.0015");
     await expect(refund).toContainText("冻结：US$0.00");
   });
