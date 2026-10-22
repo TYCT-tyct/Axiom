@@ -8,12 +8,9 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-// upgradeLegacy turns Chat's legacy function calling into the members that replaced it (OpenAI《Function calling》, read
-// 2026-10-17): functions are function tools, function_call is tool_choice, a message's function_call is a tool call, and a
-// function message the result of the call it names. Chat's legacy form has no call IDs, so a call is given one of its
-// own, outside the ones the request already uses, and a result takes the ID of the oldest call of its name that no
-// result has answered: the pair is made as the messages were written, so a replayed history converts the same way twice
-// (README.md「跨格式转换」).
+// upgradeLegacy normalizes Chat's deprecated function calling before shape and pairing checks.
+// Pairing follows sub2api backend/internal/pkg/apicompat/chatcompletions_to_responses.go
+// (21cc92693, 2026-10-22): ordered IDs skip existing IDs and results claim the oldest call by name.
 func (c *canon) upgradeLegacy() error {
 	if err := c.upgradeChoice(); err != nil {
 		return err
@@ -41,11 +38,7 @@ func (c *canon) upgradeChoice() error {
 // upgradeTools adds the functions to the tools, after the tools the request names when it names both.
 func (c *canon) upgradeTools() {
 	for _, f := range c.Functions {
-		var tool canonTool
-		tool.Type = "function"
-		tool.Function.Name, tool.Function.Description, tool.Function.Parameters = f.Name, f.Description, f.Parameters
-		tool.Function.Strict = f.Strict
-		c.Tools = append(c.Tools, tool)
+		c.Tools = append(c.Tools, canonTool{Type: "function", Function: f})
 	}
 }
 

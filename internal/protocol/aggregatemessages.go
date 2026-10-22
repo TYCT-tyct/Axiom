@@ -227,12 +227,9 @@ func (a *messagesAggregate) blockType() error {
 	}
 	a.cur.kind = otherBlock
 	if len(v) > 0 && v[0] == '"' {
-		name := v[1 : len(v)-1]
-		if bytes.IndexByte(name, '\\') >= 0 {
-			name, err = a.unquote(v)
-			if err != nil {
-				return err
-			}
+		name, err := a.unquote(v)
+		if err != nil {
+			return err
 		}
 		switch {
 		case string(name) == "text":

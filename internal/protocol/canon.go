@@ -97,13 +97,8 @@ type canonToolCall struct {
 }
 
 type canonTool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        jsontext.Value `json:"name"`
-		Description jsontext.Value `json:"description"`
-		Parameters  jsontext.Value `json:"parameters"`
-		Strict      *bool          `json:"strict"`
-	} `json:"function"`
+	Type         string         `json:"type"`
+	Function     canonFunction  `json:"function"`
 	CacheControl jsontext.Value `json:"cache_control"`
 }
 
