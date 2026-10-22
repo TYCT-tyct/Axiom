@@ -9,6 +9,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
 )
 
@@ -38,7 +39,15 @@ func TestOrderPersistsTheExactBufferedRate(t *testing.T) {
 	if o.Total != (Money{currency(t, "USD"), 147}) || o.Fee != 5 {
 		t.Fatalf("total %+v, fee %d", o.Total, o.Fee)
 	}
-	w.setRate("CNY", "USD", "1", "6")
+	if err := w.tx(pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
+		_, err := billing.SetExchangeRate(t.Context(), tx, admin, billing.ExchangeInput{
+			Base: "CNY", Quote: "USD", Numerator: "1", Denominator: "6", Kind: "adjustment",
+			ExpectedVersion: 1, Reason: "verified new reference rate",
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var refNum, refDen, appliedNum, appliedDen string
 	err := w.tx(w.accountA(), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT ref_num::text, ref_den::text, applied_num::text, applied_den::text

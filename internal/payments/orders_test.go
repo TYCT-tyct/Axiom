@@ -157,8 +157,8 @@ func TestCreateOrderStoresWhatWasBought(t *testing.T) {
 		"merchant": {o.MerchantID, MerchantID(m.ID)}, "total": {o.Total, want.Total},
 		"fee": {o.Fee, want.Fee}, "client secret": {o.Checkout.ClientSecret, ""},
 	} {
-		if diff := cmp.Diff(v.want, v.got); diff != "" {
-			t.Fatalf("%s (-want +got): %s", field, diff)
+		if v.got != v.want {
+			t.Fatalf("%s: got %v, want %v", field, v.got, v.want)
 		}
 	}
 	if !o.ExpiresAt.After(o.CreatedAt) {
