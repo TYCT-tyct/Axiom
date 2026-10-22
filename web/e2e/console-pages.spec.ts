@@ -490,13 +490,31 @@ test.describe("statement", () => {
       .filter({ has: page.getByRole("cell", { name: "退款冻结", exact: true }) })
       .first();
     await expect(hold).toContainText("冻结额变动");
-    await expect(hold).toContainText("冻结：$0.0015");
+    await expect(hold).toContainText("冻结：US$0.0015");
     const refund = page
       .getByRole("row")
       .filter({ has: page.getByRole("cell", { name: "退款完成", exact: true }) })
       .first();
-    await expect(refund).toContainText("-$0.0015");
-    await expect(refund).toContainText("冻结：$0.00");
+    await expect(refund).toContainText("-US$0.0015");
+    await expect(refund).toContainText("冻结：US$0.00");
+  });
+
+  test("a denied statement shows no rows and failed exports can be retried", async ({ page }) => {
+    const state = await mockConsole(page, "usual", { permissions: [] });
+    signedInAs(state);
+    await page.goto("/console/statement");
+    await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByRole("row")).toHaveCount(0);
+    state.permissions = ["balance.view"];
+    await page.reload();
+    await expect(page.getByRole("row")).toHaveCount(51);
+    await failOnce(page, "**/statement.csv");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    await expect(page.getByRole("alert")).toContainText("导出没有成功");
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    expect((await download).suggestedFilename()).toMatch(/\.csv$/);
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("an account with no movements says so", async ({ page }) => {

@@ -45,8 +45,9 @@ func TestStatement(t *testing.T) {
 	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) VALUES
 			('`+uuid.NewV7().String()+`', '`+site.String()+`', '`+account.String()+`', 'settle', '`+call.String()+`')`,
 		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount) VALUES
-			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', -1000),
-			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', 1000)`)
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', 1000),
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', -1000)`,
+		`UPDATE billing.balances SET balance = balance - 1000 WHERE account_id = '`+account.String()+`'`)
 	page := f.statementRows(s, "?limit=1")
 	if len(page.Data) != 1 || page.NextCursor == nil {
 		t.Fatalf("%d rows and the cursor %v, want one and one", len(page.Data), page.NextCursor)
@@ -91,8 +92,9 @@ func TestStatementCSV(t *testing.T) {
 	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) VALUES
 			('`+uuid.NewV7().String()+`', '`+site.String()+`', '`+account.String()+`', 'settle', '`+call.String()+`')`,
 		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount) VALUES
-			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', -250000000),
-			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', 250000000)`)
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', 250000000),
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', -250000000)`,
+		`UPDATE billing.balances SET balance = balance - 250000000 WHERE account_id = '`+account.String()+`'`)
 	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
@@ -137,7 +139,7 @@ func TestStatementExportIsCapped(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
 	account, site := f.account(s)
-	const many = statementExport + 50
+	const many = 10_050
 	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
 			SELECT gen_random_uuid(), '`+site.String()+`', '`+account.String()+`', 'settle', gen_random_uuid()
 			FROM generate_series(1, `+strconv.Itoa(many)+`)`,
@@ -148,8 +150,8 @@ func TestStatementExportIsCapped(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
 	}
-	if got := strings.Count(rec.Body.String(), "\n"); got != statementExport+1 {
-		t.Errorf("the file has %d lines, want a header and %d movements of %d", got, statementExport, many)
+	if got := strings.Count(rec.Body.String(), "\n"); got != 10_001 {
+		t.Errorf("the file has %d lines, want a header and 10,000 movements of %d", got, many)
 	}
 	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
 		t.Errorf("the first page holds %d rows and the cursor %v", len(page.Data), page.NextCursor)

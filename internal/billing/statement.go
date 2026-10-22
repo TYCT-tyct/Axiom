@@ -30,8 +30,8 @@ const (
 // MaxStatementPage is the most movements one page of a statement holds.
 const MaxStatementPage = 200
 
-// StatementRow is one movement of an account's credits: what it was, what it did to the balance, and the balance after
-// it. Reference is the call's request ID for a charge and the credit batch's ID for other events (the order ID for paid credit) (README.md「控制台的读取」).
+// StatementRow projects only the account's balance and refund holds. Reference is the call ID for charges/reversals,
+// otherwise the batch ID (the order ID for paid credit). See README.md「控制台的读取」.
 type StatementRow struct {
 	ID           uuid.UUID // the row's own identity; it names no ledger entry
 	At           time.Time
@@ -43,11 +43,9 @@ type StatementRow struct {
 	Reference    uuid.UUID
 }
 
-// StatementCursor is where a page of a statement continues: the place of the page's last row in the account's ledger,
-// and the balance after it. The balance is carried because the account's balance at a place in its ledger cannot be read
-// again without summing every entry above it, which a statement cannot do page by page. A cursor only marks a place in
-// one account's own statement: whoever forges one reads what the scope already lets them read, with a balance column
-// shifted by what they chose.
+// StatementCursor carries the last row's position and the counters for the next row. Carrying counters avoids
+// summing all preceding entries on every page. A forged cursor can shift only the caller's own displayed counters;
+// account RLS still determines which rows can be read.
 type StatementCursor struct {
 	Seq     int64     // the seq of the last numbered row read; 0 once the rows from before the sequence are all read
 	At      time.Time // where the rows from before the sequence continue; the end of time until they begin

@@ -1,14 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { raised, statementCsv, statementFile, statementName } from "./statement";
-
-afterEach(() => vi.unstubAllGlobals());
+import { describe, expect, it } from "vitest";
+import { raised, statementFile, statementName } from "./statement";
 
 describe("the statement's file", () => {
-  it("reads a successful CSV response as text", async () => {
-    const csv = "at,kind,amount\n2026-10-21T00:00:00Z,freeze,0.000000000\n";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(csv, { headers: { "Content-Type": "text/csv" } })));
-    expect(await statementCsv()).toBe(csv);
-  });
   it("is named for the day it was taken, in UTC", () => {
     expect(statementName(new Date("2026-10-20T23:30:00Z"))).toBe("statement-2026-10-20.csv");
   });
