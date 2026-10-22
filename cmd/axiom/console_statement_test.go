@@ -283,23 +283,30 @@ func TestStatementCSVContinuesEmptyPages(t *testing.T) {
 type statementDeadlineWriter struct {
 	*httptest.ResponseRecorder
 	deadline time.Time
+	err      error
 }
 
 func (w *statementDeadlineWriter) SetWriteDeadline(deadline time.Time) error {
 	w.deadline = deadline
-	return nil
+	return w.err
 }
 
 func TestStatementDownloadBoundsSocketWrites(t *testing.T) {
 	t.Parallel()
 	want := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
-	transport := &statementDeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
-	sink := statementCSVWriter{ResponseWriter: transport, deadline: want}
-	if _, err := sink.Write([]byte("at,kind\n")); err != nil {
-		t.Fatal(err)
-	}
-	if transport.deadline != want || !transport.Flushed {
-		t.Fatalf("deadline %v, flushed %v", transport.deadline, transport.Flushed)
+	for _, writeErr := range []error{nil, io.ErrClosedPipe} {
+		transport := &statementDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), err: writeErr}
+		sink := statementCSVWriter{ResponseWriter: transport, deadline: want}
+		_, err := sink.Write([]byte("at,kind\n"))
+		if !errors.Is(err, writeErr) || transport.deadline != want {
+			t.Fatalf("deadline = %v, error = %v", transport.deadline, err)
+		}
+		if writeErr == nil && !transport.Flushed {
+			t.Fatal("CSV bytes were not flushed")
+		}
+		if writeErr != nil && (sink.started || transport.Body.Len() != 0) {
+			t.Fatal("deadline failure sent download bytes")
+		}
 	}
 }
 
