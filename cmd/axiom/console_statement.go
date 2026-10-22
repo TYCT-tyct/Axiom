@@ -1,9 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/csv"
+	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -57,30 +59,51 @@ func (c consoleAPI) ListStatement(ctx context.Context, request consoleapi.ListSt
 	return consoleapi.ListStatement200JSONResponse(page), nil
 }
 
-// ExportStatement answers the statement as a CSV file, newest first.
+// statementDownload implements the generated response boundary while keeping the read transaction alive only while
+// CSV is sent. A failure after the first bytes aborts the connection, so a truncated export cannot look complete.
+type statementDownload func(http.ResponseWriter) error
+
+func (d statementDownload) VisitExportStatementResponse(w http.ResponseWriter) error { return d(w) }
+
 func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStatementRequestObject) (consoleapi.ExportStatementResponseObject, error) {
 	cl := callOf(ctx)
-	var body []byte
-	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		body, err = statementCSV(ctx, tx, uuid.UUID(cl.principal.AccountID()), cl.site.Currency)
+	return statementDownload(func(w http.ResponseWriter) error {
+		sink := statementCSVWriter{ResponseWriter: w}
+		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+			return statementCSV(ctx, tx, uuid.UUID(cl.principal.AccountID()), cl.site.Currency, &sink)
+		})
+		if err != nil && sink.started {
+			panic(fmt.Errorf("console: stream statement: %w", err))
+		}
 		return err
-	}); err != nil {
-		return nil, err
+	}), nil
+}
+
+type statementCSVWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (w *statementCSVWriter) Write(b []byte) (int, error) {
+	if !w.started {
+		name := "statement-" + time.Now().UTC().Format(time.DateOnly) + ".csv"
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		w.started = true
 	}
-	name := "statement-" + time.Now().UTC().Format(time.DateOnly) + ".csv"
-	return consoleapi.ExportStatement200TextcsvResponse{
-		Body: bytes.NewReader(body), ContentLength: int64(len(body)),
-		Headers: consoleapi.ExportStatement200ResponseHeaders{ContentDisposition: `attachment; filename="` + name + `"`},
-	}, nil
+	n, err := w.ResponseWriter.Write(b)
+	if err != nil {
+		return n, err
+	}
+	return n, http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // statementCSV reads the account's statement as CSV, newest first: the same rows and the same order as the pages, a page
 // at a time through the cursor, at most statementExport of them.
-func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency platform.Currency) ([]byte, error) {
-	var out bytes.Buffer
-	w := csv.NewWriter(&out)
+func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency platform.Currency, out io.Writer) error {
+	w := csv.NewWriter(out)
 	if err := w.Write([]string{"at", "kind", "amount", "balance_after", "currency", "reference", "frozen_change", "frozen_after"}); err != nil {
-		return nil, err
+		return err
 	}
 	var after *billing.StatementCursor
 	for written := 0; written < statementExport; {
@@ -88,21 +111,24 @@ func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency pla
 			Account: account, PageSize: billing.MaxStatementPage, After: after,
 		})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, row := range rows[:min(len(rows), statementExport-written)] {
 			if err := w.Write(statementCSVRow(row, currency)); err != nil {
-				return nil, err
+				return err
 			}
 			written++
 		}
-		if next == nil || len(rows) == 0 {
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return fmt.Errorf("console: write statement CSV: %w", err)
+		}
+		if next == nil {
 			break
 		}
 		after = next
 	}
-	w.Flush()
-	return out.Bytes(), w.Error()
+	return nil
 }
 
 // statementCSVRow is one row of the file: the time in UTC as RFC 3339, the amounts as exact decimals of the site's

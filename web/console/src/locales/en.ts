@@ -59,6 +59,10 @@ export default {
     export: "Export CSV",
     exportFailed: "The export failed: {{reason}}",
     note: "Newest first in posting order. Held credits remain in the balance until refunded; holds do not include pending call reservations. The export holds the newest 10,000 rows; page here for the rest.",
+    segment: {
+      title: "No balance changes in this segment",
+      body: "Load older events to continue through your statement.",
+    },
     empty: {
       title: "No movements yet",
       body: "Top-ups, gifts and charges show up here.",

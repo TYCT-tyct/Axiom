@@ -12,7 +12,6 @@ func TestStatementRefundEvents(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	b.charge(100)
-	b.reverseStatementCharge(40)
 	f.Amount = 300
 	b.freeze(f)
 	f.Amount = 100
@@ -30,13 +29,12 @@ func TestStatementRefundEvents(t *testing.T) {
 		kind                                  StatementKind
 		amount, frozenChange, balance, frozen int64
 	}{
-		{StatementFreeze, 0, 70, 740, 70},
-		{StatementUnfreeze, 0, -50, 740, 0},
-		{StatementFreeze, 0, 50, 740, 50},
-		{StatementRefund, -200, -200, 740, 0},
-		{StatementUnfreeze, 0, -100, 940, 200},
-		{StatementFreeze, 0, 300, 940, 300},
-		{StatementReversal, 40, 0, 940, 0},
+		{StatementFreeze, 0, 70, 700, 70},
+		{StatementUnfreeze, 0, -50, 700, 0},
+		{StatementFreeze, 0, 50, 700, 50},
+		{StatementRefund, -200, -200, 700, 0},
+		{StatementUnfreeze, 0, -100, 900, 200},
+		{StatementFreeze, 0, 300, 900, 300},
 		{StatementSpend, -100, 0, 900, 0},
 		{StatementTopUp, 1000, 0, 1000, 0},
 	}
@@ -71,6 +69,23 @@ func (b *bank) checkStatementRefundPaging(f Freeze, count int) {
 		}
 		checkStatementChain(b.t, all)
 	}
+}
+
+// Allocation deliberately stops on reversals (#277); this read-side fixture posts the reversal only after all
+// allocation-dependent writes, and then reads without trying PrepareRefund on an unsupported ledger.
+func TestStatementReversal(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, Config{})
+	b.charge(100)
+	b.reverseStatementCharge(40)
+	rows, next := b.statement(b.admitted, 50, nil)
+	if len(rows) != 3 || next != nil || rows[0].Kind != StatementReversal || rows[0].Amount != 40 || rows[0].Balance != 940 {
+		t.Fatalf("reversal statement = %+v, %v", rows, next)
+	}
+	if rows[0].Reference != rows[1].Reference {
+		t.Fatal("reversal does not refer to its original charge")
+	}
+	checkStatementChain(t, rows)
 }
 
 func (b *bank) reverseStatementCharge(amount int64) {

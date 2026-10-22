@@ -13,13 +13,13 @@ import (
 	"axiom/internal/accounts"
 )
 
-// TestContractRules: the rules the program enforces are the ones the contract declares: all 18 operations, with the
+// TestContractRules: the rules the program enforces are the ones the contract declares: all 20 operations, with the
 // level and permission each names, and whether it changes data.
 func TestContractRules(t *testing.T) {
 	t.Parallel()
 	c := loadedContract(t)
-	if len(c.byPattern) != 18 {
-		t.Errorf("%d operations, want 18", len(c.byPattern))
+	if len(c.byPattern) != 20 {
+		t.Errorf("%d operations, want 20", len(c.byPattern))
 	}
 	manage, view := mustPermission(t, "api_keys.manage"), mustPermission(t, "api_keys.view")
 	cases := []struct {
@@ -40,6 +40,8 @@ func TestContractRules(t *testing.T) {
 		{"POST /api/console/v1/keys", "signed_in", &manage, true, true},
 		{"DELETE /api/console/v1/keys/{key_id}", "signed_in", &manage, true, true},
 		{"GET /api/console/v1/balance", "signed_in", mustPermissionPtr(t, "balance.view"), true, false},
+		{"GET /api/console/v1/statement", "signed_in", mustPermissionPtr(t, "balance.view"), true, false},
+		{"GET /api/console/v1/statement.csv", "signed_in", mustPermissionPtr(t, "balance.view"), true, false},
 		{"GET /api/console/v1/calls", "signed_in", mustPermissionPtr(t, "calls.view"), true, false},
 	}
 	for _, want := range cases {

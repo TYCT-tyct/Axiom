@@ -311,6 +311,32 @@ func TestStatementIsTheAccountsOwn(t *testing.T) {
 	}
 }
 
+func TestStatementSkipsBoundedEmptySegments(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, Config{})
+	b.sql("INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) SELECT gen_random_uuid(), '" + b.admitted.Site.String() + "', '" + b.admitted.Account.String() + "', 'settle', gen_random_uuid() FROM generate_series(1, 300)")
+	rows, next := b.statement(b.admitted, 2, nil)
+	if len(rows) != 0 || next == nil {
+		t.Fatalf("empty segment = %+v, %v", rows, next)
+	}
+	b.credit(200) // newer than the cursor, including when no visible row was returned
+	for pages := 0; next != nil; pages++ {
+		if pages >= 20 {
+			t.Fatal("cursor did not advance across zero-effect events")
+		}
+		previous := *next
+		var page []StatementRow
+		page, next = b.statement(b.admitted, 2, next)
+		rows = append(rows, page...)
+		if next != nil && next.Seq >= previous.Seq {
+			t.Fatal("empty cursor repeated or moved forward")
+		}
+	}
+	if len(rows) != 1 || rows[0].Amount != 1000 || rows[0].Balance != 1000 {
+		t.Fatalf("visible history = %+v", rows)
+	}
+}
+
 // TestStatementReadsGrowWithThePage: a page deep in a long history reads about what the first page reads, from the two
 // indexes the ledger has, not what the history above it holds.
 func TestStatementReadsGrowWithThePage(t *testing.T) {
@@ -326,10 +352,11 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	first, _ := b.plan(statementPage, b.admitted.Account, int64(math.MaxInt64), int32(100), statementNewest.At, uuid.Max())
+	first, firstPlan := b.plan(statementPage, b.admitted.Account, int64(math.MaxInt64), int32(100), statementNewest.At, uuid.Max())
 	deep, plan := b.plan(statementPage, b.admitted.Account, far, int32(100), statementNewest.At, uuid.Max())
-	t.Logf("a page of 100, from the start and 25,000 in: blocks touched %d, then %d", first, deep)
-	if !strings.Contains(plan, "transactions_by_account_seq") || strings.Contains(plan, "Seq Scan on transactions") {
+	t.Logf("EXPLAIN blocks: first=%d deep=%d", first, deep)
+	t.Logf("first plan: %s\ndeep plan: %s", firstPlan, plan)
+	if !strings.Contains(plan, "transactions_by_account_seq") || strings.Contains(plan, "Seq Scan on transactions") || strings.Contains(plan, "Bitmap Index Scan") {
 		t.Errorf("the deep page is not read from the index:\n%s", plan)
 	}
 	if deep > first+first/2+50 || deep > 1000 {

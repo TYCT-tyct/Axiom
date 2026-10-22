@@ -111,36 +111,38 @@ func (q *Queries) SpentThisMonth(ctx context.Context, db DBTX, subjects []uuid.U
 }
 
 const statementPage = `-- name: StatementPage :many
-WITH page AS (
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision, (-coalesce(e.debit, 0))::bigint AS amount
-    FROM billing.transactions t
-    LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
-        WHERE e.transaction_id = t.id AND e.book = 'user_balance') e ON true
-    WHERE t.account_id = $1 AND t.seq < $2::bigint
-        AND (t.kind IN ('freeze', 'unfreeze') OR e.debit IS NOT NULL)
-    ORDER BY t.seq DESC
-    LIMIT $3)
-    UNION ALL
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision, (-coalesce(e.debit, 0))::bigint AS amount
-    FROM billing.transactions t
-    LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
-        WHERE e.transaction_id = t.id AND e.book = 'user_balance') e ON true
-    WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) < ($4::timestamptz, $5::uuid)
-        AND (t.kind IN ('freeze', 'unfreeze') OR e.debit IS NOT NULL)
-    ORDER BY t.created_at DESC, t.id DESC
-    LIMIT $3)
+WITH page AS MATERIALIZED (
+    SELECT id, seq, created_at, kind, request_id, revision FROM (
+        (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
+        FROM billing.transactions t
+        WHERE t.account_id = $1 AND t.seq < $2::bigint
+            AND t.kind NOT IN ('attempt_cost', 'cost_adjust')
+        ORDER BY t.seq DESC
+        LIMIT $3)
+        UNION ALL
+        (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
+        FROM billing.transactions t
+        WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) < ($4::timestamptz, $5::uuid)
+            AND t.kind NOT IN ('attempt_cost', 'cost_adjust')
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT $3)
+    ) candidates
+    ORDER BY seq DESC NULLS LAST, created_at DESC, id DESC
+    LIMIT $3
 )
 SELECT p.id, p.created_at, p.kind, p.request_id, coalesce(p.seq, 0)::bigint AS seq,
-    p.amount, coalesce(b.source, '')::text AS source,
+    (-coalesce(e.debit, 0))::bigint AS amount, coalesce(b.source, '')::text AS source,
     (CASE WHEN p.kind IN ('freeze', 'unfreeze') THEN
         (p.revision - coalesce((SELECT t.revision FROM billing.transactions t
             WHERE t.account_id = $1 AND t.request_id = p.request_id AND t.attempt_seq = 0
                 AND t.kind = p.kind AND t.revision < p.revision
             ORDER BY t.revision DESC LIMIT 1), 0)) * CASE WHEN p.kind = 'freeze' THEN 1 ELSE -1 END
-        WHEN p.kind = 'refund' THEN p.amount ELSE 0 END)::bigint AS frozen_change,
+        WHEN p.kind = 'refund' THEN -coalesce(e.debit, 0) ELSE 0 END)::bigint AS frozen_change,
     (SELECT ba.balance FROM billing.balances ba WHERE ba.account_id = $1)::bigint AS balance,
     (SELECT ba.frozen FROM billing.balances ba WHERE ba.account_id = $1)::bigint AS frozen
 FROM page p
+LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
+    WHERE e.transaction_id = p.id AND e.book = 'user_balance') e ON true
 LEFT JOIN billing.credit_batches b ON p.kind = 'credit' AND b.id = p.request_id
 ORDER BY p.seq DESC NULLS LAST, p.created_at DESC, p.id DESC
 `
@@ -166,11 +168,8 @@ type StatementPageRow struct {
 	Frozen       int64
 }
 
-// Balance and refund-hold events share the ledger's account commit order. Both index regions stop at a page of
-// visible events. Freeze/unfreeze revisions are cumulative per batch and kind: the unique event index finds the
-// previous revision without scanning the account history. Lateral aggregation keeps entry lookups on the transaction
-// index even before ANALYZE has statistics; a hash of all entries per CSV page can exceed the request deadline.
-// The counters and rows use one snapshot.
+// Every branch is limited using only transaction columns, then the merged page is materialized before any entry
+// aggregation. Putting an entry predicate inside either limit makes deep pages aggregate the whole prefix.
 func (q *Queries) StatementPage(ctx context.Context, db DBTX, arg StatementPageParams) ([]StatementPageRow, error) {
 	rows, err := db.Query(ctx, statementPage,
 		arg.AccountID,

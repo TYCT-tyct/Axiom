@@ -19,7 +19,11 @@ export default function Statement() {
       <div className="space-y-4 p-4 sm:p-6">
         <Panel title={t("statement.movements")} action={<Export onFailed={setFailed} />}>
           {failed ? <ExportFailed error={failed} /> : null}
-          <DataState query={statement} isEmpty={() => rows.length === 0} empty={<NoMovements />}>
+          <DataState
+            query={statement}
+            isEmpty={() => rows.length === 0}
+            empty={<NoMovements more={statement.hasNextPage} />}
+          >
             {() => <StatementTable rows={rows} />}
           </DataState>
           <LoadMore list={statement} />
@@ -30,11 +34,11 @@ export default function Statement() {
   );
 }
 
-function NoMovements() {
+function NoMovements({ more }: { more: boolean }) {
   const { t } = useTranslation();
   return (
-    <EmptyState title={t("statement.empty.title")}>
-      {t("statement.empty.body")}
+    <EmptyState title={t(more ? "statement.segment.title" : "statement.empty.title")}>
+      {t(more ? "statement.segment.body" : "statement.empty.body")}
       <p className="mt-2">
         <Link to="/balance" className="text-accent underline-offset-4 hover:underline">
           {t("statement.empty.balance")}

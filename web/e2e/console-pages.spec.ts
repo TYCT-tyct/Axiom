@@ -517,6 +517,21 @@ test.describe("statement", () => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
+  test("an empty segment can continue to older movements", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    let first = true;
+    await page.route("**/statement?*", async (route) => {
+      if (!first) return route.fallback();
+      first = false;
+      await route.fulfill({ status: 200, json: { data: [], next_cursor: ":0" } });
+    });
+    await page.goto("/console/statement");
+    await expect(page.getByRole("heading", { name: "这一段没有余额变动" })).toBeVisible();
+    await page.getByRole("button", { name: "加载更多" }).click();
+    await expect(page.getByRole("row")).toHaveCount(51);
+  });
+
   test("an account with no movements says so", async ({ page }) => {
     const state = await mockConsole(page, "empty");
     signedInAs(state);

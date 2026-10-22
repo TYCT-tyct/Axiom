@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/csv"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -198,12 +202,26 @@ func TestStatementExportIsCapped(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
+	f.seedStatementHistory(s, 10_050)
+	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
+	}
+	if got := strings.Count(rec.Body.String(), "\n"); got != 10_001 {
+		t.Errorf("the file has %d lines, want a header and 10,000 movements of %d", got, 10_050)
+	}
+	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
+		t.Errorf("the first page holds %d rows and the cursor %v", len(page.Data), page.NextCursor)
+	}
+}
+
+func (f consoleFixture) seedStatementHistory(s session, many int) {
+	f.t.Helper()
 	account, site := f.account(s)
-	const many = 10_050
-	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		return billing.AddCredit(t.Context(), tx, billing.Credit{ID: uuid.NewV7(), Site: site, Account: account, Amount: many, Actor: audit.System("test"), Reason: "fund statement history"})
+	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.AddCredit(f.t.Context(), tx, billing.Credit{ID: uuid.NewV7(), Site: site, Account: account, Amount: int64(many), Actor: audit.System("test"), Reason: "fund statement history"})
 	}); err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 
 	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
@@ -213,15 +231,51 @@ func TestStatementExportIsCapped(t *testing.T) {
 			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', 1), ('revenue', -1)) AS b(book, amount)
 			WHERE t.account_id = '`+account.String()+`' AND t.kind = 'settle'`,
 		`UPDATE billing.balances SET balance = 0 WHERE account_id = '`+account.String()+`'`)
+}
+
+type statementWriterFunc func([]byte) (int, error)
+
+func (f statementWriterFunc) Write(b []byte) (int, error) { return f(b) }
+
+func TestStatementCSVStreamsAndCancels(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 301)
+	account, _ := f.account(s)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var streamed bytes.Buffer
+	sink := statementWriterFunc(func(b []byte) (int, error) { cancel(); return streamed.Write(b) })
+	err = f.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return statementCSV(ctx, tx, account, currency, sink) })
+	if !errors.Is(err, context.Canceled) || strings.Count(streamed.String(), "\n") != 201 {
+		t.Fatalf("streamed %d lines before cancel: %v", strings.Count(streamed.String(), "\n"), err)
+	}
+	err = f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return statementCSV(t.Context(), tx, account, currency, statementWriterFunc(func([]byte) (int, error) { return 0, io.ErrClosedPipe }))
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write failure = %v", err)
+	}
+}
+
+func TestStatementCSVContinuesEmptyPages(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 1)
+	account, site := f.account(s)
+	f.run("INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) SELECT gen_random_uuid(), '" + site.String() + "', '" + account.String() + "', 'settle', gen_random_uuid() FROM generate_series(1, 2000)")
+	if page := f.statementRows(s, "?limit=200"); len(page.Data) != 0 || page.NextCursor == nil {
+		t.Fatalf("segment = %+v", page)
+	}
 	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
-	}
-	if got := strings.Count(rec.Body.String(), "\n"); got != 10_001 {
-		t.Errorf("the file has %d lines, want a header and 10,000 movements of %d", got, many)
-	}
-	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
-		t.Errorf("the first page holds %d rows and the cursor %v", len(page.Data), page.NextCursor)
+	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "\n") != 3 {
+		t.Fatalf("empty-page export = %d %s", rec.Code, rec.Body)
 	}
 }
 

@@ -100,11 +100,12 @@ type StatementQuery struct {
 // sequence.
 var statementNewest = StatementCursor{Seq: math.MaxInt64, At: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), ID: uuid.Max()}
 
-// ListStatement returns a page of the account's statement, newest first, and where the next page starts (nil on the last
-// page), read in tx, which must hold the account's scope. One row is one movement of the user's balance: a credit, a
-// charge, expiry, refund or refund hold, with the balance and frozen credits after it; internal cost events take no row, and no
-// entry or book is read out. A new movement arriving between pages lands above the cursor and does not shift the rows
-// already read.
+// statementRounds bounds work even when a long history contains only waived charges. Such a segment can return an
+// empty page with a continuation cursor; the cursor advances past every examined transaction.
+const statementRounds = 8
+
+// ListStatement reads account-scoped balance and refund-hold events in commit order. Entry aggregation happens only
+// after limiting candidate transactions; zero-effect transactions are skipped here, within statementRounds reads.
 func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) {
 	if q.PageSize < 1 || q.PageSize > MaxStatementPage {
 		return nil, nil, fmt.Errorf("billing: a page of %d movements", q.PageSize)
@@ -113,48 +114,61 @@ func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]Statement
 	if q.After != nil {
 		after = *q.After
 	}
-	rows, err := queries.StatementPage(ctx, tx, StatementPageParams{
-		AccountID: q.Account, AfterSeq: after.Seq, Max: int32(q.PageSize + 1), AfterAt: after.At, AfterID: after.ID,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("billing: read the statement of %s: %w", q.Account, err)
-	}
-	more := len(rows) > q.PageSize
-	rows = rows[:min(len(rows), q.PageSize)]
-	statement := make([]StatementRow, len(rows))
-	// The page's newest row is where the balance stands if the page follows nothing, and otherwise the balance the
-	// cursor carries; each row below it left the balance one movement further back.
-	balance := after.Balance
-	frozen := after.Frozen
-	if q.After == nil && len(rows) > 0 {
-		balance = rows[0].Balance
-		frozen = rows[0].Frozen
-	}
-	for i, r := range rows {
-		kind, err := statementKind(r.Kind, r.Source)
+	statement := make([]StatementRow, 0, q.PageSize)
+	for round := range statementRounds {
+		rows, err := queries.StatementPage(ctx, tx, StatementPageParams{
+			AccountID: q.Account, AfterSeq: after.Seq, Max: int32(q.PageSize + 1), AfterAt: after.At, AfterID: after.ID,
+		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("billing: the statement of %s, transaction %s: %w", q.Account, r.ID, err)
+			return nil, nil, fmt.Errorf("billing: read the statement of %s: %w", q.Account, err)
 		}
-		statement[i] = StatementRow{
-			ID: r.ID, At: r.CreatedAt, Kind: kind, Amount: r.Amount, Balance: balance, Reference: r.RequestID,
-			FrozenChange: r.FrozenChange, Frozen: frozen,
+		if round == 0 && q.After == nil && len(rows) > 0 {
+			after.Balance, after.Frozen = rows[0].Balance, rows[0].Frozen
 		}
-		balance -= r.Amount
-		frozen -= r.FrozenChange
+		var more bool
+		statement, more, err = appendStatement(statement, rows, &after, q.PageSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		if more {
+			return statement, &after, nil
+		}
+		if len(rows) < q.PageSize+1 {
+			return statement, nil, nil
+		}
 	}
-	if !more {
-		return statement, nil, nil
+	return statement, &after, nil
+}
+
+// appendStatement leaves after immediately before the first visible row that does not fit, including any skipped
+// zero-effect rows in that position. This also carries unchanged balances across empty continuation pages.
+func appendStatement(out []StatementRow, rows []StatementPageRow, after *StatementCursor, limit int) ([]StatementRow, bool, error) {
+	for _, r := range rows {
+		if r.Amount != 0 || r.FrozenChange != 0 {
+			if len(out) == limit {
+				return out, true, nil
+			}
+			kind, err := statementKind(r.Kind, r.Source)
+			if err != nil {
+				return nil, false, fmt.Errorf("billing: statement transaction %s: %w", r.ID, err)
+			}
+			out = append(out, StatementRow{
+				ID: r.ID, At: r.CreatedAt, Kind: kind, Amount: r.Amount, Balance: after.Balance,
+				FrozenChange: r.FrozenChange, Frozen: after.Frozen, Reference: r.RequestID,
+			})
+		}
+		after.advance(r)
 	}
-	last := rows[len(rows)-1]
-	next := statementNewest
-	next.Balance = balance
-	next.Frozen = frozen
-	if last.Seq != 0 {
-		next.Seq = last.Seq // the rows from before the sequence are all below it, so its bound stays open
-	} else {
-		next.Seq, next.At, next.ID = 0, last.CreatedAt, last.ID
+	return out, false, nil
+}
+
+func (c *StatementCursor) advance(r StatementPageRow) {
+	c.Seq = r.Seq
+	if r.Seq == 0 {
+		c.At, c.ID = r.CreatedAt, r.ID
 	}
-	return statement, &next, nil
+	c.Balance -= r.Amount
+	c.Frozen -= r.FrozenChange
 }
 
 // statementKind is what the ledger's kind of a transaction, and the source of the batch a credit opened, reads as on a
