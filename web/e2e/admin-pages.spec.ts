@@ -284,7 +284,7 @@ test.describe("suppliers", () => {
     await expect(press(page, "suppliers.unit.open")).toHaveCount(0);
     await expect(press(page, "suppliers.remove.open")).toHaveCount(0);
     await expect(page.getByText("gpt-test-mini")).toBeVisible();
-    await expect(press(page, "suppliers.test.title")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: words("suppliers.test.title") })).toHaveCount(0);
   });
 });
 
@@ -299,7 +299,7 @@ test.describe("endpoint tests", () => {
     const state = await open(page, `/suppliers/${uuid(2, 1)}`);
     await expect(page.getByText("unpriced-model")).toBeVisible();
     // five endpoints, of which the switched-off one and the one with no known cost cannot be called
-    await expect(press(page, "suppliers.test.title")).toHaveCount(3);
+    await expect(page.getByRole("button", { name: words("suppliers.test.title") })).toHaveCount(3);
     await expect(page.getByText(zhText("suppliers.endpoints.state.off"))).toBeVisible();
     await expect(page.getByText(zhText("suppliers.endpoints.state.unknown"))).toBeVisible();
 

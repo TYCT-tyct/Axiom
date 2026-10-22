@@ -175,7 +175,7 @@ export default {
       conflict: "成本冲突",
       ready: "可测试",
     },
-    empty: { title: "还没有端点", body: "选用分组、映射好它的模型名之后，同步会在这里列出端点。" },
+    empty: { title: "还没有端点", body: "分组被选用、模型名映射好之后，同步会在这里列出端点。" },
   },
   test: {
     open: "测试",
