@@ -23,6 +23,8 @@ func TestPrepareMessagesCap(t *testing.T) {
 		{"null", `{"model":"m","max_tokens":null,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":7000,"messages":[]}`},
 		{"set", `{"model":"m","max_tokens":50,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":50,"messages":[]}`},
 		{"nothing to send", `{"model":"m","messages":[]}`, 0, false, `{"model":"u","messages":[]}`},
+		{"unknown null", `{"model":"m","max_tokens":null,"messages":[]}`, 0, true, `{"model":"u","max_tokens":null,"messages":[],"stream":true}`},
+		{"escaped member", `{"model":"m","max_\u0074okens":null,"messages":[]}`, 7000, false, `{"model":"u","max_\u0074okens":7000,"messages":[]}`},
 		{"with the stream", `{"model":"m","messages":[]}`, 7000, true, `{"model":"u","messages":[],"max_tokens":7000,"stream":true}`},
 	} {
 		r := inspected(t, protocol.Messages, []byte(c.body))

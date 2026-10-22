@@ -32,20 +32,16 @@ func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
 // the value the client wrote, not the bytes it spelled it with: an escaped "auto" is auto (README.md「跨格式转换」).
 func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 	if isNull(v) {
-		return `{"type":"auto"`, false, nil
+		return messagesChoices["auto"], false, nil
 	}
 	if v.Kind() == '"' {
-		name, err := jsontext.AppendUnquote(nil, v)
+		var buf [16]byte
+		name, err := jsontext.AppendUnquote(buf[:0], v)
 		if err != nil {
 			return "", false, shapeError("a tool_choice that is not a string")
 		}
-		switch string(name) {
-		case "auto":
-			return `{"type":"auto"`, false, nil
-		case "none":
-			return `{"type":"none"`, false, nil
-		case "required":
-			return `{"type":"any"`, true, nil
+		if choice := messagesChoices[string(name)]; choice != "" {
+			return choice, string(name) == "required", nil
 		}
 	}
 	var named struct {
@@ -57,4 +53,10 @@ func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 		return "", false, &NotSupported{Reason: "a tool_choice Messages cannot express"}
 	}
 	return `{"type":"tool","name":` + string(named.Function.Name), true, nil
+}
+
+var messagesChoices = map[string]string{
+	"auto":     `{"type":"` + choiceNames["auto"] + `"`,
+	"none":     `{"type":"` + choiceNames["none"] + `"`,
+	"required": `{"type":"` + choiceNames["required"] + `"`,
 }

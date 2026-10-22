@@ -52,9 +52,15 @@ func (c *canon) upgradeTools() {
 // upgradeCalls turns the messages' legacy calls into tool calls and their results into tool results, in the order the
 // messages were written.
 func (c *canon) upgradeCalls() error {
-	calls := newLegacyCalls(c.Messages)
+	var calls *legacyCalls
 	for i := range c.Messages {
 		m := &c.Messages[i]
+		if isNull(m.FunctionCall) && m.Role != "function" {
+			continue
+		}
+		if calls == nil {
+			calls = newLegacyCalls(c.Messages)
+		}
 		var err error
 		switch {
 		case !isNull(m.FunctionCall):

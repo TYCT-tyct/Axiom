@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"bytes"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -77,4 +78,36 @@ func TestConvertLegacyToResponses(t *testing.T) {
 				`{"type":"function_call_output","call_id":"call_legacy_1","output":"done"}],"store":false}`,
 		},
 	})
+}
+
+// Legacy and current spellings must produce the same conversation on either endpoint.
+func TestLegacyConversionMatchesTools(t *testing.T) {
+	for _, format := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		for _, c := range []struct{ name, legacy, current string }{
+			{"definitions", `"messages":[` + userHi + `],"functions":[{"name":"f"}],"function_call":"\u0061uto"`,
+				`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"auto"`},
+			{"mixed definitions", `"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"g"}}],"functions":[{"name":"f","strict":false}]`,
+				`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"g"}},{"type":"function","function":{"name":"f","strict":false}}]`},
+			{"escaped call name", `"messages":[` + userHi + `,{"role":"assistant","function_call":{"name":"\u0066","arguments":"{}"}},{"role":"function","name":"f","content":"done"}]`,
+				`"messages":[` + userHi + `,{"role":"assistant","tool_calls":[{"id":"call_legacy_1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_legacy_1","content":"done"}]`},
+			{"explicit result ID", `"messages":[` + userHi + `,{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"function","name":"f","tool_call_id":"c","content":"done"}]`,
+				`"messages":[` + userHi + `,{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"c","content":"done"}]`},
+		} {
+			t.Run(c.name+"/"+string(rune('0'+format)), func(t *testing.T) {
+				got, err := convertBody(format, chatBody(c.legacy), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := convertBody(format, chatBody(c.current), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sameJSON(t, string(want), got)
+				replay, err := convertBody(format, chatBody(c.legacy), nil)
+				if err != nil || !bytes.Equal(got, replay) {
+					t.Fatalf("unstable replay: %s, %v", replay, err)
+				}
+			})
+		}
+	}
 }
