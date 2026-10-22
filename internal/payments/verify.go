@@ -76,15 +76,19 @@ func (p *Payments) queryPending(ctx context.Context) error {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := p.pollOrder(ctx, OrderID(id)); err != nil {
-			p.logger.Warn("payments: order query failed", "order", OrderID(id).TypeID(), "error", err)
-			continue
-		}
+		p.pollOrder(ctx, OrderID(id))
 	}
 	return nil
 }
 
-func (p *Payments) pollOrder(ctx context.Context, id OrderID) error {
+// pollOrder logs its own failure: one order's query must not stop the round.
+func (p *Payments) pollOrder(ctx context.Context, id OrderID) {
+	if err := p.queryScheduled(ctx, id); err != nil {
+		p.logger.Warn("payments: order query failed", "order", id.TypeID(), "error", err)
+	}
+}
+
+func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
 	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
 	defer cancel()
 	var o Order
