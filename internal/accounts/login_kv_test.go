@@ -61,7 +61,8 @@ func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 	t.Parallel()
 	server := kvtest.New(t)
 	namespace := kvtest.Namespace()
-	s := &Service{cache: server.OpenIn(t, namespace, kv.Deps{}), guards: newGuards(1, time.Second)}
+	frozen := time.Now()
+	s := &Service{cache: server.OpenIn(t, namespace, kv.Deps{Now: func() time.Time { return frozen }}), guards: newGuards(1, time.Second)}
 	site := SiteID(uuid.MustParse("6f1b2f14-3a4c-4bd0-9d1e-2f5a7c8b9d10"))
 	// A canceled access deterministically uses fallback without a race against a real server's deadline.
 	away, cancel := context.WithCancel(t.Context())
