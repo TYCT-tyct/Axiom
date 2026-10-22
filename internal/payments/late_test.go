@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
-
 	"uuid"
 
 	"axiom/internal/billing"
@@ -47,9 +46,11 @@ func testLateTerminalPayment(t *testing.T, state State, closeSupported bool) {
 	if closeSupported {
 		caps = CapClose
 	}
-	w := newTestWorld(t, fakePlugin{caps: caps, create: goodCheckout, verify: signedNotice,
+	w := newTestWorld(t, fakePlugin{
+		caps: caps, create: goodCheckout, verify: signedNotice,
 		close: func(context.Context, OrderID, string) error { return errors.New("fake: close failed") },
-		query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil }})
+		query: func(context.Context, string, string) (Payment, error) { return receipt(o).payment, nil },
+	})
 	m := w.waiting()
 	o = w.mustPlace(yuan, "late")
 	if state == Cancelled {
@@ -91,9 +92,13 @@ type identityCase struct {
 
 func TestMerchantIdentityWindowAndNonIdentityChanges(t *testing.T) {
 	for _, tc := range []identityCase{
-		{Expired, true, "59 seconds", true}, {Cancelled, true, "59 seconds", true},
-		{Failed, true, "59 seconds", true}, {Failed, false, "59 seconds", false},
-		{Expired, true, "61 seconds", false}, {Cancelled, true, "61 seconds", false}, {Failed, true, "61 seconds", false},
+		{Expired, true, "59 seconds", true},
+		{Cancelled, true, "59 seconds", true},
+		{Failed, true, "59 seconds", true},
+		{Failed, false, "59 seconds", false},
+		{Expired, true, "61 seconds", false},
+		{Cancelled, true, "61 seconds", false},
+		{Failed, true, "61 seconds", false},
 	} {
 		t.Run(fmt.Sprintf("%s/%v/%s", tc.state, tc.trade, tc.age), func(t *testing.T) {
 			testMerchantIdentityWindow(t, tc)
@@ -205,8 +210,10 @@ func testArrivalRate(t *testing.T, age string) {
 	w.endOrder(o, Expired)
 	w.exec(fmt.Sprintf("UPDATE payments.orders SET expires_at = transaction_timestamp() - interval '%s'", age))
 	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
-		_, err := billing.SetExchangeRate(t.Context(), tx, admin, billing.ExchangeInput{Base: "CNY", Quote: "USD",
-			Numerator: "1", Denominator: "6", ExpectedVersion: 1, Kind: "correction", Reason: "arrival rate"})
+		_, err := billing.SetExchangeRate(t.Context(), tx, admin, billing.ExchangeInput{
+			Base: "CNY", Quote: "USD",
+			Numerator: "1", Denominator: "6", ExpectedVersion: 1, Kind: "correction", Reason: "arrival rate",
+		})
 		return err
 	}); err != nil {
 		t.Fatal(err)

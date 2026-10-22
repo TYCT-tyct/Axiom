@@ -273,8 +273,10 @@ func (p *Payments) discrepancy(ctx context.Context, tx pg.Tx, c confirmed, o *Lo
 	if err != nil {
 		return err
 	}
-	r := RecordDiscrepancyParams{ID: uuid.NewV7(), MerchantID: uuid.UUID(c.merchant), Kind: kind,
-		Dedupe: fmt.Sprintf("%x", key), Detail: detail}
+	r := RecordDiscrepancyParams{
+		ID: uuid.NewV7(), MerchantID: uuid.UUID(c.merchant), Kind: kind,
+		Dedupe: fmt.Sprintf("%x", key), Detail: detail,
+	}
 	if o != nil {
 		r.OrderID, r.AccountID = &o.ID, &o.AccountID
 	}

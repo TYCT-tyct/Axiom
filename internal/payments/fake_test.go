@@ -76,6 +76,7 @@ func (c fakeChannel) Verify(_ context.Context, cb Callback) (Notice, error) {
 	}
 	return Notice{}, errors.New("fake: unsigned callback")
 }
+
 func (c fakeChannel) Query(ctx context.Context, order, trade string) (Payment, error) {
 	if c.query != nil {
 		return c.query(ctx, order, trade)

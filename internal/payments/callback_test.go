@@ -75,8 +75,10 @@ func fakeMinor(text string) (int64, error) {
 }
 
 func callbackValues(o Order) url.Values {
-	v := url.Values{"pid": {"1001"}, "trade_no": {o.TradeNo}, "out_trade_no": {o.ID.TypeID()},
-		"money": {fmt.Sprintf("%d.%02d", o.Total.Minor/100, o.Total.Minor%100)}, "trade_status": {"TRADE_SUCCESS"}, "sign_type": {"MD5"}}
+	v := url.Values{
+		"pid": {"1001"}, "trade_no": {o.TradeNo}, "out_trade_no": {o.ID.TypeID()},
+		"money": {fmt.Sprintf("%d.%02d", o.Total.Minor/100, o.Total.Minor%100)}, "trade_status": {"TRADE_SUCCESS"}, "sign_type": {"MD5"},
+	}
 	v.Set("sign", epaySignature(v, theKey))
 	return v
 }
