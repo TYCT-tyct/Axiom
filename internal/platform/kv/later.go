@@ -82,20 +82,7 @@ func (c *Client) Later(account uuid.UUID, cmd Cmd) {
 // writeLater gives up immediately on busy slots; it must never queue ahead of foreground accesses.
 // An unavailable write is discarded, never retried: a stale retry could replace a newer binding from another node.
 func (c *Client) writeLater(ctx context.Context) {
-	defer func() {
-		var pending int64
-		for {
-			select {
-			case <-c.later:
-				pending++
-			default:
-				if pending > 0 {
-					c.m.drop(context.WithoutCancel(ctx), dropShutdown, pending)
-				}
-				return
-			}
-		}
-	}()
+	defer c.discardLater(ctx)
 	var batch [stickyOutstanding]Cmd
 	for {
 		if ctx.Err() != nil {
@@ -124,6 +111,22 @@ func (c *Client) writeLater(ctx context.Context) {
 			_, _ = c.Do(ctx, StickyWrite, batch[:n]...) //nolint:errcheck // Do records failures; this disposable write has no caller to fail.
 		}
 		clear(batch[:n])
+	}
+}
+
+// discardLater runs after Close seals admission, so every remaining binding is accounted for exactly once.
+func (c *Client) discardLater(ctx context.Context) {
+	var pending int64
+	for {
+		select {
+		case <-c.later:
+			pending++
+		default:
+			if pending > 0 {
+				c.m.drop(context.WithoutCancel(ctx), dropShutdown, pending)
+			}
+			return
+		}
 	}
 }
 
