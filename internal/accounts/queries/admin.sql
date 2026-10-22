@@ -13,24 +13,21 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit, t.max_keys_per_account, t.key_creations_per_hour
+    t.new_key_daily_limit
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
 
 -- name: WriteSiteSettings :exec
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
 -- limits are not the admin API's and are left as they are.
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit, max_keys_per_account, key_creations_per_hour)
+    new_key_daily_limit)
 VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
     make_interval(secs => sqlc.narg(console_max_age_seconds)::bigint),
     make_interval(secs => sqlc.narg(admin_idle_seconds)::bigint),
-    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint,
-    sqlc.narg(max_keys_per_account)::integer, sqlc.narg(key_creations_per_hour)::integer)
+    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
-    max_keys_per_account = excluded.max_keys_per_account,
-    key_creations_per_hour = excluded.key_creations_per_hour;
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
 
 -- name: CutSessions :exec
 -- A site that shortens its sessions writes the shorter lifetimes into the ones already made, so that loosening it again
@@ -74,3 +71,26 @@ JOIN LATERAL (
     ORDER BY (r.name = 'owner') DESC, m.user_id
     LIMIT 1) o ON true
 WHERE a.id = @id;
+
+-- name: ReadSiteKeyLimits :one
+-- The site's own limits on the call keys of an account (a NULL is not set); no row means no such site.
+SELECT t.max_keys_per_account, t.key_creations_per_hour
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
+
+-- name: WriteSiteKeyLimits :exec
+-- Replaces the site's own limits on keys and leaves its other settings as they are, so the settings the admin API
+-- replaces whole cannot take these along.
+INSERT INTO accounts.site_settings (site_id, max_keys_per_account, key_creations_per_hour)
+VALUES (@site_id, sqlc.narg(max_keys)::integer, sqlc.narg(creations_per_hour)::integer)
+ON CONFLICT (site_id) DO UPDATE SET max_keys_per_account = excluded.max_keys_per_account,
+    key_creations_per_hour = excluded.key_creations_per_hour;
+
+-- name: ReadAccountKeyLimits :one
+-- The account's own limits and its site's, which it falls back to; no row means no such account.
+SELECT a.site_id, a.max_keys, a.key_creations_per_hour, t.max_keys_per_account AS site_max_keys,
+    t.key_creations_per_hour AS site_creations_per_hour
+FROM accounts.accounts a LEFT JOIN accounts.site_settings t ON t.site_id = a.site_id WHERE a.id = @account_id;
+
+-- name: WriteAccountKeyLimits :exec
+UPDATE accounts.accounts SET max_keys = sqlc.narg(max_keys)::integer, key_creations_per_hour = sqlc.narg(creations_per_hour)::integer
+WHERE id = @account_id;

@@ -32,30 +32,11 @@ func seconds(d time.Duration) *int {
 	return &n
 }
 
-// count is a limit the module holds as an optional integer, as the contract writes it.
-func count(n *int32) *int {
-	if n == nil {
-		return nil
-	}
-	value := int(*n)
-	return &value
-}
-
-// keyLimit is a limit the contract bounds to 1 to 10,000, as the module holds it.
-func keyLimit(n *int) *int32 {
-	if n == nil {
-		return nil
-	}
-	value := int32(*n) // #nosec G115 -- the contract bounds it to 10,000
-	return &value
-}
-
 // settingsBody is a site's settings as the contract writes them; a setting that is not set is left out.
 func settingsBody(v accounts.SiteSettings, currency platform.Currency) adminapi.SiteSettings {
 	body := adminapi.SiteSettings{
 		ConsoleIdleTimeoutSeconds: seconds(v.ConsoleIdle), ConsoleMaxAgeSeconds: seconds(v.ConsoleMaxAge),
 		AdminIdleTimeoutSeconds: seconds(v.AdminIdle), AdminMaxAgeSeconds: seconds(v.AdminMaxAge),
-		MaxKeysPerAccount: count(v.MaxKeysPerAccount), KeyCreationsPerHour: count(v.KeyCreationsPerHour),
 	}
 	if v.NewKeyDailyLimit != nil {
 		limit := adminMoney(*v.NewKeyDailyLimit, currency)
@@ -82,7 +63,6 @@ func settingsOf(b adminapi.SiteSettings, currency platform.Currency) (accounts.S
 	v := accounts.SiteSettings{
 		ConsoleIdle: duration(b.ConsoleIdleTimeoutSeconds), ConsoleMaxAge: duration(b.ConsoleMaxAgeSeconds),
 		AdminIdle: duration(b.AdminIdleTimeoutSeconds), AdminMaxAge: duration(b.AdminMaxAgeSeconds),
-		MaxKeysPerAccount: keyLimit(b.MaxKeysPerAccount), KeyCreationsPerHour: keyLimit(b.KeyCreationsPerHour),
 	}
 	var p problems
 	if b.NewKeyDailyLimit != nil {

@@ -1,11 +1,11 @@
 package accounts_test
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,20 +111,25 @@ func TestKeyCapHoldsUnderConcurrentCreates(t *testing.T) {
 	}
 }
 
-// madeAt makes a call key of a1 whose ID carries the time at, as a key made then would have, and deletes it if it was.
-// ID n is the last byte of the ID, to tell keys of one millisecond apart.
-func madeAt(t *testing.T, database pgtest.Database, at time.Time, n byte, deleted bool) {
+// madeAgo adds a call key of a1 that was made the span ago, and deleted if it was.
+func madeAgo(t *testing.T, database pgtest.Database, ago time.Duration, deleted bool) {
 	t.Helper()
-	var id uuid.UUID
-	var ms [8]byte
-	binary.BigEndian.PutUint64(ms[:], uint64(at.UnixMilli())) // #nosec G115 -- after 1970
-	copy(id[:6], ms[2:])
-	id[6], id[8], id[15] = 0x70, 0x80, n
-	sql := apiKey("'"+id.String()+"'", ":s1", ":a1", ":w1", ":u1", "call")
+	id := "'" + uuid.NewV7().String() + "'"
+	sql := apiKey(id, ":s1", ":a1", ":w1", ":u1", "call") + fmt.Sprintf(
+		";\nUPDATE accounts.api_keys SET created_at = now() - make_interval(secs => %d) WHERE id = %s", int(ago.Seconds()), id)
 	if deleted {
-		sql += ";\nUPDATE accounts.api_keys SET deleted_at = now() WHERE id = '" + id.String() + "'"
+		sql += fmt.Sprintf(";\nUPDATE accounts.api_keys SET deleted_at = now() WHERE id = %s", id)
 	}
 	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(sql)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedKeyIsOld makes the key the seed gave a1 three hours old, so that the keys of the hour are the ones a test adds.
+func seedKeyIsOld(t *testing.T, database pgtest.Database) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(
+		"UPDATE accounts.api_keys SET created_at = now() - interval '3 hours' WHERE id = :k1")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -161,34 +166,52 @@ func TestKeyCap(t *testing.T) {
 	}
 }
 
-// TestKeyCreationWindow: the keys made in the last hour are counted by the time their IDs carry, deleted ones too, on
-// the node's clock; the refusal names when the oldest of them is an hour old. The clock is two hours on, so that the
-// key the seed made is out of the hour, and the keys of the hour are the ones the test makes.
+// TestKeyCreationWindow: the keys made in the last hour are counted on the database's clock, deleted ones too, and
+// the refusal reports how many there are, whatever the limit now is, and how long until the key that must age out for
+// a place to be free is an hour old. The keys are made at times before now, and the waits are checked to a minute,
+// which is more than the test takes.
 func TestKeyCreationWindow(t *testing.T) {
 	t.Parallel()
-	db, database := open(t)
-	keySettingsOf(t, database, 100, 2)
-	var mu sync.Mutex
-	at := time.Now().Add(2 * time.Hour).Truncate(time.Millisecond)
-	s := node(t, db, hashKeys(t, 1), func() time.Time { mu.Lock(); defer mu.Unlock(); return at })
-	move := func(d time.Duration) { mu.Lock(); at = at.Add(d); mu.Unlock() }
-	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return at }
-	madeAt(t, database, now().Add(-40*time.Minute), 1, true)
-	madeAt(t, database, now().Add(-10*time.Minute), 2, false)
-	madeAt(t, database, now().Add(-2*time.Hour), 3, false) // long out of the hour
-	want := accounts.TooManyKeys{Limit: 2, Count: 2, RetryAfter: 20 * time.Minute}
-	if diff := cmp.Diff(want, tooManyKeys(t, tryKey(t, db, s, "Over", accounts.WorkspaceID(w1)))); diff != "" {
-		t.Errorf("two keys in the hour, one of them deleted (-want +got):\n%s", diff)
+	minutes := func(n ...int) []time.Duration {
+		ago := make([]time.Duration, len(n))
+		for i, m := range n {
+			ago[i] = time.Duration(m) * time.Minute
+		}
+		return ago
 	}
-	// A key exactly an hour old is out of the hour; a millisecond younger is in it.
-	move(20*time.Minute - time.Millisecond)
-	want.RetryAfter = time.Millisecond
-	if diff := cmp.Diff(want, tooManyKeys(t, tryKey(t, db, s, "Over", accounts.WorkspaceID(w1)))); diff != "" {
-		t.Errorf("a millisecond before the oldest is an hour old (-want +got):\n%s", diff)
-	}
-	move(time.Millisecond)
-	if err := tryKey(t, db, s, "In", accounts.WorkspaceID(w1)); err != nil {
-		t.Errorf("when the oldest is an hour old: %v", err)
+	for name, c := range map[string]struct {
+		limit   int
+		ago     []time.Duration // when the keys were made, the first one deleted
+		refused bool
+		count   int
+		wait    time.Duration
+	}{
+		"a deleted key counts":                   {2, minutes(40, 10), true, 2, 20 * time.Minute},
+		"a key past the hour does not count":     {2, minutes(61, 10), false, 0, 0},
+		"a key just inside the hour counts":      {2, minutes(59, 10), true, 2, time.Minute},
+		"a lowered limit reports the true count": {2, minutes(50, 40, 30, 20, 10), true, 5, 40 * time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			db, database := open(t)
+			keySettingsOf(t, database, 100, c.limit)
+			seedKeyIsOld(t, database)
+			for i, ago := range c.ago {
+				madeAgo(t, database, ago, i == 0)
+			}
+			s := node(t, db, hashKeys(t, 1), nil)
+			err := tryKey(t, db, s, "Over", accounts.WorkspaceID(w1))
+			if !c.refused {
+				if err != nil {
+					t.Errorf("a key with the hour's keys %v: %v", c.ago, err)
+				}
+				return
+			}
+			got := tooManyKeys(t, err)
+			if got.Limit != c.limit || got.Count != c.count || got.RetryAfter > c.wait || got.RetryAfter <= c.wait-time.Minute {
+				t.Errorf("the refusal is %+v, want %d of %d and a wait of up to %v and more than a minute less", got, c.count, c.limit, c.wait)
+			}
+		})
 	}
 }
 
@@ -205,6 +228,192 @@ func TestKeyCreationsCountTheKeysMade(t *testing.T) {
 	keys := tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)))
 	if keys.Limit != 2 || keys.Count != 2 || keys.RetryAfter <= 0 || keys.RetryAfter > time.Hour {
 		t.Errorf("the third key of the hour: %+v, want 2 of 2 and a wait of up to an hour", keys)
+	}
+}
+
+// TestKeyCreationsIgnoreTheNodesClocks: nodes whose clocks are hours apart, making keys of one account in turn, are held
+// to the hour's limit as one: a key is stamped and the hour judged by the database, not by the node that made it.
+func TestKeyCreationsIgnoreTheNodesClocks(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	keySettingsOf(t, database, 100, 3)
+	seedKeyIsOld(t, database)
+	nodes := make([]*accounts.Service, 0, 3)
+	for _, skew := range []time.Duration{0, 2 * time.Hour, -2 * time.Hour} {
+		nodes = append(nodes, node(t, db, hashKeys(t, 1), func() time.Time { return time.Now().Add(skew) }))
+	}
+	for i := range 3 {
+		if err := tryKey(t, db, nodes[i], "Skewed", accounts.WorkspaceID(w1)); err != nil {
+			t.Fatalf("key %d of the hour, made on a node %d of 3: %v", i+1, i+1, err)
+		}
+	}
+	for i, s := range nodes {
+		if keys := tooManyKeys(t, tryKey(t, db, s, "Over", accounts.WorkspaceID(w1))); keys.Count != 3 || keys.RetryAfter <= 0 || keys.RetryAfter > time.Hour {
+			t.Errorf("a fourth key from node %d: %+v, want 3 of 3 and a wait of up to an hour", i, keys)
+		}
+	}
+}
+
+// TestKeyCreationsUseTheIndex: the hour's count of an account that made none reads no more than its own keys however
+// many keys other accounts made in the hour: the plan is a scan of api_keys_made_by_account with no row dropped by a
+// filter. The statement is RecentKeys's, spelled with the literals it takes, and must stay in step with it.
+func TestKeyCreationsUseTheIndex(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(`
+		INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
+			secret_version, created_by, status)
+		SELECT gen_random_uuid(), :s2, :a2, :w2, 'call', 'Bulk', 'sk-ax-v1-', 'abcd', sha256(convert_to(n::text, 'UTF8')), 1, :u2, 'active'
+		FROM generate_series(1, 30000) AS n;
+		ANALYZE accounts.api_keys`)); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(texts(t, db, platform, ids.Replace(`EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF)
+		WITH recent AS (
+			SELECT created_at FROM accounts.api_keys
+			WHERE account_id = :a1 AND kind = 'call' AND created_at > statement_timestamp() - make_interval(secs => 3600::bigint)
+		)
+		SELECT (SELECT count(*) FROM recent)::bigint AS made`)), "\n")
+	if !strings.Contains(plan, "api_keys_made_by_account") || strings.Contains(plan, "Seq Scan") || strings.Contains(plan, "Rows Removed by Filter") {
+		t.Errorf("the plan of the hour's count:\n%s", plan)
+	}
+}
+
+// TestAccountKeyLimits: an account's own limits come over its site's, one limit at a time, in either direction; a limit
+// the account does not set is the site's, and clearing them gives the site's back; the change is audited with the
+// values it replaced, bounds are checked before anything is written, and the account's key being made meets them.
+func TestAccountKeyLimits(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	keySettingsOf(t, database, 3, 100)
+	seedKeyIsOld(t, database)
+	s := node(t, db, hashKeys(t, 1), nil)
+	scope := pg.NewScope(true, nil, nil)
+	set := func(limits accounts.KeyLimits) error {
+		return db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+			return s.SetAccountKeyLimits(t.Context(), tx, operatorActor, accounts.AccountID(a1), limits, "reason")
+		})
+	}
+	read := func() (accounts.KeyLimits, accounts.EffectiveKeyLimits) {
+		var own accounts.KeyLimits
+		var effective accounts.EffectiveKeyLimits
+		if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
+			own, effective, err = s.AccountKeyLimits(t.Context(), tx, accounts.AccountID(a1))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return own, effective
+	}
+	if own, effective := read(); own != (accounts.KeyLimits{}) || effective != (accounts.EffectiveKeyLimits{MaxKeys: 3, CreationsPerHour: 100}) {
+		t.Errorf("an account that sets none: %+v, %+v", own, effective)
+	}
+	// Below the site's: the seed's key and one more are the two it may hold.
+	if err := set(accounts.KeyLimits{MaxKeys: new(int32(2))}); err != nil {
+		t.Fatal(err)
+	}
+	if own, effective := read(); *own.MaxKeys != 2 || own.CreationsPerHour != nil || effective != (accounts.EffectiveKeyLimits{MaxKeys: 2, CreationsPerHour: 100}) {
+		t.Errorf("an account with a cap of its own: %+v, %+v", own, effective)
+	}
+	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
+		t.Fatalf("the second key, of two: %v", err)
+	}
+	if diff := cmp.Diff(accounts.TooManyKeys{Limit: 2, Count: 2}, tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("the account's cap of 2 under its site's 3 (-want +got):\n%s", diff)
+	}
+	// Over the site's: its own hourly limit is lower and its cap higher, and each wins.
+	if err := set(accounts.KeyLimits{MaxKeys: new(int32(10)), CreationsPerHour: new(int32(1))}); err != nil {
+		t.Fatal(err)
+	}
+	if keys := tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1))); keys.Limit != 1 || keys.Count != 1 {
+		t.Errorf("the account's hour of 1 and cap of 10: %+v, want 1 of 1", keys)
+	}
+	// Cleared, it is the site's again: three held, so the cap of 3 refuses.
+	if err := set(accounts.KeyLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)); err != nil {
+		t.Fatalf("the third key under the site's 3: %v", err)
+	}
+	if diff := cmp.Diff(accounts.TooManyKeys{Limit: 3, Count: 3}, tooManyKeys(t, tryKey(t, db, s, "Fourth", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("the site's cap of 3 (-want +got):\n%s", diff)
+	}
+	for name, limits := range map[string]accounts.KeyLimits{
+		"no keys":                      {MaxKeys: new(int32(0))},
+		"too many keys":                {MaxKeys: new(int32(10_001))},
+		"none an hour":                 {CreationsPerHour: new(int32(0))},
+		"ten thousand and one an hour": {CreationsPerHour: new(int32(10_001))},
+	} {
+		var bad *accounts.SettingError
+		if err := set(limits); !errors.As(err, &bad) {
+			t.Errorf("%s: %v, want a setting error", name, err)
+		}
+	}
+	if got := texts(t, db, platform, `SELECT coalesce(detail->'before'->>'max_keys', 'none') || ',' || coalesce(detail->'after'->>'max_keys', 'none') || ',' ||
+		coalesce(detail->'after'->>'creations_per_hour', 'none') FROM platform.audit_log WHERE action = 'account_key_limits.update' ORDER BY id`); !slices.Equal(got, []string{"none,2,none", "2,10,1", "10,none,none"}) {
+		t.Errorf("the audit entries of the account's limits (before max, after max, after hour): %v", got)
+	}
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return s.SetAccountKeyLimits(t.Context(), tx, operatorActor, accounts.AccountID(x), accounts.KeyLimits{}, "r")
+	}); !errors.Is(err, accounts.ErrNotFound) {
+		t.Errorf("limits of an account that is not there: %v", err)
+	}
+}
+
+// TestSiteKeyLimits: a site's own limits are read and replaced without touching its other settings, and the
+// replacement of its other settings leaves them: the older shape of that request has no key limits in it. Another node
+// applies them when it reloads the sites.
+func TestSiteKeyLimits(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	seedKeyIsOld(t, database)
+	s := node(t, db, hashKeys(t, 1), nil)
+	scope := pg.NewScope(true, nil, nil)
+	site := accounts.SiteID(s1)
+	readLimits := func() (accounts.KeyLimits, accounts.EffectiveKeyLimits) {
+		var own accounts.KeyLimits
+		var effective accounts.EffectiveKeyLimits
+		if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
+			own, effective, err = s.SiteKeyLimits(t.Context(), tx, site)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return own, effective
+	}
+	if own, effective := readLimits(); own != (accounts.KeyLimits{}) || effective != accounts.DefaultKeyLimits() {
+		t.Errorf("a site that sets none: %+v, %+v", own, effective)
+	}
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return s.SetSiteKeyLimits(t.Context(), tx, operatorActor, site, accounts.KeyLimits{MaxKeys: new(int32(2))}, "tighten")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The settings are replaced whole, as the request of an older page does; the site's key limits stay.
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return s.SetSiteSettings(t.Context(), tx, operatorActor, site, accounts.SiteSettings{AdminIdle: time.Hour}, "older page")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if own, effective := readLimits(); *own.MaxKeys != 2 || effective != (accounts.EffectiveKeyLimits{MaxKeys: 2, CreationsPerHour: 50}) {
+		t.Errorf("the site's limits after its settings were replaced: %+v, %+v", own, effective)
+	}
+	// This node has not reloaded the sites yet, another that has applies the limit.
+	other := node(t, db, hashKeys(t, 1), nil)
+	if err := tryKey(t, db, other, "Second", accounts.WorkspaceID(w1)); err != nil {
+		t.Fatalf("the second key, of two: %v", err)
+	}
+	if diff := cmp.Diff(accounts.TooManyKeys{Limit: 2, Count: 2}, tooManyKeys(t, tryKey(t, db, other, "Third", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("the site's cap of 2 (-want +got):\n%s", diff)
+	}
+	var bad *accounts.SettingError
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		return s.SetSiteKeyLimits(t.Context(), tx, operatorActor, site, accounts.KeyLimits{MaxKeys: new(int32(0))}, "r")
+	}); !errors.As(err, &bad) {
+		t.Errorf("a cap of none: %v, want a setting error", err)
+	}
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM platform.audit_log WHERE action = 'site_key_limits.update'`); got[0] != "1" {
+		t.Errorf("%s audit entries of the site's key limits, want 1", got[0])
 	}
 }
 

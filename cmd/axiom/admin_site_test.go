@@ -32,22 +32,20 @@ func TestSiteSettings(t *testing.T) {
 	defaults := adminapi.SiteSettings{
 		ConsoleIdleTimeoutSeconds: new(7 * 24 * 3600), ConsoleMaxAgeSeconds: new(30 * 24 * 3600),
 		AdminIdleTimeoutSeconds: new(1800), AdminMaxAgeSeconds: new(12 * 3600),
-		NewKeyDailyLimit:  &adminapi.Money{Amount: "10000000000", Currency: "USD"},
-		MaxKeysPerAccount: new(100), KeyCreationsPerHour: new(50),
+		NewKeyDailyLimit: &adminapi.Money{Amount: "10000000000", Currency: "USD"},
 	}
 	if diff := cmp.Diff(adminapi.SiteSettingsView{Defaults: defaults}, f.getSettings(s, site)); diff != "" {
 		t.Errorf("the settings of a site that sets none (-want +got):\n%s", diff)
 	}
 
-	body := `{"settings":{"console_idle_timeout_seconds":3600,"admin_max_age_seconds":7200,"new_key_daily_limit":{"amount":"5000000000","currency":"USD"},"max_keys_per_account":10,"key_creations_per_hour":20},"reason":"tighten"}`
+	body := `{"settings":{"console_idle_timeout_seconds":3600,"admin_max_age_seconds":7200,"new_key_daily_limit":{"amount":"5000000000","currency":"USD"}},"reason":"tighten"}`
 	key := newKey()
 	rec := f.change(s, http.MethodPut, "/sites/"+site+"/settings", body, key)
 	expectAdmin(t, "updateSiteSettings", rec, http.StatusOK, "")
 	want := adminapi.SiteSettingsView{
 		Settings: adminapi.SiteSettings{
 			ConsoleIdleTimeoutSeconds: new(3600), AdminMaxAgeSeconds: new(7200),
-			NewKeyDailyLimit:  &adminapi.Money{Amount: "5000000000", Currency: "USD"},
-			MaxKeysPerAccount: new(10), KeyCreationsPerHour: new(20),
+			NewKeyDailyLimit: &adminapi.Money{Amount: "5000000000", Currency: "USD"},
 		},
 		Defaults: defaults,
 	}
@@ -66,9 +64,6 @@ func TestSiteSettings(t *testing.T) {
 		"coalesce(detail->'after'->>'new_key_daily_limit', 'none')":        "5000000000",
 		"coalesce(detail->'after'->>'admin_idle_timeout_seconds', 'none')": "none",
 		"coalesce(detail->'before'->>'admin_max_age_seconds', 'none')":     "none",
-		"coalesce(detail->'after'->>'max_keys_per_account', 'none')":       "10",
-		"coalesce(detail->'after'->>'key_creations_per_hour', 'none')":     "20",
-		"coalesce(detail->'before'->>'max_keys_per_account', 'none')":      "none",
 	})
 
 	// The same request again, after a lost response, is not done again.
@@ -113,9 +108,6 @@ func TestSiteSettingsRefusals(t *testing.T) {
 		{"a limit over a million units", `{"settings":{"new_key_daily_limit":{"amount":"1000000000000001","currency":"USD"}},"reason":"r"}`, "/settings/new_key_daily_limit"},
 		{"a negative limit", `{"settings":{"new_key_daily_limit":{"amount":"-1","currency":"USD"}},"reason":"r"}`, "/settings/new_key_daily_limit"},
 		{"an amount past 64 bits", `{"settings":{"new_key_daily_limit":{"amount":"9999999999999999999","currency":"USD"}},"reason":"r"}`, "/settings/new_key_daily_limit/amount"},
-		{"no keys at all", `{"settings":{"max_keys_per_account":0},"reason":"r"}`, "/settings/max_keys_per_account"},
-		{"ten thousand and one keys", `{"settings":{"max_keys_per_account":10001},"reason":"r"}`, "/settings/max_keys_per_account"},
-		{"no keys in an hour", `{"settings":{"key_creations_per_hour":0},"reason":"r"}`, "/settings/key_creations_per_hour"},
 		{"no reason", `{"settings":{}}`, "/reason"},
 		{"an empty reason", `{"settings":{},"reason":""}`, "/reason"},
 	} {

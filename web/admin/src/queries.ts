@@ -44,6 +44,13 @@ export const accountQuery = (id: AdminSchemas["AccountId"]) =>
       unwrap(adminApi.GET(`${base}/accounts/{account_id}`, { params: { path: { account_id: id } }, signal })),
   });
 
+export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-key-limits", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
+  });
+
 export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "suppliers", status ?? ""],

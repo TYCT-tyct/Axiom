@@ -21,43 +21,49 @@ WHERE k.id = @key_id
 
 -- name: LockAccount :one
 -- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
--- second one's count sees the first: a count read before the insert without this lock would let both through.
-SELECT id FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
+-- second one's count sees the first: a count read before the insert without this lock would let both through. The
+-- account's own limits come with it.
+SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: CountKeys :one
--- The call keys the account holds that are not deleted: what the site's limit of keys per account bounds. Read in the
--- account's turn (LockAccount), so it counts every key an insert before this one made.
+-- The call keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn
+-- (LockAccount), so it counts every key an insert before this one made.
 SELECT count(*) FROM accounts.api_keys
 WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL;
 
--- name: RecentKeys :many
--- The account's newest call keys from an ID on, deleted ones too: an ID is a UUIDv7, so the keys made since a time are
--- the ones whose ID is at least the smallest ID of that time. The site's limit of keys made in an hour needs no more
--- than that many.
-SELECT id FROM accounts.api_keys
-WHERE account_id = @account_id AND kind = 'call' AND id >= @from_id
-ORDER BY id DESC
-LIMIT @most;
+-- name: RecentKeys :one
+-- How many call keys the account made in the last window, deleted ones too, and how long until a place is free under a
+-- limit of max_made: until the key that must age out for the count to fall below it is a window old (0 while the
+-- count is below the limit, when it is not asked). The time is the database's, taken once per statement, after the
+-- account's turn was won, and so is the time a key is stamped with (InsertKey): one clock for every node.
+WITH recent AS (
+    SELECT created_at FROM accounts.api_keys
+    WHERE account_id = @account_id AND kind = 'call'
+        AND created_at > statement_timestamp() - make_interval(secs => @window_seconds::bigint)
+)
+SELECT (SELECT count(*) FROM recent)::bigint AS made,
+    coalesce((SELECT extract(epoch FROM created_at + make_interval(secs => @window_seconds::bigint) - statement_timestamp())::float8
+        FROM recent ORDER BY created_at OFFSET greatest((SELECT count(*) FROM recent) - @max_made::bigint, 0) LIMIT 1), 0)::float8 AS wait_seconds;
 
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
+    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
 VALUES (@id, @site_id, @account_id, @workspace_id, 'call', @name, @prefix, @last4, @secret_hash, @secret_version,
-    @created_by, @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow);
+    @created_by, statement_timestamp(), @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow);
 
 -- name: DefaultWorkspace :many
 SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default;
 
 -- name: ListKeys :many
 -- An account's call keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
 WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL AND id < @before
 ORDER BY id DESC
 LIMIT @page_size;
 
 -- name: GetKey :many
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL;
 
 -- name: LockKey :one

@@ -228,12 +228,58 @@ func (q *Queries) ReadAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]Rea
 	return items, nil
 }
 
+const readAccountKeyLimits = `-- name: ReadAccountKeyLimits :one
+SELECT a.site_id, a.max_keys, a.key_creations_per_hour, t.max_keys_per_account AS site_max_keys,
+    t.key_creations_per_hour AS site_creations_per_hour
+FROM accounts.accounts a LEFT JOIN accounts.site_settings t ON t.site_id = a.site_id WHERE a.id = $1
+`
+
+type ReadAccountKeyLimitsRow struct {
+	SiteID               uuid.UUID
+	MaxKeys              *int32
+	KeyCreationsPerHour  *int32
+	SiteMaxKeys          *int32
+	SiteCreationsPerHour *int32
+}
+
+// The account's own limits and its site's, which it falls back to; no row means no such account.
+func (q *Queries) ReadAccountKeyLimits(ctx context.Context, db DBTX, accountID uuid.UUID) (ReadAccountKeyLimitsRow, error) {
+	row := db.QueryRow(ctx, readAccountKeyLimits, accountID)
+	var i ReadAccountKeyLimitsRow
+	err := row.Scan(
+		&i.SiteID,
+		&i.MaxKeys,
+		&i.KeyCreationsPerHour,
+		&i.SiteMaxKeys,
+		&i.SiteCreationsPerHour,
+	)
+	return i, err
+}
+
+const readSiteKeyLimits = `-- name: ReadSiteKeyLimits :one
+SELECT t.max_keys_per_account, t.key_creations_per_hour
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
+`
+
+type ReadSiteKeyLimitsRow struct {
+	MaxKeysPerAccount   *int32
+	KeyCreationsPerHour *int32
+}
+
+// The site's own limits on the call keys of an account (a NULL is not set); no row means no such site.
+func (q *Queries) ReadSiteKeyLimits(ctx context.Context, db DBTX, siteID uuid.UUID) (ReadSiteKeyLimitsRow, error) {
+	row := db.QueryRow(ctx, readSiteKeyLimits, siteID)
+	var i ReadSiteKeyLimitsRow
+	err := row.Scan(&i.MaxKeysPerAccount, &i.KeyCreationsPerHour)
+	return i, err
+}
+
 const readSiteSettings = `-- name: ReadSiteSettings :many
 SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit, t.max_keys_per_account, t.key_creations_per_hour
+    t.new_key_daily_limit
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
 `
 
@@ -243,8 +289,6 @@ type ReadSiteSettingsRow struct {
 	AdminIdleSeconds     int64
 	AdminMaxAgeSeconds   int64
 	NewKeyDailyLimit     *int64
-	MaxKeysPerAccount    *int32
-	KeyCreationsPerHour  *int32
 }
 
 // A site with no settings row has none of its own; a site that does not exist has no row at all. A length of 0 is unset:
@@ -264,8 +308,6 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 			&i.AdminIdleSeconds,
 			&i.AdminMaxAgeSeconds,
 			&i.NewKeyDailyLimit,
-			&i.MaxKeysPerAccount,
-			&i.KeyCreationsPerHour,
 		); err != nil {
 			return nil, err
 		}
@@ -277,19 +319,52 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 	return items, nil
 }
 
+const writeAccountKeyLimits = `-- name: WriteAccountKeyLimits :exec
+UPDATE accounts.accounts SET max_keys = $1::integer, key_creations_per_hour = $2::integer
+WHERE id = $3
+`
+
+type WriteAccountKeyLimitsParams struct {
+	MaxKeys          *int32
+	CreationsPerHour *int32
+	AccountID        uuid.UUID
+}
+
+func (q *Queries) WriteAccountKeyLimits(ctx context.Context, db DBTX, arg WriteAccountKeyLimitsParams) error {
+	_, err := db.Exec(ctx, writeAccountKeyLimits, arg.MaxKeys, arg.CreationsPerHour, arg.AccountID)
+	return err
+}
+
+const writeSiteKeyLimits = `-- name: WriteSiteKeyLimits :exec
+INSERT INTO accounts.site_settings (site_id, max_keys_per_account, key_creations_per_hour)
+VALUES ($1, $2::integer, $3::integer)
+ON CONFLICT (site_id) DO UPDATE SET max_keys_per_account = excluded.max_keys_per_account,
+    key_creations_per_hour = excluded.key_creations_per_hour
+`
+
+type WriteSiteKeyLimitsParams struct {
+	SiteID           uuid.UUID
+	MaxKeys          *int32
+	CreationsPerHour *int32
+}
+
+// Replaces the site's own limits on keys and leaves its other settings as they are, so the settings the admin API
+// replaces whole cannot take these along.
+func (q *Queries) WriteSiteKeyLimits(ctx context.Context, db DBTX, arg WriteSiteKeyLimitsParams) error {
+	_, err := db.Exec(ctx, writeSiteKeyLimits, arg.SiteID, arg.MaxKeys, arg.CreationsPerHour)
+	return err
+}
+
 const writeSiteSettings = `-- name: WriteSiteSettings :exec
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit, max_keys_per_account, key_creations_per_hour)
+    new_key_daily_limit)
 VALUES ($1, make_interval(secs => $2::bigint),
     make_interval(secs => $3::bigint),
     make_interval(secs => $4::bigint),
-    make_interval(secs => $5::bigint), $6::bigint,
-    $7::integer, $8::integer)
+    make_interval(secs => $5::bigint), $6::bigint)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
-    max_keys_per_account = excluded.max_keys_per_account,
-    key_creations_per_hour = excluded.key_creations_per_hour
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit
 `
 
 type WriteSiteSettingsParams struct {
@@ -299,8 +374,6 @@ type WriteSiteSettingsParams struct {
 	AdminIdleSeconds     *int64
 	AdminMaxAgeSeconds   *int64
 	NewKeyDailyLimit     *int64
-	MaxKeysPerAccount    *int32
-	KeyCreationsPerHour  *int32
 }
 
 // Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
@@ -313,8 +386,6 @@ func (q *Queries) WriteSiteSettings(ctx context.Context, db DBTX, arg WriteSiteS
 		arg.AdminIdleSeconds,
 		arg.AdminMaxAgeSeconds,
 		arg.NewKeyDailyLimit,
-		arg.MaxKeysPerAccount,
-		arg.KeyCreationsPerHour,
 	)
 	return err
 }

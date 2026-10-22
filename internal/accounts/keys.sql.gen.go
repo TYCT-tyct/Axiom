@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -78,8 +79,8 @@ SELECT count(*) FROM accounts.api_keys
 WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL
 `
 
-// The call keys the account holds that are not deleted: what the site's limit of keys per account bounds. Read in the
-// account's turn (LockAccount), so it counts every key an insert before this one made.
+// The call keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn
+// (LockAccount), so it counts every key an insert before this one made.
 func (q *Queries) CountKeys(ctx context.Context, db DBTX, accountID uuid.UUID) (int64, error) {
 	row := db.QueryRow(ctx, countKeys, accountID)
 	var count int64
@@ -142,7 +143,7 @@ func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) ([]Delet
 }
 
 const getKey = `-- name: GetKey :many
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys WHERE id = $1 AND kind = 'call' AND deleted_at IS NULL
 `
 
@@ -152,6 +153,7 @@ type GetKeyRow struct {
 	Name        string
 	Prefix      string
 	Last4       string
+	CreatedAt   pgtype.Timestamptz
 	ExpiresAt   *time.Time
 	Status      string
 	SpendLimit  *int64
@@ -175,6 +177,7 @@ func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRo
 			&i.Name,
 			&i.Prefix,
 			&i.Last4,
+			&i.CreatedAt,
 			&i.ExpiresAt,
 			&i.Status,
 			&i.SpendLimit,
@@ -219,9 +222,9 @@ func (q *Queries) GetKeyInfo(ctx context.Context, db DBTX, id uuid.UUID) (GetKey
 
 const insertKey = `-- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
+    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
 VALUES ($1, $2, $3, $4, 'call', $5, $6, $7, $8, $9,
-    $10, $11, 'active', $12, $13, $14, $15)
+    $10, statement_timestamp(), $11, 'active', $12, $13, $14, $15)
 `
 
 type InsertKeyParams struct {
@@ -327,7 +330,7 @@ func (q *Queries) ListAccountWorkspaces(ctx context.Context, db DBTX, accountID 
 }
 
 const listKeys = `-- name: ListKeys :many
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
 WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL AND id < $2
 ORDER BY id DESC
@@ -346,6 +349,7 @@ type ListKeysRow struct {
 	Name        string
 	Prefix      string
 	Last4       string
+	CreatedAt   pgtype.Timestamptz
 	ExpiresAt   *time.Time
 	Status      string
 	SpendLimit  *int64
@@ -370,6 +374,7 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 			&i.Name,
 			&i.Prefix,
 			&i.Last4,
+			&i.CreatedAt,
 			&i.ExpiresAt,
 			&i.Status,
 			&i.SpendLimit,
@@ -388,16 +393,22 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 }
 
 const lockAccount = `-- name: LockAccount :one
-SELECT id FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
+SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `
 
+type LockAccountRow struct {
+	MaxKeys             *int32
+	KeyCreationsPerHour *int32
+}
+
 // Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
-// second one's count sees the first: a count read before the insert without this lock would let both through.
-func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (uuid.UUID, error) {
+// second one's count sees the first: a count read before the insert without this lock would let both through. The
+// account's own limits come with it.
+func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (LockAccountRow, error) {
 	row := db.QueryRow(ctx, lockAccount, id)
-	var id_2 uuid.UUID
-	err := row.Scan(&id_2)
-	return id_2, err
+	var i LockAccountRow
+	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour)
+	return i, err
 }
 
 const lockKey = `-- name: LockKey :one
@@ -435,40 +446,37 @@ func (q *Queries) LockKey(ctx context.Context, db DBTX, id uuid.UUID) (LockKeyRo
 	return i, err
 }
 
-const recentKeys = `-- name: RecentKeys :many
-SELECT id FROM accounts.api_keys
-WHERE account_id = $1 AND kind = 'call' AND id >= $2
-ORDER BY id DESC
-LIMIT $3
+const recentKeys = `-- name: RecentKeys :one
+WITH recent AS (
+    SELECT created_at FROM accounts.api_keys
+    WHERE account_id = $3 AND kind = 'call'
+        AND created_at > statement_timestamp() - make_interval(secs => $1::bigint)
+)
+SELECT (SELECT count(*) FROM recent)::bigint AS made,
+    coalesce((SELECT extract(epoch FROM created_at + make_interval(secs => $1::bigint) - statement_timestamp())::float8
+        FROM recent ORDER BY created_at OFFSET greatest((SELECT count(*) FROM recent) - $2::bigint, 0) LIMIT 1), 0)::float8 AS wait_seconds
 `
 
 type RecentKeysParams struct {
-	AccountID uuid.UUID
-	FromID    uuid.UUID
-	Most      int32
+	WindowSeconds int64
+	MaxMade       int64
+	AccountID     uuid.UUID
 }
 
-// The account's newest call keys from an ID on, deleted ones too: an ID is a UUIDv7, so the keys made since a time are
-// the ones whose ID is at least the smallest ID of that time. The site's limit of keys made in an hour needs no more
-// than that many.
-func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, recentKeys, arg.AccountID, arg.FromID, arg.Most)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type RecentKeysRow struct {
+	Made        int64
+	WaitSeconds float64
+}
+
+// How many call keys the account made in the last window, deleted ones too, and how long until a place is free under a
+// limit of max_made: until the key that must age out for the count to fall below it is a window old (0 while the
+// count is below the limit, when it is not asked). The time is the database's, taken once per statement, after the
+// account's turn was won, and so is the time a key is stamped with (InsertKey): one clock for every node.
+func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams) (RecentKeysRow, error) {
+	row := db.QueryRow(ctx, recentKeys, arg.WindowSeconds, arg.MaxMade, arg.AccountID)
+	var i RecentKeysRow
+	err := row.Scan(&i.Made, &i.WaitSeconds)
+	return i, err
 }
 
 const updateKey = `-- name: UpdateKey :exec

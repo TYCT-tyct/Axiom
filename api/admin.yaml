@@ -310,6 +310,68 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/key-limits:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteKeyLimits
+      tags: [Site]
+      summary: A site's limits on the keys of an account
+      description: >-
+        The limits the site sets itself and what they come to over the defaults in code. An account without limits
+        of its own is held to these.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The limits
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyLimitsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteKeyLimits
+      tags: [Site]
+      summary: Set a site's limits on the keys of an account
+      description: >-
+        Replaces the limits the site sets itself: a limit left out falls back to the default in code. These are not
+        part of the site's settings (`updateSiteSettings`), so that request, which replaces those whole, leaves them as
+        they are. A request outside the bounds `KeyLimits` states is a 400. A node applies the change at once if it
+        served the request, and the others when they reload the sites, within 30 seconds; the change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyLimitsUpdate"}
+      responses:
+        "200":
+          description: The limits as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyLimitsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/tiers:
     get:
       operationId: listTiers
@@ -382,6 +444,46 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/key-limits:
+    put:
+      operationId: updateAccountKeyLimits
+      tags: [Users]
+      summary: Set an account's own limits on its keys
+      description: >-
+        Replaces the limits of the account itself: a limit left out is the site's. The account's limits are in
+        `AccountDetail`. A request outside the bounds `KeyLimits` states is a 400. The change is audited, and a key being
+        made meets the limits whole, the new or the old. Lowering a limit below what the account holds deletes no key:
+        the account only cannot make more.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyLimitsUpdate"}
+      responses:
+        "200":
+          description: The limits as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyLimitsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/credit-grants:
     post:
@@ -1920,15 +2022,13 @@ components:
         A site's own values for the sessions and keys its users get. A value that is absent is the default in code.
         Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days;
         the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to
-        1,000,000 units; the keys one account may hold from 1 to 10,000, and the keys it may make in an hour too.
+        1,000,000 units.
       properties:
         console_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 2592000}
         console_max_age_seconds: {type: integer, minimum: 300, maximum: 7776000}
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
-        max_keys_per_account: {type: integer, minimum: 1, maximum: 10000}
-        key_creations_per_hour: {type: integer, minimum: 1, maximum: 10000}
     SiteSettingsView:
       type: object
       required: [settings, defaults]
@@ -1942,6 +2042,37 @@ components:
       required: [settings, reason]
       properties:
         settings: {$ref: "#/components/schemas/SiteSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    KeyLimits:
+      type: object
+      description: >-
+        Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it
+        may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level
+        above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000.
+      properties:
+        max_keys: {type: integer, minimum: 1, maximum: 10000}
+        creations_per_hour: {type: integer, minimum: 1, maximum: 10000}
+    EffectiveKeyLimits:
+      type: object
+      required: [max_keys, creations_per_hour]
+      properties:
+        max_keys: {type: integer, minimum: 1, maximum: 10000}
+        creations_per_hour: {type: integer, minimum: 1, maximum: 10000}
+    KeyLimitsView:
+      type: object
+      required: [limits, effective]
+      properties:
+        limits:
+          description: The limits set at this level.
+          allOf: [{$ref: "#/components/schemas/KeyLimits"}]
+        effective:
+          description: What applies here, `limits` over the level above.
+          allOf: [{$ref: "#/components/schemas/EffectiveKeyLimits"}]
+    KeyLimitsUpdate:
+      type: object
+      required: [limits, reason]
+      properties:
+        limits: {$ref: "#/components/schemas/KeyLimits"}
         reason: {$ref: "#/components/schemas/Reason"}
     UserSummary:
       type: object
@@ -1965,7 +2096,7 @@ components:
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     AccountDetail:
       type: object
-      required: [id, site_id, name, kind, status, tier, owner, balance, created_at]
+      required: [id, site_id, name, kind, status, tier, owner, balance, key_limits, created_at]
       properties:
         id: {$ref: "#/components/schemas/AccountId"}
         site_id: {$ref: "#/components/schemas/SiteId"}
@@ -1980,6 +2111,7 @@ components:
             id: {$ref: "#/components/schemas/UserId"}
             email: {type: string}
         balance: {$ref: "#/components/schemas/Balance"}
+        key_limits: {$ref: "#/components/schemas/KeyLimitsView"}
         created_at: {type: string, format: date-time}
     CreditGrantRequest:
       type: object

@@ -198,6 +198,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/key-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's limits on the keys of an account
+         * @description The limits the site sets itself and what they come to over the defaults in code. An account without limits of its own is held to these.
+         */
+        get: operations["getSiteKeyLimits"];
+        /**
+         * Set a site's limits on the keys of an account
+         * @description Replaces the limits the site sets itself: a limit left out falls back to the default in code. These are not part of the site's settings (`updateSiteSettings`), so that request, which replaces those whole, leaves them as they are. A request outside the bounds `KeyLimits` states is a 400. A node applies the change at once if it served the request, and the others when they reload the sites, within 30 seconds; the change is audited.
+         */
+        put: operations["updateSiteKeyLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tiers": {
         parameters: {
             query?: never;
@@ -248,6 +274,26 @@ export interface paths {
         /** One account with its balance */
         get: operations["getAccount"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/key-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an account's own limits on its keys
+         * @description Replaces the limits of the account itself: a limit left out is the site's. The account's limits are in `AccountDetail`. A request outside the bounds `KeyLimits` states is a 400. The change is audited, and a key being made meets the limits whole, the new or the old. Lowering a limit below what the account holds deletes no key: the account only cannot make more.
+         */
+        put: operations["updateAccountKeyLimits"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1001,15 +1047,13 @@ export interface components {
         TierList: {
             data: components["schemas"]["TierRef"][];
         };
-        /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units; the keys one account may hold from 1 to 10,000, and the keys it may make in an hour too. */
+        /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
         SiteSettings: {
             console_idle_timeout_seconds?: number;
             console_max_age_seconds?: number;
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
-            max_keys_per_account?: number;
-            key_creations_per_hour?: number;
         };
         SiteSettingsView: {
             settings: components["schemas"]["SiteSettings"];
@@ -1018,6 +1062,25 @@ export interface components {
         };
         SiteSettingsUpdate: {
             settings: components["schemas"]["SiteSettings"];
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000. */
+        KeyLimits: {
+            max_keys?: number;
+            creations_per_hour?: number;
+        };
+        EffectiveKeyLimits: {
+            max_keys: number;
+            creations_per_hour: number;
+        };
+        KeyLimitsView: {
+            /** @description The limits set at this level. */
+            limits: components["schemas"]["KeyLimits"];
+            /** @description What applies here, `limits` over the level above. */
+            effective: components["schemas"]["EffectiveKeyLimits"];
+        };
+        KeyLimitsUpdate: {
+            limits: components["schemas"]["KeyLimits"];
             reason: components["schemas"]["Reason"];
         };
         UserSummary: {
@@ -1051,6 +1114,7 @@ export interface components {
                 email: string;
             };
             balance: components["schemas"]["Balance"];
+            key_limits: components["schemas"]["KeyLimitsView"];
             /** Format: date-time */
             created_at: string;
         };
@@ -1965,6 +2029,68 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteKeyLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteKeyLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listTiers: {
         parameters: {
             query?: {
@@ -2046,6 +2172,42 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateAccountKeyLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

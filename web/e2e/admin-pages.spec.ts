@@ -52,6 +52,28 @@ test.describe("users and credit", () => {
     await expect(page.getByRole("heading", { name: zhText("users.noMatch.title") })).toBeVisible();
   });
 
+  test("an account's key limits show where they come from, and a change sets the account's own over the site's", async ({
+    page,
+  }) => {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    await expect(page.getByText(words("settings.keyLimits.from.account")).first()).toBeVisible();
+    await press(page, "settings.keyLimits.edit").click();
+    await dialog(page).getByLabel(words("settings.keyLimits.field.max_keys")).fill("0");
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(
+      zhText("settings.keyLimits.invalid").replace("{{min}}", "1").replace("{{max}}", "10000"),
+    );
+    await dialog(page).getByLabel(words("settings.keyLimits.field.max_keys")).fill("250");
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(done(page)).toBeVisible();
+    expect(state.accounts.get(acct(1))?.key_limits).toEqual({
+      limits: { max_keys: 250 },
+      effective: { max_keys: 250, creations_per_hour: 50 },
+    });
+    await close(page);
+    await expect(page.getByText("250").first()).toBeVisible();
+  });
+
   test("credit is added with a reason and a key, and the same key again does it once", async ({ page }) => {
     const state = await open(page, `/accounts/${acct(1)}`);
     await expect(h1(page, "user1@example.com")).toBeVisible();
@@ -167,6 +189,26 @@ test.describe("site settings", () => {
     });
     await close(page);
     await expect(page.getByText(/7,200/)).toBeVisible();
+  });
+
+  test("the site's key limits are changed apart from the settings, and a settings change leaves them", async ({
+    page,
+  }) => {
+    const state = await open(page, "/settings");
+    await expect(page.getByText(words("settings.keyLimits.own")).first()).toBeVisible();
+    await press(page, "settings.keyLimits.edit").click();
+    await dialog(page).getByLabel(words("settings.keyLimits.field.creations_per_hour")).fill("30");
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    expect(state.keyLimits).toEqual({
+      limits: { max_keys: 20, creations_per_hour: 30 },
+      effective: { max_keys: 20, creations_per_hour: 30 },
+    });
+    await close(page);
+    await press(page, "settings.edit").click();
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(done(page)).toBeVisible();
+    expect(state.keyLimits.limits).toEqual({ max_keys: 20, creations_per_hour: 30 });
   });
 });
 

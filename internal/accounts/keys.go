@@ -2,7 +2,6 @@ package accounts
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -66,7 +65,7 @@ type Key struct {
 	Workspace WorkspaceID
 	Prefix    string
 	Last4     string
-	// CreatedAt is when the ID was made: an ID is a UUIDv7, which carries its time in milliseconds.
+	// CreatedAt is when the database stamped the key, on the clock that also judges the hour's limit.
 	CreatedAt time.Time
 	ExpiresAt *time.Time
 	KeySettings
@@ -130,50 +129,42 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	return CreatedKey{id, secret.New(text)}, nil
 }
 
-// keyWindow is the span the site's limit of keys made counts over.
+// keyWindow is the span the limit of keys made counts over.
 const keyWindow = time.Hour
 
-// admitKey checks the site's limits on the call keys account holds and makes, in the transaction that makes one. The
-// account's row is locked first, so that two creates at once are made one after the other and the second counts the
-// key the first made: counting before the insert without the lock would let both take the last place. The counts are
-// the database's, so they hold across nodes, and the lock is held to the end of the transaction, past the insert. The
-// time a key was made is the one its ID carries (createdAt), so the keys made in the hour are those from the smallest
-// ID of the hour's start on, deleted ones too: deleting a key does not give its turn back.
+// admitKey checks the limits on the call keys account holds and makes, in the transaction that makes one: the
+// account's own over its site's over the defaults. The account's row is locked first, so that two creates at once are
+// made one after the other and the second counts the key the first made: counting before the insert without the lock
+// would let both take the last place. The counts are the database's, so they hold across nodes, and the lock is held
+// to the end of the transaction, past the insert. The hour is judged on the database's clock, the one that stamps a key
+// when it is made (RecentKeys, InsertKey), so nodes whose own clocks differ cannot stretch or shorten it; deleted keys
+// count, so deleting one does not give its turn back.
 func (s *Service) admitKey(ctx context.Context, tx pg.Tx, site Site, account AccountID) error {
-	if _, err := s.queries.LockAccount(ctx, tx, uuid.UUID(account)); errors.Is(err, pg.ErrNoRows) {
+	own, err := s.queries.LockAccount(ctx, tx, uuid.UUID(account))
+	if errors.Is(err, pg.ErrNoRows) {
 		return fmt.Errorf("create an API key: %w", ErrNotFound)
-	} else if err != nil {
+	}
+	if err != nil {
 		return fmt.Errorf("create an API key: lock the account: %w", err)
 	}
+	limits := KeyLimits{own.MaxKeys, own.KeyCreationsPerHour}.over(EffectiveKeyLimits{site.MaxKeysPerAccount, site.KeyCreationsPerHour})
 	held, err := s.queries.CountKeys(ctx, tx, uuid.UUID(account))
 	if err != nil {
 		return fmt.Errorf("create an API key: count the account's keys: %w", err)
 	}
-	if int(held) >= site.MaxKeysPerAccount {
-		return &TooManyKeys{Limit: site.MaxKeysPerAccount, Count: int(held)}
+	if int(held) >= limits.MaxKeys {
+		return &TooManyKeys{Limit: limits.MaxKeys, Count: int(held)}
 	}
-	now := s.now()
 	made, err := s.queries.RecentKeys(ctx, tx, RecentKeysParams{
-		AccountID: uuid.UUID(account), FromID: firstIDAfter(now.Add(-keyWindow)), Most: int32(site.KeyCreationsPerHour), // #nosec G115 -- bounded to 10,000
+		AccountID: uuid.UUID(account), WindowSeconds: int64(keyWindow / time.Second), MaxMade: int64(limits.CreationsPerHour),
 	})
 	if err != nil {
 		return fmt.Errorf("create an API key: count the keys it made in the last hour: %w", err)
 	}
-	if len(made) >= site.KeyCreationsPerHour {
-		oldest := createdAt(made[len(made)-1])
-		return &TooManyKeys{Limit: site.KeyCreationsPerHour, Count: len(made), RetryAfter: oldest.Add(keyWindow).Sub(now)}
+	if int(made.Made) >= limits.CreationsPerHour {
+		return &TooManyKeys{Limit: limits.CreationsPerHour, Count: int(made.Made), RetryAfter: time.Duration(made.WaitSeconds * float64(time.Second))}
 	}
 	return nil
-}
-
-// firstIDAfter is the smallest UUIDv7 made after t: its time, to the millisecond, is the next one's, and the rest of
-// it zero. The IDs of t's own millisecond sort below it.
-func firstIDAfter(t time.Time) uuid.UUID {
-	var id uuid.UUID
-	var ms [8]byte
-	binary.BigEndian.PutUint64(ms[:], uint64(t.UnixMilli()+1)) // #nosec G115 -- after 1970
-	copy(id[:6], ms[2:])
-	return id
 }
 
 // nullable is s as a nullable column: empty is null.
@@ -296,20 +287,13 @@ func keyOf[R ListKeysRow | GetKeyRow](row R) Key {
 	r := ListKeysRow(row)
 	k := Key{
 		ID: KeyID(r.ID), Workspace: WorkspaceID(r.WorkspaceID), Prefix: r.Prefix, Last4: r.Last4,
-		CreatedAt: createdAt(r.ID), ExpiresAt: r.ExpiresAt,
+		CreatedAt: r.CreatedAt.Time, ExpiresAt: r.ExpiresAt,
 		Name: r.Name, Disabled: r.Status == "disabled", SpendLimit: r.SpendLimit, Models: r.Models, IPAllow: r.IpAllow,
 	}
 	if r.LimitReset != nil {
 		k.LimitReset = *r.LimitReset
 	}
 	return k
-}
-
-// createdAt is the time a UUIDv7 carries: its first 48 bits, in milliseconds since the Unix epoch.
-func createdAt(id uuid.UUID) time.Time {
-	var ms [8]byte
-	copy(ms[2:], id[:6])
-	return time.UnixMilli(int64(binary.BigEndian.Uint64(ms[:]))).UTC() // #nosec G115 -- 48 bits fit
 }
 
 // DeleteKey deletes the key for good in tx and records it.
