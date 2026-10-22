@@ -206,7 +206,7 @@ test.describe("site settings", () => {
     });
     await close(page);
     await press(page, "settings.edit").click();
-    await dialog(page).locator("button[type=submit]").click();
+    await send(page);
     await expect(done(page)).toBeVisible();
     expect(state.keyLimits.limits).toEqual({ max_keys: 20, creations_per_hour: 30 });
   });
