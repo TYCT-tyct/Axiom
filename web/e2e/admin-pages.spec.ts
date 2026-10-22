@@ -395,8 +395,8 @@ test.describe("endpoint tests", () => {
     await expect(vip).toBeVisible();
     // the group column is hidden at this width; each row still names its group under the model
     const rows = page.getByRole("row").filter({ hasText: "gpt-test-mini" });
-    await expect(rows.nth(0).getByText("Maple", { exact: true })).toBeVisible();
-    await expect(rows.nth(1).getByText("vip-2", { exact: true })).toBeVisible();
+    await expect(rows.nth(0).getByText("Maple", { exact: true }).filter({ visible: true })).toBeVisible();
+    await expect(rows.nth(1).getByText("vip-2", { exact: true }).filter({ visible: true })).toBeVisible();
     await vip.click();
     await expect(dialog(page).getByRole("heading", { name: "测试 gpt-test-mini（分组 vip-2）" })).toBeVisible();
     await send(page);
