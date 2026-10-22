@@ -4,7 +4,7 @@
 
 > 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G9（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
 
-M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性随 K3，设计见 [platform/kv 的设计](../platform/kv/README.md)，其余共享状态仍在进程内。出口只有 `platform/egress` 直连。
+M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性也已共享（K3），状态核对见 [platform/kv 的设计](../platform/kv/README.md)，供应商凭证并发与 RPM 尚未按节点分份额，生产入口仍拒绝 N > 1。出口只有 `platform/egress` 直连。
 
 ## 不变量
 

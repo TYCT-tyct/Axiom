@@ -153,7 +153,7 @@ new-api 和 sub2api 都没有熔断：出错即 500 或直接放行（`rate-limi
 
 ## 指标与告警
 
-`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（后台写入被丢弃，标签 `reason`：`queue`、`memory`、`account`）、`axiom.kv.memory_used_bytes`（后台每 10 秒读 `INFO memory`）与 `axiom.kv.rejected_oom`（访问被服务端以 OOM 拒绝的次数，由客户端在拒绝发生时数，不读 `INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
+`axiom.kv.calls`（标签 `use`：`precheck`、`sticky_write`、`login`；`result`：`ok`、`unavailable`、`error`、`skipped`）、`axiom.kv.duration`（直方图，按 `use`）、`axiom.kv.breaker_open`（0 或 1）、`axiom.kv.dropped`（发送前因队列、内存或账户限制被丢弃，标签 `reason`：`queue`、`memory`、`account`）、`axiom.kv.memory_used_bytes`（后台每 10 秒读 `INFO memory`）与 `axiom.kv.rejected_oom`（访问被服务端以 OOM 拒绝的次数，由客户端在拒绝发生时数，不读 `INFO stats`）、`axiom.kv.clock_skew_seconds`、`axiom.kv.nodes_live`。告警规则随告警出口（[#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：熔断打开超过 1 分钟；有 OOM 拒绝；内存超过上限的 70%（粘性开始被丢）；`dropped` 每分钟超过 100 条持续 5 分钟；时钟偏差超过 1s；存活节点数大于 N；`precheck` 的 p95 超过 2ms。
 
 ## 部署
 
