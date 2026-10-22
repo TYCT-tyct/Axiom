@@ -40,9 +40,14 @@ type PaymentsMerchantMethod struct {
 }
 
 type PaymentsSetting struct {
-	SiteID     uuid.UUID
-	Open       *bool
-	CreditsMin *int64
-	CreditsMax *int64
-	Strategy   *string
+	SiteID              uuid.UUID
+	Open                *bool
+	CreditsMin          *int64
+	CreditsMax          *int64
+	Strategy            *string
+	PendingLimit        *int64
+	CancelLimit         *int64
+	CancelWindowSeconds *int64
+	DailyCredits        *int64
+	FirstCredits        *int64
 }

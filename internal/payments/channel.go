@@ -82,7 +82,12 @@ type CreateRequest struct {
 }
 
 // Checkout is where the user pays. ClientSecret goes to the browser only, never to the database.
-type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string }
+type Checkout struct {
+	TradeNo      string `json:"trade_no,omitempty"`
+	PayURL       string `json:"pay_url,omitempty"`
+	QRCode       string `json:"qr_code,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
+}
 
 // Callback is a notification as received.
 type Callback struct {
