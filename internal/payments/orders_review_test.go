@@ -26,7 +26,11 @@ func TestPollExpiresBatchBeforeBlockedClose(t *testing.T) {
 		calls[merchant]++
 		if stalled == (MerchantID{}) {
 			stalled = merchant
-			pendingAtClose = w.count(w.p.platform, "SELECT count(*) FROM payments.orders WHERE state = 'pending'")
+			if err := w.db.ReadTx(ctx, w.p.platform, func(tx pg.Tx) error {
+				return tx.QueryRow(ctx, "SELECT count(*) FROM payments.orders WHERE state = 'pending'").Scan(&pendingAtClose)
+			}); err != nil {
+				return err
+			}
 			// Exercise the real cancellation boundary, without a sleep or an elapsed-time assertion.
 			<-ctx.Done()
 			return ctx.Err()
@@ -96,9 +100,15 @@ func TestUnsafeCheckoutClosesAfterRejectionCommit(t *testing.T) {
 		create: func(CreateRequest) (Checkout, error) {
 			return Checkout{TradeNo: "gateway-unsafe", PayURL: "javascript:pay()"}, nil
 		},
-		close: func(_ context.Context, id OrderID, trade string) error {
+		close: func(ctx context.Context, id OrderID, trade string) error {
 			closes++
-			state, storedTrade, checkout := w.stored(id)
+			var state, storedTrade, checkout string
+			if err := w.db.ReadTx(ctx, w.accountA(), func(tx pg.Tx) error {
+				return tx.QueryRow(ctx, "SELECT state, trade_no, checkout::text FROM payments.orders WHERE id = $1",
+					id).Scan(&state, &storedTrade, &checkout)
+			}); err != nil {
+				return err
+			}
 			if [4]string{state, storedTrade, trade, checkout} != [4]string{"failed", "gateway-unsafe", "gateway-unsafe", "{}"} {
 				return fmt.Errorf("uncommitted rejection: %s %s %s %s", state, storedTrade, trade, checkout)
 			}
