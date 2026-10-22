@@ -20,18 +20,21 @@ import (
 	"axiom/internal/platform/secret"
 )
 
+const endpointTestStream = "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n"
+
 // A disconnect must not roll back a paid generation's claim; a retry replays its recorded result.
 func TestAdminEndpointGenerationSurvivesDisconnect(t *testing.T) {
 	t.Parallel()
 	started, finish := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
+		if calls.Add(1) == 1 {
+			close(started)
+		}
 		rw.Header().Set("Content-Type", "text/event-stream")
 		rw.Header().Set("X-Oneapi-Request-Id", "admin-test-1")
-		close(started)
 		<-finish
-		_, _ = io.WriteString(rw, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n") //nolint:errcheck // a test server
+		_, _ = io.WriteString(rw, endpointTestStream) //nolint:errcheck // a test server
 	}))
 	t.Cleanup(up.Close)
 	base := newAdminFixture(t)

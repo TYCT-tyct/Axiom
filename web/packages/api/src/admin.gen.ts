@@ -334,7 +334,7 @@ export interface paths {
          * Test one of a supplier's endpoints with a real generation
          * @description Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit, with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate is never compared with the supplier's charge, so no test can move the endpoint's cost state.
          *
-         *     `passed`: a 2xx answer with content read to its end. `failed`: a failure the endpoint is at fault for. `inconclusive`: anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the request itself — says nothing about the endpoint.
+         *     `passed`: a 2xx answer read to its normal end. `failed`: a failure the endpoint is at fault for. `inconclusive`: anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the request itself — says nothing about the endpoint.
          *
          *     Limits: 10 a minute per session, because each test is a generation the platform pays for.
          */
@@ -1244,7 +1244,7 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         /**
-         * @description `passed`: a 2xx with content read to its end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+         * @description `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
          * @enum {string}
          */
         EndpointTestOutcome: "passed" | "failed" | "inconclusive";
@@ -1279,7 +1279,7 @@ export interface components {
             first_token_ms?: number;
             /** @description The whole test: waiting for the answer and reading it. */
             total_ms: number;
-            /** @description What the test is booked at: the highest price of the prompt's tokens and of the 16-token cap over every reachable context band, in the supplier's unit. A definite upper bound, never what the supplier reported. */
+            /** @description Zero when the supplier is known not to have executed the call; otherwise the highest price of the prompt's tokens and of the 16-token cap over every reachable context band, in the supplier's unit. A definite upper bound, never what the supplier reported. */
             estimated_native: components["schemas"]["Decimal"];
             /**
              * @description The unit the supplier counts its balance in, which the estimate is in.

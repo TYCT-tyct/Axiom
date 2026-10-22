@@ -355,7 +355,7 @@ func TestReconciliationMatchesATestButNeverJudgesIt(t *testing.T) {
 		t.Error("a test's charge delisted the endpoint")
 	}
 	if n := w.count(`SELECT count(*) FROM suppliers.charge_events e JOIN suppliers.charge_records c ON c.id = e.charge_record_id
-		WHERE c.charge_ref = 'ref-1' AND e.payload->>'verdict' = 'unjudged'`); n != 1 {
+		WHERE c.charge_ref = 'ref-1' AND e.payload->>'verdict' = 'unjudged' AND e.payload->>'test' = 'true'`); n != 1 {
 		t.Error("the test's charge was judged")
 	}
 }

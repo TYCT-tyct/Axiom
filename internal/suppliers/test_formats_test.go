@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -110,6 +111,11 @@ func TestEndpointCostAndAuditRollBackTogether(t *testing.T) {
 	if w.count(`SELECT count(*) FROM suppliers.attempt_costs`) != 0 || w.count(`SELECT count(*) FROM platform.audit_log WHERE action = 'endpoint.test'`) != 0 {
 		t.Fatal("the rolled-back test left a cost or audit row")
 	}
+	w.ingest(w.charge("ref-1", "400", w.clock.now()))
+	report := w.reconcile(w.clock.now().Add(time.Hour))
+	if len(report.Held) != 1 {
+		t.Errorf("a charge whose transaction rolled back was not held: %+v", report)
+	}
 }
 
 func TestEndpointOwnLimitsAreInconclusive(t *testing.T) {
@@ -150,20 +156,36 @@ func TestEndpointWithoutAPriceDoesNotGenerate(t *testing.T) {
 	}
 }
 
-func TestEndpointEmptyAnswerFails(t *testing.T) {
+func TestEndpointEmptyBodyFailsButNormalEndPasses(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t, 1)
-	up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(rw, chatEvent(`"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":0}`)+"data: [DONE]\n\n") //nolint:errcheck // a test server
-	}))
-	t.Cleanup(up.Close)
-	w.pointAt(up.URL)
-	r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Outcome() != TestFailed || r.FirstToken != nil {
-		t.Errorf("an empty answer passed: %+v", r)
+	for _, c := range []struct {
+		name   string
+		format protocol.Format
+		body   string
+		want   TestOutcome
+	}{
+		{"empty body", protocol.Chat, "", TestFailed},
+		{"chat normal end", protocol.Chat, chatEvent(`"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":0}`) + "data: [DONE]\n\n", TestPassed},
+		{"chat hidden reasoning cap", protocol.Chat, chatEvent(`"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":3,"completion_tokens":16,"completion_tokens_details":{"reasoning_tokens":16}}`) + "data: [DONE]\n\n", TestPassed},
+		{"responses output cap", protocol.Responses, "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"r\",\"status\":\"incomplete\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":16}}}\n\n", TestPassed},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t, 1)
+			up := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(rw, c.body) //nolint:errcheck // a test server
+			}))
+			t.Cleanup(up.Close)
+			w.pointAt(up.URL)
+			w.svc.snap.Load().endpoints[w.endpoint].formats = []protocol.Format{c.format}
+			r, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: c.format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Outcome() != c.want || r.FirstToken != nil {
+				t.Errorf("completion: %+v, want %v", r, c.want)
+			}
+		})
 	}
 }
 

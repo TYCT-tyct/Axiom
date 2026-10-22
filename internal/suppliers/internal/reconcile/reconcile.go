@@ -222,7 +222,7 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	}
 	return event(ctx, tx, q, m.ChargeID, m.Revision, map[string]any{
 		"attribution": "attempt", "request_id": m.RequestID.String(), "attempt_seq": m.AttemptSeq, "verdict": verdict,
-		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag,
+		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag, "test": m.Test,
 	})
 }
 

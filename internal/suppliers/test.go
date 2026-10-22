@@ -15,6 +15,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -58,16 +59,24 @@ const (
 
 func (o TestOutcome) String() string { return [...]string{"passed", "failed", "inconclusive"}[o] }
 
-// ProblemCauses and ProblemScopes are every name a TestResult's problem can carry, in the spelling of the admin
-// contract: a test holds that contract's enums to them (cmd/axiom).
-var (
-	ProblemCauses = []string{
-		"timeout", "memory", "stream_broken", "upstream_error", "overloaded", "rate_limited", "context_too_long",
-		"content_rejected", "bad_request", "model_not_found", "not_permitted", "credential_rejected",
-		"credential_quota_exhausted", "supplier_balance_low", "transport", "tool_input", "unknown",
+// ProblemCauses derives the names checked by the admin contract from the runtime causes and stream faults.
+func ProblemCauses() []string {
+	names := []string{"timeout", "memory"}
+	for _, cause := range []adapter.Cause{
+		RateLimited{}, Overloaded{}, UpstreamError{}, SupplierBalanceLow{}, CredentialQuotaExhausted{},
+		CredentialRejected{}, NotPermitted{}, ContextTooLong{}, BadRequest{}, ContentRejected{},
+		ModelNotFound{}, Unknown{}, Transport{},
+	} {
+		names = append(names, cause.String())
 	}
-	ProblemScopes = []string{"request", "egress", "endpoint", "credential", "group", "supplier"}
-)
+	for _, name := range faultNames {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ProblemScopes are the scopes in the admin contract's spelling, in Scope's order.
+var ProblemScopes = []string{"request", "egress", "endpoint", "credential", "group", "supplier"}
 
 // TestResult is what one test generation found, and what its cost row is written from.
 type TestResult struct {
@@ -177,6 +186,9 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	}
 	defer attempt.Done()
 	ep := attempt.ep
+	if ep.ownerScope != "platform" {
+		return TestResult{}, ErrTestOwner
+	}
 	if !slices.Contains(ep.formats, req.Format) {
 		return TestResult{}, fmt.Errorf("%w: %d", ErrNoFormat, req.Format)
 	}
@@ -211,6 +223,10 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.UpstreamRequest = result.receipt.ref
 	if failure != nil {
 		result.Failure, result.Total, result.FinishedAt = failure, time.Since(sent), s.now()
+		if failure.Executed == NotExecuted {
+			result.Cost = AttemptCost{Conversion: ConversionNotRun, Currency: ep.currency}
+			result.estimate = "0"
+		}
 		if ctx.Err() != nil {
 			result.Failure, result.cause = nil, "timeout"
 		}
@@ -243,9 +259,6 @@ func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 			}
 		case protocol.StepProgress, protocol.StepBuffered, protocol.StepData, protocol.StepHeartbeat:
 		case protocol.StepUpstreamDone:
-			if r.FirstToken == nil {
-				r.cause, r.scope, r.failed = "stream_broken", "endpoint", true
-			}
 			r.Streamed = true
 			relay.Finish(protocol.Final{}) // the ending belongs to a client a test does not have; this frees its buffers
 		}
@@ -256,7 +269,7 @@ func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 }
 
 // endOf records how the stream ended: a fault of the endpoint's, a class of error event that is not, or the test's own
-// limit, which says nothing about the endpoint.
+// lifetime limit, which is not a header-wait or idle timeout and says nothing about the endpoint.
 func (r *TestResult) endOf(ctx context.Context, err error) {
 	fault := protocol.FaultOf(err)
 	switch {
@@ -350,6 +363,9 @@ func (s *Service) testCost(schedule uuid.UUID, prompt string) (AttemptCost, erro
 
 // ErrNoFormat is the error for a test in a format the endpoint does not serve.
 var ErrNoFormat = errors.New("suppliers: the endpoint does not serve that call format")
+
+// ErrTestOwner prevents the platform from spending a tenant supplier's balance on a test.
+var ErrTestOwner = errors.New("suppliers: only platform endpoints may be tested")
 
 // ErrTestCost refuses a paid test whose input or output has no price to bound it by.
 var ErrTestCost = errors.New("suppliers: the test cost cannot be bounded")

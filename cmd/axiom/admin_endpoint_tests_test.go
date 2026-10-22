@@ -30,7 +30,7 @@ func TestTestEndpointRefusals(t *testing.T) {
 // so that a result the module describes is one the API can answer.
 func TestTheContractNamesEveryProblemATestCanHave(t *testing.T) {
 	t.Parallel()
-	for _, cause := range suppliers.ProblemCauses {
+	for _, cause := range suppliers.ProblemCauses() {
 		if !adminapi.EndpointTestCause(cause).Valid() {
 			t.Errorf("the contract has no cause %q", cause)
 		}
