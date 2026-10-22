@@ -55,8 +55,8 @@ func (c fakeChannel) Create(_ context.Context, r CreateRequest) (Checkout, error
 	return Checkout{}, &Rejected{"fake", "no checkout"}
 }
 
-func (c fakeChannel) Verify(context.Context, Callback) (Notice, error) { return Notice{}, nil }
-func (c fakeChannel) Query(context.Context, string, string) (Payment, error) {
+func (fakeChannel) Verify(context.Context, Callback) (Notice, error) { return Notice{}, nil }
+func (fakeChannel) Query(context.Context, string, string) (Payment, error) {
 	return Payment{State: PayPending}, nil
 }
 

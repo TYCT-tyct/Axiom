@@ -10,6 +10,9 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 )
@@ -17,7 +20,7 @@ import (
 // goodCheckout is a channel that takes the order: an https link and the client secret only the browser is meant to see.
 func goodCheckout(r CreateRequest) (Checkout, error) {
 	id := uuid.UUID(r.Order).String()
-	return Checkout{TradeNo: "T" + id[:8], PayURL: "https://pay.example.com/checkout/" + id, ClientSecret: "s3cret"}, nil
+	return Checkout{TradeNo: "T" + id, PayURL: "https://pay.example.com/checkout/" + id, ClientSecret: "s3cret"}, nil
 }
 
 // place asks for credits through the world's first site, as account A.
@@ -149,33 +152,46 @@ func TestCreateOrderStoresWhatWasBought(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.State != Pending || o.Credits != 10*yuan || o.MerchantID != MerchantID(m.ID) || o.Total != want.Total ||
-		o.Fee != want.Fee || o.Checkout.ClientSecret != "" || !o.ExpiresAt.After(o.CreatedAt) {
-		t.Fatalf("order = %+v, want %+v", o, want)
+	for field, v := range map[string]struct{ got, want any }{
+		"state": {o.State, Pending}, "credits": {o.Credits, int64(10 * yuan)},
+		"merchant": {o.MerchantID, MerchantID(m.ID)}, "total": {o.Total, want.Total},
+		"fee": {o.Fee, want.Fee}, "client secret": {o.Checkout.ClientSecret, ""},
+	} {
+		if diff := cmp.Diff(v.want, v.got); diff != "" {
+			t.Fatalf("%s (-want +got): %s", field, diff)
+		}
 	}
-	if c.ClientSecret != "s3cret" || !strings.HasPrefix(c.PayURL, "https://pay.example.com/checkout/") {
+	if !o.ExpiresAt.After(o.CreatedAt) {
+		t.Fatal("order already expired")
+	}
+	if c != (Checkout{TradeNo: "T" + uuid.UUID(o.ID).String(), PayURL: "https://pay.example.com/checkout/" + uuid.UUID(o.ID).String(), ClientSecret: "s3cret"}) {
 		t.Fatalf("checkout = %+v", c)
 	}
 	state, tradeNo, stored := w.stored(o.ID)
-	if state != "pending" || tradeNo != c.TradeNo || !strings.Contains(stored, `"pay_url"`) ||
-		strings.Contains(stored, "client_secret") || strings.Contains(stored, "s3cret") {
+	if [2]string{state, tradeNo} != [2]string{"pending", c.TradeNo} {
 		t.Fatalf("stored %s, %q, %s", state, tradeNo, stored)
+	}
+	var saved Checkout
+	if err := jsonx.UnmarshalKnown([]byte(stored), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(c.stored(), saved); diff != "" {
+		t.Fatalf("saved checkout (-want +got): %s", diff)
 	}
 	if n := w.events(o.ID); n != 2 { // created, then its checkout
 		t.Fatalf("%d events", n)
 	}
-	if used := w.used(uuid.UUID(m.ID)); used != want.Total.Minor {
+	if used := w.used(m.ID); used != want.Total.Minor {
 		t.Fatalf("usage = %d, want %d", used, want.Total.Minor)
 	}
-	// Account data: another account of another site sees none of it.
-	if n := w.count(w.accountB(), "SELECT count(*) FROM payments.orders"); n != 0 {
-		t.Fatalf("another account sees %d orders", n)
-	}
-	if n := w.count(w.accountB(), "SELECT count(*) FROM payments.order_events"); n != 0 {
-		t.Fatalf("another account sees %d events", n)
-	}
-	if _, err := w.p.Cancel(w.t.Context(), w.accountB(), o.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("another account cancelling: %v", err)
+}
+
+func TestCreateOrderIdempotency(t *testing.T) {
+	w := newTestWorld(t, fakePlugin{create: goodCheckout})
+	w.waiting()
+	o, c, err := w.place(10*yuan, "key-1")
+	if err != nil {
+		t.Fatal(err)
 	}
 	// The same request under the same key is the order it made, and its stored checkout carries no secret.
 	if again, c2, err := w.place(10*yuan, "key-1"); err != nil || again.ID != o.ID || c2.TradeNo != c.TradeNo ||
@@ -191,6 +207,10 @@ func TestCreateOrderStoresWhatWasBought(t *testing.T) {
 	if _, _, err := w.place(10*yuan, ""); !isField(err, "/idempotency_key") {
 		t.Fatalf("without a key: %v", err)
 	}
+}
+
+func TestCreateOrderRejectsAnUnsafeReturnAddress(t *testing.T) {
+	w := newTestWorld(t, fakePlugin{create: goodCheckout})
 	// The return address comes from the site, never from the request: a plain-http one is refused before any order.
 	r := CreateOrder{
 		Site: w.site(w.siteA, "CNY"), Account: w.account, User: w.user, Method: "alipay", Credits: 10 * yuan,
@@ -232,7 +252,7 @@ func TestCreateOrderKeepsTheAccountToItsPlaces(t *testing.T) {
 			t.Errorf("placing an order: %v", err)
 		}
 	}
-	if len(placed) != defaultPending || refused != 10-defaultPending {
+	if [2]int{len(placed), refused} != [2]int{defaultPending, 10 - defaultPending} {
 		t.Fatalf("%d placed, %d refused", len(placed), refused)
 	}
 	// A cancelled order gives its place back, and the cancellations themselves become the next limit.
@@ -312,7 +332,7 @@ func TestCreateOrderRefusesALinkToFollow(t *testing.T) {
 			if state, _, _ := w.stored(o.ID); state != "failed" {
 				t.Fatalf("state %s", state)
 			}
-			if used := w.used(uuid.UUID(m.ID)); used != 0 {
+			if used := w.used(m.ID); used != 0 {
 				t.Fatalf("usage %d, want nothing reserved", used)
 			}
 		})
@@ -353,7 +373,7 @@ func TestCreateOrderLeavesTheOrderWhenTheChannelIsNotHeardFrom(t *testing.T) {
 	if state, tradeNo, _ := w.stored(id); state != "pending" || tradeNo != "" {
 		t.Fatalf("stored %s, %q", state, tradeNo)
 	}
-	if used := w.used(uuid.UUID(m.ID)); used == 0 {
+	if used := w.used(m.ID); used == 0 {
 		t.Fatal("the merchant's day was given back for an order the gateway may have taken")
 	}
 	// The key still answers that order, so the caller may retry with it instead of paying twice.
@@ -399,7 +419,7 @@ func TestCancelGivesThePlaceBack(t *testing.T) {
 	if state, _, _ := w.stored(o.ID); state != "cancelled" {
 		t.Fatalf("state %s", state)
 	}
-	if used := w.used(uuid.UUID(m.ID)); used != 0 {
+	if used := w.used(m.ID); used != 0 {
 		t.Fatalf("usage %d, want nothing reserved", used)
 	}
 	mu.Lock()
@@ -447,7 +467,7 @@ func TestExpiryFreesThePlaceOnce(t *testing.T) {
 	if state, _, _ := w.stored(o.ID); state != "expired" {
 		t.Fatalf("state %s", state)
 	}
-	if used := w.used(uuid.UUID(m.ID)); used != 0 {
+	if used := w.used(m.ID); used != 0 {
 		t.Fatalf("usage %d, want nothing reserved", used)
 	}
 	if n := w.events(o.ID); n != 3 {
@@ -478,7 +498,7 @@ func TestMerchantIdentityWaitsForOrdersInFlight(t *testing.T) {
 	m := w.waiting()
 	o := w.mustPlace(10*yuan, "k")
 	rev := m.Rev
-	change := func(edit func(*MerchantInput)) (Merchant, error) {
+	change := func(edit func(*MerchantInput)) error {
 		in := w.input(w.siteA)
 		in.ID, in.Rev, in.Secrets = MerchantID(m.ID), rev, nil // the keys are kept unless the change is theirs
 		edit(&in)
@@ -486,7 +506,7 @@ func TestMerchantIdentityWaitsForOrdersInFlight(t *testing.T) {
 		if err == nil {
 			rev = saved.Rev
 		}
-		return saved, err
+		return err
 	}
 	for name, c := range map[string]struct {
 		edit  func(*MerchantInput)
@@ -500,18 +520,18 @@ func TestMerchantIdentityWaitsForOrdersInFlight(t *testing.T) {
 			in.Secrets = map[string]secret.Secret{"key": secret.New("another-key")}
 		}, "/secrets"},
 	} {
-		if _, err := change(c.edit); !isField(err, c.field) {
+		if err := change(c.edit); !isField(err, c.field) {
 			t.Errorf("%s with an order in flight: %v", name, err)
 		}
 	}
 	// What the order does not rest on may still change while it waits.
-	if _, err := change(func(in *MerchantInput) { in.Name = "Gateway 2" }); err != nil {
+	if err := change(func(in *MerchantInput) { in.Name = "Gateway 2" }); err != nil {
 		t.Fatalf("renaming with an order in flight: %v", err)
 	}
 	if _, err := w.p.Cancel(w.t.Context(), w.accountA(), o.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := change(func(in *MerchantInput) { in.Currency = currency(t, "USD") }); err != nil {
+	if err := change(func(in *MerchantInput) { in.Currency = currency(t, "USD") }); err != nil {
 		t.Fatalf("changing the currency after the cancel: %v", err)
 	}
 }

@@ -185,10 +185,30 @@ func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (
 	if err = m.settings.admits(r.Credits); err != nil {
 		return Order{}, Checkout{}, err
 	}
+	order, placed, err := p.reserveOrder(ctx, s, r, m)
+	if err != nil {
+		return Order{}, Checkout{}, err
+	}
+	if !placed {
+		return order, order.Checkout, nil
+	}
+	checkout, err := p.checkout(ctx, s, order, r)
+	switch {
+	case errors.Is(err, errRefused):
+		return order, Checkout{}, p.refuseOrder(ctx, s, order, err)
+	case err != nil:
+		return order, Checkout{}, fmt.Errorf("%w: %w", ErrUnconfirmed, err)
+	}
+	order.TradeNo, order.Checkout = checkout.TradeNo, checkout.stored()
+	return order, checkout, nil
+}
+
+// reserveOrder commits the order and its merchant reservation together before any gateway call.
+func (p *Payments) reserveOrder(ctx context.Context, s pg.Scope, r CreateOrder, m menu) (Order, bool, error) {
 	var (
 		order  Order
-		choice candidate
 		placed bool
+		err    error
 	)
 	err = p.db.Tx(ctx, s, func(tx pg.Tx) error {
 		if err = boundOrderTx(ctx, tx); err != nil {
@@ -210,27 +230,14 @@ func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (
 		if err = m.settings.admitsCounts(counts, r.Credits); err != nil {
 			return err
 		}
-		if choice, err = p.choose(ctx, tx, m, r.Method, r.Credits); err != nil {
+		choice, err := p.choose(ctx, tx, m, r.Method, r.Credits)
+		if err != nil {
 			return err
 		}
 		order, placed, err = placeOrder(ctx, tx, r, m.site.Currency, choice)
 		return err
 	})
-	if err != nil {
-		return Order{}, Checkout{}, err
-	}
-	if !placed {
-		return order, order.Checkout, nil
-	}
-	checkout, err := p.checkout(ctx, s, order, r)
-	switch {
-	case errors.Is(err, errRefused):
-		return order, Checkout{}, p.refuseOrder(ctx, s, order, err)
-	case err != nil:
-		return order, Checkout{}, fmt.Errorf("%w: %w", ErrUnconfirmed, err)
-	}
-	order.TradeNo, order.Checkout = checkout.TradeNo, checkout.stored()
-	return order, checkout, nil
+	return order, placed, err
 }
 
 // placeOrder writes an order and its creation event, and reports whether it wrote one: false means the account's
@@ -350,8 +357,7 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o Order, r CreateOr
 		Order: o.ID, Method: o.Method, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL,
 		ClientIP: r.ClientIP, Mobile: r.Mobile,
 	})
-	var rejected *Rejected
-	if errors.As(err, &rejected) {
+	if rejected, ok := errors.AsType[*Rejected](err); ok {
 		return Checkout{}, fmt.Errorf("%w: %s %s", errRefused, rejected.Code, rejected.Message)
 	}
 	if err != nil {
@@ -411,13 +417,11 @@ func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 		if err != nil {
 			return err
 		}
-		switch State(locked.State) {
-		case Pending:
+		if State(locked.State) == Pending {
 			if err = move(ctx, tx, locked, Cancelled, event{source: sourceUser, kind: kindCancel}); err != nil {
 				return err
 			}
-		case Cancelled:
-		default:
+		} else if State(locked.State) != Cancelled {
 			return ErrNotWaiting
 		}
 		order, err = loadOrder(ctx, tx, id)
@@ -461,8 +465,7 @@ func move(ctx context.Context, tx pg.Tx, o LockOrderRow, to State, e event) erro
 	if changed == 0 {
 		return fmt.Errorf("payments: order %s was no longer %s", OrderID(o.ID).TypeID(), from)
 	}
-	switch to {
-	case Expired, Cancelled, Failed:
+	if to == Expired || to == Cancelled || to == Failed {
 		if released, err := queries.ReleaseUsage(ctx, tx, o.ID); err != nil {
 			return fmt.Errorf("payments: release the merchant's reservation: %w", err)
 		} else if released == 0 {

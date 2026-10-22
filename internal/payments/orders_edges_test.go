@@ -61,8 +61,8 @@ func TestConcurrentOrderReplayCreatesOneCheckout(t *testing.T) {
 		t.Fatalf("%d channel creates, %d events", calls.Load(), w.events(id))
 	}
 	q, err := quote(yuan, nil, currency(t, "CNY"), Fee{PPM: 30_000})
-	if err != nil || w.used(uuid.UUID(m.ID)) != q.Total.Minor {
-		t.Fatalf("usage %d, quote %+v, %v", w.used(uuid.UUID(m.ID)), q, err)
+	if err != nil || w.used(m.ID) != q.Total.Minor {
+		t.Fatalf("usage %d, quote %+v, %v", w.used(m.ID), q, err)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestCheckoutCommitFailureReturnsUnknown(t *testing.T) {
 	if state != "pending" || trade != "" || checkout != "{}" || w.events(o.ID) != 1 {
 		t.Fatalf("partial write: %s %q %s, %d events", state, trade, checkout, w.events(o.ID))
 	}
-	if w.used(uuid.UUID(m.ID)) != o.Total.Minor {
+	if w.used(m.ID) != o.Total.Minor {
 		t.Fatal("unknown gateway outcome released its reservation")
 	}
 }
@@ -119,8 +119,8 @@ func TestStaleMenuCannotPlaceAnOrder(t *testing.T) {
 		_, err := w.p.choose(t.Context(), tx, menu, "alipay", yuan)
 		return err
 	})
-	if !errors.Is(err, ErrStale) || w.used(uuid.UUID(m.ID)) != 0 {
-		t.Fatalf("stale menu: %v, usage %d", err, w.used(uuid.UUID(m.ID)))
+	if !errors.Is(err, ErrStale) || w.used(m.ID) != 0 {
+		t.Fatalf("stale menu: %v, usage %d", err, w.used(m.ID))
 	}
 }
 
@@ -177,15 +177,17 @@ func TestConcurrentCancelAndExpiryReleaseOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if w.used(uuid.UUID(m.ID)) != 0 || w.events(o.ID) != 3 {
-		t.Fatalf("usage %d, events %d", w.used(uuid.UUID(m.ID)), w.events(o.ID))
+	if w.used(m.ID) != 0 || w.events(o.ID) != 3 {
+		t.Fatalf("usage %d, events %d", w.used(m.ID), w.events(o.ID))
 	}
 }
 
 func TestOrderRequestRequiresAccountUserAndIP(t *testing.T) {
 	w := newWorld(t)
-	r := CreateOrder{Account: w.account, User: w.user, Key: "valid", ReturnURL: "https://console.example/topup",
-		ClientIP: netip.MustParseAddr("203.0.113.7")}
+	r := CreateOrder{
+		Account: w.account, User: w.user, Key: "valid", ReturnURL: "https://console.example/topup",
+		ClientIP: netip.MustParseAddr("203.0.113.7"),
+	}
 	for _, mutate := range []func(*CreateOrder){
 		func(r *CreateOrder) { r.Account = uuid.UUID{} },
 		func(r *CreateOrder) { r.User = uuid.UUID{} },
