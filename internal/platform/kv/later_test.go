@@ -140,6 +140,11 @@ func TestLaterBatchesAndRechecksMemory(t *testing.T) {
 			}
 			c.memoryStop.Store(stopped)
 			ctx, cancel := context.WithCancel(t.Context())
+			defer func() {
+				cancel()
+				close(server.release)
+				c.done.Wait()
+			}()
 			c.done.Go(func() { c.writeLater(ctx) })
 			synctest.Wait()
 			if stopped {
@@ -149,9 +154,6 @@ func TestLaterBatchesAndRechecksMemory(t *testing.T) {
 			} else if server.sent.Load() != 20 || server.batches.Load() != 1 {
 				t.Fatalf("sent %d commands, want one batch of 20", server.sent.Load())
 			}
-			cancel()
-			close(server.release)
-			c.done.Wait()
 		})
 	}
 }
@@ -208,6 +210,11 @@ func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
 			c.later <- cmd
 		}
 		ctx, cancel := context.WithCancel(t.Context())
+		defer func() {
+			cancel()
+			close(server.release)
+			c.done.Wait()
+		}()
 		c.done.Go(func() { c.writeLater(ctx) })
 		synctest.Wait() // the first batch is waiting for replies the server has withheld
 		if server.sent.Load() != maxOutstanding {
@@ -223,8 +230,5 @@ func TestLaterDoesNotWaitForStalledWrites(t *testing.T) {
 		if server.sent.Load() != maxOutstanding {
 			t.Fatal("a second batch escaped while all command slots were held")
 		}
-		cancel()
-		close(server.release)
-		c.done.Wait()
 	})
 }
