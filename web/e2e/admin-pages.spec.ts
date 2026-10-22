@@ -283,7 +283,7 @@ test.describe("suppliers", () => {
     await expect(h1(page, "Paused Site")).toBeVisible();
     await expect(press(page, "suppliers.unit.open")).toHaveCount(0);
     await expect(press(page, "suppliers.remove.open")).toHaveCount(0);
-    await expect(page.getByText("gpt-test-mini")).toBeVisible();
+    await expect(page.getByText("gpt-test-mini").first()).toBeVisible();
     await expect(page.getByRole("button", { name: words("suppliers.test.title") })).toHaveCount(0);
   });
 });
