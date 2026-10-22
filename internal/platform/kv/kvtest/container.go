@@ -13,6 +13,8 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"axiom/internal/platform/containertest"
 )
 
 // box is one Valkey container, started as a deployment starts it: the ACL file is copied in before the server starts,
@@ -35,6 +37,7 @@ func startServer(ctx context.Context, users string, settings options) (*box, err
 				host.PortBindings = network.PortMap{network.MustParsePort(port): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: settings.hostPort}}}
 			}
 		}),
+		containertest.WithCgroupParent(),
 		testcontainers.WithFiles(testcontainers.ContainerFile{
 			Reader: strings.NewReader(users), ContainerFilePath: aclPath, FileMode: 0o444,
 		}),
