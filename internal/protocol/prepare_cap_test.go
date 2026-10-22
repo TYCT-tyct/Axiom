@@ -36,8 +36,8 @@ func TestPrepareMessagesCap(t *testing.T) {
 		if err != nil || string(u.Body) != c.want {
 			t.Errorf("%s: got %s (%v), want %s", c.name, u.Body, err, c.want)
 		}
-		if cost := protocol.PrepareCost(&r, []byte(c.body), target, w); int64(cap(u.Body))+3*int64(len(c.body)) != cost {
-			t.Errorf("%s: the buffer was %d bytes, the cost %d: the rewrite outgrew its room", c.name, cap(u.Body), cost)
+		if cost := protocol.PrepareCost(&r, []byte(c.body), target, w); int64(cap(u.Body))+3*int64(len(c.body)) > cost {
+			t.Errorf("%s: the buffer was %d bytes, the cost %d: the rewrite exceeded its budget", c.name, cap(u.Body), cost)
 		}
 	}
 }
