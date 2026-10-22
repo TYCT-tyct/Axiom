@@ -2,6 +2,7 @@ package payments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -120,5 +121,26 @@ func TestPollCreditsBeforeExpiryAndWhenCallbackIsLost(t *testing.T) {
 	w.assertCredit(o, o.Credits)
 	if state, _, _ := w.stored(o.ID); state != "paid" || w.used(m.ID) != o.Total.Minor {
 		t.Fatal("paid order expired or released its usage")
+	}
+}
+
+func TestPollQueryRoundReturnsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var calls atomic.Int64
+	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(context.Context, string, string) (Payment, error) {
+		calls.Add(1)
+		cancel()
+		return Payment{State: PayPending}, nil
+	}})
+	w.waiting()
+	w.mustPlace(yuan, "cancel-round-1")
+	w.mustPlace(yuan, "cancel-round-2")
+	w.exec("UPDATE payments.orders SET next_query_at = transaction_timestamp() - interval '1 minute'")
+	if err := w.p.queryPending(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled query round returned %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("queried %d orders after cancellation", calls.Load())
 	}
 }
