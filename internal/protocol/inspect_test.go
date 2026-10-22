@@ -211,6 +211,10 @@ var inspectCases = []struct {
 		func(r *protocol.Request) { r.Model, r.ServiceTiers = "m", standard },
 	},
 	{
+		"chat legacy functions", protocol.Chat, `{"model":"m","functions":[{"name":"f","parameters":{"type":"object"}}],"function_call":"auto"}`,
+		func(r *protocol.Request) { r.Model, r.Needs = "m", protocol.Tools },
+	},
+	{
 		"chat reasoning disabled, null members", protocol.Chat, `{"model":"m","reasoning":{"enabled":false},
 		"stream":null,"messages":null,"tools":[{"type":null}],"max_tokens":null,"service_tier":null}`,
 		func(r *protocol.Request) { r.Model, r.Needs = "m", protocol.Tools },
