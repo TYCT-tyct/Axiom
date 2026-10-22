@@ -216,10 +216,15 @@ func (r *Router) Stuck(k SessionKey) (EndpointID, bool) { return r.sticky.get(k,
 // the preset sets none). A fallback that succeeds moves the session to the endpoint that served it.
 func (r *Router) Stick(k SessionKey, ep EndpointID, ttl time.Duration) {
 	now := r.cfg.Now()
+	r.sticky.put(k, ep, now.Add(r.stickyTTL(ttl)), now)
+}
+
+// stickyTTL is how long a binding lasts: the preset's, or the router's default when it sets none.
+func (r *Router) stickyTTL(ttl time.Duration) time.Duration {
 	if ttl <= 0 {
-		ttl = r.cfg.StickyTTL
+		return r.cfg.StickyTTL
 	}
-	r.sticky.put(k, ep, now.Add(ttl), now)
+	return ttl
 }
 
 // Forget drops the session's entry: the client says the context was compacted, so the cache it stuck for is gone.
