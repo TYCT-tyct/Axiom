@@ -3,3 +3,23 @@
 //   sqlc v1.31.1
 
 package billing
+
+import (
+	"time"
+
+	"uuid"
+)
+
+type BillingExchangeRate struct {
+	ID          uuid.UUID
+	Base        string
+	Quote       string
+	Version     int64
+	Numerator   int64
+	Denominator int64
+	Source      string
+	Kind        string
+	Reason      string
+	CreatedBy   string
+	CreatedAt   time.Time
+}

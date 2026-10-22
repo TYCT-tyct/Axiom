@@ -389,11 +389,17 @@ paths:
       tags: [Users]
       summary: Give an account credit
       description: >-
-        Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense
-        and audited with the reason. The amount is positive and within the limit for one grant (the money limits of
-        the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what
-        is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid
-        for offline comes with the payments design.
+        Adds credit to the account: a credit batch, its ledger entries and an audit entry with the reason and the
+        source (docs/domains/billing.md「额度批次」). The source `gift` (the default) gives `amount` in the site's
+        currency, recorded as a gift expense. The source `offline_payment` records money an administrator received
+        outside the payment channels: `payment` says how much, in which currency, and where it was received; the
+        ledger books it as a top-up (cash, the user's balance, and across currencies the exchange gain or loss), and
+        the credit is what was paid at the current reference exchange rate (none in the site's own currency), rounded
+        down. The credit is positive and within the limit for one grant (the money limits of the control plane,
+        docs/domains/operations.md), else 422; so is a payment that is not whole minor units of its currency, in a
+        currency with no reference rate to the site's, or a gift with a `payment` or a payment with an `amount`. A
+        batch given an `expires_at` expires then, and what is left of it is written off; without one it does not
+        expire.
       security:
         - session: []
           csrf: []
@@ -539,6 +545,52 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/endpoint-tests:
+    post:
+      operationId: testSupplierEndpoint
+      tags: [Suppliers]
+      summary: Test one of a supplier's endpoints with a real generation
+      description: >-
+        Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no
+        reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect
+        bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit,
+        with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate
+        is never compared with the supplier's charge, so no test can move the endpoint's cost state.
+
+
+        `passed`: a 2xx answer read to its normal end. `failed`: a failure the endpoint is at fault for. `inconclusive`:
+        anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the
+        request itself — says nothing about the endpoint.
+
+
+        Limits: 10 a minute per session, because each test is a generation the platform pays for.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EndpointTestRequest"}
+      responses:
+        "201":
+          description: What the test found, and what it was booked at.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EndpointTest"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
@@ -803,6 +855,52 @@ paths:
       responses:
         "201":
           description: Binding.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits:
+    put:
+      operationId: setSupplierCredentialLimits
+      tags: [Suppliers]
+      summary: Set a credential's concurrency and account RPM ceiling
+      description: >-
+        Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys
+        and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured
+        ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the
+        same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later;
+        concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialLimits"}
+      responses:
+        "200":
+          description: The credential as changed
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
@@ -1231,6 +1329,95 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/exchange-rates:
+    get:
+      operationId: listExchangeRates
+      tags: [Pricing]
+      summary: List current manual exchange rates
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      responses:
+        "200":
+          description: One current version per normalized pair
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRateList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: setExchangeRate
+      tags: [Pricing]
+      summary: Append a manual exchange rate
+      description: >-
+        One base buys numerator/denominator quote. Both directions share a normalized history.
+        Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold;
+        correction bypasses only that relative check and requires an audited reason.
+        The first value requires kind initial and expected_version 0; without a trusted reference a reversed
+        first value cannot be detected automatically. A stale expected version returns 409. The range and the fivefold
+        limit are rules on the numerator and denominator together, so their 422 points at the whole body (an empty
+        pointer).
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExchangeRateInput"}
+      responses:
+        "201":
+          description: The appended normalized version
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRate"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/exchange-rates/{base}/{quote}:
+    get:
+      operationId: exchangeRateHistory
+      tags: [Pricing]
+      summary: Read a pair's immutable history
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      parameters:
+        - name: base
+          in: path
+          required: true
+          schema: {type: string}
+        - name: quote
+          in: path
+          required: true
+          schema: {type: string}
+        - name: before_version
+          in: query
+          description: The version to continue from, exclusive; omit it to start from the newest.
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        "200":
+          description: At most 100 versions newest first; use the last version as before_version to continue
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExchangeRateList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/pricing/rules:
     get:
       operationId: listPricingRules
@@ -1476,6 +1663,42 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    ExchangeRateInput:
+      type: object
+      additionalProperties: false
+      required: [base, quote, numerator, denominator, expected_version, kind, reason]
+      properties:
+        base: {type: string, maxLength: 3}
+        quote: {type: string, maxLength: 3}
+        numerator: {type: string, maxLength: 19, description: Positive integer at most 10^18}
+        denominator: {type: string, maxLength: 19, description: Positive integer at most 10^18}
+        expected_version: {type: integer, format: int64}
+        kind: {type: string}
+        reason: {type: string, maxLength: 1000}
+    ExchangeRate:
+      type: object
+      additionalProperties: false
+      required: [id, base, quote, numerator, denominator, version, source, kind, reason, created_by, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        base: {type: string}
+        quote: {type: string}
+        numerator: {type: string}
+        denominator: {type: string}
+        version: {type: integer, format: int64}
+        source: {type: string}
+        kind: {type: string}
+        reason: {type: string}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+    ExchangeRateList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/ExchangeRate"}
     Error:
       type: object
       required: [error]
@@ -1759,21 +1982,43 @@ components:
         created_at: {type: string, format: date-time}
     CreditGrantRequest:
       type: object
-      required: [amount, reason]
+      required: [reason]
       properties:
+        source: {$ref: "#/components/schemas/CreditSource"}
         amount: {$ref: "#/components/schemas/Money"}
+        payment: {$ref: "#/components/schemas/OfflinePayment"}
         expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the credit does not expire."}
         reason: {$ref: "#/components/schemas/Reason"}
+      description: "A gift needs `amount`, in the site's currency; an offline payment needs `payment` instead."
+    CreditSource:
+      type: string
+      enum: [gift, offline_payment]
+      description: "Where the credit comes from. Absent in a request: gift."
+    OfflinePayment:
+      type: object
+      required: [amount, channel]
+      description: >-
+        Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange
+        rate can be kept for, and in whole minor units of it.
+      properties:
+        amount: {$ref: "#/components/schemas/Money"}
+        channel: {type: string, minLength: 1, maxLength: 200, description: "Where it was received, such as a bank account."}
     CreditGrant:
       type: object
-      required: [id, account_id, amount, created_at, balance_after]
+      required: [id, account_id, source, amount, created_at, balance_after]
       properties:
         id: {$ref: "#/components/schemas/Uuid"}
         account_id: {$ref: "#/components/schemas/AccountId"}
+        source: {$ref: "#/components/schemas/CreditSource"}
         amount: {$ref: "#/components/schemas/Money"}
+        payment: {$ref: "#/components/schemas/OfflinePayment"}
+        exchange_rate: {$ref: "#/components/schemas/ExchangeRate"}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         balance_after: {$ref: "#/components/schemas/Balance"}
+      description: >-
+        `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it
+        was converted from another currency.
     SupplierStatus:
       type: string
       enum: [connecting, active, low_balance, needs_attention, paused, removing, removed]
@@ -1858,7 +2103,9 @@ components:
           pattern: '^[A-Z]{3}$'
           description: >-
             The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the
-            supplier's unit, so the person says it; it is fixed, and the unit value is always in it.
+            supplier's unit, so the person says it; it is fixed, and the unit value is always in it. It must be the
+            site's currency or one the manual exchange rates support (USD, CNY, EUR, GBP, JPY, HKD, SGD, AUD, CAD, CHF), else
+            422 pointing at this member: a supplier in any other would have no rate to convert its costs with.
         login: {$ref: "#/components/schemas/SupplierLogin"}
         reason: {$ref: "#/components/schemas/Reason"}
     SupplierLoginUpdate:
@@ -1917,6 +2164,26 @@ components:
         cooldown_until: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         max_concurrency: {type: integer, minimum: 1}
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          description: "The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
+    CredentialLimits:
+      type: object
+      required: [max_concurrency, reason]
+      properties:
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: The calls the key has in flight at once. A new binding starts at 4.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          nullable: true
+          description: "Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling."
+        reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object
       required: [ref, status]
@@ -1949,6 +2216,82 @@ components:
     ModelFormat:
       type: string
       enum: [messages, responses, chat]
+    EndpointTestRequest:
+      type: object
+      required: [endpoint_id, format, reason]
+      properties:
+        endpoint_id: {$ref: "#/components/schemas/Uuid"}
+        format:
+          allOf: [{$ref: "#/components/schemas/ModelFormat"}]
+          description: The format to test it in; it must be one the endpoint serves.
+        reason: {$ref: "#/components/schemas/Reason"}
+    EndpointTestOutcome:
+      type: string
+      enum: [passed, failed, inconclusive]
+      description: >-
+        `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke.
+        `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the
+        endpoint can be judged by.
+    EndpointTestCause:
+      type: string
+      enum:
+        - timeout
+        - memory
+        - stream_broken
+        - upstream_error
+        - overloaded
+        - rate_limited
+        - context_too_long
+        - content_rejected
+        - bad_request
+        - model_not_found
+        - not_permitted
+        - credential_rejected
+        - credential_quota_exhausted
+        - supplier_balance_low
+        - transport
+        - tool_input
+        - unknown
+      description: Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+    EndpointTestProblem:
+      type: object
+      required: [cause]
+      properties:
+        cause: {$ref: "#/components/schemas/EndpointTestCause"}
+        scope:
+          type: string
+          enum: [request, egress, endpoint, credential, group, supplier]
+          description: >-
+            Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to
+            the supplier. Absent when the test's own limit ended it.
+    EndpointTest:
+      type: object
+      required: [request_id, endpoint_id, model_id, upstream_model, format, outcome, total_ms, estimated_native, native_unit]
+      properties:
+        request_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The platform's own ID of the test, which its cost row and its audit entry are keyed by.
+        endpoint_id: {$ref: "#/components/schemas/Uuid"}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_model: {type: string, description: "The model's name at the supplier, which the call sent."}
+        format: {$ref: "#/components/schemas/ModelFormat"}
+        outcome: {$ref: "#/components/schemas/EndpointTestOutcome"}
+        problem: {$ref: "#/components/schemas/EndpointTestProblem"}
+        upstream_status: {type: integer, minimum: 0, description: "The supplier's HTTP status; 0 when it answered nothing."}
+        upstream_request_id:
+          type: string
+          description: "The supplier's own ID of the call, when it gave one: the key its charge carries."
+        first_token_ms: {type: integer, minimum: 0, description: "Absent when no content came."}
+        total_ms: {type: integer, minimum: 0, description: "The whole test: waiting for the answer and reading it."}
+        estimated_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: >-
+            Zero when the supplier is known not to have executed the call; otherwise the highest price of the prompt's tokens and of the 16-token cap over every reachable
+            context band, in the supplier's unit. A definite upper bound, never what the supplier reported.
+        native_unit:
+          type: string
+          enum: [quota, usd]
+          description: The unit the supplier counts its balance in, which the estimate is in.
     PendingMapping:
       type: object
       required: [supplier_id, group_id, upstream_name, formats]

@@ -389,7 +389,7 @@ func (a *messagesAggregate) closeBlock() error {
 			a.out = append(comma(a.out), `"input":{}`...)
 		} else if b.deltas {
 			if err := jsonx.Validate(a.out[b.input:]); err != nil {
-				return fmt.Errorf("%w: a tool's input is not JSON: %w", ErrUpstream, err)
+				return &faultError{fault: FaultToolInput, detail: "a tool's input is not JSON: " + err.Error()}
 			}
 		}
 	case otherBlock, redactedBlock, signatureDelta, inputDelta:

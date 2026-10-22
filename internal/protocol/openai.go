@@ -21,6 +21,14 @@ type openAIUsage struct {
 	Output            *int64         `json:"output_tokens"`
 	CompletionDetails *openAIDetails `json:"completion_tokens_details"`
 	OutputDetails     *openAIDetails `json:"output_tokens_details"`
+	// DeepSeek names the cached part of the prompt prompt_cache_hit_tokens and the rest prompt_cache_miss_tokens, which
+	// add up to prompt_tokens (DeepSeek《Create Chat Completion》, usage, read 2026-10-19). The hit count is the cache read
+	// when prompt_tokens_details.cached_tokens is absent or 0 and the hit count is above 0; when both are above 0 the
+	// standard member wins and the two are not compared. new-api reads it so (relay/channel/openai/usage.go,
+	// applyUsagePostProcessing, 32e5874); the miss count is no usage of its own. Left unnamed, both would be charged as
+	// unknown tokens, on top of the prompt.
+	CacheHit  *int64         `json:"prompt_cache_hit_tokens"`
+	CacheMiss jsontext.Value `json:"prompt_cache_miss_tokens"`
 	// Reported but not billed: the sum, and a relay's price, which is not usage (OpenRouter《Usage accounting》, read
 	// 2026-10-14).
 	Total       jsontext.Value            `json:"total_tokens"`
@@ -36,6 +44,7 @@ type openAIDetails struct {
 	CacheWrite    int64                     `json:"cache_write_tokens"`
 	Audio         int64                     `json:"audio_tokens"`
 	Image         int64                     `json:"image_tokens"`
+	Video         int64                     `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
 	Text          int64                     `json:"text_tokens"`
 	CachedDetails *openAICachedDetails      `json:"cached_tokens_details"`
 	Reasoning     int64                     `json:"reasoning_tokens"`
@@ -63,36 +72,11 @@ func (c *openAICachedDetails) within(d openAIDetails) bool {
 
 // items maps the usage as catalog README.md「计费项与用量」 tabulates, at the service tier the reply names, if any.
 func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
-	in, inDetails, inName := u.Input, u.InputDetails, "input_tokens_details"
-	if u.Prompt != nil {
-		in, inDetails, inName = u.Prompt, u.PromptDetails, "prompt_tokens_details"
+	if err := u.mapInput(&r); err != nil {
+		return r, err
 	}
-	out, outDetails, outName := u.Output, u.OutputDetails, "output_tokens_details"
-	if u.Completion != nil {
-		out, outDetails, outName = u.Completion, u.CompletionDetails, "completion_tokens_details"
-	}
-	if in != nil {
-		d := inDetails.orZero()
-		if err := r.openAIInput(*in, d); err != nil {
-			return r, err
-		}
-		r.inputDetailed = inDetails != nil
-		unknownCounts(&r, "usage."+inName, d.Unknown)
-		if d.CachedDetails != nil {
-			unknownCounts(&r, "usage."+inName+".cached_tokens_details", d.CachedDetails.Unknown)
-		}
-	}
-	if out != nil {
-		d := outDetails.orZero()
-		if !countOK(d.Text) || d.Text > *out {
-			return r, fmt.Errorf("usage: invalid output text count")
-		}
-		if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
-			[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
-			return r, err
-		}
-		r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, outDetails != nil
-		unknownCounts(&r, "usage."+outName, d.Unknown)
+	if err := u.mapOutput(&r); err != nil {
+		return r, err
 	}
 	unknownCounts(&r, "usage", u.Unknown)
 	if tier != nil {
@@ -102,14 +86,68 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	return r, nil
 }
 
+// mapInput maps the input side as the reply reports it. Chat and Responses name the same counts differently, and those
+// names go into the unknown usage, so each side reads its own. A report without the side says nothing about its split,
+// so the meter takes none and keeps an earlier one.
+func (u *openAIUsage) mapInput(r *usageReport) error {
+	in, details, name := u.Input, u.InputDetails, "input_tokens_details"
+	if u.Prompt != nil {
+		in, details, name = u.Prompt, u.PromptDetails, "prompt_tokens_details"
+	}
+	if in == nil {
+		return nil
+	}
+	d, detailed := details.orZero(), details != nil
+	if u.Prompt != nil && d.Cached == 0 && u.CacheHit != nil {
+		d.Cached, detailed = *u.CacheHit, true
+	}
+	if err := r.openAIInput(*in, d); err != nil {
+		return err
+	}
+	r.inputDetailed = detailed
+	unknownCounts(r, "usage."+name, d.Unknown)
+	if d.CachedDetails != nil {
+		unknownCounts(r, "usage."+name+".cached_tokens_details", d.CachedDetails.Unknown)
+	}
+	return nil
+}
+
+// mapOutput maps the output side the same way, through the other format's names when the reply uses them.
+func (u *openAIUsage) mapOutput(r *usageReport) error {
+	out, details, name := u.Output, u.OutputDetails, "output_tokens_details"
+	if u.Completion != nil {
+		out, details, name = u.Completion, u.CompletionDetails, "completion_tokens_details"
+	}
+	if out == nil {
+		return nil
+	}
+	d := details.orZero()
+	if !countOK(d.Text) || d.Text > *out {
+		return fmt.Errorf("usage: invalid output text count")
+	}
+	// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
+	// output total: checked, and billed with that total rather than again on its own.
+	if !countOK(d.Video) || d.Video > *out {
+		return fmt.Errorf("usage: invalid output video count")
+	}
+	if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
+		[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
+		return err
+	}
+	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
+	unknownCounts(r, "usage."+name, d.Unknown)
+	return nil
+}
+
 // openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
-// uncached remainder: absent intersection detail cannot justify charging a cached image a second time.
+// uncached remainder: absent intersection detail cannot justify charging a cached image a second time. Video has no item
+// of its own, so its input tokens are image_in with the images (catalog README.md「计费项与用量」).
 func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
-	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Text},
+	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Video, d.Text},
 		func(n int64) bool { return !countOK(n) || n > total }) {
 		return fmt.Errorf("usage: input or a part of it is not a count within its total %d", total)
 	}
-	image, audio := d.Image, d.Audio
+	image, audio := d.Image+d.Video, d.Audio // no overflow: each count is at most 10¹⁰
 	if c := d.CachedDetails; c != nil {
 		if !c.within(d) {
 			return fmt.Errorf("usage: cached modality counts exceed their totals")
@@ -125,7 +163,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Audio > 0 {
 		r.set(catalog.ItemAudioIn, audio)
 	}
-	if d.Image > 0 {
+	if d.Image > 0 || d.Video > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
 	r.physicalInput = tokenTotal{total, true}

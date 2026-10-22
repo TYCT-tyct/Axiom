@@ -19,16 +19,25 @@ WHERE k.id = @key_id
     AND w.status = 'active' AND w.deleted_at IS NULL
     AND a.status = 'active';
 
--- name: LockAccount :many
+-- name: LockAccount :one
 -- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
 -- second one's count sees the first: a count read before the insert without this lock would let both through.
 SELECT id FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: CountKeys :one
 -- The call keys the account holds that are not deleted: what the site's limit of keys per account bounds. Read in the
--- account's turn (LockAccount), by API key of the account, so it counts what the insert is about to follow.
+-- account's turn (LockAccount), so it counts every key an insert before this one made.
 SELECT count(*) FROM accounts.api_keys
 WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL;
+
+-- name: RecentKeys :many
+-- The account's newest call keys from an ID on, deleted ones too: an ID is a UUIDv7, so the keys made since a time are
+-- the ones whose ID is at least the smallest ID of that time. The site's limit of keys made in an hour needs no more
+-- than that many.
+SELECT id FROM accounts.api_keys
+WHERE account_id = @account_id AND kind = 'call' AND id >= @from_id
+ORDER BY id DESC
+LIMIT @most;
 
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
@@ -60,7 +69,7 @@ FOR UPDATE;
 
 -- name: UpdateKey :exec
 -- Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
--- (LockKey), which has already given the tenant the audit entry needs.
+-- (LockKey) and has read the settings this replaces.
 UPDATE accounts.api_keys SET name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
     models = @models, ip_allow = @ip_allow
 WHERE id = @id AND kind = 'call';

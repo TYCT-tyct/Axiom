@@ -30,7 +30,10 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {
-		out = appendQuoted(append(out, `,"metadata":{"user_id":`...), w.Identity(*c.User))
+		out, err = appendMetadataUserID(append(out, `,"metadata":{"user_id":`...), w, *c.User)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, '}')
 	}
 	return append(out, '}'), nil
@@ -343,7 +346,7 @@ func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
 	var err error
 	switch {
 	case p.Type == "text", p.Type == "refusal": // a refusal is text the assistant said: Anthropic's own come as text
-		out = append(append(out, `{"type":"text","text":`...), p.Text...)
+		out = append(append(out, messagesTextHead...), p.Text...)
 	case textOnly:
 		return nil, &NotSupported{Reason: "a " + p.Type + " part where Messages takes text only"}
 	case p.Type == "image_url" && p.ImageURL != nil:
@@ -368,7 +371,7 @@ func imageBlock(out []byte, p canonPart) ([]byte, error) {
 	if p.ImageURL.Detail == "low" {
 		return nil, &NotSupported{Reason: "image detail low has no Messages counterpart"}
 	}
-	out = append(out, `{"type":"image","source":`...)
+	out = append(out, messagesImageHead...)
 	if media, data, ok := dataURL(p.ImageURL.URL); ok {
 		out = appendQuoted(append(out, `{"type":"base64","media_type":`...), media)
 		out = appendQuoted(append(out, `,"data":`...), data)
@@ -384,7 +387,7 @@ func documentBlock(out []byte, fileData string) ([]byte, error) {
 	if !ok || media != "application/pdf" {
 		return nil, &NotSupported{Reason: "a file that is not PDF data"}
 	}
-	out = append(out, `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":`...)
+	out = append(out, messagesFileHead...)
 	return append(appendQuoted(out, data), '}'), nil
 }
 
@@ -457,13 +460,11 @@ func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
 
 // messagesChoice is tool_choice in Messages' terms, but its closing brace, and whether it forces a tool.
 func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
-	switch {
-	case isNull(v), string(v) == `"auto"`:
-		return `{"type":"auto"`, false, nil
-	case string(v) == `"none"`:
-		return `{"type":"none"`, false, nil
-	case string(v) == `"required"`:
-		return `{"type":"any"`, true, nil
+	if isNull(v) {
+		return messagesChoices[`"auto"`], false, nil
+	}
+	if choice := messagesChoices[string(v)]; choice != "" {
+		return choice, string(v) == `"required"`, nil
 	}
 	var named struct {
 		Function struct {
@@ -474,6 +475,12 @@ func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 		return "", false, &NotSupported{Reason: "a tool_choice Messages cannot express"}
 	}
 	return `{"type":"tool","name":` + string(named.Function.Name), true, nil
+}
+
+var messagesChoices = map[string]string{
+	`"auto"`:     `{"type":"` + choiceNames["auto"] + `"`,
+	`"none"`:     `{"type":"` + choiceNames["none"] + `"`,
+	`"required"`: `{"type":"` + choiceNames["required"] + `"`,
 }
 
 // thinking writes the thinking setting and output_config: the effort of an adaptive model, and the schema of a

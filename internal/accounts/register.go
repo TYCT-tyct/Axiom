@@ -48,7 +48,7 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if d.surface != Console {
 		return UserID{}, ErrUnknownHost
 	}
-	if err := s.fromIP(d.site, r.ClientIP); err != nil {
+	if err := s.fromIP(ctx, d.site, r.ClientIP); err != nil {
 		return UserID{}, err
 	}
 	email := normalEmail(r.Email)

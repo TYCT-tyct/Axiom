@@ -29,13 +29,36 @@ const (
 
 func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "no_usage"}[f] }
 
+// Conversion says how an attempt's native cost became money. The zero value is no conversion computed, which is how old
+// nodes' and legacy writes stay unknown. The names are what attempt_costs.conversion_state stores (its CHECK, migration
+// 00007).
+type Conversion uint8
+
+// The conversions.
+const (
+	ConversionUnset Conversion = iota
+	ConversionSame
+	ConversionConverted
+	ConversionMissingRate
+	ConversionOverflow
+	ConversionUnpriced
+	ConversionNotRun // the attempt is known not to have run: nothing to convert
+)
+
+func (c Conversion) String() string {
+	return [...]string{"", "same_currency", "converted", "missing_rate", "overflow", "unpriced", "not_executed"}[c]
+}
+
 // AttemptCost is the estimate of an attempt's cost to us, in the supplier's own unit, from the schedule the attempt was
 // priced with. It is not money: the amount is in the unit of the supplier (quota, dollars) and billing turns it into
 // money.
 type AttemptCost struct {
-	Native  platform.Exact
-	Flag    CostFlag
-	Missing catalog.ItemSet
+	// Conversion describes conversion of Native, independently of Flag's coverage of the supplier's usage.
+	Conversion Conversion
+	Currency   platform.Currency
+	Native     platform.Exact
+	Flag       CostFlag
+	Missing    catalog.ItemSet
 	// Unknown is set when the supplier reported usage that has no billing item: it cannot be priced, so the estimate is
 	// not complete, and it is not the same as no usage.
 	Unknown bool
@@ -75,22 +98,33 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 	return cost, nil
 }
 
-// Credits is the attempt's Cost in billionths of a credit of currency: its native amount times the unit value the
-// attempt began with, rounded up once (docs/domains/billing.md「钱的表示」). known is false when that is not the whole
-// cost: the estimate leaves some usage out, the supplier is paid in another currency (there are no exchange rates yet),
-// or the amount is beyond what an amount holds. The priced part is still given when it can be told in currency. The
-// Cost it was converted from is returned with it, so that one pricing serves both.
+// Credits multiplies native cost, the attempt's unit value and the reservation's exchange rate, rounding up once to
+// billionths (docs/domains/billing.md「钱的表示」). known is false when usage cannot all be priced, the frozen pair is
+// missing, or the amount overflows. The priced part is still given when convertible; Cost serves native reconciliation.
 func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency platform.Currency) (c AttemptCost, credits int64, known bool, err error) {
 	c, err = s.Cost(r, usage)
-	if err != nil || r.currency != currency {
+	c.Currency = currency
+	if err != nil {
+		c.Conversion = ConversionUnpriced
 		return c, 0, false, err
 	}
 	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
+	c.Conversion = ConversionSame
+	if r.currency != currency {
+		rate, ok := r.exchange.Between(r.currency, currency)
+		if !ok {
+			c.Conversion = ConversionMissingRate
+			return c, 0, false, nil
+		}
+		money.Mul(money, rate)
+		c.Conversion = ConversionConverted
+	}
 	q, m := new(big.Int).DivMod(new(big.Int).Mul(money.Num(), big.NewInt(1e9)), money.Denom(), new(big.Int))
 	if m.Sign() != 0 {
 		q.Add(q, big.NewInt(1))
 	}
 	if !q.IsInt64() {
+		c.Conversion = ConversionOverflow
 		return c, 0, false, nil
 	}
 	return c, q.Int64(), c.Flag != CostUnpriced, nil
@@ -107,7 +141,8 @@ func usedItems(u catalog.Usage) (items catalog.ItemSet) {
 }
 
 // AttemptRecord is a finished attempt, as billing hands it to RecordAttempts. Site and Account are the request's tenant,
-// nil for a request of the platform's own.
+// nil for a request of the platform's own. Test marks a test generation, whose estimate is a bound of our own choosing
+// (TestEndpoint): no tenant pays it, and reconciliation never judges it.
 type AttemptRecord struct {
 	Request       platform.RequestID
 	Seq           platform.AttemptSeq
@@ -116,6 +151,23 @@ type AttemptRecord struct {
 	Usage         []catalog.Usage
 	Cost          AttemptCost
 	FinishedAt    time.Time
+	Test          bool
+}
+
+// setBasis saves what the cost was computed from; an attempt without a rate or a conversion keeps those columns NULL.
+func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
+	if a.Receipt.unitValueID != (uuid.UUID{}) {
+		row.UnitValueID = &a.Receipt.unitValueID
+	}
+	// Only a conversion that reached the multiplication used the rate; a same-currency overflow used none.
+	used := a.Cost.Conversion == ConversionConverted || a.Cost.Conversion == ConversionOverflow
+	if used && a.Receipt.currency != a.Cost.Currency {
+		row.ExchangeRateID = &a.Receipt.exchange.ID
+	}
+	if a.Cost.Conversion != ConversionUnset {
+		from, to, state := a.Receipt.currency.String(), a.Cost.Currency.String(), a.Cost.Conversion.String()
+		row.ConversionFrom, row.ConversionTo, row.ConversionState = &from, &to, &state
+	}
 }
 
 // RecordAttempts writes the cost and reconciliation key of a request's attempts, all in one statement, in the
@@ -139,8 +191,9 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), SiteID: a.Site, AccountID: a.Account,
 			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
-			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate,
+			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
 		}
+		setBasis(&row, a)
 		if a.Receipt.ref != "" {
 			row.ChargeRef = &a.Receipt.ref
 		}

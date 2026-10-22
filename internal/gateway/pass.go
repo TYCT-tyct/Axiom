@@ -25,11 +25,13 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
 	body, err := readWhole(s.x.Memory, resp.Body, idle, idleFor, &s.replyHeld)
+	a.obs.Ended = time.Now()
 	if err != nil {
 		s.dropReply()
 		return s.failedReply(a, ctx, err)
 	}
 	a.usage = protocol.UsageOf(body)
+	a.obs.Done, a.obs.Empty = true, len(body) == 0
 	rec := &s.ends[a.i]
 	if s.isGone() { // the reply was read to the end for what it says it used, but nothing of it reaches the client
 		s.dropReply()
@@ -37,6 +39,7 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{}
 	}
+	s.state = a.state // as in commit: the reply is the answer, so its upstream's state goes with it (headers.go)
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
 	return over, ended{reply: body, status: resp.StatusCode}
@@ -84,6 +87,7 @@ func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFo
 // what the upstream did is given up on for the next entry, as a stream that fails before its commit point is; one that
 // fails because the client left, the node is out of memory, or the call is out of road answers with the error.
 func (s *session) failedReply(a *attempt, ctx context.Context, err error) (step, ended) {
+	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
 	e, finish, again := s.classify(ctx, err)
 	rec := &s.ends[a.i]
 	rec.Result, rec.Finish = billing.FailedBeforeCommit, finish

@@ -41,8 +41,11 @@ type Site struct {
 	// MaxKeysPerAccount and KeyCreationsPerHour bound an account's call keys: how many it may hold that are not
 	// deleted, and how many it may make in an hour.
 	MaxKeysPerAccount, KeyCreationsPerHour int
-	sessions                               map[Surface]lifetime
-	limits                                 limits
+	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
+	// where to point a client rather than trusting the Host of the request (README.md「快照」).
+	APIBase  string
+	sessions map[Surface]lifetime
+	limits   limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -178,9 +181,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range domains {
-		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
-	}
+	readDomains(next, domains)
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -196,6 +197,29 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		}
 	}
 	return next, nil
+}
+
+// readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
+// host a key's calls are made to, which the console shows the user instead of a URL built from the request's Host
+// (README.md「快照」). Prefer HTTPS to avoid sending a key in cleartext when both schemes are registered. Break ties by
+// origin so the query's unordered results cannot change the address between reloads.
+func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
+	for _, r := range domains {
+		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
+			preferAPIOrigin(r.Origin, site.APIBase) {
+			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
+	}
+}
+
+func preferAPIOrigin(candidate, current string) bool {
+	secure, currentSecure := strings.HasPrefix(candidate, "https://"), strings.HasPrefix(current, "https://")
+	if secure != currentSecure {
+		return secure
+	}
+	return current == "" || candidate < current
 }
 
 // seconds is a session length in seconds as a duration, or fallback when it is unset (0).

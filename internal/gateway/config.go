@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -26,9 +27,8 @@ type Config struct {
 	KeyRate    int   // requests one key may make in RateWindow before it is refused: the platform's abuse limit
 	CountRate  int   // count_tokens requests one key may make in RateWindow: counted apart from its calls
 
-	PoolSize         int // N, database connections: the pool's size, so that every permit has a connection (DefaultConfig)
-	PoolReserve      int // connections only the Completion class may take
-	BatchConnections int // most connections the batch writer of call records holds
+	PoolSize    int // N, gateway permits, derived from the combined database pool ceiling
+	PoolReserve int // completion permits; admission permits are PoolSize - PoolReserve
 
 	QueueMax    int // waiters in the queue
 	QueuePerKey int // waiters of one key
@@ -67,8 +67,7 @@ func DefaultConfig() Config {
 		KeyLookup:         time.Second,
 		RateWindow:        time.Minute,
 		PoolSize:          pg.PoolSize,
-		PoolReserve:       16,
-		BatchConnections:  2,
+		PoolReserve:       pg.CompletionReserve,
 		QueueMax:          256,
 		QueuePerKey:       16,
 		AccountGateWait:   5 * time.Second,
@@ -107,8 +106,7 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf(format, args...))
 		}
 	}
-	// A batch writer that could never be granted would wait forever.
-	relation(c.PoolSize-c.PoolReserve >= c.BatchConnections, "PoolSize %d - PoolReserve %d must leave room for BatchConnections %d", c.PoolSize, c.PoolReserve, c.BatchConnections)
+	relation(c.PoolReserve < c.PoolSize, "PoolReserve %d must be below PoolSize %d", c.PoolReserve, c.PoolSize)
 	relation(c.QueuePerKey <= c.QueueMax, "QueuePerKey %d must not exceed QueueMax %d", c.QueuePerKey, c.QueueMax)
 	relation(c.LockTimeout < c.AdmissionBudget && c.StatementTimeout < c.AdmissionBudget,
 		"LockTimeout %v and StatementTimeout %v must be below AdmissionBudget %v", c.LockTimeout, c.StatementTimeout, c.AdmissionBudget)
@@ -123,8 +121,20 @@ func (c Config) Validate() error {
 	// Subtracted, not added: two huge positives would overflow past the grace.
 	relation(c.SettleBackground < c.SettleGrace-c.SettleRetry, "SettleGrace %v must exceed SettleRetry %v + SettleBackground %v",
 		c.SettleGrace, c.SettleRetry, c.SettleBackground)
+	// The shared count's windows are whole milliseconds, counted from the epoch, and its keys live two windows: a window
+	// that is not a whole number of milliseconds numbers and weighs by different lengths, and one over a day makes a key
+	// that long-lived for no use. Compared, not multiplied, so no value overflows past the bound (internal/platform/kv/README.md「键」).
+	relation(c.RateWindow >= minRateWindow && c.RateWindow <= maxRateWindow && c.RateWindow%time.Millisecond == 0,
+		"RateWindow %v must be a whole number of milliseconds from %v to %v", c.RateWindow, minRateWindow, maxRateWindow)
 	return errors.Join(errs...)
 }
+
+// The shortest and longest RateWindow: a window under a second is a count of a few requests that the clock's own
+// granularity decides, and over a day is a key that lives two days.
+const (
+	minRateWindow = time.Second
+	maxRateWindow = 24 * time.Hour
+)
 
 // KeyLookupSlot is accounts.Config.LookupSlot: a lookup of a key that is not cached uses a database connection like an
 // admission does, so it takes one of the admission class, for as long as the lookup runs (internal/gateway/README.md
@@ -139,11 +149,12 @@ type Backpressure struct {
 	byReason    map[string][]metric.AddOption // one slice per reason, built once: options passed one by one make a slice for each call
 	InFlight    *InFlight
 	Funds       *Funds
-	Pool        *Pool // for the connections that need no account gate: cold-key lookup, batch writers
+	Pool        *Pool // for the connections that need no account gate: cold-key lookup
 	Queue       *Queue
 	Rate        *RateCounter
 	IPCalls     *Limiter // requests in flight per client address
 	cfg         Config
+	rateTTL     string // how long a rate count lives in the shared cache, in milliseconds as the script takes it: two windows
 }
 
 // New validates cfg and builds the limits; it is the only way to get them, so no limit runs on a bad relation. The
@@ -164,7 +175,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	for _, r := range rateLimits {
 		byReason[r.Reason] = []metric.AddOption{metric.WithAttributes(attribute.String("reason", r.Reason))}
 	}
-	pool := newPool(cfg.PoolSize, cfg.PoolReserve, cfg.BatchConnections)
+	pool := newPool(cfg.PoolSize, cfg.PoolReserve)
 	return &Backpressure{
 		rateLimited: rateLimited, byReason: byReason,
 		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
@@ -174,6 +185,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 		Rate:     NewRateCounter(cfg.RateWindow),
 		IPCalls:  NewLimiter(errIPInFlight),
 		cfg:      cfg,
+		rateTTL:  strconv.FormatInt((2 * cfg.RateWindow).Milliseconds(), 10),
 	}, nil
 }
 

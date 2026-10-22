@@ -46,7 +46,7 @@ func TestLoadNodeProcess(t *testing.T) {
 	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) {
 		return egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tel.Traces)), nil
 	}
-	if err := serveVia(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback); err != nil {
+	if err := serveWith(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback, startRecorder, nil); err != nil {
 		t.Fatal(err)
 	}
 }

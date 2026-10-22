@@ -158,12 +158,29 @@ func readEvent(name, data string) event {
 // leaf; what is left over is an event only one stream has.
 func compareEvents(newAPI, axiom []event) []difference {
 	var out []difference
+	if theirs, ours := stopIndexes(newAPI), stopIndexes(axiom); theirs != ours {
+		out = append(out, difference{"sse[content_block_stop].indexes", "sse[content_block_stop].indexes", theirs, ours})
+	}
 	i, j := 0, 0
 	for _, m := range anchors(newAPI, axiom) {
 		out = append(out, compareGap(newAPI[i:m[0]], axiom[j:m[1]], i, j)...)
 		i, j = m[0]+1, m[1]+1
 	}
 	return append(out, compareGap(newAPI[i:], axiom[j:], i, j)...)
+}
+
+// A moved stop may be paired as two unmatched events, but a lost or duplicated block must still fail the comparison.
+func stopIndexes(events []event) string {
+	var indexes []string
+	for _, e := range events {
+		if e.name == "content_block_stop" {
+			if doc, ok := e.doc.(map[string]any); ok {
+				indexes = append(indexes, canonical(doc["index"]))
+			}
+		}
+	}
+	slices.Sort(indexes)
+	return canonical(indexes)
 }
 
 // anchors is the longest run of events both streams have, in order, as pairs of positions.
@@ -203,13 +220,12 @@ func compareGap(a, b []event, offA, offB int) []difference {
 	var out []difference
 	paired := make([]bool, len(b))
 	for i, x := range a {
-		j := slices.IndexFunc(b, func(y event) bool { return y.name == x.name })
-		for j >= 0 && paired[j] { // the first event of that name that has no partner yet
-			k := slices.IndexFunc(b[j+1:], func(y event) bool { return y.name == x.name })
-			if k < 0 {
-				j = -1
-			} else {
-				j += k + 1
+		j := -1
+		var partner event
+		for k, y := range b {
+			if !paired[k] && sameEventItem(x, y) {
+				j, partner = k, y
+				break
 			}
 		}
 		path := "sse[" + x.name + "]"
@@ -218,7 +234,7 @@ func compareGap(a, b []event, offA, offB int) []difference {
 			continue
 		}
 		paired[j] = true
-		out = append(out, compareLeaves(eventLeaves(path, x, offA+i, offB+j), eventLeaves(path, b[j], offA+i, offB+j))...)
+		out = append(out, compareLeaves(eventLeaves(path, x, offA+i, offB+j), eventLeaves(path, partner, offA+i, offB+j))...)
 	}
 	for j, y := range b {
 		if !paired[j] {
@@ -227,6 +243,16 @@ func compareGap(a, b []event, offA, offB int) []difference {
 		}
 	}
 	return out
+}
+
+// Responses may close concurrent items in a different order; compare the same output item, retaining its event position.
+func sameEventItem(a, b event) bool {
+	if a.name != b.name {
+		return false
+	}
+	x, xok := a.doc.(map[string]any)
+	y, yok := b.doc.(map[string]any)
+	return !strings.HasPrefix(a.name, "response.") || !xok || !yok || x["output_index"] == y["output_index"]
 }
 
 // eventLeaves is the leaves of an event's data, placed by the pair the event belongs to, so its partner's are placed alike.

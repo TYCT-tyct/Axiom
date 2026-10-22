@@ -79,43 +79,101 @@ func TestKeyCapHoldsUnderConcurrentCreates(t *testing.T) {
 	}
 }
 
-// TestKeyCreationRate: the keys an account may make in an hour are counted by the node's clock, a create that fails
-// after taking a turn gives it back, and the refusal names when the next one is let through.
-func TestKeyCreationRate(t *testing.T) {
-	t.Parallel()
-	db, database := open(t)
-	keySettingsOf(t, database, "key_creations_per_hour", "2")
-	var mu sync.Mutex
-	now := time.Now()
-	s := node(t, db, hashKeys(t, 1), func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
-	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
-	if err := tryKey(t, db, s, "One", accounts.WorkspaceID(w1)); err != nil {
+// madeAt makes a call key of a1 whose ID carries the time at, as a key made then would have, and deletes it if it was.
+// ID n is the last byte of the ID, to tell keys of one millisecond apart.
+func madeAt(t *testing.T, database pgtest.Database, at time.Time, n byte, deleted bool) {
+	t.Helper()
+	var id uuid.UUID
+	ms := uint64(at.UnixMilli()) // #nosec G115 -- after 1970
+	for i := range 6 {
+		id[i] = byte(ms >> (8 * (5 - i)))
+	}
+	id[6], id[8], id[15] = 0x70, 0x80, n
+	sql := apiKey("'"+id.String()+"'", ":s1", ":a1", ":w1", ":u1", "call")
+	if deleted {
+		sql += ";\nUPDATE accounts.api_keys SET deleted_at = now() WHERE id = '" + id.String() + "'"
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(sql)); err != nil {
 		t.Fatal(err)
 	}
-	// A workspace that is not there fails after the turn was taken, and the turn comes back.
-	if err := tryKey(t, db, s, "Doomed", accounts.WorkspaceID(uuid.NewV7())); err == nil || errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Fatalf("a key in a workspace that is not there: %v", err)
+}
+
+// tooManyKeys is the refusal err is, or fails the test.
+func tooManyKeys(t *testing.T, err error) accounts.TooManyKeys {
+	t.Helper()
+	keys, ok := errors.AsType[*accounts.TooManyKeys](err)
+	if !ok || !errors.Is(err, accounts.ErrTooManyKeys) {
+		t.Fatalf("got %v, want a refusal of too many keys", err)
 	}
-	if err := tryKey(t, db, s, "Two", accounts.WorkspaceID(w1)); err != nil {
-		t.Errorf("the hour's second key after a failed create gave its turn back: %v", err)
+	return *keys
+}
+
+// TestKeyCap: the refusal of the cap names the limit and the keys held, a deleted key is no longer held, and a site
+// that lowers its cap below what an account holds leaves those keys and refuses more.
+func TestKeyCap(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "2, 100")
+	s := node(t, db, hashKeys(t, 1), nil)
+	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
+		t.Fatalf("the second key, of two: %v", err)
 	}
-	// Two an hour is one every half hour: the third waits that long, and no more.
-	err := tryKey(t, db, s, "Three", accounts.WorkspaceID(w1))
-	tooMany, ok := errors.AsType[*accounts.TooManyAttempts](err)
-	if !ok || tooMany.RetryAfter != 30*time.Minute {
-		t.Errorf("the hour's third key: %v, want a wait of 30 minutes", err)
+	want := accounts.TooManyKeys{Limit: 2, Count: 2}
+	if diff := cmp.Diff(want, tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("the third key (-want +got):\n%s", diff)
 	}
-	advance(30*time.Minute - time.Second)
-	if err := tryKey(t, db, s, "Three", accounts.WorkspaceID(w1)); !errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Errorf("a second before the turn: %v, want a refusal", err)
+	if err := pgtest.Run(t.Context(), database.Superuser, "UPDATE accounts.api_keys SET deleted_at = now() WHERE name = 'Second'"); err != nil {
+		t.Fatal(err)
 	}
-	advance(time.Second)
-	if err := tryKey(t, db, s, "Three", accounts.WorkspaceID(w1)); err != nil {
-		t.Errorf("the turn after half an hour: %v", err)
+	if err := tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)); err != nil {
+		t.Errorf("a key after one was deleted: %v", err)
 	}
-	if got := texts(t, db, platform, fmt.Sprintf(
-		`SELECT count(*)::text FROM accounts.api_keys WHERE account_id = '%s' AND deleted_at IS NULL`, a1)); len(got) != 1 || got[0] != "4" {
-		t.Errorf("the account holds %v call keys, want the seed's one and three made", got)
+}
+
+// TestKeyCreationWindow: the keys made in the last hour are counted by the time their IDs carry, deleted ones too, on
+// the node's clock; the refusal names when the oldest of them is an hour old. The clock is two hours on, so that the
+// key the seed made is out of the hour, and the keys of the hour are the ones the test makes.
+func TestKeyCreationWindow(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "100, 2")
+	var mu sync.Mutex
+	at := time.Now().Add(2 * time.Hour).Truncate(time.Millisecond)
+	s := node(t, db, hashKeys(t, 1), func() time.Time { mu.Lock(); defer mu.Unlock(); return at })
+	move := func(d time.Duration) { mu.Lock(); at = at.Add(d); mu.Unlock() }
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return at }
+	madeAt(t, database, now().Add(-40*time.Minute), 1, true)
+	madeAt(t, database, now().Add(-10*time.Minute), 2, false)
+	madeAt(t, database, now().Add(-2*time.Hour), 3, false) // long out of the hour
+	want := accounts.TooManyKeys{Limit: 2, Count: 2, RetryAfter: 20 * time.Minute}
+	if diff := cmp.Diff(want, tooManyKeys(t, tryKey(t, db, s, "Over", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("two keys in the hour, one of them deleted (-want +got):\n%s", diff)
+	}
+	// A key exactly an hour old is out of the hour; a millisecond younger is in it.
+	move(20*time.Minute - time.Millisecond)
+	want.RetryAfter = time.Millisecond
+	if diff := cmp.Diff(want, tooManyKeys(t, tryKey(t, db, s, "Over", accounts.WorkspaceID(w1)))); diff != "" {
+		t.Errorf("a millisecond before the oldest is an hour old (-want +got):\n%s", diff)
+	}
+	move(time.Millisecond)
+	if err := tryKey(t, db, s, "In", accounts.WorkspaceID(w1)); err != nil {
+		t.Errorf("when the oldest is an hour old: %v", err)
+	}
+}
+
+// TestKeyCreationsCountTheKeysMade: the keys the account makes through CreateKey count toward the hour, the one the
+// seed made too, since all were made in it.
+func TestKeyCreationsCountTheKeysMade(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "100, 2")
+	s := node(t, db, hashKeys(t, 1), nil)
+	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
+		t.Fatalf("the second key of the hour: %v", err)
+	}
+	keys := tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)))
+	if keys.Limit != 2 || keys.Count != 2 || keys.RetryAfter <= 0 || keys.RetryAfter > time.Hour {
+		t.Errorf("the third key of the hour: %+v, want 2 of 2 and a wait of up to an hour", keys)
 	}
 }
 

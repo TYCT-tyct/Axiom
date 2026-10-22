@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 )
 
@@ -80,6 +81,7 @@ const MaxEntries = 3
 // both: a request that sets no cap is sent with Target.MaxOutput, which is MaxOutput, so what is quoted is what the
 // upstream may produce (I1).
 type Entry struct {
+	Exchange    platform.ExchangeRate
 	Endpoint    EndpointID
 	Supplier    SupplierID
 	Target      protocol.Target

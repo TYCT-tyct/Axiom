@@ -18,9 +18,11 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -57,6 +59,7 @@ type callDeps struct {
 	meter    metric.Meter            // where the call path's counters go
 	logger   *slog.Logger
 	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv       *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -64,9 +67,12 @@ type callDeps struct {
 type callNode struct {
 	handler  *gateway.Handler
 	executor *gateway.Executor
-	stop     context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
-	ready    func() bool        // whether the node can route now: its latest snapshot can route and is fresh
-	reaped   <-chan error       // carries what billing.Run ended with, when it is not a shutdown
+	// upstreams is the path's suppliers, which the admin also tests an endpoint through: a test must go through the
+	// snapshot and the credentials the calls use, not a second view of the database.
+	upstreams *suppliers.Service
+	stop      context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
+	ready     func() bool        // whether the node can route now: its latest snapshot can route and is fresh
+	reaped    <-chan error       // carries what billing.Run ended with, when it is not a shutdown
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -75,6 +81,7 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
+	billing.WarmTokenizers()
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
 	// stamps it on every plan and the executor reads it from there, not from the configuration.
 	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy})
@@ -89,7 +96,11 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	n, err := newCallNode(d, router, upstreams, ledger)
+	health := quality.New(d.meter) // the attempts report to it and the snapshot reads it, so it is one for both
+	// The list in OpenRouter's shape is built by the route builder with every snapshot it publishes, from the sale prices
+	// that snapshot was priced with, so a price a client reads is a price a call is charged at.
+	models := gateway.NewModelList()
+	n, err := newCallNode(d, router, upstreams, ledger, health, models)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -101,12 +112,12 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	var routable atomic.Bool
-	routes := routeDeps(d, router, upstreams, &routable)
-	snap, count, err := routes.Build(ctx)
+	routes := routeDeps(d, router, upstreams, health, &routable, salePrices(d.db, d.accounts, d.catalog, d.logger), models)
+	snap, list, count, err := routes.Build(ctx)
 	if err != nil {
 		return callNode{}, err
 	}
-	routes.Publish(snap, count)
+	routes.Publish(snap, list, count)
 	if !count.Routable() {
 		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
 			"answers 404 no_endpoint until each model has a spec and a sale price",
@@ -129,32 +140,40 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 }
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.
-func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing) (callNode, error) {
+func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor,
+	models *gateway.ModelList,
+) (callNode, error) {
 	memory := protocol.NewMemory(nodeMemory)
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records,
+		Records: d.records, Quality: health,
 	})
 	if err != nil {
 		return callNode{}, err
 	}
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
-		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Proxies: d.proxies,
+		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 	})
-	return callNode{handler: handler, executor: executor}, err
+	return callNode{handler: handler, executor: executor, upstreams: upstreams}, err
 }
 
-// routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route.
-func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, routable *atomic.Bool) *gateway.RouteDeps {
+// routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
+// models collects the model list published with it.
+func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool,
+	prices func(context.Context) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
+) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
-		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
-		Catalog:      d.catalog,
-		Prices:       salePrices(d.db, d.accounts, d.catalog, d.logger),
-		UnknownItems: unknownItems(d.db),
-		Router:       router,
-		Logger:       d.logger,
+		ExchangeRates: exchangeRates(d),
+		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
+		Catalog:       d.catalog,
+		Prices:        prices,
+		Models:        models,
+		UnknownItems:  unknownItems(d.db),
+		Quality:       health,
+		Router:        router,
+		Logger:        d.logger,
 		// Readiness is decided here, once the snapshot is the router's: a node whose suppliers offer no endpoint yet is
 		// ready, because there is nothing to route and the console is how its first supplier is set up; a node whose
 		// suppliers offer endpoints that the catalog or the price list cannot describe is not, because every model call

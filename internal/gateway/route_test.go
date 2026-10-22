@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -59,6 +60,8 @@ type routeFixture struct {
 	router *routing.Router
 	prices map[catalog.ModelID]billing.Sold
 	items  []billing.UnknownItem
+	health *quality.Monitor
+	models *ModelList
 
 	logs  *strings.Builder
 	deps  RouteDeps
@@ -86,7 +89,7 @@ func newRouteFixture(t *testing.T) *routeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &routeFixture{t: t, db: db, cat: cat, router: router, logs: new(strings.Builder)}
+	f := &routeFixture{t: t, db: db, cat: cat, router: router, logs: new(strings.Builder), health: quality.New(nil), models: NewModelList()}
 	f.served = f.seed("acme/served", specAll)
 	f.nospec = f.seed("acme/nospec", specNoServing)
 	f.unpriced = f.seed("other/unpriced", specAll)
@@ -197,23 +200,25 @@ func routable(model catalog.ModelID, formats ...protocol.Format) suppliers.Routa
 	}
 }
 
-// build runs RouteDeps.Build over the endpoints and the unknown items the test gives.
+// build runs RouteDeps.Build over the endpoints and the unknown items the test gives, and publishes what it made.
 func (f *routeFixture) build(endpoints []suppliers.Routable) *routing.Snapshot {
 	f.t.Helper()
 	f.deps = RouteDeps{
 		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return endpoints, nil },
 		Catalog:      f.cat,
 		Prices:       func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return f.prices, nil },
+		Models:       f.models,
 		UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return f.items, nil },
+		Quality:      f.health,
 		Router:       f.router,
 		Logger:       slog.New(slog.NewTextHandler(f.logs, nil)),
 	}
-	snap, count, err := f.deps.Build(f.t.Context())
+	snap, list, count, err := f.deps.Build(f.t.Context())
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	f.count = count
-	f.deps.Publish(snap, count)
+	f.deps.Publish(snap, list, count)
 	return snap
 }
 
@@ -314,6 +319,26 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	}
 }
 
+func TestRouteBuildConvertsNativeClientsToChat(t *testing.T) {
+	f := newRouteFixture(t)
+	f.build([]suppliers.Routable{routable(f.served, protocol.Chat)})
+	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
+		in := call(f.served, func(r *protocol.Request) { r.Format = client })
+		plan, _, err := f.router.Plan(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := plan.Entries
+		if len(entries) != 1 || entries[0].Target.Format != protocol.Chat || !entries[0].Limits.OpenAIUsage {
+			t.Fatalf("client %v: entries %+v", client, entries)
+		}
+		in.NativeOnly = true
+		if _, _, err := f.router.Plan(in); err == nil {
+			t.Fatalf("native-only client %v was converted", client)
+		}
+	}
+}
+
 // withStreams is the endpoint as a supplier whose policy passes no stream.
 func withStreams(r suppliers.Routable, streams bool) suppliers.Routable {
 	r.Streams = streams
@@ -392,15 +417,19 @@ func TestRouteBuildFlagsAModelThatReportedAnUnpricedItem(t *testing.T) {
 }
 
 // TestRouteBuildPublishesOnlyNewerSnapshots: the router refuses a snapshot built before the one it holds, so a rebuild
-// that finished late never replaces a newer view of the world.
+// that finished late never replaces a newer view of the world, and neither does its model list: the two are one build's.
 func TestRouteBuildPublishesOnlyNewerSnapshots(t *testing.T) {
 	f := newRouteFixture(t)
 	a, b := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
 	older := f.build([]suppliers.Routable{a})
 	newer := f.build([]suppliers.Routable{a, b})
-	f.deps.Publish(older, Count{Endpoints: 1, Offered: 1}) // late, and older: refused
+	listed := f.models.published()
+	f.deps.Publish(older, &openRouterListing{built: listed.built.Add(-time.Second)}, Count{Endpoints: 1, Offered: 1}) // late, and older: refused
 	if got := f.planned(call(f.served)); len(got) != 2 {
 		t.Errorf("routing plans to %d endpoints, want the newer snapshot's 2", len(got))
+	}
+	if f.models.published() != listed {
+		t.Error("a build that finished late replaced the model list")
 	}
 	if newer == nil || older == nil {
 		t.Fatal("no snapshot")
@@ -430,10 +459,10 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 				return map[catalog.ModelID]billing.Sold{}, nil
 			},
 			UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return nil, nil },
-			Router:       f.router, Logger: slog.New(slog.DiscardHandler),
+			Quality:      quality.New(nil), Router: f.router, Logger: slog.New(slog.DiscardHandler),
 		}
 		set(&d)
-		if _, _, err := d.Build(t.Context()); err == nil || !strings.Contains(err.Error(), boom.Error()) || !strings.Contains(err.Error(), name) {
+		if _, _, _, err := d.Build(t.Context()); err == nil || !strings.Contains(err.Error(), boom.Error()) || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s: %v, want it named and the cause kept", name, err)
 		}
 	}
@@ -489,7 +518,7 @@ func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
 	deps, offered := f.deps, []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
 	deps.Endpoints = func(context.Context) ([]suppliers.Routable, error) { return offered, nil }
 	for range 3 {
-		if _, _, err := deps.Build(t.Context()); err != nil {
+		if _, _, _, err := deps.Build(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -498,14 +527,53 @@ func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
 		t.Fatalf("the reason was told %d times over 4 builds, want once", n)
 	}
 	offered = nil // the model goes, and then comes back with the same reason
-	if _, _, err := deps.Build(t.Context()); err != nil {
+	if _, _, _, err := deps.Build(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	offered = []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
-	if _, _, err := deps.Build(t.Context()); err != nil {
+	if _, _, _, err := deps.Build(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(f.logs.String(), reason); n != 2 {
 		t.Errorf("the reason was told %d times after the model left and came back, want twice", n)
+	}
+}
+
+// TestRouteBuildRanksByWhatQualityMeasured: the snapshot carries the health, speed and time to first token real traffic
+// measured, so the fastest goes by them, and a session no longer sticks to an endpoint whose health fell below 0.5.
+func TestRouteBuildRanksByWhatQualityMeasured(t *testing.T) {
+	f := newRouteFixture(t)
+	fast, slow := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
+	answer := func(id uuid.UUID, gen time.Duration) {
+		now := time.Now()
+		f.health.Observe(t.Context(), quality.Observation{
+			Endpoint: id, Done: true, OutputTokens: 100, Sent: now.Add(-gen - time.Second), FirstToken: now.Add(-gen), Ended: now,
+		})
+	}
+	for range 5 {
+		answer(fast.ID, time.Second)
+		answer(slow.ID, 2*time.Second)
+	}
+	fastest := routing.Fastest
+	in := call(f.served)
+	in.Override.Sort, in.Sticky = &fastest, routing.EndpointID(slow.ID)
+	f.build([]suppliers.Routable{slow, fast})
+	if got := f.planned(in); len(got) != 2 || got[0] != slow.ID {
+		t.Fatalf("route %v: the session's healthy endpoint is not first", got)
+	}
+	in.Sticky = routing.EndpointID{}
+	if got := f.planned(in); got[0] != fast.ID {
+		t.Fatalf("route %v: the fastest by measurement is not first", got)
+	}
+	for range 4 { // health 0.8⁴ ≈ 0.41
+		f.health.Observe(t.Context(), quality.Observation{
+			Endpoint: slow.ID, Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{Status: 500}},
+			Ended: time.Now(),
+		})
+	}
+	f.build([]suppliers.Routable{slow, fast})
+	in.Sticky = routing.EndpointID(slow.ID)
+	if got := f.planned(in); got[0] != fast.ID {
+		t.Errorf("route %v: the session still sticks to an endpoint whose health is below 0.5", got)
 	}
 }

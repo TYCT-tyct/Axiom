@@ -16,6 +16,15 @@ __pycache__/
 # The program built for the container image
 deploy/bin/
 
+# What a Go command run in the tree writes: `go build ./cmd/axiom` leaves axiom or axiom.exe at the root, `go test -c`
+# leaves *.test, and `go test -coverprofile` and `go tool cover` leave the coverage files
+/axiom
+*.exe
+*.test
+coverage.out
+coverage.html
+*.coverprofile
+
 # The frontend builds the program embeds (just web-embed); the directory keeps only the note saying so
 /internal/platform/webui/build/*
 !/internal/platform/webui/build/NOT_BUILT.txt

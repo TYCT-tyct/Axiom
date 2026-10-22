@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -80,8 +81,9 @@ func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	}
 }
 
-// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers
-// are replaced by derived ones, and the whitelisted headers go with it.
+// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers are
+// replaced by derived ones — the metadata.user_id of an Anthropic call by the structure the session is read out of — and
+// the whitelisted headers go with it.
 func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) {
@@ -94,20 +96,15 @@ func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 		}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		h.run()
+		account := uuid.UUID(h.call.caller.AccountID())
 		call := h.up.endpoint(1).calls[0]
-		body := string(call.Body)
-		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, `"user_id":"`) {
-			t.Errorf("the request upstream: %s", body)
+		body, want := string(call.Body), `"user_id":"{\"device_id\":\"`+h.exec.deviceID(account)+`\",\"account_uuid\":\"\",`+
+			`\"session_id\":\"`+h.exec.identity(account)("client-secret-user")+`\"}"`
+		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, want) {
+			t.Errorf("the request upstream:\n%s\nwant it to hold %s", body, want)
 		}
 		if call.Format != protocol.Messages || call.Header.Get("Anthropic-Beta") != "beta-1" {
 			t.Errorf("format %d, headers %v", call.Format, call.Header)
-		}
-		var ids []string
-		for _, part := range strings.Split(body, `"user_id":"`)[1:] {
-			ids = append(ids, part[:strings.Index(part, `"`)])
-		}
-		if len(ids) != 1 || len(ids[0]) != 32 {
-			t.Errorf("the derived identifier: %v", ids)
 		}
 	})
 }
@@ -245,7 +242,7 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full, nil},
 		{"no endpoint can express it", options{entries: 2, mutate: func(c *Call) {
 			for i := range c.Plan.Entries {
-				c.Plan.Entries[i].Target.Format = protocol.Chat // a Messages request is not converted to Chat
+				c.Plan.Entries[i].Target.Format = protocol.Responses // Messages is not converted to Responses
 			}
 		}}, 400, "", routing.FormatNotServed, nil},
 	}
@@ -291,7 +288,7 @@ func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
 
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Chat }})
+		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Responses }})
 		h.run()
 		if h.w.status != 429 { // a credential may be free in a second; the other entry will not ever do
 			t.Errorf("status %d\n%s", h.w.status, h.w.body())
@@ -379,7 +376,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -390,6 +387,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
+		"quality": func(d *ExecDeps) { d.Quality = nil },
 	} {
 		d := full
 		missing(&d)

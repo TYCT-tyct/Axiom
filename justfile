@@ -13,7 +13,7 @@ check: docs check-static test secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main
-check-static: modules adapters-removable scope api tidy generated lint deadcode vuln
+check-static: modules adapters-removable artifacts scope api tidy generated lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -66,6 +66,12 @@ adapters-removable:
 api:
     go run -C tools ./checkapi ..
 
+# No build output, binary or file over 1 MB is committed: the files the branch adds or changes, and the untracked ones a
+# `git add` would take, are checked by size, by suffix and for a NUL byte (every file on main, and without origin/main);
+# scripts/check_artifacts.py holds the rules and the allowlist of what the tree keeps on purpose
+artifacts:
+    {{ python }} {{ quote(justfile_directory() / "scripts/check_artifacts.py") }}
+
 # Only internal/platform/pg sets the tenant scope or switches the role, in Go and SQL, tests and migrations included;
 # scripts/check_scope.py holds the rule and its reasons
 scope:
@@ -112,9 +118,9 @@ check-all: check bench-once
 # `docs` workflow.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
 check-ci: script-tests check-static test web
 
-# The checks that read Markdown: the docs tests (including the pull request template), module boundaries, and the pg
-# module table. A Markdown-only PR runs this instead of the full build.
-md-checks: docs modules
+# The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
+# template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
+md-checks: docs modules artifacts
     go test ./internal/platform/pg -run '^TestModuleOrderFollowsArchitecture$'
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the

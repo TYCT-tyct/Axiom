@@ -31,6 +31,9 @@ func (o adminOperation) changes() bool { return o.method != http.MethodGet }
 
 // adminOperations are the operations that need a session and a permission on the platform: all but the Session tag's.
 var adminOperations = []adminOperation{
+	{"listExchangeRates", http.MethodGet, "/pricing/exchange-rates", "", "pricing.view", false},
+	{"setExchangeRate", http.MethodPost, "/pricing/exchange-rates", `{}`, "pricing.manage", true},
+	{"exchangeRateHistory", http.MethodGet, "/pricing/exchange-rates/USD/CNY", "", "pricing.view", false},
 	{"getSiteSettings", http.MethodGet, someSite, "", "sites.manage", false},
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
 	{"listTiers", http.MethodGet, "/tiers", "", "users.view", false},
@@ -40,6 +43,7 @@ var adminOperations = []adminOperation{
 	{"listSuppliers", http.MethodGet, "/suppliers", "", "suppliers.view", false},
 	{"createSupplier", http.MethodPost, "/suppliers", `{}`, "suppliers.manage", true},
 	{"detectSupplier", http.MethodPost, "/suppliers/detections", `{"origin":"https://api.example.com"}`, "suppliers.manage", false},
+	{"testSupplierEndpoint", http.MethodPost, "/suppliers/endpoint-tests", `{"endpoint_id":"0198c0a8-0000-7000-8000-000000000001","format":"chat","reason":"r"}`, "suppliers.manage", true},
 	{"getSupplier", http.MethodGet, someSupplier, "", "suppliers.view", false},
 	{"setSupplierStatus", http.MethodPut, someSupplier + "/status", `{"status":"paused","reason":"r"}`, "suppliers.manage", true},
 	{"removeSupplier", http.MethodPost, someSupplier + "/removal", `{"reason":"r"}`, "suppliers.manage", true},
@@ -47,6 +51,7 @@ var adminOperations = []adminOperation{
 	{"confirmSupplierUnitValue", http.MethodPut, someSupplier + "/unit-value", `{"value":"1","reason":"r"}`, "suppliers.manage", true},
 	{"selectSupplierGroup", http.MethodPut, someSupplier + "/groups/0198c0a8-0000-7000-8000-000000000004", `{"selected":true,"reason":"r"}`, "suppliers.manage", true},
 	{"bindSupplierKey", http.MethodPost, someSupplier + "/credentials", `{}`, "suppliers.manage", true},
+	{"setSupplierCredentialLimits", http.MethodPut, someSupplier + "/credentials/0198c0a8-0000-7000-8000-000000000005/limits", `{"max_concurrency":8,"requests_per_minute":null,"reason":"r"}`, "suppliers.manage", true},
 	{"listPendingMappings", http.MethodGet, "/pending-mappings", "", "suppliers.view", false},
 	{"mapSupplierModel", http.MethodPost, someSupplier + "/model-mappings", `{}`, "suppliers.manage", true},
 	{"listAuthors", http.MethodGet, "/authors", "", "catalog.view", false},

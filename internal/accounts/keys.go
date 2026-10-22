@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"sync"
 	"time"
 	"uuid"
 
@@ -19,15 +18,20 @@ import (
 // ErrKeyNotFound is a key the transaction cannot see, or already deleted.
 var ErrKeyNotFound = errors.New("accounts: no such API key")
 
-// ErrTooManyKeys is an account that already holds as many call keys as its site allows. It is lifted by deleting a
-// key, never taken away: the keys made are the account's, and a site that lowers its limit keeps them usable.
+// ErrTooManyKeys is a key an account may not make now, over one of its site's two limits: the call keys it holds that
+// are not deleted, which deleting a key lifts, and the keys it makes in an hour, which waiting lifts. A site that lowers
+// its limit leaves the keys already made usable.
 var ErrTooManyKeys = errors.New("accounts: too many API keys")
 
-// TooManyKeys is ErrTooManyKeys with the limit of the site and the keys the account holds.
-type TooManyKeys struct{ Limit, Count int }
+// TooManyKeys is ErrTooManyKeys with the limit that was met and the keys counted against it. RetryAfter is set for the
+// hourly limit: how long until the oldest of the keys counted is an hour old and a place is free.
+type TooManyKeys struct {
+	Limit, Count int
+	RetryAfter   time.Duration
+}
 
 func (e *TooManyKeys) Error() string {
-	return fmt.Sprintf("%s: %d of %d", ErrTooManyKeys, e.Count, e.Limit)
+	return fmt.Sprintf("%s: %d counted against a limit of %d", ErrTooManyKeys, e.Count, e.Limit)
 }
 
 // Is makes errors.Is(err, ErrTooManyKeys) true for it.
@@ -88,20 +92,18 @@ type CreatedKey struct {
 
 // CreateKey makes a call key in tx, with the site's prefix and, unless r says otherwise, the site's daily spend limit
 // for new keys, and records it in the audit log in the same transaction. It refuses a key over one of the site's two
-// limits on how many an account holds and how many it makes in an hour (admitKey).
+// limits on how many an account holds and how many it makes in an hour (ErrTooManyKeys).
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error) {
 	site, ok := s.snapshot.Load().sites[r.Site]
 	if !ok {
 		return CreatedKey{}, fmt.Errorf("create an API key: site %s is not in the snapshot", r.Site.TypeID())
 	}
-	give, err := s.admitKey(ctx, tx, site, r.Account)
-	if err != nil {
+	if err := s.admitKey(ctx, tx, site, r.Account); err != nil {
 		return CreatedKey{}, err
 	}
 	if r.Workspace == (WorkspaceID{}) {
 		found, err := s.queries.DefaultWorkspace(ctx, tx, uuid.UUID(r.Account))
 		if err != nil || len(found) == 0 {
-			give()
 			return CreatedKey{}, fmt.Errorf("create an API key: the account's default workspace: %w", errors.Join(err, ErrKeyNotFound))
 		}
 		r.Workspace = WorkspaceID(found[0])
@@ -117,51 +119,61 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	if err := s.queries.InsertKey(ctx, tx, InsertKeyParams{
 		ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
 		WorkspaceID: uuid.UUID(r.Workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
-		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy), ExpiresAt: r.ExpiresAt,
-		SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
+		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
+		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}); err != nil {
-		give()
 		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
 	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), nil); err != nil {
-		give()
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
 }
 
-// admitKey is the site's limits on the call keys account holds, met in the transaction that makes one: the hour's
-// creation turns (KeyCreationsPerHour), and the keys the account already holds (MaxKeysPerAccount). The count is read
-// in the account's row's turn, so that two creates at once cannot both take the last place. It returns the turn, to be
-// given back when the key is not made after all. The turns are counted by the node, as the attempts before sign-in are
-// (README.md「登录前的资源」), so the nodes multiply the hourly limit by their number.
-func (s *Service) admitKey(ctx context.Context, tx pg.Tx, site Site, account AccountID) (func(), error) {
-	per := time.Hour / time.Duration(site.KeyCreationsPerHour)
-	turns := s.guards.keys
-	if wait := turns.take(uuid.UUID(account), site.KeyCreationsPerHour, per, s.now()); wait > 0 {
-		return nil, &TooManyAttempts{RetryAfter: wait}
+// keyWindow is the span the site's limit of keys made counts over.
+const keyWindow = time.Hour
+
+// admitKey checks the site's limits on the call keys account holds and makes, in the transaction that makes one. The
+// account's row is locked first, so that two creates at once are made one after the other and the second counts the
+// key the first made: counting before the insert without the lock would let both take the last place. The counts are
+// the database's, so they hold across nodes, and the lock is held to the end of the transaction, past the insert. The
+// time a key was made is the one its ID carries (createdAt), so the keys made in the hour are those from the smallest
+// ID of the hour's start on, deleted ones too: deleting a key does not give its turn back.
+func (s *Service) admitKey(ctx context.Context, tx pg.Tx, site Site, account AccountID) error {
+	if _, err := s.queries.LockAccount(ctx, tx, uuid.UUID(account)); errors.Is(err, pg.ErrNoRows) {
+		return fmt.Errorf("create an API key: %w", ErrNotFound)
+	} else if err != nil {
+		return fmt.Errorf("create an API key: lock the account: %w", err)
 	}
-	// The turn is given back on every way out that makes no key: here, and by the caller whose later steps fail.
-	give := sync.OnceFunc(func() { turns.give(uuid.UUID(account), per, s.now()) })
-	locked, err := s.queries.LockAccount(ctx, tx, uuid.UUID(account))
+	held, err := s.queries.CountKeys(ctx, tx, uuid.UUID(account))
 	if err != nil {
-		give()
-		return nil, fmt.Errorf("create an API key: lock the account: %w", err)
+		return fmt.Errorf("create an API key: count the account's keys: %w", err)
 	}
-	if len(locked) == 0 {
-		give()
-		return nil, fmt.Errorf("create an API key: %w", ErrNotFound)
+	if int(held) >= site.MaxKeysPerAccount {
+		return &TooManyKeys{Limit: site.MaxKeysPerAccount, Count: int(held)}
 	}
-	count, err := s.queries.CountKeys(ctx, tx, uuid.UUID(account))
+	now := s.now()
+	made, err := s.queries.RecentKeys(ctx, tx, RecentKeysParams{
+		AccountID: uuid.UUID(account), FromID: firstIDAfter(now.Add(-keyWindow)), Most: int32(site.KeyCreationsPerHour), // #nosec G115 -- bounded to 10,000
+	})
 	if err != nil {
-		give()
-		return nil, fmt.Errorf("create an API key: count the account's keys: %w", err)
+		return fmt.Errorf("create an API key: count the keys it made in the last hour: %w", err)
 	}
-	if int(count) >= site.MaxKeysPerAccount {
-		give()
-		return nil, &TooManyKeys{Limit: site.MaxKeysPerAccount, Count: int(count)}
+	if len(made) >= site.KeyCreationsPerHour {
+		oldest := createdAt(made[len(made)-1])
+		return &TooManyKeys{Limit: site.KeyCreationsPerHour, Count: len(made), RetryAfter: oldest.Add(keyWindow).Sub(now)}
 	}
-	return give, nil
+	return nil
+}
+
+// firstIDAfter is the smallest UUIDv7 made after t: its time, to the millisecond, is the next one's, and the rest of
+// it zero. The IDs of t's own millisecond sort below it.
+func firstIDAfter(t time.Time) uuid.UUID {
+	var id uuid.UUID
+	var ms [8]byte
+	binary.BigEndian.PutUint64(ms[:], uint64(t.UnixMilli()+1)) // #nosec G115 -- after 1970
+	copy(id[:6], ms[2:])
+	return id
 }
 
 // nullable is s as a nullable column: empty is null.

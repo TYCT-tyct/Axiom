@@ -9,6 +9,7 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
@@ -73,6 +74,7 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
+		RequestsPerMinute: c.RequestsPerMinute,
 	}
 }
 
@@ -258,6 +260,9 @@ func (a adminAPI) CreateSupplier(ctx context.Context, request adminapi.CreateSup
 	if err != nil {
 		return nil, invalidField("/settlement_currency", "not a currency code")
 	}
+	if err := a.checkSettlementCurrency(currency); err != nil {
+		return nil, err
+	}
 	login := credentialsOf(b.Login)
 	// The login is not in the fingerprint: it would let the fingerprint be used to guess a password. Its members' names are.
 	identity := []any{b.Name, b.Kind, origin, b.UpstreamAccount, b.SettlementCurrency, b.Reason, loginMembers(login)}
@@ -403,6 +408,29 @@ func (a adminAPI) BindSupplierKey(ctx context.Context, request adminapi.BindSupp
 	return adminapi.BindSupplierKey201JSONResponse{Body: bound, Headers: adminapi.BindSupplierKey201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
+// SetSupplierCredentialLimits sets the calls a credential serves at once and the requests its minute admits.
+func (a adminAPI) SetSupplierCredentialLimits(ctx context.Context, request adminapi.SetSupplierCredentialLimitsRequestObject) (adminapi.SetSupplierCredentialLimitsResponseObject, error) {
+	supplier, err := supplierIDOf(request.SupplierId)
+	if err != nil {
+		return nil, err
+	}
+	credential, err := supplierIDOf(request.CredentialId)
+	if err != nil {
+		return nil, suppliers.ErrNoCredential
+	}
+	b := request.Body
+	limits := suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute}
+	changed, replayed, err := idempotently(ctx, a.db, "setSupplierCredentialLimits", request.Params.IdempotencyKey, []any{request.SupplierId, request.CredentialId, b},
+		func(tx pg.Tx) (adminapi.SupplierCredential, error) {
+			c, err := a.suppliers.SetLimits(ctx, tx, actor(ctx), supplier, credential, limits, b.Reason)
+			return credentialBody(c), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetSupplierCredentialLimits200JSONResponse{Body: changed, Headers: adminapi.SetSupplierCredentialLimits200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
 // pendingCursor is where a page of the queue of names to map ended, in the cursor's own form.
 type pendingCursor struct {
 	Seen  time.Time `json:"s"`
@@ -514,6 +542,23 @@ func mappableModel(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
 		return err
 	case view.Status == catalog.StatusRetired:
 		return unprocessable("the model is retired")
+	}
+	return nil
+}
+
+// checkSettlementCurrency refuses a currency the supplier's cost could never be converted from: the site's own, or one
+// the exchange rates cover with it (billing.ExchangePair). Any other would put every attempt on the supplier at a missing
+// rate, with a zero cost and an unknown profit and no rate that could be set to fix it.
+func (a adminAPI) checkSettlementCurrency(currency platform.Currency) error {
+	site, ok := a.accounts.MainSite()
+	if !ok {
+		return accounts.ErrNotFound
+	}
+	if currency == site.Currency {
+		return nil
+	}
+	if _, _, err := billing.ExchangePair(currency.String(), site.Currency.String()); err != nil {
+		return unprocessableFields("/settlement_currency", "must be the site's currency or one that has exchange rates with it")
 	}
 	return nil
 }

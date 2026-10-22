@@ -362,6 +362,7 @@ func FuzzInspect(f *testing.F) {
 		if r.TextBytes < 0 || r.TextBytes > int64(len(body)) {
 			t.Fatalf("TextBytes %d of a %d-byte body", r.TextBytes, len(body))
 		}
+		checkTextBytes(t, body, r.TextBytes)
 	})
 }
 
@@ -425,7 +426,7 @@ func TestAllocs(t *testing.T) {
 			_, err := protocol.Inspect(f, b)
 			return err
 		}},
-		{"Prepare", protocol.Chat, prepareInspected()},
+		{"Prepare", protocol.Format(len(turns)), prepareInspected()},
 	} {
 		for f := range c.formats {
 			for _, lead := range []string{"", wideTurn} {

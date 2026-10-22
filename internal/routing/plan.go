@@ -145,15 +145,15 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	limits := c.model
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
+		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }
 
 // callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
-// the endpoint's own format is called in it, or in one protocol converts it to. A Chat request is only ever converted:
-// M1 rewrites no Chat request for an endpoint of its own format, so it is called in the first format the endpoint
-// speaks that protocol converts a Chat request to, Messages before Responses (docs/domains/gateway.md「转发规则」).
+// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat;
+// Chat uses Messages before Responses (docs/domains/gateway.md「转发规则」).
 // NativeOnly says only the request's own format will do.
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
@@ -161,9 +161,15 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 		return f, c.Native.Has(f)
 	}
 	if f != protocol.Chat {
+		if c.Native.Has(f) {
+			return f, true
+		}
+		if c.Served.Has(f) && c.Native.Has(protocol.Chat) {
+			return protocol.Chat, true
+		}
 		return f, c.Served.Has(f)
 	}
-	for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, g := range [...]protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		if c.Native.Has(g) {
 			return g, true
 		}

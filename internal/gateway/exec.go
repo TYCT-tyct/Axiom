@@ -17,6 +17,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -77,6 +78,8 @@ type ExecDeps struct {
 	// IdentitySecret derives the identifiers sent upstream in place of the client's session and end-user ones; it is
 	// the same for every node, or a session's cache would not follow it from one to another.
 	IdentitySecret []byte
+	// Quality is told how every attempt ended, and measures the endpoints routing ranks by.
+	Quality *quality.Monitor
 	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
 	// observation and a call never depends on it; a node always gives it.
 	Records *observability.Recorder
@@ -96,7 +99,7 @@ const minSecret = 16
 // NewExecutor checks the dependencies.
 func NewExecutor(d ExecDeps) (*Executor, error) {
 	if d.Router == nil || d.Upstreams == nil || d.Limits == nil || d.Memory == nil || d.Logger == nil || d.Ledger == nil ||
-		d.Costs == nil || d.Alive == nil {
+		d.Costs == nil || d.Alive == nil || d.Quality == nil {
 		return nil, errors.New("gateway: the executor needs every dependency")
 	}
 	if len(d.IdentitySecret) < minSecret {
@@ -173,14 +176,18 @@ type session struct {
 	deadline time.Time // the longest the call may run
 	logger   *slog.Logger
 
-	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
-	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
-	currency platform.Currency       // of the last attempt's price, the site's until one is made
-	skips    skips
-	last     *attempt // the attempt in progress, or the last one made
+	ends       []billing.AttemptResult // the attempts made, in order; the last is the one charged
+	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
+	currency   platform.Currency       // of the last attempt's price, the site's until one is made
+	skips      skips
+	last       *attempt        // the attempt in progress, or the last one made
+	textCounts [2]textEstimate // one count (or failure) per supported encoding for this session
 
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
+	// state is the turn state the upstream of the attempt whose content answers the call set, which the client gets
+	// back with it: the upstream's own, which no attempt the call gave up on can put there (headers.go).
+	state string
 	// live is the relay the call must release however it ends, panic included: the one being read, then the one the
 	// call ends with. It is the backstop for a way out that skips the release; drop clears it once a relay is let go,
 	// so that a discarded relay's buffers are not kept reachable (and the budget they were charged against reused)

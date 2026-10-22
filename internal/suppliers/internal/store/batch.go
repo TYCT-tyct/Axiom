@@ -11,6 +11,8 @@ import (
 
 // AttemptCostRow is the cost and reconciliation key of one finished attempt.
 type AttemptCostRow struct {
+	UnitValueID, ExchangeRateID                      *uuid.UUID
+	ConversionFrom, ConversionTo, ConversionState    *string
 	RequestID                                        uuid.UUID
 	AttemptSeq                                       int16
 	SiteID, AccountID                                *uuid.UUID
@@ -20,19 +22,24 @@ type AttemptCostRow struct {
 	PricedAt, FinishedAt                             time.Time
 	CostFlag                                         string
 	EstimatedNative                                  string
+	Test                                             bool
 }
 
 const insertAttemptCosts = `
 INSERT INTO suppliers.attempt_costs (request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id,
-    cost_schedule_id, charge_ref, usage, priced_at, finished_at, cost_flag, estimated_native)
+    cost_schedule_id, charge_ref, usage, priced_at, finished_at, cost_flag, estimated_native,
+    unit_value_id, exchange_rate_id, conversion_from, conversion_to, conversion_state, test)
 SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[],
-    $9::text[], $10::jsonb[], $11::timestamptz[], $12::timestamptz[], $13::text[], $14::numeric[])
+    $9::text[], $10::jsonb[], $11::timestamptz[], $12::timestamptz[], $13::text[], $14::numeric[],
+    $15::uuid[], $16::uuid[], $17::text[], $18::text[], $19::text[], $20::boolean[])
 ON CONFLICT (request_id, attempt_seq) DO NOTHING`
 
 // InsertAttemptCosts writes the attempts of a request in one statement. A row already there stays as it was, so a
 // settlement repeated after a crash changes nothing.
 func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) error {
 	var a struct {
+		unit, exchange                                []*uuid.UUID
+		from, to, conversion                          []*string
 		req, supplier, credential, endpoint, schedule []uuid.UUID
 		seq                                           []int16
 		site, account                                 []*uuid.UUID
@@ -40,8 +47,11 @@ func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) err
 		usage                                         [][]byte
 		priced, finished                              []time.Time
 		flag, estimated                               []string
+		test                                          []bool
 	}
 	for _, r := range rows {
+		a.unit, a.exchange = append(a.unit, r.UnitValueID), append(a.exchange, r.ExchangeRateID)
+		a.from, a.to, a.conversion = append(a.from, r.ConversionFrom), append(a.to, r.ConversionTo), append(a.conversion, r.ConversionState)
 		a.req, a.seq = append(a.req, r.RequestID), append(a.seq, r.AttemptSeq)
 		a.site, a.account = append(a.site, r.SiteID), append(a.account, r.AccountID)
 		a.supplier, a.credential = append(a.supplier, r.SupplierID), append(a.credential, r.CredentialID)
@@ -49,9 +59,10 @@ func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) err
 		a.ref, a.usage = append(a.ref, r.ChargeRef), append(a.usage, r.Usage)
 		a.priced, a.finished = append(a.priced, r.PricedAt), append(a.finished, r.FinishedAt)
 		a.flag, a.estimated = append(a.flag, r.CostFlag), append(a.estimated, r.EstimatedNative)
+		a.test = append(a.test, r.Test)
 	}
 	_, err := db.Exec(ctx, insertAttemptCosts, a.req, a.seq, a.site, a.account, a.supplier, a.credential, a.endpoint,
-		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated)
+		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated, a.unit, a.exchange, a.from, a.to, a.conversion, a.test)
 	return err
 }
 

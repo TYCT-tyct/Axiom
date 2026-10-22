@@ -19,6 +19,9 @@ import (
 
 func derive(s string) string { return "h(" + s + ")" }
 
+// rewrites are the gateway's values the protocol tests prepare with: an identity that tags what it derives, and a device.
+func rewrites() protocol.Rewrites { return protocol.Rewrites{Identity: derive, Device: "d"} }
+
 // history is a stored chain: a user message and the compaction item the reply carried (OpenAI《Compaction》,
 // https://developers.openai.com/api/docs/guides/compaction, read 2026-10-14; the item's id and encrypted_content are
 // made up, as the guide shows none).
@@ -45,7 +48,7 @@ var prepareCases = []struct {
 		`{"provider":{"order":["a"]}, "model":"claude-opus-5-5","metadata":{"user_id":"u\u00e9","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}],"axiom":{}, "max_tokens":5}`,
-		`{ "model":"up","metadata":{"user_id":"h(ué)","x":1},` +
+		`{ "model":"up","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(ué)\"}","x":1},` +
 			`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"caf\u00e9","signature":"sig_1"},` +
 			`{"type":"redacted_thinking","data":"red_1"},{"type":"compaction","content":"sum"}]}], "max_tokens":5}`,
 	},
@@ -125,7 +128,7 @@ func claim(yes bool) catalog.Claim {
 }
 
 func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte, error) {
-	w := protocol.Rewrites{Identity: derive}
+	w := rewrites()
 	if continues {
 		w.History = history
 	}
@@ -157,7 +160,7 @@ var routingParameters = []string{"provider", "models", "route", "transforms", "p
 
 // TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
 func TestPrepareDropsRoutingParameters(t *testing.T) {
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		want := `{"model":"up"}`
 		if f == protocol.Responses {
 			want = `{"model":"up","store":false}`
@@ -175,96 +178,6 @@ func TestPrepareDropsRoutingParameters(t *testing.T) {
 	}
 }
 
-// TestPrepareBuffer holds the output buffer to the room README.md「同格式改写」 promises: whatever Prepare adds, with
-// derived identifiers as long as Rewrites.IdentityLen says, fits without the body being copied again. The body is small
-// so that the allocator's rounding up leaves less room than what is added.
-func TestPrepareBuffer(t *testing.T) {
-	const id = "0123456789abcdef0123456789abcdef0123456789abcdef"
-	body := []byte(`{"model":"m","previous_response_id":"r","input":"next","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`)
-	allocs := func(identity string, identityLen int) float64 {
-		w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: identityLen, History: history}
-		r := inspected(t, protocol.Responses, body)
-		return testing.AllocsPerRun(5, func() {
-			if _, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Responses, Model: "up", EncryptedReasoning: catalog.ClaimYes}, w); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-	long := allocs(id, len(id))
-	// A one-byte identifier replaces a one-byte original: the body grows only by what is added.
-	if short := allocs("k", 0); long != short {
-		t.Errorf("%d allocations with long identifiers, %d with short ones", int(long), int(short))
-	}
-	// Room to spare for the identifiers, which the added members must fit in as well.
-	if roomy := allocs(id, 10*len(id)); long != roomy {
-		t.Errorf("%d allocations with room for the identifiers, %d with room to spare", int(long), int(roomy))
-	}
-}
-
-// TestPrepareBufferEscapes holds the room to the JSON escapes of the values put in: a model name and identifiers
-// made of bytes that take six bytes each still fit in one allocation, as short ones do.
-func TestPrepareBufferEscapes(t *testing.T) {
-	nasty := strings.Repeat("\x01\"\\", 40)
-	for _, c := range []struct {
-		format protocol.Format
-		body   string
-	}{
-		{protocol.Messages, `{"model":"m","metadata":{"user_id":"u"}}`},
-		{protocol.Responses, `{"model":"m","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`},
-	} {
-		allocs := func(model, identity string) float64 {
-			w := protocol.Rewrites{Identity: func(string) string { return identity }, IdentityLen: len(identity)}
-			r := inspected(t, c.format, []byte(c.body))
-			return testing.AllocsPerRun(5, func() {
-				if _, err := protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: model}, w); err != nil {
-					t.Fatal(err)
-				}
-			})
-		}
-		if long, short := allocs(nasty, nasty), allocs("m", "u"); long != short {
-			t.Errorf("format %d: %d allocations with escaped values, %d without", c.format, int(long), int(short))
-		}
-	}
-}
-
-// TestPrepareBufferDefaultIdentityLen holds the room for Identity's values to the default bound when IdentityLen is
-// not set: values as long as the bound, all of bytes that need escaping, replacing originals that need none, fit in
-// one allocation; a longer one is refused as the gateway's error.
-func TestPrepareBufferDefaultIdentityLen(t *testing.T) {
-	for _, c := range []struct {
-		format protocol.Format
-		body   string
-	}{
-		{protocol.Messages, `{"model":"m","metadata":{"user_id":"` + strings.Repeat("a", 128) + `"}}`},
-		{protocol.Responses, `{"model":"m","prompt_cache_key":"` + strings.Repeat("a", 128) + `","user":"u","safety_identifier":"s"}`},
-	} {
-		prepareWith := func(n int) (float64, error) {
-			id := strings.Repeat(`\`, n)
-			w := protocol.Rewrites{Identity: func(string) string { return id }}
-			r := inspected(t, c.format, []byte(c.body))
-			var err error
-			allocs := testing.AllocsPerRun(5, func() {
-				_, err = protocol.Prepare(&r, []byte(c.body), protocol.Target{Format: c.format, Model: "m"}, w)
-			})
-			return allocs, err
-		}
-		long, err := prepareWith(128)
-		if err != nil {
-			t.Fatal(err)
-		}
-		short, err := prepareWith(1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if long != short {
-			t.Errorf("format %d: %d allocations with 128 escaped bytes, %d with one", c.format, int(long), int(short))
-		}
-		if _, err := prepareWith(129); err == nil || errors.Is(err, protocol.ErrInvalid) {
-			t.Errorf("format %d: got %v for 129 bytes, want the gateway's error", c.format, err)
-		}
-	}
-}
-
 // TestPrepareSamples holds the recorded requests, pretty-printed as published, to a change of the model alone, and
 // of storage in Responses.
 func TestPrepareSamples(t *testing.T) {
@@ -278,6 +191,7 @@ func TestPrepareSamples(t *testing.T) {
 		{protocol.Messages, "messages/thinking/request.json", `"claude-opus-5-5"`, false},
 		{protocol.Messages, "messages/tool-use/request.json", `"claude-opus-5"`, false},
 		{protocol.Responses, "responses/text/request.json", `"gpt-6-astra"`, true},
+		{protocol.Chat, "chat/text/request.json", `"gpt-6-astra"`, false},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			body := caseBody(t, c.file)
@@ -330,7 +244,7 @@ func TestPrepareRejects(t *testing.T) {
 
 // FuzzPrepare holds Prepare's output to the summary Inspect read from the input, which also holds it to jsonx's
 // policy: admission's reservation and routing's capabilities stay true of what is sent, the model, the continued
-// response and the history's bytes aside. Chat's seeds are read as Messages.
+// response and the history's bytes aside.
 func FuzzPrepare(f *testing.F) {
 	for _, c := range inspectCases {
 		f.Add(uint8(c.format), caseBody(f, c.body))
@@ -345,7 +259,7 @@ func FuzzPrepare(f *testing.F) {
 	f.Add(uint8(protocol.Messages), []byte(`{"model":"m","metadata":{"user_id":"u","n":1e1000}}`))
 	f.Add(uint8(protocol.Responses), []byte(`{"model":"m","include":["x"],"n":1e1000}`))
 	f.Fuzz(func(t *testing.T, format uint8, body []byte) {
-		fm := protocol.Format(format % 2)
+		fm := protocol.Format(format % 3)
 		r, err := protocol.Inspect(fm, body)
 		if err != nil {
 			return
@@ -365,10 +279,20 @@ func FuzzPrepare(f *testing.F) {
 			t.Fatalf("%s: %v", out, err)
 		}
 		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
+		r = withSmallerCap(r, got)
 		if diff := cmp.Diff(r, got); diff != "" {
 			t.Fatalf("%s:\n%s", out, diff)
 		}
 	})
+}
+
+// withSmallerCap is r with the output cap of got when that is the smaller of the two caps a Chat request may have: they are
+// sent as one, which is the smaller.
+func withSmallerCap(r, got protocol.Request) protocol.Request {
+	if r.MaxOutput > 0 && got.MaxOutput > 0 && got.MaxOutput <= r.MaxOutput {
+		r.MaxOutput = got.MaxOutput
+	}
+	return r
 }
 
 // rejects reports whether Prepare must refuse a body Inspect accepted, decoding it to tell: a member only Prepare reads
@@ -394,6 +318,9 @@ func rejects(t *testing.T, f protocol.Format, body []byte) bool {
 			decode(top["metadata"], &metadata)
 		}
 		return notString(metadata["user_id"])
+	}
+	if f == protocol.Chat {
+		return slices.ContainsFunc([]jsontext.Value{top["user"], top["prompt_cache_key"], top["safety_identifier"]}, notString)
 	}
 	var include []jsontext.Value
 	if !is(top["include"], '[') {

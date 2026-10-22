@@ -229,7 +229,7 @@ export interface paths {
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds and the keys it makes in an hour; the cap is answered 409, and the hourly one 429 with `Retry-After`, and neither depends on this request alone.
+         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
          */
         post: operations["createKey"];
         delete?: never;
@@ -461,6 +461,12 @@ export interface components {
              * @example sk-ax-v1-
              */
             key_prefix: string;
+            /**
+             * Format: uri
+             * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host. Absent when the site has no enabled API domain.
+             * @example https://api.example.com
+             */
+            api_base_url?: string;
             /**
              * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
              * @enum {string}

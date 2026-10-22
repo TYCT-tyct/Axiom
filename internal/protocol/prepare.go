@@ -2,10 +2,13 @@ package protocol
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: Prepare walks the body token by token
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"axiom/internal/catalog"
 )
@@ -57,17 +60,23 @@ type Rewrites struct {
 	// Identity maps a client's session, prompt cache or end-user identifier to the opaque value sent upstream in its
 	// place (docs/domains/gateway.md「转发规则」).
 	Identity func(string) string
-	// IdentityLen is the most bytes Identity may return, before JSON escaping; 0 means defaultIdentityLen. It sizes the
-	// output, so that identifiers that are longer than the ones they replace, or need escaping, do not make Prepare
-	// copy the body again; a longer value is refused (errIdentity).
+	// Device is the value that stands for the client's machine in Anthropic's metadata.user_id, whose session member is
+	// Identity's value for the same request: a relay of this deployment reads the session out of it to pin a
+	// conversation to one account (docs/domains/gateway.md「转发规则」). It is written into the object as it is, so it
+	// must be an opaque identifier, as the ones Identity returns are. Both components are JSON-encoded.
+	Device string
+	// IdentityLen is the most bytes a derived identifier may take before outer JSON escaping; for metadata.user_id,
+	// this includes the inner JSON encoding of the structure and both components. 0 means
+	// defaultIdentityLen. It sizes the output, so that identifiers that are longer than the ones they replace, or need
+	// escaping, do not make Prepare copy the body again; a longer value is refused (errIdentity).
 	IdentityLen int
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
 }
 
-// defaultIdentityLen is what Identity may return when Rewrites.IdentityLen is 0: derived identifiers are short opaque
-// values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
+// defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short
+// opaque values, and a bound that holds whatever the client sent is what lets the output be sized before it is written.
 const defaultIdentityLen = 128
 
 // withDefaults fills in what a zero Rewrites value leaves to its defaults.
@@ -79,7 +88,7 @@ func (w Rewrites) withDefaults() Rewrites {
 }
 
 // errIdentity reports a gateway whose Identity returned more than Rewrites.IdentityLen bytes.
-var errIdentity = errors.New("protocol: Identity returned more than Rewrites.IdentityLen bytes")
+var errIdentity = errors.New("protocol: a derived value is longer than Rewrites.IdentityLen bytes")
 
 // Upstream is a request ready for an endpoint: its body, and what the body tells the relay about the usage the
 // endpoint will report.
@@ -111,13 +120,17 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // Prepare readies body, which Inspect read as r, for the endpoint t. For an endpoint of the same format it changes
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
-// A Chat request for a Messages or Responses endpoint is converted (README.md「跨格式转换」).
+// Chat and Messages/Responses requests convert in either direction (README.md「跨格式转换」).
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		u.Body, err = rewrite(r.Format, body, t, w)
+		return u, err
+	}
+	if t.Format == Chat && !t.Compact && (r.Format == Messages || r.Format == Responses) {
+		u.Body, err = requestToChat(r.Format, body, t, w)
 		return u, err
 	}
 	if r.Format != Chat {
@@ -145,36 +158,6 @@ func usageContext(r *Request) UsageContext {
 	return u
 }
 
-// rewrite is Prepare for an endpoint of the request's format. Chat's rewrites depend on the endpoint's dialect,
-// which come later (#27).
-func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	rules := rulesFor(f, t)
-	if rules.members == nil {
-		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
-	}
-	w = w.withDefaults()
-	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
-	}
-	if err := p.top(rules); err != nil {
-		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
-	}
-	return p.out, nil
-}
-
-// rewriteSize is the capacity of the buffer a rewrite of an n-byte body writes into: the whole of what it can write.
-func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
-	w = w.withDefaults()
-	size := n + quoted(len(t.Model)) + rules.room + rules.identities*quoted(w.IdentityLen)
-	for _, item := range w.History {
-		size += len(item) + 1
-	}
-	return size
-}
-
 // What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
 // reads them into structures, one for every object or null in an array of them and, in an object whose members it does
 // not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
@@ -198,13 +181,25 @@ const (
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	n := int64(len(body))
 	if r.Format == t.Format {
-		return int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n
+		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
+		if r.Format == Responses {
+			cost += replayHistoryCost(w.History)
+		}
+		return cost
 	}
-	if r.Format != Chat {
-		return 0 // Prepare refuses at once: nothing is converted from another format
+	if r.Format != Chat && t.Format != Chat {
+		return 0
 	}
 	objects := bytes.Count(body, []byte("{")) + bytes.Count(body, []byte("null")) // a null element is a zero structure too
-	return convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	if t.Format == Chat {
+		cost := nativeRequestCost(body)
+		for _, item := range w.History {
+			cost += nativeRequestCost(item)
+		}
+		return cost + int64(quoted(len(t.Model))+3*quoted(w.withDefaults().IdentityLen))
+	}
+	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
+	return cost
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
@@ -241,7 +236,19 @@ var (
 			room: len(addStore) + len(addInclude) + len(addInput) + len(wrapInput) + len("[]}") + len(addOutputCap) +
 				len(maxInt64) + len(addStream),
 		},
-		Chat: {},
+		// Chat's rewrites are the identity members and the output cap the other formats' are, and the usage the gateway
+		// meters from: stream_options.include_usage. The dialect of the model (its reasoning parameters, its cache
+		// markers) is the client's: what it wrote reaches the endpoint as it wrote it (README.md「同格式改写」).
+		Chat: {
+			members: withRouting(map[string]rule{
+				"model": (*rewriter).model, "user": (*rewriter).identity, "prompt_cache_key": (*rewriter).identity,
+				"safety_identifier": (*rewriter).identity, "max_tokens": (*rewriter).chatOutputCap,
+				"max_completion_tokens": (*rewriter).chatOutputCap, "stream": (*rewriter).stream,
+				"stream_options": (*rewriter).streamOptions,
+			}),
+			add: (*rewriter).addChat, identities: 3,
+			room: len(addStream) + len(addStreamOptions) + len(addCompletionCap) + len(maxInt64),
+		},
 	}
 	// compactRules rewrite a compaction request: the members that must not reach an upstream as they are — the
 	// endpoint's model name, the identifiers, the routing parameters — and nothing else. A generation's rewrite adds
@@ -257,7 +264,7 @@ var (
 		},
 		Chat: {}, // spelled out so that the array covers every format, as rewriteRules does: rulesFor never indexes past it
 	}
-	metadataRules = map[string]rule{"user_id": (*rewriter).identity}
+	metadataRules = map[string]rule{"user_id": (*rewriter).userID}
 )
 
 // rulesFor is how a request of format f is rewritten for the endpoint t: a compaction request is the one that is not a
@@ -293,6 +300,12 @@ const (
 	// addOutputCap and its number: the cap a request without one is sent with (Target.MaxOutput).
 	addOutputCap = `,"max_output_tokens":`
 	maxInt64     = "9223372036854775807"
+	// addCap and addCompletionCap are the Chat members the output cap is written in (usesCompletionCap), addStreamOptions
+	// the option that makes the upstream report usage; forcedOptions stands for a null stream_options.
+	addCap           = `,"max_tokens":`
+	addCompletionCap = `,"max_completion_tokens":`
+	addStreamOptions = `,"stream_options":` + forcedOptions
+	forcedOptions    = `{"include_usage":true}`
 	// addStream asks for the upstream's stream when the endpoint streams one, since the gateway reads every call as a
 	// stream and a client that wants no stream gets the events aggregated (docs/domains/gateway.md「转发规则」).
 	addStream = `,"stream":true`
@@ -309,8 +322,12 @@ type rewriter struct {
 	streamed                              bool            // the stream member seen
 	ending                                bool            // the event is the one that carries the final usage
 	capped                                bool            // max_output_tokens was given a value
+	chatCap                               int64           // the smallest of Chat's output caps above 0, 0 for none
+	optioned, usageForced                 bool            // Chat's stream_options seen, and its include_usage
 	usageAt                               int             // where the last usage object the relay rewrote closes in out
 	usageMembers                          map[string]rule // the usage members the relay keeps
+	replayAssistant, replayEmpty          bool
+	replayMeta                            *aggBase
 }
 
 func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }
@@ -387,7 +404,12 @@ func (p *rewriter) model() error {
 	return p.replaceString(len(v), p.t.Model)
 }
 
-func (p *rewriter) identity() error {
+// identity replaces the identifier just read with the gateway's opaque value of it.
+func (p *rewriter) identity() error { return p.replaceDerived(p.w.Identity) }
+
+// replaceDerived reads the string just read and writes derive's value of it in its place, refusing one longer than
+// Rewrites.IdentityLen.
+func (p *rewriter) replaceDerived(derive func(string) string) error {
 	v, err := p.raw()
 	if v == nil || err != nil {
 		return err
@@ -396,7 +418,7 @@ func (p *rewriter) identity() error {
 	if err != nil {
 		return err
 	}
-	derived := p.w.Identity(string(s))
+	derived := derive(string(s))
 	if p.w.IdentityLen > 0 && len(derived) > p.w.IdentityLen {
 		return errIdentity
 	}
@@ -559,4 +581,102 @@ func (p *rewriter) stream() error {
 		p.replace(len(v), "true")
 	}
 	return err
+}
+
+// chatOutputCap takes a Chat output cap out of the body, to be written again as the one member the endpoint reads
+// (addChat). The client's two members cap the same output, and which of them an endpoint reads depends on the endpoint,
+// so a cap the endpoint ignores must not stay and be taken for the bound the call was reserved at. The smallest value
+// above 0 is the client's cap; null and 0 stand for none (Inspect reads 0 as no cap too).
+func (p *rewriter) chatOutputCap() error {
+	v, err := p.dec.ReadValue()
+	p.at = p.offset()
+	if err != nil || v.Kind() != '0' {
+		return err
+	}
+	if n, perr := strconv.ParseInt(string(v), 10, 64); perr == nil && n > 0 && (p.chatCap == 0 || n < p.chatCap) {
+		p.chatCap = n
+	}
+	return nil
+}
+
+// usesCompletionCap reports whether a Chat endpoint of the model reads max_completion_tokens and refuses max_tokens:
+// OpenAI's o1, o3 and o4 reasoning models, GPT-5 and the GPT-6 Astra, Sol and Luna snapshots. It is new-api's rule
+// (relaykit/dto/openai_request.go, GetOpenAIChatCapabilities with IsOpenAIReasoningOModel and IsOpenAIGPT5Model,
+// 32e5874), which converts the member for them; every other endpoint, DeepSeek and Qwen among them, reads max_tokens
+// and ignores the other member. The model is the endpoint's name for it (Target.Model).
+func usesCompletionCap(model string) bool {
+	if strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.HasPrefix(model, "o4") ||
+		model == "gpt-5" || strings.HasPrefix(model, "gpt-5-") || strings.HasPrefix(model, "gpt-5.") {
+		return true
+	}
+	for _, base := range [...]string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+		if rest, ok := strings.CutPrefix(model, base); ok && (rest == "" || isDatedSnapshot(rest)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDatedSnapshot reports whether s is "-" and a date, YYYY-MM-DD, as OpenAI names a snapshot of a model.
+func isDatedSnapshot(s string) bool {
+	date, ok := strings.CutPrefix(s, "-")
+	if !ok {
+		return false
+	}
+	_, err := time.Parse(time.DateOnly, date)
+	return err == nil
+}
+
+// streamOptions makes a streaming upstream report usage whatever the client wrote: the gateway meters from the
+// upstream's report, and aggregates its stream for a client that asked for none, so include_usage is true and the
+// client's other options stay. new-api forces it the same way (relay/compatible_handler.go, ForceStreamOption), and
+// sub2api sets this member alone (backend/internal/service/openai_gateway_chat_completions_raw.go,
+// ensureOpenAIChatStreamUsage, 8f2cbb5).
+func (p *rewriter) streamOptions() error {
+	p.optioned = true
+	if !p.t.Streams {
+		return p.skip()
+	}
+	if ok, err := p.open('{', "an object"); !ok {
+		if err == nil {
+			p.replace(len("null"), forcedOptions)
+		}
+		return err
+	}
+	if err := p.members(map[string]rule{"include_usage": (*rewriter).forceUsage}, (*rewriter).skip); err != nil {
+		return err
+	}
+	if !p.usageForced {
+		if p.out[len(p.out)-1] != '{' { // everything up to here is copied: an object that has no member ends the output
+			p.out = append(p.out, ',')
+		}
+		p.out = append(p.out, `"include_usage":true`...)
+	}
+	return p.token()
+}
+
+func (p *rewriter) forceUsage() error {
+	p.usageForced = true
+	v, err := p.dec.ReadValue()
+	if err == nil && string(v) != "true" {
+		p.replace(len(v), "true")
+	}
+	return err
+}
+
+// addChat appends the output cap in the member the endpoint reads, and what else a Chat request lacks. The cap is the
+// client's, else the one the call was quoted at, so that what is sent is what was reserved (I1).
+func (p *rewriter) addChat() error {
+	limit := cmp.Or(p.chatCap, p.t.MaxOutput)
+	if limit > 0 {
+		member := addCap
+		if usesCompletionCap(p.t.Model) {
+			member = addCompletionCap
+		}
+		p.out = strconv.AppendInt(append(p.out, member...), limit, 10)
+	}
+	if p.t.Streams && !p.optioned {
+		p.out = append(p.out, addStreamOptions...)
+	}
+	return p.addStream()
 }

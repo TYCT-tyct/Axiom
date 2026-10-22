@@ -79,7 +79,7 @@ WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL
 `
 
 // The call keys the account holds that are not deleted: what the site's limit of keys per account bounds. Read in the
-// account's turn (LockAccount), by API key of the account, so it counts what the insert is about to follow.
+// account's turn (LockAccount), so it counts every key an insert before this one made.
 func (q *Queries) CountKeys(ctx context.Context, db DBTX, accountID uuid.UUID) (int64, error) {
 	row := db.QueryRow(ctx, countKeys, accountID)
 	var count int64
@@ -387,30 +387,17 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 	return items, nil
 }
 
-const lockAccount = `-- name: LockAccount :many
+const lockAccount = `-- name: LockAccount :one
 SELECT id FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `
 
 // Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
 // second one's count sees the first: a count read before the insert without this lock would let both through.
-func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, lockAccount, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (uuid.UUID, error) {
+	row := db.QueryRow(ctx, lockAccount, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const lockKey = `-- name: LockKey :one
@@ -448,6 +435,42 @@ func (q *Queries) LockKey(ctx context.Context, db DBTX, id uuid.UUID) (LockKeyRo
 	return i, err
 }
 
+const recentKeys = `-- name: RecentKeys :many
+SELECT id FROM accounts.api_keys
+WHERE account_id = $1 AND kind = 'call' AND id >= $2
+ORDER BY id DESC
+LIMIT $3
+`
+
+type RecentKeysParams struct {
+	AccountID uuid.UUID
+	FromID    uuid.UUID
+	Most      int32
+}
+
+// The account's newest call keys from an ID on, deleted ones too: an ID is a UUIDv7, so the keys made since a time are
+// the ones whose ID is at least the smallest ID of that time. The site's limit of keys made in an hour needs no more
+// than that many.
+func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, recentKeys, arg.AccountID, arg.FromID, arg.Most)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateKey = `-- name: UpdateKey :exec
 UPDATE accounts.api_keys SET name = $1, status = $2, spend_limit = $3, limit_reset = $4,
     models = $5, ip_allow = $6
@@ -465,7 +488,7 @@ type UpdateKeyParams struct {
 }
 
 // Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
-// (LockKey), which has already given the tenant the audit entry needs.
+// (LockKey) and has read the settings this replaces.
 func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) error {
 	_, err := db.Exec(ctx, updateKey,
 		arg.Name,

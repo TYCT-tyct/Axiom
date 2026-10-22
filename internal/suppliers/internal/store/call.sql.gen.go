@@ -95,6 +95,36 @@ func (q *Queries) DelistEndpoint(ctx context.Context, db DBTX, id uuid.UUID) (in
 	return result.RowsAffected(), nil
 }
 
+const enabledSupplierCurrencies = `-- name: EnabledSupplierCurrencies :many
+SELECT id, settlement_currency FROM suppliers.suppliers WHERE status IN ('active', 'low_balance')
+`
+
+type EnabledSupplierCurrenciesRow struct {
+	ID                 uuid.UUID
+	SettlementCurrency string
+}
+
+// Include enabled suppliers without a routable endpoint: configuration problems must be visible before a call.
+func (q *Queries) EnabledSupplierCurrencies(ctx context.Context, db DBTX) ([]EnabledSupplierCurrenciesRow, error) {
+	rows, err := db.Query(ctx, enabledSupplierCurrencies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnabledSupplierCurrenciesRow
+	for rows.Next() {
+		var i EnabledSupplierCurrenciesRow
+		if err := rows.Scan(&i.ID, &i.SettlementCurrency); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const holdOverdueCharges = `-- name: HoldOverdueCharges :many
 WITH due AS (
     SELECT c.id FROM suppliers.charge_records c
@@ -255,9 +285,10 @@ func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requ
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit,
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
     s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
+    c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
@@ -278,6 +309,7 @@ type ListRoutableRow struct {
 	Kind               string
 	Origin             string
 	NativeUnit         string
+	OwnerScope         string
 	SettlementCurrency string
 	UnitValueID        uuid.UUID
 	UnitValue          string
@@ -288,6 +320,7 @@ type ListRoutableRow struct {
 	KeyVersion         *int64
 	MaxConcurrency     int32
 	ExpiresAt          *time.Time
+	RequestsPerMinute  *int32
 	CostScheduleID     uuid.UUID
 	Schedule           []byte
 }
@@ -315,6 +348,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.Kind,
 			&i.Origin,
 			&i.NativeUnit,
+			&i.OwnerScope,
 			&i.SettlementCurrency,
 			&i.UnitValueID,
 			&i.UnitValue,
@@ -325,6 +359,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.KeyVersion,
 			&i.MaxConcurrency,
 			&i.ExpiresAt,
+			&i.RequestsPerMinute,
 			&i.CostScheduleID,
 			&i.Schedule,
 		); err != nil {
@@ -340,7 +375,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 
 const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
 SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
-WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1
+WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1 AND NOT test
     AND (finished_at, request_id, attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
 ORDER BY finished_at, request_id, attempt_seq
 LIMIT $5::int
@@ -362,6 +397,8 @@ type ListUnmatchedAttemptsRow struct {
 }
 
 // One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
+// A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost is
+// the platform's own (H-I9).
 func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUnmatchedAttemptsParams) ([]ListUnmatchedAttemptsRow, error) {
 	rows, err := db.Query(ctx, listUnmatchedAttempts,
 		arg.Before,
@@ -407,14 +444,14 @@ WITH pairs AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
     WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
     attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
-    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq,
+    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq, claimed.test,
     (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit
 `
 
@@ -427,13 +464,17 @@ type MatchChargesRow struct {
 	EndpointID      uuid.UUID
 	RequestID       uuid.UUID
 	AttemptSeq      int16
+	Test            bool
 	NativeUnit      string
 }
 
 // Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:
 // which one it belongs to is not known. The attempt is claimed first, and a charge is attributed only to an attempt
 // this statement claimed, so two matchers at once cannot give one attempt two charges or one charge two attempts. A
-// charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update.
+// charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update. A test
+// generation's row is matched like any other, so the supplier's charge for a probe is attributed and never held for a
+// person; its flag is returned, because the estimate of a probe is an upper bound and judging the endpoint by it would
+// say nothing (H-I9).
 func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]MatchChargesRow, error) {
 	rows, err := db.Query(ctx, matchCharges, batch)
 	if err != nil {
@@ -452,6 +493,7 @@ func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]Mat
 			&i.EndpointID,
 			&i.RequestID,
 			&i.AttemptSeq,
+			&i.Test,
 			&i.NativeUnit,
 		); err != nil {
 			return nil, err

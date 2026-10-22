@@ -47,7 +47,7 @@ const (
 
 // buckets are token buckets by key, each holding size tokens and refilling one every per. A bucket is kept as the
 // time it is full again (GCRA), so one that has filled up is the same as none: the entry expires then, and the LRU
-// bounds how many are kept. Counted per node, so several nodes multiply a limit by their number.
+// bounds how many are kept. Shared-store fallback divides the limits between nodes before using these buckets.
 type buckets[K comparable] struct {
 	mu   sync.Mutex // the LRU's get and put are one step here
 	full *lru[K, time.Time]
@@ -85,8 +85,10 @@ func (b *buckets[K]) give(key K, per time.Duration, now time.Time) {
 type guards struct {
 	ips    *buckets[siteIP]
 	emails *buckets[siteEmail]
-	users  *buckets[uuid.UUID]
-	keys   *buckets[uuid.UUID] // the call keys an account makes, by account
+	users  *buckets[siteUser]
+	// coarse bounds how many login keys one source makes in the shared store, at the site's own rate and per node, so
+	// that a flood cannot fill the store with them (internal/platform/kv/README.md「内存」).
+	coarse *buckets[siteIP]
 
 	hashing  *semaphore.Weighted
 	hashWait time.Duration
@@ -94,12 +96,17 @@ type guards struct {
 
 type siteIP struct {
 	site SiteID
-	ip   netip.Addr
+	ip   netip.Addr // normalized
 }
 
 type siteEmail struct {
 	site  SiteID
 	email string // normalized
+}
+
+type siteUser struct {
+	site SiteID
+	user uuid.UUID
 }
 
 func newGuards(concurrency int, wait time.Duration) guards {
@@ -110,33 +117,10 @@ func newGuards(concurrency int, wait time.Duration) guards {
 		wait = defaultHashWait
 	}
 	return guards{
-		ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[uuid.UUID](),
-		keys:    newBuckets[uuid.UUID](),
+		ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[siteUser](),
+		coarse:  newBuckets[siteIP](),
 		hashing: semaphore.NewWeighted(int64(concurrency)), hashWait: wait,
 	}
-}
-
-// fromIP spends one of the IP's attempts on site.
-func (s *Service) fromIP(site SiteID, ip netip.Addr) error {
-	l := s.snapshot.Load().sites[site].limits
-	if wait := s.guards.ips.take(siteIP{site, ip}, l.ipBurst, time.Minute/time.Duration(l.ipPerMinute), s.now()); wait > 0 {
-		return &TooManyAttempts{RetryAfter: wait}
-	}
-	return nil
-}
-
-// failing runs attempt with one of key's failures spent beforehand, so attempts at once cannot overrun the limit,
-// and given back when attempt succeeds.
-func failing[K comparable](s *Service, b *buckets[K], key K, size int, window time.Duration, attempt func() error) error {
-	per := window / time.Duration(size)
-	if wait := b.take(key, size, per, s.now()); wait > 0 {
-		return &TooManyAttempts{RetryAfter: wait}
-	}
-	err := attempt()
-	if err == nil {
-		b.give(key, per, s.now())
-	}
-	return err
 }
 
 // hash runs an argon2id computation in one of the node's turns, waiting at most hashWait for one; ctx ending while
