@@ -8,29 +8,34 @@ func (a *allocation) refund(m movement) error {
 	if !ok || b.source != "paid" || b.opened.compare(a.at) > 0 {
 		return fmt.Errorf("billing: %s transaction %s names no open paid batch %s", m.kind, m.key.id, m.request)
 	}
-	var previous, limit, debit int64
-	switch m.kind {
-	case "freeze":
-		previous, limit = b.freezeTotal, b.available()
-	case "unfreeze":
-		previous, limit = b.unfreezeTotal, b.frozen()
-	case "refund":
-		previous, limit = b.refunded, b.frozen()
+	total := b.refundTotal(m.kind)
+	previous, limit, debit := *total, b.frozen(), int64(0)
+	if m.kind == "freeze" {
+		limit = b.available()
+	}
+	if m.kind == "refund" {
 		debit = m.revision - previous
 	}
 	if m.revision <= previous || m.revision-previous > limit || m.debit != debit {
 		return fmt.Errorf("billing: %s transaction %s at %d does not fit batch %s", m.kind, m.key.id, m.revision, b.id)
 	}
-	switch m.kind {
-	case "freeze":
-		b.freezeTotal = m.revision
-	case "unfreeze":
-		b.unfreezeTotal = m.revision
+	*total = m.revision
+	if m.kind == "unfreeze" {
 		a.payDebt(b, m.revision-previous)
-	case "refund":
-		b.refunded = m.revision
 	}
 	b.touched = true
 	a.dropSpent()
 	return nil
+}
+
+// refundTotal selects the cumulative ledger revision shared by posting and replay.
+func (b *batchState) refundTotal(kind string) *int64 {
+	switch kind {
+	case "freeze":
+		return &b.freezeTotal
+	case "unfreeze":
+		return &b.unfreezeTotal
+	default:
+		return &b.refunded
+	}
 }

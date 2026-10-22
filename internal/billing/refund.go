@@ -43,7 +43,7 @@ func FreezeRefund(ctx context.Context, tx pg.Tx, f Freeze) (int64, error) {
 	if f.Amount == 0 {
 		return 0, a.save(ctx, tx, f.Account)
 	}
-	if err := a.postRefund(ctx, tx, f, credit.Site, "freeze", b.freezeTotal, nil); err != nil {
+	if err := a.postRefund(ctx, tx, f, credit.Site, "freeze", nil); err != nil {
 		return 0, err
 	}
 	return f.Amount, nil
@@ -60,14 +60,14 @@ func ReleaseRefund(ctx context.Context, tx pg.Tx, f Freeze) error {
 	if b == nil || f.Amount > b.frozen() {
 		return fmt.Errorf("billing: release of %d exceeds the freeze of batch %s", f.Amount, f.Batch)
 	}
-	return a.postRefund(ctx, tx, f, credit.Site, "unfreeze", b.unfreezeTotal, nil)
+	return a.postRefund(ctx, tx, f, credit.Site, "unfreeze", nil)
 }
 
 // SettleRefund converts frozen credit into a refund, even after expiry or spending down to the floor. Cash is booked
 // in the original payment currency; exchange gain/loss balances each currency without using today's exchange rate.
 // The caller must change its refund's state in tx so retries cannot settle a different freeze.
 func SettleRefund(ctx context.Context, tx pg.Tx, r Refund) error {
-	_, a, credit, err := r.Freeze.load(ctx, tx)
+	_, a, credit, err := r.load(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func SettleRefund(ctx context.Context, tx pg.Tx, r Refund) error {
 	if err != nil {
 		return err
 	}
-	return a.postRefund(ctx, tx, r.Freeze, credit.Site, "refund", b.refunded, entries)
+	return a.postRefund(ctx, tx, r.Freeze, credit.Site, "refund", entries)
 }
 
 func (f Freeze) load(ctx context.Context, tx pg.Tx) (LockBalanceRow, *allocation, CreditBatch, error) {
@@ -101,7 +101,8 @@ func (f Freeze) load(ctx context.Context, tx pg.Tx) (LockBalanceRow, *allocation
 }
 
 // postRefund updates the synchronous admission counter and replays the event into the allocation cache atomically.
-func (a *allocation) postRefund(ctx context.Context, tx pg.Tx, f Freeze, site uuid.UUID, kind string, previous int64, entries []line) error {
+func (a *allocation) postRefund(ctx context.Context, tx pg.Tx, f Freeze, site uuid.UUID, kind string, entries []line) error {
+	previous := *a.batches[f.Batch].refundTotal(kind)
 	if f.Amount > math.MaxInt64-previous {
 		return fmt.Errorf("billing: cumulative %s of batch %s exceeds the ledger", kind, f.Batch)
 	}
@@ -137,13 +138,16 @@ func (r Refund) entries(credit CreditBatch) ([]line, error) {
 	cash := r.Returned * scale
 	if credit.RateID == (uuid.UUID{}) {
 		return []line{
-			{bookUserBalance, r.Amount, siteCredits}, {bookCash, -cash, siteCredits},
+			{bookUserBalance, r.Amount, siteCredits},
+			{bookCash, -cash, siteCredits},
 			{bookExchange, cash - r.Amount, siteCredits},
 		}, nil
 	}
 	in := credit.Payment.Currency.String()
 	return []line{
-		{bookUserBalance, r.Amount, siteCredits}, {bookExchange, -r.Amount, siteCredits},
-		{bookCash, -cash, in}, {bookExchange, cash, in},
+		{bookUserBalance, r.Amount, siteCredits},
+		{bookExchange, -r.Amount, siteCredits},
+		{bookCash, -cash, in},
+		{bookExchange, cash, in},
 	}, nil
 }

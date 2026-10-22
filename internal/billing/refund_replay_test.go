@@ -81,6 +81,44 @@ func TestRefundReplayHistory(t *testing.T) {
 	checkReplays(t, rows, log, a)
 }
 
+func TestRefundReplayUsesSequence(t *testing.T) {
+	b := newBank(t, 0, 0, Config{})
+	f := b.refundable(1000)
+	b.creditBatch(100, longAgo)
+	b.charge(140)
+	f.Amount = 600
+	b.freeze(f)
+	b.charge(260)
+	f.Amount = 200
+	b.finishRefund(f, 0, true)
+	f.Amount = 300
+	b.finishRefund(f, 300, false)
+	// Wall clocks can run backwards. Neither SQL pagination nor a stored checkpoint may use their order.
+	b.sql("UPDATE billing.transactions SET created_at = '2026-01-01'::timestamptz - seq * interval '1 second'",
+		"UPDATE billing.balances b SET allocated_at = t.created_at FROM billing.transactions t WHERE t.seq = b.allocated_seq")
+	b.checkStored(f.Account)
+	want := b.replayed(f.Account)
+	b.sql("UPDATE billing.balances SET allocated_seq = 0, allocated_at = 'epoch', allocated_id = '00000000-0000-0000-0000-000000000000', unfunded = 0",
+		"UPDATE billing.credit_batches SET consumed = 0, expired = 0, freeze_total = 0, unfreeze_total = 0, refunded = 0")
+	for more := true; more; {
+		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+			a, err := loadAllocation(t.Context(), tx, f.Account)
+			if err != nil {
+				return err
+			}
+			more, err = a.catchUpPage(t.Context(), tx, f.Account, 1, math.MaxInt64)
+			if err != nil {
+				return err
+			}
+			return a.save(t.Context(), tx, f.Account)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sameAllocation(t, "persisted one event at a time", b.replayed(f.Account), want)
+	b.checkStored(f.Account)
+}
+
 func TestRefundReplayRejectsInvalidEvents(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind string
@@ -112,9 +150,9 @@ func TestRefundReplayRejectsInvalidEvents(t *testing.T) {
 
 // Repeated freeze/release cycles can reach the ledger limit even with a tiny batch. Refuse before issuing SQL.
 func TestFreezeCumulativeOverflow(t *testing.T) {
-	a := &allocation{}
 	f := Freeze{Account: uuid.NewV7(), Batch: uuid.NewV7(), Amount: 1}
-	if err := a.postRefund(context.Background(), pg.Tx{}, f, uuid.NewV7(), "freeze", math.MaxInt64, nil); err == nil {
+	a := &allocation{batches: map[uuid.UUID]*batchState{f.Batch: {freezeTotal: math.MaxInt64}}}
+	if err := a.postRefund(context.Background(), pg.Tx{}, f, uuid.NewV7(), "freeze", nil); err == nil {
 		t.Fatal("cumulative freeze wrapped")
 	}
 }

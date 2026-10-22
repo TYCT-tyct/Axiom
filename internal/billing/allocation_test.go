@@ -190,25 +190,28 @@ func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next 
 		*next++
 		return creditOf(rows[*next-1])
 	}
-	if len(live.open) > 0 {
-		b := live.open[r.IntN(len(live.open))]
-		m := movement{key: keyAt(seq), request: b.id}
-		switch {
-		case n < 4 && b.available() > 0:
-			m.kind, m.debit = "expire", 1+r.Int64N(b.available())
-		case n < 6 && b.source == "paid" && b.available() > 0:
-			m.kind, m.revision = "freeze", b.freezeTotal+1+r.Int64N(b.available())
-		case n < 8 && b.frozen() > 0:
-			m.kind, m.revision = "unfreeze", b.unfreezeTotal+1+r.Int64N(b.frozen())
-		case n < 9 && b.frozen() > 0:
-			m.kind, m.debit = "refund", 1+r.Int64N(b.frozen())
-			m.revision = b.refunded + m.debit
-		default:
-			return settled(seq, "settle", 1+r.Int64N(120))
-		}
-		return m
+	if len(live.open) == 0 {
+		return settled(seq, "settle", 1+r.Int64N(120))
 	}
-	return settled(seq, "settle", 1+r.Int64N(120))
+	return randomBatchMovement(r, live.open[r.IntN(len(live.open))], n, seq)
+}
+
+func randomBatchMovement(r *rand.Rand, b *batchState, n int, seq int64) movement {
+	m := movement{key: keyAt(seq), request: b.id}
+	switch {
+	case n < 4 && b.available() > 0:
+		m.kind, m.debit = "expire", 1+r.Int64N(b.available())
+	case n < 6 && b.source == "paid" && b.available() > 0:
+		m.kind, m.revision = "freeze", b.freezeTotal+1+r.Int64N(b.available())
+	case n < 8 && b.frozen() > 0:
+		m.kind, m.revision = "unfreeze", b.unfreezeTotal+1+r.Int64N(b.frozen())
+	case n < 9 && b.frozen() > 0:
+		m.kind, m.debit = "refund", 1+r.Int64N(b.frozen())
+		m.revision = b.refunded + m.debit
+	default:
+		return settled(seq, "settle", 1+r.Int64N(120))
+	}
+	return m
 }
 
 // checkInvariants fails the test unless the allocation funds exactly the balance, no batch is over-spent, and debt is

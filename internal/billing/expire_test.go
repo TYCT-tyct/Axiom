@@ -95,16 +95,9 @@ func (b *bank) replayed(account uuid.UUID) *allocation {
 	}); err != nil {
 		b.t.Fatal(err)
 	}
-	if got, want := a.funded(), b.count("SELECT balance FROM billing.balances WHERE account_id = '"+account.String()+"'"); got != want {
-		b.t.Errorf("the batches of %s fund %d of a balance of %d", account, got, want)
-	}
+	checkInvariants(b.t, a, b.balanceOf(account), movement{})
 	if got, want := a.frozen(), b.count("SELECT frozen FROM billing.balances WHERE account_id = '"+account.String()+"'"); got != want {
 		b.t.Errorf("replay freezes %d, stored balance freezes %d", got, want)
-	}
-	for _, batch := range a.batches {
-		if batch.remaining() < batch.frozen() || batch.frozen() < 0 {
-			b.t.Errorf("batch %+v is over-spent", *batch)
-		}
 	}
 	return a
 }

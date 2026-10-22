@@ -113,35 +113,40 @@ func TestRefundAcrossExpiry(t *testing.T) {
 	for _, release := range []bool{false, true} {
 		t.Run(fmt.Sprint(release), func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})
-			f := b.refundable(200)
-			f.Amount = 150
-			if n := b.freeze(f); n != 150 {
-				t.Fatalf("froze %d, want 150", n)
-			}
-			b.sql("UPDATE billing.credit_batches SET expires_at = clock_timestamp() - interval '1 second'")
-			if got := b.expire(); got != 50 {
-				t.Fatalf("expired %d, want only the 50 unfrozen", got)
-			}
-			if got := b.expire(); got != 0 {
-				t.Fatalf("second expiry took %d frozen credits", got)
-			}
-			b.finishRefund(f, 0, release)
-			want := int64(0)
-			if release {
-				want = 150
-			}
-			if got := b.expire(); got != want {
-				t.Fatalf("after resolving freeze, expired %d, want %d", got, want)
-			}
-			if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != 0 {
-				t.Fatal("resolved and expired batch still funds credit")
-			}
-			for _, e := range b.ledgerOf(f.Batch) {
-				if (e.Kind == "freeze" || e.Kind == "unfreeze") && len(e.Entries) != 0 {
-					t.Fatalf("%s moved money: %+v", e.Kind, e)
-				}
-			}
+			b.refundAcrossExpiry(release)
 		})
+	}
+}
+
+func (b *bank) refundAcrossExpiry(release bool) {
+	b.t.Helper()
+	f := b.refundable(200)
+	f.Amount = 150
+	if n := b.freeze(f); n != 150 {
+		b.t.Fatalf("froze %d, want 150", n)
+	}
+	b.sql("UPDATE billing.credit_batches SET expires_at = clock_timestamp() - interval '1 second'")
+	if got := b.expire(); got != 50 {
+		b.t.Fatalf("expired %d, want only the 50 unfrozen", got)
+	}
+	if got := b.expire(); got != 0 {
+		b.t.Fatalf("second expiry took %d frozen credits", got)
+	}
+	b.finishRefund(f, 0, release)
+	want := int64(0)
+	if release {
+		want = 150
+	}
+	if got := b.expire(); got != want {
+		b.t.Fatalf("after resolving freeze, expired %d, want %d", got, want)
+	}
+	if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != 0 {
+		b.t.Fatal("resolved and expired batch still funds credit")
+	}
+	for _, e := range b.ledgerOf(f.Batch) {
+		if (e.Kind == "freeze" || e.Kind == "unfreeze") && len(e.Entries) != 0 {
+			b.t.Fatalf("%s moved money: %+v", e.Kind, e)
+		}
 	}
 }
 
@@ -371,8 +376,10 @@ func TestRefundBooks(t *testing.T) {
 			if cross {
 				returned = 710
 				want = []LedgerEntry{
-					{bookExchange, -1_000_000_000, ""}, {bookUserBalance, 1_000_000_000, ""},
-					{bookCash, -7_100_000_000, "CNY"}, {bookExchange, 7_100_000_000, "CNY"},
+					{bookExchange, -1_000_000_000, ""},
+					{bookUserBalance, 1_000_000_000, ""},
+					{bookCash, -7_100_000_000, "CNY"},
+					{bookExchange, 7_100_000_000, "CNY"},
 				}
 			}
 			b.finishRefund(f, returned, false)
@@ -404,9 +411,9 @@ func TestRefundValidation(t *testing.T) {
 	f := b.refundable(500)
 	b.freeze(f)
 	for _, r := range []Refund{
-		{Freeze: Freeze{Account: f.Account, Batch: f.Batch, Amount: 0}},
-		{Freeze: Freeze{Account: f.Account, Batch: f.Batch, Amount: 501}},
-		{Freeze: Freeze{Account: f.Account, Batch: uuid.NewV7(), Amount: 1}},
+		{Freeze: {Account: f.Account, Batch: f.Batch, Amount: 0}},
+		{Freeze: {Account: f.Account, Batch: f.Batch, Amount: 501}},
+		{Freeze: {Account: f.Account, Batch: uuid.NewV7(), Amount: 1}},
 		{Freeze: f, Returned: -1},
 		{Freeze: f, Returned: math.MaxInt64},
 	} {
