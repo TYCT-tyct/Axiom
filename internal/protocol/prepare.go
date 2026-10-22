@@ -160,7 +160,7 @@ func usageContext(r *Request) UsageContext {
 
 // What a conversion holds at once is bounded by what it is given. It copies the body's strings a few times over, and
 // reads them into structures, one for every object or null in an array of them and, in an object whose members it does
-// not know, one for every member; a body of nothing but "{}," or "null," makes 224 bytes of message of every 3 or 5.
+// not know, one for every member; a body of nothing but "{}," or "null," makes 248 bytes of message of every 3 or 5.
 // The body does not say how many there are, but counting its braces, nulls and colons bounds them (any other element
 // of such an array is refused where it stands): those inside strings only add. The constants are
 // the structures' sizes, doubled for the growth of the slices they sit in, with room to spare (measured 2026-10-16, a

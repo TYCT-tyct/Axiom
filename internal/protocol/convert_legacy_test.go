@@ -57,6 +57,12 @@ func TestConvertLegacyToMessages(t *testing.T) {
 			`{"role":"tool","tool_call_id":"c","content":"x"}]`), nil, "invalid"},
 		{"a legacy choice of other words", chatBody(`"messages":[` + userHi + `],"function_call":"sometimes"`), nil, "invalid"},
 		{"a legacy call without a name", chatBody(`"messages":[` + userHi + `,{"role":"assistant","function_call":{"arguments":"{}"}}]`), nil, "invalid"},
+		{"a legacy call outside an assistant message", chatBody(`"messages":[{"role":"user","function_call":{"name":"f","arguments":"{}"}}]`), nil, "invalid"},
+		{"legacy arguments must be a string", chatBody(`"messages":[` + userHi + `,{"role":"assistant","function_call":{"name":"f","arguments":{}}}]`), nil, "invalid"},
+		{"a legacy result without a name", chatBody(`"messages":[` + userHi + `,{"role":"function","content":"done"}]`), nil, "invalid"},
+		{"a legacy call without its result", chatBody(`"messages":[` + userHi + `,{"role":"assistant","function_call":{"name":"f","arguments":"{}"}}]`), nil, "unsupported"},
+		{"a legacy result answered twice", chatBody(`"messages":[` + userHi + `,{"role":"assistant","function_call":{"name":"f","arguments":"{}"}},` +
+			`{"role":"function","name":"f","content":"one"},{"role":"function","name":"f","content":"two"}]`), nil, "unsupported"},
 		{"a legacy function without a name", chatBody(`"messages":[` + userHi + `],"functions":[{"description":"d"}]`), nil, "invalid"},
 	})
 }

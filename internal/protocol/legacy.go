@@ -127,21 +127,16 @@ func (c *legacyCalls) add(m *canonMessage) error {
 	if len(m.ToolCalls) > 0 {
 		return shapeError("tool_calls and function_call in one message")
 	}
-	var call struct {
-		Name      jsontext.Value `json:"name"`
-		Arguments jsontext.Value `json:"arguments"`
-	}
-	if err := jsonx.Unmarshal(m.FunctionCall, &call); err != nil || call.Name.Kind() != '"' {
+	var call canonToolCall
+	if err := jsonx.Unmarshal(m.FunctionCall, &call.Function); err != nil || call.Function.Name.Kind() != '"' {
 		return shapeError("a function_call without a name")
 	}
-	name, err := jsontext.AppendUnquote(nil, call.Name)
+	name, err := jsontext.AppendUnquote(nil, call.Function.Name)
 	if err != nil {
 		return shapeError("a function_call without a name")
 	}
-	var toolCall canonToolCall
-	toolCall.ID, toolCall.Type = c.assign(string(name)), "function"
-	toolCall.Function.Name, toolCall.Function.Arguments = call.Name, call.Arguments
-	m.ToolCalls = append(m.ToolCalls, toolCall)
+	call.ID, call.Type = c.assign(string(name)), "function"
+	m.ToolCalls = append(m.ToolCalls, call)
 	return nil
 }
 
