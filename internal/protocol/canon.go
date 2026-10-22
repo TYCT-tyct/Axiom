@@ -377,7 +377,10 @@ func isDefault(name string, v jsontext.Value) bool {
 		return s == "1"
 	case "logprobs", "store":
 		return s == "false"
-	case "modalities": // the list it spells: an escape or a line break is the client's, not another list
+	case "modalities":
+		if s == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
+			return true
+		}
 		var only []string
 		return jsonx.Unmarshal(v, &only) == nil && len(only) == 1 && only[0] == "text"
 	case "metadata", "logit_bias":
