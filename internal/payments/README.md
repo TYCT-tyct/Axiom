@@ -54,7 +54,7 @@ type Channel interface {
 	QueryRefund(ctx context.Context, r RefundCall) (RefundState, error)
 	Ack(ok bool) (status int, body []byte) // 渠道要求的应答，sub2api handler/payment_webhook_handler.go:215-226；ok 只在事务提交后为真
 }
-type CreateRequest struct{ Order OrderID; Method Method; Total Money; Subject, ReturnURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由核心按站点域名生成
+type CreateRequest struct{ Order OrderID; Method Method; Total Money; Subject, ReturnURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由控制台处理器按站点域名生成（E1-2c），核心校验 https
 type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string } // 存库前去掉 NUL（sub2api payment_order.go:509-523）；ClientSecret 只交给浏览器，不存库
 type Callback struct{ Method string; RawQuery string; Body []byte; Header http.Header }
 type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; Raw string }
