@@ -1634,7 +1634,7 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     Conflict:
       description: >-
-        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`,
+        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
         `idempotency_key_reused`).
       content:
         application/json:
@@ -1741,6 +1741,7 @@ components:
         - conflict
         - email_taken
         - name_taken
+        - too_many_keys
         - stale_revision
         - idempotency_key_reused
         - invalid_invite

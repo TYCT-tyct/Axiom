@@ -887,7 +887,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -1636,7 +1636,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`, `idempotency_key_reused`). */
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`). */
         Conflict: {
             headers: {
                 [name: string]: unknown;

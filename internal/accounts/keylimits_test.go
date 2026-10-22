@@ -1,6 +1,7 @@
 package accounts_test
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -31,11 +32,11 @@ func tryKey(t *testing.T, db *pg.DB, s *accounts.Service, name string, workspace
 	})
 }
 
-// keySettingsOf sets s1's key limits, and leaves the rest of its settings at their defaults.
-func keySettingsOf(t *testing.T, database pgtest.Database, columns, values string) {
+// keySettingsOf sets s1's limits on the keys of an account, and leaves the rest of its settings at their defaults.
+func keySettingsOf(t *testing.T, database pgtest.Database, held, perHour int) {
 	t.Helper()
-	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(
-		"INSERT INTO accounts.site_settings (site_id, "+columns+") VALUES (:s1, "+values+")")); err != nil {
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(fmt.Sprintf(
+		"INSERT INTO accounts.site_settings (site_id, max_keys_per_account, key_creations_per_hour) VALUES (:s1, %d, %d)", held, perHour))); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -46,7 +47,7 @@ func keySettingsOf(t *testing.T, database pgtest.Database, columns, values strin
 func TestKeyCapHoldsUnderConcurrentCreates(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
-	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "2, 100")
+	keySettingsOf(t, database, 2, 100)
 	s := node(t, db, hashKeys(t, 1), nil)
 	const at = 4
 	errs := make([]error, at)
@@ -84,10 +85,9 @@ func TestKeyCapHoldsUnderConcurrentCreates(t *testing.T) {
 func madeAt(t *testing.T, database pgtest.Database, at time.Time, n byte, deleted bool) {
 	t.Helper()
 	var id uuid.UUID
-	ms := uint64(at.UnixMilli()) // #nosec G115 -- after 1970
-	for i := range 6 {
-		id[i] = byte(ms >> (8 * (5 - i)))
-	}
+	var ms [8]byte
+	binary.BigEndian.PutUint64(ms[:], uint64(at.UnixMilli())) // #nosec G115 -- after 1970
+	copy(id[:6], ms[2:])
 	id[6], id[8], id[15] = 0x70, 0x80, n
 	sql := apiKey("'"+id.String()+"'", ":s1", ":a1", ":w1", ":u1", "call")
 	if deleted {
@@ -113,7 +113,7 @@ func tooManyKeys(t *testing.T, err error) accounts.TooManyKeys {
 func TestKeyCap(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
-	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "2, 100")
+	keySettingsOf(t, database, 2, 100)
 	s := node(t, db, hashKeys(t, 1), nil)
 	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
 		t.Fatalf("the second key, of two: %v", err)
@@ -136,7 +136,7 @@ func TestKeyCap(t *testing.T) {
 func TestKeyCreationWindow(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
-	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "100, 2")
+	keySettingsOf(t, database, 100, 2)
 	var mu sync.Mutex
 	at := time.Now().Add(2 * time.Hour).Truncate(time.Millisecond)
 	s := node(t, db, hashKeys(t, 1), func() time.Time { mu.Lock(); defer mu.Unlock(); return at })
@@ -166,7 +166,7 @@ func TestKeyCreationWindow(t *testing.T) {
 func TestKeyCreationsCountTheKeysMade(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
-	keySettingsOf(t, database, "max_keys_per_account, key_creations_per_hour", "100, 2")
+	keySettingsOf(t, database, 100, 2)
 	s := node(t, db, hashKeys(t, 1), nil)
 	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
 		t.Fatalf("the second key of the hour: %v", err)

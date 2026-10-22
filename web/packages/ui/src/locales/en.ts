@@ -32,6 +32,7 @@ export default {
     conflict: "That conflicts with what’s already there. Reload and try again.",
     email_taken: "That email is already registered.",
     name_taken: "That name is taken. Pick another.",
+    too_many_keys: "This account already has as many API keys as the site allows. Delete one first.",
     stale_revision: "This was just changed elsewhere. Reload and try again.",
     idempotency_key_reused: "That request was repeated. Reload and try again.",
     invalid_invite: "The invite code isn’t valid, or this site isn’t taking invite sign-ups right now.",

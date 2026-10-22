@@ -229,7 +229,7 @@ export interface paths {
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
+         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
          */
         post: operations["createKey"];
         delete?: never;
@@ -349,7 +349,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -615,7 +615,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`, `idempotency_key_reused`). */
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`). */
         Conflict: {
             headers: {
                 [name: string]: unknown;

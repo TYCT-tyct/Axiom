@@ -20,6 +20,7 @@ const (
 	codeConflict         errorCode = "conflict"
 	codeEmailTaken       errorCode = "email_taken"
 	codeNameTaken        errorCode = "name_taken"
+	codeTooManyKeys      errorCode = "too_many_keys"
 	codeStaleRevision    errorCode = "stale_revision"
 	codeIdempotencyReuse errorCode = "idempotency_key_reused"
 	codeInvalidInvite    errorCode = "invalid_invite"
