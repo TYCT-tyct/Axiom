@@ -68,7 +68,7 @@ func (b *bank) advanceRacedByACredit() {
 			return err
 		}
 		go func() {
-			_, err := b.expirer().advance(b.t.Context(), account)
+			_, err := advanceAllocation(b.t.Context(), b.app, b.platform, account, movementPage)
 			done <- err
 		}()
 		b.waitForLockWait()

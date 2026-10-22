@@ -25,7 +25,7 @@ FOR KEY SHARE;
 INSERT INTO billing.balances (account_id, site_id, floor) VALUES (@account_id, @site_id, @floor);
 
 -- name: LockBalance :one
-SELECT balance, floor, reserved FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
+SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
 
 -- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
 -- Counters are kept per UTC day; a limit counts the days of its window that holds day, its UTC day, week or month,

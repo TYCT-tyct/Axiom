@@ -2,7 +2,7 @@
 -- lock: a page may show a figure a moment old.
 
 -- name: ReadBalance :many
-SELECT balance, floor, reserved FROM billing.balances WHERE account_id = @account_id;
+SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = @account_id;
 
 -- name: SpentThisMonth :one
 -- What the subjects, the account's workspaces, have been charged since the first of the month (UTC, by the database's
