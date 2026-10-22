@@ -289,6 +289,30 @@ func (q *Queries) MerchantConfigs(ctx context.Context, db DBTX, merchants []uuid
 	return items, nil
 }
 
+const merchantRevision = `-- name: MerchantRevision :many
+SELECT rev FROM payments.merchants WHERE id = $1
+`
+
+func (q *Queries) MerchantRevision(ctx context.Context, db DBTX, id uuid.UUID) ([]int64, error) {
+	rows, err := db.Query(ctx, merchantRevision, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var rev int64
+		if err := rows.Scan(&rev); err != nil {
+			return nil, err
+		}
+		items = append(items, rev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const offers = `-- name: Offers :many
 SELECT x.merchant_id, x.method, x.fee_ppm, x.fee_fixed, x.single_min, x.single_max, x.daily_limit, m.currency, m.sort, m.rev, m.ttl_seconds
 FROM payments.merchant_methods x JOIN payments.merchants m ON m.id = x.merchant_id
@@ -484,7 +508,7 @@ func (q *Queries) SaveMethod(ctx context.Context, db DBTX, arg SaveMethodParams)
 }
 
 const siteSettings = `-- name: SiteSettings :many
-SELECT site_id, open, credits_min, credits_max, strategy, pending_limit, cancel_limit, cancel_window_seconds, daily_credits, first_credits FROM payments.settings WHERE site_id = $1
+SELECT site_id, open, credits_min, credits_max, strategy, pending_limit, cancel_limit, cancel_window_seconds, daily_credits, first_credits, grace_seconds, auto_credit_seconds, post_expiry_query_seconds FROM payments.settings WHERE site_id = $1
 `
 
 func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) ([]PaymentsSetting, error) {
@@ -507,6 +531,9 @@ func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) (
 			&i.CancelWindowSeconds,
 			&i.DailyCredits,
 			&i.FirstCredits,
+			&i.GraceSeconds,
+			&i.AutoCreditSeconds,
+			&i.PostExpiryQuerySeconds,
 		); err != nil {
 			return nil, err
 		}

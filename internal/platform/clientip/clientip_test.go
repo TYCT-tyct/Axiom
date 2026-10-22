@@ -8,6 +8,22 @@ import (
 	"axiom/internal/platform/config"
 )
 
+func TestGroup(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"203.0.113.1", "203.0.113.1"},
+		{"::ffff:203.0.113.1", "203.0.113.1"},
+		{"2001:db8:1:2:3:4:5:6", "2001:db8:1:2::"},
+		{"fe80::1234%eth0", "fe80::"},
+	} {
+		if got := Group(netip.MustParseAddr(tc.input)); got.String() != tc.want {
+			t.Errorf("Group(%s) = %s, want %s", tc.input, got, tc.want)
+		}
+	}
+	if Group(netip.Addr{}).IsValid() {
+		t.Fatal("an absent address acquired an IP budget")
+	}
+}
+
 // TestAddr: only the connection's own address is believed unless it is a trusted proxy, and then X-Forwarded-For is
 // read from its right past the proxies to the first address that is not one; without a trusted proxy the header is
 // ignored whoever sends it, and a header that cannot be read is not believed. The peers are compared after Unmap, so a

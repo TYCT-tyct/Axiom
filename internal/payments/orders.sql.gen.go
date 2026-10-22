@@ -254,7 +254,8 @@ func (q *Queries) MoveOrder(ctx context.Context, db DBTX, arg MoveOrderParams) (
 
 const openMerchantOrders = `-- name: OpenMerchantOrders :one
 SELECT EXISTS (
-    SELECT 1 FROM payments.orders WHERE merchant_id = $1 AND state IN ('pending', 'review')
+    SELECT 1 FROM payments.order_windows
+    WHERE merchant_id = $1 AND (queryable OR state = 'review')
 ) AS open
 `
 
