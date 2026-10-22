@@ -100,4 +100,4 @@ jobs:
           BASE: ${{ inputs.base || 'main' }}
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
           PRS: ${{ inputs.prs }}
-          LANE_SIZE: 2 # builds the lane runs at once: axiom-t1 and axiom-t2 carry the axiom-train label (RUNS_ON_TRAIN)
+          LANE_SIZE: 2 # concurrent prefix builds, independent of the four runners serving their jobs (RUNS_ON_TRAIN)

@@ -25,6 +25,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"axiom/internal/platform/containertest"
 	"axiom/internal/platform/pg"
 )
 
@@ -234,6 +235,7 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 	}
 	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
 		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
+		containertest.WithCgroupParent(),
 		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
 			"-c", "max_connections=1000"))
 	if err != nil {
