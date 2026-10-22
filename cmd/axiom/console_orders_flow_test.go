@@ -52,7 +52,7 @@ func TestTopUpOrder(t *testing.T) {
 	if o.State != consoleapi.Pending || o.Credits.Amount != tenCredits || o.Credits.Currency != "USD" || !pageWithSecret(o.Checkout) {
 		t.Fatalf("the new order: %+v", o)
 	}
-	if got := f.gateway.created[0]; got.ReturnURL != consoleOrigin+"/balance" || got.ClientIP.String() != "192.0.2.1" {
+	if got := f.gateway.created[0]; got.ReturnURL != consoleOrigin+"/console/balance" || got.ClientIP.String() != "192.0.2.1" {
 		t.Errorf("the channel was told to return to %q for %s", got.ReturnURL, got.ClientIP)
 	}
 	seen := f.read(s, o.Id)

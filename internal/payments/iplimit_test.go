@@ -254,8 +254,8 @@ func TestFailureAndItsCountAreOne(t *testing.T) {
 		CREATE TRIGGER refuse_failures BEFORE INSERT OR UPDATE ON payments.ip_usage
 		FOR EACH ROW WHEN (NEW.failures > 0) EXECUTE FUNCTION payments.refuse_failures()`)
 	o, _, err := w.placeFrom(w.accountA(), w.account, "192.0.2.90", "faulty-failure")
-	if err == nil {
-		t.Fatal("a refused order with the failure count broken answered success")
+	if err == nil || errors.Is(err, ErrRefused) {
+		t.Fatalf("a refusal that could not be saved answered %v, which is success or a definite refusal", err)
 	}
 	if state, _, _ := w.stored(o.ID); state != "pending" || w.used(m.ID) != o.Total.Minor {
 		t.Fatalf("state %s, %d reserved: the order failed without its failure counted", state, w.used(m.ID))

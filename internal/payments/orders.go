@@ -407,8 +407,8 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateO
 	return c, nil
 }
 
-// refuseOrder fails an order the channel refused, in the caller's scope: an order that never had a checkout gives its
-// reservation of the merchant's daily limit back.
+// refuseOrder fails an order the channel refused, in the caller's scope, and returns cause once that is committed:
+// an order that never had a checkout gives its reservation of the merchant's daily limit back.
 func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, ip netip.Addr, cause error) error {
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) error {
 		locked, err := lockForChange(ctx, tx, o.ID)
@@ -421,7 +421,10 @@ func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, ip neti
 		return move(ctx, tx, locked, Failed, event{source: sourceUser, kind: kindReject, tradeNo: o.TradeNo, raw: cause.Error()})
 	})
 	if err != nil {
-		return errors.Join(cause, err)
+		// The refusal was not saved: the order is still waiting and its reservation held, so the caller must not tell the
+		// user it was refused. The cause is text only, so that this error is not ErrRefused; a retry with the same key
+		// finds the order as it is.
+		return fmt.Errorf("payments: save the refusal of order %s (%s): %w", o.ID.TypeID(), cause.Error(), err)
 	}
 	if errors.Is(cause, ErrUnsafeLink) {
 		p.closeOrder(ctx, o)

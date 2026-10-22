@@ -11,12 +11,13 @@ import (
 	"axiom/internal/payments"
 	"axiom/internal/platform"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/webui"
 )
 
 // returnPath is the page the payment channel sends the browser back to: the console's balance page, where the order
-// the user just paid shows up. The order does not exist yet when the address is built (the module makes its ID), so
-// the address cannot name it.
-const returnPath = "/balance"
+// the user just paid shows up. The console is served under webui.ConsoleMount, the same constant the router mounts it
+// with. The order does not exist yet when the address is built (the module makes its ID), so the address cannot name it.
+const returnPath = webui.ConsoleMount + "/balance"
 
 // orderRefusals are how payments' refusals are answered (tried after refusals). A message is English for logs and
 // developers, says what to do next, and never repeats what the client sent or what the merchant's gateway answered.
@@ -140,12 +141,20 @@ func (c consoleAPI) CreateOrder(ctx context.Context, request consoleapi.CreateOr
 		Method: payments.Method(request.Body.Method), Credits: credits, Key: request.Params.IdempotencyKey,
 		ReturnURL: back, ClientIP: cl.ip,
 	})
+	if errors.Is(err, payments.ErrUnconfirmed) && order.ID != (payments.OrderID{}) {
+		// The order the module returns is the one it placed, which a cancel, a callback or an expiry may have moved while
+		// the channel was called: answer by what is stored now. A read that fails is a fault, not a waiting order.
+		if order, err = c.payments.GetOrder(ctx, cl.scope, order.ID); err != nil {
+			return nil, err
+		}
+		checkout = order.Checkout
+	}
 	return placed(order, cl.site.Currency, checkout, err)
 }
 
 // placed answers a request for an order by the order's state and checkout, never by whether the module returned an
 // error: a replay of the key returns the stored order and no error whatever became of it, and a first request that
-// ended unknown returns an error with the order that exists.
+// ended unknown is read again by the caller (CreateOrder) so that this sees the stored order.
 //
 //   - failed: the channel refused it, a 422, for the first request and every replay;
 //   - waiting with a saved checkout: 201 with the checkout to pay on;
@@ -153,8 +162,6 @@ func (c consoleAPI) CreateOrder(ctx context.Context, request consoleapi.CreateOr
 //   - anything else (paid, cancelled, expired, ...): 200 as the state says, nothing to pay on.
 func placed(o payments.Order, site platform.Currency, checkout payments.Checkout, err error) (consoleapi.CreateOrderResponseObject, error) {
 	switch {
-	case errors.Is(err, payments.ErrUnconfirmed) && o.ID != (payments.OrderID{}):
-		return consoleapi.CreateOrder202JSONResponse(orderBody(o, site, payments.Checkout{})), nil
 	case err != nil:
 		return nil, err
 	case o.State == payments.Failed:

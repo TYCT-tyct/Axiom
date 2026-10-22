@@ -23,13 +23,20 @@ import (
 // makes it fail, remembers what it was asked, and reports an order paid when a test says so.
 type fakeGateway struct {
 	mu      sync.Mutex
-	failure error // what Create answers instead of a checkout
+	failure error                        // what Create answers instead of a checkout
+	during  func(payments.CreateRequest) // runs while Create is called, after the order is committed and before it answers
 	created []payments.CreateRequest
 	queried int
 	paid    map[string]payments.Money // by order number
 }
 
 func (g *fakeGateway) create(r payments.CreateRequest) (payments.Checkout, error) {
+	g.mu.Lock()
+	during := g.during
+	g.mu.Unlock()
+	if during != nil {
+		during(r)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.created = append(g.created, r)
@@ -48,6 +55,13 @@ func (g *fakeGateway) query(order string) payments.Payment {
 		return payments.Payment{State: payments.PayPaid, TradeNo: "T" + order, Paid: total}
 	}
 	return payments.Payment{State: payments.PayPending}
+}
+
+// meanwhile runs f while the channel is called for an order, as another request of the same account would.
+func (g *fakeGateway) meanwhile(f func(payments.CreateRequest)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.during = f
 }
 
 // fails makes the channel answer every order with err; nil makes it answer well again.
