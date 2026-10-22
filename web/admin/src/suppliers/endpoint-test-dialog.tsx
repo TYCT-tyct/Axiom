@@ -18,11 +18,19 @@ const callTimeout = 75_000;
 
 // A test is a change in the dialog's sense: one Idempotency-Key per opened dialog, so pressing again or resending after
 // a lost answer replays the first test's result instead of paying for a second generation (change.tsx).
-export function EndpointTestDialog({ endpoint, onClose }: { endpoint: Endpoint; onClose: () => void }) {
+export function EndpointTestDialog({
+  endpoint,
+  group,
+  onClose,
+}: {
+  endpoint: Endpoint;
+  group: string;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   return (
     <ChangeDialog
-      title={t("suppliers.test.title", { name: endpoint.upstream_name })}
+      title={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
       intro={<p>{t("suppliers.test.body")}</p>}
       action={t("suppliers.test.action")}
       fields={() => (

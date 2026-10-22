@@ -118,20 +118,22 @@ function aGroup(supplier: number, n: number, over: Partial<Schemas["SupplierGrou
   };
 }
 
-// The endpoints of a supplier's chosen group, by upstream name as the server lists them. The name decides what a test
-// of it finds (admin-supply.ts); the last two cannot be called, so they offer no test.
-function endpoints(supplier: number, group: string): Schemas["SupplierEndpoint"][] {
+// The endpoints of a supplier's groups, by upstream name as the server lists them. The name decides what a test of it
+// finds (admin-supply.ts); both groups offer gpt-test-mini, at their own cost; the last two cannot be called, so they
+// offer no test.
+function endpoints(supplier: number, groups: Schemas["SupplierGroup"][]): Schemas["SupplierEndpoint"][] {
   const rows = [
-    ["broken-stream-model", ["chat"], "known", true],
-    ["gpt-test-mini", ["messages", "responses", "chat"], "known", true],
-    ["rate-limited-model", ["messages"], "known", true],
-    ["retired-model", ["chat"], "known", false],
-    ["unpriced-model", ["responses"], "unknown", true],
+    ["broken-stream-model", 0, ["chat"], "known", true],
+    ["gpt-test-mini", 0, ["messages", "responses", "chat"], "known", true],
+    ["gpt-test-mini", 1, ["chat"], "known", true],
+    ["rate-limited-model", 0, ["messages"], "known", true],
+    ["retired-model", 0, ["chat"], "known", false],
+    ["unpriced-model", 0, ["responses"], "unknown", true],
   ] as const;
-  return rows.map(([name, formats, cost_state, enabled], i) => ({
+  return rows.map(([name, group, formats, cost_state, enabled], i) => ({
     id: uuid(9, supplier * 100 + i),
-    group_id: group,
-    model_id: uuid(5, i + 1),
+    group_id: groups[group]?.id ?? "",
+    model_id: uuid(5, rows.findIndex(([other]) => other === name) + 1),
     upstream_name: name,
     formats: [...formats],
     cost_state,
@@ -155,7 +157,7 @@ function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["S
       },
     ],
     unbound_keys: [{ ref: `key-${n}-b`, group_ref: "group-2", status: "active" }],
-    endpoints: endpoints(n, groups[0]?.id ?? ""),
+    endpoints: endpoints(n, groups),
   };
 }
 

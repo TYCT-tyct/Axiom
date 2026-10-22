@@ -176,10 +176,16 @@ export default {
       ready: "可测试",
     },
     empty: { title: "还没有端点", body: "分组被选用、模型名映射好之后，同步会在这里列出端点。" },
+    unavailable: {
+      empty: {
+        title: "端点暂时列不出来",
+        body: "回答这个页面的服务器还是发布前的版本，不会列出端点。发布完成后刷新页面再试。",
+      },
+    },
   },
   test: {
     open: "测试",
-    title: "测试 {{name}}",
+    title: "测试 {{name}}（分组 {{group}}）",
     body: "用这个端点真实生成一次：流式、最多 16 个 token、不开推理，读完整个回答。费用由平台承担，最长约 45 秒。",
     format: "调用格式",
     format_messages: "Messages",

@@ -5,4 +5,4 @@ export type Open =
   | { kind: "pause" | "resume" | "remove" | "login" | "unit" }
   | { kind: "group"; group: AdminSchemas["SupplierGroup"] }
   | { kind: "bind"; key: AdminSchemas["UpstreamKey"] }
-  | { kind: "test"; endpoint: AdminSchemas["SupplierEndpoint"] };
+  | { kind: "test"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string };

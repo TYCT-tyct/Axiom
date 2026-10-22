@@ -7,13 +7,19 @@ import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
 
-function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoints" }) {
+function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoints" | "endpoints.unavailable" }) {
   const { t } = useTranslation();
   return (
     <EmptyState compact title={t(`suppliers.${what}.empty.title`)}>
       {t(`suppliers.${what}.empty.body`)}
     </EmptyState>
   );
+}
+
+// The name a group goes by in a list of its keys or endpoints: the code name once it has one.
+function groupName(groups: AdminSchemas["SupplierGroup"][], id: string) {
+  const group = groups.find((candidate) => candidate.id === id);
+  return group?.codename ?? group?.name ?? id;
 }
 
 // The groups the supplier lists, with the ratio it charges for each. Choosing one gives it its code name and makes its
@@ -108,7 +114,6 @@ export function Credentials({
       />
       <tbody>
         {credentials.map((credential) => {
-          const group = groups.find((candidate) => candidate.id === credential.group_id);
           return (
             <tr key={credential.id}>
               <Td className="max-w-48">
@@ -116,7 +121,7 @@ export function Credentials({
                   <Code>{credential.upstream_key_ref}</Code>
                 </p>
               </Td>
-              <Td className="max-w-48 truncate">{group?.codename ?? group?.name ?? credential.group_id}</Td>
+              <Td className="max-w-48 truncate">{groupName(groups, credential.group_id)}</Td>
               <Td>
                 <State tone={credentialTones[credential.status]}>
                   {t(`suppliers.credentials.state.${credential.status}`)}
@@ -190,17 +195,22 @@ const endpointTones = {
 } as const satisfies Record<ReturnType<typeof endpointState>, "neutral" | "good" | "warn" | "bad">;
 
 // The supplier's endpoints, one per model of a group, by upstream name: what a person tests. Only one that may be called
-// offers the test; the state says why another does not.
+// offers the test; the state says why another does not. Two groups can offer the same model at different costs, so the
+// group is always shown with the name (under it where its column is hidden) and is part of the button's name. None from
+// the server is a node of an earlier release (SupplierView).
 export function Endpoints({
   endpoints,
   groups,
   onOpen,
 }: {
-  endpoints: AdminSchemas["SupplierEndpoint"][];
+  endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
   groups: AdminSchemas["SupplierGroup"][];
   onOpen: OnOpen;
 }) {
   const { t } = useTranslation();
+  if (endpoints === undefined) {
+    return <Empty what="endpoints.unavailable" />;
+  }
   if (endpoints.length === 0) {
     return <Empty what="endpoints" />;
   }
@@ -217,7 +227,7 @@ export function Endpoints({
       />
       <tbody>
         {endpoints.map((endpoint) => {
-          const group = groups.find((candidate) => candidate.id === endpoint.group_id);
+          const group = groupName(groups, endpoint.group_id);
           const state = endpointState(endpoint);
           return (
             <tr key={endpoint.id}>
@@ -225,10 +235,11 @@ export function Endpoints({
                 <p className="truncate" title={endpoint.upstream_name}>
                   <Code>{endpoint.upstream_name}</Code>
                 </p>
+                <p className="truncate text-label text-t3 md:hidden" title={group}>
+                  {group}
+                </p>
               </Td>
-              <Td className="hidden max-w-48 truncate md:table-cell">
-                {group?.codename ?? group?.name ?? endpoint.group_id}
-              </Td>
+              <Td className="hidden max-w-48 truncate md:table-cell">{group}</Td>
               <Td className="hidden lg:table-cell">
                 <div className="flex flex-wrap gap-1">
                   {endpoint.formats.map((format) => (
@@ -246,8 +257,8 @@ export function Endpoints({
                   {state === "ready" ? (
                     <Button
                       size="sm"
-                      aria-label={t("suppliers.test.title", { name: endpoint.upstream_name })}
-                      onClick={() => onOpen({ kind: "test", endpoint })}
+                      aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
+                      onClick={() => onOpen({ kind: "test", endpoint, group })}
                     >
                       {t("suppliers.test.open")}
                     </Button>

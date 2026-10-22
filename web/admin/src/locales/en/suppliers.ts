@@ -193,10 +193,16 @@ export default {
       title: "No endpoints yet",
       body: "Once a group is chosen and its model names are mapped, the sync lists its endpoints here.",
     },
+    unavailable: {
+      empty: {
+        title: "Endpoints can’t be listed right now",
+        body: "The server answering this page still runs the release before endpoints were listed. Reload once the release has finished.",
+      },
+    },
   },
   test: {
     open: "Test",
-    title: "Test {{name}}",
+    title: "Test {{name}} (group {{group}})",
     body: "Runs one real generation on this endpoint: streamed, at most 16 tokens, no reasoning, read to the end. The platform pays for it; it takes up to about 45 seconds.",
     format: "Format",
     format_messages: "Messages",
