@@ -411,9 +411,9 @@ func TestRefundValidation(t *testing.T) {
 	f := b.refundable(500)
 	b.freeze(f)
 	for _, r := range []Refund{
-		{Freeze: {Account: f.Account, Batch: f.Batch, Amount: 0}},
-		{Freeze: {Account: f.Account, Batch: f.Batch, Amount: 501}},
-		{Freeze: {Account: f.Account, Batch: uuid.NewV7(), Amount: 1}},
+		{Account: f.Account, Batch: f.Batch, Amount: 0},
+		{Account: f.Account, Batch: f.Batch, Amount: 501},
+		{Account: f.Account, Batch: uuid.NewV7(), Amount: 1},
 		{Freeze: f, Returned: -1},
 		{Freeze: f, Returned: math.MaxInt64},
 	} {
