@@ -21,7 +21,7 @@ on:
         type: string
         default: ""
       gate_stress:
-        description: run only web and repeat the four admin scenes from issue 363 fifty times
+        description: "web-only diagnostic (four admin scenes x50); use main or a throwaway branch with its own commit, never a PR head (build fails)"
         type: boolean
         default: false
 
@@ -256,7 +256,7 @@ jobs:
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
   # check counts as passed on GitHub; a part that was skipped (a Markdown-only change, a PR's bench and deploy) is fine.
   build:
-    # A diagnostic web-only run must never publish the required full-build status for the same commit.
+    # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
     needs: [changes, static, go-test, web, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)

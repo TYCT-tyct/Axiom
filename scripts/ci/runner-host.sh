@@ -37,7 +37,10 @@ playwright_version=$(sed -n 's/.*"@playwright\/test": "\(.*\)".*/\1/p' "$root/we
 node_bin=$toolcache/node/$node_version/x64/bin
 
 service() { echo "actions.runner.TYCT-tyct-Axiom.$prefix$1.service"; }
-as_user() { sudo -u "$user" -H env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"; }
+as_user() {
+  sudo -u "$user" -H --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN \
+    env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"
+}
 
 runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNERS decides membership
   local label result= items
@@ -49,10 +52,11 @@ runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNER
   printf '%s\n' "$result"
 }
 
-runner_api() { # method runner-id [curl args]: registration tokens cannot update an existing runner's labels
+runner_api() { # method path [curl args]: empty path lists runners, /<id>/labels addresses their labels
+  # The shared host exposes argv to other users; only the pipe carries the Authorization value.
   curl -fsSL --connect-timeout 10 --max-time 60 -X "$1" \
-    -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-    "https://api.github.com/repos/TYCT-tyct/Axiom/actions/runners/$2/labels" "${@:3}"
+    -H @<(printf 'Authorization: Bearer %s\n' "$GH_TOKEN") -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/TYCT-tyct/Axiom/actions/runners$2" "${@:3}"
 }
 
 # download URL FILE SHA256: a swapped or truncated download fails the checksum
@@ -123,13 +127,14 @@ install_runner() { # number
   if [ ! -f "$dir/.runner" ]; then
     as_user mkdir -p "$dir"
     as_user tar -xzf "$tarball" -C "$dir"
-    (cd "$dir" && as_user ./config.sh --unattended --replace --url "$repo_url" --token "$RUNNER_TOKEN" \
+    # Runner.Listener consumes and clears this input variable; --token would expose it in argv.
+    (cd "$dir" && ACTIONS_RUNNER_INPUT_TOKEN="$RUNNER_TOKEN" as_user ./config.sh --unattended --replace --url "$repo_url" \
       --name "$name" --labels "$desired" --work _work)
   fi
   id=$(jq -r .agentId "$dir/.runner")
-  current=$(runner_api GET "$id" | jq -r '[.labels[] | select(.type == "custom") | .name] | sort | join(",")')
+  current=$(runner_api GET "/$id/labels" | jq -r '[.labels[] | select(.type == "custom") | .name] | sort | join(",")')
   if [ "$current" != "$(jq -nr --arg labels "$desired" '$labels | split(",") | sort | join(",")')" ]; then
-    runner_api PUT "$id" -H 'Content-Type: application/json' \
+    runner_api PUT "/$id/labels" -H 'Content-Type: application/json' \
       --data "$(jq -nc --arg labels "$desired" '{labels: ($labels | split(",") | map(select(length > 0)))}')" >/dev/null
   fi
   # Apart from the configuration, so a service install that failed after it is retried on the next run
@@ -158,6 +163,8 @@ GOLANGCI_LINT_CACHE=$dir/_lintcache"; then
 install() {
   [ -n "${RUNNER_TOKEN:-}" ] || { echo "RUNNER_TOKEN is not set; see the top of this script" >&2; exit 1; }
   [ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set; existing runner labels need Administration write permission" >&2; exit 1; }
+  # Catch missing repository access before tool installation or creating an offline runner registration.
+  runner_api GET "" >/dev/null
   command -v docker >/dev/null || { echo "install docker first" >&2; exit 1; }
   # gcc and libc6-dev: go test -race needs cgo
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade gcc libc6-dev jq curl git sudo
@@ -221,5 +228,5 @@ remove() {
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 case "${1:-}" in
   install | check | remove) "$1" ;;
-  *) sed -n '2,14p' "$0" | cut -c3- >&2; exit 2 ;;
+  *) sed -n '2,16p' "$0" | cut -c3- >&2; exit 2 ;;
 esac
