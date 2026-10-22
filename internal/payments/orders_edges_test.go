@@ -254,8 +254,18 @@ func TestConcurrentCancelAndExpiryReleaseOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if w.used(m.ID) != 0 || w.events(o.ID) != 3 {
-		t.Fatalf("usage %d, events %d", w.used(m.ID), w.events(o.ID))
+	// The poll's query step may also record a "payment" event while the order still pends, depending on timing; the
+	// place is released once when exactly one event moves the order out of pending and no query event changes state.
+	const events = "SELECT count(*) FROM payments.order_events WHERE order_id = $1 AND "
+	id := uuid.UUID(o.ID)
+	if n := w.count(w.accountA(), events+"kind IN ('cancel', 'expire')", id); w.used(m.ID) != 0 || n != 1 {
+		t.Fatalf("usage %d, closing events %d", w.used(m.ID), n)
+	}
+	if n := w.count(w.accountA(), events+"source <> 'query'", id); n != 3 {
+		t.Fatalf("create, checkout and one close expected, got %d non-query events", n)
+	}
+	if n := w.count(w.accountA(), events+"source = 'query' AND from_state <> to_state", id); n != 0 {
+		t.Fatalf("%d query events changed the order's state", n)
 	}
 }
 
