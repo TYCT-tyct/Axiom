@@ -381,8 +381,8 @@ func isDefault(name string, v jsontext.Value) bool {
 		if s == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
 			return true
 		}
-		var only []string
-		return jsonx.Unmarshal(v, &only) == nil && len(only) == 1 && only[0] == "text"
+		var only [1]string // excess elements must be rejected without allocating an unbounded list
+		return jsonx.Unmarshal(v, &only) == nil && only[0] == "text"
 	case "metadata", "logit_bias":
 		return strings.TrimSpace(strings.Trim(s, "{}")) == ""
 	}

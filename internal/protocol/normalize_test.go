@@ -2,8 +2,11 @@ package protocol_test
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 )
 
@@ -38,6 +41,24 @@ func TestControlNormalizationKeepsPayloadBytes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrepareCostBoundsModalities(t *testing.T) {
+	body := []byte(chatBody(`"messages":[` + userHi + `],"modalities":[` + strings.Repeat(`"text",`, 20000) + `"text"]`))
+	r := inspected(t, protocol.Chat, body)
+	target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
+	w := rewrites()
+	cost := protocol.PrepareCost(&r, body, target, w)
+	got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
+		_, err := protocol.Prepare(&r, body, target, w)
+		if _, ok := errors.AsType[*protocol.NotSupported](err); !ok {
+			t.Fatalf("expected unsupported modalities, got %v", err)
+		}
+	}})
+	t.Logf("allocated %.0f bytes within a %d-byte budget", got["prepare"].Bytes, cost)
+	if got["prepare"].Bytes > float64(cost) {
+		t.Fatalf("allocated %.0f bytes, exceeding the %d-byte budget", got["prepare"].Bytes, cost)
 	}
 }
 
