@@ -92,15 +92,12 @@ func TestAttemptsAreGivenBackToTheStoreThatTook(t *testing.T) {
 		}
 		giveAttempt(s, giveCtx, l, at)
 		// Local takes always return locally. A shared take whose give failed stays spent; the other store is untouched.
-		localWant := 1
 		sharedWant := 1
 		if !localTake && localGive {
 			sharedWant = 0
 		}
-		for range localWant {
-			if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
-				t.Fatalf("op %d: local refund missing: %v", op, wait)
-			}
+		if wait := l.bucket.take(l.key, l.size, l.per, now); wait != 0 {
+			t.Fatalf("op %d: local refund missing: %v", op, wait)
 		}
 		if wait := l.bucket.take(l.key, l.size, l.per, now); wait == 0 {
 			t.Fatalf("op %d: refunded an unspent local attempt", op)

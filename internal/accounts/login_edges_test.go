@@ -69,7 +69,7 @@ func TestAttemptIPNormalization(t *testing.T) {
 			t.Errorf("normalIP(%q) = %s, want %s", c.input, got, c.want)
 		}
 	}
-	if normalIP(netip.Addr()).IsValid() {
+	if normalIP(netip.Addr{}).IsValid() {
 		t.Fatal("invalid address became valid")
 	}
 	s := &Service{guards: newGuards(1, time.Second)}
