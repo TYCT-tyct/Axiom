@@ -355,8 +355,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One supplier with its groups and keys
-         * @description The supplier, its groups with their ratios, the keys bound to groups, and the keys the supplier lists that are bound to none. Read from what the sync last stored, not from the supplier, so it is cheap.
+         * One supplier with its groups, keys and endpoints
+         * @description The supplier, its groups with their ratios, the keys bound to groups, the keys the supplier lists that are bound to none, and its endpoints, by upstream name. Read from what the sync last stored, not from the supplier, so it is cheap.
          */
         get: operations["getSupplier"];
         put?: never;
@@ -1224,10 +1224,23 @@ export interface components {
             /** @enum {string} */
             status: "active" | "disabled" | "quota_exhausted" | "expired";
         };
+        /** @description One model in one of the supplier's groups, as the sync projected it: what testSupplierEndpoint is given. Only an enabled endpoint whose cost is `known` can be called, and so tested. */
+        SupplierEndpoint: {
+            id: components["schemas"]["Uuid"];
+            group_id: components["schemas"]["Uuid"];
+            model_id: components["schemas"]["Uuid"];
+            /** @description The model's name at the supplier. */
+            upstream_name: string;
+            formats: components["schemas"]["ModelFormat"][];
+            /** @enum {string} */
+            cost_state: "known" | "unknown" | "conflict";
+            enabled: boolean;
+        };
         SupplierDetail: {
             supplier: components["schemas"]["Supplier"];
             groups: components["schemas"]["SupplierGroup"][];
             credentials: components["schemas"]["SupplierCredential"][];
+            endpoints: components["schemas"]["SupplierEndpoint"][];
             unbound_keys: components["schemas"]["UpstreamKey"][];
         };
         BindKey: {

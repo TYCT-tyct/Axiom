@@ -120,17 +120,15 @@ func hostName() string {
 	return name
 }
 
-// singleNodeOnly refuses N above 1 until session stickiness is shared too: login's attempts already are, and with the
-// last of the cache's slices still in the process a second node would lose a session's endpoint
-// (internal/platform/kv/README.md「落地顺序」). It is the check of the program's own entry, serve, and not of serveWith,
-// which the tests that run two nodes of one deployment use. K3 removes it. A value that is no number is for
-// readSettings to report.
+// singleNodeOnly keeps production on one core until supplier credential concurrency and RPM have node shares.
+// K1-K3 share the cache state, but each suppliers.Service still applies the full configured ceilings locally
+// (internal/suppliers/README.md「并发与速率」). Refs #313 (E3-3), #382. Two-node tests use serveWith directly.
 func singleNodeOnly(environ []string) error {
 	env := config.New(environ)
 	nodes := env.Int(kv.NodesVar, 1, 1)
 	if env.Problems() == nil && nodes > 1 {
-		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: session stickiness still lives in the process, "+
-			"so a session would change endpoints from one node to another", kv.NodesVar, nodes)
+		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: supplier credential concurrency and RPM still use full per-node limits, "+
+			"so multiple nodes would exceed the configured ceilings (Refs #313 E3-3, #382)", kv.NodesVar, nodes)
 	}
 	return nil
 }

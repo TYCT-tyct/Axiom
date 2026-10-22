@@ -55,6 +55,20 @@ const connectDetails = scene(
   },
 );
 
+// An endpoint test that has answered, for the first endpoint: with the usual data the mock fails it (a cause to show),
+// with the worst it passes it under a 200-character upstream name (admin-data.ts, admin-supply.ts).
+const testResult = scene(
+  "supplier-test-result",
+  (p) => goto(p, supplier(1)),
+  async (p) => {
+    await press(p, "suppliers.test.title");
+    const form = p.getByRole("dialog");
+    await form.getByLabel(words("change.reason")).fill("check the endpoint after the key rotation");
+    await form.locator("button[type=submit]").click();
+    await form.getByText(words("suppliers.test.total")).waitFor();
+  },
+);
+
 // A change dialog after an answer that did not settle the change: the server's answer to the first send is replaced, so
 // the dialog shows what it does next (change.tsx).
 const unsettled = (name: string, path: string, open: string, fill: (p: Page) => Promise<unknown>, answer: Answer) =>
@@ -104,6 +118,8 @@ const scenes: Scene[] = [
   dialog("supplier-pause", supplier(2), "suppliers.status.paused.action"),
   dialog("supplier-group", supplier(1), "suppliers.group.unselect.action"),
   dialog("supplier-bind", supplier(1), "suppliers.bind.action"),
+  dialog("supplier-test", supplier(1), "suppliers.test.title"),
+  testResult,
   dialog("mapping", "mappings", "mappings.map"),
   dialog("model-draft-new", "models", "models.draft.open"),
   dialog("author", "models", "models.authors.add"),

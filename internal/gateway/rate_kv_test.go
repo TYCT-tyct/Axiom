@@ -13,6 +13,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/kv/kvtest"
+	"axiom/internal/routing"
 )
 
 // frozenClock is the real time until a test places a client on it, and stands still from then, so that nothing the test
@@ -182,22 +183,42 @@ func TestRateFallsBackToTheProcessCount(t *testing.T) {
 	}
 }
 
-// BenchmarkPrecheck is the shared count of a precheck against a real Valkey, with the breaker closed: one access, the
-// allocations of the client and the script's keys included. The rule (docs/performance.md「调用路径上的规则」): the
-// count is held, and bench-compare fails a pull request that raises it. AllocsPerRun cannot hold it here, as it counts the
-// client's own goroutines too.
-func BenchmarkPrecheck(b *testing.B) {
+// benchmarkPrecheck is the handler both precheck benchmarks measure: a real Valkey with the breaker closed, and the
+// connection and the keys made before the loop. The rule (docs/performance.md「调用路径上的规则」): bench-compare fails
+// a pull request that raises a benchmark's allocations. AllocsPerRun cannot hold that here, as it counts the client's own
+// goroutines too.
+func benchmarkPrecheck(b *testing.B) *Handler {
+	b.Helper()
 	server := kvtest.New(b)
 	limits, err := New(DefaultConfig(), nil)
 	if err != nil {
 		b.Fatal(err)
 	}
-	h := &Handler{Limits: limits, KV: server.Open(b, kv.Deps{})}
+	return &Handler{Limits: limits, KV: server.Open(b, kv.Deps{})}
+}
+
+// BenchmarkPrecheck is the shared count alone: the batch K1 measured, so the gate keeps comparing like with like.
+func BenchmarkPrecheck(b *testing.B) {
+	h := benchmarkPrecheck(b)
 	ctx := b.Context()
 	h.countRate(ctx, rateSite, callDimension, "local", "bench") // the connection, and the key
 	b.ReportAllocs()
 	for b.Loop() {
 		h.countRate(ctx, rateSite, callDimension, "local", "bench")
+	}
+}
+
+// BenchmarkPrecheckSticky is the count with a session's binding read in the same batch: the key, the command and the
+// reply a call pays for stickiness, next to the count's own. No benchmark of the base commit has this name, so
+// bench-compare reports it without a counterpart; the pull requests after this one compare it against this commit.
+func BenchmarkPrecheckSticky(b *testing.B) {
+	h := benchmarkPrecheck(b)
+	ctx := b.Context()
+	call := &Call{Session: routing.SessionKey{1}}
+	h.precheck(ctx, rateSite, callDimension, "local", "bench", call, false) // the connection, and the keys
+	b.ReportAllocs()
+	for b.Loop() {
+		h.precheck(ctx, rateSite, callDimension, "local", "bench", call, false)
 	}
 }
 

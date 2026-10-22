@@ -6,7 +6,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Actions, Facts, PageBody, Time } from "../parts";
-import { supplierQuery } from "../queries";
+import { type SupplierView, supplierQuery } from "../queries";
 import { Checklist } from "../suppliers/checklist";
 import {
   BindKeyDialog,
@@ -16,11 +16,12 @@ import {
   StatusDialog,
   UnitValueDialog,
 } from "../suppliers/dialogs";
-import { Credentials, Groups, UnboundKeys } from "../suppliers/lists";
+import { EndpointTestDialog } from "../suppliers/endpoint-test-dialog";
+import { Credentials, Endpoints, Groups, UnboundKeys } from "../suppliers/lists";
 import type { Open } from "../suppliers/open";
 import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
 
-type Detail = AdminSchemas["SupplierDetail"];
+type Detail = SupplierView;
 
 export default function SupplierPage() {
   const { t } = useTranslation();
@@ -86,6 +87,9 @@ function Body({ detail }: { detail: Detail }) {
       <Panel title={t("suppliers.credentials.title")}>
         <Credentials credentials={detail.credentials} groups={detail.groups} />
       </Panel>
+      <Panel title={t("suppliers.endpoints.title")}>
+        <Endpoints endpoints={detail.endpoints} groups={detail.groups} onOpen={act} />
+      </Panel>
       <Panel title={t("suppliers.unbound.title")}>
         <UnboundKeys keys={detail.unbound_keys} onOpen={act} />
       </Panel>
@@ -143,6 +147,8 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
           onClose={onClose}
         />
       );
+    case "test":
+      return <EndpointTestDialog endpoint={open.endpoint} group={open.group} onClose={onClose} />;
     default:
       return null;
   }

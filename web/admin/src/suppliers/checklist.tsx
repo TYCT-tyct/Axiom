@@ -1,9 +1,9 @@
-import type { AdminSchemas } from "@axiom/api";
 import { Icon, Panel } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
+import type { SupplierView } from "../queries";
 import type { Open } from "./open";
 
-type Detail = AdminSchemas["SupplierDetail"];
+type Detail = SupplierView;
 
 type Step = { key: "connected" | "groups" | "keys" | "unit"; done: boolean; open?: Open };
 
