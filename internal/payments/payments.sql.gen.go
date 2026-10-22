@@ -142,7 +142,7 @@ func (q *Queries) QueryAllowed(ctx context.Context, db DBTX, id uuid.UUID) (bool
 
 const queryOrders = `-- name: QueryOrders :many
 SELECT o.id FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
-WHERE o.next_query_at <= transaction_timestamp() AND
+WHERE (o.next_query_at <= transaction_timestamp() OR (o.state = 'pending' AND o.expires_at <= transaction_timestamp())) AND
     (o.state = 'pending' OR (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
         AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= transaction_timestamp())
 ORDER BY o.next_query_at, o.id LIMIT $1
@@ -287,7 +287,7 @@ func (q *Queries) RestoreUsage(ctx context.Context, db DBTX, id uuid.UUID) (int6
 const scheduleQuery = `-- name: ScheduleQuery :execrows
 UPDATE payments.orders SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),
     query_delay_seconds = least(query_delay_seconds * 2, CASE WHEN expires_at > clock_timestamp() THEN 600 ELSE 3600 END)
-WHERE id = $1 AND next_query_at <= clock_timestamp()
+WHERE id = $1 AND (next_query_at <= clock_timestamp() OR (state = 'pending' AND expires_at <= clock_timestamp()))
 `
 
 func (q *Queries) ScheduleQuery(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {

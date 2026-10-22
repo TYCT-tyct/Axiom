@@ -537,7 +537,11 @@ func TestMerchantIdentityWaitsForOrdersInFlight(t *testing.T) {
 	if _, err := w.p.Cancel(w.t.Context(), w.accountA(), o.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := change(func(in *MerchantInput) { in.Currency = currency(t, "USD") }); !isField(err, "/currency") {
+		t.Fatalf("changing the currency inside the late-payment window: %v", err)
+	}
+	w.exec("UPDATE payments.orders SET expires_at = transaction_timestamp() - interval '8 days'")
 	if err := change(func(in *MerchantInput) { in.Currency = currency(t, "USD") }); err != nil {
-		t.Fatalf("changing the currency after the cancel: %v", err)
+		t.Fatalf("changing the currency after the late-payment window: %v", err)
 	}
 }

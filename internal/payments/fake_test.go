@@ -11,12 +11,13 @@ import (
 // fakePlugin is a channel kind for tests: its settings name a gateway and the methods it offers, and it needs a key.
 // create, close and caps let a test decide what its channel does, so it can watch the order reach the channel.
 type fakePlugin struct {
-	create func(CreateRequest) (Checkout, error)
-	close  func(context.Context, OrderID, string) error
-	open   func() error
-	verify func(Callback, string) (Notice, error)
-	query  func(context.Context, string, string) (Payment, error)
-	caps   Caps
+	create  func(CreateRequest) (Checkout, error)
+	close   func(context.Context, OrderID, string) error
+	open    func() error
+	verify  func(Callback, string) (Notice, error)
+	query   func(context.Context, string, string) (Payment, error)
+	noQuery bool
+	caps    Caps
 }
 
 type fakeSettings struct {
@@ -42,7 +43,11 @@ func (p fakePlugin) Open(c MerchantConfig) (Channel, error) {
 	if c.Secrets["key"].Reveal() == "" {
 		return nil, errors.New("a key is required")
 	}
-	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: p.caps, verify: p.verify, query: p.query}, nil
+	caps := CapQuery | p.caps
+	if p.noQuery {
+		caps = p.caps
+	}
+	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: caps, verify: p.verify, query: p.query}, nil
 }
 
 // fakeChannel offers its methods and does nothing else; key is what it would sign with.
@@ -56,7 +61,7 @@ type fakeChannel struct {
 	query    func(context.Context, string, string) (Payment, error)
 }
 
-func (c fakeChannel) Caps() Caps        { return CapQuery | c.caps }
+func (c fakeChannel) Caps() Caps        { return c.caps }
 func (c fakeChannel) Methods() []Method { return c.settings.Methods }
 func (c fakeChannel) Create(_ context.Context, r CreateRequest) (Checkout, error) {
 	if c.create != nil {

@@ -7,11 +7,12 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"net/http"
-	"sync"
+	"sync/atomic"
 	"testing"
 
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 )
@@ -179,7 +180,13 @@ func TestLateCrossCurrencyUsesArrivalRateWithoutChangingQuote(t *testing.T) {
 			o := w.mustPlace(10*yuan, "arrival")
 			w.endOrder(o, Expired)
 			w.exec(fmt.Sprintf("UPDATE payments.orders SET expires_at = transaction_timestamp() - interval '%s'", age))
-			w.setRate("CNY", "USD", "1", "6")
+			if err := w.tx(w.p.platform, func(tx pg.Tx) error {
+				_, err := billing.SetExchangeRate(t.Context(), tx, admin, billing.ExchangeInput{Base: "CNY", Quote: "USD",
+					Numerator: "1", Denominator: "6", ExpectedVersion: 1, Kind: "correction", Reason: "arrival rate"})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
 			w.receive(receipt(o))
 			want := o.Credits
 			if age == "6 minutes" {
@@ -207,9 +214,9 @@ func TestLateCrossCurrencyUsesArrivalRateWithoutChangingQuote(t *testing.T) {
 }
 
 func TestVerifyThrottleScopeAndQueryWindow(t *testing.T) {
-	var calls atomicCounter
+	var calls atomic.Int64
 	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(context.Context, string, string) (Payment, error) {
-		calls.add()
+		calls.Add(1)
 		return Payment{State: PayPending}, nil
 	}})
 	w.waiting()
@@ -231,19 +238,10 @@ func TestVerifyThrottleScopeAndQueryWindow(t *testing.T) {
 	if err := w.p.queryPending(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if calls.get() != 1 {
+	if calls.Load() != 1 {
 		t.Fatal("queried an order after its identity window")
 	}
 }
-
-// atomicCounter deliberately uses the same synchronization on both sides of the network boundary.
-type atomicCounter struct {
-	mu sync.Mutex
-	n  int
-}
-
-func (c *atomicCounter) add()     { c.mu.Lock(); c.n++; c.mu.Unlock() }
-func (c *atomicCounter) get() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
 
 func TestPaymentReplayProperty(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})

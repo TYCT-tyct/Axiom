@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/pg"
 )
 
@@ -22,6 +24,10 @@ func (p *Payments) Notify() http.Handler {
 		id, err := merchantPrefix.Decode(r.PathValue("merchant"))
 		if err != nil {
 			http.Error(w, "unknown merchant", http.StatusNotFound)
+			return
+		}
+		if !p.allowCallback(MerchantID(id), clientip.Addr(r, p.proxies), time.Now()) {
+			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
 			return
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, callbackMax))
@@ -40,23 +46,24 @@ func (p *Payments) Notify() http.Handler {
 			return
 		}
 		if n.Relevant {
-			if err = p.notify(ctx, ch, MerchantID(id), n); err != nil {
-				p.logger.Error("payments: callback could not commit", "merchant", MerchantID(id).TypeID(), "error", err)
-				status, msg := ch.Ack(false)
-				if errors.Is(err, ErrUnconfirmed) {
-					status = http.StatusBadGateway
-				} else if status < 300 {
-					status = http.StatusInternalServerError
-				}
-				w.WriteHeader(status)
-				p.writeAck(w, msg)
-				return
-			}
+			err = p.notify(ctx, ch, MerchantID(id), n)
 		}
-		status, msg := ch.Ack(true)
-		w.WriteHeader(status)
-		p.writeAck(w, msg)
+		p.ack(w, ch, MerchantID(id), err)
 	})
+}
+
+func (p *Payments) ack(w http.ResponseWriter, ch Channel, id MerchantID, err error) {
+	status, msg := ch.Ack(err == nil)
+	if err != nil {
+		p.logger.Error("payments: callback could not commit", "merchant", id.TypeID(), "error", err)
+		if errors.Is(err, ErrUnconfirmed) {
+			status = http.StatusBadGateway
+		} else if status < 300 {
+			status = http.StatusInternalServerError
+		}
+	}
+	w.WriteHeader(status)
+	p.writeAck(w, msg)
 }
 
 func (p *Payments) writeAck(w http.ResponseWriter, msg []byte) {
@@ -123,21 +130,25 @@ func (p *Payments) replayedPayment(ctx context.Context, c confirmed) (bool, erro
 func (p *Payments) callbackChannel(ctx context.Context, id MerchantID) (Channel, error) {
 	var ch Channel
 	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
+		revisions, err := queries.MerchantRevision(ctx, tx, uuid.UUID(id))
+		if err != nil {
+			return err
+		}
+		if len(revisions) == 0 {
+			return ErrNotFound
+		}
+		p.mu.Lock()
+		cached, ok := p.channels[id]
+		p.mu.Unlock()
+		if ok && cached.rev == revisions[0] && time.Since(cached.at) < validFor {
+			ch = cached.channel
+			return nil
+		}
 		rows, err := queries.MerchantConfigs(ctx, tx, []uuid.UUID{uuid.UUID(id)})
 		if err != nil {
 			return err
 		}
-		if len(rows) == 0 {
-			return ErrNotFound
-		}
-		r := rows[0]
-		p.mu.Lock()
-		cached, ok := p.channels[id]
-		p.mu.Unlock()
-		if ok && cached.rev == r.Rev && time.Since(cached.at) < validFor {
-			ch = cached.channel
-			return nil
-		}
+		r := rows[0] // merchants are never deleted, and this read transaction has a consistent snapshot
 		ch, err = p.open(r)
 		if err == nil {
 			p.mu.Lock()
@@ -153,4 +164,46 @@ type channelBinding struct {
 	rev     int64
 	at      time.Time
 	channel Channel
+}
+
+type callbackKey struct {
+	merchant MerchantID
+	ip       netip.Addr
+}
+
+type callbackCount struct {
+	until time.Time
+	n     int
+}
+
+// This is an ingress budget, not money state. Bounded local buckets shed unsigned floods before a database read;
+// rejected callbacks remain retryable. GET and POST share the same bucket.
+func (p *Payments) allowCallback(merchant MerchantID, ip netip.Addr, now time.Time) bool {
+	if !ip.IsValid() {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !now.Before(p.sweepAt) {
+		for key, v := range p.callbacks {
+			if !now.Before(v.until) {
+				delete(p.callbacks, key)
+			}
+		}
+		p.sweepAt = now.Add(time.Minute)
+	}
+	key := callbackKey{merchant, ip}
+	v, ok := p.callbacks[key]
+	if !ok && len(p.callbacks) >= 4096 {
+		return false
+	}
+	if !now.Before(v.until) {
+		v = callbackCount{until: now.Add(time.Minute)}
+	}
+	if v.n >= 120 {
+		return false
+	}
+	v.n++
+	p.callbacks[key] = v
+	return true
 }

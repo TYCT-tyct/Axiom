@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 	"uuid"
 
@@ -26,6 +27,11 @@ type confirmed struct {
 }
 
 func (p *Payments) receive(ctx context.Context, c confirmed) error {
+	if strings.ContainsRune(c.order+c.payment.TradeNo, 0) {
+		c.reason = "invalid_payment"
+		c.order = strings.ReplaceAll(c.order, "\x00", "")
+		c.payment.TradeNo = strings.ReplaceAll(c.payment.TradeNo, "\x00", "")
+	}
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
 		if err := boundOrderTx(ctx, tx); err != nil {
 			return err

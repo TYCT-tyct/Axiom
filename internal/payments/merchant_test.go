@@ -69,6 +69,8 @@ func newTestWorld(t *testing.T, plugin Plugin) *world {
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
 		w.siteA, w.account, w.siteB, w.acctB))
+	w.exec(fmt.Sprintf("INSERT INTO billing.balances (site_id, account_id) VALUES ('%s','%s'), ('%s','%s')",
+		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
 		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{plugin},
 		Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
