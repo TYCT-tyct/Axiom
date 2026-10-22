@@ -166,51 +166,59 @@ func TestKeyCap(t *testing.T) {
 	}
 }
 
+// windowCase is a limit of keys made in an hour and the keys made before it, and what a key made now meets.
+type windowCase struct {
+	limit   int
+	ago     []time.Duration // when the keys were made, the first one deleted
+	refused bool
+	count   int
+	wait    time.Duration
+}
+
+func minutesAgo(n ...int) []time.Duration {
+	ago := make([]time.Duration, len(n))
+	for i, m := range n {
+		ago[i] = time.Duration(m) * time.Minute
+	}
+	return ago
+}
+
+func (c windowCase) run(t *testing.T) {
+	db, database := open(t)
+	keySettingsOf(t, database, 100, c.limit)
+	seedKeyIsOld(t, database)
+	for i, ago := range c.ago {
+		madeAgo(t, database, ago, i == 0)
+	}
+	s := node(t, db, hashKeys(t, 1), nil)
+	err := tryKey(t, db, s, "Over", accounts.WorkspaceID(w1))
+	if !c.refused {
+		if err != nil {
+			t.Errorf("a key with the hour's keys %v: %v", c.ago, err)
+		}
+		return
+	}
+	got := tooManyKeys(t, err)
+	if got.Limit != c.limit || got.Count != c.count || got.RetryAfter > c.wait || got.RetryAfter <= c.wait-time.Minute {
+		t.Errorf("the refusal is %+v, want %d of %d and a wait of up to %v and more than a minute less", got, c.count, c.limit, c.wait)
+	}
+}
+
 // TestKeyCreationWindow: the keys made in the last hour are counted on the database's clock, deleted ones too, and
 // the refusal reports how many there are, whatever the limit now is, and how long until the key that must age out for
 // a place to be free is an hour old. The keys are made at times before now, and the waits are checked to a minute,
 // which is more than the test takes.
 func TestKeyCreationWindow(t *testing.T) {
 	t.Parallel()
-	minutes := func(n ...int) []time.Duration {
-		ago := make([]time.Duration, len(n))
-		for i, m := range n {
-			ago[i] = time.Duration(m) * time.Minute
-		}
-		return ago
-	}
-	for name, c := range map[string]struct {
-		limit   int
-		ago     []time.Duration // when the keys were made, the first one deleted
-		refused bool
-		count   int
-		wait    time.Duration
-	}{
-		"a deleted key counts":                   {2, minutes(40, 10), true, 2, 20 * time.Minute},
-		"a key past the hour does not count":     {2, minutes(61, 10), false, 0, 0},
-		"a key just inside the hour counts":      {2, minutes(59, 10), true, 2, time.Minute},
-		"a lowered limit reports the true count": {2, minutes(50, 40, 30, 20, 10), true, 5, 40 * time.Minute},
+	for name, c := range map[string]windowCase{
+		"a deleted key counts":                   {2, minutesAgo(40, 10), true, 2, 20 * time.Minute},
+		"a key past the hour does not count":     {2, minutesAgo(61, 10), false, 0, 0},
+		"a key just inside the hour counts":      {2, minutesAgo(59, 10), true, 2, time.Minute},
+		"a lowered limit reports the true count": {2, minutesAgo(50, 40, 30, 20, 10), true, 5, 40 * time.Minute},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			db, database := open(t)
-			keySettingsOf(t, database, 100, c.limit)
-			seedKeyIsOld(t, database)
-			for i, ago := range c.ago {
-				madeAgo(t, database, ago, i == 0)
-			}
-			s := node(t, db, hashKeys(t, 1), nil)
-			err := tryKey(t, db, s, "Over", accounts.WorkspaceID(w1))
-			if !c.refused {
-				if err != nil {
-					t.Errorf("a key with the hour's keys %v: %v", c.ago, err)
-				}
-				return
-			}
-			got := tooManyKeys(t, err)
-			if got.Limit != c.limit || got.Count != c.count || got.RetryAfter > c.wait || got.RetryAfter <= c.wait-time.Minute {
-				t.Errorf("the refusal is %+v, want %d of %d and a wait of up to %v and more than a minute less", got, c.count, c.limit, c.wait)
-			}
+			c.run(t)
 		})
 	}
 }
@@ -279,65 +287,91 @@ func TestKeyCreationsUseTheIndex(t *testing.T) {
 	}
 }
 
+// accountLimits is the node and database a test changes the limits of a1 through.
+type accountLimits struct {
+	t  *testing.T
+	db *pg.DB
+	s  *accounts.Service
+}
+
+func (a accountLimits) set(limits accounts.KeyLimits) error {
+	return a.db.Tx(a.t.Context(), platform, func(tx pg.Tx) error {
+		return a.s.SetAccountKeyLimits(a.t.Context(), tx, operatorActor, accounts.AccountID(a1), limits, "reason")
+	})
+}
+
+func (a accountLimits) read() (own accounts.KeyLimits, effective accounts.EffectiveKeyLimits) {
+	a.t.Helper()
+	if err := a.db.ReadTx(a.t.Context(), platform, func(tx pg.Tx) (err error) {
+		own, effective, err = a.s.AccountKeyLimits(a.t.Context(), tx, accounts.AccountID(a1))
+		return err
+	}); err != nil {
+		a.t.Fatal(err)
+	}
+	return own, effective
+}
+
+// refuses is whether a key of a1 made now is refused with this limit and count.
+func (a accountLimits) refuses(name string, limit, count int) {
+	a.t.Helper()
+	keys := tooManyKeys(a.t, tryKey(a.t, a.db, a.s, name, accounts.WorkspaceID(w1)))
+	if keys.Limit != limit || keys.Count != count {
+		a.t.Errorf("key %q: %+v, want %d of %d", name, keys, count, limit)
+	}
+}
+
+// makes is a key of a1 made now, which must be let through.
+func (a accountLimits) makes(name string) {
+	a.t.Helper()
+	if err := tryKey(a.t, a.db, a.s, name, accounts.WorkspaceID(w1)); err != nil {
+		a.t.Fatalf("key %q: %v", name, err)
+	}
+}
+
 // TestAccountKeyLimits: an account's own limits come over its site's, one limit at a time, in either direction; a limit
-// the account does not set is the site's, and clearing them gives the site's back; the change is audited with the
-// values it replaced, bounds are checked before anything is written, and the account's key being made meets them.
+// the account does not set is the site's, and clearing them gives the site's back; each change is audited with the
+// values it replaced.
 func TestAccountKeyLimits(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
 	keySettingsOf(t, database, 3, 100)
 	seedKeyIsOld(t, database)
-	s := node(t, db, hashKeys(t, 1), nil)
-	scope := pg.NewScope(true, nil, nil)
-	set := func(limits accounts.KeyLimits) error {
-		return db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-			return s.SetAccountKeyLimits(t.Context(), tx, operatorActor, accounts.AccountID(a1), limits, "reason")
-		})
-	}
-	read := func() (accounts.KeyLimits, accounts.EffectiveKeyLimits) {
-		var own accounts.KeyLimits
-		var effective accounts.EffectiveKeyLimits
-		if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
-			own, effective, err = s.AccountKeyLimits(t.Context(), tx, accounts.AccountID(a1))
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return own, effective
-	}
-	if own, effective := read(); own != (accounts.KeyLimits{}) || effective != (accounts.EffectiveKeyLimits{MaxKeys: 3, CreationsPerHour: 100}) {
+	a := accountLimits{t, db, node(t, db, hashKeys(t, 1), nil)}
+	if own, effective := a.read(); own != (accounts.KeyLimits{}) || effective != (accounts.EffectiveKeyLimits{MaxKeys: 3, CreationsPerHour: 100}) {
 		t.Errorf("an account that sets none: %+v, %+v", own, effective)
 	}
 	// Below the site's: the seed's key and one more are the two it may hold.
-	if err := set(accounts.KeyLimits{MaxKeys: new(int32(2))}); err != nil {
+	if err := a.set(accounts.KeyLimits{MaxKeys: new(int32(2))}); err != nil {
 		t.Fatal(err)
 	}
-	if own, effective := read(); *own.MaxKeys != 2 || own.CreationsPerHour != nil || effective != (accounts.EffectiveKeyLimits{MaxKeys: 2, CreationsPerHour: 100}) {
+	if own, effective := a.read(); *own.MaxKeys != 2 || own.CreationsPerHour != nil || effective != (accounts.EffectiveKeyLimits{MaxKeys: 2, CreationsPerHour: 100}) {
 		t.Errorf("an account with a cap of its own: %+v, %+v", own, effective)
 	}
-	if err := tryKey(t, db, s, "Second", accounts.WorkspaceID(w1)); err != nil {
-		t.Fatalf("the second key, of two: %v", err)
-	}
-	if diff := cmp.Diff(accounts.TooManyKeys{Limit: 2, Count: 2}, tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)))); diff != "" {
-		t.Errorf("the account's cap of 2 under its site's 3 (-want +got):\n%s", diff)
-	}
+	a.makes("Second")
+	a.refuses("Third", 2, 2)
 	// Over the site's: its own hourly limit is lower and its cap higher, and each wins.
-	if err := set(accounts.KeyLimits{MaxKeys: new(int32(10)), CreationsPerHour: new(int32(1))}); err != nil {
+	if err := a.set(accounts.KeyLimits{MaxKeys: new(int32(10)), CreationsPerHour: new(int32(1))}); err != nil {
 		t.Fatal(err)
 	}
-	if keys := tooManyKeys(t, tryKey(t, db, s, "Third", accounts.WorkspaceID(w1))); keys.Limit != 1 || keys.Count != 1 {
-		t.Errorf("the account's hour of 1 and cap of 10: %+v, want 1 of 1", keys)
-	}
-	// Cleared, it is the site's again: three held, so the cap of 3 refuses.
-	if err := set(accounts.KeyLimits{}); err != nil {
+	a.refuses("Third", 1, 1)
+	// Cleared, it is the site's again: the cap of 3 lets a third key through and refuses a fourth.
+	if err := a.set(accounts.KeyLimits{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tryKey(t, db, s, "Third", accounts.WorkspaceID(w1)); err != nil {
-		t.Fatalf("the third key under the site's 3: %v", err)
+	a.makes("Third")
+	a.refuses("Fourth", 3, 3)
+	if got := texts(t, db, platform, `SELECT coalesce(detail->'before'->>'max_keys', 'none') || ',' || coalesce(detail->'after'->>'max_keys', 'none') || ',' ||
+		coalesce(detail->'after'->>'creations_per_hour', 'none') FROM platform.audit_log WHERE action = 'account_key_limits.update' ORDER BY id`); !slices.Equal(got, []string{"none,2,none", "2,10,1", "10,none,none"}) {
+		t.Errorf("the audit entries of the account's limits (before max, after max, after hour): %v", got)
 	}
-	if diff := cmp.Diff(accounts.TooManyKeys{Limit: 3, Count: 3}, tooManyKeys(t, tryKey(t, db, s, "Fourth", accounts.WorkspaceID(w1)))); diff != "" {
-		t.Errorf("the site's cap of 3 (-want +got):\n%s", diff)
-	}
+}
+
+// TestAccountKeyLimitsAreChecked: a limit outside its bounds is refused by name before anything is written, and so are
+// the limits of an account that is not there.
+func TestAccountKeyLimitsAreChecked(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	a := accountLimits{t, db, node(t, db, hashKeys(t, 1), nil)}
 	for name, limits := range map[string]accounts.KeyLimits{
 		"no keys":                      {MaxKeys: new(int32(0))},
 		"too many keys":                {MaxKeys: new(int32(10_001))},
@@ -345,16 +379,15 @@ func TestAccountKeyLimits(t *testing.T) {
 		"ten thousand and one an hour": {CreationsPerHour: new(int32(10_001))},
 	} {
 		var bad *accounts.SettingError
-		if err := set(limits); !errors.As(err, &bad) {
+		if err := a.set(limits); !errors.As(err, &bad) {
 			t.Errorf("%s: %v, want a setting error", name, err)
 		}
 	}
-	if got := texts(t, db, platform, `SELECT coalesce(detail->'before'->>'max_keys', 'none') || ',' || coalesce(detail->'after'->>'max_keys', 'none') || ',' ||
-		coalesce(detail->'after'->>'creations_per_hour', 'none') FROM platform.audit_log WHERE action = 'account_key_limits.update' ORDER BY id`); !slices.Equal(got, []string{"none,2,none", "2,10,1", "10,none,none"}) {
-		t.Errorf("the audit entries of the account's limits (before max, after max, after hour): %v", got)
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM platform.audit_log WHERE action = 'account_key_limits.update'`); got[0] != "0" {
+		t.Errorf("%s audit entries of refused limits, want none", got[0])
 	}
-	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-		return s.SetAccountKeyLimits(t.Context(), tx, operatorActor, accounts.AccountID(x), accounts.KeyLimits{}, "r")
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		return a.s.SetAccountKeyLimits(t.Context(), tx, operatorActor, accounts.AccountID(x), accounts.KeyLimits{}, "r")
 	}); !errors.Is(err, accounts.ErrNotFound) {
 		t.Errorf("limits of an account that is not there: %v", err)
 	}
