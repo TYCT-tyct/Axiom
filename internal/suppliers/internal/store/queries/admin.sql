@@ -33,6 +33,10 @@ FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
+-- name: ListEndpointsOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
+
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
