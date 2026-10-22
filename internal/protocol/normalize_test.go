@@ -52,7 +52,7 @@ func TestPrepareCostBoundsModalities(t *testing.T) {
 	cost := protocol.PrepareCost(&r, body, target, w)
 	got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
 		_, err := protocol.Prepare(&r, body, target, w)
-		if _, ok := errors.AsType[*protocol.NotSupported](err); !ok {
+		if ns, _ := errors.AsType[*protocol.NotSupported](err); ns == nil {
 			t.Fatalf("expected unsupported modalities, got %v", err)
 		}
 	}})
