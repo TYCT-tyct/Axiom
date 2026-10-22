@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"axiom/internal/billing"
@@ -38,7 +39,7 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 		return err
 	}
 	defer release()
-	return write(ctx)
+	return write(pg.CompletionContext(ctx))
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One
@@ -99,7 +100,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
-	rec.Segments = estimated(a.usage, a.seen, routing.DemandOf(&s.c.Request), a.entry.Limits, a.meter.OutputCap())
+	rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap())
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
@@ -142,15 +143,71 @@ func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.C
 	return suppliers.CostComplete
 }
 
+// demand is the request as billing estimates it: what the request says, and its text counted in the tokens of the
+// entry's model family when that family has a tokenizer and the reply reported none of the input, which is the only
+// case the count is used in.
+func (a *attempt) demand() billing.Demand {
+	d := routing.DemandOf(&a.s.c.Request)
+	if inputReported(a.usage) {
+		return d
+	}
+	tok := billing.TokenizerOf(a.entry.Target.Model)
+	if tok == billing.TokenizerNone {
+		return d
+	}
+	cached := &a.s.textCounts[int(tok)-1]
+	if !cached.counted {
+		var err error
+		cached.tokens, err = textTokens(a.s.c.Body, d, tok)
+		cached.counted = true
+		if err != nil {
+			a.s.logger.Warn("input token count failed; using byte estimate", "err", err)
+		}
+	}
+	d.TextTokens = cached.tokens
+	return d
+}
+
+type textEstimate struct {
+	tokens  int64
+	counted bool
+}
+
+// inputReported keeps input/cache reports authoritative, including explicitly reported zero counts.
+func inputReported(u protocol.Usage) bool {
+	return len(u.Segments) > 0 && u.Segments[0].Reported&catalog.InputSide != 0
+}
+
+// maxCountBytes bounds per-family BPE and unquoting work, independently of a route's context window. The cached count
+// can therefore serve another attempt of the same family with a different context limit.
+const maxCountBytes = 256 << 10
+
+func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, error) {
+	c := billing.NewTextCount(tok, d.TextBytes)
+	if c == nil {
+		return 0, nil
+	}
+	remaining, err := protocol.Text(body, maxCountBytes, c.Add)
+	if err != nil {
+		return 0, fmt.Errorf("extract input text: %w", err)
+	}
+	count, err := c.Total()
+	if err != nil {
+		return 0, err
+	}
+	return min(d.TextBytes, count+tokensOf(remaining, billing.InputBytesPerToken)), nil
+}
+
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
-// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the
-// first sampling's estimate (billing.InputEstimate: the text at 4 bytes a token, an image at 1600 tokens, a file at
-// 4096, each held to its bound), unless any input-side item was reported; the
-// output by the text, reasoning and tool input read at outputBytesPerToken, never below a count reported so far and
-// never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
-// to); the web searches by the events seen. The ratios stand in for the estimates by model the docs want, which have no
-// data yet; the bounds and the cap keep an estimate within what the reservation covers. Nothing corrects an estimate
-// after the charge in M1: the supplier's record is the platform's cost, not the user's bill.
+// upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the first
+// sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has a
+// tokenizer and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
+// any input-side item was reported; the output by the text, reasoning and tool input read at outputBytesPerToken, never
+// below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
+// which metering holds the output to); the web searches by the events seen. The ratios stand in for the estimates by
+// model the docs want, which have no data yet; the bounds and the cap keep an estimate within what the reservation
+// covers. Nothing corrects an estimate after the charge in M1: the supplier's record is the platform's cost, not the
+// user's bill.
 func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64) []billing.Segment {
 	input := billing.InputEstimate(d, m)
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
@@ -162,7 +219,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	for it := range catalog.NumItems {
 		counts[it] = reply.Usage.Count(it)
 	}
-	if reply.Reported&catalog.InputSide == 0 { // none of the input was reported, so it is estimated
+	if !inputReported(u) { // none of the input was reported, so it is estimated
 		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
@@ -186,7 +243,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 
 // The bytes per output token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4
 // bytes a token, and output is taken at 3 to lean the guess up, since no record may come to correct it. The input's is
-// billing.InputBytesPerToken.
+// billing.InputBytesPerToken for a family whose tokenizer counted nothing.
 const outputBytesPerToken = 3
 
 // tokensOf is bytes at perToken bytes a token, rounded up: a token begun is charged.

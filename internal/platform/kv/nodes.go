@@ -21,9 +21,10 @@ const (
 	// beatEvery is how often a node writes its row. 30 seconds without one is stale, so a node that misses two in a row
 	// is gone, which a slow database answers before it happens.
 	beatEvery = 10 * time.Second
-	// aliveFor is how recently a row must have been written to count a node alive: three missed beats.
-	aliveFor = 30 * time.Second
-	// forgetAfter is when a stale row is deleted. Longer than aliveFor, so two nodes never disagree about a row that is
+	// AliveFor is how recently a row must have been written to count a node alive: three missed beats. The key ring's
+	// lifecycle commands use it too: a node that may still be writing is a node that has to be stopped first.
+	AliveFor = 30 * time.Second
+	// forgetAfter is when a stale row is deleted. Longer than AliveFor, so two nodes never disagree about a row that is
 	// about to expire; the table holds a handful of rows either way.
 	forgetAfter = 60 * time.Second
 )
@@ -62,7 +63,7 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		}
 		err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE id <> $1 AND seen_at > now() - make_interval(secs => $2)),
 			count(*) FILTER (WHERE seen_at > now() - make_interval(secs => $2))
-			FROM platform.nodes`, h.id, aliveFor.Seconds()).Scan(&others, &alive)
+			FROM platform.nodes`, h.id, AliveFor.Seconds()).Scan(&others, &alive)
 		if err != nil {
 			return err
 		}
@@ -95,7 +96,7 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT count(*) FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1)`,
-			aliveFor.Seconds()).Scan(&alive)
+			AliveFor.Seconds()).Scan(&alive)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("kv: write this node's heartbeat: %w", err)
@@ -111,7 +112,7 @@ func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
 	return err
 }
 
-// forget deletes the rows that went stale: longer than aliveFor, so that two nodes never disagree about a row that is
+// forget deletes the rows that went stale: longer than AliveFor, so that two nodes never disagree about a row that is
 // about to expire, and the table holds a handful of rows either way.
 func forget(ctx context.Context, tx pg.Tx) error {
 	_, err := tx.Exec(ctx, `DELETE FROM platform.nodes WHERE seen_at < now() - make_interval(secs => $1)`,

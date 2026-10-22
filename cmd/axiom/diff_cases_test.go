@@ -87,11 +87,16 @@ var diffBackends = map[string]diffBackend{
 	}},
 }
 
-// diffPairs are the client formats and the models each is tried with: a format with the model of its own format, which
-// both gateways forward as it is, and Chat with each of the other two, which both convert, and with a model of its own
-// format, which they forward as it is.
+// diffPairs cover each native format and both directions between Chat and the
+// other formats, with both gateways calling the same upstream endpoint.
 var diffPairs = []struct{ client, backend string }{
-	{"chat", "claude"}, {"chat", "gpt"}, {"chat", "deepseek"}, {"messages", "claude"}, {"responses", "gpt"},
+	{"chat", "claude"},
+	{"chat", "gpt"},
+	{"chat", "deepseek"},
+	{"messages", "claude"},
+	{"responses", "gpt"},
+	{"messages", "deepseek"},
+	{"responses", "deepseek"},
 }
 
 // body is a request of the client's format to the model, for a conversation, as a stream or whole.

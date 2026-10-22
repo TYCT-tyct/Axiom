@@ -42,6 +42,57 @@ func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uu
 	return err
 }
 
+const getCredentialOf = `-- name: GetCredentialOf :many
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+FROM suppliers.credentials WHERE supplier_id = $1 AND id = $2
+`
+
+type GetCredentialOfParams struct {
+	SupplierID uuid.UUID
+	ID         uuid.UUID
+}
+
+type GetCredentialOfRow struct {
+	ID                uuid.UUID
+	SupplierGroupID   uuid.UUID
+	UpstreamKeyRef    string
+	Status            string
+	CooldownUntil     *time.Time
+	ExpiresAt         *time.Time
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
+}
+
+// One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
+func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentialOfParams) ([]GetCredentialOfRow, error) {
+	rows, err := db.Query(ctx, getCredentialOf, arg.SupplierID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCredentialOfRow
+	for rows.Next() {
+		var i GetCredentialOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SupplierGroupID,
+			&i.UpstreamKeyRef,
+			&i.Status,
+			&i.CooldownUntil,
+			&i.ExpiresAt,
+			&i.MaxConcurrency,
+			&i.RequestsPerMinute,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getGroupOf = `-- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
 FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
@@ -226,18 +277,19 @@ func (q *Queries) InsertUnitValue(ctx context.Context, db DBTX, arg InsertUnitVa
 }
 
 const listCredentialsOf = `-- name: ListCredentialsOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
 FROM suppliers.credentials WHERE supplier_id = $1 ORDER BY id
 `
 
 type ListCredentialsOfRow struct {
-	ID              uuid.UUID
-	SupplierGroupID uuid.UUID
-	UpstreamKeyRef  string
-	Status          string
-	CooldownUntil   *time.Time
-	ExpiresAt       *time.Time
-	MaxConcurrency  int32
+	ID                uuid.UUID
+	SupplierGroupID   uuid.UUID
+	UpstreamKeyRef    string
+	Status            string
+	CooldownUntil     *time.Time
+	ExpiresAt         *time.Time
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
 }
 
 func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListCredentialsOfRow, error) {
@@ -257,6 +309,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 			&i.CooldownUntil,
 			&i.ExpiresAt,
 			&i.MaxConcurrency,
+			&i.RequestsPerMinute,
 		); err != nil {
 			return nil, err
 		}
@@ -589,6 +642,33 @@ type SelectGroupParams struct {
 func (q *Queries) SelectGroup(ctx context.Context, db DBTX, arg SelectGroupParams) error {
 	_, err := db.Exec(ctx, selectGroup, arg.Selected, arg.Codename, arg.ID)
 	return err
+}
+
+const setCredentialLimits = `-- name: SetCredentialLimits :execrows
+UPDATE suppliers.credentials SET max_concurrency = $1, requests_per_minute = $2
+WHERE supplier_id = $3 AND id = $4
+`
+
+type SetCredentialLimitsParams struct {
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
+	SupplierID        uuid.UUID
+	ID                uuid.UUID
+}
+
+// What the admin set: the calls the key serves at once, and the account minute ceiling for selecting it. The count itself is each
+// node's own, in memory (internal/suppliers/README.md「并发与速率」).
+func (q *Queries) SetCredentialLimits(ctx context.Context, db DBTX, arg SetCredentialLimitsParams) (int64, error) {
+	result, err := db.Exec(ctx, setCredentialLimits,
+		arg.MaxConcurrency,
+		arg.RequestsPerMinute,
+		arg.SupplierID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setSupplierStatusBumpingConfigGen = `-- name: SetSupplierStatusBumpingConfigGen :exec
