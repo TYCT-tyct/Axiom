@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -128,20 +129,18 @@ func TestCallbackChannelFailuresAreLogged(t *testing.T) {
 	}
 }
 
-func TestCallbackQueryHasItsOwnDeadline(t *testing.T) {
-	var deadline time.Time
-	w := newTestWorld(t, fakePlugin{
-		create: goodCheckout, verify: signedNotice,
-		query: func(ctx context.Context, _, _ string) (Payment, error) {
-			deadline, _ = ctx.Deadline()
-			return Payment{State: PayPending}, nil
-		},
+func TestPaymentQueryHasItsOwnDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), pollDeadline)
+		defer cancel()
+		ch := fakeChannel{query: func(ctx context.Context, _, _ string) (Payment, error) {
+			<-ctx.Done()
+			return Payment{}, ctx.Err()
+		}}
+		start := time.Now()
+		_, err := queryPayment(ctx, ch, "order", "trade")
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != closeTimeout {
+			t.Fatal("query did not stop at its own deadline", err, time.Since(start))
+		}
 	})
-	w.waiting()
-	o := w.mustPlace(yuan, "query-deadline")
-	start := time.Now()
-	w.callback(o.MerchantID, http.MethodGet, callbackValues(o))
-	if deadline.IsZero() || deadline.After(start.Add(2*closeTimeout)) {
-		t.Fatal("callback query inherited the 30 second request deadline", deadline)
-	}
 }
