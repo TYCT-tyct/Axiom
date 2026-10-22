@@ -17,6 +17,9 @@ SELECT m.id, m.kind, m.currency, m.rev, c.settings, c.ciphertext, c.nonce, c.wra
 FROM payments.merchants m JOIN payments.merchant_configs c ON c.merchant_id = m.id
 WHERE m.id = ANY (@merchants::uuid[]);
 
+-- name: MerchantRevision :many
+SELECT rev FROM payments.merchants WHERE id = @id;
+
 -- name: UpdateMerchant :exec
 UPDATE payments.merchants SET name = @name, enabled = @enabled, currency = @currency, ttl_seconds = @ttl_seconds,
     refund_enabled = @refund_enabled, user_refund = @user_refund, sort = @sort, rev = rev + 1, updated_at = clock_timestamp()

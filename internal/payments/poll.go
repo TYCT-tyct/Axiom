@@ -12,9 +12,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// payments.poll is the module's periodic job (README.md「事务与任务」). This PR carries its first step, the expiry of
-// orders past their deadline; querying orders that lost their callback, and the late payment that follows a query, come
-// with the callback (README.md「实现拆分」E1-2c), which is what a query's answer would be credited by.
+// payments.poll queries before expiry, then releases expired orders before making any network close calls.
 
 // pollEvery is how often a run is inserted; the queue inserts it on the node that leads.
 const pollEvery = time.Minute
@@ -74,8 +72,15 @@ func RegisterPoll(cfg PollConfig) error {
 func (p *Payments) poll(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, pollDeadline)
 	defer cancel()
+	// Leave the expiry and close steps time even when every queried gateway stalls.
+	queryCtx, stopQuery := context.WithTimeout(ctx, 10*time.Second)
+	err := p.queryPending(queryCtx)
+	stopQuery()
+	if err != nil {
+		p.logger.Warn("payments: poll queries stopped", "error", err)
+	}
 	var due []ExpiringOrdersRow
-	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
+	err = p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
 		due, err = queries.ExpiringOrders(ctx, tx, expireBatch)
 		return err
 	})
