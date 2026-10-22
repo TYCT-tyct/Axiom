@@ -106,6 +106,7 @@ class RunnerLabels(unittest.TestCase):
 CURL_STUB = r'''
 curl() {
   printf '%s\0' "$@" > "$CURL_ARGV"
+  : > "$CURL_HEADER"
   local argument line
   for argument in "$@"; do
     if [[ "$argument" == @* ]]; then
