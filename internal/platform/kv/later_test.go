@@ -56,6 +56,8 @@ func makeDrop(c *Client, reason dropReason) {
 		for range writeBurst {
 			c.Later(uuid.UUID{1}, cmd)
 		}
+	case dropSlots, dropShutdown:
+		panic("writer lifecycle drops are not admission drops")
 	}
 }
 
@@ -259,8 +261,8 @@ func TestLaterCountsOffersRacingWithClose(t *testing.T) {
 			c.writeLater(ctx)
 		})
 		var group sync.WaitGroup
-		for n := range 64 {
-			group.Go(func() { c.Later(uuid.UUID{byte(n)}, Set("ax:test", "value", time.Hour)) })
+		for n := range byte(64) {
+			group.Go(func() { c.Later(uuid.UUID{n}, Set("ax:test", "value", time.Hour)) })
 		}
 		if err := c.Close(t.Context()); err != nil {
 			t.Fatal(err)
