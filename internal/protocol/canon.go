@@ -18,7 +18,9 @@ import (
 type canon struct {
 	Messages            []canonMessage            `json:"messages"`
 	Tools               []canonTool               `json:"tools"`
+	Functions           []canonFunction           `json:"functions"` // legacy: upgradeLegacy makes them tools
 	ToolChoice          jsontext.Value            `json:"tool_choice"`
+	FunctionCall        jsontext.Value            `json:"function_call"` // legacy: upgradeLegacy makes it the choice
 	ParallelToolCalls   *bool                     `json:"parallel_tool_calls"`
 	MaxTokens           *int64                    `json:"max_tokens"`
 	MaxCompletionTokens *int64                    `json:"max_completion_tokens"`
@@ -55,6 +57,7 @@ type canonMessage struct {
 	Content          jsontext.Value            `json:"content"`
 	ToolCalls        []canonToolCall           `json:"tool_calls"`
 	ToolCallID       *string                   `json:"tool_call_id"`
+	FunctionCall     jsontext.Value            `json:"function_call"` // legacy: upgradeLegacy makes it a tool call
 	ReasoningDetails []canonReasoningDetail    `json:"reasoning_details"`
 	Unknown          map[string]jsontext.Value `json:",embed"`
 	// Name and Refusal go into Parts (settle). Reasoning in the other two members is read, not converted: it has no
@@ -94,13 +97,8 @@ type canonToolCall struct {
 }
 
 type canonTool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        jsontext.Value `json:"name"`
-		Description jsontext.Value `json:"description"`
-		Parameters  jsontext.Value `json:"parameters"`
-		Strict      *bool          `json:"strict"`
-	} `json:"function"`
+	Type         string         `json:"type"`
+	Function     canonFunction  `json:"function"`
 	CacheControl jsontext.Value `json:"cache_control"`
 }
 
@@ -139,6 +137,9 @@ func decodeCanon(body []byte) (*canon, error) {
 	c := &canon{}
 	if err := jsonx.Unmarshal(body, c); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	if err := c.upgradeLegacy(); err != nil {
+		return nil, err
 	}
 	for i := range c.Messages {
 		if err := c.Messages[i].settle(); err != nil {
@@ -377,7 +378,11 @@ func isDefault(name string, v jsontext.Value) bool {
 	case "logprobs", "store":
 		return s == "false"
 	case "modalities":
-		return strings.ReplaceAll(s, " ", "") == `["text"]`
+		if s == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
+			return true
+		}
+		var only [1]string // excess elements must be rejected without allocating an unbounded list
+		return jsonx.Unmarshal(v, &only) == nil && only[0] == "text"
 	case "metadata", "logit_bias":
 		return strings.TrimSpace(strings.Trim(s, "{}")) == ""
 	}

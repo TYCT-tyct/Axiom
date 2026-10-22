@@ -71,7 +71,7 @@ var grammars = [...]grammar{
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
-			"tools": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
+			"tools": (*scanner).tools, "functions": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
 		}),

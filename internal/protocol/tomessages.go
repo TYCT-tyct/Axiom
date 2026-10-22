@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/jsonx"
 )
 
 // toMessages writes a Chat request as an Anthropic Messages request (Anthropic《Messages API reference》, read
@@ -434,53 +433,6 @@ func messagesTool(out []byte, tool canonTool) ([]byte, error) {
 		out = append(append(out, `,"cache_control":`...), tool.CacheControl...)
 	}
 	return append(out, '}'), nil
-}
-
-// toolChoice maps tool_choice and parallel_tool_calls. Anthropic refuses a forced choice while thinking, and some
-// models (Claude Opus 5.5, Sonnet 5.5 and Fable 5.1) refuse one at all.
-func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
-	choice, forced, err := messagesChoice(m.c.ToolChoice)
-	if err != nil {
-		return nil, err
-	}
-	if forced {
-		if err := m.forcedRefusal(); err != nil {
-			return nil, err
-		}
-	}
-	parallelOff := m.c.ParallelToolCalls != nil && !*m.c.ParallelToolCalls
-	if isNull(m.c.ToolChoice) && !parallelOff || len(m.c.Tools) == 0 {
-		return out, nil
-	}
-	if parallelOff {
-		choice += `,"disable_parallel_tool_use":true`
-	}
-	return append(append(append(out, `,"tool_choice":`...), choice...), '}'), nil
-}
-
-// messagesChoice is tool_choice in Messages' terms, but its closing brace, and whether it forces a tool.
-func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
-	if isNull(v) {
-		return messagesChoices[`"auto"`], false, nil
-	}
-	if choice := messagesChoices[string(v)]; choice != "" {
-		return choice, string(v) == `"required"`, nil
-	}
-	var named struct {
-		Function struct {
-			Name jsontext.Value `json:"name"`
-		} `json:"function"`
-	}
-	if err := jsonx.Unmarshal(v, &named); err != nil || isNull(named.Function.Name) {
-		return "", false, &NotSupported{Reason: "a tool_choice Messages cannot express"}
-	}
-	return `{"type":"tool","name":` + string(named.Function.Name), true, nil
-}
-
-var messagesChoices = map[string]string{
-	`"auto"`:     `{"type":"` + choiceNames["auto"] + `"`,
-	`"none"`:     `{"type":"` + choiceNames["none"] + `"`,
-	`"required"`: `{"type":"` + choiceNames["required"] + `"`,
 }
 
 // thinking writes the thinking setting and output_config: the effort of an adaptive model, and the schema of a
