@@ -3,7 +3,7 @@ import { consoleApi, unwrap } from "@axiom/api";
 // The statement's own pieces: the file a page offers to download, and what a row's amount means.
 
 // statementCsv is the account's statement as the server gives it: comma-separated text, newest first.
-export const statementCsv = () => unwrap(consoleApi.GET("/api/console/v1/statement.csv"));
+export const statementCsv = () => unwrap(consoleApi.GET("/api/console/v1/statement.csv", { parseAs: "text" }));
 
 // statementName is what the saved file is called, the day it was taken, so two exports of one account do not overwrite
 // each other. It matches the name the server gives the download itself.
@@ -31,5 +31,5 @@ export function save(file: File) {
 
 // raised says whether a movement added to the balance: an amount is signed, and the contract makes a charge negative.
 export function raised(amount: string) {
-  return !amount.startsWith("-");
+  return BigInt(amount) > 0n;
 }

@@ -40,10 +40,11 @@ func TestStatementKinds(t *testing.T) {
 		{"refund", "", StatementRefund},
 		{"credit", "", ""},
 		{"credit", "unknown", ""},
-		{"reverse", "", ""},
+		{"reverse", "", StatementReversal},
 		{"attempt_cost", "", ""},
 		{"cost_adjust", "", ""},
-		{"freeze", "", ""},
+		{"freeze", "", StatementFreeze},
+		{"unfreeze", "", StatementUnfreeze},
 	} {
 		got, err := statementKind(tc.kind, tc.source)
 		if got != tc.want || (err != nil) != (tc.want == "") {
@@ -59,7 +60,7 @@ func TestStatementCursorSurvivesTheConsole(t *testing.T) {
 	t.Parallel()
 	for _, want := range []StatementCursor{
 		{Seq: math.MaxInt64, At: statementNewest.At, ID: uuid.Max(), Balance: math.MinInt64},
-		{Seq: 42, At: epoch, ID: uuid.NewV7(), Balance: -1},
+		{Seq: 42, At: epoch, ID: uuid.NewV7(), Balance: -1, Frozen: 200},
 		{At: epoch.Add(time.Microsecond), ID: uuid.Max(), Balance: math.MaxInt64},
 	} {
 		got, err := ParseStatementCursor(want.String())
@@ -265,6 +266,8 @@ func TestStatementIsTheAccountsOwn(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 1000, 0, Config{})
 	stranger := Admitted{Scope: pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()}), Account: uuid.NewV7()}
+	// Deliberately name the victim's account: an empty query for the stranger's own ID would not test RLS.
+	stranger.Account = b.admitted.Account
 	if rows, next := b.statement(stranger, 50, nil); len(rows) != 0 || next != nil {
 		t.Errorf("another account read %+v with a cursor %v", rows, next)
 	}

@@ -101,6 +101,7 @@ const MovementRow = memo(function MovementRow({ row }: { row: Schemas["Statement
   const { t } = useTranslation();
   const format = useFormat();
   const credit = raised(row.amount.amount);
+  const hold = row.kind === "freeze" || row.kind === "unfreeze";
   return (
     <tr className="hover:bg-s2">
       <Td className="whitespace-nowrap">{format.dateTime(new Date(row.at))}</Td>
@@ -111,9 +112,15 @@ const MovementRow = memo(function MovementRow({ row }: { row: Schemas["Statement
         }
       >
         {credit ? "+" : ""}
-        {format.money(row.amount)}
+        {format.money(hold ? row.frozen_change : row.amount)}
+        {hold ? <span className="block text-label text-t3">{t("statement.frozenChange")}</span> : null}
       </Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">{format.money(row.balance_after)}</Td>
+      <Td className="text-right whitespace-nowrap tabular-nums">
+        {format.money(row.balance_after)}
+        <span className="block text-label text-t3">
+          {t("statement.frozenAfter", { amount: format.money(row.frozen_after) })}
+        </span>
+      </Td>
       <Td className="hidden lg:table-cell">
         <Reference row={row} />
       </Td>
@@ -126,7 +133,7 @@ const MovementRow = memo(function MovementRow({ row }: { row: Schemas["Statement
 function Reference({ row }: { row: Schemas["StatementRow"] }) {
   const { t } = useTranslation();
   const short = `${row.reference.slice(0, 8)}…`;
-  if (row.kind === "spend") {
+  if (row.kind === "spend" || row.kind === "reversal") {
     return (
       <Link
         to="/calls/$callId"

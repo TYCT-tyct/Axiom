@@ -24,6 +24,7 @@ func statementRowOf(row billing.StatementRow, currency platform.Currency) consol
 	return consoleapi.StatementRow{
 		Id: row.ID.String(), At: row.At, Kind: consoleapi.StatementKind(row.Kind), Reference: row.Reference.String(),
 		Amount: moneyOf(row.Amount, currency), BalanceAfter: moneyOf(row.Balance, currency),
+		FrozenChange: moneyOf(row.FrozenChange, currency), FrozenAfter: moneyOf(row.Frozen, currency),
 	}
 }
 
@@ -79,7 +80,7 @@ func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStat
 func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency platform.Currency) ([]byte, error) {
 	var out bytes.Buffer
 	w := csv.NewWriter(&out)
-	if err := w.Write([]string{"at", "kind", "amount", "balance_after", "currency", "reference"}); err != nil {
+	if err := w.Write([]string{"at", "kind", "amount", "balance_after", "currency", "reference", "frozen_change", "frozen_after"}); err != nil {
 		return nil, err
 	}
 	var after *billing.StatementCursor
@@ -110,7 +111,7 @@ func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency pla
 func statementCSVRow(row billing.StatementRow, currency platform.Currency) []string {
 	return []string{
 		row.At.UTC().Format(time.RFC3339), string(row.Kind), creditsOf(row.Amount), creditsOf(row.Balance),
-		currency.String(), row.Reference.String(),
+		currency.String(), row.Reference.String(), creditsOf(row.FrozenChange), creditsOf(row.Frozen),
 	}
 }
 

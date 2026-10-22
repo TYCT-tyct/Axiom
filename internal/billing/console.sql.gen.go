@@ -112,27 +112,34 @@ func (q *Queries) SpentThisMonth(ctx context.Context, db DBTX, subjects []uuid.U
 
 const statementPage = `-- name: StatementPage :many
 WITH page AS (
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id
+    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
     FROM billing.transactions t
     WHERE t.account_id = $1 AND t.seq < $2::bigint
-        AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance')
+        AND (t.kind IN ('freeze', 'unfreeze') OR EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance'))
     ORDER BY t.seq DESC
     LIMIT $3)
     UNION ALL
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id
+    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
     FROM billing.transactions t
     WHERE t.account_id = $1 AND t.seq IS NULL AND (t.created_at, t.id) < ($4::timestamptz, $5::uuid)
-        AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance')
+        AND (t.kind IN ('freeze', 'unfreeze') OR EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance'))
     ORDER BY t.created_at DESC, t.id DESC
     LIMIT $3)
 )
 SELECT p.id, p.created_at, p.kind, p.request_id, coalesce(p.seq, 0)::bigint AS seq,
-    (-sum(e.amount))::bigint AS amount, coalesce(b.source, '')::text AS source,
-    (SELECT coalesce(ba.balance, 0)::bigint FROM billing.balances ba WHERE ba.account_id = $1) AS balance
+    (-coalesce(sum(e.amount), 0))::bigint AS amount, coalesce(b.source, '')::text AS source,
+    (CASE WHEN p.kind IN ('freeze', 'unfreeze') THEN
+        (p.revision - coalesce((SELECT t.revision FROM billing.transactions t
+            WHERE t.account_id = $1 AND t.request_id = p.request_id AND t.attempt_seq = 0
+                AND t.kind = p.kind AND t.revision < p.revision
+            ORDER BY t.revision DESC LIMIT 1), 0)) * CASE WHEN p.kind = 'freeze' THEN 1 ELSE -1 END
+        WHEN p.kind = 'refund' THEN -coalesce(sum(e.amount), 0) ELSE 0 END)::bigint AS frozen_change,
+    (SELECT ba.balance FROM billing.balances ba WHERE ba.account_id = $1)::bigint AS balance,
+    (SELECT ba.frozen FROM billing.balances ba WHERE ba.account_id = $1)::bigint AS frozen
 FROM page p
-JOIN billing.entries e ON e.transaction_id = p.id AND e.book = 'user_balance'
+LEFT JOIN billing.entries e ON e.transaction_id = p.id AND e.book = 'user_balance'
 LEFT JOIN billing.credit_batches b ON p.kind = 'credit' AND b.id = p.request_id
-GROUP BY p.id, p.seq, p.created_at, p.kind, p.request_id, b.source
+GROUP BY p.id, p.seq, p.created_at, p.kind, p.request_id, p.revision, b.source
 ORDER BY p.seq DESC NULLS LAST, p.created_at DESC, p.id DESC
 `
 
@@ -145,23 +152,21 @@ type StatementPageParams struct {
 }
 
 type StatementPageRow struct {
-	ID        uuid.UUID
-	CreatedAt time.Time
-	Kind      string
-	RequestID uuid.UUID
-	Seq       int64
-	Amount    int64
-	Source    string
-	Balance   int64
+	ID           uuid.UUID
+	CreatedAt    time.Time
+	Kind         string
+	RequestID    uuid.UUID
+	Seq          int64
+	Amount       int64
+	Source       string
+	FrozenChange int64
+	Balance      int64
+	Frozen       int64
 }
 
-// A page of the account's statement (README.md「控制台的读取」): what each of its transactions did to the user's balance,
-// newest first, with the balance it left. Only the user's own balance book is read, so a statement shows the money that
-// moved and nothing of where it went; a transaction that moved none of it (an attempt's cost, a released hold) takes no
-// row. The two regions of the ledger are read together, numbered rows by transactions_by_account_seq and rows from
-// before the sequence by transactions_legacy_by_account, each bounded to a page before its entries are summed, so what a
-// page reads grows with the page and not with the history around it. The balance is read in the same statement as the
-// rows, so a page and the balance its newest row starts from are one snapshot.
+// Balance and refund-hold events share the ledger's account commit order. Both index regions are bounded before
+// summing entries. Freeze/unfreeze revisions are cumulative per batch and kind: the unique event index finds the
+// previous revision without scanning the account history. The counters and rows use one snapshot.
 func (q *Queries) StatementPage(ctx context.Context, db DBTX, arg StatementPageParams) ([]StatementPageRow, error) {
 	rows, err := db.Query(ctx, statementPage,
 		arg.AccountID,
@@ -185,7 +190,9 @@ func (q *Queries) StatementPage(ctx context.Context, db DBTX, arg StatementPageP
 			&i.Seq,
 			&i.Amount,
 			&i.Source,
+			&i.FrozenChange,
 			&i.Balance,
+			&i.Frozen,
 		); err != nil {
 			return nil, err
 		}

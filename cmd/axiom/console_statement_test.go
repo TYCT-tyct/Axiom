@@ -54,6 +54,7 @@ func TestStatement(t *testing.T) {
 	want := consoleapi.StatementRow{
 		Id: page.Data[0].Id, At: page.Data[0].At, Kind: consoleapi.Spend, Reference: call.String(),
 		Amount: consoleapi.Money{Amount: "-1000", Currency: "USD"}, BalanceAfter: consoleapi.Money{Amount: "4999999000", Currency: "USD"},
+		FrozenChange: consoleapi.Money{Amount: "0", Currency: "USD"}, FrozenAfter: consoleapi.Money{Amount: "0", Currency: "USD"},
 	}
 	if diff := cmp.Diff(want, page.Data[0], cmpopts.EquateApproxTime(time.Millisecond)); diff != "" {
 		t.Errorf("a charge (-want +got):\n%s", diff)
@@ -107,9 +108,9 @@ func TestStatementCSV(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"at", "kind", "amount", "balance_after", "currency", "reference"},
-		{"", "spend", "-0.250000000", "1.250000000", "USD", call.String()},
-		{"", "gift", "1.500000000", "1.500000000", "USD", gift.String()},
+		{"at", "kind", "amount", "balance_after", "currency", "reference", "frozen_change", "frozen_after"},
+		{"", "spend", "-0.250000000", "1.250000000", "USD", call.String(), "0.000000000", "0.000000000"},
+		{"", "gift", "1.500000000", "1.500000000", "USD", gift.String(), "0.000000000", "0.000000000"},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("%d lines, want %d: %v", len(lines), len(want), lines)
@@ -170,6 +171,7 @@ func TestCreditsOf(t *testing.T) {
 		{999_999_999_999, "999.999999999"},
 		{-1_000_000_000, "-1.000000000"},
 		{1 << 62, "4611686018.427387904"},
+		{-1 << 63, "-9223372036.854775808"},
 	} {
 		if got := creditsOf(tc.amount); got != tc.want {
 			t.Errorf("creditsOf(%d) = %q, want %q", tc.amount, got, tc.want)

@@ -17,26 +17,30 @@ import (
 type StatementKind string
 
 const (
-	StatementTopUp  StatementKind = "top_up" // paid credit, from a payment or an offline channel
-	StatementGift   StatementKind = "gift"
-	StatementSpend  StatementKind = "spend" // one call's charge
-	StatementExpiry StatementKind = "expiry"
-	StatementRefund StatementKind = "refund"
+	StatementTopUp    StatementKind = "top_up" // paid credit, from a payment or an offline channel
+	StatementGift     StatementKind = "gift"
+	StatementSpend    StatementKind = "spend" // one call's charge
+	StatementExpiry   StatementKind = "expiry"
+	StatementRefund   StatementKind = "refund"
+	StatementReversal StatementKind = "reversal"
+	StatementFreeze   StatementKind = "freeze"
+	StatementUnfreeze StatementKind = "unfreeze"
 )
 
 // MaxStatementPage is the most movements one page of a statement holds.
 const MaxStatementPage = 200
 
 // StatementRow is one movement of an account's credits: what it was, what it did to the balance, and the balance after
-// it. Reference is the call's request ID for a charge and the credit batch's ID for a top-up, a gift, an expiry and a
-// refund (README.md「控制台的读取」).
+// it. Reference is the call's request ID for a charge and the credit batch's ID for other events (the order ID for paid credit) (README.md「控制台的读取」).
 type StatementRow struct {
-	ID        uuid.UUID // the row's own identity; it names no ledger entry
-	At        time.Time
-	Kind      StatementKind
-	Amount    int64 // billionths of a credit, positive when the balance rose
-	Balance   int64 // billionths of a credit, the account's balance after this movement
-	Reference uuid.UUID
+	ID           uuid.UUID // the row's own identity; it names no ledger entry
+	At           time.Time
+	Kind         StatementKind
+	Amount       int64 // billionths of a credit, positive when the balance rose
+	Balance      int64 // billionths of a credit, the account's balance after this movement
+	FrozenChange int64 // signed change in credits held for refunds; freezes do not move the total balance
+	Frozen       int64 // frozen credits after this event
+	Reference    uuid.UUID
 }
 
 // StatementCursor is where a page of a statement continues: the place of the page's last row in the account's ledger,
@@ -49,22 +53,24 @@ type StatementCursor struct {
 	At      time.Time // where the rows from before the sequence continue; the end of time until they begin
 	ID      uuid.UUID
 	Balance int64
+	Frozen  int64
 }
 
 // statementCursorLen is a cursor's bytes: the seq, the time to the microsecond that the column keeps, the ID and the
-// balance.
-const statementCursorLen = 8 + 8 + 16 + 8
+// balance and frozen counters.
+const statementCursorLen = 8 + 8 + 16 + 8 + 8
 
 // ErrBadStatementCursor is text that is no cursor a page of a statement gave out.
 var ErrBadStatementCursor = errors.New("billing: malformed statement cursor")
 
-// String is the cursor as the console passes it back: opaque text, 54 characters.
+// String is the cursor as the console passes it back: opaque text, 64 characters.
 func (c StatementCursor) String() string {
 	var b [statementCursorLen]byte
 	binary.BigEndian.PutUint64(b[:8], uint64(c.Seq))              // #nosec G115 -- the bits are kept, and read back by ParseStatementCursor
 	binary.BigEndian.PutUint64(b[8:16], uint64(c.At.UnixMicro())) // #nosec G115 -- as for Seq
 	copy(b[16:32], c.ID[:])
 	binary.BigEndian.PutUint64(b[32:], uint64(c.Balance)) // #nosec G115 -- as for Seq, and a balance may be negative
+	binary.BigEndian.PutUint64(b[40:], uint64(c.Frozen))  // #nosec G115 -- the bits are preserved
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
@@ -79,6 +85,7 @@ func ParseStatementCursor(s string) (StatementCursor, error) {
 		At:      time.UnixMicro(int64(binary.BigEndian.Uint64(b[8:16]))).UTC(), // #nosec G115 -- as for Seq
 		ID:      uuid.UUID(b[16:32]),
 		Balance: int64(binary.BigEndian.Uint64(b[32:])), // #nosec G115 -- the bits String kept
+		Frozen:  int64(binary.BigEndian.Uint64(b[40:])), // #nosec G115 -- the bits String kept
 	}, nil
 }
 
@@ -96,7 +103,7 @@ var statementNewest = StatementCursor{Seq: math.MaxInt64, At: time.Date(9999, 1,
 
 // ListStatement returns a page of the account's statement, newest first, and where the next page starts (nil on the last
 // page), read in tx, which must hold the account's scope. One row is one movement of the user's balance: a credit, a
-// charge, an expiry or a refund, with the balance after it; a transaction that moved none of it takes no row, and no
+// charge, expiry, refund or refund hold, with the balance and frozen credits after it; internal cost events take no row, and no
 // entry or book is read out. A new movement arriving between pages lands above the cursor and does not shift the rows
 // already read.
 func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) {
@@ -119,8 +126,10 @@ func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]Statement
 	// The page's newest row is where the balance stands if the page follows nothing, and otherwise the balance the
 	// cursor carries; each row below it left the balance one movement further back.
 	balance := after.Balance
+	frozen := after.Frozen
 	if q.After == nil && len(rows) > 0 {
 		balance = rows[0].Balance
+		frozen = rows[0].Frozen
 	}
 	for i, r := range rows {
 		kind, err := statementKind(r.Kind, r.Source)
@@ -129,8 +138,10 @@ func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]Statement
 		}
 		statement[i] = StatementRow{
 			ID: r.ID, At: r.CreatedAt, Kind: kind, Amount: r.Amount, Balance: balance, Reference: r.RequestID,
+			FrozenChange: r.FrozenChange, Frozen: frozen,
 		}
 		balance -= r.Amount
+		frozen -= r.FrozenChange
 	}
 	if !more {
 		return statement, nil, nil
@@ -138,6 +149,7 @@ func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]Statement
 	last := rows[len(rows)-1]
 	next := statementNewest
 	next.Balance = balance
+	next.Frozen = frozen
 	if last.Seq != 0 {
 		next.Seq = last.Seq // the rows from before the sequence are all below it, so its bound stays open
 	} else {
@@ -165,6 +177,12 @@ func statementKind(kind, source string) (StatementKind, error) {
 		return StatementExpiry, nil
 	case "refund":
 		return StatementRefund, nil
+	case "reverse":
+		return StatementReversal, nil
+	case "freeze":
+		return StatementFreeze, nil
+	case "unfreeze":
+		return StatementUnfreeze, nil
 	}
 	return "", fmt.Errorf("a %s transaction is not a statement kind", kind)
 }

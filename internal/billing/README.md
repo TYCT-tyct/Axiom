@@ -29,8 +29,8 @@ func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor i
 func ReadBalance(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (BalanceView, error) // 已实现：控制台的余额
 func KeysUsed(ctx context.Context, tx pg.Tx, keys []KeyWindow) (map[uuid.UUID]int64, error) // 已实现：控制台的 key 剩余额度
 func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) // 已实现：控制台的额度流水，一页最新在前
-type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount, Balance int64; Reference uuid.UUID } // 已实现：Amount 正数是余额增加，Balance 是这笔之后的余额，都是十亿分之一额度；Reference 扣费是调用编号，其余是额度批次
-type StatementCursor struct{ Seq int64; At time.Time; ID uuid.UUID; Balance int64 } // 已实现；String 与 ParseStatementCursor 是它的文本形式，控制台的游标就是它
+type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount, Balance, FrozenChange, Frozen int64; Reference uuid.UUID } // 已实现：Amount 正数是余额增加，Balance 是这笔之后的余额，都是十亿分之一额度；Reference 扣费和冲回是调用编号，其余是额度批次（付费批次为订单编号或线下记录编号）
+type StatementCursor struct{ Seq int64; At time.Time; ID uuid.UUID; Balance, Frozen int64 } // 已实现；String 与 ParseStatementCursor 是它的文本形式，控制台的游标就是它
 func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (Funds, error) // 已实现：余额行加这些工作区的累计 spent，不加锁；没有余额行全是 0；只读接口用
 func ReadKeyUsage(ctx context.Context, tx pg.Tx, key uuid.UUID, reset Reset) (KeyUsage, error) // 已实现：key 的累计和当前 UTC 日、周、月已收，以及上限窗口里的已收加预留；只读接口用
 type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；gateway 把 accounts.Admission 转成它（`billingAdmitted`），这一层转换是设计，不是临时
@@ -90,9 +90,9 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 - `ReadBalance(ctx, tx, account, workspaces) BalanceView`：余额行的 `balance`、`reserved`、`frozen`、`floor`（没有余额行按全 0），以及 `SpentThisMonth`，即给定的这些工作区自本 UTC 月初起被收的 `spend.spent` 之和。按工作区加是因为每笔收费在 `spend` 里记两行（工作区一行、key 一行），不能全加；账户的工作区由 accounts 的 `AccountWorkspaces` 给出（含已删除的，它们的花费仍算）。按 `(subject, window_start)` 主键读，每个工作区一次索引范围扫描，与账本的大小无关。可用额度 = 余额 − 在途预留 − 退款冻结，由 `BalanceView.Available()` 以大整数精确计算，控制台和管理后台共用。
 - `KeysUsed(ctx, tx, []KeyWindow) map[key]int64`：每把 key 在**自己重置周期**的当前窗口里已用的（花掉的加预留的），与准入检查上限用的是同一个数（`ReadUsage`），一条语句读完所有 key；控制台的 `limit_remaining` = 上限 − 已用，不低于 0。
-- `ListStatement(ctx, tx, StatementQuery) ([]StatementRow, *StatementCursor, error)`：额度流水，一页最新在前，一行是一笔动过用户余额的交易，带这笔之后的余额。只读 `user_balance` 这一本账：没动余额的交易（尝试成本、释放的预留）不占行，别的账本和分录一个字节也不出，这就是「不暴露内部分录」。两类记录一条语句读完：有 `seq` 的按 `transactions_by_account_seq` 取一页，`seq` 为空的按 `transactions_legacy_by_account` 取一页，都先限行数、再只给这一页求金额之和，余额行在同一个快照里读（一条语句一个快照，页和它的起点才对得上），`TestStatementReadsGrowWithThePage` 用 `EXPLAIN (ANALYZE, BUFFERS)` 的块数守住"读的量随页走、不随历史走"，与 `Movements` 守的是同一条。
-- **种类**：`credit` 按批次的 `source` 分充值（`paid`）和赠送（`gift`），`settle` 是扣费，`expire` 是到期，`refund` 是退款；其余动过余额的种类（`reverse`、`cost_adjust`）报错、不出行——悄悄跳过会让余额列和钱对不上。
-- **游标带余额**（`StatementCursor`）：它记这一页最后一行的位置**和那之后的余额**，下一页从那里往回走，每行减掉自己的金额就是这一行之后的余额。不带余额的话，算第 n 行之后的余额得把它上面的分录全加起来，翻页就退化成扫全账本；带上之后一页除了这 200 行只多读一次余额行。伪造的游标只能挪用户自己那一列余额，读到别的账户的行也会被行级安全挡住；翻页期间新结算的调用序号更大、落在这页之上，已读的页不错位、行不重复（`TestStatementPagesAcrossNewMovements`）。
+- `ListStatement(ctx, tx, StatementQuery) ([]StatementRow, *StatementCursor, error)`：额度流水，一页最新在前，一行是一笔余额或退款冻结事件，带这笔之后的总余额、冻结额与本次冻结额变动。只读 `user_balance` 分录与 `freeze`/`unfreeze` 事件：尝试成本、释放的调用预留不占行，别的账本和分录一个字节也不出，这就是「不暴露内部分录」。两类记录一条语句读完：有 `seq` 的按 `transactions_by_account_seq` 取一页，`seq` 为空的按 `transactions_legacy_by_account` 取一页，都先限行数、再只给这一页求金额之和，余额行在同一个快照里读（一条语句一个快照，页和它的起点才对得上），`TestStatementReadsGrowWithThePage` 用 `EXPLAIN (ANALYZE, BUFFERS)` 的块数守住"读的量随页走、不随历史走"，与 `Movements` 守的是同一条。
+- **种类**：`credit` 按批次的 `source` 分充值（`paid`）和赠送（`gift`），`settle` 是扣费，`expire` 是到期，`refund` 是已完成退款（扣总余额、减冻结额），`reverse` 是调用退费（加总余额），`freeze`/`unfreeze` 只加减冻结额、不动总余额。冻结/解冻的 revision 是批次同种事件的累计值，通过既有 `(request_id, attempt_seq, kind, revision)` 唯一索引找前一个值，作差得到本次金额；不把累计量当单笔金额。未知的余额变动种类报错，避免悄悄漏掉。
+- **游标带余额和冻结额**（`StatementCursor`）：它记这一页最后一行的位置**和下一行的余额、冻结额起点**，下一页从那里往回走，分别减去本行余额与冻结额变动，即上一笔事件之后的状态。不带余额的话，算第 n 行之后的余额得把它上面的分录全加起来，翻页就退化成扫全账本；带上之后一页除了这 200 行只多读一次余额行。伪造的游标只能挪用户自己那一列余额，读到别的账户的行也会被行级安全挡住；翻页期间新结算的调用序号更大、落在这页之上，已读的页不错位、行不重复（`TestStatementPagesAcrossNewMovements`）。
 
 ## 报价
 

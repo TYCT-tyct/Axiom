@@ -294,7 +294,7 @@ export interface paths {
         };
         /**
          * The account's credit statement
-         * @description Every movement of the account's credits, newest first: a top-up, a gift, a charge for a call, an expiry or a refund, each with the balance after it. One row is one movement, so a call is one row here and the calls list has what it used and cost. `reference` is the call behind a charge, or the credit batch behind a top-up, a gift, an expiry and a refund. No ledger entry, book or platform account appears. A movement that settles while the pages are being read lands above the cursor and shifts none of the pages already read.
+         * @description Every credit event, newest first in ledger commit order: top-up, gift, call charge or reversal, expiry, refund freeze, unfreeze or completed refund. Corrections can create multiple events for one call. `reference` identifies the call for charges/reversals and the batch otherwise (the order ID for paid credit). Freezes change frozen credits but leave the total balance unchanged. No ledger entry, book or platform account appears. An event that commits while the pages are being read lands above the cursor and shifts none of the pages already read.
          */
         get: operations["listStatement"];
         put?: never;
@@ -314,7 +314,7 @@ export interface paths {
         };
         /**
          * The account's credit statement as a CSV file
-         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount` and `balance_after` (exact decimal amounts of the site's currency, in credits), `currency` and `reference`. At most the newest 10 000 movements; an account with more reads the rest a page at a time from `listStatement`.
+         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount`, `balance_after`, `currency`, `reference`, `frozen_change`, `frozen_after`. All amounts are exact decimals in site credits. At most the newest 10 000 events are buffered (bounded memory); an account with more reads the rest a page at a time from `listStatement`.
          */
         get: operations["exportStatement"];
         put?: never;
@@ -482,10 +482,10 @@ export interface components {
             spent_this_month: components["schemas"]["Money"];
         };
         /**
-         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge, unused credit that expired, or credit given back.
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
          * @enum {string}
          */
-        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund";
+        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
         /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
@@ -498,7 +498,11 @@ export interface components {
             kind: components["schemas"]["StatementKind"];
             amount: components["schemas"]["Money"];
             balance_after: components["schemas"]["Money"];
-            /** @description What the movement was for: the call's ID (as `listCalls` and `getCall` give it) for a charge, or the credit batch's ID for the others. */
+            /** @description Signed change in credits frozen for refunds; zero for ordinary balance changes. */
+            frozen_change: components["schemas"]["Money"];
+            /** @description Credits frozen after this event; included in balance_after, unavailable for new spending. */
+            frozen_after: components["schemas"]["Money"];
+            /** @description The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit, or the offline credit ID). No payment credentials or internal account IDs are included. */
             reference: string;
         };
         Statement: {

@@ -481,6 +481,24 @@ test.describe("statement", () => {
     expect(state.log.filter((line) => line === "GET /statement.csv")).toHaveLength(1);
   });
 
+  test("refund holds leave the balance visible and completed refunds reduce it", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/statement");
+    const hold = page
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: "退款冻结", exact: true }) })
+      .first();
+    await expect(hold).toContainText("冻结额变动");
+    await expect(hold).toContainText("冻结：$0.0015");
+    const refund = page
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: "退款完成", exact: true }) })
+      .first();
+    await expect(refund).toContainText("-$0.0015");
+    await expect(refund).toContainText("冻结：$0.00");
+  });
+
   test("an account with no movements says so", async ({ page }) => {
     const state = await mockConsole(page, "empty");
     signedInAs(state);

@@ -95,9 +95,11 @@ function exportStatement({ state }: Ctx<"/api/console/v1/statement.csv", "get">)
     row.balance_after.amount,
     row.amount.currency,
     row.reference,
+    row.frozen_change.amount,
+    row.frozen_after.amount,
   ];
   const lines = [
-    `at,kind,amount,balance_after,currency,reference`,
+    `at,kind,amount,balance_after,currency,reference,frozen_change,frozen_after`,
     ...state.statement.map((row) => columns(row).join(",")),
   ];
   return {
