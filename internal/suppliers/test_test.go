@@ -159,22 +159,23 @@ func checkTestCostRow(w *world, result TestResult) {
 		return RecordTest(ctx, tx, audit.User(uuid.NewV7()), "test the endpoint", result)
 	})
 	var (
-		test                    bool
-		flag, ref, state, est   string
-		site, account, usageRow *string
+		test                  bool
+		flag, ref, state, est string
+		site, account         *string
+		input, output         int64
 	)
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		return tx.QueryRow(ctx, `SELECT test, cost_flag, coalesce(charge_ref, ''), state, estimated_native::text,
-			site_id::text, account_id::text, usage::text
+			site_id::text, account_id::text, (usage->'items'->>'input')::bigint, (usage->'items'->>'output')::bigint
 			FROM suppliers.attempt_costs WHERE request_id = $1 AND attempt_seq = 1`, uuid.UUID(result.Request)).
-			Scan(&test, &flag, &ref, &state, &est, &site, &account, &usageRow)
+			Scan(&test, &flag, &ref, &state, &est, &site, &account, &input, &output)
 	})
 	if !test || flag != "complete" || state != "pending" || ref != "ref-1" || est != "6.15" || site != nil || account != nil {
 		t.Errorf("the row: test %v, flag %s, ref %s, state %s, estimate %s, tenant %v/%v; want a test's own row", test, flag, ref, state, est, site, account)
 	}
 	// What the supplier reported is stored beside the estimate, not instead of it.
-	if usageRow == nil || !strings.Contains(*usageRow, `"items":{"input":3,"output":2}`) {
-		t.Errorf("the row's usage is %v, want the supplier's 3 and 2", usageRow)
+	if input != 3 || output != 2 {
+		t.Errorf("the row's usage is %d and %d, want the supplier's 3 and 2", input, output)
 	}
 }
 
