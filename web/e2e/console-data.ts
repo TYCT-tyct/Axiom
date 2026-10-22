@@ -73,18 +73,29 @@ const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 // top-up or an expiry names the batch it came from.
 const kinds = ["spend", "spend", "top_up", "reversal", "gift", "expiry", "refund", "freeze", "unfreeze"] as const;
 
+// What each kind does, in billionths: to the balance, to the credits frozen for refunds, and the frozen credits after.
+const effects: Record<(typeof kinds)[number], [amount: string, frozenChange: string, frozenAfter: string]> = {
+  spend: ["-1500000", "0", "0"],
+  top_up: ["500000000", "0", "0"],
+  reversal: ["500000000", "0", "0"],
+  gift: ["500000000", "0", "0"],
+  expiry: ["-1500000", "0", "0"],
+  refund: ["-1500000", "-1500000", "0"],
+  freeze: ["0", "1500000", "1500000"],
+  unfreeze: ["0", "-1500000", "0"],
+};
+
 function aMovement(n: number, over: Partial<Schemas["StatementRow"]> = {}): Schemas["StatementRow"] {
   const kind = kinds[n % kinds.length] ?? "spend";
-  const income = kind === "top_up" || kind === "gift" || kind === "reversal";
-  const hold = kind === "freeze" || kind === "unfreeze";
+  const [amount, frozenChange, frozenAfter] = effects[kind];
   return {
     id: callId(1000 + n),
     at: new Date(Date.UTC(2026, 9, 14, 8, 30) - n * 60_000).toISOString(),
     kind,
-    amount: nano(String(hold ? 0 : income ? 500_000_000 : -1_500_000)),
+    amount: nano(amount),
     balance_after: nano(String(3_000_000_000 - n * 100_000)),
-    frozen_change: nano(kind === "freeze" ? "1500000" : kind === "unfreeze" || kind === "refund" ? "-1500000" : "0"),
-    frozen_after: nano(kind === "freeze" ? "1500000" : "0"),
+    frozen_change: nano(frozenChange),
+    frozen_after: nano(frozenAfter),
     reference: kind === "spend" || kind === "reversal" ? callId(1 + (n % 3)) : callId(2000 + n),
     ...over,
   };

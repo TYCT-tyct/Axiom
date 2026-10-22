@@ -143,3 +143,15 @@ export async function mockConsole(page: Page, data: MockData = "usual", over: Pa
 }
 
 export { signedInAs } from "./mock-auth.ts";
+
+// The server answering the same call, once, with a failure.
+export const failOnce = (page: Page, url: string) => {
+  let failed = false;
+  return page.route(url, (route) => {
+    if (failed) {
+      return route.fallback();
+    }
+    failed = true;
+    return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
+  });
+};
