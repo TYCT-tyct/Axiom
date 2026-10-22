@@ -20,22 +20,25 @@ const Timeout = 20 * time.Millisecond
 // caller takes its fallback (README「每种用途」).
 var ErrUnavailable = errors.New("valkey unavailable")
 
+var errWriteSlots = errors.New("sticky write slots are busy")
+
 // Use is what a batch of commands is for: the label of the metrics and of the log line (README「指标与告警」).
 type Use string
 
 // The uses of a batch, as the metrics label them.
 const (
-	Precheck Use = "precheck" // the precheck of a model call, before admission
-	// Login is what a sign-in spends and gives back: the attempts before it (README「每种用途」).
+	Precheck    Use = "precheck" // the precheck of a model call, before admission
+	StickyWrite Use = "sticky_write"
+	// Login is what a sign-in spends and gives back: the attempts before it.
 	Login Use = "login"
 	// check is the client's own reading of the server: the startup checks and the loop's measurements.
 	check Use = "check"
 )
 
 // uses is every Use, in the order the metrics prebuild their options.
-var uses = [...]Use{Precheck, Login, check}
+var uses = [...]Use{Precheck, Login, check, StickyWrite}
 
-// Space is the purpose a key serves, its third field (README「键」). K3 adds the sticky one.
+// Space is the purpose a key serves, its third field (README「键」).
 type Space string
 
 const (
@@ -45,6 +48,9 @@ const (
 	LoginSpace Space = "login"
 )
 
+// StickySpace holds routing's session-to-endpoint bindings.
+const StickySpace Space = "stick"
+
 // Script is a module's Lua script. kv runs it and holds none of its rules: the keys are the module's, and so are the
 // arguments, which carry the time the module read from Now (README「接口」).
 type Script struct{ src string }
@@ -53,13 +59,14 @@ type Script struct{ src string }
 // NOSCRIPT, and the second round trip would break the one round trip a precheck has.
 func NewScript(src string) Script { return Script{src} }
 
-// Cmd is one command of a batch. The type is opaque so that a module runs its own script and nothing else: the client's
-// two readings of the server are the other commands it knows.
+// Cmd is one command of a batch: a module's script, an expiring binding operation, or the client's server readings.
 type Cmd struct {
-	kind cmdKind
-	src  string   // the script's source, for a script
-	keys []string // the keys the script declares, which the server checks against the ACL user
-	args []string
+	kind       cmdKind
+	src        string   // the script's source, for a script
+	keys       []string // the keys the script declares, which the server checks against the ACL user
+	args       []string
+	key, value string
+	ttl        time.Duration
 }
 
 // cmdKind is the command a Cmd runs.
@@ -69,7 +76,24 @@ const (
 	scriptCmd cmdKind = iota
 	timeCmd
 	memoryCmd
+	getCmd
+	deleteCmd
+	setCmd
 )
+
+// Get reads an optional binding; a missing key does not fail the other commands.
+func Get(key string) Cmd { return Cmd{kind: getCmd, key: key} }
+
+// Delete forgets a binding in the precheck batch.
+func Delete(key string) Cmd { return Cmd{kind: deleteCmd, key: key} }
+
+// Set writes a binding with a positive, relative lifetime. There is no persistent form.
+func Set(key, value string, ttl time.Duration) Cmd {
+	if ttl <= 0 {
+		panic("kv: a binding needs a positive lifetime")
+	}
+	return Cmd{kind: setCmd, key: key, value: value, ttl: ttl}
+}
 
 // Cmd is one run of the script over keys with arguments.
 func (s Script) Cmd(keys []string, args ...string) Cmd {
@@ -90,6 +114,9 @@ func (v Value) Ints() ([]int64, error) { return v.r.AsIntSlice() }
 // String is the reply as text: INFO's fields, or a sticky key's endpoint.
 func (v Value) String() (string, error) { return v.r.ToString() }
 
+// Missing reports the normal GET miss, distinct from a failed batch.
+func (v Value) Missing() bool { return valkey.IsValkeyNil(v.r.Error()) }
+
 // Do runs the batch in one round trip, through the breaker, under the deadline the caller's context and Timeout set,
 // and counts it. Any failure is ErrUnavailable with its cause, and the caller falls back; the replies are read only
 // when every command succeeded.
@@ -98,7 +125,12 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 		return nil, ErrUnavailable
 	}
 	started := c.now()
-	probe, allowed := c.br.allow(started)
+	var probe, allowed bool
+	if use == StickyWrite {
+		allowed = c.br.allowWrite()
+	} else {
+		probe, allowed = c.br.allow(started)
+	}
 	if !allowed {
 		c.m.recordCall(ctx, use, unavailable)
 		return nil, ErrUnavailable
@@ -106,13 +138,17 @@ func (c *Client) Do(ctx context.Context, use Use, cmds ...Cmd) ([]Value, error) 
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	values, err := c.send(ctx, caller, c.build(cmds))
+	values, err := c.send(ctx, caller, use, cmds)
 	took := c.now().Sub(started)
 	result := outcomeOf(caller, err)
 	c.m.duration.Record(caller, took.Seconds(), c.m.useOption(use))
 	c.m.recordCall(caller, use, result)
-	if changed, open := c.br.done(started, probe, result); changed {
-		c.m.recordBreaker(caller, open)
+	if use != StickyWrite {
+		if changed, open := c.br.done(started, probe, result); changed {
+			c.m.recordBreaker(caller, open)
+		}
+	} else if errors.Is(err, errWriteSlots) {
+		c.m.drop(caller, dropSlots, int64(len(cmds)))
 	}
 	if err != nil {
 		if result == failed {
@@ -147,17 +183,34 @@ type flight struct {
 // send puts the batch on the wire and waits for its replies for as long as ctx lasts. The batch is sent by a goroutine of
 // its own that holds its place until the replies come, not until the caller stops waiting: the place stands for the ring
 // slot, which an abandoned command keeps. Without a place by the deadline nothing is sent.
-func (c *Client) send(ctx, caller context.Context, built []valkey.Completed) ([]Value, error) {
-	weight := int64(len(built))
-	if err := c.slots.Acquire(ctx, weight); err != nil {
+func (c *Client) send(ctx, caller context.Context, use Use, cmds []Cmd) ([]Value, error) {
+	weight := int64(len(cmds))
+	if use == StickyWrite {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// The private budget also covers abandoned writes until their replies arrive. TryAcquire never joins
+		// the foreground semaphore's FIFO queue, or passes a request already waiting there.
+		if !c.writeSlots.TryAcquire(weight) {
+			return nil, errWriteSlots
+		}
+		if !c.slots.TryAcquire(weight) {
+			c.writeSlots.Release(weight)
+			return nil, errWriteSlots
+		}
+	} else if err := c.slots.Acquire(ctx, weight); err != nil {
 		return nil, err
 	}
+	built := c.build(cmds)
 	sent := &flight{done: make(chan struct{})}
 	go func() {
 		work, cancel := context.WithTimeout(context.WithoutCancel(caller), settleBy)
 		defer cancel()
 		sent.values, sent.err = c.run(work, built)
 		c.slots.Release(weight)
+		if use == StickyWrite {
+			c.writeSlots.Release(weight)
+		}
 		close(sent.done)
 	}()
 	select {
@@ -180,6 +233,12 @@ func (c *Client) build(cmds []Cmd) []valkey.Completed {
 			built[i] = builder.Info().Section("memory").Build()
 		case scriptCmd:
 			built[i] = builder.Eval().Script(cmd.src).Numkeys(int64(len(cmd.keys))).Key(cmd.keys...).Arg(cmd.args...).Build()
+		case getCmd:
+			built[i] = builder.Get().Key(cmd.key).Build()
+		case deleteCmd:
+			built[i] = builder.Del().Key(cmd.key).Build()
+		case setCmd:
+			built[i] = builder.Set().Key(cmd.key).Value(cmd.value).PxMilliseconds(max(1, cmd.ttl.Milliseconds())).Build()
 		}
 	}
 	return built
@@ -191,7 +250,7 @@ func (c *Client) run(ctx context.Context, built []valkey.Completed) ([]Value, er
 	replies := c.vk.DoMulti(ctx, built...)
 	values := make([]Value, len(replies))
 	for i, reply := range replies {
-		if err := reply.Error(); err != nil {
+		if err := reply.Error(); err != nil && !valkey.IsValkeyNil(err) {
 			return nil, err
 		}
 		values[i] = Value{reply}
