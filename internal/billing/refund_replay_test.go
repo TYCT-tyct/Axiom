@@ -71,8 +71,9 @@ func TestRefundReplayHistory(t *testing.T) {
 	rows := []LiveBatchesRow{paid, gift}
 	a := newAllocation(AllocationStateRow{}, rows)
 	applyAll(t, a, log...)
+	// The second charge leaves 10 unfunded; the release pays it from this paid batch.
 	p := a.batches[paid.ID]
-	if p.consumed != 20 || p.refunded != 70 || p.remaining() != 10 || a.unfunded != 0 || a.frozen() != 0 {
+	if p.consumed != 30 || p.refunded != 70 || p.remaining() != 0 || a.unfunded != 0 || a.frozen() != 0 {
 		t.Fatalf("paid batch %+v, debt %d, frozen %d", *p, a.unfunded, a.frozen())
 	}
 	if a.batches[gift.ID].consumed != 100 {
