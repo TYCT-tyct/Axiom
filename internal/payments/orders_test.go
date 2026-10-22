@@ -476,8 +476,8 @@ func TestExpiryFreesThePlaceOnce(t *testing.T) {
 	if used := w.used(m.ID); used != 0 {
 		t.Fatalf("usage %d, want nothing reserved", used)
 	}
-	if n := w.events(o.ID); n != 3 {
-		t.Fatalf("%d events", n)
+	if n := w.count(w.accountA(), "SELECT count(*) FROM payments.order_events WHERE order_id = $1 AND kind = 'expire'", uuid.UUID(o.ID)); n != 1 {
+		t.Fatalf("%d expiry events", n)
 	}
 	mu.Lock()
 	if !slices.Contains(closed, o.ID) {
@@ -487,8 +487,8 @@ func TestExpiryFreesThePlaceOnce(t *testing.T) {
 	if err := w.p.poll(w.t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if n := w.events(o.ID); n != 3 {
-		t.Fatalf("%d events after a second run", n)
+	if n := w.count(w.accountA(), "SELECT count(*) FROM payments.order_events WHERE order_id = $1 AND kind = 'expire'", uuid.UUID(o.ID)); n != 1 {
+		t.Fatalf("%d expiry events after a second run", n)
 	}
 	mu.Lock()
 	if len(closed) != 1 {

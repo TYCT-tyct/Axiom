@@ -112,7 +112,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 | 监听 | 提供什么 |
 |---|---|
-| 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；模型调用接口（`/v1/`、`/api/v1/`，`cmd/axiom` 的 `withModelCalls`）；支付回调以后加 |
+| 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，18 个操作都有处理器，见「接口约定」的守卫）；模型调用接口（`/v1/`、`/api/v1/`，`cmd/axiom` 的 `withModelCalls`）；支付回调（GET/POST `/api/payments/v1/notify/{merchant}`，渠道签名鉴权，独立于控制台会话） |
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 45 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
