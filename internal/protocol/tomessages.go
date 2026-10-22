@@ -29,7 +29,10 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {
-		out = appendQuoted(append(out, `,"metadata":{"user_id":`...), w.Identity(*c.User))
+		out, err = appendMetadataUserID(append(out, `,"metadata":{"user_id":`...), w, *c.User)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, '}')
 	}
 	return append(out, '}'), nil
@@ -342,7 +345,7 @@ func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
 	var err error
 	switch {
 	case p.Type == "text", p.Type == "refusal": // a refusal is text the assistant said: Anthropic's own come as text
-		out = append(append(out, `{"type":"text","text":`...), p.Text...)
+		out = append(append(out, messagesTextHead...), p.Text...)
 	case textOnly:
 		return nil, &NotSupported{Reason: "a " + p.Type + " part where Messages takes text only"}
 	case p.Type == "image_url" && p.ImageURL != nil:
@@ -367,7 +370,7 @@ func imageBlock(out []byte, p canonPart) ([]byte, error) {
 	if p.ImageURL.Detail == "low" {
 		return nil, &NotSupported{Reason: "image detail low has no Messages counterpart"}
 	}
-	out = append(out, `{"type":"image","source":`...)
+	out = append(out, messagesImageHead...)
 	if media, data, ok := dataURL(p.ImageURL.URL); ok {
 		out = appendQuoted(append(out, `{"type":"base64","media_type":`...), media)
 		out = appendQuoted(append(out, `,"data":`...), data)
@@ -383,7 +386,7 @@ func documentBlock(out []byte, fileData string) ([]byte, error) {
 	if !ok || media != "application/pdf" {
 		return nil, &NotSupported{Reason: "a file that is not PDF data"}
 	}
-	out = append(out, `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":`...)
+	out = append(out, messagesFileHead...)
 	return append(appendQuoted(out, data), '}'), nil
 }
 

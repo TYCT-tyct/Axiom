@@ -128,7 +128,7 @@ func TestTheOffsetToTheServerIsMeasuredAndKept(t *testing.T) {
 			t.Parallel()
 			server := startTimeServer(t, local.Add(tt.offset))
 			cfg := kv.Config{URL: "valkey://axiom@" + server.address, PasswordFile: password, Nodes: 1, Namespace: kvtest.Namespace()}
-			client, err := kv.Open(t.Context(), cfg, kv.Deps{Now: func() time.Time { return local }})
+			client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{Now: func() time.Time { return local }}))
 			if tt.refuse {
 				if err == nil || !strings.Contains(err.Error(), kv.URLVar) || !strings.Contains(err.Error(), "away from the server's") {
 					t.Fatalf("a clock %v from the server's: %v, want a refusal naming %s", tt.offset, err, kv.URLVar)

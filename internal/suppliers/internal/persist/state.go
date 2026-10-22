@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -32,19 +33,67 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 		if err != nil {
 			return err
 		}
-		if row.Format != format {
-			return fmt.Errorf("the state is stored in format %d, which this program does not read", row.Format)
-		}
-		if err := jsonx.UnmarshalKnown(row.State, &out); err != nil {
-			return fmt.Errorf("decode the state: %w", err)
-		}
-		out.Version = row.Version
-		return nil
+		out, err = decode(row.Version, row.Format, row.State)
+		return err
 	})
 	if err != nil {
 		return syncer.State{}, fmt.Errorf("persist: load the state of supplier %s: %w", st.s.Supplier.ID, err)
 	}
 	return out, nil
+}
+
+// decode reads a stored state as this program keeps it. Its version is the row's, which the state's own member is not
+// read for: the row is what a Commit names.
+func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error) {
+	if storedFormat != format {
+		return syncer.State{}, fmt.Errorf("the state is stored in format %d, which this program does not read", storedFormat)
+	}
+	var out syncer.State
+	if err := jsonx.UnmarshalKnown(raw, &out); err != nil {
+		return syncer.State{}, fmt.Errorf("decode the state: %w", err)
+	}
+	out.Version = version
+	return out, nil
+}
+
+// Wake resumes polling in the transaction that replaces the login, fencing out the old lease holder. It keeps the
+// charge position to avoid rescanning history, and LastOK so commits still project the stored listing (readsListing).
+//
+// It ensures and locks the state row before the caller locks the supplier, matching hold's lock order. Without the
+// insert, an initial sync could create and stop the state between this read and the caller's supplier lock.
+func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
+	q := store.New()
+	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
+		return fmt.Errorf("persist: make the state of supplier %s: %w", id, err)
+	}
+	row, err := q.LockSyncState(ctx, tx, id)
+	if errors.Is(err, pg.ErrNoRows) {
+		// No supplier to wake: the caller's own read of it reports that, as it did before there was a state to wake.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("persist: lock the state of supplier %s: %w", id, err)
+	}
+	woken, err := decode(row.Version, row.Format, row.State)
+	if err != nil {
+		return fmt.Errorf("persist: read the state of supplier %s: %w", id, err)
+	}
+	woken.Version++
+	woken.Status, woken.Reason = syncer.Normal, ""
+	for i, t := range woken.Tasks {
+		woken.Tasks[i] = syncer.TaskState{LastOK: t.LastOK}
+	}
+	encoded, err := jsonx.MarshalCanonical(woken)
+	if err != nil {
+		return fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)
+	}
+	err = q.ResetSyncState(ctx, tx, store.ResetSyncStateParams{
+		SupplierID: id, Version: woken.Version, State: encoded, NextDue: now,
+	})
+	if err != nil {
+		return fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
+	}
+	return nil
 }
 
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the

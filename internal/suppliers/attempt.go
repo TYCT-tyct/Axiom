@@ -57,6 +57,7 @@ type AttemptReceipt struct {
 	supplier, credential, endpoint, schedule uuid.UUID
 	unitValueID                              uuid.UUID
 	ref                                      string
+	status                                   int
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
@@ -93,28 +94,34 @@ type Attempt struct {
 	cred   *credential
 	priced time.Time
 
-	mu   sync.Mutex
-	ref  string
-	once sync.Once
+	mu     sync.Mutex
+	ref    string
+	status int
+	once   sync.Once
 }
 
-// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired, by compare and
-// swap on its in-flight count, in memory. It returns ErrNoEndpoint or ErrNoSlot when there is none, and gateway moves
-// on to its next entry: that is not an attempt. The slot is held until Done.
+// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose minute
+// admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or ErrNoSlot
+// when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until Done.
 func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 	ep, ok := s.snap.Load().endpoints[id]
 	if !ok {
 		return nil, ErrNoEndpoint
 	}
 	now := s.now()
-	for range 8 { // another caller may take the slot between looking and swapping
+	for range 8 { // another caller may take the slot or the minute's last request between looking and swapping
 		best, n := leastBusy(ep, now)
 		if best == nil {
 			return nil, ErrNoSlot
 		}
-		if best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
-			return &Attempt{s: s, ep: ep, cred: best, priced: now}, nil
+		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
+			continue
 		}
+		if !best.rt.requests.take(now, best.perMinute) {
+			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
+			continue
+		}
+		return &Attempt{s: s, ep: ep, cred: best, priced: now}, nil
 	}
 	return nil, ErrNoSlot
 }
@@ -122,9 +129,13 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with.
 func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
+	if len(ep.creds) == 0 {
+		return nil, 0
+	}
+	used := ep.creds[0].rt.requests.count(now)
 	var bestLoad float64
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= c.perMinute) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -184,7 +195,7 @@ func (a *Attempt) receipt() AttemptReceipt {
 	defer a.mu.Unlock()
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
-		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
+		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
 	}
 }
 
@@ -231,7 +242,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if err != nil {
 		return nil, transportFailure(wrote.Load())
 	}
-	a.noteRef(resp.Header)
+	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
@@ -245,11 +256,12 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	return nil, &f
 }
 
-func (a *Attempt) noteRef(h http.Header) {
+func (a *Attempt) noteResponse(status int, h http.Header) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status = status
 	if ref, ok := a.ep.quirks.ChargeRef(h); ok {
-		a.mu.Lock()
 		a.ref = string(ref)
-		a.mu.Unlock()
 	}
 }
 

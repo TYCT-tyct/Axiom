@@ -93,7 +93,7 @@ func TestClockTooFarRefusesTheStart(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t)
 	_, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()),
-		kv.Deps{Now: func() time.Time { return time.Now().Add(time.Hour) }})
+		kvtest.Deps(kv.Deps{Now: func() time.Time { return time.Now().Add(time.Hour) }}))
 	if err == nil {
 		t.Fatal("a node an hour ahead of the server started")
 	}

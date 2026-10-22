@@ -74,8 +74,8 @@ func TestModelListIsScopedToTheKey(t *testing.T) {
 	restrict(r, alpha, "{acme/alpha}")
 	aliased := r.newAccount(1e9)
 	restrict(r, aliased, "{claude-live}") // the maker's name of anthropic/claude-live
-	checkListIsScoped(t, r, alpha, []string{"acme/alpha"})
-	checkListIsScoped(t, r, aliased, []string{"anthropic/claude-live", "claude-live"})
+	checkListIsScoped(t, r, alpha, []string{"acme/alpha"}, []string{"acme/alpha"})
+	checkListIsScoped(t, r, aliased, []string{"anthropic/claude-live", "claude-live"}, []string{"anthropic/claude-live"})
 	checkOneModel(t, r, alpha, aliased)
 	t.Run("an Anthropic client reads the same 404 in Messages' shell", func(t *testing.T) {
 		resp, body := r.do(http.MethodGet, "/v1/models/acme/beta", alpha.key, nil, "Anthropic-Version", "2023-06-01")
@@ -85,13 +85,15 @@ func TestModelListIsScopedToTheKey(t *testing.T) {
 	})
 }
 
-// checkListIsScoped: the key's list is exactly want, in both prefixes.
-func checkListIsScoped(t *testing.T, r *rig, a account, want []string) {
+// checkListIsScoped: the key's list under /v1 is exactly want, in OpenAI's and Anthropic's members, and under /api/v1 it
+// is wantOR, in OpenRouter's shape, where a model is named once by its catalog name.
+func checkListIsScoped(t *testing.T, r *rig, a account, want, wantOR []string) {
 	t.Helper()
-	for _, path := range []string{"/v1/models", "/api/v1/models"} {
-		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
-			t.Errorf("%s (-want +got):\n%s", path, diff)
-		}
+	if diff := cmp.Diff(want, r.listIDs(a)); diff != "" {
+		t.Errorf("/v1/models (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantOR, r.orIDs(a)); diff != "" {
+		t.Errorf("/api/v1/models (-want +got):\n%s", diff)
 	}
 }
 
@@ -162,7 +164,7 @@ func checkStillListed(t *testing.T, r *rig, call int) {
 	t.Helper()
 	a := r.newAccount(1e9)
 	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}
-	if diff := cmp.Diff(want, r.listIDs(a, "/v1/models")); diff != "" {
+	if diff := cmp.Diff(want, r.listIDs(a)); diff != "" {
 		t.Errorf("the list (-want +got):\n%s", diff)
 	}
 	if resp, body := r.do(http.MethodGet, "/v1/models/acme/alpha", a.key, nil); resp.StatusCode != http.StatusOK {
@@ -185,7 +187,7 @@ func TestModelNothingServesIsNotListed(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	restrict(r, a, "{claude-test,acme/alpha}") // the key may call the model, so it is the route that leaves it out
-	if diff := cmp.Diff([]string{"acme/alpha"}, r.listIDs(a, "/v1/models")); diff != "" {
+	if diff := cmp.Diff([]string{"acme/alpha"}, r.listIDs(a)); diff != "" {
 		t.Errorf("without an endpoint: the list (-want +got):\n%s", diff)
 	}
 	for _, path := range []string{"/v1/models/claude-test", "/v1/models/anthropic/claude-test"} {
@@ -196,7 +198,7 @@ func TestModelNothingServesIsNotListed(t *testing.T) {
 	}
 	r.attachEndpoint(r.bare)
 	want := []string{"acme/alpha", "anthropic/claude-test", "claude-test"}
-	if diff := cmp.Diff(want, r.listIDs(a, "/v1/models")); diff != "" {
+	if diff := cmp.Diff(want, r.listIDs(a)); diff != "" {
 		t.Errorf("with an endpoint: the list (-want +got):\n%s", diff)
 	}
 	if resp, body := r.do(http.MethodGet, "/v1/models/claude-test", a.key, nil); resp.StatusCode != http.StatusOK {

@@ -10,8 +10,8 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-// canon is a request in the canonical model the conversions write from (README.md「跨格式转换」). In M1 only Chat
-// requests convert, so its shape is Chat's, read with jsonx; a string the conversion copies is kept as written, quotes
+// canon is the Chat-shaped model shared by both request directions (README.md「跨格式转换」), read with jsonx.
+// A string the conversion copies is kept as written, quotes
 // and escapes included, so its decoded value reaches the upstream unchanged (D2). Members a conversion cannot express
 // are refused, not dropped: Unknown holds those Chat defines that no member names here, and every other format's
 // own members, so the conversion can tell.
