@@ -464,10 +464,11 @@ func (p *rewriter) store() error {
 }
 
 // outputCap gives the output cap member, max_tokens or max_output_tokens, the cap the request was quoted at when it is
-// null, which stands for none.
+// null, or zero in Messages: Inspect treats both as unset.
 func (p *rewriter) outputCap() error {
 	v, err := p.dec.ReadValue()
-	if err == nil && v.Kind() == 'n' && p.t.MaxOutput > 0 {
+	// Responses zero normalization is tracked in https://github.com/TYCT-tyct/Axiom/issues/396.
+	if err == nil && p.t.MaxOutput > 0 && (v.Kind() == 'n' || p.t.Format == Messages && numberIs(v, 0)) {
 		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
 	}
 	p.capped = true

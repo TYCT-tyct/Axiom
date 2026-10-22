@@ -36,10 +36,7 @@ func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 	}
 	if v.Kind() == '"' {
 		var buf [16]byte
-		name, err := jsontext.AppendUnquote(buf[:0], v)
-		if err != nil {
-			return "", false, shapeError("a tool_choice that is not a string")
-		}
+		name, _ := jsontext.AppendUnquote(buf[:0], v) //nolint:errcheck // decodeCanon validates JSON; Kind above guarantees a string
 		if choice := messagesChoices[string(name)]; choice != "" {
 			return choice, string(name) == "required", nil
 		}

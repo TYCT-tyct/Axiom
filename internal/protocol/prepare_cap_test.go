@@ -7,7 +7,7 @@ import (
 	"axiom/internal/protocol"
 )
 
-// TestPrepareMessagesCap: a Messages request without max_tokens, or with null for it, is sent with Target.MaxOutput, the
+// TestPrepareMessagesCap: a Messages request without max_tokens, or with null or zero for it, is sent with Target.MaxOutput, the
 // cap it was quoted at — Messages requires one of its own, and the cap sent is the cap reserved (I1). A request that sets
 // one keeps it, and a model whose cap is not known leaves it out (README.md「同格式改写」, docs/domains/gateway.md
 // 「转发规则」). The member is added before the stream, so a request that names neither is rewritten the same way twice.
@@ -21,6 +21,9 @@ func TestPrepareMessagesCap(t *testing.T) {
 		{"none", `{"model":"m","messages":[]}`, 7000, false, `{"model":"u","messages":[],"max_tokens":7000}`},
 		{"the largest", `{"model":"m","messages":[]}`, math.MaxInt64, false, `{"model":"u","messages":[],"max_tokens":9223372036854775807}`},
 		{"null", `{"model":"m","max_tokens":null,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":7000,"messages":[]}`},
+		{"zero", `{"model":"m","max_tokens":0,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":7000,"messages":[]}`},
+		{"negative zero", `{"model":"m","max_tokens":-0,"messages":[]}`, 7000, true, `{"model":"u","max_tokens":7000,"messages":[],"stream":true}`},
+		{"unknown zero", `{"model":"m","max_tokens":0,"messages":[]}`, 0, false, `{"model":"u","max_tokens":0,"messages":[]}`},
 		{"set", `{"model":"m","max_tokens":50,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":50,"messages":[]}`},
 		{"nothing to send", `{"model":"m","messages":[]}`, 0, false, `{"model":"u","messages":[]}`},
 		{"unknown null", `{"model":"m","max_tokens":null,"messages":[]}`, 0, true, `{"model":"u","max_tokens":null,"messages":[],"stream":true}`},

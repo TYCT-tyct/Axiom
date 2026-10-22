@@ -55,6 +55,8 @@ func TestConvertLegacyToMessages(t *testing.T) {
 		{"a legacy result without its call", chatBody(`"messages":[` + userHi + `,{"role":"function","name":"f","content":"x"}]`), nil, "unsupported"},
 		{"a legacy call where the client called tools too", chatBody(`"messages":[` + userHi + `,{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{}"}}],"function_call":{"name":"g","arguments":"{}"}},` +
 			`{"role":"tool","tool_call_id":"c","content":"x"}]`), nil, "invalid"},
+		{"required is not a legacy choice", chatBody(`"messages":[` + userHi + `],"function_call":"required"`), nil, "invalid"},
+		{"escaped required is not a legacy choice", chatBody(`"messages":[` + userHi + `],"function_call":"requir\u0065d"`), nil, "invalid"},
 		{"a legacy choice of other words", chatBody(`"messages":[` + userHi + `],"function_call":"sometimes"`), nil, "invalid"},
 		{"a legacy call without a name", chatBody(`"messages":[` + userHi + `,{"role":"assistant","function_call":{"arguments":"{}"}}]`), nil, "invalid"},
 		{"a legacy call outside an assistant message", chatBody(`"messages":[{"role":"user","function_call":{"name":"f","arguments":"{}"}}]`), nil, "invalid"},
@@ -92,6 +94,10 @@ func TestLegacyConversionMatchesTools(t *testing.T) {
 			{
 				"definitions", `"messages":[` + userHi + `],"functions":[{"name":"f"}],"function_call":"\u0061uto"`,
 				`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"auto"`,
+			},
+			{
+				"no call", `"messages":[` + userHi + `],"functions":[{"name":"f"}],"function_call":"n\u006fne"`,
+				`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"none"`,
 			},
 			{
 				"mixed definitions", `"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"g"}}],"functions":[{"name":"f","strict":false}]`,

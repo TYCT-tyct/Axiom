@@ -76,15 +76,13 @@ type canonFunction struct {
 	Strict      *bool          `json:"strict"`
 }
 
-// legacyChoice is function_call as tool_choice: the same choices, a named function written the way tools name one.
+// legacyChoice maps the deprecated auto/none choices and named functions to tool_choice.
 func legacyChoice(v jsontext.Value) (jsontext.Value, error) {
 	if v.Kind() == '"' {
-		name, err := jsontext.AppendUnquote(nil, v)
-		if err != nil {
-			return nil, shapeError("a function_call that is not a string")
-		}
+		var buf [16]byte
+		name, _ := jsontext.AppendUnquote(buf[:0], v) //nolint:errcheck // decodeCanon validates JSON; Kind above guarantees a string
 		switch string(name) {
-		case "auto", "none", "required":
+		case "auto", "none":
 			return v, nil
 		}
 		return nil, shapeError("a function_call that is not a choice")
@@ -131,10 +129,7 @@ func (c *legacyCalls) add(m *canonMessage) error {
 	if err := jsonx.Unmarshal(m.FunctionCall, &call.Function); err != nil || call.Function.Name.Kind() != '"' {
 		return shapeError("a function_call without a name")
 	}
-	name, err := jsontext.AppendUnquote(nil, call.Function.Name)
-	if err != nil {
-		return shapeError("a function_call without a name")
-	}
+	name, _ := jsontext.AppendUnquote(nil, call.Function.Name) //nolint:errcheck // Unmarshal validated JSON and Name's kind above
 	call.ID, call.Type = c.assign(string(name)), "function"
 	m.ToolCalls = append(m.ToolCalls, call)
 	return nil
@@ -149,10 +144,7 @@ func (c *legacyCalls) answer(m *canonMessage) error {
 	if m.Name.Kind() != '"' {
 		return shapeError("a function result without a name")
 	}
-	name, err := jsontext.AppendUnquote(nil, m.Name)
-	if err != nil {
-		return shapeError("a function result without a name")
-	}
+	name, _ := jsontext.AppendUnquote(nil, m.Name) //nolint:errcheck // decodeCanon validated JSON and Name's kind above
 	id, ok := c.claim(string(name))
 	if !ok {
 		return &NotSupported{Reason: "a function result that answers no call"}
