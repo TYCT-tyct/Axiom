@@ -16,6 +16,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
+	"axiom/internal/payments"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
@@ -119,16 +120,15 @@ func hostName() string {
 	return name
 }
 
-// singleNodeOnly refuses N above 1 until login and stickiness are shared too: while they live in the process, a second
-// node would multiply the login attempts. It is the check of the program's own entry, serve, and not of serveWith, which
-// the tests that run two nodes of one deployment use. The last of the cache's slices (K3) removes it
-// (internal/platform/kv/README.md「落地顺序」). A value that is no number is for readSettings to report.
+// singleNodeOnly keeps production on one core until supplier credential concurrency and RPM have node shares.
+// K1-K3 share the cache state, but each suppliers.Service still applies the full configured ceilings locally
+// (internal/suppliers/README.md「并发与速率」). Refs #313 (E3-3), #382. Two-node tests use serveWith directly.
 func singleNodeOnly(environ []string) error {
 	env := config.New(environ)
 	nodes := env.Int(kv.NodesVar, 1, 1)
 	if env.Problems() == nil && nodes > 1 {
-		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: login and stickiness still live in the process, "+
-			"so more than one node would multiply the login attempts", kv.NodesVar, nodes)
+		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: supplier credential concurrency and RPM still use full per-node limits, "+
+			"so multiple nodes would exceed the configured ceilings (Refs #313 E3-3, #382)", kv.NodesVar, nodes)
 	}
 	return nil
 }
@@ -283,6 +283,7 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 type consoleParts struct {
 	cfg           nodeSettings
 	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials; set once the database is checked
+	masterKey     []byte          // newest distributed version, for the login HMAC key
 	hashes        *secret.MACKeys // keys API keys are hashed with
 	identity      []byte          // derives what replaces the client's identifiers upstream
 	contract      *contract
@@ -291,6 +292,12 @@ type consoleParts struct {
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
+	// The same file, read for its newest key: the login keys are derived from it under a label of their own, so that
+	// they do not follow the hash keys' rotation (internal/platform/kv/README.md「键」).
+	masterKey, err := secret.LoadSecret(masterKeyFileVar, cfg.masterKeyFile)
+	if err != nil {
+		return consoleParts{}, err
+	}
 	hashes, err := secret.LoadMAC(cfg.keyHashFile)
 	if err != nil {
 		return consoleParts{}, err
@@ -312,7 +319,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+		cfg: cfg, masterKey: masterKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
 	}, nil
 }
 
@@ -340,7 +347,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		OnAccountOpened: openBalance,
+		OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -368,7 +375,14 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
-	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, db, logger),
+	pay, err := payments.Open(payments.Config{
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Proxies: p.cfg.trustedProxies,
+	})
+	if err != nil {
+		return nodeRoutes{}, err
+	}
+	public = withPaymentCallbacks(public, pay.Notify())
+	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
@@ -417,6 +431,18 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
+		return nil, err
+	}
+	// Orders past their deadline expire every minute, on whichever node leads the queue
+	// (docs/domains/payments.md「补单与过期」). The module has no channel compiled in yet, so it is opened with none and the
+	// run only closes orders whose channel it can open.
+	store, err := payments.Open(payments.Config{
+		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
 		return nil, err
 	}
 	if err := queue.Start(ctx); err != nil {

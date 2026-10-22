@@ -222,15 +222,17 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	}
 	return event(ctx, tx, q, m.ChargeID, m.Revision, map[string]any{
 		"attribution": "attempt", "request_id": m.RequestID.String(), "attempt_seq": m.AttemptSeq, "verdict": verdict,
-		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag,
+		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag, "test": m.Test,
 	})
 }
 
 // judge compares the charge with the estimate: within the supplier's rounding plus the relative tolerance is "within",
 // a charge above that is "under" (we estimated too little: the cost we know is not the cost), below it "over". An
-// estimate that leaves out priced items or had no usage says nothing about the price, so it is "unjudged".
+// estimate that leaves out priced items or had no usage says nothing about the price, so it is "unjudged", and so does
+// a test generation, whose estimate is a deliberate upper bound: a probe charges the platform, not a tenant, and its
+// own price must never delist a payable endpoint (H-I9).
 func judge(cfg Config, m store.MatchChargesRow) (string, error) {
-	if m.CostFlag != "complete" {
+	if m.CostFlag != "complete" || m.Test {
 		return "unjudged", nil
 	}
 	actual, ok1 := new(big.Rat).SetString(m.ActualNative)

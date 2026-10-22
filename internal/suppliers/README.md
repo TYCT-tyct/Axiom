@@ -2,7 +2,7 @@
 
 供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；管理接口见「管理接口」，事件投递在后续 PR。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
+> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；用真实生成测试端点（`TestEndpoint`、`RecordTest`，[#313](https://github.com/TYCT-tyct/Axiom/issues/313) 的 E3-5）已实现，写在「用真实生成测试端点」；管理接口见「管理接口」，事件投递在后续 PR。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 代码结构
 
@@ -26,7 +26,7 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限。迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
@@ -39,7 +39,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
 | `attempt_journal` | 旧的对账日志（「没有对账日志」）：没有代码再读写，表按收缩规则留到下一个发布删 | PK `(request_id, attempt_seq)`；平台范围 |
-| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词 | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户 |
+| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词；`test` 标记检测的成本行（平台自己付，见「用真实生成测试端点」） | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户，检测的行两列都为空 |
 | `ended_requests` | billing 告知的请求终结时刻与到达终态的时间 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |
@@ -196,6 +196,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 换上登录的供应商重新进入扫描，握着旧登录的节点写不进任何东西 | `Admin.ReplaceLogin` 在同一事务里复位状态（正常、失败与 `halted` 清零、`lastOK` 与扣费水位保留），并把 `lease_fence` 和 `version` 加一、清空租约；测试：停在需处理的供应商换登录后 `next_due` 是当时、下一个节点取得租约，旧持有者的提交和 `Swap` 都被拒绝；从没同步过的供应商由同时进行的第一次同步让出状态行，复位照样落地 |
 | 扣费水位只升不降，每条记录至少读到一次 | 前进遍的 `end` 大于水位、水位取最大值；新记录只出现在列表最前面；测试覆盖整页边界、扫描期间新增、迟到记录（重叠回扫和每日补扫） |
 | 凭证只发往接入时的主机，错误里没有对方的文字 | `client.New` 只接受裸 origin，路径不能改主机；管理接口的错误只带固定清单里的 `code` 和权限名 |
+| H-I9 检测成本行的估价不低于供应商的实际扣费，对账从不判它 | 行带 `test` 标记，判定见标记即返回未判，等待扣费的列表排除它；测试 `TestReconciliationMatchesATestButNeverJudgesIt`：扣费比估价高 60 倍仍不摘牌、不报偏高，扣费照常认到这一行，检测的行不列在等待里 |
 
 ## 调用面
 
@@ -214,6 +215,8 @@ type RateLimited = adapter.RateLimited  // Failure.Cause 的一种：上游回�
 func (a *Attempt) Done() AttemptReceipt                        // 幂等；释放占位；带凭证、端点、成本计划版本、单位价值行 id、已到的对账键；字段不对外，billing 只原样传回
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认；端点实测值覆盖 Cancels
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
+func (s *Service) TestEndpoint(ctx context.Context, r TestRequest) (TestResult, error) // 一次真实的检测生成（「用真实生成测试端点」）
+func RecordTest(ctx context.Context, tx pg.Tx, who audit.Actor, reason string, r TestResult) error // 检测的成本行和审计，在调用方的事务里
 func (s *Service) Cost(r AttemptReceipt, u []catalog.Usage) (AttemptCost, error) // 纯内存：原生金额、缺项、cost_flag
 func (s *Service) Credits(r AttemptReceipt, u []catalog.Usage, c platform.Currency) (AttemptCost, int64, bool, error) // 纯内存：同一次定价的 Cost 和 c 的十亿分之一；即 gateway 的 Costs
 func RecordAttempts(ctx context.Context, tx pg.Tx, rows []AttemptRecord) error
@@ -240,6 +243,19 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **缺汇率告警的数据**：`EnabledCurrencies` 在平台事务列出 active、low_balance 的供应商，包括暂时没有可路由端点的。组装层每轮路由构建与当前汇率一同读取，日志/指标只记录缺失及恢复状态变化，读取失败不能推进路由快照的新鲜时间。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
+
+## 用真实生成测试端点
+
+已实现（`test.go`）。`TestEndpoint` 只测试平台供应商的端点，非平台归属返回 `ErrTestOwner`；它测一个端点能不能用：一次真正的生成，走真实调用面（`Acquire`、`Send`、`Done`），用端点自己的调用格式、流式、输出上限 16 个 token、不开推理；`RecordTest` 写它的成本行和审计。管理接口的 `testSupplierEndpoint` 就是这两步（「管理接口」），[quality 的试探](../../docs/domains/quality.md#试探)以后从同一处调用。
+
+- **发什么**：`TestRequest{Endpoint, Format, Prompt}`，`Prompt` 为空是 `TestPrompt`（`hi`）。格式必须是端点 `formats` 里的一个，否则 `ErrNoFormat`，什么都不发。三个格式的请求体是 new-api 的 channel test（`controller/channel-test.go:702-782`，提交 `7d8b912`，2026-10-22）加两处改动：Responses 也带上限（new-api 不带），并且没有任何成员要求推理。Messages 和 Chat 用 `max_tokens`，Responses 用 `max_output_tokens`；Chat 的新模型改用 `max_completion_tokens` 时会回 400，这次检测因此是不确定，而不是端点没干活（见末行）。
+- **读到流结束，从不提前取消**：调用方的取消被 `context.WithoutCancel` 挡在外面，并发位持有到读完整条流；只留自己的 45 秒上限（比管理请求的 1 分钟短，慢的答案也还来得及记账）。不传递取消的供应商（sub2api 一类）照样生成到底并收费，提前断开只会让我们记的成本少于对方扣的。测试 `TestATestIsReadToItsEndThoughTheCallerGoesAway`：假上游写第二段之前调用方就取消，第二段仍写得出去，请求的 context 直到最后都没被取消。
+- **判什么**：`TestResult.Outcome()` 按[什么算一次失败](../../docs/domains/quality.md#什么算一次失败)只看端点自己那一格：2xx 且流读到上游自己的正常结束事件是通过（包括没有可见内容、输出上限耗在隐藏推理上的情况）；没有事件的空 body 或未到结束事件就断流才是 `stream_broken`；端点自己那一格的 `UpstreamError`（5xx）、`Overloaded`、`ModelNotFound`、`Transport` 和 500 及以上且不是疑似出口拦截的 `Unknown` 是失败；别的范围（请求、出口、凭证、分组、供应商）、`RateLimited`、500 以下的未知状态、我们自己的期限和内存，都是不确定——既不通过也不失败。`ProblemCauses()` 从 `Cause.String()` 和流错误映射派生实际名字，`cmd/axiom` 的契约测试逐项核对；`Problem()` 给出这些名字及 `ProblemScopes` 里的范围，流断了是 `stream_broken`。
+- **成本行**：`RecordTest` 在**调用方的事务**里写，不另起一个：`billing` 的结算事务用 `RecordAttempts` 写真实尝试，检测借同一个函数和同一个事务（后台的测试接口就是它自己的幂等事务，事务也不受浏览器断连取消，且有 1 分钟上限，给 45 秒的生成留出提交时间；重放得到第一次的答案，不会为同一次检测再付一次钱）。**只有事务提交后**成本行、审计和幂等响应才存在；生成后写入、`FinishKey` 或提交失败会全部回滚，成本和认领都不存在。供应商仍可能扣费：没有成本行可匹配的扣费在宽限期（默认 30 分钟）后照常暂挂、告警、由人处理；同键重试会再次生成、再次付费。`TestAdminEndpointTestRollbackAllowsAnotherGeneration` 注入响应写入失败，核对回滚、重试及之后的重放；`TestEndpointCostAndAuditRollBackTogether` 核对回滚后扣费暂挂。行带 `test` 标记，两列租户为空（平台自己付），没有预留、不经 billing 的结算，`state` 停在 `pending` 等对账。
+- **估价是确定的上界**：输入按题目的 token 数上界（字节数 + 16 的框架开销，一个字节至多一个 token），输出按上限 16，两侧都取输入上界可落入的所有上下文档位和标准档里的最高价，绝不用上游报告的用量。适配器或传输层已确定 `NotExecuted` 的尝试不产生检测成本：估价为 0、用量为空、换算状态为 `not_executed`，仍写检测行和审计；未知执行状态（包括可能已执行的 5xx）仍按上界估价。成本计划缺一侧的价时返回 `ErrTestCost`（管理接口为 422），在付钱之前拒绝这次检测。测试 `TestATestSendsACappedStreamAndBooksWhatItFound`：18 个 token 与 16 个 token 的封顶合成 6.15。
+- **对账**：成本事务已提交的检测扣费照常认到这一行（也照常给 billing 发带 `test: true` 的事件），但从不用估价判它：`reconcile.judge` 见 `test` 即返回未判，`ListUnmatchedAttempts` 也排除它，所以一次检测既不会把端点摘牌，也不会被当成"等不到扣费的尝试"告警（H-I9）。
+- **审计**：`endpoint.test`，目标是供应商，明细里有端点、格式、结局、原因与范围、上游状态与它的请求 ID、估价和原生单位；不带凭证和 key。
+- **没有做的**：`max_completion_tokens` 那条分支（设计稿 [quality](../../docs/domains/quality.md) 说不需要 o 系和 gpt-5 的细节）；一次检测里不换凭证（quality 的试探会刻意换一把，见[试探](../../docs/domains/quality.md#试探)）。
 
 ## 并发与速率
 
@@ -280,6 +296,8 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 上面改配置的操作都在 `suppliers` 行上加锁、校验状态后才写，所以和同步、彼此之间串行。读（`Suppliers`、`Supplier`）带最近一次的单位价值、余额和分组与 key；没有同步写过的字段是空。
 
+`POST /api/admin/v1/suppliers/endpoint-tests`（`testSupplierEndpoint`）不走 `Admin`：它要的是本节点的调用面（`callNode.upstreams`），经 `TestEndpoint` 发一次真实生成、`RecordTest` 在同一个事务里写成本行和审计（「用真实生成测试端点」）。每个会话每分钟 10 次，同 `detectSupplier`，因为每次都是平台付钱的一次生成。
+
 ## 对账
 
 `internal/suppliers/internal/reconcile`。同步引擎在栅栏事务里经 `reconcile.Ingest` 写入扣费记录（一条记录读两次只存一次），结算在自己的事务里写入 `attempt_costs`（含对账键），清理写入丢失的请求。节点在 `pg.Queue` 启动前调用 `RegisterReconcile`：River leader 每分钟投递 `suppliers.reconcile`，启动或换主也投递，任一节点的 worker 都可执行。相同参数的未完成任务去重；匹配、暂挂、摘牌、事件及下一页任务在同一平台范围事务提交，重复和迟到执行不改变已有归属或重复增加版本。
@@ -289,12 +307,12 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），后四项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
 
 1. **匹配**：一条语句，先占住只有这个对账键的那一个尝试，再把扣费记录归到它，尝试和扣费记录各有唯一约束，两个节点同时跑也只有一个成功。有两个以上尝试共用一个键时都不对上。已暂挂、已归到丢失请求或已确认未归属的扣费记录，尝试到了就改归到尝试，旧归属在同一条语句里撤销，所以归属的 CHECK 始终成立。
-2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：端点改回"成本未知"（原因 `under_estimated`），退出路由；偏低：只在报告里列出。
-3. **暂挂**：过了宽限（默认 30 分钟）还没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效，不按冻结路线猜用户。
+2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。检测的行（`test`）一律不判：它的估价是上界而不是估计，判它只会把付得起的端点摘掉（「用真实生成测试端点」）。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：端点改回"成本未知"（原因 `under_estimated`），退出路由；偏低：只在报告里列出。
+3. **暂挂**：过了宽限（默认 30 分钟）还没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警，检测的尝试不在其中。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效，不按冻结路线猜用户。
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）和等级，因为只有声明了的项才能校正暂估。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。
 6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表一批一批地列，`Config.After` 和报告里的 `Next`（按完成时间、请求、序号排序的游标）把它跨轮推进，列到末尾 `Next` 归零、下一遍从头开始，所以超过一批、始终对不上的尝试最终都会被报告一次。
-7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复。billing 的事件消费与成本分录校正尚未接入（[#28](https://github.com/TYCT-tyct/Axiom/issues/28)）；本任务只做匹配、判定、暂挂、归属记录和告警，不修改用户收费。
+7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复。billing 的事件消费与成本分录校正尚未接入（[#28](https://github.com/TYCT-tyct/Axiom/issues/28)）；尝试归属的事件带布尔 `test`，检测为 `true`、真实调用为 `false`，billing 消费时据此跳过没有租户与账本的检测；本任务只做匹配、判定、暂挂、归属记录和告警，不修改用户收费。
 
 ## 没有对账日志
 
@@ -327,6 +345,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | 端点只在拿到成本计划后生成，计划消失时把成本置为未知而不是删行、也不动 `enabled` | 端点存在就等于"有东西可以按这个价调"，`ListRoutable` 的条件与写入侧一致；行留着，`attempt_costs` 引用的成本计划版本和人的开关都不丢，计划回来时是同一个端点 | 先生成端点为未知：后台多出一堆不可用的行；计划消失时改成禁用：分不清是人停的还是同步停的，人停用的语义被吞掉 |
 | 成本行写进 billing 的结算事务，不另起一份「进行中尝试」的日志 | 一个事务里成或不成，所以「这次尝试花了多少钱、对账键是什么、哪个端点」与账本同一次提交；崩溃后剩下的是丢失的请求（带预留冻结的路线），不需要第二张表、第二个写入线程和第二个连接池名额 | 进程内日志每秒批量落库：多一条写入路径、一类连接名额，而它只把崩溃窗口缩小一点，仍无法自动确认崩溃前最后一次尝试的归属 |
 | 分组代号在第一次选用时随机生成，取消选用不收回 | 用户看到的是代号不是上游名字，换回来或重选不能让同一个分组换名字 | 由名字派生：名字泄露代号；每次选用重新生成：用户记下的代号失效 |
+| 检测成本、审计和幂等响应共用事务，生成期间保留幂等认领 | 同键并发请求在认领上等待，正常提交后重放同一答案；代价是外部 HTTP 期间（最多 45 秒）占用一个数据库连接并保留事务快照，生成后的回滚会丢失成本和认领、允许再次付费（见「成本行」）。每会话每分钟 10 次限制触发频率，不保证回滚后的付费至多一次 | 仅另开短事务补写成本不能阻止同键重试再次生成，原事务提交结果不明时也不能独立判定响应归属；彻底消除失败窗口需要持久化进行中的认领及恢复协议，不在本次 H1.5 中引入 |
 | 并发和每分钟请求上限按凭证存两列，管理接口一起设定，计数在各节点内存里 | 同一供应商账号的全部 key 和端点共用 RPM，配置上限按待选凭证应用（见「并发与速率」）；上限存在行上，`Reload` 随端点读进快照（5 秒内生效），调用路径仍是纯内存。窗口是固定一分钟、从这一分钟的第一个请求起算、惰性重置：没有计时器，也没有每次调用一次事务。一分钟用完的凭证与并发位用完的一样返回 `ErrNoSlot`，gateway 跳过条目，最终回 429 `rate_limited`（指标原因 `credentials_busy`）、`Retry-After: 1`（上限不超过一分钟）。代价：RPM 不跨节点，共享计数随 Valkey 后续实现；并发沿用静态份额设计；TPM 等有可信的额度数据时再加，现在只有余额和 key 状态 | 只靠 `client.Limiter` 的桶：那是同步和适配器自己的限速，调用量由用户的请求决定，因此拒绝用户是把计量和业务搞混；计数放数据库（`rate_buckets`，`SharedLimiter` 的做法）：每次调用一次事务，热路径上多一次往返；`golang.org/x/time/rate`：多一个依赖，其令牌补充口径也不等同于固定一分钟 |
 | RPM 计数按账号共用，上限仍按凭证设定 | 同一上游额度不会因新增 key 增加，仍可按 key 单独压低上限；共享额度的 key 应设相同值 | 上限存在 `suppliers` 上、凭证继承：无法按 key 单独压低 |
 | 新绑定的默认是并发 4、每分钟请求不限 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；每分钟不设，因为限流值猜错会让本来能发的请求失败，不设只是没有额外的天花板 | 不设并发上限：新接入的供应商可能被打满；给每分钟一个默认数字：猜错就拒了本来能发的请求 |
