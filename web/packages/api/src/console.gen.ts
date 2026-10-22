@@ -314,7 +314,7 @@ export interface paths {
         };
         /**
          * The account's credit statement as a CSV file
-         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount`, `balance_after`, `currency`, `reference`, `frozen_change`, `frozen_after`. All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
+         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount`, `balance_after` (empty where the row's balance after is null), `currency`, `reference`, `frozen_change`, `frozen_after`. All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
          */
         get: operations["exportStatement"];
         put?: never;
@@ -486,7 +486,7 @@ export interface components {
          * @enum {string}
          */
         StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
-        /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded. */
+        /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
             id: string;
@@ -497,7 +497,7 @@ export interface components {
             at: string;
             kind: components["schemas"]["StatementKind"];
             amount: components["schemas"]["Money"];
-            balance_after: components["schemas"]["Money"];
+            balance_after: components["schemas"]["Money"] | null;
             /** @description Signed change in credits frozen for refunds; zero for ordinary balance changes. */
             frozen_change: components["schemas"]["Money"];
             /** @description Credits frozen after this event; included in balance_after, unavailable for new spending. */

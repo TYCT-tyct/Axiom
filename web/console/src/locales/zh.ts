@@ -63,7 +63,7 @@ export default {
       body: "充值、赠送或调用扣费之后，记录会出现在这里。",
       balance: "查看余额",
     },
-    col: { time: "时间", kind: "类型", amount: "金额", balance: "变动后余额", reference: "参考" },
+    col: { time: "时间", kind: "类型", amount: "金额", balance: "变动后余额" },
     kind: {
       top_up: "充值",
       gift: "赠送",
@@ -76,6 +76,8 @@ export default {
     },
     frozenChange: "冻结额变动",
     frozenAfter: "冻结：{{amount}}",
+    balanceUnknown: "不可用",
+    balanceUnknownNote: "这笔记录早于账本编号，先后顺序无法确定，所以无法给出变动后余额。",
     call: "调用 {{id}}",
   },
   keys: {

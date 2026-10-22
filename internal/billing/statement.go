@@ -34,11 +34,15 @@ const MaxStatementPage = 200
 // StatementRow projects only the account's balance and refund holds. Reference is the call ID for charges/reversals,
 // otherwise the batch ID (the order ID for paid credit). See README.md「控制台的读取」.
 type StatementRow struct {
-	ID           uuid.UUID // the row's own identity; it names no ledger entry
-	At           time.Time
-	Kind         StatementKind
-	Amount       int64 // billionths of a credit, positive when the balance rose
-	Balance      int64 // billionths of a credit, the account's balance after this movement
+	ID     uuid.UUID // the row's own identity; it names no ledger entry
+	At     time.Time
+	Kind   StatementKind
+	Amount int64 // billionths of a credit, positive when the balance rose
+	// Balance is the account's balance after this movement, in billionths of a credit, or nil for a row from before the
+	// sequence: those are ordered by (created_at, id), which a clock stepping back or a shared microsecond keeps from
+	// being the order they committed in (migration 00007), so the balance between two of them is not known. Frozen is
+	// known for them: refund holds began after the sequence, so none of them moved it.
+	Balance      *int64
 	FrozenChange int64 // signed change in credits held for refunds; freezes do not move the total balance
 	Frozen       int64 // frozen credits after this event
 	Reference    uuid.UUID
@@ -112,12 +116,13 @@ func (q StatementQuery) start() StatementCursor {
 // empty page with a continuation cursor; the cursor advances past every examined transaction.
 const statementRounds = 8
 
-// statementScansInOrder keeps the planner from sorting a page's transactions, so it walks the indexes in order and stops
-// at the limit. The row-level security filter on billing.transactions is estimated at a sliver of the account's rows
-// (0.5% in the platform scope; in an account's scope its share of the table, counted a second time), so with a sort
-// allowed a long account's page is planned as a bitmap scan of its whole history and a sort of it: 25,000 transactions
-// read for 101 (README.md「控制台的读取」). Like plan_cache_mode in observability's lists, it is set for the rest of the
-// transaction, which the console's statement reads hold for nothing else.
+// statementScansInOrder makes the planner avoid an explicit sort wherever another plan can give the order, so a page's
+// transactions are read by walking the indexes in order and stopping at the limit; it changes no result. The row-level
+// security filter on billing.transactions is estimated at a sliver of the account's rows (0.5% in the platform scope;
+// in an account's scope its share of the table, counted a second time), so otherwise a long account's page is planned as
+// a bitmap scan of its whole history and a sort of it: 25,000 transactions read for 101 (README.md「控制台的读取」; the
+// estimate itself is #408). Like plan_cache_mode in observability's lists, it is set for the rest of the transaction,
+// which the console's statement reads hold for nothing else.
 const statementScansInOrder = "SET LOCAL enable_sort = off"
 
 // ListStatement reads account-scoped balance and refund-hold events in commit order. Entry aggregation happens only
@@ -169,13 +174,21 @@ func appendStatement(out []StatementRow, rows []StatementPageRow, after *Stateme
 				return nil, false, fmt.Errorf("billing: statement transaction %s: %w", r.ID, err)
 			}
 			out = append(out, StatementRow{
-				ID: r.ID, At: r.CreatedAt, Kind: kind, Amount: r.Amount, Balance: after.Balance,
+				ID: r.ID, At: r.CreatedAt, Kind: kind, Amount: r.Amount, Balance: balanceAfter(r, after.Balance),
 				FrozenChange: r.FrozenChange, Frozen: after.Frozen, Reference: r.RequestID,
 			})
 		}
 		*after = after.advance(r)
 	}
 	return out, false, nil
+}
+
+// balanceAfter is the balance after a numbered row, and nil after one from before the sequence (StatementRow.Balance).
+func balanceAfter(r StatementPageRow, balance int64) *int64 {
+	if r.Seq == 0 {
+		return nil
+	}
+	return &balance
 }
 
 func (c StatementCursor) advance(r StatementPageRow) StatementCursor {

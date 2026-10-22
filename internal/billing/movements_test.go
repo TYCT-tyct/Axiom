@@ -63,11 +63,11 @@ func (b *bank) postUnlocked(e event, posted chan<- error, release <-chan struct{
 	})
 }
 
-// plan runs a query of the ledger under EXPLAIN (ANALYZE, BUFFERS), in a transaction that setup, if not nil, has run in
-// first, and returns the blocks it touched and the plan.
-func (b *bank) plan(setup func(pg.Tx) error, query string, args ...any) (blocks int, plan string) {
+// plan runs a query of the ledger under EXPLAIN (ANALYZE, BUFFERS) in scope, in a transaction that setup, if not nil,
+// has run in first, and returns the blocks it touched and the plan.
+func (b *bank) plan(scope pg.Scope, setup func(pg.Tx) error, query string, args ...any) (blocks int, plan string) {
 	b.t.Helper()
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+	if err := b.app.Tx(b.t.Context(), scope, func(tx pg.Tx) error {
 		if setup != nil {
 			if err := setup(tx); err != nil {
 				return err
@@ -167,8 +167,8 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 			1000,
 		},
 	} {
-		first, _ := b.plan(nil, tc.query, tc.first...)
-		deep, deepPlan := b.plan(nil, tc.query, tc.deep...)
+		first, _ := b.plan(b.platform, nil, tc.query, tc.first...)
+		deep, deepPlan := b.plan(b.platform, nil, tc.query, tc.deep...)
 		t.Logf("%s: %s: blocks touched %d, then %d", tc.name, tc.what, first, deep)
 		if !strings.Contains(deepPlan, tc.index) || strings.Contains(deepPlan, "Seq Scan") {
 			t.Errorf("%s: %s: not read from the index %s:\n%s", tc.name, tc.what, tc.index, deepPlan)

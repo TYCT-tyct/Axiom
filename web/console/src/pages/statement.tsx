@@ -89,7 +89,6 @@ function StatementTable({ rows }: { rows: Schemas["StatementRow"][] }) {
           <Th>{t("statement.col.kind")}</Th>
           <Th className="text-right">{t("statement.col.amount")}</Th>
           <Th className="text-right">{t("statement.col.balance")}</Th>
-          <Th className="hidden lg:table-cell">{t("statement.col.reference")}</Th>
         </tr>
       </thead>
       <tbody>
@@ -109,7 +108,12 @@ const MovementRow = memo(function MovementRow({ row }: { row: Schemas["Statement
   return (
     <tr className="hover:bg-s2">
       <Td className="whitespace-nowrap">{format.dateTime(new Date(row.at))}</Td>
-      <Td className="whitespace-nowrap">{t(`statement.kind.${row.kind}`)}</Td>
+      <Td className="whitespace-nowrap">
+        {t(`statement.kind.${row.kind}`)}
+        <span className="block">
+          <Reference row={row} />
+        </span>
+      </Td>
       <Td
         className={
           credit ? "text-right whitespace-nowrap tabular-nums text-ok" : "text-right whitespace-nowrap tabular-nums"
@@ -120,20 +124,23 @@ const MovementRow = memo(function MovementRow({ row }: { row: Schemas["Statement
         {hold ? <span className="block text-label text-t3">{t("statement.frozenChange")}</span> : null}
       </Td>
       <Td className="text-right whitespace-nowrap tabular-nums">
-        {format.money(row.balance_after)}
+        {row.balance_after ? (
+          format.money(row.balance_after)
+        ) : (
+          <span className="text-t3" title={t("statement.balanceUnknownNote")}>
+            {t("statement.balanceUnknown")}
+          </span>
+        )}
         <span className="block text-label text-t3">
           {t("statement.frozenAfter", { amount: format.money(row.frozen_after) })}
         </span>
-      </Td>
-      <Td className="hidden lg:table-cell">
-        <Reference row={row} />
       </Td>
     </tr>
   );
 });
 
 // A movement's reference is the call it charged, or the batch it came from: a charge opens the call, which says what the
-// money bought, and the rest are named in full on hover.
+// money bought, and the rest are named in full on hover. It sits under the kind, so a narrow screen keeps it.
 function Reference({ row }: { row: Schemas["StatementRow"] }) {
   const { t } = useTranslation();
   const short = `${row.reference.slice(0, 8)}…`;

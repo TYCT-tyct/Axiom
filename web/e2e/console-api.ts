@@ -92,7 +92,7 @@ function exportStatement({ state }: Ctx<"/api/console/v1/statement.csv", "get">)
     row.at,
     row.kind,
     row.amount.amount,
-    row.balance_after.amount,
+    row.balance_after?.amount ?? "",
     row.amount.currency,
     row.reference,
     row.frozen_change.amount,

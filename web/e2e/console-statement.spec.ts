@@ -27,6 +27,20 @@ test.describe("statement", () => {
     expect(state.log.filter((line) => line === "GET /statement.csv")).toHaveLength(1);
   });
 
+  test("on a phone a charge still opens its call, and an unknown balance says so", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    const state = await mockConsole(page);
+    state.statement = state.statement.map((row, i) => (i === 0 ? { ...row, balance_after: null } : row));
+    signedInAs(state);
+    await page.goto("/console/statement");
+    const first = page.getByRole("row").nth(1);
+    await expect(first).toContainText("不可用");
+    const call = first.getByRole("link", { name: /^调用 00000000/ });
+    await expect(call).toBeVisible();
+    await call.click();
+    await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
+  });
+
   test("refund holds leave the balance visible and completed refunds reduce it", async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);

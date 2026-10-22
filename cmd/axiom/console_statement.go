@@ -23,11 +23,16 @@ const statementExport = 10_000
 
 // statementRowOf is a statement row as the contract gives it.
 func statementRowOf(row billing.StatementRow, currency platform.Currency) consoleapi.StatementRow {
-	return consoleapi.StatementRow{
+	out := consoleapi.StatementRow{
 		Id: row.ID.String(), At: row.At, Kind: consoleapi.StatementKind(row.Kind), Reference: row.Reference.String(),
-		Amount: moneyOf(row.Amount, currency), BalanceAfter: moneyOf(row.Balance, currency),
+		Amount:       moneyOf(row.Amount, currency),
 		FrozenChange: moneyOf(row.FrozenChange, currency), FrozenAfter: moneyOf(row.Frozen, currency),
 	}
+	if row.Balance != nil {
+		balance := moneyOf(*row.Balance, currency)
+		out.BalanceAfter = &balance
+	}
+	return out
 }
 
 // ListStatement lists the account's credit statement, newest first, a page at a time.
@@ -144,9 +149,17 @@ func statementCSV(ctx context.Context, tx pg.Tx, account uuid.UUID, currency pla
 // currency, and the reference as the ID the pages give.
 func statementCSVRow(row billing.StatementRow, currency platform.Currency) []string {
 	return []string{
-		row.At.UTC().Format(time.RFC3339), string(row.Kind), creditsOf(row.Amount), creditsOf(row.Balance),
+		row.At.UTC().Format(time.RFC3339), string(row.Kind), creditsOf(row.Amount), balanceCSV(row.Balance),
 		currency.String(), row.Reference.String(), creditsOf(row.FrozenChange), creditsOf(row.Frozen),
 	}
+}
+
+// balanceCSV leaves the cell empty where the balance after a movement is not known (billing.StatementRow.Balance).
+func balanceCSV(balance *int64) string {
+	if balance == nil {
+		return ""
+	}
+	return creditsOf(*balance)
 }
 
 // creditsOf is an amount in billionths of a credit as the exact decimal it stands for: 1500000000 as 1.500000000,

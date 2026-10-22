@@ -129,8 +129,8 @@ func checkStatementRows(t *testing.T, rows []StatementRow, want []struct {
 	t.Helper()
 	for i, w := range want {
 		row := rows[i]
-		if row.Kind != w.kind || row.Amount != w.amount || row.Balance != after[i] {
-			t.Errorf("row %d: %s %d with %d left; want %s %d with %d", i, row.Kind, row.Amount, row.Balance, w.kind, w.amount, after[i])
+		if row.Kind != w.kind || row.Amount != w.amount || *row.Balance != after[i] {
+			t.Errorf("row %d: %s %d with %d left; want %s %d with %d", i, row.Kind, row.Amount, *row.Balance, w.kind, w.amount, after[i])
 		}
 		if w.kind != StatementSpend && row.Reference != w.ref {
 			t.Errorf("row %d refers to %s; want the batch %s", i, row.Reference, w.ref)
@@ -174,7 +174,7 @@ func TestStatementPages(t *testing.T) {
 		t.Fatalf("%d movements in the statement, want the gift and 25 charges", len(all))
 	}
 	checkStatementChain(t, all)
-	if all[0].Balance != b.balanceOf(b.admitted.Account) || all[len(all)-1].Kind != StatementGift {
+	if *all[0].Balance != b.balanceOf(b.admitted.Account) || all[len(all)-1].Kind != StatementGift {
 		t.Errorf("the statement starts with %+v and ends with %+v", all[0], all[len(all)-1])
 	}
 }
@@ -193,13 +193,13 @@ func checkStatementChain(t *testing.T, rows []StatementRow) {
 		seen[row.ID] = true
 		if i > 0 {
 			previous := rows[i-1]
-			if previous.Balance-previous.Amount != row.Balance || previous.Frozen-previous.FrozenChange != row.Frozen {
+			if *previous.Balance-previous.Amount != *row.Balance || previous.Frozen-previous.FrozenChange != row.Frozen {
 				t.Errorf("row %d does not reconcile with the preceding row", i)
 			}
 		}
 	}
 	last := rows[len(rows)-1]
-	if last.Balance-last.Amount != 0 || last.Frozen-last.FrozenChange != 0 {
+	if *last.Balance-last.Amount != 0 || last.Frozen-last.FrozenChange != 0 {
 		t.Errorf("statement does not reconcile to zero opening funds: %+v", last)
 	}
 }
@@ -223,47 +223,60 @@ func TestStatementPagesAcrossNewMovements(t *testing.T) {
 	if len(second) != 2 {
 		t.Fatalf("the second page holds %d rows, want the last 2", len(second))
 	}
-	if second[0].Balance != first[len(first)-1].Balance-first[len(first)-1].Amount {
+	if *second[0].Balance != *first[len(first)-1].Balance-first[len(first)-1].Amount {
 		t.Errorf("the second page starts at %d, and the first ends at %d: a movement between them moved the column",
-			second[0].Balance, first[len(first)-1].Balance-first[len(first)-1].Amount)
+			*second[0].Balance, *first[len(first)-1].Balance-first[len(first)-1].Amount)
 	}
-	if first[0].Balance != before {
-		t.Errorf("the first page's balance reads %d, the one it was read with is %d", first[0].Balance, before)
+	if *first[0].Balance != before {
+		t.Errorf("the first page's balance reads %d, the one it was read with is %d", *first[0].Balance, before)
 	}
 	if got := b.balanceOf(b.admitted.Account); got != before-250 {
 		t.Errorf("the account holds %d after a charge of 250 from %d", got, before)
 	}
-	if got := second[len(second)-1]; got.Kind != StatementGift || got.Balance != got.Amount {
+	if got := second[len(second)-1]; got.Kind != StatementGift || *got.Balance != got.Amount {
 		t.Errorf("the statement ends with %+v", got)
 	}
 }
 
 // TestStatementFromBeforeTheSequence: the rows from before the sequence come last in the statement, newest first among
-// themselves by the key the ledger fixes for them, and the numbered ones come first.
+// themselves by the key the ledger fixes for them, and the numbered ones come first. Only the numbered rows say what
+// the balance was after them: the key of the older rows is not the order they were posted in when a clock stepped back
+// or two of them share a microsecond, and a balance walked back along it would show one the account never had (a gift
+// of 100 and a later charge of 20 stamped an hour earlier would read 80 after the gift and -20 after the charge).
 func TestStatementFromBeforeTheSequence(t *testing.T) {
 	t.Parallel()
-	b := newBank(t, 0, 0, Config{})
-	b.credit(1000)
-	b.charge(100)
-	b.charge(50)
-	b.sql("UPDATE billing.transactions SET seq = NULL")
-	b.charge(20) // numbered, and so above every row from before the sequence
-	legacy := b.legacyStatementIDs()
-	rows, next := b.statement(b.admitted, 50, nil)
-	if next != nil {
-		t.Errorf("the last page gave a cursor %v", next)
-	}
-	var got []uuid.UUID
-	for _, row := range rows {
-		got = append(got, row.ID)
-	}
-	if len(got) != len(legacy)+1 || !slices.Equal(got[1:], legacy) {
-		t.Errorf("the statement is %v; want the numbered charge, then %v", got, legacy)
-	}
-	for i := 1; i < len(rows); i++ {
-		if rows[i-1].Balance-rows[i-1].Amount != rows[i].Balance {
-			t.Errorf("row %d does not continue the balance above it", i)
-		}
+	for _, tc := range []struct{ name, restamp string }{
+		{"a clock that stepped back", `UPDATE billing.transactions t SET created_at = t.created_at - interval '1 hour'
+			WHERE t.seq IS NULL AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance' AND e.amount = 20)`},
+		{"one microsecond", "UPDATE billing.transactions SET created_at = '2026-01-01T00:00:00Z' WHERE seq IS NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := newBank(t, 0, 0, Config{})
+			b.credit(100)
+			b.charge(20)
+			b.charge(30)
+			b.sql("UPDATE billing.transactions SET seq = NULL", tc.restamp)
+			b.charge(7) // numbered, and so above every row from before the sequence
+			legacy := b.legacyStatementIDs()
+			rows, next := b.statement(b.admitted, 50, nil)
+			if next != nil || len(rows) != len(legacy)+1 {
+				t.Fatalf("the statement is %+v with a cursor %v; want the numbered charge and %d more", rows, next, len(legacy))
+			}
+			if rows[0].Amount != -7 || rows[0].Balance == nil || *rows[0].Balance != b.balanceOf(b.admitted.Account) {
+				t.Errorf("the numbered charge reads %+v; want -7 and the balance %d", rows[0], b.balanceOf(b.admitted.Account))
+			}
+			var sum int64
+			for i, row := range rows[1:] {
+				if row.ID != legacy[i] || row.Balance != nil || row.Frozen != 0 {
+					t.Errorf("row %d is %+v; want %s with no balance and nothing frozen", i+1, row, legacy[i])
+				}
+				sum += row.Amount
+			}
+			if sum != 50 {
+				t.Errorf("the rows from before the sequence add up to %d, want 100 - 20 - 30", sum)
+			}
+		})
 	}
 }
 
@@ -333,41 +346,66 @@ func TestStatementSkipsBoundedEmptySegments(t *testing.T) {
 			t.Fatal("empty cursor repeated or moved forward")
 		}
 	}
-	if len(rows) != 1 || rows[0].Amount != 1000 || rows[0].Balance != 1000 {
+	if len(rows) != 1 || rows[0].Amount != 1000 || *rows[0].Balance != 1000 {
 		t.Fatalf("visible history = %+v", rows)
 	}
 }
 
-// TestStatementReadsGrowWithThePage: a page deep in a long history reads about what the first page reads, from the two
-// indexes the ledger has, not what the history above it holds.
+// TestStatementReadsGrowWithThePage: a page deep in a long history reads about what the first page reads, walking the
+// two indexes the ledger has backward, not the history above it: numbered rows with every row in view, and in the
+// account's own scope beside 2,000 other accounts (where the estimate of the row-level security filter alone made the
+// planner read the whole history and sort it), and an account whose rows all come from before the sequence. A page of
+// 100 is read from the start and from deep in: 25,000 rows in for the numbered ones, 10,000 for the older ones.
 func TestStatementReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	legacy := uuid.NewV7()
 	b.sql(append(slices.Concat(
 		seedLedger(b.admitted.Site, b.admitted.Account, 30000, false),
 		seedLedger(b.admitted.Site, legacy, 12000, true),
+		[]string{`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
+			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 300)`},
 	), "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
-	var far int64
+	newest := statementNewest
+	far, farLegacy := newest, StatementCursor{}
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), "SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq OFFSET 25000 LIMIT 1", b.admitted.Account).Scan(&far)
+		if err := tx.QueryRow(t.Context(), "SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq OFFSET 25000 LIMIT 1", b.admitted.Account).Scan(&far.Seq); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), "SELECT created_at, id FROM billing.transactions WHERE account_id = $1 ORDER BY created_at DESC, id DESC OFFSET 10000 LIMIT 1", legacy).Scan(&farLegacy.At, &farLegacy.ID)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The page query is planned in the transaction ListStatement has read a page in, so the plan is the one it gets.
-	listed := func(tx pg.Tx) error {
-		_, _, err := ListStatement(t.Context(), tx, StatementQuery{Account: b.admitted.Account, PageSize: 1})
-		return err
-	}
-	first, firstPlan := b.plan(listed, statementPage, b.admitted.Account, int64(math.MaxInt64), int32(100), statementNewest.At, uuid.Max())
-	deep, plan := b.plan(listed, statementPage, b.admitted.Account, far, int32(100), statementNewest.At, uuid.Max())
-	t.Logf("EXPLAIN blocks: first=%d deep=%d", first, deep)
-	t.Logf("first plan: %s\ndeep plan: %s", firstPlan, plan)
-	checkStatementIndexPlan(t, plan)
-	if !strings.Contains(plan, "transactions_by_account_seq") {
-		t.Errorf("the deep page is not read from the index:\n%s", plan)
-	}
-	if deep > first+first/2+50 || deep > 1000 || first > 1000 {
-		t.Errorf("the deep page touched %d blocks against the first page's %d:\n%s", deep, first, plan)
+	for _, tc := range []struct {
+		name        string
+		scope       pg.Scope
+		account     uuid.UUID
+		index       string
+		first, deep StatementCursor
+	}{
+		{"numbered, every row in view", b.platform, b.admitted.Account, "transactions_by_account_seq", newest, far},
+		{"numbered, in the account's scope", b.admitted.Scope, b.admitted.Account, "transactions_by_account_seq", newest, far},
+		{"from before the sequence, in the account's scope", pg.NewScope(false, nil, []uuid.UUID{legacy}), legacy, "transactions_legacy_by_account", newest, farLegacy},
+	} {
+		// The page query is planned in the transaction ListStatement has read a page in, so the plan is the one it gets.
+		listed := func(tx pg.Tx) error {
+			_, _, err := ListStatement(t.Context(), tx, StatementQuery{Account: tc.account, PageSize: 1})
+			return err
+		}
+		page := func(at StatementCursor) (int, string) {
+			return b.plan(tc.scope, listed, statementPage, tc.account, at.Seq, int32(100), at.At, at.ID)
+		}
+		first, firstPlan := page(tc.first)
+		deep, deepPlan := page(tc.deep)
+		t.Logf("%s: EXPLAIN blocks: first=%d deep=%d", tc.name, first, deep)
+		checkStatementIndexPlan(t, firstPlan, 100)
+		checkStatementIndexPlan(t, deepPlan, 100)
+		if !strings.Contains(deepPlan, tc.index) {
+			t.Errorf("%s: the deep page is not read from %s:\n%s", tc.name, tc.index, deepPlan)
+		}
+		if deep > first+first/2+50 || deep > 1000 || first > 1000 {
+			t.Errorf("%s: the deep page touched %d blocks against the first page's %d:\n%s", tc.name, deep, first, deepPlan)
+		}
 	}
 }
 
@@ -377,14 +415,19 @@ type statementQueryPlan struct {
 	Relation  string               `json:"Relation Name"`
 	Direction string               `json:"Scan Direction"`
 	Loops     float64              `json:"Actual Loops"`
+	Rows      float64              `json:"Actual Rows"`
 	Plans     []statementQueryPlan `json:"Plans"`
 }
 
-func checkStatementIndexPlan(t *testing.T, raw string) {
+// checkStatementIndexPlan checks that the page returned rows and read every transaction it read in index order.
+func checkStatementIndexPlan(t *testing.T, raw string, rows float64) {
 	t.Helper()
 	var plans []struct{ Plan statementQueryPlan }
 	if err := jsonx.Unmarshal([]byte(raw), &plans); err != nil {
 		t.Fatal(err)
+	}
+	if plans[0].Plan.Rows != rows {
+		t.Errorf("the page returned %v rows, want %v", plans[0].Plan.Rows, rows)
 	}
 	var check func(statementQueryPlan)
 	check = func(p statementQueryPlan) {

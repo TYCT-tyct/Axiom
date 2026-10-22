@@ -43,7 +43,7 @@ func TestStatementRefundEvents(t *testing.T) {
 	}
 	for i, w := range want {
 		r := rows[i]
-		if r.Kind != w.kind || r.Amount != w.amount || r.FrozenChange != w.frozenChange || r.Balance != w.balance || r.Frozen != w.frozen {
+		if r.Kind != w.kind || r.Amount != w.amount || r.FrozenChange != w.frozenChange || *r.Balance != w.balance || r.Frozen != w.frozen {
 			t.Errorf("row %d = %+v, want %+v", i, r, w)
 		}
 		if r.Kind != StatementSpend && r.Kind != StatementReversal && r.Reference != f.Batch {
@@ -79,7 +79,7 @@ func TestStatementReversal(t *testing.T) {
 	b.charge(100)
 	b.reverseStatementCharge(40)
 	rows, next := b.statement(b.admitted, 50, nil)
-	if len(rows) != 3 || next != nil || rows[0].Kind != StatementReversal || rows[0].Amount != 40 || rows[0].Balance != 940 {
+	if len(rows) != 3 || next != nil || rows[0].Kind != StatementReversal || rows[0].Amount != 40 || *rows[0].Balance != 940 {
 		t.Fatalf("reversal statement = %+v, %v", rows, next)
 	}
 	if rows[0].Reference != rows[1].Reference {
@@ -115,7 +115,7 @@ func TestStatementRefundAfterExpiry(t *testing.T) {
 	b.expire()
 	b.finishRefund(f, true, false)
 	rows, _ := b.statement(b.admitted, 50, nil)
-	if len(rows) != 4 || rows[0].Kind != StatementRefund || rows[0].Amount != -300 || rows[0].Balance != 0 || rows[0].Frozen != 0 || rows[1].Amount != -700 {
+	if len(rows) != 4 || rows[0].Kind != StatementRefund || rows[0].Amount != -300 || *rows[0].Balance != 0 || rows[0].Frozen != 0 || rows[1].Amount != -700 {
 		t.Fatalf("refund and expiry = %+v", rows)
 	}
 	// Another tenant cannot read these events even when it names the victim account.

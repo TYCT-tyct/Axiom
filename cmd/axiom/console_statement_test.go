@@ -60,7 +60,7 @@ func TestStatement(t *testing.T) {
 	}
 	want := consoleapi.StatementRow{
 		Id: page.Data[0].Id, At: page.Data[0].At, Kind: consoleapi.Spend, Reference: call.String(),
-		Amount: consoleapi.Money{Amount: "-1000", Currency: "USD"}, BalanceAfter: consoleapi.Money{Amount: "4999999000", Currency: "USD"},
+		Amount: consoleapi.Money{Amount: "-1000", Currency: "USD"}, BalanceAfter: &consoleapi.Money{Amount: "4999999000", Currency: "USD"},
 		FrozenChange: consoleapi.Money{Amount: "0", Currency: "USD"}, FrozenAfter: consoleapi.Money{Amount: "0", Currency: "USD"},
 	}
 	if diff := cmp.Diff(want, page.Data[0], cmpopts.EquateApproxTime(time.Millisecond)); diff != "" {
@@ -73,7 +73,7 @@ func TestStatement(t *testing.T) {
 	if len(rest.Data) != 1 || rest.NextCursor != nil || rest.Data[0].Kind != consoleapi.Gift || rest.Data[0].Reference != gift.String() {
 		t.Fatalf("the last page: %+v, cursor %v", rest.Data, rest.NextCursor)
 	}
-	if rest.Data[0].Amount != (consoleapi.Money{Amount: "5000000000", Currency: "USD"}) || rest.Data[0].BalanceAfter != rest.Data[0].Amount {
+	if rest.Data[0].Amount != (consoleapi.Money{Amount: "5000000000", Currency: "USD"}) || rest.Data[0].BalanceAfter == nil || *rest.Data[0].BalanceAfter != rest.Data[0].Amount {
 		t.Errorf("the gift: %+v", rest.Data[0])
 	}
 	expect(t, "a cursor that is none", f.do(http.MethodGet, "/statement?cursor=nonsense", "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
@@ -192,7 +192,7 @@ func (f consoleFixture) checkRefundStatement(s session, count int, kind consolea
 		f.t.Fatalf("statement has %d rows, want %d", len(page.Data), count)
 	}
 	row := page.Data[0]
-	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter != balance.Balance || row.FrozenAfter.Amount != frozen {
+	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter == nil || *row.BalanceAfter != balance.Balance || row.FrozenAfter.Amount != frozen {
 		f.t.Fatalf("statement %+v disagrees with balance %+v", page, balance)
 	}
 }
@@ -213,6 +213,57 @@ func TestStatementExportIsCapped(t *testing.T) {
 	}
 	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
 		t.Errorf("the first page holds %d rows and the cursor %v", len(page.Data), page.NextCursor)
+	}
+}
+
+// TestStatementExportCutsInsideAPage: when a run of movements that changed nothing ends the first page short, the pages
+// after it no longer line up with the cap, and the file still holds exactly the newest statementExport movements. 150
+// movements sit above 1,600 that changed nothing, so the first page holds 150 and a cursor (8 rounds of 201 reach no
+// further), the next 49 hold 200 each, and the cap falls inside the 51st.
+func TestStatementExportCutsInsideAPage(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	insert := func(kind string, n int) string {
+		return `INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '` + site.String() + `', '` + account.String() + `', '` + kind + `', gen_random_uuid()
+			FROM generate_series(1, ` + strconv.Itoa(n) + `)`
+	}
+	f.run(insert("settle", 10_100), insert("attempt_cost", 1_600), insert("settle", 150),
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', 1), ('revenue', -1)) AS b(book, amount)
+			WHERE t.account_id = '`+account.String()+`' AND t.kind = 'settle'`)
+	var want []string
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT request_id::text FROM billing.transactions WHERE account_id = $1 AND kind = 'settle'
+			ORDER BY seq DESC LIMIT $2`, account, statementExport)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			want = append(want, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first := f.statementRows(s, "?limit=200"); len(first.Data) != 150 || first.NextCursor == nil {
+		t.Fatalf("the first page holds %d rows and the cursor %v; want 150 and a cursor", len(first.Data), first.NextCursor)
+	}
+	records, err := csv.NewReader(f.do(http.MethodGet, "/statement.csv", "", as(s)).Body).ReadAll()
+	if err != nil || len(records) != statementExport+1 {
+		t.Fatalf("the file has %d records (%v); want a header and %d movements", len(records), err, statementExport)
+	}
+	for i, record := range records[1:] {
+		if record[5] != want[i] {
+			t.Fatalf("movement %d of the file is %s; want %s, the newest %d in order", i, record[5], want[i], statementExport)
+		}
 	}
 }
 
@@ -330,5 +381,28 @@ func TestCreditsOf(t *testing.T) {
 		if got := creditsOf(tc.amount); got != tc.want {
 			t.Errorf("creditsOf(%d) = %q, want %q", tc.amount, got, tc.want)
 		}
+	}
+}
+
+// TestStatementWithoutABalance: a movement from before the ledger numbered them gives its balance after as null in a
+// page and as an empty cell in the file, never as a figure its order cannot prove.
+func TestStatementWithoutABalance(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 1)
+	account, _ := f.account(s)
+	f.run(`UPDATE billing.transactions SET seq = NULL WHERE account_id = '` + account.String() + `'`)
+	rec := f.do(http.MethodGet, "/statement", "", as(s))
+	var page consoleapi.Statement
+	decode(t, rec, &page)
+	if len(page.Data) != 2 || page.Data[0].BalanceAfter != nil || page.Data[1].BalanceAfter != nil ||
+		strings.Count(rec.Body.String(), `"balance_after":null`) != 2 {
+		t.Errorf("a page from before the sequence: %s", rec.Body)
+	}
+	file := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	records, err := csv.NewReader(file.Body).ReadAll()
+	if err != nil || len(records) != 3 || records[0][3] != "balance_after" || records[1][3] != "" || records[2][3] != "" {
+		t.Errorf("the file from before the sequence: %v, %v", records, err)
 	}
 }

@@ -68,7 +68,7 @@ export default {
       body: "Top-ups, gifts and charges show up here.",
       balance: "See your balance",
     },
-    col: { time: "Time", kind: "Kind", amount: "Amount", balance: "Balance after", reference: "Reference" },
+    col: { time: "Time", kind: "Kind", amount: "Amount", balance: "Balance after" },
     kind: {
       top_up: "Top-up",
       gift: "Gift",
@@ -81,6 +81,8 @@ export default {
     },
     frozenChange: "Change in held credits",
     frozenAfter: "Held: {{amount}}",
+    balanceUnknown: "Not available",
+    balanceUnknownNote: "Recorded before posting order was kept, so the balance after it is unknown.",
     call: "Call {{id}}",
   },
   keys: {
