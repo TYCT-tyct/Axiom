@@ -201,8 +201,8 @@ func retryAfter(t testing.TB, rec *httptest.ResponseRecorder) int {
 func TestReturnURL(t *testing.T) {
 	t.Parallel()
 	for origin, want := range map[string]string{
-		"https://console.example.com":      "https://console.example.com/balance",
-		"https://console.example.com:8443": "https://console.example.com:8443/balance",
+		"https://console.example.com":      "https://console.example.com/console/balance",
+		"https://console.example.com:8443": "https://console.example.com:8443/console/balance",
 		"http://localhost:317":             "",
 		"console.example.com":              "",
 		"":                                 "",
