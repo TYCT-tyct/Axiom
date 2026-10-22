@@ -34,7 +34,6 @@ export default function Balance() {
                     [
                       ["balance", data.balance],
                       ["reserved", data.reserved],
-                      ["frozen", data.frozen],
                       ["floor", data.floor],
                     ] as const
                   ).map(([name, money]) => (

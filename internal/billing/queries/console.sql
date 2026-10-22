@@ -27,34 +27,38 @@ GROUP BY k.key_id;
 -- name: StatementPage :many
 -- Balance and refund-hold events share the ledger's account commit order. Both index regions are bounded before
 -- summing entries. Freeze/unfreeze revisions are cumulative per batch and kind: the unique event index finds the
--- previous revision without scanning the account history. The counters and rows use one snapshot.
+-- previous revision without scanning the account history. Lateral aggregation keeps entry lookups on the transaction
+-- index even before ANALYZE has statistics; a hash of all entries per CSV page can exceed the request deadline.
+-- The counters and rows use one snapshot.
 WITH page AS (
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
+    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision, (-coalesce(e.debit, 0))::bigint AS amount
     FROM billing.transactions t
+    LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
+        WHERE e.transaction_id = t.id AND e.book = 'user_balance') e ON true
     WHERE t.account_id = @account_id AND t.seq < @after_seq::bigint
-        AND (t.kind IN ('freeze', 'unfreeze') OR EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance'))
+        AND (t.kind IN ('freeze', 'unfreeze') OR e.debit IS NOT NULL)
     ORDER BY t.seq DESC
     LIMIT @max)
     UNION ALL
-    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision
+    (SELECT t.id, t.seq, t.created_at, t.kind, t.request_id, t.revision, (-coalesce(e.debit, 0))::bigint AS amount
     FROM billing.transactions t
+    LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
+        WHERE e.transaction_id = t.id AND e.book = 'user_balance') e ON true
     WHERE t.account_id = @account_id AND t.seq IS NULL AND (t.created_at, t.id) < (@after_at::timestamptz, @after_id::uuid)
-        AND (t.kind IN ('freeze', 'unfreeze') OR EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = t.id AND e.book = 'user_balance'))
+        AND (t.kind IN ('freeze', 'unfreeze') OR e.debit IS NOT NULL)
     ORDER BY t.created_at DESC, t.id DESC
     LIMIT @max)
 )
 SELECT p.id, p.created_at, p.kind, p.request_id, coalesce(p.seq, 0)::bigint AS seq,
-    (-coalesce(sum(e.amount), 0))::bigint AS amount, coalesce(b.source, '')::text AS source,
+    p.amount, coalesce(b.source, '')::text AS source,
     (CASE WHEN p.kind IN ('freeze', 'unfreeze') THEN
         (p.revision - coalesce((SELECT t.revision FROM billing.transactions t
             WHERE t.account_id = @account_id AND t.request_id = p.request_id AND t.attempt_seq = 0
                 AND t.kind = p.kind AND t.revision < p.revision
             ORDER BY t.revision DESC LIMIT 1), 0)) * CASE WHEN p.kind = 'freeze' THEN 1 ELSE -1 END
-        WHEN p.kind = 'refund' THEN -coalesce(sum(e.amount), 0) ELSE 0 END)::bigint AS frozen_change,
+        WHEN p.kind = 'refund' THEN p.amount ELSE 0 END)::bigint AS frozen_change,
     (SELECT ba.balance FROM billing.balances ba WHERE ba.account_id = @account_id)::bigint AS balance,
     (SELECT ba.frozen FROM billing.balances ba WHERE ba.account_id = @account_id)::bigint AS frozen
 FROM page p
-LEFT JOIN billing.entries e ON e.transaction_id = p.id AND e.book = 'user_balance'
 LEFT JOIN billing.credit_batches b ON p.kind = 'credit' AND b.id = p.request_id
-GROUP BY p.id, p.seq, p.created_at, p.kind, p.request_id, p.revision, b.source
 ORDER BY p.seq DESC NULLS LAST, p.created_at DESC, p.id DESC;

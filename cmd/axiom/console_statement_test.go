@@ -165,8 +165,8 @@ func TestStatementRefundMatchesBalance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.checkRefundStatement(s, 2, consoleapi.Freeze, "0", batch.String())
-	if balance := f.balance(s); balance.Frozen.Amount != "500000000" || balance.Available.Amount != "500000000" {
+	f.checkRefundStatement(s, 2, consoleapi.Freeze, "0", batch.String(), "500000000")
+	if balance := f.balance(s); balance.Balance.Amount != "1000000000" || balance.Available.Amount != "500000000" {
 		t.Fatalf("refund hold not reflected in available balance: %+v", balance)
 	}
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
@@ -174,20 +174,20 @@ func TestStatementRefundMatchesBalance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.checkRefundStatement(s, 3, consoleapi.Refund, "-500000000", batch.String())
+	f.checkRefundStatement(s, 3, consoleapi.Refund, "-500000000", batch.String(), "0")
 	if csv := f.do(http.MethodGet, "/statement.csv", "", as(s)); csv.Code != http.StatusOK || !strings.Contains(csv.Body.String(), ",refund,-0.500000000,0.500000000,USD,"+batch.String()+",-0.500000000,0.000000000") {
 		t.Fatalf("refund export = %d %s", csv.Code, csv.Body)
 	}
 }
 
-func (f consoleFixture) checkRefundStatement(s session, count int, kind consoleapi.StatementKind, delta, batch string) {
+func (f consoleFixture) checkRefundStatement(s session, count int, kind consoleapi.StatementKind, delta, batch, frozen string) {
 	f.t.Helper()
 	page, balance := f.statementRows(s, ""), f.balance(s)
 	if len(page.Data) != count {
 		f.t.Fatalf("statement has %d rows, want %d", len(page.Data), count)
 	}
 	row := page.Data[0]
-	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter != balance.Balance || row.FrozenAfter != balance.Frozen {
+	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter != balance.Balance || row.FrozenAfter.Amount != frozen {
 		f.t.Fatalf("statement %+v disagrees with balance %+v", page, balance)
 	}
 }
@@ -200,12 +200,19 @@ func TestStatementExportIsCapped(t *testing.T) {
 	s := f.owner()
 	account, site := f.account(s)
 	const many = 10_050
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.AddCredit(t.Context(), tx, billing.Credit{ID: uuid.NewV7(), Site: site, Account: account, Amount: many, Actor: audit.System("test"), Reason: "fund statement history"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
 			SELECT gen_random_uuid(), '`+site.String()+`', '`+account.String()+`', 'settle', gen_random_uuid()
 			FROM generate_series(1, `+strconv.Itoa(many)+`)`,
 		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
-			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', -1), ('revenue', 1)) AS b(book, amount)
-			WHERE t.account_id = '`+account.String()+`'`)
+			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', 1), ('revenue', -1)) AS b(book, amount)
+			WHERE t.account_id = '`+account.String()+`' AND t.kind = 'settle'`,
+		`UPDATE billing.balances SET balance = 0 WHERE account_id = '`+account.String()+`'`)
 	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the export: %d %s", rec.Code, rec.Body)

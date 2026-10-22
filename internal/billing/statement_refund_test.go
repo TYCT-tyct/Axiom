@@ -2,6 +2,7 @@ package billing
 
 import (
 	"testing"
+	"uuid"
 
 	"axiom/internal/platform/pg"
 )
@@ -11,7 +12,7 @@ func TestStatementRefundEvents(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	b.charge(100)
-	b.reverse(40)
+	b.reverseStatementCharge(40)
 	f.Amount = 300
 	b.freeze(f)
 	f.Amount = 100
@@ -69,6 +70,23 @@ func (b *bank) checkStatementRefundPaging(f Freeze, count int) {
 			all = append(all, page...)
 		}
 		checkStatementChain(b.t, all)
+	}
+}
+
+func (b *bank) reverseStatementCharge(amount int64) {
+	b.t.Helper()
+	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		if _, err := lockAccount(b.t.Context(), tx, b.admitted.Account); err != nil {
+			return err
+		}
+		var request uuid.UUID
+		if err := tx.QueryRow(b.t.Context(), "SELECT request_id FROM billing.transactions WHERE account_id = $1 AND kind = 'settle' ORDER BY seq DESC LIMIT 1", b.admitted.Account).Scan(&request); err != nil {
+			return err
+		}
+		_, err := post(b.t.Context(), tx, event{site: b.admitted.Site, account: b.admitted.Account, kind: "reverse", request: request, revision: 1}, reversal(amount, amount)...)
+		return err
+	}); err != nil {
+		b.t.Fatal(err)
 	}
 }
 

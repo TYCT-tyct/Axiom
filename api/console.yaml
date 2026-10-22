@@ -813,15 +813,14 @@ components:
           items: {type: string}
     Balance:
       type: object
-      required: [balance, reserved, frozen, floor, available, spent_this_month]
+      required: [balance, reserved, floor, available, spent_this_month]
       description: >-
-        An account's money in its site's accounting currency. `available` is `balance - reserved - frozen`; a call is admitted
+        An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted
         while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls
         settled for the current UTC calendar month.
       properties:
         balance: {$ref: "#/components/schemas/Money"}
         reserved: {$ref: "#/components/schemas/Money"}
-        frozen: {$ref: "#/components/schemas/Money"}
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}

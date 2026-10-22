@@ -110,13 +110,12 @@ func TestStatement(t *testing.T) {
 		kind   StatementKind
 		amount int64
 		ref    uuid.UUID
-	}{{StatementExpiry, -200, expiring}, {StatementSpend, -300, uuid.UUID{}}, {StatementTopUp, 500, topUp.ID}, {StatementGift, 1000, gift}}
+	}{{StatementExpiry, -200, expiring}, {StatementGift, 200, expiring}, {StatementSpend, -300, uuid.UUID{}}, {StatementTopUp, 500, topUp.ID}, {StatementGift, 1000, gift}}
 	if len(rows) != len(want) {
 		t.Fatalf("%d rows, want %d: %+v", len(rows), len(want), rows)
 	}
-	// The balance after each movement, newest first: 1000 left now, 1200 before the expiry, 1500 before the charge,
-	// and 1000 before the top-up.
-	after := []int64{1000, 1200, 1500, 1000}
+	// The expiring gift must appear too: its credit and write-off cancel, leaving 1200 now.
+	after := []int64{1200, 1400, 1200, 1500, 1000}
 	checkStatementRows(t, rows, want, after, waived)
 }
 
@@ -272,7 +271,7 @@ func (b *bank) legacyStatementIDs() []uuid.UUID {
 
 	var ids []uuid.UUID
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		rows, err := tx.Query(b.t.Context(), "SELECT id FROM billing.transactions WHERE account_id = $1 AND seq IS NULL ORDER BY created_at DESC, id DESC", b.admitted.Account)
+		rows, err := tx.Query(b.t.Context(), "SELECT id FROM billing.transactions WHERE account_id = $1 AND seq IS NULL AND EXISTS (SELECT 1 FROM billing.entries e WHERE e.transaction_id = billing.transactions.id AND e.book = 'user_balance') ORDER BY created_at DESC, id DESC", b.admitted.Account)
 		if err != nil {
 			return err
 		}
