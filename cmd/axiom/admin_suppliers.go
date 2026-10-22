@@ -70,6 +70,22 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 	return body
 }
 
+func endpointBody(e suppliers.Endpoint) adminapi.SupplierEndpoint {
+	return adminapi.SupplierEndpoint{
+		Id: e.ID.String(), GroupId: e.Group.String(), ModelId: e.Model.String(), UpstreamName: e.UpstreamName,
+		Formats: modelFormats(e.Formats), CostState: adminapi.SupplierEndpointCostState(e.CostState), Enabled: e.Enabled,
+	}
+}
+
+// modelFormats are the call formats as the store names them, which are the contract's names.
+func modelFormats(formats []string) []adminapi.ModelFormat {
+	out := make([]adminapi.ModelFormat, len(formats))
+	for i, f := range formats {
+		out[i] = adminapi.ModelFormat(f)
+	}
+	return out
+}
+
 func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
@@ -115,8 +131,8 @@ func (a adminAPI) ListSuppliers(ctx context.Context, request adminapi.ListSuppli
 	return adminapi.ListSuppliers200JSONResponse(list), nil
 }
 
-// GetSupplier reads one supplier with its groups and the keys bound to them, as the sync last stored them. The keys the
-// supplier lists that are bound to none are the sync's to say, and are not stored yet.
+// GetSupplier reads one supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
+// The keys the supplier lists that are bound to none are the sync's to say, and are not stored yet.
 func (a adminAPI) GetSupplier(ctx context.Context, request adminapi.GetSupplierRequestObject) (adminapi.GetSupplierResponseObject, error) {
 	id, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -132,12 +148,16 @@ func (a adminAPI) GetSupplier(ctx context.Context, request adminapi.GetSupplierR
 	body := adminapi.SupplierDetail{
 		Supplier: supplierBody(detail.Supplier), Groups: make([]adminapi.SupplierGroup, len(detail.Groups)),
 		Credentials: make([]adminapi.SupplierCredential, len(detail.Credentials)), UnboundKeys: []adminapi.UpstreamKey{},
+		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)),
 	}
 	for i, g := range detail.Groups {
 		body.Groups[i] = groupBody(g)
 	}
 	for i, c := range detail.Credentials {
 		body.Credentials[i] = credentialBody(c)
+	}
+	for i, e := range detail.Endpoints {
+		body.Endpoints[i] = endpointBody(e)
 	}
 	return adminapi.GetSupplier200JSONResponse(body), nil
 }
@@ -475,10 +495,7 @@ func (a adminAPI) ListPendingMappings(ctx context.Context, request adminapi.List
 	for i, n := range names {
 		list.Data[i] = adminapi.PendingMapping{
 			SupplierId: n.Supplier.String(), GroupId: n.Group.String(), GroupCodename: text(n.GroupCodename), UpstreamName: n.UpstreamName,
-			Formats: make([]adminapi.ModelFormat, len(n.Formats)),
-		}
-		for j, f := range n.Formats {
-			list.Data[i].Formats[j] = adminapi.ModelFormat(f)
+			Formats: modelFormats(n.Formats),
 		}
 	}
 	if more {

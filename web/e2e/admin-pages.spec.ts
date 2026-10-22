@@ -283,6 +283,89 @@ test.describe("suppliers", () => {
     await expect(h1(page, "Paused Site")).toBeVisible();
     await expect(press(page, "suppliers.unit.open")).toHaveCount(0);
     await expect(press(page, "suppliers.remove.open")).toHaveCount(0);
+    await expect(page.getByText("gpt-test-mini")).toBeVisible();
+    await expect(press(page, "suppliers.test.title")).toHaveCount(0);
+  });
+});
+
+test.describe("endpoint tests", () => {
+  const verdict = (page: Page, outcome: string) =>
+    dialog(page).getByText(zhText(`suppliers.test.outcome.${outcome}.title`), { exact: true });
+
+  test("a test waits out a slow answer, says it passed with its timings and IDs, and only callable endpoints offer one", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    await expect(page.getByText("unpriced-model")).toBeVisible();
+    // five endpoints, of which the switched-off one and the one with no known cost cannot be called
+    await expect(press(page, "suppliers.test.title")).toHaveCount(3);
+    await expect(page.getByText(zhText("suppliers.endpoints.state.off"))).toBeVisible();
+    await expect(page.getByText(zhText("suppliers.endpoints.state.unknown"))).toBeVisible();
+
+    await press(page, "suppliers.test.title", 1).click();
+    await expect(dialog(page).getByLabel(words("suppliers.test.format")).locator("option")).toHaveCount(3);
+    await dialog(page).getByLabel(words("suppliers.test.format")).selectOption("chat");
+    // The server answers after 11 s, past the client's usual 10 s limit (packages/api), which this call must not have:
+    // the answer still arrives, without the dialog resending.
+    await page.route(
+      "**/suppliers/endpoint-tests",
+      async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 11_000));
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    await send(page, "check the endpoint");
+    await expect(dialog(page).getByText(zhText("suppliers.test.waiting"))).toBeVisible();
+    await expect(dialog(page).locator("button[type=submit]")).toBeDisabled();
+    await expect(verdict(page, "passed")).toBeVisible({ timeout: 30_000 });
+    expect(state.log.filter((line) => line === "POST /suppliers/endpoint-tests")).toHaveLength(1);
+    await expect(dialog(page).getByText(zhText("change.done"))).toHaveCount(0);
+    await expect(dialog(page).getByText("820 毫秒")).toBeVisible();
+    await expect(dialog(page).getByText("3.2 秒")).toBeVisible();
+    await expect(dialog(page).getByText("chatcmpl-9fX2kQ")).toBeVisible();
+    await expect(dialog(page).getByText(uuid(10, 1))).toBeVisible();
+    await expect(dialog(page).getByRole("button", { name: zhText("suppliers.test.copyRequestId") })).toBeVisible();
+    const [stored] = state.stored.values();
+    expect(stored?.json).toMatchObject({ format: "chat", upstream_model: "gpt-test-mini" });
+  });
+
+  test("a failed and an inconclusive test name the cause, and a lost answer is replayed, not paid twice", async ({
+    page,
+  }) => {
+    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    await press(page, "suppliers.test.title", 0).click();
+    await send(page);
+    await expect(verdict(page, "failed")).toBeVisible();
+    await expect(dialog(page).getByText("问题出在端点：流中途断开。")).toBeVisible();
+    await close(page);
+
+    await press(page, "suppliers.test.title", 2).click();
+    state.dropReplies = 1;
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(/连不上/);
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(verdict(page, "inconclusive")).toBeVisible();
+    await expect(dialog(page).getByText("这次测试说明不了端点好坏：被限流（key）。")).toBeVisible();
+    await expect(dialog(page).getByText(zhText("change.replayed"))).toBeVisible();
+    // two tests, three requests: the resend carried the lost one's key and got its stored answer
+    expect(state.log.filter((line) => line === "POST /suppliers/endpoint-tests")).toHaveLength(3);
+    expect(state.stored.size).toBe(2);
+  });
+
+  test("a refusal says why nothing was paid for and what to check", async ({ page }) => {
+    await open(page, `/suppliers/${uuid(2, 1)}`);
+    await press(page, "suppliers.test.title", 1).click();
+    await page.route(
+      "**/suppliers/endpoint-tests",
+      (route) => route.fulfill({ status: 409, json: { error: { code: "conflict", message: "conflict" } } }),
+      { times: 1 },
+    );
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.test.refused.conflict"));
+    // refused before anything was done: the form is open again for another try
+    await expect(dialog(page).getByLabel(words("suppliers.test.format"))).toBeEnabled();
   });
 });
 

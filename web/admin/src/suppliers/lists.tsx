@@ -2,11 +2,12 @@ import type { AdminSchemas } from "@axiom/api";
 import { Button, EmptyState, Table, Td, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { Code, Head, mainCell, State, Time } from "../parts";
+import { endpointState } from "./endpoint-test";
 import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
 
-function Empty({ what }: { what: "groups" | "credentials" | "unbound" }) {
+function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoints" }) {
   const { t } = useTranslation();
   return (
     <EmptyState compact title={t(`suppliers.${what}.empty.title`)}>
@@ -176,6 +177,86 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
             ) : null}
           </tr>
         ))}
+      </tbody>
+    </Table>
+  );
+}
+
+const endpointTones = {
+  off: "neutral",
+  unknown: "warn",
+  conflict: "bad",
+  ready: "good",
+} as const satisfies Record<ReturnType<typeof endpointState>, "neutral" | "good" | "warn" | "bad">;
+
+// The supplier's endpoints, one per model of a group, by upstream name: what a person tests. Only one that may be called
+// offers the test; the state says why another does not.
+export function Endpoints({
+  endpoints,
+  groups,
+  onOpen,
+}: {
+  endpoints: AdminSchemas["SupplierEndpoint"][];
+  groups: AdminSchemas["SupplierGroup"][];
+  onOpen: OnOpen;
+}) {
+  const { t } = useTranslation();
+  if (endpoints.length === 0) {
+    return <Empty what="endpoints" />;
+  }
+  return (
+    <Table label={t("suppliers.endpoints.title")}>
+      <Head
+        cols={[
+          [t("suppliers.endpoints.model")],
+          [t("suppliers.endpoints.group"), "hidden md:table-cell"],
+          [t("suppliers.endpoints.formats"), "hidden lg:table-cell"],
+          [t("suppliers.col.status"), "whitespace-nowrap"],
+        ]}
+        action={onOpen !== undefined}
+      />
+      <tbody>
+        {endpoints.map((endpoint) => {
+          const group = groups.find((candidate) => candidate.id === endpoint.group_id);
+          const state = endpointState(endpoint);
+          return (
+            <tr key={endpoint.id}>
+              <Td className={mainCell}>
+                <p className="truncate" title={endpoint.upstream_name}>
+                  <Code>{endpoint.upstream_name}</Code>
+                </p>
+              </Td>
+              <Td className="hidden max-w-48 truncate md:table-cell">
+                {group?.codename ?? group?.name ?? endpoint.group_id}
+              </Td>
+              <Td className="hidden lg:table-cell">
+                <div className="flex flex-wrap gap-1">
+                  {endpoint.formats.map((format) => (
+                    <span key={format} className="rounded-xs bg-s3 px-1.5 py-0.5 text-label text-t2">
+                      {t(`suppliers.test.format_${format}`)}
+                    </span>
+                  ))}
+                </div>
+              </Td>
+              <Td className="whitespace-nowrap">
+                <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
+              </Td>
+              {onOpen ? (
+                <Td className="whitespace-nowrap">
+                  {state === "ready" ? (
+                    <Button
+                      size="sm"
+                      aria-label={t("suppliers.test.title", { name: endpoint.upstream_name })}
+                      onClick={() => onOpen({ kind: "test", endpoint })}
+                    >
+                      {t("suppliers.test.open")}
+                    </Button>
+                  ) : null}
+                </Td>
+              ) : null}
+            </tr>
+          );
+        })}
       </tbody>
     </Table>
   );

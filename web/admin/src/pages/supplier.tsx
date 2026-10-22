@@ -16,7 +16,8 @@ import {
   StatusDialog,
   UnitValueDialog,
 } from "../suppliers/dialogs";
-import { Credentials, Groups, UnboundKeys } from "../suppliers/lists";
+import { EndpointTestDialog } from "../suppliers/endpoint-test-dialog";
+import { Credentials, Endpoints, Groups, UnboundKeys } from "../suppliers/lists";
 import type { Open } from "../suppliers/open";
 import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
 
@@ -86,6 +87,9 @@ function Body({ detail }: { detail: Detail }) {
       <Panel title={t("suppliers.credentials.title")}>
         <Credentials credentials={detail.credentials} groups={detail.groups} />
       </Panel>
+      <Panel title={t("suppliers.endpoints.title")}>
+        <Endpoints endpoints={detail.endpoints} groups={detail.groups} onOpen={act} />
+      </Panel>
       <Panel title={t("suppliers.unbound.title")}>
         <UnboundKeys keys={detail.unbound_keys} onOpen={act} />
       </Panel>
@@ -143,6 +147,8 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
           onClose={onClose}
         />
       );
+    case "test":
+      return <EndpointTestDialog endpoint={open.endpoint} onClose={onClose} />;
     default:
       return null;
   }

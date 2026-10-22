@@ -118,6 +118,27 @@ function aGroup(supplier: number, n: number, over: Partial<Schemas["SupplierGrou
   };
 }
 
+// The endpoints of a supplier's chosen group, by upstream name as the server lists them. The name decides what a test
+// of it finds (admin-supply.ts); the last two cannot be called, so they offer no test.
+function endpoints(supplier: number, group: string): Schemas["SupplierEndpoint"][] {
+  const rows = [
+    ["broken-stream-model", ["chat"], "known", true],
+    ["gpt-test-mini", ["messages", "responses", "chat"], "known", true],
+    ["rate-limited-model", ["messages"], "known", true],
+    ["retired-model", ["chat"], "known", false],
+    ["unpriced-model", ["responses"], "unknown", true],
+  ] as const;
+  return rows.map(([name, formats, cost_state, enabled], i) => ({
+    id: uuid(9, supplier * 100 + i),
+    group_id: group,
+    model_id: uuid(5, i + 1),
+    upstream_name: name,
+    formats: [...formats],
+    cost_state,
+    enabled,
+  }));
+}
+
 function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["SupplierDetail"] {
   const supplier = aSupplier(n, over);
   const groups = [aGroup(n, 1), aGroup(n, 2)];
@@ -134,6 +155,7 @@ function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["S
       },
     ],
     unbound_keys: [{ ref: `key-${n}-b`, group_ref: "group-2", status: "active" }],
+    endpoints: endpoints(n, groups[0]?.id ?? ""),
   };
 }
 
@@ -314,6 +336,23 @@ export function worstState(): AdminState {
     }),
     ...range(60).map((n) => aDetail(n + 1)),
   ];
+  const [worst] = state.suppliers;
+  if (worst) {
+    const [first, ...rest] = worst.endpoints;
+    worst.endpoints = [
+      ...(first ? [{ ...first, upstream_name: long("an-upstream-model-name-", 200) }] : []),
+      ...rest,
+      ...range(150).map((n) => ({
+        id: uuid(9, 10_000 + n),
+        group_id: worst.groups[0]?.id ?? "",
+        model_id: uuid(5, 1),
+        upstream_name: `model-${n}`,
+        formats: ["messages" as const, "responses" as const, "chat" as const],
+        cost_state: "known" as const,
+        enabled: true,
+      })),
+    ];
+  }
   const slug = `${long("a-vendor-with-a-long-name", 40).replace(/-$/, "a")}/${long("model-name-", 99)}@${long("v", 39)}`;
   state.models = [
     aModel(1, { slug: slug as Schemas["ModelSlug"], names: [{ name: long("alias-", 200), visibility: "internal" }] }),
