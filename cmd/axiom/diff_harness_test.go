@@ -74,8 +74,46 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 		{"deepseek cache names changed", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", "65", false},
 		{"deepseek cache names made up", "chat-deepseek-tools-whole", "json.usage.prompt_cache_hit_tokens", absent, "64", false},
 		{"deepseek cache names in another case", "chat-gpt-tools-whole", "json.usage.prompt_cache_hit_tokens", "64", absent, false},
+		{"converted item identity", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, `"12345678-1234-1234-1234-123456789abc_0"`, true},
+		{"converted identity cannot leak", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, `"msg_other_up"`, false},
+		{"converted identity cannot disappear", "responses-deepseek-text-whole", "json.output[].id", `"msg_up"`, absent, false},
 		{"times", "chat-claude-text-whole", "json.created", "1741290958", "1792390509", true},
 		{"time that is no time", "chat-claude-text-whole", "json.created", "1741290958", `"soon"`, false},
+		{
+			"OpenAI names in an Anthropic usage", "messages-deepseek-text-whole", "json.usage.prompt_tokens", "9", absent, true,
+		},
+		{
+			"an Anthropic member new-api left out", "messages-deepseek-text-whole", "json.usage.input_tokens", absent, "9", true,
+		},
+		{
+			"an Anthropic member both have", "messages-deepseek-text-whole", "json.usage.output_tokens", "12", "9", false,
+		},
+		{
+			"the prompt new-api counts itself", "messages-deepseek-text-stream",
+			"sse[message_start].message.usage.input_tokens", "532", "0", true,
+		},
+		{
+			"an input count that is Axiom's", "messages-deepseek-text-stream",
+			"sse[message_start].message.usage.input_tokens", "532", "9", false,
+		},
+		{
+			"a stop sequence neither matched", "messages-deepseek-text-whole", "json.stop_sequence", absent, "null", true,
+		},
+		{
+			"a stop sequence new-api has", "messages-deepseek-text-whole", "json.stop_sequence", `"\n\nHuman:"`, "null", false,
+		},
+		{
+			"a block stopped elsewhere", "messages-deepseek-tools-stream",
+			"sse[content_block_stop]", `{"index":1,"type":"content_block_stop"}`, absent, true,
+		},
+		{
+			"a block stopped in the other stream", "messages-deepseek-tools-stream",
+			"sse[content_block_stop]", absent, `{"index":2,"type":"content_block_stop"}`, true,
+		},
+		{
+			"a block stop that became something else", "messages-deepseek-tools-stream",
+			"sse[content_block_stop]", `{"index":1,"type":"content_block_stop"}`, `{"index":1,"type":"content_block_delta"}`, false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

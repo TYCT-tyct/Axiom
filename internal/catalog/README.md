@@ -2,13 +2,13 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」）。页面监测、审核项、数据集核对、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」），以及数据集同步的定时调度、它留在 `catalog.sync_state` 的记录和失败过久的告警（#319 E7-4、#281）。页面监测、审核项、数据集核对、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
 
 ## 包
 
 | 包 | 做什么 |
 |---|---|
-| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集取数、解析与自动发布、改选到数据集、只读检查（均已实现）；页面监测与数据集核对（设计，尚未实现） |
+| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集取数、解析与自动发布、改选到数据集、只读检查、定时同步与告警（均已实现）；页面监测与数据集核对（设计，尚未实现） |
 | `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（`watched_page` 等页面与数据集的表随它们的 PR 加入） |
 | `catalog/queries` | sqlc 的查询，生成的 `*.gen.go` 在 `catalog` 包里；生成的 `Queries` 构造函数叫 `New`，所以目录的构造函数叫 `Open` |
 
@@ -16,7 +16,7 @@
 
 ### 表（schema `catalog`）
 
-> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。数据集同步现在不建表：每一轮取数后条目在内存里与模型对应，没发布的结果在报告和日志里，下一轮重新算，所以不丢；`dataset` / `dataset_entry` / `review` 随页面监测与审核项一起加入。
+> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`、`sync_state`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。数据集同步仍不落库条目：每一轮取数后条目在内存里与模型对应，没发布的结果在报告和日志里，下一轮重新算，所以不丢；`sync_state` 只记各轮的结果——最后成功、连续失败、待确认改价（有候选价的 held）。`dataset` / `dataset_entry` / `review` 随页面监测与审核项一起加入。
 
 "只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
 
@@ -28,6 +28,7 @@
 | `reference_price` | `id`、`model_id`、`currency`、`source`、`schedule` jsonb（撤下时为空）、`schedule_sha256`、`published_at`、`supersedes` | PK `id`；UNIQUE `supersedes`；部分唯一索引 `(model_id, currency) WHERE supersedes IS NULL`；UNIQUE `(id, model_id, currency)`，外键 `(supersedes, model_id, currency)` 引用它，只能替代同一条时间线上的行；`supersedes <> id`；`currency ~ '^[A-Z]{3}$'`，`schedule` 与 `schedule_sha256` 同时为空或同时非空，非空时币种等于 `schedule` 里的币种 | 公开，只含 listed 模型的参考价，其余只有平台可见 | 只追加 |
 | `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
 | `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
+| `sync_state` | 单行：`last_success_at`、`failing_since`、`failures`、`pending`（有候选价的 held 数） | PK `singleton`；`(failing_since IS NULL) = (failures = 0)` | 平台 | 改 |
 | `watched_page` | `id`、`author`、`url`、`currency`、`section_start`、`section_end`（截取价格段的标记）、`interval`、`enabled`、`lease_owner`、`lease_gen`、`lease_until`、`last_ok_at`、`failures`、`current_snapshot_id` | PK `id`；`url ~ '^https://'` | 平台 | 改 |
 | `page_snapshot` | `id`、`page_id`、`first_seen_at`、`extractor_version`、`text`（截取并规范化的正文）、`text_sha256` | PK `id`；UNIQUE `(page_id, extractor_version, text_sha256)` | 平台 | 只追加 |
 | `page_observation` | `page_id`、`observed_at`、`snapshot_id` | PK `(page_id, observed_at)`；只在当前内容变化时追加 | 平台 | 只追加 |
@@ -197,10 +198,12 @@
 
 ## 参考价的录入
 
-> 已实现：LiteLLM 与 OpenRouter 的取数、解析、自动发布、改选到数据集（`Fetcher`、`SyncDataset`、`SyncAll`、`SelectDatasetSource`，命令 `axiom catalog sync`、`check`、`select-dataset-source`），各条的标注写明与设计的差别。设计，尚未实现：页面监测、官方价格页的证据核对、审核项、其余数据集（models.dev）的核对、定时调度（River 已有，但目录的同步没有登记到队列，现在由 `axiom catalog sync` 手动运行；`SyncAll` 是登记时要调用的函数）。选价格来源和发布见「管理操作」。
+> 已实现：LiteLLM 与 OpenRouter 的取数、解析、自动发布、改选到数据集（`Fetcher`、`SyncDataset`、`SyncAll`、`SelectDatasetSource`，命令 `axiom catalog sync`、`check`、`select-dataset-source`），以及每天一轮的定时同步、它留在 `catalog.sync_state` 的记录和失败过久的告警（`RegisterSync`，任务种类 `catalog.sync`）；各条的标注写明与设计的差别。设计，尚未实现：页面监测、官方价格页的证据核对、审核项、其余数据集（models.dev）的核对。选价格来源和发布见「管理操作」。
 
 - **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。已实现：`Fetcher` 只读两个固定地址（`raw.githubusercontent.com` 上 LiteLLM 的 `model_prices_and_context_window.json`、`openrouter.ai/api/v1/models`），只收 200，重定向不跟随；超时 60 秒、正文上限 32MB。取数或解析失败时这一数据集整轮不发布，模型保持最后的价格，日志记 error。
+- **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，启动或换主也先跑一轮。参数相同，未结束任务按参数保持唯一，重启不会堆积任务。`MaxAttempts` 为 1；正常取数或解析失败写入 `catalog.sync_state` 后返回 nil，任务完成，等下一日轮次，不因一次短暂上游故障触发 `queue.job_discarded`。只有状态记录写不进才返回错误，队列丢弃信号暴露的是记录设施故障。任务自己打开目录，只做取数和发布；对外快照由调用路径打开。价格 worker 同时响应 River 任务和登记时传入的节点 context；节点开始关停即取消网络取数，启动失败也在停止队列前取消，不等通用队列的优雅收尾期限。结果记录使用不继承任务取消、最多 5 秒的 context，生产时间来自同一记录事务里的 `clock_timestamp()`，测试可注入时钟。读全两个数据集才写最后成功、清零连续失败，并重算待确认改价数（仅 `OutcomeHeld` 且 `Candidate != nil`）；缺条目、歧义、无法构造价目表的 held 仍留在报告和日志里，但不算待确认改价。失败累加连续失败，首次失败记录 `failing_since`，保留最后成功和上一完整轮次的待确认数，后续成功再重算。
+- **同步状态与告警**（已实现，`sync_metrics.go`）：登记任务时同时登记无标签 gauge `axiom_catalog_sync_last_success_age_seconds` 和 `axiom_catalog_sync_consecutive_failures`。每次采集都以平台范围读持久化状态和数据库时钟（最多 2 秒），距最后成功的秒数即使没有新任务执行也继续增长；从未成功时从 `failing_since` 起算，尚未执行过为 0，时钟倒退时不报负数。连续失败直接取 `failures`。读库失败返回采集错误、不伪报 0；运维节点需同时监测指标缺失。运维节点按后台数据配置时间和连续失败阈值、严重程度及通知渠道（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）。节点仍在执行失败轮次时提供 `catalog.sync.overdue` 日志和 `axiom_catalog_sync_overdue_total` 计数作为兜底；`SyncJobConfig.AlertAfter` 的 48 小时是代码默认值，没有后台配置入口，显式启动配置可覆盖，不能把它当作后台规则。单次取数错误仍由 `SyncAll` 记录，但不走队列丢弃告警。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。已实现的读法：
   - LiteLLM 只读厂商自己的 provider（`openai`、`anthropic`、`gemini`→google、`deepseek`）下 `mode` 为 `chat` 或 `responses` 的条目，不读 `vertex_ai`、`bedrock`、`azure` 这类转售方按自己的价格表的条目；条目名去掉 `<provider>/` 前缀。字段先去服务等级后缀（`_priority`、`_flex`），再去 `_above_<N>k_tokens`（N 千 token），再按字段表认计费项；`_batches` 等不对应计费项的字段不读。联网搜索取 `search_context_cost_per_query`，三种上下文大小同价才取。
   - OpenRouter 取 `pricing` 里单位明确的字段（`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`web_search`）；条目以 `id` 和带日期的 `canonical_slug` 为名；带 `:` 的变体（`:batch`、`:free`）是供应商别名，不当模型。带 `overrides` 的条目不可用：它写了 `min_prompt_tokens` 却没说按什么用量求和、门槛本身算不算进该档，有的还按时段（`utc_start`），所以 OpenRouter 现在只表达无分档的价格。
@@ -251,7 +254,7 @@
 
 ## 不变量
 
-> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下。尚未实现：过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
+> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下；定时同步的记录跨重启和换主存活，一轮失败不改最后成功和待确认改价，连续失败的起点不随后续轮次移动。尚未实现：过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -263,6 +266,7 @@
 | 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |
 | 参考价只来自模型选定的来源，手填不被同步覆盖；每个币种的当前价的 `source` 都等于模型的 `price_source` | 发布在锁住的模型行上比较 `price_source` 与发布的来源；改选在同一事务里为每个币种发布或撤下；测试：`manual`、`official` 和另一个数据集的模型不在同步里，数据集改价后不变（`TestSyncLeavesOtherSourcesAlone`）；同步与改选来源并发时，改选先提交则同步的发布被拒；官方来源有 CNY 和 USD、改选只有 USD 的数据集后，`CurrentPrices` 里没有 CNY；当前价的 priority 有输入、输出价只缺 `web_search`，所选来源的 priority 只有输出价或没有 priority 时，改选被拒；同价改选后 USD 的当前行是新的 `id`、`source` 是新来源 |
 | 超过阈值的改价不自动生效 | 自动发布先过安全阀；测试（`TestSyncPublishes`、`TestSyncHolds`、`TestSyncBadDatasets`）：阈值内的变化发布，超过的是 held（报告里写原因和候选，日志记 warn），参考价不变，审核项随 `review` 表；取数或解析失败时保留最后的价格并告警，不换来源 |
+| 定时同步的记录跨重启和换主存活，一轮失败不改写最后成功和待确认改价 | 记录在 `catalog.sync_state` 的一行里，每轮在自己的事务里写；测试（`TestTheSyncRecordsEachRound`）：成功写最后成功并清零连续失败，失败累加并保留两者，再失败不移动连续失败的起点 |
 | 管理操作重试不重复生效 | 每个操作带 `op_key`，`change.op_key` UNIQUE，重试返回第一次的结果；测试：提交成功、响应丢失后重试 |
 | 过期的取数者写不进数据 | 租约加代次，提交前校验；测试：A 取数期间租约被 B 接管，A 提交失败 |
 | 锁顺序固定 | 页面或数据集行 → 审核项 → 模型行（按 id 升序，经 `lock_models`）→ `revision`；所有加锁都经同一个函数按这个顺序取。测试：两个事务以相反的顺序请求同一组模型行，都成功、不死锁 |
@@ -329,7 +333,7 @@ func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) // 平台范�
 func (c *Catalog) Current() (*Snapshot, error)              // 超过陈旧上限返回 ErrStale；一个请求从头到尾用同一个快照
 func (c *Catalog) Ready() bool
 func (c *Catalog) Refresh(ctx context.Context) error        // 读 revision，变了才全量加载
-func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 SyncAll 提供、尚未登记到 River 队列，页面监测与核对随它们的 PR（设计，尚未实现）
+func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 RegisterSync 登记到队列，页面监测与核对随它们的 PR（设计，尚未实现）
 func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对；设计，尚未实现
 // 读取（「管理操作」一节），平台范围：Authors、GetAuthor、Models(ModelQuery)、Model(ModelID)，返回 Author、ModelSummary、ModelView。
 // 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、UpdateSpec、ListModel、Retire、PublishPrice、
@@ -337,11 +341,14 @@ func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) /
 
 type Fetched struct{ Source PriceSource; Body []byte; At time.Time } // 一份取回的数据集
 func NewFetcher(client *egress.Client) *Fetcher                     // 固定地址、60 秒、32MB、只收 200
+func NewTestFetcher(t testing.TB, client *egress.Client, urls map[PriceSource]string) *Fetcher // 仅测试二进制能覆盖地址，节点集成测试用本地数据集
 func (f *Fetcher) Fetch(ctx context.Context, src PriceSource) (Fetched, error) // At 为零
 func (c *Catalog) Fetch(ctx context.Context, f *Fetcher, src PriceSource) (Fetched, error) // 取数，At 取自取数前数据库的时钟
 func ParseLiteLLM(body []byte) ([]Entry, error)                     // 条目；ParseOpenRouter 同；整份不能解析是错误，单条不可用记在 Entry.Err
 func (c *Catalog) SyncDataset(ctx context.Context, f Fetched, publish bool) (SyncReport, error) // publish 为 false 是演习：只报告
-func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]SyncReport, error)  // 调度要调用的函数
+func (c *Catalog) SyncAll(ctx context.Context, f *Fetcher, publish bool) ([]SyncReport, error)  // 一轮的全部数据集；定时任务调的就是它
+type SyncJobConfig struct{ DB *pg.DB; Scope pg.Scope; Queue *pg.Queue; Fetcher *Fetcher; Logger *slog.Logger; Meter metric.Meter; Clock func() time.Time; AlertAfter time.Duration } // Clock 为空用数据库 clock_timestamp()；AlertAfter 为零用 48 小时代码兜底
+func RegisterSync(ctx context.Context, cfg SyncJobConfig) error // 队列启动前登记：每天一轮 catalog.sync 在 syncs 队列上；ctx 结束立即取消取数，结果仍有独立的记录期限
 func (c *Catalog) SelectDatasetSource(ctx context.Context, f Fetched, r SelectDatasetSourceRequest) (Result, error)
 func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, error)           // 只读
 func (c *Catalog) Unrecognized(entries []Entry, authors []string) ([]string, error)           // OpenRouter 列出而目录不认识的纯文本模型
@@ -361,6 +368,9 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
 - 服务等级与档位交叉的用例：标准档输出 2、长上下文 4，priority 输出 3、长上下文 5，四种组合各得其价；priority 没录 `cache_read` 时，priority 请求的缓存读被报告缺价，标准档请求不受影响，`Missing` 返回 priority；priority 漏写长上下文档或门槛与顶层不同的价目表被拒。
 - `Lost` 的表驱动用例：旧 priority 有输入、输出价只缺 `web_search`，新 priority 只有输出价时返回 priority 的 `input`，新价目表没有 priority 时返回 priority 的 `input` 和 `output`；旧价有 `reasoning`、新价没有但有 `output` 时为空；新价目表多一道门槛、高区间缺 `output` 时只返回高区间；新价目表去掉旧门槛时为空（基础价覆盖高区间，档位的丢失由自动发布另查）；两表都只在 200k 以上为 priority 提供 `output`、旧表口径 {`input`, `cache_read`} 而新表 {`input`} 时返回 `ErrTierBasisChanged`（请求 `input=1、cache_read=200000、output=1` 在旧表有输出价、在新表没有），两表都没有分档而口径不同时照常比较。自动发布的条目让 `Lost` 不为空时只开审核项，参考价不变。
+- 节点集成测试默认不登记价格周期任务；`TestServeCancelsAPriceFetchOnShutdown` 显式使用本地数据集，在等待响应头和读取响应体两种阶段暂停取数，取消节点后验证请求立即取消、节点无错误退出、失败记账且任务完成，不等 30 秒队列期限。
+- 定时同步的用例（`sync_job_test.go`、`sync_job_recovery_test.go`）：队列启动即执行，健康或上游 503 的轮次均完成，`queue=syncs`、`max_attempts=1`，信号用 `sync.Once`；成功、失败、恢复及部分发布后的下一轮不重复发布；失败保留最后成功和完整待确认数，取消后仍记录并完成；恰在 48 小时不触发兜底、超过后日志和计数上升、恢复停止、从未成功也有兜底；manual/official 来源和涨跌幅安全阀保持不变。
+- 状态指标和边界用例（`sync_metrics_test.go`）：没有下一轮时 gauge 仍按受控时钟增长，从未成功、失败和恢复均能读到；生产记录时间在前后两次数据库 `clock_timestamp()` 之间；缺条目的 held 不计入待确认数且保持价格；记录写入失败仍返回错误。
 
 ## 决策与理由
 
@@ -392,3 +402,6 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 | catalog 自带变化阈值（`Config.PriceChangeLimit`，默认 25%）和合理性检查 | billing 的安全阀在 catalog 之上、调用不了；25% 是我定的过渡值：厂商改价多在这以内，超过的让人看一眼代价小，漏掉一次错价代价大；阈值应是后台数据，现在是启动配置 | 等 billing 的安全阀：自动发布先没有保护 |
 | `SelectPriceSource` 仍只接受 `official`、`manual`，数据集来源另设 `SelectDatasetSource` | 价目表只来自条目这一点由方法保证，不靠证据里写了什么；放开原方法，任何调用者都能把手填的价目表记在数据集名下 | 放开原方法、命令从条目拼请求 |
 | 供应商上游名字的映射在 `syncer.MapUpstream`：先别名，再目录的内部识别，目标必须是上架的模型；未映射则 `EndpointFacts.Mapped` 为假 | 与 docs/domains/suppliers.md 的前两步一致；退役或不存在的模型不能接流量。不带日期的名字只是候选（`Unverified`），端点可建但要先过真伪检测；调用点在写 `supplier_models.model_id` 的同步持久化（#25，见 internal/suppliers/README.md） | 目录里加一个「可路由」查询：suppliers 的映射规则放进了 catalog |
+| 同步的记录放在数据库的一行里，不放在节点的内存里 | 只有领导节点插入周期任务、任何 worker 执行，换主和重启都会清掉内存里的计数；告警量的是「多久没有成功」，记录必须跨这两件事活着，operator 也能直接查 | 节点内存里的计数：重启即归零；告警规则直接查 `river.river_job`：它记不了待确认改价，还把模块的语义搬进运维系统 |
+| 取数失败写进状态后完成任务，`MaxAttempts=1`，等待下一日轮次 | 负责人在本 PR 评审后的修复指令中选择方案 (a)。River 默认短退避会在一次短暂上游故障后耗尽尝试并触发丢弃告警，与过久未成功告警重复；状态、gauge 和兜底 overdue 已提供所需信号 | 短间隔重试：过早告警；小时级重试：引入另一套同步时序，当前不采用 |
+| 状态导出为 gauge，运维节点判断后台阈值；节点 overdue 保留代码默认兜底 | gauge 每次采集读持久化状态与数据库时钟，不依赖下一轮执行；运维可设置更早的时间阈值或连续失败阈值。节点的 48 小时只是代码默认值，未接入后台配置；通知仍由运维节点决定 | 只在失败轮次上升的计数：任务不再执行时看不到陈旧；把代码常量称为后台数据：运维无法提前判断 |
