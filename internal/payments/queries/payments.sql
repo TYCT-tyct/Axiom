@@ -1,12 +1,8 @@
--- name: PaymentOrder :many
-SELECT id FROM payments.orders WHERE id = @id AND merchant_id = @merchant_id;
-
 -- Read after acquiring the order lock: the policy clock must not precede a lock wait.
 -- name: PaymentTerms :one
 SELECT o.rate_id, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
-    coalesce(s.grace_seconds, 300)::bigint AS grace_seconds,
-    coalesce(s.auto_credit_seconds, 604800)::bigint AS auto_credit_seconds
-FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id WHERE o.id = @id;
+    w.grace_seconds, w.auto_credit_seconds
+FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id WHERE o.id = @id;
 
 -- name: RecordPayment :exec
 INSERT INTO payments.order_payments (id, order_id, site_id, account_id, merchant_id, trade_no, amount, currency, source)
@@ -44,20 +40,17 @@ UPDATE payments.orders SET next_verify_at = clock_timestamp() + interval '1 minu
 WHERE id = @id AND next_verify_at <= clock_timestamp();
 
 -- name: QueryAllowed :one
-SELECT EXISTS (SELECT 1 FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
-WHERE o.id = @id AND (o.state = 'pending' OR
-    (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
-    AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= clock_timestamp())) AS allowed;
+SELECT EXISTS (SELECT 1 FROM payments.order_windows WHERE id = @id AND queryable) AS allowed;
 
 -- name: QueryOrders :many
-SELECT o.id FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
-WHERE (o.next_query_at <= transaction_timestamp() OR (o.state = 'pending' AND o.expires_at <= transaction_timestamp())) AND
-    (o.state = 'pending' OR o.expires_at >= transaction_timestamp() - interval '30 days' AND
-        (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
-        AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= transaction_timestamp())
-ORDER BY o.next_query_at, o.id LIMIT @batch;
+SELECT id FROM payments.order_windows
+WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
+    AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
+ORDER BY CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
+    WHEN state = 'pending' THEN 1 ELSE 2 END, next_query_at, id LIMIT @batch;
 
 -- name: ScheduleQuery :execrows
-UPDATE payments.orders SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),
+UPDATE payments.orders AS o SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),
     query_delay_seconds = least(query_delay_seconds * 2, CASE WHEN expires_at > clock_timestamp() THEN 600 ELSE 3600 END)
-WHERE id = @id AND (next_query_at <= clock_timestamp() OR (state = 'pending' AND expires_at <= clock_timestamp()));
+WHERE o.id = @id AND (o.next_query_at <= clock_timestamp() OR (o.state = 'pending' AND o.expires_at <= clock_timestamp()))
+    AND EXISTS (SELECT 1 FROM payments.order_windows w WHERE w.id = o.id AND w.queryable);

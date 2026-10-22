@@ -112,7 +112,7 @@ func testMerchantIdentityWindow(t *testing.T, tc identityCase) {
 	m := w.waiting()
 	o := w.mustPlace(yuan, "identity-window")
 	w.endOrder(o, tc.state)
-	w.limits("post_expiry_query_seconds = 60")
+	w.limits("grace_seconds = 0, auto_credit_seconds = 60, post_expiry_query_seconds = 60")
 	w.exec(fmt.Sprintf("UPDATE payments.orders SET expires_at = transaction_timestamp() - interval '%s'", tc.age))
 	if !tc.trade {
 		w.exec("UPDATE payments.orders SET trade_no = ''")

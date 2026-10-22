@@ -66,40 +66,10 @@ func (q *Queries) PaymentCount(ctx context.Context, db DBTX, orderID uuid.UUID) 
 	return count, err
 }
 
-const paymentOrder = `-- name: PaymentOrder :many
-SELECT id FROM payments.orders WHERE id = $1 AND merchant_id = $2
-`
-
-type PaymentOrderParams struct {
-	ID         uuid.UUID
-	MerchantID uuid.UUID
-}
-
-func (q *Queries) PaymentOrder(ctx context.Context, db DBTX, arg PaymentOrderParams) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, paymentOrder, arg.ID, arg.MerchantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const paymentTerms = `-- name: PaymentTerms :one
 SELECT o.rate_id, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
-    coalesce(s.grace_seconds, 300)::bigint AS grace_seconds,
-    coalesce(s.auto_credit_seconds, 604800)::bigint AS auto_credit_seconds
-FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id WHERE o.id = $1
+    w.grace_seconds, w.auto_credit_seconds
+FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id WHERE o.id = $1
 `
 
 type PaymentTermsRow struct {
@@ -127,10 +97,7 @@ func (q *Queries) PaymentTerms(ctx context.Context, db DBTX, id uuid.UUID) (Paym
 }
 
 const queryAllowed = `-- name: QueryAllowed :one
-SELECT EXISTS (SELECT 1 FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
-WHERE o.id = $1 AND (o.state = 'pending' OR
-    (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
-    AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= clock_timestamp())) AS allowed
+SELECT EXISTS (SELECT 1 FROM payments.order_windows WHERE id = $1 AND queryable) AS allowed
 `
 
 func (q *Queries) QueryAllowed(ctx context.Context, db DBTX, id uuid.UUID) (bool, error) {
@@ -141,12 +108,11 @@ func (q *Queries) QueryAllowed(ctx context.Context, db DBTX, id uuid.UUID) (bool
 }
 
 const queryOrders = `-- name: QueryOrders :many
-SELECT o.id FROM payments.orders o LEFT JOIN payments.settings s ON s.site_id = o.site_id
-WHERE (o.next_query_at <= transaction_timestamp() OR (o.state = 'pending' AND o.expires_at <= transaction_timestamp())) AND
-    (o.state = 'pending' OR o.expires_at >= transaction_timestamp() - interval '30 days' AND
-        (o.state IN ('expired', 'cancelled') OR (o.state = 'failed' AND o.trade_no <> ''))
-        AND o.expires_at + make_interval(secs => coalesce(s.post_expiry_query_seconds, 604800)) >= transaction_timestamp())
-ORDER BY o.next_query_at, o.id LIMIT $1
+SELECT id FROM payments.order_windows
+WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
+    AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
+ORDER BY CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
+    WHEN state = 'pending' THEN 1 ELSE 2 END, next_query_at, id LIMIT $1
 `
 
 func (q *Queries) QueryOrders(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
@@ -286,9 +252,10 @@ func (q *Queries) RestoreUsage(ctx context.Context, db DBTX, id uuid.UUID) (int6
 }
 
 const scheduleQuery = `-- name: ScheduleQuery :execrows
-UPDATE payments.orders SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),
+UPDATE payments.orders AS o SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),
     query_delay_seconds = least(query_delay_seconds * 2, CASE WHEN expires_at > clock_timestamp() THEN 600 ELSE 3600 END)
-WHERE id = $1 AND (next_query_at <= clock_timestamp() OR (state = 'pending' AND expires_at <= clock_timestamp()))
+WHERE o.id = $1 AND (o.next_query_at <= clock_timestamp() OR (o.state = 'pending' AND o.expires_at <= clock_timestamp()))
+    AND EXISTS (SELECT 1 FROM payments.order_windows w WHERE w.id = o.id AND w.queryable)
 `
 
 func (q *Queries) ScheduleQuery(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {

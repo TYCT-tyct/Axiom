@@ -15,19 +15,26 @@ import (
 
 const callbackMax = 1 << 20
 
+const (
+	callbackIPLimit       = 600
+	callbackMerchantLimit = 120
+	callbackBuckets       = 4096
+)
+
 // Notify handles the merchant-specific public callback. The caller mounts its GET and POST routes without a user
 // session: authentication is the channel's signature, checked before any event or payment can be written.
 func (p *Payments) Notify() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), pollDeadline)
 		defer cancel()
+		ip := clientip.Group(clientip.Addr(r, p.proxies))
+		if !p.allowCallback(callbackKey{ip: ip}, callbackIPLimit, time.Now()) {
+			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
+			return
+		}
 		id, err := merchantPrefix.Decode(r.PathValue("merchant"))
 		if err != nil {
 			http.Error(w, "unknown merchant", http.StatusNotFound)
-			return
-		}
-		if !p.allowCallback(MerchantID(id), clientip.Addr(r, p.proxies), time.Now()) {
-			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
 			return
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, callbackMax))
@@ -37,7 +44,12 @@ func (p *Payments) Notify() http.Handler {
 		}
 		ch, err := p.callbackChannel(ctx, MerchantID(id))
 		if err != nil {
+			p.channelUnavailable(MerchantID(id), err)
 			http.Error(w, "merchant unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !p.allowCallback(callbackKey{MerchantID(id), ip}, callbackMerchantLimit, time.Now()) {
+			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
 			return
 		}
 		n, err := ch.Verify(ctx, Callback{Method: r.Method, RawQuery: r.URL.RawQuery, Body: body, Header: r.Header})
@@ -50,6 +62,14 @@ func (p *Payments) Notify() http.Handler {
 		}
 		p.ack(w, ch, MerchantID(id), err)
 	})
+}
+
+func (p *Payments) channelUnavailable(id MerchantID, err error) {
+	if errors.Is(err, ErrNotFound) {
+		p.logger.Warn("payments: callback merchant not found", "merchant", id.TypeID(), "error", err)
+		return
+	}
+	p.logger.Error("payments: callback channel unavailable", "merchant", id.TypeID(), "error", err)
 }
 
 func (p *Payments) ack(w http.ResponseWriter, ch Channel, id MerchantID, err error) {
@@ -81,46 +101,55 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 	if !n.Success {
 		return p.receive(ctx, c)
 	}
-	if id, parseErr := orderPrefix.Decode(c.order); parseErr == nil {
-		replay, err := p.replayedPayment(ctx, c, OrderID(id))
-		if err != nil || replay {
-			return err
-		}
+	known, replay, err := p.callbackOrder(ctx, c)
+	if err != nil || replay {
+		return err
 	}
-	if ch.Caps().Has(CapQuery) {
-		payment, err := ch.Query(ctx, n.Order, n.TradeNo)
-		if err != nil {
-			return errors.Join(ErrUnconfirmed, err)
-		}
-		if payment.State != PayPaid {
-			return ErrUnconfirmed
-		}
-		if payment.TradeNo != n.TradeNo || payment.Paid != n.Paid {
-			c.reason = "confirmation_mismatch"
-		}
-		c.payment = payment
+	if !ch.Caps().Has(CapQuery) {
+		return p.receive(ctx, c)
 	}
+	payment, err := queryPayment(ctx, ch, n.Order, n.TradeNo)
+	if err != nil {
+		return errors.Join(ErrUnconfirmed, err)
+	}
+	if payment.State != PayPaid {
+		if !known {
+			p.logger.Warn("payments: unmatched callback is not paid at channel", "merchant", merchant.TypeID(), "order", n.Order, "trade_no", n.TradeNo)
+			return nil
+		}
+		return ErrUnconfirmed
+	}
+	if !incompletePayment(c.payment) && (payment.TradeNo != n.TradeNo || payment.Paid != n.Paid) {
+		c.reason = "confirmation_mismatch"
+	}
+	c.payment = payment
 	return p.receive(ctx, c)
 }
 
 // A replay bypasses the gateway only when both identity and exact amounts match a committed, credited receipt.
-func (p *Payments) replayedPayment(ctx context.Context, c confirmed, id OrderID) (bool, error) {
-	var replay bool
+func (p *Payments) callbackOrder(ctx context.Context, c confirmed) (bool, bool, error) {
+	var known, replay bool
+	id, parseErr := orderPrefix.Decode(c.order)
 	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
-		o, err := loadOrder(ctx, tx, id)
+		// Invalid IDs decode to zero and cannot match an order; absence still needs a gateway query.
+		o, err := loadOrder(ctx, tx, OrderID(id))
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
-		if err != nil || o.MerchantID != c.merchant || o.State.canMoveTo(Paid) {
+		if err != nil || parseErr != nil || o.MerchantID != c.merchant {
 			return err
+		}
+		known = true
+		if o.State.canMoveTo(Paid) || invalidPaymentText(c.payment.TradeNo) {
+			return nil
 		}
 		r, err := queries.RecordedPayment(ctx, tx, RecordedPaymentParams{MerchantID: uuid.UUID(c.merchant), TradeNo: c.payment.TradeNo})
 		if err == nil && len(r) == 1 {
-			replay = r[0].OrderID == uuid.UUID(id) && r[0].Amount == c.payment.Paid.Minor && r[0].Currency == c.payment.Paid.Currency.String()
+			replay = r[0].OrderID == id && r[0].Amount == c.payment.Paid.Minor && r[0].Currency == c.payment.Paid.Currency.String()
 		}
 		return err
 	})
-	return replay, err
+	return known, replay, err
 }
 
 // callbackChannel caches decrypted configuration for a minute. The revision is still read on every request so saves
@@ -170,38 +199,37 @@ type callbackKey struct {
 }
 
 type callbackCount struct {
+	key   callbackKey
 	until time.Time
 	n     int
 }
 
 // This is an ingress budget, not money state. Bounded local buckets shed unsigned floods before a database read;
 // rejected callbacks remain retryable. GET and POST share the same bucket.
-func (p *Payments) allowCallback(merchant MerchantID, ip netip.Addr, now time.Time) bool {
-	if !ip.IsValid() {
+func (p *Payments) allowCallback(key callbackKey, limit int, now time.Time) bool {
+	if !key.ip.IsValid() {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !now.Before(p.sweepAt) {
-		for key, v := range p.callbacks {
-			if !now.Before(v.until) {
-				delete(p.callbacks, key)
-			}
+	e, ok := p.callbacks[key]
+	if !ok {
+		if len(p.callbacks) == callbackBuckets {
+			oldest := p.callbackLRU.Front()
+			delete(p.callbacks, oldest.Value.(*callbackCount).key)
+			p.callbackLRU.Remove(oldest)
 		}
-		p.sweepAt = now.Add(time.Minute)
+		e = p.callbackLRU.PushBack(&callbackCount{key: key})
+		p.callbacks[key] = e
 	}
-	key := callbackKey{merchant, ip}
-	v, ok := p.callbacks[key]
-	if !ok && len(p.callbacks) >= 4096 {
-		return false
-	}
+	p.callbackLRU.MoveToBack(e)
+	v := e.Value.(*callbackCount)
 	if !now.Before(v.until) {
-		v = callbackCount{until: now.Add(time.Minute)}
+		v.until, v.n = now.Add(time.Minute), 0
 	}
-	if v.n >= 120 {
+	if v.n >= limit {
 		return false
 	}
 	v.n++
-	p.callbacks[key] = v
 	return true
 }

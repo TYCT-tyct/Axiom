@@ -100,11 +100,11 @@ func TestCallbackBodyBoundAndIngressLimit(t *testing.T) {
 	now := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 	ip := netip.MustParseAddr("203.0.113.1")
 	for i := range 121 {
-		if got := w.p.allowCallback(MerchantID(m.ID), ip, now); got != (i < 120) {
+		if got := w.p.allowCallback(callbackKey{MerchantID(m.ID), ip}, callbackMerchantLimit, now); got != (i < 120) {
 			t.Fatalf("callback %d allowed=%v", i, got)
 		}
 	}
-	if !w.p.allowCallback(MerchantID(m.ID), ip, now.Add(time.Minute)) || !w.p.allowCallback(MerchantID(uuid.NewV7()), ip, now) {
+	if !w.p.allowCallback(callbackKey{MerchantID(m.ID), ip}, callbackMerchantLimit, now.Add(time.Minute)) || !w.p.allowCallback(callbackKey{MerchantID(uuid.NewV7()), ip}, callbackMerchantLimit, now) {
 		t.Fatal("callback window or merchant isolation failed")
 	}
 }

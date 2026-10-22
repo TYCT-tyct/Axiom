@@ -100,6 +100,7 @@ test: web-embed
 # Focused remote verification for callback transactions and their mutation proofs (#309).
 payments-test:
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/payments
+    go test -race -p=2 ./internal/platform/clientip
     go test -race -p=2 -run '^TestPaymentCallbacksBypassOnlyConsoleAuthentication$' ./cmd/axiom
 
 # Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare

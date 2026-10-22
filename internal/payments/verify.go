@@ -21,7 +21,7 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 	var allowed bool
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) (err error) {
 		o, err = loadOrder(ctx, tx, id)
-		if err != nil || !queryable(o) {
+		if err != nil {
 			return err
 		}
 		allowed, err = queries.QueryAllowed(ctx, tx, uuid.UUID(id))
@@ -44,8 +44,15 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 	return o, err
 }
 
-func queryable(o Order) bool {
-	return o.State == Pending || o.State == Expired || o.State == Cancelled || o.State == Failed && o.TradeNo != ""
+// A gateway may publish its paid status before the settlement fields. Retry once within the same deadline.
+func queryPayment(ctx context.Context, ch Channel, order, trade string) (Payment, error) {
+	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	defer cancel()
+	paid, err := ch.Query(ctx, order, trade)
+	if err == nil && incompletePayment(paid) {
+		return ch.Query(ctx, order, trade)
+	}
+	return paid, err
 }
 
 func (p *Payments) queryOrder(ctx context.Context, o Order) error {
@@ -56,7 +63,7 @@ func (p *Payments) queryOrder(ctx context.Context, o Order) error {
 	if !ch.Caps().Has(CapQuery) {
 		return nil
 	}
-	paid, err := ch.Query(ctx, o.ID.TypeID(), o.TradeNo)
+	paid, err := queryPayment(ctx, ch, o.ID.TypeID(), o.TradeNo)
 	if err != nil {
 		return fmt.Errorf("%w: query the order: %w", ErrUnconfirmed, err)
 	}
@@ -101,7 +108,7 @@ func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
 		o, err = loadOrder(ctx, tx, id)
 		return err
 	})
-	if err != nil || claimed == 0 || !queryable(o) {
+	if err != nil || claimed == 0 {
 		return err
 	}
 	return p.queryOrder(ctx, o)

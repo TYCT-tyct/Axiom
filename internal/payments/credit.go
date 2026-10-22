@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"uuid"
 
 	"axiom/internal/billing"
@@ -28,10 +29,10 @@ type confirmed struct {
 }
 
 func (p *Payments) receive(ctx context.Context, c confirmed) error {
-	if strings.ContainsRune(c.order, 0) || strings.ContainsRune(c.payment.TradeNo, 0) {
+	if invalidPaymentText(c.order) || invalidPaymentText(c.payment.TradeNo) {
 		c.reason = "invalid_payment"
-		c.order = strings.ReplaceAll(c.order, "\x00", "")
-		c.payment.TradeNo = strings.ReplaceAll(c.payment.TradeNo, "\x00", "")
+		c.order = strings.ReplaceAll(strings.ToValidUTF8(c.order, ""), "\x00", "")
+		c.payment.TradeNo = strings.ReplaceAll(strings.ToValidUTF8(c.payment.TradeNo, ""), "\x00", "")
 	}
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
 		return p.receiveTx(ctx, tx, c)
@@ -42,6 +43,10 @@ func (p *Payments) receive(ctx context.Context, c confirmed) error {
 	return nil
 }
 
+func invalidPaymentText(s string) bool {
+	return !utf8.ValidString(s) || strings.ContainsRune(s, 0)
+}
+
 func (p *Payments) receiveTx(ctx context.Context, tx pg.Tx, c confirmed) error {
 	if err := boundOrderTx(ctx, tx); err != nil {
 		return err
@@ -49,31 +54,39 @@ func (p *Payments) receiveTx(ctx context.Context, tx pg.Tx, c confirmed) error {
 	if err := queries.HoldMerchantIdentity(ctx, tx, merchantKey(c.merchant)); err != nil {
 		return err
 	}
-	id, parseErr := orderPrefix.Decode(c.order)
-	rows, err := queries.PaymentOrder(ctx, tx, PaymentOrderParams{ID: id, MerchantID: uuid.UUID(c.merchant)})
-	if err != nil {
-		return err
-	}
-	if parseErr != nil || len(rows) == 0 {
-		if c.payment.State != PayPaid {
-			return nil
+	if id, err := orderPrefix.Decode(c.order); err == nil {
+		o, err := lockForChange(ctx, tx, OrderID(id))
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return err
 		}
+		if err == nil && o.MerchantID == uuid.UUID(c.merchant) {
+			return p.receiveOrder(ctx, tx, o, c)
+		}
+	}
+	if c.payment.State == PayPaid {
 		return p.discrepancy(ctx, tx, c, nil, "unmatched_payment")
 	}
-	o, err := lockForChange(ctx, tx, OrderID(id))
-	if err != nil {
-		return err
-	}
-	return p.receiveOrder(ctx, tx, o, c)
+	return nil
 }
 
 func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) error {
 	if c.payment.State != PayPaid {
 		return paymentEvent(ctx, tx, o, c, State(o.State))
 	}
+	if c.reason == "invalid_payment" {
+		return p.reviewPayment(ctx, tx, o, c, c.reason)
+	}
+	if incompletePayment(c.payment) {
+		p.logger.Warn("payments: paid receipt is incomplete", "order", c.order, "trade_no", c.payment.TradeNo)
+		return paymentEvent(ctx, tx, o, c, State(o.State))
+	}
 	if !validPayment(c.payment) {
 		return p.reviewPayment(ctx, tx, o, c, "invalid_payment")
 	}
+	return p.fulfillOrder(ctx, tx, o, c)
+}
+
+func (p *Payments) fulfillOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) error {
 	kind, err := recordReceipt(ctx, tx, o, c)
 	if err != nil {
 		return err
@@ -96,6 +109,10 @@ func (p *Payments) receiveOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c
 
 func validPayment(p Payment) bool {
 	return p.Paid.Minor > 0 && p.Paid.Currency != (platform.Currency{}) && p.TradeNo != "" && len(p.TradeNo) <= 1024
+}
+
+func incompletePayment(p Payment) bool {
+	return p.State == PayPaid && (p.Paid.Minor <= 0 || p.TradeNo == "")
 }
 
 // recordReceipt preserves a gateway trade's first identity and amount. Conflicts are facts to resolve, never INSERT
@@ -138,6 +155,8 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 		if errors.Is(err, ErrOutOfRange) {
 			return p.reviewPayment(ctx, tx, o, c, "invalid_credit")
 		}
+		// Balances exist from account opening; rates are append-only. Lookup or storage failures are retryable,
+		// not evidence of a bad receipt: roll back rather than permanently hold a recoverable payment.
 		return err
 	}
 	conflict, err := creditBatch(ctx, tx, credit)
@@ -285,7 +304,8 @@ func (p *Payments) discrepancy(ctx context.Context, tx pg.Tx, c confirmed, o *Lo
 		return fmt.Errorf("payments: record discrepancy: %w", err)
 	}
 	if n > 0 {
-		p.logger.Warn("payments: confirmed payment needs attention", "merchant", c.merchant.TypeID(), "kind", kind)
+		p.logger.Warn("payments: confirmed payment needs attention", "merchant", c.merchant.TypeID(), "kind", kind,
+			"order", c.order, "trade_no", c.payment.TradeNo, "discrepancy", r.ID)
 	}
 	return nil
 }

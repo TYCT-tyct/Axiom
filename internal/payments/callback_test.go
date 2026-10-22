@@ -218,7 +218,7 @@ func testCallbackQueryOutcome(t *testing.T, failure bool) {
 }
 
 func TestPaymentConflictsAreRecordedAndAcknowledged(t *testing.T) {
-	for _, scenario := range []string{"unknown", "wrong merchant", "trade conflict", "multiple", "one cent less", "one cent more", "currency", "zero"} {
+	for _, scenario := range []string{"unknown", "wrong merchant", "trade conflict", "multiple", "one cent less", "one cent more", "currency"} {
 		t.Run(scenario, func(t *testing.T) {
 			w := newTestWorld(t, fakePlugin{create: goodCheckout})
 			w.waiting()
@@ -243,8 +243,6 @@ func TestPaymentConflictsAreRecordedAndAcknowledged(t *testing.T) {
 				c.payment.Paid.Minor++
 			case "currency":
 				c.payment.Paid.Currency = currency(t, "USD")
-			case "zero":
-				c.payment.Paid.Minor = 0
 			}
 			w.receive(c)
 			w.receive(c)
