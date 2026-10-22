@@ -222,9 +222,9 @@ func TestATestThatFailsIsBookedAndSaysWhy(t *testing.T) {
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		return RecordTest(ctx, tx, audit.User(uuid.NewV7()), "test the endpoint", result)
 	})
-	if n := w.count(`SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1 AND test AND cost_flag = 'complete'`,
+	if n := w.count(`SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1 AND test AND cost_flag = 'complete' AND estimated_native = 6.15 AND conversion_state IS NULL`,
 		uuid.UUID(result.Request)); n != 1 {
-		t.Error("a failed test wrote no cost row")
+		t.Error("a failure of unknown execution lost its bounded cost")
 	}
 	if entry := w.auditDetail("endpoint.test"); !strings.Contains(entry, `"outcome": "failed"`) || !strings.Contains(entry, `"upstream_status": 500`) {
 		t.Errorf("the audit entry %s does not say how the test failed", entry)

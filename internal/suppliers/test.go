@@ -63,9 +63,19 @@ func (o TestOutcome) String() string { return [...]string{"passed", "failed", "i
 func ProblemCauses() []string {
 	names := []string{"timeout", "memory"}
 	for _, cause := range []adapter.Cause{
-		RateLimited{}, Overloaded{}, UpstreamError{}, SupplierBalanceLow{}, CredentialQuotaExhausted{},
-		CredentialRejected{}, NotPermitted{}, ContextTooLong{}, BadRequest{}, ContentRejected{},
-		ModelNotFound{}, Unknown{}, Transport{},
+		RateLimited{},
+		Overloaded{},
+		UpstreamError{},
+		SupplierBalanceLow{},
+		CredentialQuotaExhausted{},
+		CredentialRejected{},
+		NotPermitted{},
+		ContextTooLong{},
+		BadRequest{},
+		ContentRejected{},
+		ModelNotFound{},
+		Unknown{},
+		Transport{},
 	} {
 		names = append(names, cause.String())
 	}
@@ -222,14 +232,8 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.Status = result.receipt.status
 	result.UpstreamRequest = result.receipt.ref
 	if failure != nil {
-		result.Failure, result.Total, result.FinishedAt = failure, time.Since(sent), s.now()
-		if failure.Executed == NotExecuted {
-			result.Cost = AttemptCost{Conversion: ConversionNotRun, Currency: ep.currency}
-			result.estimate = "0"
-		}
-		if ctx.Err() != nil {
-			result.Failure, result.cause = nil, "timeout"
-		}
+		result.Total, result.FinishedAt = time.Since(sent), s.now()
+		result.fail(ctx, failure)
 		return result, nil
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing more to learn from a body that fails to close
@@ -237,6 +241,19 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	result.read(ctx, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
+}
+
+// fail keeps a known refusal free even if the lifetime expires at the same time. The lifetime is our limit,
+// not a header-wait or idle failure of the endpoint.
+func (r *TestResult) fail(ctx context.Context, failure *Failure) {
+	r.Failure = failure
+	if failure.Executed == NotExecuted {
+		r.Cost = AttemptCost{Conversion: ConversionNotRun, Currency: r.receipt.currency}
+		r.estimate = "0"
+	}
+	if ctx.Err() != nil {
+		r.Failure, r.cause = nil, "timeout"
+	}
 }
 
 // read reads the answer's stream to its end or its failure, and nothing else: a test has no client to write to, so the

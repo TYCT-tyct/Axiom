@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,28 +62,33 @@ func TestEndpointTenantOwnersAreNotTested(t *testing.T) {
 	for _, owner := range []string{"site", "account"} {
 		t.Run(owner, func(t *testing.T) {
 			t.Parallel()
-			w := newWorld(t, 1)
-			account := "NULL"
-			if owner == "account" {
-				account = "'" + uuid.NewV7().String() + "'"
-			}
-			err := pgtest.Run(t.Context(), w.database.Superuser, fmt.Sprintf(`UPDATE suppliers.suppliers SET owner_scope = '%s', site_id = '%s', account_id = %s WHERE id = '%s'`, owner, uuid.NewV7(), account, w.supplier))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := w.svc.Reload(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			up := newTestUpstream(t, answersWhole)
-			w.pointAt(up.URL)
-			_, err = w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
-			if err != ErrTestOwner || up.sent() != "" {
-				t.Errorf("tenant test: %v, body %s", err, up.sent())
-			}
-			if w.count(`SELECT count(*) FROM suppliers.attempt_costs`) != 0 {
-				t.Error("tenant refusal left a cost")
-			}
+			checkEndpointTenantOwner(t, owner)
 		})
+	}
+}
+
+func checkEndpointTenantOwner(t *testing.T, owner string) {
+	t.Helper()
+	w := newWorld(t, 1)
+	account := "NULL"
+	if owner == "account" {
+		account = "'" + uuid.NewV7().String() + "'"
+	}
+	err := pgtest.Run(t.Context(), w.database.Superuser, fmt.Sprintf(`UPDATE suppliers.suppliers SET owner_scope = '%s', site_id = '%s', account_id = %s WHERE id = '%s'`, owner, uuid.NewV7(), account, w.supplier))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	up := newTestUpstream(t, answersWhole)
+	w.pointAt(up.URL)
+	_, err = w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat})
+	if !errors.Is(err, ErrTestOwner) || up.sent() != "" {
+		t.Errorf("tenant test: %v, body %s", err, up.sent())
+	}
+	if w.count(`SELECT count(*) FROM suppliers.attempt_costs`) != 0 {
+		t.Error("tenant refusal left a cost")
 	}
 }
 
@@ -106,7 +112,7 @@ func checkEndpointLifetime(t *testing.T, committed bool) {
 			prefix = chatEvent(`"choices":[{"index":0,"delta":{"content":"hi"}}]`)
 		}
 		r := TestResult{Format: protocol.Chat}
-		r.read(ctx, io.MultiReader(strings.NewReader(prefix), deadlineBody{ctx}), time.Now())
+		r.read(ctx, io.MultiReader(strings.NewReader(prefix), deadlineBody(ctx.Done())), time.Now())
 		cause, scope, ok := r.Problem()
 		if r.Outcome() != TestInconclusive || !ok || cause != "timeout" || scope != "" {
 			t.Errorf("lifetime judged the endpoint: %+v", r)
@@ -117,9 +123,9 @@ func checkEndpointLifetime(t *testing.T, committed bool) {
 	})
 }
 
-type deadlineBody struct{ ctx context.Context }
+type deadlineBody <-chan struct{}
 
-func (b deadlineBody) Read([]byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+func (b deadlineBody) Read([]byte) (int, error) { <-b; return 0, context.DeadlineExceeded }
 
 func TestEndpointUnsentCostsZero(t *testing.T) {
 	t.Parallel()
