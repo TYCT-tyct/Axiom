@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,7 +69,8 @@ func (d statementDownload) VisitExportStatementResponse(w http.ResponseWriter) e
 func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStatementRequestObject) (consoleapi.ExportStatementResponseObject, error) {
 	cl := callOf(ctx)
 	return statementDownload(func(w http.ResponseWriter) error {
-		sink := statementCSVWriter{ResponseWriter: w}
+		deadline, _ := ctx.Deadline()
+		sink := statementCSVWriter{ResponseWriter: w, deadline: deadline}
 		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
 			return statementCSV(ctx, tx, uuid.UUID(cl.principal.AccountID()), cl.site.Currency, &sink)
 		})
@@ -81,11 +83,18 @@ func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStat
 
 type statementCSVWriter struct {
 	http.ResponseWriter
-	started bool
+	started  bool
+	deadline time.Time
 }
 
 func (w *statementCSVWriter) Write(b []byte) (int, error) {
 	if !w.started {
+		if !w.deadline.IsZero() {
+			// In-process response writers have no socket deadline.
+			if err := http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				return 0, fmt.Errorf("console: bound statement download: %w", err)
+			}
+		}
 		name := "statement-" + time.Now().UTC().Format(time.DateOnly) + ".csv"
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)

@@ -157,18 +157,19 @@ func appendStatement(out []StatementRow, rows []StatementPageRow, after *Stateme
 				FrozenChange: r.FrozenChange, Frozen: after.Frozen, Reference: r.RequestID,
 			})
 		}
-		after.advance(r)
+		*after = after.advance(r)
 	}
 	return out, false, nil
 }
 
-func (c *StatementCursor) advance(r StatementPageRow) {
+func (c StatementCursor) advance(r StatementPageRow) StatementCursor {
 	c.Seq = r.Seq
 	if r.Seq == 0 {
 		c.At, c.ID = r.CreatedAt, r.ID
 	}
 	c.Balance -= r.Amount
 	c.Frozen -= r.FrozenChange
+	return c
 }
 
 // statementKind is what the ledger's kind of a transaction, and the source of the batch a credit opened, reads as on a
