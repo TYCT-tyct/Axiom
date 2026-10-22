@@ -73,7 +73,7 @@ func TestStatement(t *testing.T) {
 	if len(rest.Data) != 1 || rest.NextCursor != nil || rest.Data[0].Kind != consoleapi.Gift || rest.Data[0].Reference != gift.String() {
 		t.Fatalf("the last page: %+v, cursor %v", rest.Data, rest.NextCursor)
 	}
-	if rest.Data[0].Amount != (consoleapi.Money{Amount: "5000000000", Currency: "USD"}) || rest.Data[0].BalanceAfter == nil || *rest.Data[0].BalanceAfter != rest.Data[0].Amount {
+	if rest.Data[0].Amount != (consoleapi.Money{Amount: "5000000000", Currency: "USD"}) || !cmp.Equal(rest.Data[0].BalanceAfter, &rest.Data[0].Amount) {
 		t.Errorf("the gift: %+v", rest.Data[0])
 	}
 	expect(t, "a cursor that is none", f.do(http.MethodGet, "/statement?cursor=nonsense", "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
@@ -192,7 +192,7 @@ func (f consoleFixture) checkRefundStatement(s session, count int, kind consolea
 		f.t.Fatalf("statement has %d rows, want %d", len(page.Data), count)
 	}
 	row := page.Data[0]
-	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || row.BalanceAfter == nil || *row.BalanceAfter != balance.Balance || row.FrozenAfter.Amount != frozen {
+	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || !cmp.Equal(row.BalanceAfter, &balance.Balance) || row.FrozenAfter.Amount != frozen {
 		f.t.Fatalf("statement %+v disagrees with balance %+v", page, balance)
 	}
 }

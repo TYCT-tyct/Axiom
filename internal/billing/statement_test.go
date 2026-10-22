@@ -258,25 +258,34 @@ func TestStatementFromBeforeTheSequence(t *testing.T) {
 			b.charge(300)
 			b.sql("UPDATE billing.transactions SET seq = NULL", tc.restamp)
 			b.charge(70) // numbered, and so above every row from before the sequence
-			legacy := b.legacyStatementIDs()
 			rows, next := b.statement(b.admitted, 50, nil)
-			if next != nil || len(rows) != len(legacy)+1 {
-				t.Fatalf("the statement is %+v with a cursor %v; want the numbered charge and %d more", rows, next, len(legacy))
+			if next != nil || len(rows) == 0 {
+				t.Fatalf("the statement is %+v with a cursor %v", rows, next)
 			}
 			if rows[0].Amount != -70 || rows[0].Balance == nil || *rows[0].Balance != b.balanceOf(b.admitted.Account) {
 				t.Errorf("the numbered charge reads %+v; want -70 and the balance %d", rows[0], b.balanceOf(b.admitted.Account))
 			}
-			var sum int64
-			for i, row := range rows[1:] {
-				if row.ID != legacy[i] || row.Balance != nil || row.Frozen != 0 {
-					t.Errorf("row %d is %+v; want %s with no balance and nothing frozen", i+1, row, legacy[i])
-				}
-				sum += row.Amount
-			}
-			if sum != 500 {
-				t.Errorf("the rows from before the sequence add up to %d, want 1000 - 200 - 300", sum)
-			}
+			b.checkUnnumbered(rows[1:], 500)
 		})
+	}
+}
+
+// checkUnnumbered checks rows from before the sequence: in the ledger's fixed order, with no balance after them, nothing
+// frozen, and amounts that add up to sum.
+func (b *bank) checkUnnumbered(rows []StatementRow, sum int64) {
+	b.t.Helper()
+	legacy := b.legacyStatementIDs()
+	if len(rows) != len(legacy) {
+		b.t.Fatalf("%d rows from before the sequence, want %d: %+v", len(rows), len(legacy), rows)
+	}
+	for i, row := range rows {
+		if row.ID != legacy[i] || row.Balance != nil || row.Frozen != 0 {
+			b.t.Errorf("row %d is %+v; want %s with no balance and nothing frozen", i, row, legacy[i])
+		}
+		sum -= row.Amount
+	}
+	if sum != 0 {
+		b.t.Errorf("the rows from before the sequence are %d off the amounts they moved", sum)
 	}
 }
 
