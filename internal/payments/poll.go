@@ -92,7 +92,7 @@ func (p *Payments) poll(ctx context.Context) error {
 		}
 	}
 	p.closeExpired(ctx, closing)
-	return nil
+	return p.queryPending(ctx)
 }
 
 // closeExpired runs only after the whole batch has released its places and reservations. A stalled merchant gets

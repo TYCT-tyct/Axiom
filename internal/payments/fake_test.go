@@ -14,6 +14,8 @@ type fakePlugin struct {
 	create func(CreateRequest) (Checkout, error)
 	close  func(context.Context, OrderID, string) error
 	open   func() error
+	verify func(Callback, string) (Notice, error)
+	query  func(context.Context, string, string) (Payment, error)
 	caps   Caps
 }
 
@@ -40,7 +42,7 @@ func (p fakePlugin) Open(c MerchantConfig) (Channel, error) {
 	if c.Secrets["key"].Reveal() == "" {
 		return nil, errors.New("a key is required")
 	}
-	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: p.caps}, nil
+	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: p.caps, verify: p.verify, query: p.query}, nil
 }
 
 // fakeChannel offers its methods and does nothing else; key is what it would sign with.
@@ -50,6 +52,8 @@ type fakeChannel struct {
 	create   func(CreateRequest) (Checkout, error)
 	close    func(context.Context, OrderID, string) error
 	caps     Caps
+	verify   func(Callback, string) (Notice, error)
+	query    func(context.Context, string, string) (Payment, error)
 }
 
 func (c fakeChannel) Caps() Caps        { return CapQuery | c.caps }
@@ -61,8 +65,16 @@ func (c fakeChannel) Create(_ context.Context, r CreateRequest) (Checkout, error
 	return Checkout{}, &Rejected{"fake", "no checkout"}
 }
 
-func (fakeChannel) Verify(context.Context, Callback) (Notice, error) { return Notice{}, nil }
-func (fakeChannel) Query(context.Context, string, string) (Payment, error) {
+func (c fakeChannel) Verify(_ context.Context, cb Callback) (Notice, error) {
+	if c.verify != nil {
+		return c.verify(cb, c.key)
+	}
+	return Notice{}, errors.New("fake: unsigned callback")
+}
+func (c fakeChannel) Query(ctx context.Context, order, trade string) (Payment, error) {
+	if c.query != nil {
+		return c.query(ctx, order, trade)
+	}
 	return Payment{State: PayPending}, nil
 }
 

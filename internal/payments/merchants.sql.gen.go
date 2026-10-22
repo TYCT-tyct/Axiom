@@ -484,7 +484,7 @@ func (q *Queries) SaveMethod(ctx context.Context, db DBTX, arg SaveMethodParams)
 }
 
 const siteSettings = `-- name: SiteSettings :many
-SELECT site_id, open, credits_min, credits_max, strategy, pending_limit, cancel_limit, cancel_window_seconds, daily_credits, first_credits FROM payments.settings WHERE site_id = $1
+SELECT site_id, open, credits_min, credits_max, strategy, pending_limit, cancel_limit, cancel_window_seconds, daily_credits, first_credits, grace_seconds, auto_credit_seconds, post_expiry_query_seconds FROM payments.settings WHERE site_id = $1
 `
 
 func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) ([]PaymentsSetting, error) {
@@ -507,6 +507,9 @@ func (q *Queries) SiteSettings(ctx context.Context, db DBTX, siteID uuid.UUID) (
 			&i.CancelWindowSeconds,
 			&i.DailyCredits,
 			&i.FirstCredits,
+			&i.GraceSeconds,
+			&i.AutoCreditSeconds,
+			&i.PostExpiryQuerySeconds,
 		); err != nil {
 			return nil, err
 		}
