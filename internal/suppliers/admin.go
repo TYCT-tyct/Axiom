@@ -228,11 +228,21 @@ func limited(n *int32) *int {
 	return &v
 }
 
-// Detail is a supplier with its groups and the keys bound to them, as the sync last stored them.
+// Endpoint is one model in one of the supplier's groups, as the sync projected it: what a person picks to test.
+type Endpoint struct {
+	ID, Group, Model uuid.UUID
+	UpstreamName     string
+	Formats          []string
+	CostState        string
+	Enabled          bool
+}
+
+// Detail is a supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
 type Detail struct {
 	Supplier    Supplier
 	Groups      []Group
 	Credentials []Credential
+	Endpoints   []Endpoint
 }
 
 func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool) (Group, error) {
@@ -243,7 +253,7 @@ func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool,
 	return g, nil
 }
 
-// Supplier is one supplier with its groups and credentials; ErrNoSupplier when there is none.
+// Supplier is one supplier with its groups, credentials and endpoints; ErrNoSupplier when there is none.
 func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
 	summary, err := a.view(ctx, tx, id)
 	if err != nil {
@@ -269,6 +279,16 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 	for _, c := range creds {
 		d.Credentials = append(d.Credentials, credentialOf(
 			c.ID, c.SupplierGroupID, c.UpstreamKeyRef, c.Status, c.CooldownUntil, c.ExpiresAt, c.MaxConcurrency, c.RequestsPerMinute))
+	}
+	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
+	if err != nil {
+		return Detail{}, fmt.Errorf("read the endpoints: %w", err)
+	}
+	for _, e := range endpoints {
+		d.Endpoints = append(d.Endpoints, Endpoint{
+			ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
+			CostState: e.CostState, Enabled: e.Enabled,
+		})
 	}
 	return d, nil
 }

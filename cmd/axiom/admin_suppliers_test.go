@@ -76,6 +76,10 @@ func TestCreateSupplier(t *testing.T) {
 	if diff := cmp.Diff(want, detail.Supplier); diff != "" || len(detail.Groups) != 0 || len(detail.Credentials) != 0 || len(detail.UnboundKeys) != 0 {
 		t.Errorf("getSupplier (-want +got):\n%s", diff)
 	}
+	// The contract requires the list: a supplier with no endpoints answers an empty one, which decodes as non-nil.
+	if detail.Endpoints == nil || len(detail.Endpoints) != 0 {
+		t.Errorf("getSupplier's endpoints: %#v, want an empty list", detail.Endpoints)
+	}
 	rec = f.do(http.MethodGet, "/suppliers", "", as(f.s))
 	expectAdmin(t, "listSuppliers", rec, http.StatusOK, "")
 	var list adminapi.SupplierList

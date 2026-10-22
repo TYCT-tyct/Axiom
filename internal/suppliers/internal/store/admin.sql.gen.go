@@ -321,6 +321,49 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 	return items, nil
 }
 
+const listEndpointsOf = `-- name: ListEndpointsOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+FROM suppliers.endpoints WHERE supplier_id = $1 ORDER BY upstream_name, id
+`
+
+type ListEndpointsOfRow struct {
+	ID              uuid.UUID
+	SupplierGroupID uuid.UUID
+	ModelID         uuid.UUID
+	UpstreamName    string
+	Formats         []string
+	CostState       string
+	Enabled         bool
+}
+
+func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListEndpointsOfRow, error) {
+	rows, err := db.Query(ctx, listEndpointsOf, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEndpointsOfRow
+	for rows.Next() {
+		var i ListEndpointsOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SupplierGroupID,
+			&i.ModelID,
+			&i.UpstreamName,
+			&i.Formats,
+			&i.CostState,
+			&i.Enabled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGroupsOf = `-- name: ListGroupsOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
 FROM suppliers.supplier_groups WHERE supplier_id = $1 ORDER BY name, id

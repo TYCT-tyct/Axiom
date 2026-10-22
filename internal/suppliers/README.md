@@ -294,7 +294,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 处理器的 `Idempotency-Key` 指纹里没有登录的值，只有给了哪几个成员：指纹存在库里，带值会让它成为猜密码的依据；代价是同一个键换一个密钥重发得到第一次的结果，所以页面每次尝试用新键。
 
-上面改配置的操作都在 `suppliers` 行上加锁、校验状态后才写，所以和同步、彼此之间串行。读（`Suppliers`、`Supplier`）带最近一次的单位价值、余额和分组与 key；没有同步写过的字段是空。
+上面改配置的操作都在 `suppliers` 行上加锁、校验状态后才写，所以和同步、彼此之间串行。读（`Suppliers`、`Supplier`）带最近一次的单位价值、余额和分组与 key，`Supplier` 还带端点（按上游名排序，含格式、成本状态、是否启用），后台从中选端点测试；没有同步写过的字段是空。
 
 `POST /api/admin/v1/suppliers/endpoint-tests`（`testSupplierEndpoint`）不走 `Admin`：它要的是本节点的调用面（`callNode.upstreams`），经 `TestEndpoint` 发一次真实生成、`RecordTest` 在同一个事务里写成本行和审计（「用真实生成测试端点」）。每个会话每分钟 10 次，同 `detectSupplier`，因为每次都是平台付钱的一次生成。
 

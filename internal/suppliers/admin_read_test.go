@@ -64,21 +64,28 @@ func TestSuppliersNewestFirst(t *testing.T) {
 	same(t, "the active suppliers", []uuid.UUID{second.ID}, supplierIDs(active))
 }
 
-// TestSupplierDetail: one supplier with its groups and keys as the sync stored them; a supplier that is not there is
-// ErrNoSupplier.
+// TestSupplierDetail: one supplier with its groups, keys and endpoints (by upstream name) as the sync stored them; a
+// supplier that is not there is ErrNoSupplier.
 func TestSupplierDetail(t *testing.T) {
 	t.Parallel()
 	a := newAdmins(t)
 	id := a.connect("https://api.example.com", "ops@example.com").ID
 	group := a.group(id, "g", true)
-	key := uuid.NewV7()
+	key, zeta, alpha, one, two := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET facts = '{"platform":"anthropic"}' WHERE id = '%s'`, group),
 		fmt.Sprintf(`INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency)
-			VALUES ('%s', '%s', '%s', 'k1', 'binding', 4)`, key, id, group))
+			VALUES ('%s', '%s', '%s', 'k1', 'binding', 4)`, key, id, group),
+		fmt.Sprintf(`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats, enabled)
+			VALUES ('%s', '%[2]s', '%[3]s', '%[4]s', 'zeta', ARRAY['messages', 'chat'], true),
+				('%[5]s', '%[2]s', '%[3]s', '%[6]s', 'alpha', ARRAY['responses'], false)`, zeta, id, group, one, alpha, two))
 	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
 	refuses(t, "the detail", err, nil)
 	same(t, "its groups", []Group{{ID: group, UpstreamRef: "g", Name: "Group g", Ratio: "1.5", Present: true, Facts: map[string]any{"platform": "anthropic"}}}, detail.Groups)
 	same(t, "its keys", []Credential{{ID: key, Group: group, UpstreamKeyRef: "k1", Status: "binding", MaxConcurrency: 4}}, detail.Credentials)
+	same(t, "its endpoints", []Endpoint{
+		{ID: alpha, Group: group, Model: two, UpstreamName: "alpha", Formats: []string{"responses"}, CostState: "unknown"},
+		{ID: zeta, Group: group, Model: one, UpstreamName: "zeta", Formats: []string{"messages", "chat"}, CostState: "unknown", Enabled: true},
+	}, detail.Endpoints)
 	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, uuid.NewV7()) })
 	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
 }

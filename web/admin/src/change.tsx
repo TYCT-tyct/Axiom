@@ -33,6 +33,13 @@ type Props<Input, Out> = {
   read: (values: Record<string, string>) => Input | Problem;
   send: (input: Input, context: Context) => Promise<Sent<Out>>;
   done: (out: Out) => ReactNode;
+  // A change whose result says for itself how it went (a test that ran and failed), shown without the generic "Done".
+  verdict?: boolean;
+  // What the person reads while a slow change is on its way, beside the locked form.
+  waiting?: ReactNode;
+  // What a refusal means for this change, where the error code's words for every page would not say; undefined keeps
+  // those.
+  explain?: (error: unknown) => string | undefined;
   onClose: () => void;
   // For a change made as of a revision: fills the dialog again from what the page has now (useSnapshot), once the
   // server has said the revision it read is stale.
@@ -92,7 +99,7 @@ export function useSnapshot<T>(live: T) {
 }
 
 export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
-  const { done, onClose, title, reload } = props;
+  const { done, onClose, title, reload, verdict } = props;
   const change = useChange<Out>();
   // The form is made again when it is filled from what is current, so its fields take their new initial values.
   const [form, setForm] = useState(0);
@@ -116,7 +123,7 @@ export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
   return (
     <Dialog title={title} onClose={close}>
       {change.mutation.isSuccess ? (
-        <Result replayed={change.mutation.data.replayed} onClose={close}>
+        <Result replayed={change.mutation.data.replayed} verdict={verdict} onClose={close}>
           {done(change.mutation.data.data)}
         </Result>
       ) : (
@@ -134,6 +141,8 @@ function ChangeForm<Input, Out>({
   fields,
   read,
   send,
+  waiting,
+  explain,
   onClose,
   reload,
   change,
@@ -166,7 +175,7 @@ function ChangeForm<Input, Out>({
     }
   };
   const editing = attempt.state === "editing";
-  const said = <Said problem={problem} state={attempt.state} error={mutation.error} />;
+  const said = <Said problem={problem} state={attempt.state} error={mutation.error} explain={explain} />;
   return (
     <form
       noValidate
@@ -185,6 +194,7 @@ function ChangeForm<Input, Out>({
       </fieldset>
       {/* Why the button now does something else sits next to it, where the person is looking after pressing it. */}
       {editing ? null : said}
+      {mutation.isPending ? waiting : null}
       <Footer
         state={attempt.state}
         action={action}
@@ -230,13 +240,23 @@ function ChangeFields({
 
 // Said tells what stopped the change: a problem with what was typed, the server's refusal, or, when the dialog cannot
 // simply send again, why not and what happens next.
-function Said({ problem, state, error }: { problem: string | null; state: State; error: unknown }) {
+function Said({
+  problem,
+  state,
+  error,
+  explain,
+}: {
+  problem: string | null;
+  state: State;
+  error: unknown;
+  explain?: (error: unknown) => string | undefined;
+}) {
   const { t } = useTranslation();
   const errors = useErrors();
   if (state === "stale" || state === "reused") {
     return <FormError>{t(`change.${state}`)}</FormError>;
   }
-  const said = problem ?? (error ? errors.message(error) : null);
+  const said = problem ?? (error ? (explain?.(error) ?? errors.message(error)) : null);
   if (state === "unknown") {
     return (
       <FormError>
@@ -309,14 +329,26 @@ function Next({ state, action, danger, pending, reload, onClose }: Moves) {
 
 // Result says what the change did. An answer that is the stored result of an earlier try is said to be one: nothing was
 // done a second time.
-function Result({ replayed, onClose, children }: { replayed: boolean; onClose: () => void; children: ReactNode }) {
+function Result({
+  replayed,
+  verdict,
+  onClose,
+  children,
+}: {
+  replayed: boolean;
+  verdict?: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
   const { t } = useTranslation();
   return (
     <div className="space-y-4">
-      <p role="status" className="flex items-start gap-2 text-t1">
-        <Icon name="check" className="mt-0.5 shrink-0 text-ok" />
-        <span>{t("change.done")}</span>
-      </p>
+      {verdict ? null : (
+        <p role="status" className="flex items-start gap-2 text-t1">
+          <Icon name="check" className="mt-0.5 shrink-0 text-ok" />
+          <span>{t("change.done")}</span>
+        </p>
+      )}
       {replayed ? (
         <p role="status" className="rounded-btn bg-s2 px-3 py-2 text-t2">
           {t("change.replayed")}

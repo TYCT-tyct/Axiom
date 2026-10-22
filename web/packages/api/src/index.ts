@@ -20,14 +20,15 @@ export function setCsrfToken(token: string) {
   csrfToken = token;
 }
 
+// fetchWithin is fetch that ends a call after ms, or when the caller's signal aborts, whichever comes first. A call
+// known to take longer than requestTimeout passes its own as openapi-fetch's per-request `fetch`.
+export const fetchWithin = (ms: number) => (request: Request) =>
+  fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(ms)]) });
+
 // A client for one contract: paths, parameters and bodies are typed from it. A call ends at the timeout or when the
-// caller's signal aborts, whichever comes first; a query passes TanStack Query's signal, so a query nobody watches any
-// more stops its request.
+// caller's signal aborts; a query passes TanStack Query's signal, so a query nobody watches any more stops its request.
 function createApi<P extends object>() {
-  const api = createClient<P>({
-    fetch: (request) =>
-      fetch(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(requestTimeout)]) }),
-  });
+  const api = createClient<P>({ fetch: fetchWithin(requestTimeout) });
   api.use({
     onRequest({ request }) {
       if (request.method !== "GET" && request.method !== "HEAD") {
