@@ -28,6 +28,8 @@ export default {
       max_keys: "最多保有多少把调用 key",
       creations_per_hour: "每小时最多创建多少把调用 key",
     },
+    unavailableLabel: "限额",
+    unavailable: "暂时看不到：这台服务器还没有 key 限额。这里其他内容照常可用。",
     own: "在这里设置",
     from: { site: "默认值", account: "沿用本站" },
     edit: "修改 key 限额",

@@ -38,6 +38,23 @@ const close = (page: Page) =>
 const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
 
 test.describe("users and credit", () => {
+  test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    const account = state.accounts.get(acct(1));
+    if (account) {
+      // The response an older node gives: the field is not there.
+      (account as { key_limits?: unknown }).key_limits = undefined;
+    }
+    await page.goto(`/accounts/${acct(1)}`);
+    await expect(h1(page, "user1@example.com")).toBeVisible();
+    await expect(page.getByText("$12.00").first()).toBeVisible();
+    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
+    await expect(press(page, "settings.keyLimits.edit")).toHaveCount(0);
+  });
+
   test("users are found by the start of the email and paged by cursor", async ({ page }) => {
     await open(page, "/users");
     await expect(page.getByRole("row")).toHaveCount(51);
@@ -169,6 +186,18 @@ test.describe("users and credit", () => {
 });
 
 test.describe("site settings", () => {
+  test("a server of the release before has no key limits operation, and the settings still work", async ({ page }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    await page.route("**/api/admin/v1/sites/*/key-limits", (route) =>
+      route.fulfill({ status: 404, json: { error: { code: "not_found", message: "no such resource" } } }),
+    );
+    await page.goto("/settings");
+    await expect(page.getByText(/7\s*天/)).toBeVisible();
+    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
+    await expect(press(page, "settings.edit")).toBeVisible();
+  });
+
   test("the values in force show with where they come from, and a change keeps the defaults for what is left empty", async ({
     page,
   }) => {

@@ -6,7 +6,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreditDialog } from "../credit-dialog";
-import { KeyLimitsCard } from "../key-limits";
+import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State, Time } from "../parts";
 import { accountQuery } from "../queries";
 
@@ -117,10 +117,15 @@ function Details({ account }: { account: Account }) {
 // What the account is held to on its keys: its own limits over the site's.
 function AccountKeyLimits({ account }: { account: Account }) {
   const editable = can(useSession(), "sites.manage");
+  // The contract always gives it; a node of the release before does not, and the rest of the page must still show.
+  const view: AdminSchemas["KeyLimitsView"] | undefined = account.key_limits;
+  if (view === undefined) {
+    return <KeyLimitsUnavailable level="account" />;
+  }
   return (
     <KeyLimitsCard
       level="account"
-      view={account.key_limits}
+      view={view}
       editable={editable}
       send={(limits, { reason, key }) =>
         unwrapChange(

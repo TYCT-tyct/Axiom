@@ -34,6 +34,19 @@ function readKeyLimits(values: Record<string, string>, problem: string): Limits 
 
 type Send = (limits: Limits, context: { reason: string; key: string }) => Promise<{ data: View; replayed: boolean }>;
 
+// KeyLimitsUnavailable stands in for the card where the server does not give the limits: a page of this release talking
+// to a node of the one before, which has neither the account's `key_limits` nor the site's operation. The page around it
+// works as it did.
+export function KeyLimitsUnavailable({ level }: { level: "site" | "account" }) {
+  const { t } = useTranslation();
+  return (
+    <Facts
+      title={t(`settings.keyLimits.title.${level}`)}
+      rows={[[t("settings.keyLimits.unavailableLabel"), t("settings.keyLimits.unavailable")]]}
+    />
+  );
+}
+
 // KeyLimitsCard shows what an account of a site, or the site's accounts, are held to, and where it comes from; with
 // the right to, it opens the change.
 export function KeyLimitsCard({

@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
-import { KeyLimitsCard } from "../key-limits";
+import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State } from "../parts";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 
@@ -50,6 +50,10 @@ function SiteSettings({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
 // them whole, and a page opened before these limits existed would take them along.
 function SiteKeyLimits({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const limits = useQuery(siteKeyLimitsQuery(siteId));
+  // A node of the release before has no such operation: the settings above still work.
+  if (limits.isError) {
+    return <KeyLimitsUnavailable level="site" />;
+  }
   return (
     <DataState query={limits}>
       {(view) => (

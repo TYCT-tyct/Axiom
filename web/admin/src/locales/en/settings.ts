@@ -30,6 +30,8 @@ export default {
       max_keys: "Call keys it may hold",
       creations_per_hour: "Call keys it may make in an hour",
     },
+    unavailableLabel: "Limits",
+    unavailable: "Not available: this server does not give the key limits yet. Everything else here works.",
     own: "Set here",
     from: { site: "Default", account: "From the site" },
     edit: "Edit key limits",
