@@ -551,6 +551,66 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement:
+    get:
+      operationId: listStatement
+      tags: [Balance]
+      summary: The account's credit statement
+      description: >-
+        Every credit event, newest first in ledger commit order: top-up, gift, call charge or reversal, expiry,
+        refund freeze, unfreeze or completed refund. Corrections can create multiple events for one call.
+        `reference` identifies the call for charges/reversals and the batch otherwise (the order ID for paid credit).
+        Freezes change frozen credits but leave the total balance unchanged. No ledger entry, book or platform account appears. An event that commits while the pages
+        are being read lands above the cursor and shifts none of the pages already read. Each page scans at most eight
+        bounded candidate batches; zero-effect events are skipped. An empty `data` with a non-null `next_cursor`
+        means continue through an empty segment, not end of history.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the statement
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Statement"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement.csv:
+    get:
+      operationId: exportStatement
+      tags: [Balance]
+      summary: The account's credit statement as a CSV file
+      description: >-
+        The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC),
+        `kind`, `amount`, `balance_after` (empty where the row's balance after is null), `currency`, `reference`,
+        `frozen_change`, `frozen_after`.
+        All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages
+        using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the
+        connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      responses:
+        "200":
+          description: The statement, at most the newest 10 000 movements.
+          headers:
+            Content-Disposition:
+              required: true
+              description: An attachment named for its contents.
+              schema: {type: string}
+          content:
+            text/csv:
+              schema: {type: string}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/calls:
     get:
       operationId: listCalls
@@ -1076,6 +1136,51 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+    StatementKind:
+      type: string
+      enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
+      description: >-
+        What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
+        given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+    StatementRow:
+      type: object
+      required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]
+      description: >-
+        One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and
+        `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before
+        the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in,
+        so the balance between two of them is not known.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The row's own identity, to tell two rows apart; it names no ledger entry.
+        at: {type: string, format: date-time, description: When the movement was recorded.}
+        kind: {$ref: "#/components/schemas/StatementKind"}
+        amount: {$ref: "#/components/schemas/Money"}
+        balance_after:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          nullable: true
+        frozen_change:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: Signed change in credits frozen for refunds; zero for ordinary balance changes.
+        frozen_after:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: Credits frozen after this event; included in balance_after, unavailable for new spending.
+        reference:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: >-
+            The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit,
+            or the offline credit ID). No payment credentials or internal account IDs are included.
+    Statement:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/StatementRow"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     CallId:

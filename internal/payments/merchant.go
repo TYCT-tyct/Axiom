@@ -142,13 +142,9 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 	if !ok {
 		return Merchant{}, &FieldError{"/kind", "is not a channel this program has"}
 	}
-	var raw jsonx.Raw
-	if err := jsonx.Unmarshal(in.Settings, &raw); err != nil || raw.Kind() != '{' {
-		return Merchant{}, &FieldError{"/settings", "must be a JSON object"}
-	}
-	settings, err := jsonx.MarshalCanonical(raw)
+	settings, err := merchantSettings(plugin, in.Settings)
 	if err != nil {
-		return Merchant{}, &FieldError{"/settings", "must be a JSON object"}
+		return Merchant{}, &FieldError{"/settings", err.Error()}
 	}
 	created := in.ID == MerchantID{}
 	rev := int64(1)
@@ -167,6 +163,24 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 		return Merchant{}, err
 	}
 	return recordSave(ctx, tx, actor, in, created)
+}
+
+func merchantSettings(plugin Plugin, input []byte) ([]byte, error) {
+	var raw jsonx.Raw
+	if err := jsonx.Unmarshal(input, &raw); err != nil || raw.Kind() != '{' {
+		return nil, errors.New("must be a JSON object")
+	}
+	settings, err := jsonx.MarshalCanonical(raw)
+	if err != nil {
+		return nil, errors.New("must be a JSON object")
+	}
+	if normalizer, ok := plugin.(interface{ normalizeSettings([]byte) ([]byte, error) }); ok {
+		settings, err = normalizer.normalizeSettings(settings)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return settings, nil
 }
 
 // lockForSave locks the merchant, checks the revision, refuses a change of its identity while an order of it is still
@@ -191,7 +205,7 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 		return 0, &FieldError{"/kind", "cannot change"}
 	}
 	in.Site = r.SiteID
-	if err = checkIdentity(ctx, tx, r, *in, settings); err != nil {
+	if err = checkIdentity(ctx, tx, r, *in, settings, p.plugins[in.Kind]); err != nil {
 		return 0, err
 	}
 	if in.Secrets == nil {
@@ -205,7 +219,7 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 // checkIdentity refuses a change of what a merchant account is while one of its orders is still in flight: the keys,
 // the gateway address and the currency it is paid in must keep working for that order, and the same account must be
 // what the callback and the query reach (docs/domains/payments.md「后台配置」).
-func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in MerchantInput, settings []byte) error {
+func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in MerchantInput, settings []byte, plugin Plugin) error {
 	open, err := queries.OpenMerchantOrders(ctx, tx, uuid.UUID(in.ID))
 	if err != nil {
 		return fmt.Errorf("payments: read the merchant account's orders in flight: %w", err)
@@ -213,11 +227,15 @@ func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in Mer
 	if !open {
 		return nil
 	}
+	same, err := sameSettingsIdentity(plugin, []byte(stored.Settings), settings)
+	if err != nil {
+		return err
+	}
 	var field string
 	switch {
 	case stored.Currency != in.Currency.String():
 		field = "/currency"
-	case stored.Settings != string(settings):
+	case !same:
 		field = "/settings"
 	case in.Secrets != nil:
 		field = "/secrets"
@@ -227,6 +245,21 @@ func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in Mer
 	return &FieldError{field, "cannot change while the merchant account has orders still in flight"}
 }
 
+func sameSettingsIdentity(plugin Plugin, before, after []byte) (bool, error) {
+	if identity, ok := plugin.(interface{ identitySettings([]byte) ([]byte, error) }); ok {
+		var err error
+		before, err = identity.identitySettings(before)
+		if err != nil {
+			return false, err
+		}
+		after, err = identity.identitySettings(after)
+		if err != nil {
+			return false, err
+		}
+	}
+	return string(before) == string(after), nil
+}
+
 // validate has the plugin open the configuration it would run with; every method must be one the channel offers.
 func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) error {
 	ch, err := plugin.Open(MerchantConfig{ID: in.ID, Currency: in.Currency, Settings: settings, Secrets: in.Secrets, Client: p.client})
@@ -234,7 +267,7 @@ func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) er
 		return &FieldError{"/settings", err.Error()}
 	}
 	for i, m := range in.Methods {
-		if !slices.Contains(ch.Methods(), m.Method) {
+		if methods := ch.Methods(); methods != nil && !slices.Contains(methods, m.Method) {
 			return &FieldError{fmt.Sprintf("/methods/%d/method", i), "is not offered by this channel"}
 		}
 	}

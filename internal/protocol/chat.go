@@ -101,6 +101,9 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	if err := walk(&s.reader, s, chatFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
+	if s.report != nil {
+		s.meter(m, s.failed)
+	}
 	if s.failed {
 		return event{}, s.errorEvent("an error chunk")
 	}
@@ -116,11 +119,8 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	case len(s.held) > 0 && !s.more: // only finish signals, which are held
 		s.e.role = skipped
 	}
-	if s.report != nil {
-		s.e.final = true
-		s.meter(m)
-		s.report, s.reportErr = nil, nil
-	}
+	s.e.final = s.e.usage
+	s.report, s.reportErr = nil, nil
 	if s.rewrites {
 		return s.rewrite(chatRewrites)
 	}
@@ -223,14 +223,7 @@ func (s *chatStream) finishReason() error {
 
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
-	return errorObject(&s.reader, s, chatErrorFields)
-}
-
-// chatErrorFields are what an error chunk's error says of its class: OpenAI's type, and its code, which is the more
-// specific (context_length_exceeded comes with invalid_request_error).
-var chatErrorFields = map[string]func(*chatStream) error{
-	"type": func(s *chatStream) error { return s.class(&s.errClass) },
-	"code": func(s *chatStream) error { return s.class(&s.code) },
+	return errorObject(&s.reader, &s.eventReader, errorFields)
 }
 
 func (s *chatStream) rewritten() error {
@@ -255,7 +248,9 @@ func (s *chatStream) usage() error {
 	return nil
 }
 
-func (s *chatStream) meter(m *meter) {
+// meter maps the usage just read onto billing items. final is set for the usage of the chunk that ended the stream:
+// what it states is charged as it is rather than estimated (meter.take).
+func (s *chatStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -265,7 +260,7 @@ func (s *chatStream) meter(m *meter) {
 		m.invalid = err
 		return
 	}
-	m.report(r, nil)
+	m.take(r, nil, final)
 }
 
 func (s *chatStream) dropBuffers() {

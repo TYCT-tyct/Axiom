@@ -1,0 +1,408 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/csv"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+	"uuid"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+
+	"axiom/internal/billing"
+	"axiom/internal/platform"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/pg"
+)
+
+// statementRows is a page of the account's statement as the contract gives it.
+func (f consoleFixture) statementRows(s session, query string) consoleapi.Statement {
+	f.t.Helper()
+	var page consoleapi.Statement
+	decode(f.t, f.do(http.MethodGet, "/statement"+query, "", as(s)), &page)
+	return page
+}
+
+// TestStatement: the statement lists the account's own movements newest first, each with the balance it left, under the
+// kind it was and the call or the batch it was for; a page ends where the next one starts.
+func TestStatement(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	gift := uuid.NewV7()
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.AddCredit(t.Context(), tx, billing.Credit{
+			ID: gift, Site: site, Account: account, Amount: 5_000_000_000, Actor: audit.System("test"), Reason: "a gift",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := uuid.NewV7()
+	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) VALUES
+			('`+uuid.NewV7().String()+`', '`+site.String()+`', '`+account.String()+`', 'settle', '`+call.String()+`')`,
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount) VALUES
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', 1000),
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', -1000)`,
+		`UPDATE billing.balances SET balance = balance - 1000 WHERE account_id = '`+account.String()+`'`)
+	page := f.statementRows(s, "?limit=1")
+	if len(page.Data) != 1 || page.NextCursor == nil {
+		t.Fatalf("%d rows and the cursor %v, want one and one", len(page.Data), page.NextCursor)
+	}
+	want := consoleapi.StatementRow{
+		Id: page.Data[0].Id, At: page.Data[0].At, Kind: consoleapi.Spend, Reference: call.String(),
+		Amount: consoleapi.Money{Amount: "-1000", Currency: "USD"}, BalanceAfter: &consoleapi.Money{Amount: "4999999000", Currency: "USD"},
+		FrozenChange: consoleapi.Money{Amount: "0", Currency: "USD"}, FrozenAfter: consoleapi.Money{Amount: "0", Currency: "USD"},
+	}
+	if diff := cmp.Diff(want, page.Data[0], cmpopts.EquateApproxTime(time.Millisecond)); diff != "" {
+		t.Errorf("a charge (-want +got):\n%s", diff)
+	}
+	if _, err := uuid.Parse(page.Data[0].Id); err != nil {
+		t.Errorf("the row's ID %q is not one", page.Data[0].Id)
+	}
+	rest := f.statementRows(s, "?limit=5&cursor="+*page.NextCursor)
+	if len(rest.Data) != 1 || rest.NextCursor != nil || rest.Data[0].Kind != consoleapi.Gift || rest.Data[0].Reference != gift.String() {
+		t.Fatalf("the last page: %+v, cursor %v", rest.Data, rest.NextCursor)
+	}
+	if rest.Data[0].Amount != (consoleapi.Money{Amount: "5000000000", Currency: "USD"}) || !cmp.Equal(rest.Data[0].BalanceAfter, &rest.Data[0].Amount) {
+		t.Errorf("the gift: %+v", rest.Data[0])
+	}
+	expect(t, "a cursor that is none", f.do(http.MethodGet, "/statement?cursor=nonsense", "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+}
+
+// TestStatementCSV: the file is the statement's rows under a header, newest first, with the amounts as exact decimals of
+// the site's currency and the time in UTC, and it is a download.
+func TestStatementCSV(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	gift := uuid.NewV7()
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.AddCredit(t.Context(), tx, billing.Credit{
+			ID: gift, Site: site, Account: account, Amount: 1_500_000_000, Actor: audit.System("test"), Reason: "a gift",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := uuid.NewV7()
+	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) VALUES
+			('`+uuid.NewV7().String()+`', '`+site.String()+`', '`+account.String()+`', 'settle', '`+call.String()+`')`,
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount) VALUES
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'user_balance', 250000000),
+			((SELECT id FROM billing.transactions WHERE request_id = '`+call.String()+`'), '`+site.String()+`', '`+account.String()+`', 'revenue', -250000000)`,
+		`UPDATE billing.balances SET balance = balance - 250000000 WHERE account_id = '`+account.String()+`'`)
+	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/csv" {
+		t.Errorf("the export is %q", got)
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.HasPrefix(got, `attachment; filename="statement-`) || !strings.HasSuffix(got, `.csv"`) {
+		t.Errorf("the export is named %q", got)
+	}
+	lines, err := csv.NewReader(strings.NewReader(rec.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"at", "kind", "amount", "balance_after", "currency", "reference", "frozen_change", "frozen_after"},
+		{"", "spend", "-0.250000000", "1.250000000", "USD", call.String(), "0.000000000", "0.000000000"},
+		{"", "gift", "1.500000000", "1.500000000", "USD", gift.String(), "0.000000000", "0.000000000"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("%d lines, want %d: %v", len(lines), len(want), lines)
+	}
+	for i, w := range want {
+		got := lines[i]
+		if i > 0 {
+			if _, err := time.Parse(time.RFC3339, got[0]); err != nil {
+				t.Errorf("line %d's time %q: %v", i, got[0], err)
+			}
+			got = append([]string{""}, got[1:]...)
+			w = append([]string{""}, w[1:]...)
+		}
+		if diff := cmp.Diff(w, got); diff != "" {
+			t.Errorf("line %d (-want +got):\n%s", i, diff)
+		}
+	}
+}
+
+func TestStatementRefundMatchesBalance(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := uuid.NewV7()
+	hold := billing.Freeze{Account: account, Batch: batch, Amount: 500_000_000}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.CreditPaid(t.Context(), tx, billing.PaidCredit{
+			ID: batch, Site: site, Account: account, SiteCurrency: currency, Credited: 1_000_000_000,
+			Payment: billing.Payment{Currency: currency, Paid: 200, Fee: 10}, Channel: billing.Channel{Offline: "test"},
+			Actor: audit.System("test"), Reason: "statement refund",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := billing.PrepareRefund(t.Context(), f.db, pg.PlatformScope(), hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		n, err := billing.FreezeRefund(t.Context(), tx, hold)
+		if err == nil && n != hold.Amount {
+			t.Errorf("froze %d, want %d", n, hold.Amount)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.checkRefundStatement(s, 2, consoleapi.Freeze, "0", batch.String(), "500000000")
+	if balance := f.balance(s); balance.Balance.Amount != "1000000000" || balance.Available.Amount != "500000000" {
+		t.Fatalf("refund hold not reflected in available balance: %+v", balance)
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.SettleRefund(t.Context(), tx, billing.Refund{Freeze: hold, WithFee: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.checkRefundStatement(s, 3, consoleapi.Refund, "-500000000", batch.String(), "0")
+	if csv := f.do(http.MethodGet, "/statement.csv", "", as(s)); csv.Code != http.StatusOK || !strings.Contains(csv.Body.String(), ",refund,-0.500000000,0.500000000,USD,"+batch.String()+",-0.500000000,0.000000000") {
+		t.Fatalf("refund export = %d %s", csv.Code, csv.Body)
+	}
+}
+
+func (f consoleFixture) checkRefundStatement(s session, count int, kind consoleapi.StatementKind, delta, batch, frozen string) {
+	f.t.Helper()
+	page, balance := f.statementRows(s, ""), f.balance(s)
+	if len(page.Data) != count {
+		f.t.Fatalf("statement has %d rows, want %d", len(page.Data), count)
+	}
+	row := page.Data[0]
+	if row.Kind != kind || row.Amount.Amount != delta || row.Reference != batch || !cmp.Equal(row.BalanceAfter, &balance.Balance) || row.FrozenAfter.Amount != frozen {
+		f.t.Fatalf("statement %+v disagrees with balance %+v", page, balance)
+	}
+}
+
+// TestStatementExportIsCapped: the file holds the newest statementExport movements of an account with more, and the
+// pages still reach the rest.
+func TestStatementExportIsCapped(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 10_050)
+	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
+	}
+	if got := strings.Count(rec.Body.String(), "\n"); got != 10_001 {
+		t.Errorf("the file has %d lines, want a header and 10,000 movements of %d", got, 10_050)
+	}
+	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
+		t.Errorf("the first page holds %d rows and the cursor %v", len(page.Data), page.NextCursor)
+	}
+}
+
+// TestStatementExportCutsInsideAPage: when a run of movements that changed nothing ends the first page short, the pages
+// after it no longer line up with the cap, and the file still holds exactly the newest statementExport movements. 150
+// movements sit above 1,600 that changed nothing, so the first page holds 150 and a cursor (8 rounds of 201 reach no
+// further), the next 49 hold 200 each, and the cap falls inside the 51st.
+func TestStatementExportCutsInsideAPage(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	insert := func(kind string, n int) string {
+		return `INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '` + site.String() + `', '` + account.String() + `', '` + kind + `', gen_random_uuid()
+			FROM generate_series(1, ` + strconv.Itoa(n) + `)`
+	}
+	f.run(insert("settle", 10_100), insert("attempt_cost", 1_600), insert("settle", 150),
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', 1), ('revenue', -1)) AS b(book, amount)
+			WHERE t.account_id = '`+account.String()+`' AND t.kind = 'settle'`)
+	var want []string
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT request_id::text FROM billing.transactions WHERE account_id = $1 AND kind = 'settle'
+			ORDER BY seq DESC LIMIT $2`, account, statementExport)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			want = append(want, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first := f.statementRows(s, "?limit=200"); len(first.Data) != 150 || first.NextCursor == nil {
+		t.Fatalf("the first page holds %d rows and the cursor %v; want 150 and a cursor", len(first.Data), first.NextCursor)
+	}
+	records, err := csv.NewReader(f.do(http.MethodGet, "/statement.csv", "", as(s)).Body).ReadAll()
+	if err != nil || len(records) != statementExport+1 {
+		t.Fatalf("the file has %d records (%v); want a header and %d movements", len(records), err, statementExport)
+	}
+	for i, record := range records[1:] {
+		if record[5] != want[i] {
+			t.Fatalf("movement %d of the file is %s; want %s, the newest %d in order", i, record[5], want[i], statementExport)
+		}
+	}
+}
+
+func (f consoleFixture) seedStatementHistory(s session, many int) {
+	f.t.Helper()
+	account, site := f.account(s)
+	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return billing.AddCredit(f.t.Context(), tx, billing.Credit{ID: uuid.NewV7(), Site: site, Account: account, Amount: int64(many), Actor: audit.System("test"), Reason: "fund statement history"})
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+
+	f.run(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '`+site.String()+`', '`+account.String()+`', 'settle', gen_random_uuid()
+			FROM generate_series(1, `+strconv.Itoa(many)+`)`,
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+			SELECT t.id, t.site_id, t.account_id, b.book, b.amount FROM billing.transactions t, (VALUES ('user_balance', 1), ('revenue', -1)) AS b(book, amount)
+			WHERE t.account_id = '`+account.String()+`' AND t.kind = 'settle'`,
+		`UPDATE billing.balances SET balance = 0 WHERE account_id = '`+account.String()+`'`)
+}
+
+type statementWriterFunc func([]byte) (int, error)
+
+func (f statementWriterFunc) Write(b []byte) (int, error) { return f(b) }
+
+func TestStatementCSVStreamsAndCancels(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 301)
+	account, _ := f.account(s)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var streamed bytes.Buffer
+	sink := statementWriterFunc(func(b []byte) (int, error) { cancel(); return streamed.Write(b) })
+	err = f.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return statementCSV(ctx, tx, account, currency, sink) })
+	if !errors.Is(err, context.Canceled) || strings.Count(streamed.String(), "\n") != 201 {
+		t.Fatalf("streamed %d lines before cancel: %v", strings.Count(streamed.String(), "\n"), err)
+	}
+	err = f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return statementCSV(t.Context(), tx, account, currency, statementWriterFunc(func([]byte) (int, error) { return 0, io.ErrClosedPipe }))
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write failure = %v", err)
+	}
+}
+
+func TestStatementCSVContinuesEmptyPages(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 1)
+	account, site := f.account(s)
+	f.run("INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) SELECT gen_random_uuid(), '" + site.String() + "', '" + account.String() + "', 'settle', gen_random_uuid() FROM generate_series(1, 2000)")
+	if page := f.statementRows(s, "?limit=200"); len(page.Data) != 0 || page.NextCursor == nil {
+		t.Fatalf("segment = %+v", page)
+	}
+	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "\n") != 3 {
+		t.Fatalf("empty-page export = %d %s", rec.Code, rec.Body)
+	}
+}
+
+type statementDeadlineWriter struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+	err      error
+}
+
+func (w *statementDeadlineWriter) SetWriteDeadline(deadline time.Time) error {
+	w.deadline = deadline
+	return w.err
+}
+
+func TestStatementDownloadBoundsSocketWrites(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	for _, writeErr := range []error{nil, io.ErrClosedPipe} {
+		transport := &statementDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), err: writeErr}
+		sink := statementCSVWriter{ResponseWriter: transport, deadline: want}
+		_, err := sink.Write([]byte("at,kind\n"))
+		if !errors.Is(err, writeErr) || transport.deadline != want {
+			t.Fatalf("deadline = %v, error = %v", transport.deadline, err)
+		}
+		if writeErr == nil && !transport.Flushed {
+			t.Fatal("CSV bytes were not flushed")
+		}
+		if writeErr != nil && (sink.started || transport.Body.Len() != 0) {
+			t.Fatal("deadline failure sent download bytes")
+		}
+	}
+}
+
+// TestCreditsOf: an amount comes out as the exact decimal it stands for, at any size and sign, never through a floating
+// point number.
+func TestCreditsOf(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		amount int64
+		want   string
+	}{
+		{0, "0.000000000"},
+		{1, "0.000000001"},
+		{-1, "-0.000000001"},
+		{1_500_000_000, "1.500000000"},
+		{999_999_999_999, "999.999999999"},
+		{-1_000_000_000, "-1.000000000"},
+		{1 << 62, "4611686018.427387904"},
+		{-1 << 63, "-9223372036.854775808"},
+	} {
+		if got := creditsOf(tc.amount); got != tc.want {
+			t.Errorf("creditsOf(%d) = %q, want %q", tc.amount, got, tc.want)
+		}
+	}
+}
+
+// TestStatementWithoutABalance: a movement from before the ledger numbered them gives its balance after as null in a
+// page and as an empty cell in the file, never as a figure its order cannot prove.
+func TestStatementWithoutABalance(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.seedStatementHistory(s, 1)
+	account, _ := f.account(s)
+	f.run(`UPDATE billing.transactions SET seq = NULL WHERE account_id = '` + account.String() + `'`)
+	rec := f.do(http.MethodGet, "/statement", "", as(s))
+	var page consoleapi.Statement
+	decode(t, rec, &page)
+	if len(page.Data) != 2 || page.Data[0].BalanceAfter != nil || page.Data[1].BalanceAfter != nil ||
+		strings.Count(rec.Body.String(), `"balance_after":null`) != 2 {
+		t.Errorf("a page from before the sequence: %s", rec.Body)
+	}
+	file := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	records, err := csv.NewReader(file.Body).ReadAll()
+	if err != nil || len(records) != 3 || records[0][3] != "balance_after" || records[1][3] != "" || records[2][3] != "" {
+		t.Errorf("the file from before the sequence: %v, %v", records, err)
+	}
+}
