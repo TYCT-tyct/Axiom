@@ -26,7 +26,7 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[发布与缓存](../../CONTRIBUTING.md#发布与缓存)）。迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
