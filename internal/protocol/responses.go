@@ -23,6 +23,7 @@ type responsesStream struct {
 	webSearch, hasResponse bool
 	report                 *openAIUsage
 	reportErr              error
+	topReport              []byte // borrowed from this event; only failures may use it when response.usage is absent
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -47,12 +48,11 @@ var (
 			return walk(&s.reader, s, responseFields)
 		},
 		// The error event's own members: its code, and the words and param a client reads (docs/domains/gateway.md
-		// 「错误」). Some upstreams put the usage of the attempt at its top level, as they do on other events, so it is
-		// read here as well as in the response.
+		// 「错误」). Top-level usage is only a fallback for failure events; response.usage remains authoritative.
 		"code":    func(s *responsesStream) error { return s.class(&s.code, &s.rejection.Code) },
 		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
 		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
-		"usage":   (*responsesStream).usage,
+		"usage":   (*responsesStream).topUsage,
 		"error":   func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) },
 	}
 	responseFields = map[string]func(*responsesStream) error{
@@ -72,11 +72,15 @@ var (
 func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
 	s.index, s.itemBytes, s.webSearch, s.hasResponse, s.report, s.reportErr = -1, 0, false, false, nil, nil
+	s.topReport = nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	switch s.e.name {
 	case "response.failed", "error":
+		if s.report == nil && len(s.topReport) > 0 {
+			s.readUsage(s.topReport)
+		}
 		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
 		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
 		if s.report != nil {
@@ -88,6 +92,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	case "response.completed", "response.incomplete":
 		s.e.role, s.e.ends, s.e.final = ending, true, true
 	}
+	s.topReport = nil
 	if err := s.settle(); err != nil {
 		return event{}, err
 	}
@@ -131,7 +136,7 @@ func (s *responsesStream) settle() error {
 
 func (s *responsesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.items, s.report, s.reportErr = nil, nil, nil
+	s.items, s.report, s.reportErr, s.topReport = nil, nil, nil, nil
 }
 
 func (s *responsesStream) eventType() error {
@@ -205,13 +210,31 @@ func (s *responsesStream) usage() error {
 	if err != nil {
 		return err
 	}
+	s.readUsage(v)
+	return nil
+}
+
+func (s *responsesStream) readUsage(v []byte) {
 	s.report, s.e.usage = &openAIUsage{}, true
 	s.reportErr = jsonx.Unmarshal(v, s.report)
+}
+
+// topUsage keeps an offset-backed view until the event type is known, without allocating or decoding a normal
+// event's nonstandard usage. A separately decoded report would add allocations and make member order matter.
+func (s *responsesStream) topUsage() error {
+	v, err := s.dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	if v.Kind() != 'n' {
+		to := int(s.dec.InputOffset())
+		s.topReport = s.e.data[to-len(v) : to]
+	}
 	return nil
 }
 
 // meter maps the usage just read onto billing items. final is set for the usage of the event that ended the stream:
-// what it states is charged as it is rather than estimated (meter.finalize).
+// what it states is charged as it is rather than estimated (meter.take).
 func (s *responsesStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
@@ -222,11 +245,7 @@ func (s *responsesStream) meter(m *meter, final bool) {
 		m.invalid = err
 		return
 	}
-	if final {
-		m.finalize(r, nil)
-		return
-	}
-	m.report(r, nil)
+	m.take(r, nil, final)
 }
 
 // failure appends response.failed, with our error type at its top level (docs/domains/gateway.md「错误」), or, before

@@ -196,7 +196,7 @@ var messagesUsageMembers = keep("input_tokens", "cache_read_input_tokens", "cach
 // meter maps the usage just read onto billing items: the reply's, and each compaction's as its own segment, since
 // a compaction is a sampling of its own; message iterations are already in the totals (catalog README.md「计费项与
 // 用量」). final is set for the usage of the event that ended the stream: what it states is charged as it is rather
-// than estimated (meter.finalize).
+// than estimated (meter.take).
 func (s *messagesStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
@@ -226,11 +226,7 @@ func (s *messagesStream) meter(m *meter, final bool) {
 			return
 		}
 	}
-	if final {
-		m.finalize(reply, compactions)
-		return
-	}
-	m.report(reply, compactions)
+	m.take(reply, compactions, final)
 }
 
 // items maps the usage object at path. A non-zero count it does not know goes in unknown, as the upstream wrote it.

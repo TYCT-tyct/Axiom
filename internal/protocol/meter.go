@@ -95,12 +95,14 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	}
 }
 
-// finalize marks only the items and compactions a terminal failure explicitly reports as final. Earlier output
+// take marks only the items and compactions explicitly reported by a terminal failure as final. Earlier output
 // counts remain lower bounds; previously final input stays final (docs/domains/billing.md「用量来源与暂估」).
-func (m *meter) finalize(r usageReport, compactions []usageReport) {
+func (m *meter) take(r usageReport, compactions []usageReport, final bool) {
 	m.report(r, compactions)
-	m.trusted |= r.seen
-	m.trustedCompactions = compactions != nil
+	if final {
+		m.trusted |= r.seen
+		m.trustedCompactions = compactions != nil
+	}
 }
 
 // bound reports a report that would take the meter past its bounds.

@@ -73,7 +73,7 @@ func RejectionOf(err error) *Rejection {
 // node's. A read that failed because the attempt was cancelled is FaultBroken too: the caller knows why it cancelled,
 // and judges that first.
 func FaultOf(err error) Fault {
-	if f, _ := errors.AsType[*faultError](err); f != nil {
+	if f, ok := errors.AsType[*faultError](err); ok {
 		return f.fault
 	}
 	if err == nil || errors.Is(err, ErrMemory) {

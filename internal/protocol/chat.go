@@ -101,8 +101,10 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	if err := walk(&s.reader, s, chatFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
+	if s.report != nil {
+		s.meter(m, s.failed)
+	}
 	if s.failed {
-		s.meter(m, true)
 		return event{}, s.errorEvent("an error chunk")
 	}
 	if len(s.held) > 0 {
@@ -117,11 +119,8 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	case len(s.held) > 0 && !s.more: // only finish signals, which are held
 		s.e.role = skipped
 	}
-	if s.report != nil {
-		s.e.final = true
-		s.meter(m, false)
-		s.report, s.reportErr = nil, nil
-	}
+	s.e.final = s.e.usage
+	s.report, s.reportErr = nil, nil
 	if s.rewrites {
 		return s.rewrite(chatRewrites)
 	}
@@ -250,11 +249,8 @@ func (s *chatStream) usage() error {
 }
 
 // meter maps the usage just read onto billing items. final is set for the usage of the chunk that ended the stream:
-// what it states is charged as it is rather than estimated (meter.finalize).
+// what it states is charged as it is rather than estimated (meter.take).
 func (s *chatStream) meter(m *meter, final bool) {
-	if s.report == nil {
-		return
-	}
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -264,11 +260,7 @@ func (s *chatStream) meter(m *meter, final bool) {
 		m.invalid = err
 		return
 	}
-	if final {
-		m.finalize(r, nil)
-		return
-	}
-	m.report(r, nil)
+	m.take(r, nil, final)
 }
 
 func (s *chatStream) dropBuffers() {
