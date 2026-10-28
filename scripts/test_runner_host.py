@@ -71,18 +71,19 @@ class RunnerLabels(unittest.TestCase):
     def test_pool_membership_is_decided_only_by_count(self):
         # Execute only the pure label selector, never the host installer or its system/API commands.
         selector = shell_function("runner_labels")
-        for count, labels, want in (
-            (None, "axiom,axiom-temp", [True] * 4 + [False] * 4),
-            ("2", "axiom,axiom-temp", [True] * 2 + [False] * 6),
-            ("0", "axiom,axiom-train,axiom-temp", [False] * 8),
-            ("8", "axiom,axiom-train,axiom-temp", [True] * 8),
-            ("4", "axiom,axiom-pr,axiom-temp", [True] * 4 + [False] * 4),
+        for train, only, labels in (
+            (None, None, "axiom,axiom-temp"),                     # 4 train runners, the first 2 the train's alone
+            ("2", "2", "axiom,axiom-temp"),                       # no runner shared
+            ("0", "0", "axiom,axiom-train,axiom-temp"),           # no train pool: every runner serves PRs
+            ("8", "8", "axiom,axiom-train,axiom-pr,axiom-temp"),  # every runner the train's alone
+            ("4", "0", "axiom,axiom-pr,axiom-temp"),              # train runners all shared
         ):
-            with self.subTest(count=count, labels=labels):
+            with self.subTest(train=train, only=only, labels=labels):
                 env = {**os.environ, "LABELS": labels}
-                env.pop("TRAIN_RUNNERS", None)
-                if count is not None:
-                    env["TRAIN_RUNNERS"] = count
+                for name, value in (("TRAIN_RUNNERS", train), ("TRAIN_ONLY", only)):
+                    env.pop(name, None)
+                    if value is not None:
+                        env[name] = value
                 result = subprocess.run(
                     [BASH, "-eu", "-c", TRAIN_SETTINGS + '\nlabels=$LABELS\n' + selector +
                      '\nfor i in {1..8}; do runner_labels "$i"; done'],
@@ -90,8 +91,18 @@ class RunnerLabels(unittest.TestCase):
                 )
                 rows = [line.split(",") for line in result.stdout.splitlines()]
                 self.assertEqual(len(rows), 8)
-                for row, train in zip(rows, want):
-                    self.assertEqual(row, ["axiom", "axiom-temp", "axiom-train" if train else "axiom-pr"])
+                t, o = int(train or 4), int(only or 2)
+                for i, row in enumerate(rows, 1):
+                    want = ["axiom", "axiom-temp"] + (["axiom-train"] if i <= t else []) + (["axiom-pr"] if i > o else [])
+                    self.assertEqual(row, want)
+
+    def test_train_only_must_fit_the_train_pool(self):
+        for train, only in (("4", "5"), ("4", "-1"), ("4", "two")):
+            with self.subTest(train=train, only=only):
+                env = {**os.environ, "TRAIN_RUNNERS": train, "TRAIN_ONLY": only}
+                result = subprocess.run([BASH, "-eu", "-c", TRAIN_SETTINGS], env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("TRAIN_ONLY", result.stderr)
 
     def test_invalid_count_stops_before_host_changes(self):
         for count in ("-1", "four", "4.5", "99999999999999999999999999999"):
