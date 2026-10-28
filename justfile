@@ -247,11 +247,8 @@ web-embed: web-build
 
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files
 # and functions too hard to follow; functions with too many paths or lines and files too long; unused files, exports
-# and dependencies; duplicated code; unit tests; the build within its size budget; and the end-to-end tests against
-# that build, served by the program's own server from the embedded copy, which are told the version it was stamped with.
-# A passing end-to-end run is reused when the hash of everything it checked (web/, api/, all Go code, go.mod/go.sum and
-# the test configuration) matches an earlier pass on this host; any Go change misses.
-web: web-embed
+# and dependencies; duplicated code; unit tests; and the build within its size budget. CI runs this beside web-e2e.
+web-checks: web-embed
     {{ web }} typecheck
     {{ web }} lint
     {{ web }} limits
@@ -259,4 +256,10 @@ web: web-embed
     {{ web }} duplicates
     {{ web }} test
     {{ web }} budget
-    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e
+
+# Keep the shard index and count in the cached command: a partial pass cannot stand for any other shard or the suite.
+web-e2e shard="1/1": web-embed
+    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e --shard={{ quote(shard) }}
+
+# The local entry point retains every check; the workflow schedules the two parts independently.
+web: web-checks web-e2e
