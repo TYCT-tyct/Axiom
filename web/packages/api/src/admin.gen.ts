@@ -612,7 +612,7 @@ export interface paths {
         get?: never;
         /**
          * Set a credential's concurrency and account RPM ceiling
-         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints in a rolling 60-second window, in this node's memory. A credential is eligible while that shared count is below its configured ceiling, at most 100000; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
          */
         put: operations["setSupplierCredentialLimits"];
         post?: never;
@@ -1417,13 +1417,13 @@ export interface components {
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
-            /** @description The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
+            /** @description The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
             requests_per_minute?: number;
         };
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
             max_concurrency: number;
-            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling. */
+            /** @description Stop selecting this credential when the shared upstream account's rolling-minute count reaches this; absent or null clears the ceiling. At most 100000. */
             requests_per_minute?: number | null;
             reason: components["schemas"]["Reason"];
         };
