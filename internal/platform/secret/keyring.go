@@ -23,19 +23,42 @@ type Keyring struct {
 	fingerprints map[uint32][32]byte
 }
 
-// Load validates the entire file and uses its legacy highest write version. A database-backed node must use
-// Rotation.Check before sealing: the database's active version overrides this legacy default.
-func Load(path string) (*Keyring, error) {
+// MasterKeys is one read of the master key file. The ring a node checks and seals with and the login key derived from
+// the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
+// plaintext stays here and callers receive only the ring and the derived key.
+type MasterKeys struct {
+	keys   map[uint32][32]byte
+	latest uint32
+}
+
+// LoadMaster reads the master key file once and validates all of it.
+func LoadMaster(path string) (*MasterKeys, error) {
 	keys, latest, err := readKeyFile(keyFileVariable, path)
 	if err != nil {
 		return nil, err
 	}
-	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest, fingerprints: make(map[uint32][32]byte, len(keys))}
-	for version, key := range keys {
+	return &MasterKeys{keys: keys, latest: latest}, nil
+}
+
+// Keyring is the ring these keys make, with the file's highest version as the legacy write version. A database-backed
+// node must use Rotation.CheckRing before sealing: the database's active version overrides this legacy default.
+func (m *MasterKeys) Keyring() *Keyring {
+	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(m.keys)), latest: m.latest, fingerprints: make(map[uint32][32]byte, len(m.keys))}
+	for version, key := range m.keys {
 		ring.keys[version] = newGCM(key[:])
 		ring.fingerprints[version] = sha256.Sum256(key[:])
 	}
-	return ring, nil
+	return ring
+}
+
+// Load validates the entire file and uses its legacy highest write version. A database-backed node must use
+// Rotation.Check before sealing: the database's active version overrides this legacy default.
+func Load(path string) (*Keyring, error) {
+	keys, err := LoadMaster(path)
+	if err != nil {
+		return nil, err
+	}
+	return keys.Keyring(), nil
 }
 
 // LoadSecret reads the file variable names, in the keyring's format and with its protection, and returns the newest
