@@ -49,9 +49,9 @@
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
 | 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope`（规则和理由写在 `scripts/check_scope.py`，用例在 `scripts/test_scope.py`）在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；角色语句按数据库读到的样子匹配（`.sql` 文件和 Go 字符串，先解开 Go 转义，原始字符串丢掉回车），先认字符串再认注释（引号、转义字符串 `E'..'`、美元引号 `$$..$$`/`$tag$..$tag$` 里的注释标记是普通文字，美元引号正文里的注释照样抹掉，DO 块会执行它），`SET` 与 `ROLE` 之间的空白、换行和 `--`、`/* */`（可嵌套）注释都藏不住它，注释里的语句不会执行，不算；运行时拼出的 SQL、相邻字符串字面量拼成的 SQL 和 `pg` 里面靠评审 |
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
-| 没有范围就什么都查不到、写不进 | `platform.in_scope` 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
+| 没有范围就什么都查不到、写不进 | 范围读取函数 把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
-| 策略里的范围函数被内联进查询 | `in_scope` 的函数体是简单表达式，PostgreSQL 把它代进策略，过滤条件里出现的是函数体而不是调用；`TestScopeIsInlinedIntoPolicies` 读 `EXPLAIN` 的输出，要求函数体的两个 `current_setting` 都在、函数名不出现，两组断言同时排除空计划和子查询写法（带子查询的函数体不再被内联，每行一次调用） |
+| 策略读取范围与行数无关，缓存计划不保留旧范围 | 策略级无关联子查询生成 InitPlan；`TestScopeSettingsAreStatementInitPlans` 在 200 万行的命中和拒绝扫描上检查每个读取至多执行一次；缓存隔离测试交替平台、站点、账户和空范围，见 [pg 的实测与决策](pg/README.md#决策与理由) |
 | 公开数据任意非空范围可读、只有平台范围可写 | `platform.in_any_scope` 与 `in_scope` 一样把未设定或空的参数当作空集合，格式不合法时报错；测试覆盖站点、账户、平台范围可读，无范围读不到，站点和账户范围里插入失败、修改和删除找不到行，平台范围可写 |
 | 只有 `cmd/` 能构造平台范围，只有 `internal/accounts` 能构造站点和账户范围 | 能构造范围的模块就能读写范围里所有租户的数据。forbidigo 在测试文件之外拒绝构造任意范围的 `pg.NewScope`，在 `cmd/` 和测试文件之外拒绝 `pg.PlatformScope`，在 `internal/accounts` 和测试文件之外拒绝 `pg.SiteScope`、`pg.AccountScope`（`cmd/` 也不例外），`internal/platform` 自己也不例外 |
 | 应用的数据库角色受行级安全约束 | 表强制启用行级安全，所有者也受限；`serve` 启动时从登录身份本身（`session_user`，不是连接后切换成的角色）出发，检查它能成为或继承的全部角色：不是超级用户，没有 BYPASSRLS、REPLICATION、CREATEROLE、CREATEDB，进不了 `axiom_owner` 和 `axiom_lookup`，也不在读写服务器文件、在服务器上执行程序的预定义角色里；迁移时已存在的 `axiom_owner`、`axiom_lookup` 不能是超级用户、带 BYPASSRLS 或能登录 |
@@ -63,7 +63,7 @@
 | 对外 ID 只有一种写法，别的实体的 ID 读不进来 | `Prefix.Decode` 要求整串恰好是前缀、`_` 和 26 个小写字符，首字符不超过 `7`（超出 128 位），其余按字母表逐个查，不接受大写、连字符或易混字符；错误一律是 `ErrInvalid`，不带输入。`Prefix` 构造时按规范检查，常量写错在启动时就 panic。测试：规范自带的有效、无效样例（`testdata`，原样），模糊测试检查凡读得进的，`Encode` 写回原串 |
 | 改动和它的审计条目一起提交或回滚 | `audit.Record` 只在调用方的 `pg.Tx` 里写；条目被拒时返回错误，PostgreSQL 也让出过错的事务只能回滚。测试：条目被拒时，同一事务里先写的改动也不在 |
 | 应用不能改写、删除审计条目，也不能倒填时间 | `axiom_app` 对 `platform.audit_log` 只有 SELECT 和除 `id`、`at` 之外各列的 INSERT。测试：UPDATE、DELETE、TRUNCATE 和指定 `id` 或 `at` 的 INSERT 都报权限不足，平台范围里也一样 |
-| 事务只读写范围内租户的审计条目，没有租户的条目只有平台范围能读写 | 一条 `platform.in_scope(site_id, account_id)` 策略管读和写。测试：已有平台的条目时，无范围、一个账户、一个站点的事务都记不进、读不到，平台范围能记能读 |
+| 事务只读写范围内租户的审计条目，没有租户的条目只有平台范围能读写 | 一条账户范围的 InitPlan 策略管读和写。测试：已有平台的条目时，无范围、一个账户、一个站点的事务都记不进、读不到，平台范围能记能读 |
 | 审计条目的站点和账户属于同一租户 | 租户登记表 `platform.tenants` 加从 `audit_log` 到它的外键：站点登记为 (站点, 站点)，账户为 (站点, 账户)，条目按生成列 `tenant_id = coalesce(account_id, site_id)` 引用；只带账户不带站点由 CHECK 拒绝。测试：两个已登记账户交叉的两种组合、未登记的站点都被外键拒绝，只带账户被 CHECK 拒绝；账户范围能登记自己、记自己的条目，读不到登记表 |
 | 审计条目必有操作者、动作和对象，补充信息小 | 表上的 CHECK，Go 不另查。测试：缺操作者、动作、模块、对象种类或 ID，动作只有一个词，补充信息超过 8 KiB，都被拒 |
 | 单价取值 0 … 1000，单位 10⁻¹⁵；录入的单价只来自十进制文本；同一单价只有一种写法 | 规则见[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)；算出来的单价从分数向上取整，本包还没有这个构造方式。`ParseUnitPrice` 拒绝符号、指数、超过 15 位小数（是 0 也拒绝）和超出上限的值；`String` 的输出没有前导零，小数末尾不留零。模糊测试对照 `math/big`：任意文本的解析，以及整个取值范围的格式化往返 |
@@ -260,8 +260,8 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 范围
 
-- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts`、`axiom.scope_home` 四个事务级参数里，由 `platform.in_scope(site_id, account_id)` 和 `platform.sees_site(site_id)` 读取。`scope_home` 是账户范围所属的站点，只给「站点的公开配置」和「共享计数」（[安全的「租户隔离」](../../docs/security.md#租户隔离)）用：`sees_site` 是 `in_scope(site, NULL)` 加上这个站点，不放宽账户读写的任何其他行。它由 `pg.AccountScopeIn(站点, 账户)` 设定，站点来自认出这个账户的授权，而不是账户自己能写的行（例如它在 `platform.tenants` 里的登记）。
-- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据读写都用 `platform.in_scope`；站点的公开配置和共享计数读用 `platform.sees_site(site_id)`；公开数据读用 `platform.in_any_scope()`（设了任意非空范围），写用 `platform.in_platform_scope()`；平台数据读写都用 `platform.in_platform_scope()`。
+- 设定在 `axiom.scope_platform`、`axiom.scope_sites`、`axiom.scope_accounts`、`axiom.scope_home` 四个事务级参数里，由策略级子查询读取：平台标志用 `platform.in_platform_scope()`，集合用 `platform.allowed_sites()`、`platform.allowed_accounts()`，所属站点用 `platform.home_site()`。`scope_home` 是账户范围所属的站点，只给「站点的公开配置」和「共享计数」（[安全的「租户隔离」](../../docs/security.md#租户隔离)）用：公开配置策略是站点范围加上这个站点，不放宽账户读写的任何其他行。它由 `pg.AccountScopeIn(站点, 账户)` 设定，站点来自认出这个账户的授权，而不是账户自己能写的行（例如它在 `platform.tenants` 里的登记）。
+- 表强制启用行级安全（`FORCE`，所有者也受限）。按[安全](../../docs/security.md#租户隔离)的数据分类选策略：账户和站点数据比较本行的站点、账户与范围集合；公开配置和共享计数另比较所属站点；公开数据读用 `(SELECT platform.in_any_scope())`，写用 `(SELECT platform.in_platform_scope())`；平台数据读写都用后者。完整表达式、新策略的写法与实测只维护在 [pg](pg/README.md)。
 - 平台范围由 `pg.PlatformScope()` 构造，只有 `cmd/` 能调用，再交给需要它的模块。一个站点、一个账户的范围由 `pg.SiteScope`、`pg.AccountScope`（带所属站点时用 `pg.AccountScopeIn`）构造，只有 `internal/accounts` 能调用，在授权通过后交出（见 [accounts 的「授权与租户范围」](../accounts/README.md#授权与租户范围)）。各模块的测试用 `pg.NewScope` 构造任意范围。
 - 站点数据的表把 `site_id`、账户数据的表把 `site_id` 和 `account_id` 直接存在行上，都不为空，策略只看本行的列；怎么保持它们一致见 [accounts 的「表」](../accounts/README.md#表schema-accounts)。
 
@@ -287,7 +287,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 3. **验证没有遗留**：重跑上面的查询，`queue <> 'default'` 的行必须是 0；再看 `SELECT queue, kind, count(*) FROM river.river_job WHERE state IN ('available','scheduled','retryable','running') GROUP BY 1,2`，每个周期任务的种类（`billing.expire_credit`、`billing.reconcile`、`suppliers.sync_sweep`、`suppliers.reconcile`、`queue.discard_scan`）都只在 `default`，且每种至多一个，旧版本的下一次周期插入才不会被跳过。 另查 `SELECT count(*) FROM river.river_job WHERE kind = 'catalog.sync' AND state IN ('available','pending','scheduled','retryable','running')`，必须为 0；它不属于旧版本可执行种类。
 4. **新版本起不来、旧版本已经在跑时**：具名队列里又出现了任务（例如新节点停得晚），重做第 2 步和第 3 步；旧节点会在 `default` 里把它们做完。要再升级回新版本，直接部署即可：新版本留着 1 个 `default` 的 worker，会把 `default` 里剩下的任务做完。
 
-任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略写 `platform.in_scope(site_id, account_id)`，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
+任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略用 [pg 的账户范围表达式](pg/README.md#决策与理由)，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
 
 worker 返回的错误也一样：River 把它的文本写进 `river.river_job.errors`（jsonb 数组，每次尝试一项），这一列和参数一样没有策略覆盖。所以 worker 交给 River 的只能是分类：成功、snooze，和「可重试」「永久失败」两种通用错误；收件人、正文和服务器回复只进日志行，日志本来就不属于任何租户。
 
@@ -319,7 +319,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
   | `id`、`at` | 由数据库生成：UUIDv7，事务开始的时间 |
 
 - **不记什么**：密钥、密码、key、凭证的明文，对话内容，ID 之外的个人信息（邮箱、IP、姓名）；要指向它们就记 ID。8 KiB 的上限只限制条目的大小，挡不住这些内容（`{"text": "一段短对话"}` 照样写得进）；不记它们靠调用方只写允许的字段，由评审把关。
-- **谁能读写**：只追加，权限见上文「不变量」。读和写用同一个条件 `platform.in_scope(site_id, account_id)`：租户范围的改动只能记到范围内的租户，没有租户的条目只有平台范围能读写。策略按站点或账户之一放行，所以只要 `site_id` 和 `account_id` 可能不属于同一租户，账户范围的事务就能记下（别的站点，本账户），那个站点的范围就读得到。所以两列由平台自己的租户登记表 `platform.tenants` 绑在一起（负责人定的做法，见「决策与理由」）：accounts 在创建站点、账户的同一个事务里调用 `audit.RegisterSite`、`audit.RegisterAccount` 登记，条目只能写已登记的组合。登记表是平台数据，只有平台范围能读；写入的策略是 `in_scope(site_id, tenant_id)`，因为注册在新账户自己的范围里进行。登记是否与账户表一致，靠 accounts 在插入账户的同一个事务里登记，平台不知道账户表，也不对它建外键。以后租户在控制台看自己的条目时，显示哪些列由那个界面决定，因为理由可能是写给平台内部的。
+- **谁能读写**：只追加，权限见上文「不变量」。读和写用同一个账户范围条件（[表达式](pg/README.md#决策与理由)）：租户范围的改动只能记到范围内的租户，没有租户的条目只有平台范围能读写。策略按站点或账户之一放行，所以只要 `site_id` 和 `account_id` 可能不属于同一租户，账户范围的事务就能记下（别的站点，本账户），那个站点的范围就读得到。所以两列由平台自己的租户登记表 `platform.tenants` 绑在一起（负责人定的做法，见「决策与理由」）：accounts 在创建站点、账户的同一个事务里调用 `audit.RegisterSite`、`audit.RegisterAccount` 登记，条目只能写已登记的组合。登记表是平台数据，只有平台范围能读；写入策略把 `tenant_id` 当作账户列比较范围，因为注册在新账户自己的范围里进行。登记是否与账户表一致，靠 accounts 在插入账户的同一个事务里登记，平台不知道账户表，也不对它建外键。以后租户在控制台看自己的条目时，显示哪些列由那个界面决定，因为理由可能是写给平台内部的。
 - **索引**：检索用的索引随第一个读接口加入。
 - **保留**：保留期待定，由负责人决定；与钱有关的条目至少与账本保留一样久。到期删除由一个后台任务角色执行，只授予它删除过期条目的权限，随删除任务一起做；在那之前不删除任何条目。
 - **防篡改**：数据库权限只挡住应用，拥有表的 `axiom_owner` 和数据库管理员仍能改。运营的哈希链和异地留存建在已提交的条目之上，由 `operations` 实现（[运营的「审计」](../../docs/domains/operations.md#审计)）。
@@ -359,7 +359,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
-| `in_scope` 的函数体保持简单表达式，不放子查询 | PostgreSQL 只内联简单的函数体；带子查询后策略里每行调用一次，2M 行的扫描实测 53 秒，原来的函数体是 1.9 秒（#63）。要一次解析，只能让策略把解析好的数组当参数传进来，那要改每张表的策略 | 把设置读成标量子查询（#63 原本的写法）：慢 29 倍；用 `IMMUTABLE` 包一层让计划只解析一次：计划在连接上复用，范围会串到别的事务 |
+| 范围读取放在策略级 InitPlan，列比较留在子查询外 | 消除逐行解析，并让平台分支按未知布尔参数估计；200 万行的比较、限制和迁移方式见 [pg](pg/README.md#决策与理由) | 把子查询放进逐行函数：阻止内联；`IMMUTABLE`：复用计划会保留旧范围；只改规划器开关：不能解决逐行解析 |
 | 登录角色和密码由部署创建 | 密码不经过本程序。部署的初始化脚本用 `CREATE ROLE … PASSWORD` 设置它，语句里有明文密码，数据库开启 DDL 日志时会记下来，所以初始化时不开 | `axiom migrate` 按连接串设置密码：密码要经过程序 |
 | 一次 `just test` 的所有测试包共用一个 PostgreSQL 集群，由 `withcluster` 启动，连接串经 `PGTEST_CLUSTER_URL` 传入；没有变量就自己起容器 | 容器数从“包数 × 并发运行数”降到“并发运行数”：几个 worktree 同时检查时，每包一个容器会让 Docker 虚拟机里同时有几十个容器，连接握手超时、测试随机失败；变量缺省时 `go test ./某包` 照旧能单独跑；每个运行自己的容器，不同 worktree、不同 runner 互不串 | testcontainers 的复用（固定容器名加 reuse）：名字要带运行标识才不串，复用的容器没有明确的结束时刻，清不掉；一台机器一个常驻集群：并发运行共用同一份角色和模板，改集群范围状态的测试会互相影响 |
 | 模块把迁移作为 `pg.Module` 值交给 `cmd/axiom`，由它传给 `Migrate` 和 `Check`；执行顺序和合法的模块名在 `pg` 的清单里固定 | 依赖一眼可见，没有导入顺序决定的全局状态；顺序与调用方怎么排无关；拼错的模块名在迁移和启动时就失败 | 各模块在包初始化时登记到全局表：靠导入的副作用，gochecknoinits 也禁止；按传入的顺序执行：测试和生产可能以不同顺序迁移 |
@@ -383,7 +383,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 审计日志在平台，所有模块经 `audit.Record` 写同一张表 | 要留审计的 accounts、billing、catalog、payments 都不能引用 `operations`；一张表让运营按操作者、对象、时间检索全部改动 | 由 `operations` 提供写接口：违反依赖方向；各模块各建审计表：同样的列写好几份，检索要拼多张表 |
 | 审计在改动自己的事务里同步写 | 改动和条目一起成败，没有不留审计的改动，也没有记了却没发生的改动 | 提交后发事件再写：两者之间崩溃就丢条目；单独的事务写：改动回滚后留下没发生的条目 |
 | 写入时不接哈希链 | 链头要在每个写审计的事务里加锁，所有模块的管理操作排成一队，锁持有到各自提交；接链和异地留存放在提交之后 | 在 `Record` 里接链 |
-| 审计条目用 `in_scope` 一条策略管读和写 | 租户要能看自己的条目，租户范围里的改动也要能记；同一个条件限制条目能记到哪个租户 | 按平台数据只让平台读写：账户范围里的改动记不进；写入不限范围：租户的改动能记到别人头上 |
+| 审计条目用 同一范围条件 一条策略管读和写 | 租户要能看自己的条目，租户范围里的改动也要能记；同一个条件限制条目能记到哪个租户 | 按平台数据只让平台读写：账户范围里的改动记不进；写入不限范围：租户的改动能记到别人头上 |
 | 审计条目的租户由平台自有的登记表 `platform.tenants` 核对，accounts 在创建租户的事务里登记 | 平台在依赖的最底层，不能对 accounts 的表建外键；一张登记表加一个外键就把站点和账户绑到同一租户 | 从 `audit_log` 到 accounts 表的外键：平台的表依赖上层模块的表；只靠代码保证：任何一处写错就把条目记到别的租户 |
 | 审计条目的规则只写在表的约束上 | 一处规则，不论从哪写都守住 | Go 先校验一遍：两份规则会分叉 |
 | 不设整体写超时，只设读请求头超时和空闲超时 | 流式响应的时长取决于模型，由处理器设自己的期限；请求头超时挡住迟迟不发完请求头的连接，空闲超时关掉客户端丢下的长连接 | 统一的写超时：会切断长流 |

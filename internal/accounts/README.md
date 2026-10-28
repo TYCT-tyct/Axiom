@@ -20,7 +20,7 @@
 ### 表（schema `accounts`）
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
-- 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 套 `platform.in_scope`；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
+- 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
 - `axiom_app` 只对「可改的列」有 `UPDATE` 权限，任何表都没有 `DELETE` 权限。
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
@@ -53,7 +53,7 @@
 - `FOR SELECT USING (范围)`；`FOR INSERT WITH CHECK (范围)`。
 - 有终态列（`revoked_at`、`deleted_at`、`used_at`）的表：`FOR UPDATE USING (范围 AND 终态列 IS NULL) WITH CHECK (范围)`。旧行必须还没进终态，新行可以进入；进入后整行不能再改，包括清除终态列，平台范围也一样。
 - 其他表：`FOR UPDATE USING (范围) WITH CHECK (范围)`。
-- `platform_grants` 的 `INSERT`、`UPDATE` 用 `platform.in_platform_scope()`：平台范围包含所有账户，所以它比类别更严，不更宽。
+- `platform_grants` 的 `INSERT`、`UPDATE` 用 `(SELECT platform.in_platform_scope())`：平台范围包含所有账户，所以它比类别更严，不更宽。
 - 测试：首次撤销或删除成功，之后清除终态列、改其他列都影响 0 行；迁移测试查 `pg_policies`，有终态列的表上没有 `FOR ALL`，也没有第二条 `UPDATE` 策略。
 
 ## ID
@@ -75,7 +75,7 @@
 | 快照加载 | 平台范围的 `ReadTx` |
 
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
-- `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（`platform.sees_site`，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
+- `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（策略把站点列与 `platform.home_site()` 的 InitPlan 参数比较，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
 - M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`，和管理接口的八个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。

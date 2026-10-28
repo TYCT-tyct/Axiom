@@ -44,7 +44,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 | 不变量 | 靠什么保证 |
 |---|---|
-| 租户只读写自己账户的行 | 两张表和每个分区强制行级安全，策略 `platform.in_scope(site_id, account_id)`；写入者在平台范围里（`pg.PlatformScope()` 由 cmd 交给 `NewRecorder`）。测试：账户 A 读不到 B 的行也按 ID 取不到，A 的范围写不进 B 的调用或尝试 |
+| 租户只读写自己账户的行 | 两张表和每个分区强制行级安全，策略比较本行站点/账户与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)；写入者在平台范围里（`pg.PlatformScope()` 由 cmd 交给 `NewRecorder`）。测试：账户 A 读不到 B 的行也按 ID 取不到，A 的范围写不进 B 的调用或尝试 |
 | 记录不可改、不可删 | `axiom_app` 只有 SELECT 和 INSERT；到期按分区整块处理，由持有表的角色执行。测试：两张表的 UPDATE、DELETE、TRUNCATE 被拒 |
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
 | 文字能存进库 | `Enqueue` 拒绝不合法的 UTF-8 和 NUL，包括每次尝试的文字；编码本身失败（`errEncoding`）和数据库的数据错误一样走坏行隔离。测试：非法 UTF-8 的行夹在好行之间，经真实的编码和库写入，好行落库、坏行被计数 |
@@ -70,7 +70,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
-按筛选分三条查询，各读自己的索引（[索引](#索引)）：不筛选读 `(account_id, at DESC, id DESC)`；给了模型（可再给客户端应用，在该模型的行上检查）读 `(account_id, model, at DESC, id DESC)`；只给客户端应用读 `(account_id, client_app, at DESC, id DESC)`。`ORDER BY` 的列写成 `call_log.at`、`call_log.id`：裸的 `id` 指输出列 `id::text`，按文本排序，会让大账户也退回位图加排序。每次查询前 `SET LOCAL plan_cache_mode = force_custom_plan`：服务端对预处理语句执行几次后可能改用通用计划，通用计划看不到参数，把行级安全的过滤估成约 1%，选了读账户窗口内全部记录再排序的计划（6 万条的账户一页读 4,300 个缓冲，筛选时更多）；列表是给控制台用的，不在调用路径上，每次按参数规划的代价（不到 1 ms）可以接受。
+按筛选分三条查询，各读自己的索引（[索引](#索引)）：不筛选读 `(account_id, at DESC, id DESC)`；给了模型（可再给客户端应用，在该模型的行上检查）读 `(account_id, model, at DESC, id DESC)`；只给客户端应用读 `(account_id, client_app, at DESC, id DESC)`。`ORDER BY` 的列写成 `call_log.at`、`call_log.id`：裸的 `id` 指输出列 `id::text`，按文本排序，会让大账户也退回位图加排序。每次查询前 `SET LOCAL plan_cache_mode = force_custom_plan`：服务端对预处理语句执行几次后可能改用通用计划，通用计划看不到账户、时间窗和可选筛选的值，不能按它们的分布选择计划；范围的逐行成本和极低估计已由 [pg 的策略级 InitPlan](../platform/pg/README.md#决策与理由)统一处理；列表是给控制台用的，不在调用路径上，每次按参数规划的代价（不到 1 ms）可以接受。
 
 测得的读取量（应用角色，行级安全保留，12 万条、1 个大账户 6 万条、100 个小账户各 600 条；`TestListPlansFollowTheIndexes`）：
 
@@ -81,6 +81,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 稀疏（6 万条里命中 100 条） | 读该筛选索引里的全部命中再取前 N | 53 到 103 |
 | 一个都不命中 | 索引上一次探查，返回空页 | 1 到 3 |
 | 小账户（600 条）不筛选 | 位图扫描加前 N 排序，读窗口内全部 600 条，由账户自己的量封顶 | 560 |
+
+上表证明首页及紧接首页的读取；更深的页仍有[未解决的块数阻断](../platform/pg/README.md#决策与理由)，由 `TestListDeepPagesReadInIndexOrder` 保留失败断言，不能据 Index Scan 的形状声称任意深度都只读一页。
 
 稀疏筛选读的是命中的条数（命中不多于一页就读完），不是账户或分区的量：没有这两个索引时，稀疏和零命中的筛选读整个月分区（36 万条时 7,059 个缓冲，随表增长，60 到 100 ms），不管有没有命中。
 控制台把 `Cursor` 写成 32 个字符的不透明文本（`String`：调用开始时间的微秒数 8 字节、调用编号 16 字节，base64url 无填充），`ParseCursor` 读回，不是这个长度或字母表就是 `ErrBadCursor`（控制台答 400）。游标只标记一个账户的调用里的一个位置：伪造一个只会得到范围本来就让读的、从别处开始的一页，所以不签名；它也不绑定筛选条件，换了筛选条件续用同一个游标得到的是按新条件、从那个位置往后的一页。
@@ -97,6 +99,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 3（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
+
+新分区必须与父表采用相同的策略级 InitPlan 表达式；`pg.Check` 同时审计父表与分区，拒绝旧的逐行范围函数。
 
 迁移给 `call_log` 和 `call_attempt` 都建了 2026-10 到 2028-12 的月分区和一个默认分区，两表的月份一一对应，按调用开始的 `at` 分区。**此后的分区、到期分区的转出与删除是保留任务的事**（[记录与告警的「存储」](../../docs/domains/observability.md#存储)），它随温层存储一起做；在那之前，超出范围的调用和尝试进各自的默认分区，不丢，只是还没法整块转出。需要持有表的角色（`axiom_owner`）执行，不能由 `axiom_app` 做，所以不是调用路径上的事。保留任务按同一组月份处理两表，先删尝试再删调用，或在一个月的分区上一起操作。
 

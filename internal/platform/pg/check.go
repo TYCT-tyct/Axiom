@@ -48,6 +48,17 @@ var schemaAudits = []audit{
 		AND NOT (c.relrowsecurity AND c.relforcerowsecurity AND EXISTS (SELECT FROM pg_policy WHERE polrelid = c.oid))`,
 		"tables without forced row-level security and policies",
 	},
+	// Legacy row-dependent helpers parse settings for every candidate row. Policy-level InitPlans retain isolation
+	// while keeping filtered scans and ordered pages bounded; catch missed partitions and new policies using the old form.
+	{
+		`SELECT coalesce(string_agg(DISTINCT p.polrelid::regclass::text || '.' || p.polname, ', '), '')
+		FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_depend d ON d.classid = 'pg_policy'::regclass AND d.objid = p.oid
+		WHERE n.nspname = ANY (` + schemas + `) AND d.refclassid = 'pg_proc'::regclass
+		AND d.refobjid IN ('platform.in_scope(uuid,uuid)'::regprocedure, 'platform.sees_site(uuid)'::regprocedure)`,
+		"policies using per-row scope readers instead of statement InitPlans",
+	},
 	// A function that runs as its owner reads past the caller's scope, so in Axiom's schemas only the lookup role may
 	// own one; a fixed search_path keeps a caller's objects from standing in for the ones it names; and only the
 	// application may run it.
