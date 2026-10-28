@@ -280,7 +280,7 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
 	c := &candidate{Endpoint: e, state: r.state.of(e.ID), supplierPause: r.state.supplier(e.Supplier), model: billing.Model{
-		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
+		ID: e.Model, ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
 	if e.Price.Version == (uuid.UUID{}) {
