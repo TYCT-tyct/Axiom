@@ -112,16 +112,17 @@ type Reservation struct {
 
 // quote is one entry's reservation in parts, so that a meter builds every later target by addition.
 type quote struct {
-	fixed     platform.Exact     // every sampling's input at its bound and every server tool at its most uses
-	allowance platform.Exact     // the overshoot allowance, held until settlement
-	amount    platform.Exact     // fixed, the allowance and the first segment's output, or fixed and the whole output
-	output    platform.UnitPrice // the dearest price an output or reasoning token can have
-	search    platform.UnitPrice // a web search's dearest price, when the request enables web search
-	searches  int64              // the web searches fixed covers
-	resample  inputPrice         // the input price of the samplings a search beyond them adds
-	rereads   int64              // the input tokens those samplings may read: the context, twice with compaction
-	outputCap int64              // the most output tokens the upstream may produce
-	segment   int64              // output tokens a segment; 0 when the entry is reserved in full
+	tiers     catalog.ServiceTierSet // the model tiers admitted with this live hold; 0 when unknown
+	fixed     platform.Exact         // every sampling's input at its bound and every server tool at its most uses
+	allowance platform.Exact         // the overshoot allowance, held until settlement
+	amount    platform.Exact         // fixed, the allowance and the first segment's output, or fixed and the whole output
+	output    platform.UnitPrice     // the dearest price an output or reasoning token can have
+	search    platform.UnitPrice     // a web search's dearest price, when the request enables web search
+	searches  int64                  // the web searches fixed covers
+	resample  inputPrice             // the input price of the samplings a search beyond them adds
+	rereads   int64                  // the input tokens those samplings may read: the context, twice with compaction
+	outputCap int64                  // the most output tokens the upstream may produce
+	segment   int64                  // output tokens a segment; 0 when the entry is reserved in full
 }
 
 var errOverflow = errors.New("billing: the request's bounds exceed what a reservation can count")
@@ -191,6 +192,7 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 	if err := checkEntry(e, s); err != nil {
 		return q, err
 	}
+	q.tiers = e.Model.ServiceTiers
 	window := e.Model.ContextLength
 	tiers := d.ServiceTiers
 	if e.Model.ServiceTiers != 0 {
