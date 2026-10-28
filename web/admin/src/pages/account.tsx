@@ -1,4 +1,4 @@
-import type { AdminSchemas } from "@axiom/api";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
 import { Button, DataState, Icon, PageHeader, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreditDialog } from "../credit-dialog";
+import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State, Time } from "../parts";
 import { accountQuery } from "../queries";
 
@@ -32,6 +33,7 @@ export default function AccountPage() {
             </Actions>
             <Figures account={data} />
             <Details account={data} />
+            <AccountKeyLimits account={data} />
           </PageBody>
         </>
       )}
@@ -109,5 +111,30 @@ function Details({ account }: { account: Account }) {
         ]}
       />
     </div>
+  );
+}
+
+// What the account is held to on its keys: its own limits over the site's.
+function AccountKeyLimits({ account }: { account: Account }) {
+  const editable = can(useSession(), "sites.manage");
+  // The contract always gives it; a node of the release before does not, and the rest of the page must still show.
+  const view: AdminSchemas["KeyLimitsView"] | undefined = account.key_limits;
+  if (view === undefined) {
+    return <KeyLimitsUnavailable level="account" />;
+  }
+  return (
+    <KeyLimitsCard
+      level="account"
+      view={view}
+      editable={editable}
+      send={(limits, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/accounts/{account_id}/key-limits", {
+            params: { path: { account_id: account.id }, header: { "Idempotency-Key": key } },
+            body: { limits, reason },
+          }),
+        )
+      }
+    />
   );
 }

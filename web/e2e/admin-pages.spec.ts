@@ -38,6 +38,23 @@ const close = (page: Page) =>
 const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
 
 test.describe("users and credit", () => {
+  test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    const account = state.accounts.get(acct(1));
+    if (account) {
+      // The response an older node gives: the field is not there.
+      (account as { key_limits?: unknown }).key_limits = undefined;
+    }
+    await page.goto(`/accounts/${acct(1)}`);
+    await expect(h1(page, "user1@example.com")).toBeVisible();
+    await expect(page.getByText("$12.00").first()).toBeVisible();
+    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
+    await expect(press(page, "settings.keyLimits.edit")).toHaveCount(0);
+  });
+
   test("users are found by the start of the email and paged by cursor", async ({ page }) => {
     await open(page, "/users");
     await expect(page.getByRole("row")).toHaveCount(51);
@@ -50,6 +67,28 @@ test.describe("users and credit", () => {
     await page.getByLabel(zhText("users.searchLabel")).fill("nobody");
     await page.getByRole("button", { name: zhText("filter.apply") }).click();
     await expect(page.getByRole("heading", { name: zhText("users.noMatch.title") })).toBeVisible();
+  });
+
+  test("an account's key limits show where they come from, and a change sets the account's own over the site's", async ({
+    page,
+  }) => {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    await expect(page.getByText(words("settings.keyLimits.from.account")).first()).toBeVisible();
+    await press(page, "settings.keyLimits.edit").click();
+    await dialog(page).getByLabel(words("settings.keyLimits.field.max_keys")).fill("0");
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(
+      zhText("settings.keyLimits.invalid").replace("{{min}}", "1").replace("{{max}}", "10000"),
+    );
+    await dialog(page).getByLabel(words("settings.keyLimits.field.max_keys")).fill("250");
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(done(page)).toBeVisible();
+    expect(state.accounts.get(acct(1))?.key_limits).toEqual({
+      limits: { max_keys: 250 },
+      effective: { max_keys: 250, creations_per_hour: 50 },
+    });
+    await close(page);
+    await expect(page.getByText("250").first()).toBeVisible();
   });
 
   test("credit is added with a reason and a key, and the same key again does it once", async ({ page }) => {
@@ -147,6 +186,18 @@ test.describe("users and credit", () => {
 });
 
 test.describe("site settings", () => {
+  test("a server of the release before has no key limits operation, and the settings still work", async ({ page }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+    await page.route("**/api/admin/v1/sites/*/key-limits", (route) =>
+      route.fulfill({ status: 404, json: { error: { code: "not_found", message: "no such resource" } } }),
+    );
+    await page.goto("/settings");
+    await expect(page.getByText(/7\s*天/)).toBeVisible();
+    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
+    await expect(press(page, "settings.edit")).toBeVisible();
+  });
+
   test("the values in force show with where they come from, and a change keeps the defaults for what is left empty", async ({
     page,
   }) => {
@@ -167,6 +218,26 @@ test.describe("site settings", () => {
     });
     await close(page);
     await expect(page.getByText(/7,200/)).toBeVisible();
+  });
+
+  test("the site's key limits are changed apart from the settings, and a settings change leaves them", async ({
+    page,
+  }) => {
+    const state = await open(page, "/settings");
+    await expect(page.getByText(words("settings.keyLimits.own")).first()).toBeVisible();
+    await press(page, "settings.keyLimits.edit").click();
+    await dialog(page).getByLabel(words("settings.keyLimits.field.creations_per_hour")).fill("30");
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    expect(state.keyLimits).toEqual({
+      limits: { max_keys: 20, creations_per_hour: 30 },
+      effective: { max_keys: 20, creations_per_hour: 30 },
+    });
+    await close(page);
+    await press(page, "settings.edit").click();
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    expect(state.keyLimits.limits).toEqual({ max_keys: 20, creations_per_hour: 30 });
   });
 });
 

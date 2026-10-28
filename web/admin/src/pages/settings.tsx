@@ -5,8 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
+import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State } from "../parts";
-import { accountQuery, siteSettingsQuery } from "../queries";
+import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -27,7 +28,14 @@ export default function SettingsPage() {
     <>
       <PageHeader title={t("nav.settings")} description={t("settings.description")} />
       <PageBody>
-        <DataState query={owner}>{(account) => <SiteSettings siteId={account.site_id} />}</DataState>
+        <DataState query={owner}>
+          {(account) => (
+            <>
+              <SiteSettings siteId={account.site_id} />
+              <SiteKeyLimits siteId={account.site_id} />
+            </>
+          )}
+        </DataState>
       </PageBody>
     </>
   );
@@ -36,6 +44,35 @@ export default function SettingsPage() {
 function SiteSettings({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const settings = useQuery(siteSettingsQuery(siteId));
   return <DataState query={settings}>{(view) => <Current siteId={siteId} view={view} />}</DataState>;
+}
+
+// The limits on the keys of an account are the site's own, kept apart from the settings above: saving those replaces
+// them whole, and a page opened before these limits existed would take them along.
+function SiteKeyLimits({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
+  const limits = useQuery(siteKeyLimitsQuery(siteId));
+  // A node of the release before has no such operation: the settings above still work.
+  if (limits.isError) {
+    return <KeyLimitsUnavailable level="site" />;
+  }
+  return (
+    <DataState query={limits}>
+      {(view) => (
+        <KeyLimitsCard
+          level="site"
+          view={view}
+          editable
+          send={(body, { reason, key }) =>
+            unwrapChange(
+              adminApi.PUT("/api/admin/v1/sites/{site_id}/key-limits", {
+                params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
+                body: { limits: body, reason },
+              }),
+            )
+          }
+        />
+      )}
+    </DataState>
+  );
 }
 
 // seconds as the largest units that hold it: 172800 as "2 days".

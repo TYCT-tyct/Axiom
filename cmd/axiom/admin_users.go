@@ -106,10 +106,16 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	}
 	var account accounts.AccountDetail
 	var balance billing.BalanceView
+	var limits adminapi.KeyLimitsView
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		if account, err = a.accounts.Account(ctx, tx, id); err != nil {
 			return err
 		}
+		own, effective, err := a.accounts.AccountKeyLimits(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		limits = keyLimitsBody(own, effective)
 		balance, err = a.readBalance(ctx, tx, id)
 		return err
 	}); err != nil {
@@ -122,7 +128,7 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	body := adminapi.AccountDetail{
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
-		CreatedAt: account.CreatedAt,
+		KeyLimits: limits, CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
 	return adminapi.GetAccount200JSONResponse(body), nil
