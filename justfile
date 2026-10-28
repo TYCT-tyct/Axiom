@@ -13,7 +13,7 @@ check: docs check-static test secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main
-check-static: modules adapters-removable artifacts scope api tidy generated lint deadcode vuln
+check-static: modules adapters-removable artifacts scope api doc-names tidy generated lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -65,6 +65,19 @@ adapters-removable:
 # security and permission declared, the error body, cursors, idempotency keys, and what two contracts share defined alike
 api:
     go run -C tools ./checkapi ..
+
+# Rolling release runs old and new nodes side by side: a field a schema in base did not require stays optional, or a
+# new page reading an old node, or an old page writing to a new one, breaks (#400, #401). Needs the base's contracts.
+api-compat base:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    old="$(mktemp -d)"; trap 'rm -rf "$old"' EXIT
+    git ls-tree --name-only {{ quote(base) }} api/ | grep '\.yaml$' | while read -r f; do git show {{ quote(base) }}:"$f" > "$old/${f#api/}"; done
+    go run -C tools ./checkapi .. "$old"
+
+# Docs name only tests and Go declarations that exist (tools/checkdocnames)
+doc-names:
+    go run -C tools ./checkdocnames ..
 
 # No build output, binary or file over 1 MB is committed: the files the branch adds or changes, and the untracked ones a
 # `git add` would take, are checked by size, by suffix and for a NUL byte (every file on main, and without origin/main);
@@ -128,7 +141,7 @@ check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
 # template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
-md-checks: docs modules artifacts
+md-checks: docs doc-names modules artifacts
     go test ./internal/platform/pg -run '^TestModuleOrderFollowsArchitecture$'
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the

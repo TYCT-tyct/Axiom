@@ -24,8 +24,8 @@
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
-| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；缓存三类状态已共享，供应商并发与 RPM 仍未分节点份额，因此保留 N > 1 的生产入口限制（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
-| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流，见 [mail/README.md](mail/README.md) |
+| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与 RPM 仍未分节点份额，因此保留 N > 1 的生产入口限制（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
+| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流（Valkey 共享，故障退回各节点的进程内桶），见 [mail/README.md](mail/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -148,7 +148,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 接口约定
 
-控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
+控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。PR 和列车还对照目标分支跑 `just api-compat`：目标分支里已有的结构（组件、操作里内联的请求和响应体，以及它们嵌套的对象）不得新增必填字段。滚动发布时，新页面会读到不返回这个字段的旧节点，旧页面写到新节点时也不带它；字段保持可选，生成的类型就会逼两边处理它缺失的情况。确实可以必填时（例如旧节点都已下线），在这个结构上用 `x-axiom-newly-required` 按字段写明理由。新加的结构不受限制。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
 
 | 约定 | 内容 | 检查 |
 |---|---|---|
@@ -271,7 +271,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 - 每个模块的迁移在自己目录的 `migrations/` 下，模块把名字和嵌入的迁移文件作为 `pg.Module` 交给 `cmd/axiom`（如 `accounts.Module()`），由它的模块列表 `modules()` 同样传给 `pg.Migrate` 和 `DB.Check`；有迁移的模块都要加进这个列表，否则 `migrate` 不执行它、`serve` 也不检查它。模块名就是它的 schema，迁移开始前由迁移管理员建好、归 `axiom_owner`（`axiom_owner` 没有建 schema 的权限）；版本表是 `platform.goose_<模块>`。
 - 执行顺序固定：`platform` 先执行（各模块的策略调用它的函数），其余按[依赖表](../../docs/architecture.md#模块之间的依赖)从上到下，与传入的顺序无关；`pg` 里的模块清单由测试与依赖表核对。不在清单里或重复的模块名，迁移和启动都失败。
-- 迁移以 `axiom_owner` 在持有 goose 会话锁的连接上执行，并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
+- 迁移以 `axiom_owner` 在持有 goose 会话锁的专用连接上执行；`pg.Migrate` 为每条这样的连接设平台范围，让数据迁移在强制行级安全下仍能读写全部租户，连接随本次迁移关闭，模块不自行设置范围。并发的执行互相等待；初始化角色的 advisory 锁、goose 的会话锁和迁移里的每把锁都最多等约 5 秒，不让另一次迁移或长事务把部署和应用的查询堵住。中断后重跑，从记录的版本继续。
 - **期限**：每个连接从域名解析到握手结束合计最多等 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒；一个主机有几个地址也合计，URL 里的 `connect_timeout` 只能让它更短），整次执行最多 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟，长 DDL 要的时间）。到期时迁移自己结束它在服务器上的会话：每个连接带着本次执行独有的 `application_name`，期限到后用一个独立的短连接（自己最多 5 秒）对这些会话执行 `pg_terminate_backend`，等它返回才返回。这样结果既不依赖 pgx 在后台发出的取消请求（进程退出可能抢在它前面，语句也可以写成吞掉取消），也不是每条语句各自重新计时的语句超时；按应用名而不是按进程号，是因为进程号可能被别的会话复用。事务回滚，会话级的 goose 锁随会话释放。goose 释放会话锁用的是取消不掉的 context，服务器不应答时解锁会一直等，所以终止之后再给 15 秒宽限，仍未返回就放弃等待、让进程退出。两者都在连接之前校验：必须是正的时长，连接期限必须短于执行期限，拼错的变量名报错。执行期限让一次卡住的迁移不会一直占着 goose 的会话锁，挡住下一次部署。
 - 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务行不属于任何租户，也不存租户的数据；要带租户的数据放模块自己的表，见下文），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。

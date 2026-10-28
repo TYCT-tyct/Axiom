@@ -52,8 +52,9 @@ var (
 	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
 	// ErrNoCredential is a credential the supplier does not have.
 	ErrNoCredential = errors.New("suppliers: the supplier has no such credential")
-	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not that or none.
-	ErrLimits = errors.New("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none")
+	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not 1 to
+	// MaxRequestsPerMinute or none.
+	ErrLimits = fmt.Errorf("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", MaxRequestsPerMinute)
 )
 
 // LoginError is credentials that cannot make a login: the member that is wrong, and which rule it breaks.
@@ -219,12 +220,12 @@ func credentialOf(id, group uuid.UUID, ref, status string, cooldown, expires *ti
 }
 
 // limited is a per-minute limit as the admin shows it: a column with no value is no ceiling of Axiom's, which stays no
-// value here.
+// value here. An old node may write above the cap during a rolling release; show the cap the new code applies.
 func limited(n *int32) *int {
 	if n == nil {
 		return nil
 	}
-	v := int(*n)
+	v := min(int(*n), MaxRequestsPerMinute)
 	return &v
 }
 
