@@ -406,10 +406,10 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	updatable := map[string][]string{
 		"sites":         {"name", "status", "key_prefix", "registration", "default_tier_id"},
 		"site_domains":  {"disabled_at"},
-		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts"},
+		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
 		"tiers":         {"name"},
 		"roles":         {"permissions"},
-		"accounts":      {"name", "status", "tier_id"},
+		"accounts":      {"name", "status", "tier_id", "max_keys", "key_creations_per_hour"},
 		"workspaces":    {"name", "status", "budget", "budget_reset", "deleted_at"},
 		"users": {
 			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",

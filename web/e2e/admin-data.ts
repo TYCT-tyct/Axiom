@@ -11,6 +11,7 @@ export type Schemas = components["schemas"];
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   settings: Schemas["SiteSettingsView"];
+  keyLimits: Schemas["KeyLimitsView"];
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
@@ -80,6 +81,7 @@ function anAccount(user: Schemas["UserSummary"], over: Partial<Schemas["AccountD
       available: nano("11750000000"),
       spent_this_month: nano("3141592653"),
     },
+    key_limits: { limits: {}, effective: { max_keys: 100, creations_per_hour: 50 } },
     created_at: user.created_at,
     ...over,
   } satisfies Schemas["AccountDetail"];
@@ -286,6 +288,7 @@ export function usualState(): AdminState {
         new_key_daily_limit: usd("10"),
       },
     },
+    keyLimits: { limits: { max_keys: 20 }, effective: { max_keys: 20, creations_per_hour: 50 } },
     tiers,
     users,
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
