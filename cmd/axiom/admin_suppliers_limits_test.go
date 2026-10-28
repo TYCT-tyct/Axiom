@@ -53,8 +53,13 @@ func TestSetCredentialLimits(t *testing.T) {
 	if omitted.RequestsPerMinute != nil {
 		t.Errorf("the omitted minute is still %d", *omitted.RequestsPerMinute)
 	}
-	if n := f.auditCount("credential.limits"); n != "4" {
-		t.Errorf("%s audit entries, want 4: two settings and two clearings", n)
+	var largest adminapi.SupplierCredential
+	f.send(http.MethodPut, limits, `{"max_concurrency":8,"requests_per_minute":100000,"reason":"the ceiling"}`, http.StatusOK, &largest)
+	if largest.RequestsPerMinute == nil || *largest.RequestsPerMinute != 100000 {
+		t.Errorf("the largest minute: %+v", largest.RequestsPerMinute)
+	}
+	if n := f.auditCount("credential.limits"); n != "5" {
+		t.Errorf("%s audit entries, want 5: three settings and two clearings", n)
 	}
 }
 
@@ -83,6 +88,7 @@ func TestSetCredentialLimitsRefusals(t *testing.T) {
 		"no concurrency":         {limits, `{"max_concurrency":0,"requests_per_minute":null,"reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
 		"no requests a minute":   {limits, `{"max_concurrency":2,"requests_per_minute":0,"reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
 		"a minute not a number":  {limits, `{"max_concurrency":2,"requests_per_minute":"many","reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
+		"a minute above the cap": {limits, `{"max_concurrency":2,"requests_per_minute":100001,"reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
 		"a concurrency too high": {limits, `{"max_concurrency":2147483648,"requests_per_minute":null,"reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
 	} {
 		expectAdmin(t, name, f.change(f.s, http.MethodPut, c.path, c.body, newKey()), c.status, c.code)

@@ -71,7 +71,25 @@ func TestSetLimits(t *testing.T) {
 	same(t, "the clearing recorded", "60|null", a.text(
 		`SELECT (detail->>'requests_per_minute_from') || '|' || coalesce(detail->>'requests_per_minute_to', 'null')
 		 FROM platform.audit_log WHERE action = 'credential.limits' ORDER BY id DESC LIMIT 1`))
+	largest := MaxRequestsPerMinute
+	atCap, err := a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 8, RequestsPerMinute: &largest})
+	refuses(t, "the largest requests a minute", err, nil)
+	same(t, "the largest requests a minute", &largest, atCap.RequestsPerMinute)
 	same(t, "the configuration generation", generation, a.generation())
+}
+
+// TestLimitsAboveTheCapReadAsTheCap: an old node can still write a higher value during a rolling release. The new code
+// must not treat it as unbounded, in the call path or in what the admin shows.
+func TestLimitsAboveTheCapReadAsTheCap(t *testing.T) {
+	t.Parallel()
+	over := int32(MaxRequestsPerMinute + 1)
+	if got := ceiling(&over); got != MaxRequestsPerMinute {
+		t.Errorf("the call path read %d, want the cap %d", got, MaxRequestsPerMinute)
+	}
+	shown := limited(&over)
+	if shown == nil || *shown != MaxRequestsPerMinute {
+		t.Errorf("the admin shows %v, want the cap %d", shown, MaxRequestsPerMinute)
+	}
 }
 
 // TestSetLimitsRefusals: a credential the supplier does not have, one of another supplier, a supplier on its way out,
@@ -100,6 +118,7 @@ func TestSetLimitsRefusals(t *testing.T) {
 		{"a concurrency the column cannot hold", Limits{MaxConcurrency: maxLimit + 1}},
 		{"no requests a minute", Limits{MaxConcurrency: 2, RequestsPerMinute: per(0)}},
 		{"a negative requests a minute", Limits{MaxConcurrency: 2, RequestsPerMinute: per(-1)}},
+		{"a requests a minute above the cap", Limits{MaxConcurrency: 2, RequestsPerMinute: per(MaxRequestsPerMinute + 1)}},
 		{"a requests a minute the column cannot hold", Limits{MaxConcurrency: 2, RequestsPerMinute: per(maxLimit + 1)}},
 	} {
 		_, err := a.limitsOf(id, bound.ID, c.limits)

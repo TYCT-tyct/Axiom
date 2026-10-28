@@ -186,6 +186,14 @@ func TestJSON(t *testing.T) {
 		{"", "chat", `{"id":"chatcmpl-x"}`, `{"id":"chatcmpl-2"}`, ""},
 		{"an ID without a known prefix", "chat", `{"id":"gen-17"}`, `{"id":"gen-1"}`, ""},
 		{"an ID without any prefix", "chat", `{"id":"017"}`, `{"id":"id_1"}`, ""},
+		{"a Messages container reference", "messages", `{"container":{"id":"cntr_real"}}`, `{"container":{"id":"cntr_1"}}`, ""},
+		{"a Messages container string", "messages", `{"container":"cntr_real"}`, `{"container":"cntr_1"}`, ""},
+		{"the same Messages container in an event", "messages", `{"message":{"container":{"id":"cntr_real"}},"content_block":{"input":{"container":{"id":"cntr_real"}}}}`, `{"message":{"container":{"id":"cntr_1"}},"content_block":{"input":{"container":{"id":"cntr_real"}}}}`, ""},
+		{"the same container at message end", "messages", `{"type":"message_delta","delta":{"container":{"id":"cntr_real"}}}`, `{"type":"message_delta","delta":{"container":{"id":"cntr_1"}}}`, "message_delta"},
+		{"a Responses conversation reference", "responses", `{"conversation":{"id":"conv_real"}}`, `{"conversation":{"id":"conv_1"}}`, ""},
+		{"a Responses conversation string", "responses", `{"conversation":"conv_real"}`, `{"conversation":"conv_1"}`, ""},
+		{"the same conversation in a snapshot", "responses", `{"response":{"conversation":{"id":"conv_real"}},"metadata":{"conversation":{"id":"conv_real"}}}`, `{"response":{"conversation":{"id":"conv_1"}},"metadata":{"conversation":{"id":"conv_real"}}}`, ""},
+		{"Responses code containers", "responses", `{"tools":[{"container":"cntr_real"}],"item":{"container_id":"cntr_real"},"response":{"output":[{"container_id":"cntr_real"}]},"input":[{"container_id":"cntr_real"}]}`, `{"tools":[{"container":"cntr_1"}],"item":{"container_id":"cntr_1"},"response":{"output":[{"container_id":"cntr_1"}]},"input":[{"container_id":"cntr_1"}]}`, ""},
 		{"an empty ID, and one that is not a string", "responses", `{"item_id":"","previous_response_id":null}`, `{"item_id":"","previous_response_id":null}`, ""},
 	} {
 		got, typ, err := s.json([]byte(tc.data), formats[tc.format].ids)
@@ -376,6 +384,7 @@ func TestNothingWritten(t *testing.T) {
 		{"not a stream", "messages", "s", `{"stream":false}`, "", 200, false, `"stream": true`},
 		{"a request with a duplicate key", "messages", "s", `{"stream":true,"stream":true}`, "", 200, false, "request"},
 		{"an error status", "messages", "s", request, `{"error":{}}`, 500, true, "upstream answered 500"},
+		{"a non-JSON error echoing the key", "messages", "s", request, "bad key " + key, 401, true, "not shown"},
 		{"an error status echoing the key", "messages", "s", request, `{"error":"bad key ` + key + `"}`, 401, true, "not shown"},
 		{"an error status echoing the key escaped", "messages", "s", request, `{"error":"bad key ` + escapedKey + `"}`, 401, true, "not shown"},
 		{"a stream that breaks its format", "messages", "s", request, start, 200, true, "upstream.sse"},

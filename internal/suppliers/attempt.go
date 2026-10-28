@@ -100,16 +100,17 @@ type Attempt struct {
 	once   sync.Once
 }
 
-// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose minute
-// admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or ErrNoSlot
-// when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until Done.
+// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose rolling
+// minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or
+// ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until
+// Done.
 func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 	ep, ok := s.snap.Load().endpoints[id]
 	if !ok {
 		return nil, ErrNoEndpoint
 	}
-	now := s.now()
-	for range 8 { // another caller may take the slot or the minute's last request between looking and swapping
+	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
+		now := s.now() // the credential may have rested or expired since the last look
 		best, n := leastBusy(ep, now)
 		if best == nil {
 			return nil, ErrNoSlot
@@ -117,7 +118,7 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
 			continue
 		}
-		if !best.rt.requests.take(now, best.perMinute) {
+		if !best.rt.requests.take(best.perMinute) {
 			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
 			continue
 		}
@@ -135,7 +136,7 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 	used := ep.creds[0].rt.requests.count(now)
 	var bestLoad float64
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= c.perMinute) {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= int64(c.perMinute)) {
 			continue
 		}
 		n := c.rt.inflight.Load()
