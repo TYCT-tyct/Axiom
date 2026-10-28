@@ -227,8 +227,7 @@ test.describe("a grant left unsettled", () => {
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe(`/accounts/${acct(1)}`);
+    await expect(page).toHaveURL(new RegExp(`/accounts/${acct(1)}$`));
     await expectOffered(page);
 
     await resend(page).click();
