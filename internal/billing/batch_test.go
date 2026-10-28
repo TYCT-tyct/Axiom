@@ -163,7 +163,7 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 		"UPDATE billing.balances SET frozen = 23",
 		fmt.Sprintf("UPDATE billing.spend SET spent = CASE subject WHEN '%s' THEN 41 ELSE 53 END", b.admitted.Workspace),
 		fmt.Sprintf("INSERT INTO billing.spend(subject,window_start,site_id,account_id,spent) VALUES ('%s',date_trunc('day',clock_timestamp(),'UTC') - interval '400 days','%s','%s',17)", b.admitted.Workspace, b.admitted.Site, b.admitted.Account),
-		"UPDATE billing.reservations SET charged_seq = 3, entry = 0, charged = 37, price = 43, waived = true, estimated = true, profit = 59, attempt_entries = '{0,-1,2}', key_window = key_window - interval '1 day'",
+		"UPDATE billing.reservations SET charged_seq = 3, entry = 0, charged = 37, price = 43, waived = true, estimated = false, profit = 59, attempt_entries = '{0,-1,2}', key_window = key_window - interval '1 day'",
 	)
 	a := b.admitted
 	a.WorkspaceBudget = &Limit{Amount: 1e5, Reset: ResetNever}
