@@ -38,7 +38,8 @@ var faultClasses = map[string]Fault{
 	"context_length_exceeded": FaultContextTooLong,
 	"content_filter":          FaultModeration, "content_policy_violation": FaultModeration,
 	"image_content_policy_violation": FaultModeration,
-	"invalid_request_error":          FaultBadRequest, "invalid_prompt": FaultBadRequest, "request_too_large": FaultBadRequest,
+	"invalid_request_error":          FaultBadRequest, "invalid_prompt": FaultBadRequest, "invalid_value": FaultBadRequest,
+	"request_too_large": FaultBadRequest,
 }
 
 // faultError is ErrUpstream with its fault and, when the error event named them, the members of the error object it

@@ -53,6 +53,7 @@ var (
 		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
 		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
 		"usage":   (*responsesStream).usage,
+		"error":   func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) },
 	}
 	responseFields = map[string]func(*responsesStream) error{
 		"usage":        (*responsesStream).usage,

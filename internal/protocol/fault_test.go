@@ -42,6 +42,8 @@ func TestFaultOf(t *testing.T) {
 		{"Chat numeric rate limit code", protocol.Chat, chatError(`{"code":429}`), protocol.FaultRateLimited},
 		{"Chat no class", protocol.Chat, chatError(`{"message":"x"}`), protocol.FaultUnrecognised},
 		{"Chat malformed", protocol.Chat, "data: {\"choices\":\n\n", protocol.FaultBroken},
+		{"Responses parameter error", protocol.Responses, `data: {"type":"error","code":"invalid_value","message":"bad parameter","param":"input"}` + "\n\n", protocol.FaultBadRequest},
+		{"Responses relay error envelope", protocol.Responses, `data: {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}` + "\n\n", protocol.FaultBadRequest},
 		{"Responses error event", protocol.Responses, "event: error\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}\n\n", protocol.FaultRateLimited},
 		{"Responses failed", protocol.Responses, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\"}}}\n\n", protocol.FaultServer},
 		{"Responses prompt refused", protocol.Responses, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"invalid_prompt\"}}}\n\n", protocol.FaultBadRequest},

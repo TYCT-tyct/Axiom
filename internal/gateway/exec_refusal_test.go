@@ -198,7 +198,7 @@ func refusalAnswer(t *testing.T, ctx context.Context, f protocol.Format, stream,
 		obj := `{"type":"invalid_\u0072equest_error","message":"upstream-vendor: invalid input","code":"invalid_value","param":"input"}`
 		frame := `data: {"type":"error","error":` + obj + "}\n\n"
 		if f == protocol.Responses {
-			frame = `data: {"type":"response.failed","response":{"error":` + obj + "}}\n\n"
+			frame = `data: {"type":"error","code":"invalid_value","message":"upstream-vendor: invalid input","param":"input"}` + "\n\n"
 		}
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(beat{data: frame})}
 	}
