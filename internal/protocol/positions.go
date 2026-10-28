@@ -8,9 +8,9 @@ import (
 // Only the finite set of top-level rewrite members needs offsets, never the messages inside them.
 // If new rules outgrow the table, rewriting falls back to the tokenizer until its capacity is updated.
 type requestPositions struct {
-	members        [18]memberPosition
-	n, close, tail int
-	ready          bool
+	members              [18]memberPosition
+	n, close, tail, size int
+	ready                bool
 }
 
 type memberPosition struct {
@@ -25,6 +25,7 @@ func (s *scanner) topMembers(body []byte) error {
 	}
 	positions := &s.r.positions
 	positions.ready = true
+	positions.size = len(body)
 	for ordinal := 0; s.dec.PeekKind() != '}'; ordinal++ {
 		if err := s.topMember(body, ordinal); err != nil {
 			return err

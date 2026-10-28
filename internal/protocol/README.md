@@ -44,6 +44,8 @@
 
 `Prepare(r, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它复用 `Inspect` 的顶层位置表，跳过不改写的大块内容，只解析要改的值（如 Messages 的 `metadata`、Responses 的 `include`），按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写见下表之后的「Chat 的改写」：模型方言的成员（推理参数、`cache_control`、回传的 `reasoning_content`）不改写，由端点按它自己的方言处理（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
 
+位置表还记录 `Inspect` 时的请求体长度；长度不符时 `Prepare` 回退 tokenizer 改写，不对另一份体使用旧偏移量（`TestPrepareDiscardsPositionsForDifferentBodySize` 覆盖三种格式的更短、更长请求体）。这是 O(1) 的长度保护，不证明相同长度的内容相同；调用方仍须传入 `Inspect` 读过的同一份内容，改写或补全体后必须重新 `Inspect` 并更新准入摘要，不能沿用旧摘要定价。
+
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
@@ -304,7 +306,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | 不变量 | 靠什么保证 |
 |---|---|
 | 读摘要自身的分配次数、复用位置表的改写分配次数不随消息数增长 | `TestAllocs` 对三种格式的 1 KiB、1 MiB 请求，在普通对象和含 100 个成员的宽对象下检查：`Inspect` 减去 `jsonx.Validate` 的分配次数不变，`Prepare` 本身的分配次数不变（它已不再扫描内容里的宽对象）；`BenchmarkInspect`、`BenchmarkPrepare`、`BenchmarkRequestRead` 由 `just bench-compare` 与 merge base 比较；后者同时报告[分级预算](../../docs/performance.md#延迟预算)占比 |
-| 同格式改写只改「同格式改写」表里的位置，其余字节原样；签名、加密内容、压缩项原样到达 | `FuzzIndexedRewrite` 逐字节对照位置表路径与 tokenizer 路径，覆盖未知成员、连续删除、转义键、类型错误、历史、compact 和回放；`TestPositionCapacity` 保证表能装下所有顶层规则；`TestPrepare` 逐字节比较整个请求体，用例含签名和 `redacted_thinking`、转义的思考正文、Codex 压缩后的第二轮（OpenAI《Compaction》的做法，ID 和密文是编的）、表里每条规则；`TestPrepareSamples` 对已提交的样本请求只差模型名（Responses 再加 `store`） |
+| 同格式改写只改「同格式改写」表里的位置，其余字节原样；签名、加密内容、压缩项原样到达 | `FuzzIndexedRewrite` 逐字节对照位置表路径与 tokenizer 路径，覆盖未知成员、连续删除、转义键、类型错误、历史、compact 和回放；`TestPositionCapacity` 保证表能装下生成与 compact 顶层规则成员名的并集；`TestPrepare` 逐字节比较整个请求体，用例含签名和 `redacted_thinking`、转义的思考正文、Codex 压缩后的第二轮（OpenAI《Compaction》的做法，ID 和密文是编的）、表里每条规则；`TestPrepareSamples` 对已提交的样本请求只差模型名（Responses 再加 `store`） |
 | 端点能流式时发给它的请求总带 `stream: true`，不能流式的端点保持客户端的写法 | `TestPrepareResponsesCap` 覆盖 0、`-0`、`null`、缺省、正数和 int64 上界、未知报价上限与 compact，逐例核对输出缓冲预算；`TestPrepareAsksForAStream` 覆盖同格式与转换、没有/`false`/`null`/`true` 四种写法；`TestPrepareSamples`、`TestConvertSamples` 的目标不流式，黄金输出不变 |
 | `UsageOf` 读出的用量与流的结尾同一口径 | `TestUsageOf`：输入拆成缓存读、输出拆成推理、服务等级、没有 `usage` 为空、部件超过总数和不是 JSON 都判无效 |
 | 改写后准入和路由读到的摘要不变，输出合规 | 模糊测试 `FuzzPrepare`：`Inspect` 接受的请求，改写结果仍被 jsonx 接受，再读出的摘要除模型名、`Previous` 和 `TextBytes`（随增删的字节变）外完全相同；`Prepare` 返回 `ErrInvalid` 当且仅当把请求体整体解码后看到上面「出错」里的类型错误，所以错拒合法请求和漏拒错误类型都会失败；以 `Inspect` 和 `Prepare` 的表驱动用例（含拒绝的用例）为种子；每条规则都经过变异验证 |
@@ -386,7 +388,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | `Target` 加 `Streams`，由路由按端点的能力填 | 请求发出去的 `stream` 是端点的属性，不是请求的；网关一处设置，`Prepare` 两处（改写、转换）照它写 | 在网关里改请求体：protocol 拥有请求体 |
 | `UsageOf` 只读顶层 `usage` 与 `service_tier` | compact 的回复整份读一次就完了，复用聚合器的成员读出即可，不需要新的解码器 | 解成结构体：多一份随回复大小增长的分配 |
 | 两个文件共用一张替换表，并替换请求里的 ID | 多轮请求里的工具调用 ID、`previous_response_id` 会出现在流里，替换后两边仍对得上 | 只替换流：请求里留下真实 ID，两边也对不上 |
-| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 18 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用，调用方必须传入 Inspect 读过的同一份内容。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
+| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 18 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用；位置复用条件与调用方约束见「同格式改写」。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
 | 摘要按 token 读，深度在每个 token 上对照 `jsonx.MaxDepth` 检查 | 请求体可达数 MB，先 `jsonx.Validate` 再读字段要扫两遍；`jsontext` 的默认选项就是 jsonx 的严格程度，只有深度要自己查，所以 `jsontext` 只在这里和录制命令里引用，各自注明理由 | 先校验再读：两遍；解码到结构体：要为每种内容形状写解码器，分配随部件个数增长 |
 | 输入上界是请求体字节数减去图片、文件的数据，不是只数正文字段 | 只数正文要认出每一种放文本的字段，漏认一种就少算，少算就是欠款；多算的只是 JSON 语法和成员名 | 只数 `text` 等正文字段 |
 | 按位置读部件和工具，不在任意深度找 `cache_control`、`type` | schema 和工具参数里的同名键是客户端的数据，按名字找会让路由要求不需要的能力，预留也多算 | 任意深度按名字找 |

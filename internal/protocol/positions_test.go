@@ -24,8 +24,38 @@ func TestInspectRejectsDuplicateAfterLargePayload(t *testing.T) {
 
 func TestPositionCapacity(t *testing.T) {
 	for f, rules := range rewriteRules {
-		if len(rules.members) > len((requestPositions{}).members) {
-			t.Fatalf("format %d has %d rules: position table must cover them", f, len(rules.members))
+		names := map[string]struct{}{}
+		for _, members := range []map[string]rule{rules.members, compactRules[f].members} {
+			for name := range members {
+				names[name] = struct{}{}
+			}
+		}
+		if len(names) > len((requestPositions{}).members) {
+			t.Fatalf("format %d has %d distinct rules: position table must cover them", f, len(names))
+		}
+	}
+}
+
+func TestPrepareDiscardsPositionsForDifferentBodySize(t *testing.T) {
+	for f := range Format(len(rewriteRules)) {
+		for _, bodies := range [][2]string{
+			{`{"model":"original","provider":{},"input":"content"}`, `{"model":"b"}`},
+			{`{"model":"original","provider":{"order":["one"]},"axiom":{},"input":"content"}`, `{"provider":{},"model":"b"}`},
+			{`{"model":"a"}`, `{"axiom":{},"input":"longer content","model":"other","provider":{}}`},
+		} {
+			t.Run(fmt.Sprintf("format=%d/size=%d-to-%d", f, len(bodies[0]), len(bodies[1])), func(t *testing.T) {
+				r, err := Inspect(f, []byte(bodies[0]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				target := Target{Format: f, Model: "up", MaxOutput: 7000, Streams: true}
+				got, gotErr := Prepare(&r, []byte(bodies[1]), target, Rewrites{})
+				r.positions = requestPositions{}
+				want, wantErr := Prepare(&r, []byte(bodies[1]), target, Rewrites{})
+				if gotErr != nil || wantErr != nil || !bytes.Equal(got.Body, want.Body) {
+					t.Fatalf("stale positions: %s (%v)\ntokenized: %s (%v)", got.Body, gotErr, want.Body, wantErr)
+				}
+			})
 		}
 	}
 }
