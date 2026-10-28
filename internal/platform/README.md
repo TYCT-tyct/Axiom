@@ -107,7 +107,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 部署前提：出站网络不能有转换到私网、回环或元数据地址的网络自选 NAT64 前缀。哪个部署需要这种网络，再由可信的部署配置给出前缀，整段拒绝或还原出 IPv4 后再校验，并补 URL 字面量和 AAAA 两条路径的测试。
 
-测试使用 `egress.NewForTesting(egresstest.Loopback(t))` 请求本机服务器；不能借此放行 RFC 1918、ULA 或云元数据地址。
+测试使用 `egress.NewForTesting(egresstest.Loopback(t))` 请求本机服务器；TLS 假网关使用 `egresstest.Loopback(t, server.Certificate())` 额外信任该测试证书，仍校验主机名和证书链。信任根只能由测试进程构造，生产的 `egress.New` 不提供注入入口；不能借此放行 RFC 1918、ULA 或云元数据地址。
 
 ## 监听
 

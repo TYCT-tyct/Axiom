@@ -3,6 +3,7 @@ package egress
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -60,7 +61,11 @@ func New(exit Exit, opts ...Option) (*Client, error) {
 
 // NewForTesting accepts only a capability minted by egresstest, never an arbitrary address predicate.
 func NewForTesting(policy egresstest.Policy, opts ...Option) *Client {
-	return newClient(policy, net.DefaultResolver.LookupNetIP, opts...)
+	c := newClient(policy, net.DefaultResolver.LookupNetIP, opts...)
+	if roots := policy.RootCAs(); roots != nil {
+		c.transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+	}
+	return c
 }
 
 // newClient takes the resolver so tests can name hosts without replacing the production dial and TLS wiring.

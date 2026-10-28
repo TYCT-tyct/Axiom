@@ -112,7 +112,7 @@ func validPayment(p Payment) bool {
 }
 
 func incompletePayment(p Payment) bool {
-	return p.State == PayPaid && (p.Paid.Minor <= 0 || p.TradeNo == "")
+	return p.State == PayPaid && p.Paid.Minor >= 0 && (p.Paid.Minor == 0 || p.TradeNo == "")
 }
 
 // recordReceipt preserves a gateway trade's first identity and amount. Conflicts are facts to resolve, never INSERT

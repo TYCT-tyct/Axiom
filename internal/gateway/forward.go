@@ -270,73 +270,106 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	if failed, ok := errors.AsType[*extendFailed](context.Cause(ctx)); ok {
 		return a.truncate(relay, cut(failed.err))
 	}
-	e, finish, again := s.classify(ctx, err)
+	e, finish, again := s.classify(ctx, err, a.conn)
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), finish
+	scope := scopeOf(a.obs.Fault)
 	if s.aggregate {
-		return s.brokeAggregate(a, relay, e, again)
+		return s.brokeAggregate(a, relay, e, again, scope)
 	}
 	if s.isStarted() {
 		rec.Result = billing.Committed
-		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		s.record(a, true, scope, routing.ReturnToClient)
 		return over, ended{relay: relay, err: e}
 	}
 	rec.Result = billing.FailedBeforeCommit
 	s.drop(relay)
-	return s.unanswered(a, e, again)
+	return s.unanswered(a, e, again, scope)
 }
 
 // classify says how a failed attempt ended: the error the client is answered with, the finish reason, and whether
 // another entry may be tried. A relay that broke and a whole reply that could not be read fail for the same reasons
 // (docs/domains/gateway.md「错误」).
-func (s *session) classify(ctx context.Context, err error) (protocol.Error, billing.FinishReason, bool) {
+func (s *session) classify(ctx context.Context, err error, conn Conn) (protocol.Error, billing.FinishReason, bool) {
 	e := protocol.Error{Type: protocol.UpstreamFailed}
 	finish, again := billing.FinishError, true
-	cause := context.Cause(ctx)
+	cause, fault := context.Cause(ctx), protocol.FaultOf(err)
 	switch {
 	case s.isGone():
 		finish, again = billing.FinishCancelled, false
-	case errors.Is(cause, errIdle):
-		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
 	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
 		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
 	case errors.Is(err, protocol.ErrMemory):
 		e, again = protocol.Error{Type: protocol.Overloaded}, false
+	case errors.Is(cause, errIdle):
+		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
+	case upstreamRefused(fault):
+		e.Type, again = protocol.InvalidRequest, false
+		if r := protocol.RejectionOf(err); r != nil {
+			e.Rejection = conn.Sanitize(*r)
+		}
 	}
 	return e, finish, again
 }
 
+// upstreamRefused reports whether the fault is the upstream saying the request itself is wrong: its context, the
+// content or the request's form. Those are the classes no other endpoint can serve, and the two a client can act on
+// (docs/domains/gateway.md「错误」).
+func upstreamRefused(fault protocol.Fault) bool {
+	switch fault {
+	case protocol.FaultBadRequest, protocol.FaultContextTooLong, protocol.FaultModeration:
+		return true
+	case protocol.FaultNone, protocol.FaultBroken, protocol.FaultServer, protocol.FaultRateLimited,
+		protocol.FaultUnrecognised, protocol.FaultToolInput:
+	}
+	return false
+}
+
+// scopeOf is whose failure a failed attempt is recorded as: a request the upstream refused is the request's, as the
+// same answer over HTTP is, and everything else is the endpoint's (docs/domains/gateway.md「状态码」).
+func scopeOf(fault protocol.Fault) routing.Scope {
+	if upstreamRefused(fault) {
+		return routing.ScopeRequest
+	}
+	return routing.ScopeEndpoint
+}
+
 // unanswered ends an attempt that has nothing for the client: one that may still be given up on moves to the next
-// entry; one that may not answers with the error, unless the client is gone, which gets nothing.
-func (s *session) unanswered(a *attempt, e protocol.Error, again bool) (step, ended) {
+// entry; one that may not answers with the error, unless the client is gone, which gets nothing. scope is whose the
+// failure is, which the call's record keeps as the supplier's own failures are kept.
+func (s *session) unanswered(a *attempt, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
 	if !again {
-		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		s.record(a, true, scope, routing.ReturnToClient)
 		if s.isGone() {
 			return over, ended{}
 		}
 		return over, ended{err: e}
 	}
-	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
+	s.record(a, true, scope, routing.NextEntry)
 	return nextEntry, ended{}
 }
 
 // brokeAggregate ends an attempt of a call that did not stream: the client has nothing yet, so an attempt that
 // generated content may still be given up on for another entry, and what it generated answers the call if no entry is
-// left (docs/domains/gateway.md「转发规则」). An attempt that cannot be retried answers with the error, without what it
-// made: the reservation is what failed, or the call is out of road.
-func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool) (step, ended) {
+// left (docs/domains/gateway.md「转发规则」). A request refusal returns the partial reply without another attempt; local
+// cancellation, deadlines and memory failures discard it.
+func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
-	if !again { // the client is gone, the call is out of road or the reservation failed: the error alone answers it
+	if !again && (!a.content || e.Type != protocol.InvalidRequest) {
 		s.drop(relay)
-		return s.unanswered(a, e, false)
+		return s.unanswered(a, e, false, scope)
 	}
 	if a.content {
 		s.keep(relay) // it answers the call if no entry is left, and nothing else of it reaches the client
 	} else {
 		s.drop(relay)
 	}
-	return s.unanswered(a, e, true)
+	next, answer := s.unanswered(a, e, again, scope)
+	if !again {
+		answer = s.left(answer)
+	}
+	return next, answer
 }
 
 // keep holds the reply of an aggregate attempt that generated content: the answer when no entry is left. The reply kept
