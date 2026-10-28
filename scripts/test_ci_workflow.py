@@ -76,7 +76,15 @@ class BuildChecks(unittest.TestCase):
             for event in ("pull_request", "push", "workflow_dispatch"):
                 for docs in (False, True):
                     with self.subTest(job=name, event=event, docs=docs):
-                        self.assertEqual(enabled(name, event, docs=docs), not docs)
+                        # the tests run once, in the train and on main; a pull request runs only the cheap checks
+                        want = not docs and (name == "web" or event != "pull_request")
+                        self.assertEqual(enabled(name, event, docs=docs), want)
+
+    def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for docs in (False, True):
+                with self.subTest(event=event, docs=docs):
+                    self.assertEqual(enabled("go-test", event, docs=docs), not docs and event != "pull_request")
 
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)
@@ -92,11 +100,12 @@ class BuildChecks(unittest.TestCase):
         self.assertIn("fail-fast: false", job("e2e"))
         self.assertIn("name: e2e-test-results-${{ matrix.shard }}", job("e2e"))
 
-    def test_build_rejects_non_successful_shards_except_docs_only(self):
+    def test_build_rejects_non_successful_shards_except_docs_only_and_pull_requests(self):
         check = re.search(r"- if: (needs.changes.outputs.docs_only .+)\n        run: (.+)", job("build"))
         self.assertIsNotNone(check)
         for docs in (False, True):
-            self.assertEqual(expression(check[1], docs=docs), not docs)
+            self.assertEqual(expression(check[1], event="workflow_dispatch", docs=docs), not docs)
+            self.assertFalse(expression(check[1], event="pull_request", docs=docs))
             for result in ("success", "failure", "cancelled", "skipped"):
                 with self.subTest(docs=docs, result=result):
                     command = check[2].replace("${{ needs.e2e.result }}", result)
