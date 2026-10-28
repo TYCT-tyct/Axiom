@@ -137,8 +137,9 @@ func checkPipelinedSettlementFailure(t *testing.T, atEnd bool) {
 	b.billing.suppliers = b.supplies
 	checkSettlementRetries(b, holds, o)
 	checkSettlementRetries(b, holds, o)
-	if n := b.count("SELECT sum(charged) FROM billing.reservations"); n != 12*70 {
-		t.Errorf("total charged %d, want %d", n, 12*70)
+	want := int64(len(holds)) * 70
+	if n := b.count("SELECT sum(charged) FROM billing.reservations"); n != want {
+		t.Errorf("total charged %d, want %d", n, want)
 	}
 	b.balanced()
 	b.consistent()
