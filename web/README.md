@@ -29,6 +29,8 @@
 | `just web-dev` | 开发服务器：官网 `:5173`，控制台 `:5174/console/`（官网的 `/console/` 也转给它，和线上一样从官网点进去），后台 `:5175`；接口请求转给 `just up` 起的程序（`:8080`） |
 | `just web-build` | 构建三个应用到各自的 `dist/`，控制台和管理后台带上同一棵代码树构建出的程序的版本号 |
 | `just web-embed` | 先构建，再把三个应用复制到 `internal/platform/webui/build/`（不入库）供程序嵌入；`just up`、`just test`、`just web` 都先做这一步，没做的程序启动时会说要做 |
+| `just web-checks` | 构建、嵌入和除端到端之外的全部前端检查；CI 的 `web` 作业运行它 |
+| `just web-e2e "1/2"` | 构建、嵌入并运行第 1/2 个端到端分片；不传参数时跑完整的 `1/1`，CI 的两个 `e2e` 分片与 `web` 并行 |
 | `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
 
@@ -71,4 +73,4 @@
 - 接口模拟的机制集中在 `e2e/mock.ts`（会话、权限、CSRF、Origin 的校验，后台操作的 Idempotency-Key 与理由），各界面只写自己的路由和数据：`e2e/console-api.ts`、`e2e/console-data.ts` 和 `e2e/admin-*.ts`（数据：常见、空、最坏）。路径、方法、请求体和每个响应的状态与 JSON 都由契约的类型约束，与契约不符就编译不过。
 - 验收门槛的截图：`AXIOM_SHOTS_DIR=<目录> pnpm --dir web e2e shots`（可用 `-g "admin users"` 缩小范围），写出控制台和后台每个页面在四种宽度、深浅色、中英文下的截图，以及最坏数据和极端品牌色（改令牌）的截图，只给人看，不入库。
 - 单元测试（Vitest）测不需要浏览器的逻辑，和代码放在一起（`*.test.ts`）。
-- 端到端测试（Playwright）对着嵌入程序的构建产物跑：`internal/platform/webui/cmd/serveweb` 起程序自己的静态服务（公网监听上是官网和控制台，管理监听上是管理后台），发送服务端真实的缓存头、压缩和内容安全策略；接口用 `page.route` 模拟，不需要数据库。用 `just web` 跑：它先构建并嵌入，再把构建写入的版本号传给测试；测试自己挑三个应用及其服务端口都空闲的端口（随机选，两个工作区同时跑不会撞），不设固定端口，也不会拿别的工作区的服务测；`AXIOM_WEB_PORT` 设了就用它，端口已被占用时测试失败。开发服务器要在另一个工作区同时跑，设环境变量 `AXIOM_WEB_PORT` 把三个应用的端口整体挪开（默认 `5173`，测试用的服务端口在其上加 1000），例如 `AXIOM_WEB_PORT=5273 just web`。并行的 worker 最多 8 个（`playwright.config.ts`）：Playwright 默认按整机核数的一半开，在 96 核的 CI 机上是 48 个，几个作业同时跑时每项检查被拖到超时（#297）。
+- 端到端测试（Playwright）对着嵌入程序的构建产物跑：`internal/platform/webui/cmd/serveweb` 起程序自己的静态服务（公网监听上是官网和控制台，管理监听上是管理后台），发送服务端真实的缓存头、压缩和内容安全策略；接口用 `page.route` 模拟，不需要数据库。用 `just web` 跑全部检查，或用 `just web-e2e` 单跑端到端：两者都先构建并嵌入，再把构建写入的版本号传给测试。分片使用 `just web-e2e "1/2"`（内部为 `pnpm --dir web e2e --shard=1/2`），通过结果按完整命令缓存，分片序号和总数不同就不能复用；测试自己挑三个应用及其服务端口都空闲的端口（随机选，两个工作区同时跑不会撞），不设固定端口，也不会拿别的工作区的服务测；`AXIOM_WEB_PORT` 设了就用它，端口已被占用时测试失败。开发服务器要在另一个工作区同时跑，设环境变量 `AXIOM_WEB_PORT` 把三个应用的端口整体挪开（默认 `5173`，测试用的服务端口在其上加 1000），例如 `AXIOM_WEB_PORT=5273 just web`。并行的 worker 最多 8 个（`playwright.config.ts`）：Playwright 默认按整机核数的一半开，在 96 核的 CI 机上是 48 个，几个作业同时跑时每项检查被拖到超时（#297）。
