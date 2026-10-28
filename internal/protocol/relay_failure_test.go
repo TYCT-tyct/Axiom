@@ -1,14 +1,12 @@
 package protocol_test
 
 import (
-	"bytes"
 	"errors"
 	"strings"
 	"testing"
 
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
-	"axiom/internal/protocol/internal/streamcheck"
 )
 
 // The streams of the failure tests: what an upstream says when it ends the stream with its own failure, in the shape of
@@ -48,6 +46,11 @@ func TestRelayResponsesFailureUsage(t *testing.T) {
 		input, output           int64
 		inputFinal, outputFinal bool
 	}{
+		{
+			"the failure frame before the content",
+			responsesFailed(0, `{"input_tokens":5,"output_tokens":11}`),
+			5, 11, true, true,
+		},
 		{
 			"the failure frame after the content",
 			responsesFailureStream("null", responsesFailed(4, `{"input_tokens":5,"output_tokens":11}`)),
@@ -107,45 +110,42 @@ func checkFailureUsage(t *testing.T, got relayed, input, output int64, inputFina
 }
 
 // TestRelayResponsesFailureMeaning: the frame that ended the stream says how it failed, through the error the read fails
-// with and through the ending: the upstream's own code and words when its error event named them, and the failure frame
-// after a bare error event rather than the event itself, or the event when the stream ends after it
+// with: the first failure is terminal, including a bare error event
 // (docs/domains/gateway.md「错误」).
 func TestRelayResponsesFailureMeaning(t *testing.T) {
 	for _, c := range []struct {
 		name               string
 		stream             string
 		fault              protocol.Fault
-		last               string // the ending's type
-		code, param, words string // its error's members, as the upstream named them
+		code, param, words string // the carrier's error members
 	}{
 		{
 			"the failure frame after the content",
 			responsesFailureStream("null", responsesFailed(4, "null")),
-			protocol.FaultServer, "response.failed", "server_error", "", "boom",
+			protocol.FaultServer, "server_error", "", "boom",
 		},
 		{
 			"the stream ends after the error event",
 			responsesFailureStream("null", responsesErrorEvent(4, "rate_limit_exceeded", "slow down", "null")),
-			protocol.FaultRateLimited, "response.failed", "rate_limit_exceeded", "", "slow down",
+			protocol.FaultRateLimited, "rate_limit_exceeded", "input", "slow down",
 		},
 		{
 			"the error event before the response starts",
 			responsesErrorEvent(0, "context_length_exceeded", "too long", "null"),
-			protocol.FaultContextTooLong, "error", "context_length_exceeded", "input", "too long",
+			protocol.FaultContextTooLong, "context_length_exceeded", "input", "too long",
 		},
 		{
 			"the error event, then the failure frame",
 			responsesFailureStream("null", responsesErrorEvent(4, "rate_limit_exceeded", "slow down", "null"),
 				responsesFailed(5, "null")),
-			protocol.FaultServer, "response.failed", "server_error", "", "boom",
+			protocol.FaultRateLimited, "rate_limit_exceeded", "input", "slow down",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := relay(t, protocol.Responses, strings.NewReader(c.stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-			if r := checkFailureRead(t, got, c.fault); r == nil || r.Code != c.code || r.Message != c.words {
+			if r := checkFailureRead(t, got, c.fault); r == nil || r.Code != c.code || r.Param != c.param || r.Message != c.words {
 				t.Errorf("rejection %v, want code %q and words %q", r, c.code, c.words)
 			}
-			checkFailureEnding(t, got, c.last, c.code, c.param)
 		})
 	}
 }
@@ -157,24 +157,6 @@ func checkFailureRead(t *testing.T, got relayed, want protocol.Fault) *protocol.
 		t.Fatalf("error %v, fault %d, want %d", got.err, protocol.FaultOf(got.err), want)
 	}
 	return protocol.RejectionOf(got.err)
-}
-
-// checkFailureEnding is the last event the client reads: its type, and the code and param its error carries, which the
-// failed response nests and the bare error event does not.
-func checkFailureEnding(t *testing.T, got relayed, kind, code, param string) {
-	t.Helper()
-	es := events(t, got.out)
-	last := es[len(es)-1]
-	gotCode, gotParam := last["code"], last["param"]
-	if response, _ := last["response"].(map[string]any); response != nil {
-		gotCode = obj(response["error"])["code"]
-	}
-	if last["type"] != kind || gotCode != code || param != "" && gotParam != param {
-		t.Errorf("ending %v, want %s with code %q and param %q", last, kind, code, param)
-	}
-	if err := streamcheck.Responses(bytes.NewReader(got.out)); err != nil {
-		t.Error(err)
-	}
 }
 
 // TestRelayChatFailureUsage: an error chunk ends the stream, so a usage object in it is taken before the error, and the
@@ -195,9 +177,67 @@ func TestRelayChatFailureUsage(t *testing.T) {
 	if r := protocol.RejectionOf(got.err); r == nil || *r != want {
 		t.Errorf("rejection %v, want %+v", r, want)
 	}
-	es := events(t, got.out)
-	err := obj(es[len(es)-1]["error"])
-	if err["code"] != want.Code || err["message"] != want.Message {
-		t.Errorf("ending error %v", err)
+}
+
+// Failed frames must go through the same usage validation as successful frames, for native and converted clients.
+func TestFailedFrameValidatesUsage(t *testing.T) {
+	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
+		clients := []protocol.Format{f, protocol.Chat}
+		if f == protocol.Chat {
+			clients = []protocol.Format{f, protocol.Messages, protocol.Responses}
+		}
+		for _, client := range clients {
+			checkFailedFrameUsage(t, client, f)
+		}
+	}
+}
+
+func checkFailedFrameUsage(t *testing.T, client, upstream protocol.Format) {
+	t.Helper()
+	for _, output := range []string{"11", "-1", `"invalid"`} {
+		frame := failedUsageFrame(upstream, output)
+		got := relayTo(t, client, upstream, strings.NewReader(frame), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+		u := got.r.Usage()
+		valid := output == "11"
+		if !errors.Is(got.err, protocol.ErrUpstream) || (u.Invalid == nil) != valid {
+			t.Fatalf("client %v upstream %v output %s: err %v, usage %+v", client, upstream, output, got.err, u)
+		}
+		if valid {
+			checkFailureUsage(t, got, 5, 11, true, true)
+		} else if u.Segments[0].Reported != 0 {
+			t.Errorf("invalid usage trusted: %+v", u)
+		}
+	}
+}
+
+func failedUsageFrame(f protocol.Format, output string) string {
+	switch f {
+	case protocol.Chat:
+		return `data: {"error":{"type":"invalid_request_error","message":"bad"},"usage":{"prompt_tokens":5,"completion_tokens":` + output + "}}\n\n"
+	case protocol.Responses:
+		return responsesFailed(0, `{"input_tokens":5,"output_tokens":`+output+`}`)
+	case protocol.Messages:
+	}
+	return `data: {"type":"error","error":{"type":"invalid_request_error","message":"bad"},"usage":{"input_tokens":5,"output_tokens":` + output + "}}\n\n"
+}
+
+// Only compactions listed by the terminal frame are final; an earlier snapshot is still provisional.
+func TestFailedFrameCompactions(t *testing.T) {
+	const usage = `{"input_tokens":5,"output_tokens":11,"iterations":[{"type":"compaction","input_tokens":3,"output_tokens":7}]}`
+	for _, terminalUsage := range []bool{false, true} {
+		before, final := messageStart(usage), "{}"
+		if terminalUsage {
+			before, final = "", usage
+		}
+		stream := before + `data: {"type":"error","error":{"type":"api_error"},"usage":` + final + "}\n\n"
+		got := relay(t, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+		u := got.r.Usage()
+		if u.Invalid != nil || len(u.Segments) != 2 {
+			t.Fatalf("usage %+v", u)
+		}
+		c := u.Segments[1]
+		if c.Usage.Count(catalog.ItemInput) != 3 || c.Usage.OutputTotal() != 7 || (c.Reported != 0) != terminalUsage {
+			t.Errorf("terminal usage %t: compaction %+v", terminalUsage, c)
+		}
 	}
 }

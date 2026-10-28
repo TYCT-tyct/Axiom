@@ -50,13 +50,7 @@ var (
 		"content_block": func(s *messagesStream) error { return walk(&s.reader, s, blockFields) },
 		"message":       func(s *messagesStream) error { return walk(&s.reader, s, messageFields) },
 		"usage":         (*messagesStream).usage,
-		"error":         func(s *messagesStream) error { return errorObject(&s.reader, s, messagesErrorFields) },
-	}
-	// messagesErrorFields are what an error event's error says of its class and of the refusal, in its own words
-	// (Anthropic《Errors》, read 2026-10-19).
-	messagesErrorFields = map[string]func(*messagesStream) error{
-		"type":    func(s *messagesStream) error { return s.class(&s.errClass, &s.rejection.Type) },
-		"message": func(s *messagesStream) error { return s.textOf(&s.rejection.Message) },
+		"error":         func(s *messagesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) },
 	}
 	// contentFields and blockFields carry the members the client is given that the upstream bills as output:
 	// thinking's signature and redacted_thinking's data count like its text (README.md「字节上界」).

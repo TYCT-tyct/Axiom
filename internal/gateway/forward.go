@@ -297,18 +297,17 @@ func (s *session) classify(ctx context.Context, err error, conn Conn) (protocol.
 	switch {
 	case s.isGone():
 		finish, again = billing.FinishCancelled, false
-	case upstreamRefused(fault):
-		// the upstream ended the stream saying the request itself is wrong: another endpoint would refuse it too, and
-		// the client gets the words and the members a 4xx answer would have given it. It says what became of the
-		// attempt better than the reason we stopped reading, which may be an idle timeout after the upstream's error
-		e, again = protocol.Error{Type: protocol.InvalidRequest, Rejection: upstreamRefusal(conn, err)}, false
 	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
 		e, finish, again = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout, false
 	case errors.Is(err, protocol.ErrMemory):
 		e, again = protocol.Error{Type: protocol.Overloaded}, false
-	case errors.Is(cause, errIdle) && fault == protocol.FaultBroken:
-		// the upstream went quiet with nothing said of a failure of its own: a broken stream, not a refusal we held
+	case errors.Is(cause, errIdle):
 		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
+	case upstreamRefused(fault):
+		e.Type, again = protocol.InvalidRequest, false
+		if r := protocol.RejectionOf(err); r != nil {
+			e.Rejection = conn.Sanitize(*r)
+		}
 	}
 	return e, finish, again
 }
@@ -335,16 +334,6 @@ func scopeOf(fault protocol.Fault) routing.Scope {
 	return routing.ScopeEndpoint
 }
 
-// upstreamRefusal is what the upstream refused with, the supplier's identity taken out: the protocol reads an error's
-// words bounded, and only the supplier knows the credential and the addresses to hide (docs/domains/gateway.md「错误」).
-func upstreamRefusal(conn Conn, err error) *protocol.Rejection {
-	r := protocol.RejectionOf(err)
-	if r == nil || conn == nil {
-		return nil
-	}
-	return conn.Sanitize(*r)
-}
-
 // unanswered ends an attempt that has nothing for the client: one that may still be given up on moves to the next
 // entry; one that may not answers with the error, unless the client is gone, which gets nothing. scope is whose the
 // failure is, which the call's record keeps as the supplier's own failures are kept.
@@ -362,12 +351,12 @@ func (s *session) unanswered(a *attempt, e protocol.Error, again bool, scope rou
 
 // brokeAggregate ends an attempt of a call that did not stream: the client has nothing yet, so an attempt that
 // generated content may still be given up on for another entry, and what it generated answers the call if no entry is
-// left (docs/domains/gateway.md「转发规则」). An attempt that cannot be retried answers with the error, without what it
-// made: the reservation is what failed, or the call is out of road.
+// left (docs/domains/gateway.md「转发规则」). A request refusal returns the partial reply without another attempt; local
+// cancellation, deadlines and memory failures discard it.
 func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
-	if !again { // the client is gone, the call is out of road or the reservation failed: the error alone answers it
+	if !again && (!a.content || e.Type != protocol.InvalidRequest) {
 		s.drop(relay)
 		return s.unanswered(a, e, false, scope)
 	}
@@ -376,7 +365,11 @@ func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.E
 	} else {
 		s.drop(relay)
 	}
-	return s.unanswered(a, e, true, scope)
+	next, answer := s.unanswered(a, e, again, scope)
+	if !again {
+		answer = s.left(answer)
+	}
+	return next, answer
 }
 
 // keep holds the reply of an aggregate attempt that generated content: the answer when no entry is left. The reply kept

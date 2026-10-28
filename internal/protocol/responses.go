@@ -57,13 +57,7 @@ var (
 	responseFields = map[string]func(*responsesStream) error{
 		"usage":        (*responsesStream).usage,
 		"service_tier": (*responsesStream).serviceTier,
-		"error":        func(s *responsesStream) error { return errorObject(&s.reader, s, responseErrorFields) }, // response.failed's
-	}
-	responseErrorFields = map[string]func(*responsesStream) error{
-		"code":    func(s *responsesStream) error { return s.class(&s.code, &s.rejection.Code) },
-		"type":    func(s *responsesStream) error { return s.textOf(&s.rejection.Type) },
-		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
-		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
+		"error":        func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) }, // response.failed's
 	}
 	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
@@ -239,27 +233,34 @@ func (s *responsesStream) meter(m *meter, final bool) {
 // are the upstream's own, as a 4xx answer gives them: it is the same error either way.
 func (s *responsesStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	name := "response.failed"
-	code, param := appendQuoted(nil, errorTypes[e.Type].name), []byte("null")
+	code, param := errorTypes[e.Type].name, ""
 	if r := e.Rejection; r != nil {
 		if r.Code != "" {
-			code = appendQuoted(nil, r.Code)
+			code = r.Code
 		}
 		if r.Param != "" {
-			param = appendQuoted(nil, r.Param)
+			param = r.Param
 		}
 	}
 	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,`, name, s.seq+1)
 	if s.created {
 		data = append(data, `"response":{"id":`+s.id+`,"object":"response","status":"failed","model":`+s.model+
 			`,"output":[],"error":{"code":`...)
-		data = append(append(append(data, code...), `,"message":`...), appendQuoted(nil, e.message())...)
+		data = append(appendQuoted(data, code), `,"message":`...)
+		data = appendQuoted(data, e.message())
 		data = append(data, `},"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 		data = append(data, '}')
 	} else {
 		name = "error"
 		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":`, s.seq+1)
-		data = append(append(append(append(data, code...), `,"param":`...), param...), `,"message":`...)
+		data = append(appendQuoted(data, code), `,"param":`...)
+		if param == "" {
+			data = append(data, "null"...)
+		} else {
+			data = appendQuoted(data, param)
+		}
+		data = append(data, `,"message":`...)
 		data = append(appendQuoted(data, e.message()), `,"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 	}

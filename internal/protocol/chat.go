@@ -102,7 +102,8 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.failed {
-		return event{}, s.failureEvent(m)
+		s.meter(m, true)
+		return event{}, s.errorEvent("an error chunk")
 	}
 	if len(s.held) > 0 {
 		s.held = append(s.held, "]}"...)
@@ -125,16 +126,6 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return s.rewrite(chatRewrites)
 	}
 	return s.e, nil
-}
-
-// failureEvent is the chunk that ended the stream with the upstream's failure: the usage it carries is taken first,
-// since it is the upstream's last word on the attempt (docs/domains/billing.md「用量来源与暂估」), and the chunk's
-// members fail the read.
-func (s *chatStream) failureEvent(m *meter) error {
-	if s.report != nil {
-		s.meter(m, true)
-	}
-	return s.errorEvent("an error chunk")
 }
 
 // done is [DONE]: the normal end, once every choice that started has finished.
@@ -233,17 +224,7 @@ func (s *chatStream) finishReason() error {
 
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
-	return errorObject(&s.reader, s, chatErrorFields)
-}
-
-// chatErrorFields are what an error chunk's error says of its class: OpenAI's type, and its code, which is the more
-// specific (context_length_exceeded comes with invalid_request_error). Its words and param are the client's too
-// (docs/domains/gateway.md「错误」).
-var chatErrorFields = map[string]func(*chatStream) error{
-	"type":    func(s *chatStream) error { return s.class(&s.errClass, &s.rejection.Type) },
-	"code":    func(s *chatStream) error { return s.class(&s.code, &s.rejection.Code) },
-	"message": func(s *chatStream) error { return s.textOf(&s.rejection.Message) },
-	"param":   func(s *chatStream) error { return s.textOf(&s.rejection.Param) },
+	return errorObject(&s.reader, &s.eventReader, errorFields)
 }
 
 func (s *chatStream) rewritten() error {
@@ -271,6 +252,9 @@ func (s *chatStream) usage() error {
 // meter maps the usage just read onto billing items. final is set for the usage of the chunk that ended the stream:
 // what it states is charged as it is rather than estimated (meter.finalize).
 func (s *chatStream) meter(m *meter, final bool) {
+	if s.report == nil {
+		return
+	}
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return

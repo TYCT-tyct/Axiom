@@ -30,6 +30,9 @@ const (
 // faultClasses are the error classes a fault is known by: Anthropic's error.type, OpenAI's error.type and error.code
 // (Chat), code (the Responses error event) and response.error.code (response.failed).
 var faultClasses = map[string]Fault{
+	"400": FaultBadRequest, "413": FaultBadRequest, "422": FaultBadRequest,
+	"429": FaultRateLimited,
+	"500": FaultServer, "502": FaultServer, "503": FaultServer, "504": FaultServer,
 	"api_error": FaultServer, "overloaded_error": FaultServer, "server_error": FaultServer,
 	"rate_limit_error": FaultRateLimited, "rate_limit_exceeded": FaultRateLimited,
 	"context_length_exceeded": FaultContextTooLong,
@@ -52,24 +55,11 @@ func (e *faultError) Error() string { return ErrUpstream.Error() + ": " + e.deta
 // Is makes a faultError an ErrUpstream, so callers that only ask whether the upstream failed read it as before.
 func (*faultError) Is(target error) bool { return target == ErrUpstream }
 
-// errorEventOf reports whether err is an upstream's error event, as opposed to a stream that broke off, broke its format
-// or ran out of memory.
-func errorEventOf(err error) bool { return faultErrorOf(err) != nil }
-
-// faultErrorOf is err as the upstream's error event, and nil when it is not one.
-func faultErrorOf(err error) *faultError {
-	f, ok := errors.AsType[*faultError](err)
-	if !ok {
-		return nil
-	}
-	return f
-}
-
 // RejectionOf is what an upstream said when it ended the stream with an error event: its words and the members a client
 // branches on, still holding whatever names the supplier, and nil when the failure says nothing of it, as a stream that
 // broke off, or one whose error event named nothing, does. The words are bounded and are not logged or stored.
 func RejectionOf(err error) *Rejection {
-	f := faultErrorOf(err)
+	f, _ := errors.AsType[*faultError](err)
 	if f == nil || f.rejection == (Rejection{}) {
 		return nil
 	}
@@ -82,7 +72,7 @@ func RejectionOf(err error) *Rejection {
 // node's. A read that failed because the attempt was cancelled is FaultBroken too: the caller knows why it cancelled,
 // and judges that first.
 func FaultOf(err error) Fault {
-	if f := faultErrorOf(err); f != nil {
+	if f, _ := errors.AsType[*faultError](err); f != nil {
 		return f.fault
 	}
 	if err == nil || errors.Is(err, ErrMemory) {
@@ -91,74 +81,52 @@ func FaultOf(err error) Fault {
 	return FaultBroken
 }
 
-// class reads an error's class into f when it is a string that names a fault, keeping the string, bounded, in text for
-// the client. Anything else leaves f as it is: the error event fails the stream either way, and its fault is then
-// FaultUnrecognised.
+// class reads the decoded class and preserves its bounded text for the response. Codes take precedence over types.
 func (s *reader) class(f *Fault, text *string) error {
 	v, err := s.dec.ReadValue()
-	if err != nil || v.Kind() != '"' {
+	if err != nil {
 		return err
 	}
-	if c, known := faultClasses[string(v[1:len(v)-1])]; known { // an escaped class matches nothing, as it names none
-		*f = c
+	switch {
+	case v.Kind() == '"':
+		*text, err = s.errorText(v)
+	case v.Kind() == '0':
+		if len(v) <= maxErrorText {
+			*text = string(v) // HTTP rejections also preserve numeric codes as strings.
+		}
 	}
-	*text = s.errorText(v)
-	return nil
-}
-
-// textOf reads an error's member into text as errorText does, ignoring one of another type: what an error event says of
-// itself only refines a failure the stream has anyway, and a member of another shape is no reason to fail it twice.
-func (s *reader) textOf(text *string) error {
-	v, err := s.dec.ReadValue()
-	if err == nil && v.Kind() == '"' {
-		*text = s.errorText(v)
+	if c, known := faultClasses[*text]; known {
+		*f = c
 	}
 	return err
 }
 
-// maxErrorText bounds each member an error event says to the client: an error is a sentence or two, and a relay that
-// echoes the request back is not passed on. The supplier cuts its cleaned text to the same bound.
-const maxErrorText = 2 << 10
-
-// errorText is the text of v, a JSON string, up to maxErrorText bytes of it: the cut is made between two escaped units
-// and between two runes, so only that much of a huge value is ever decoded. A value it cannot decode, which the decoder
-// would not have given, is no text.
-func (s *reader) errorText(v jsontext.Value) string {
-	var b []byte
-	var err error
-	if b, err = s.unquote(cutErrorText(v)); err != nil {
-		return ""
+// textOf ignores other member types: the error event already fails the stream.
+func (s *reader) textOf(text *string) error {
+	v, err := s.dec.ReadValue()
+	if err == nil && v.Kind() == '"' {
+		*text, err = s.errorText(v)
 	}
-	return string(b)
+	return err
 }
 
-// cutErrorText is v cut to maxErrorText bytes of text, with the quote that closes it where the cut was.
-func cutErrorText(v jsontext.Value) jsontext.Value {
-	end := len(v) - 1
-	if n := unquotedLen(v); n <= maxErrorText { // the whole of it, escapes and all: nothing to cut
-		return v
+const maxErrorText = 2 << 10
+
+// errorText omits oversized fields whole: cutting before supplier sanitization could leave a credential prefix that
+// no longer matches the credential. The bound also limits the temporary storage needed to decode escapes.
+func (s *reader) errorText(v jsontext.Value) (string, error) {
+	if unquotedLen(v) > maxErrorText {
+		return "", nil
 	}
-	i, n := 1, int64(0)
-	for i < end && n < maxErrorText {
-		if v[i] != '\\' {
-			i++
-			n++
-			continue
-		}
-		if i+1 < end && v[i+1] == 'u' {
-			i += 6 // \u and its four digits
-		} else {
-			i += 2 // \ and the byte it escapes
-		}
-		n++
-	}
-	for i > 1 && v[i]&0xC0 == 0x80 { // a byte inside a rune: cut before it
-		i--
-	}
-	cut := make(jsontext.Value, i+1)
-	copy(cut, v[:i])
-	cut[i] = '"'
-	return cut
+	b, err := s.unquote(v)
+	return string(b), err
+}
+
+var errorFields = map[string]func(*eventReader) error{
+	"type":    func(s *eventReader) error { return s.class(&s.errClass, &s.rejection.Type) },
+	"code":    func(s *eventReader) error { return s.class(&s.code, &s.rejection.Code) },
+	"message": func(s *eventReader) error { return s.textOf(&s.rejection.Message) },
+	"param":   func(s *eventReader) error { return s.textOf(&s.rejection.Param) },
 }
 
 // errorObject reads an error member by fields when it is an object and skips it otherwise: what it says of its class

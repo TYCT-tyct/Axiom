@@ -80,14 +80,7 @@ func relayTo(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx 
 		step, err := res.r.Next()
 		if err != nil {
 			res.err = err
-			// The gateway's failure carries what the upstream refused with when it refused the request itself; this
-			// harness shows those words in the ending whenever the event named them, so a test can read them
-			// (docs/domains/gateway.md「错误」).
-			e := protocol.Error{Type: protocol.UpstreamFailed, Message: "upstream failed"}
-			if r := protocol.RejectionOf(err); r != nil {
-				e = protocol.Error{Type: protocol.UpstreamFailed, Rejection: r}
-			}
-			res.out = append(res.out, res.r.Fail(e, nil)...)
+			res.out = append(res.out, res.r.Fail(protocol.Error{Type: protocol.UpstreamFailed, Message: "upstream failed"}, nil)...)
 			break
 		}
 		res.kinds = append(res.kinds, step.Kind)

@@ -53,11 +53,12 @@ func (r *usageReport) sortUnknown() {
 // input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier starts as the request's.
 type meter struct {
 	usageReport
-	compactions []Segment
-	final       bool            // the format's last usage event has come
-	trusted     catalog.ItemSet // the items the frame that ended the stream stated, which are final even though the rest is not
-	invalid     error
-	scratch     map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
+	compactions        []Segment
+	final              bool            // the format's last usage event has come
+	trusted            catalog.ItemSet // items explicitly stated in a terminal failure frame
+	trustedCompactions bool            // compactions explicitly listed by that frame
+	invalid            error
+	scratch            map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
 }
 
 // The meter is kept through the settlement, so what it holds is bounded and charged up front as meterMemory: at most
@@ -94,17 +95,12 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	}
 }
 
-// finalize takes the usage object of the frame that ended the stream with the upstream's failure: an error event, or
-// the failure frame after one. What it states is the upstream's last word on the attempt, so those items are charged as
-// they are rather than estimated from the bytes relayed, while the items it leaves out stay estimated, as they do for a
-// stream that broke off before its last usage event: a count reported by an earlier frame only bounds them from below
-// (docs/domains/billing.md「用量来源与暂估」).
+// finalize marks only the items and compactions a terminal failure explicitly reports as final. Earlier output
+// counts remain lower bounds; previously final input stays final (docs/domains/billing.md「用量来源与暂估」).
 func (m *meter) finalize(r usageReport, compactions []usageReport) {
 	m.report(r, compactions)
-	if r.seen == 0 { // no usage object at all: nothing the upstream said is final
-		return
-	}
 	m.trusted |= r.seen
+	m.trustedCompactions = compactions != nil
 }
 
 // bound reports a report that would take the meter past its bounds.
@@ -226,7 +222,7 @@ func (m *meter) result() Usage {
 	reply, final := m.progress()
 	reply.Reported = final
 	u := Usage{Segments: append([]Segment{reply}, m.compactions...), Invalid: m.invalid}
-	if !m.final || u.Invalid != nil { // compactions come with the last usage event
+	if !m.final && !m.trustedCompactions || u.Invalid != nil {
 		for i := range u.Segments[1:] {
 			u.Segments[1+i].Reported = 0
 		}

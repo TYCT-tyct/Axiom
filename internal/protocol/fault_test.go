@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -28,6 +27,9 @@ func TestFaultOf(t *testing.T) {
 		{"Anthropic overloaded", protocol.Messages, anthropicError(`{"type":"overloaded_error","message":"x"}`), protocol.FaultServer},
 		{"Anthropic api_error", protocol.Messages, anthropicError(`{"type":"api_error"}`), protocol.FaultServer},
 		{"Anthropic rate limit", protocol.Messages, anthropicError(`{"type":"rate_limit_error"}`), protocol.FaultRateLimited},
+		{"Anthropic escaped invalid request", protocol.Messages, anthropicError(`{"type":"invalid_\u0072equest_error"}`), protocol.FaultBadRequest},
+		{"Chat escaped code", protocol.Chat, chatError(`{"type":"invalid_request_error","code":"context_\u006cength_exceeded"}`), protocol.FaultContextTooLong},
+		{"Responses type fallback", protocol.Responses, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"invalid_request_error\"}}}\n\n", protocol.FaultBadRequest},
 		{"Anthropic invalid request", protocol.Messages, anthropicError(`{"type":"invalid_request_error"}`), protocol.FaultBadRequest},
 		{"Anthropic unknown class", protocol.Messages, anthropicError(`{"type":"billing_error"}`), protocol.FaultUnrecognised},
 		{"Anthropic class not a string", protocol.Messages, anthropicError(`{"type":5}`), protocol.FaultUnrecognised},
@@ -36,6 +38,8 @@ func TestFaultOf(t *testing.T) {
 		{"Chat server error", protocol.Chat, chatError(`{"type":"server_error","code":null}`), protocol.FaultServer},
 		{"Chat code over type", protocol.Chat, chatError(`{"type":"invalid_request_error","code":"context_length_exceeded"}`), protocol.FaultContextTooLong},
 		{"Chat moderation", protocol.Chat, chatError(`{"code":"content_filter"}`), protocol.FaultModeration},
+		{"Chat numeric request code", protocol.Chat, chatError(`{"code":400,"message":"bad input"}`), protocol.FaultBadRequest},
+		{"Chat numeric rate limit code", protocol.Chat, chatError(`{"code":429}`), protocol.FaultRateLimited},
 		{"Chat no class", protocol.Chat, chatError(`{"message":"x"}`), protocol.FaultUnrecognised},
 		{"Chat malformed", protocol.Chat, "data: {\"choices\":\n\n", protocol.FaultBroken},
 		{"Responses error event", protocol.Responses, "event: error\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}\n\n", protocol.FaultRateLimited},
@@ -96,15 +100,14 @@ func TestRejectionOf(t *testing.T) {
 	}
 }
 
-// TestRejectionOfIsBounded: an error event that echoes the request back is cut at a character boundary, and only the
-// first bytes of a huge value are ever decoded.
+// Oversized fields are omitted whole so sanitization cannot miss a truncated credential.
 func TestRejectionOfIsBounded(t *testing.T) {
-	long := strings.Repeat("é", 3000) // 6000 bytes of text, three times the bound
-	got := relay(t, protocol.Chat, strings.NewReader("data: {\"error\":{\"message\":\""+long+"\"}}\n\n"),
-		protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	r := protocol.RejectionOf(got.err)
-	if r == nil || len(r.Message) == 0 || len(r.Message) > 2<<10 || !strings.HasPrefix(long, r.Message) ||
-		!utf8.ValidString(r.Message) {
-		t.Errorf("rejection %v, want the first bytes of the message", r)
+	for _, value := range []string{strings.Repeat("é", 3000), strings.Repeat(`\uD83D\uDE00`, 600)} {
+		got := relay(t, protocol.Chat, strings.NewReader(`data: {"error":{"message":"`+value+`","code":"invalid_value"}}`+"\n\n"),
+			protocol.UsageContext{}, protocol.NewMemory(0), settled)
+		r := protocol.RejectionOf(got.err)
+		if r == nil || r.Message != "" || r.Code != "invalid_value" {
+			t.Errorf("rejection %v, want oversized message omitted", r)
+		}
 	}
 }
