@@ -234,18 +234,16 @@ func TestSendRetriesAfterFailure(t *testing.T) {
 func TestSharedAdmissionSurvivesTheStoreGoingAway(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
-		name   string
-		reject bool
+		name       string
+		rejectStep string
 	}{
-		{"successful send", false},
-		{"failed send", true},
+		{"successful send", ""},
+		{"failed send", "rcpt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			server := startTLSServer(t, func(s *fakeServer) {
-				if tt.reject {
-					s.rejectStep, s.rejectCode = "rcpt", 451
-				}
+				s.rejectStep, s.rejectCode = tt.rejectStep, 451
 			})
 			sd := server.openSender(t, Config{Host: "127.0.0.1", Port: 587})
 			clock := newStepClock()
@@ -253,12 +251,9 @@ func TestSharedAdmissionSurvivesTheStoreGoingAway(t *testing.T) {
 			sd.throttle.local.now = clock.Now
 
 			_, err := sd.Send(t.Context(), testMessage)
-			if tt.reject {
-				if err == nil || errors.Is(err, ErrRateLimited) {
-					t.Fatalf("first Send() error = %v; want the server's temporary refusal", err)
-				}
-			} else if err != nil {
-				t.Fatalf("first Send() error = %v", err)
+			wantErr := tt.rejectStep != ""
+			if (err != nil) != wantErr || errors.Is(err, ErrRateLimited) {
+				t.Fatalf("first Send() error = %v; want SMTP failure = %t", err, wantErr)
 			}
 
 			// The store goes away between the send and the retry: the node must keep the shared admission it just made.
