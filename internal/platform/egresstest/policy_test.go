@@ -1,6 +1,11 @@
 package egresstest_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"math/big"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -36,5 +41,37 @@ func TestLoopbackAllowsOnlyPlainLoopback(t *testing.T) {
 		if (egresstest.Policy{}).Allows(ip) {
 			t.Errorf("zero Policy allowed %s", input)
 		}
+	}
+}
+
+func TestTestRootsAreImmutableAndAbsentByDefault(t *testing.T) {
+	if roots := (egresstest.Policy{}).RootCAs(); roots != nil {
+		t.Fatal("zero policy changes TLS trust")
+	}
+	if roots := egresstest.Loopback(t).RootCAs(); roots != nil {
+		t.Fatal("loopback changes system trust without a test certificate")
+	}
+	// Distinct test servers share httptest's certificate, so mint a different trust anchor explicitly.
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := egresstest.Loopback(t, cert)
+	clone := policy.RootCAs()
+	if clone == policy.RootCAs() {
+		t.Fatal("test roots were shared with the caller")
+	}
+	clone.AddCert(&x509.Certificate{Raw: []byte("another root")})
+	if clone.Equal(policy.RootCAs()) {
+		t.Fatal("mutating the copied roots changed the policy")
 	}
 }
