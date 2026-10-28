@@ -23,9 +23,9 @@ type Keyring struct {
 	fingerprints map[uint32][32]byte
 }
 
-// MasterKeys is one read of the master key file. The ring a node checks and seals with and the login key derived from
-// the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
-// plaintext stays here and callers receive only the ring and the derived key.
+// MasterKeys is one read of the master key file. The ring a node checks and seals with and the login and mail keys
+// derived from the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
+// plaintext stays here and callers receive only the ring and the derived keys.
 type MasterKeys struct {
 	keys   map[uint32][32]byte
 	latest uint32

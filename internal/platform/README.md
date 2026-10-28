@@ -8,7 +8,7 @@
 |---|---|
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
-| `secret` | 从受保护文件加载主密钥和 HMAC 密钥；主密钥文件的一次读取同时给出信封密钥环和登录键（`LoadMaster`），供应商凭证的信封加密与明文脱敏 |
+| `secret` | 从受保护文件加载主密钥和 HMAC 密钥；主密钥文件的一次读取同时给出信封密钥环、登录键和邮件键（`LoadMaster`），供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
 | `clientip` | 客户端地址的唯一一份读法：连接对端的地址，或 `AXIOM_TRUSTED_PROXIES` 里的代理给的最右一个不受信地址（变量见下文「监听」）；控制台守卫和网关都用它，读不出的头一律不信；`Group` 是来源分组的唯一一份实现（映射 IPv4 还原、去 IPv6 zone、IPv6 /64），支付回调、登录尝试和网关的按 IP 限流都用它 |
 | `webui` | 提供嵌入程序的前端三个应用：缓存、预压缩、安全头、单页应用回退，见下文「前端文件」；`cmd/serveweb` 给端到端测试起同样的服务 |
@@ -24,8 +24,8 @@
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
-| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；缓存三类状态已共享，供应商并发与 RPM 仍未分节点份额，因此保留 N > 1 的生产入口限制（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
-| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流，见 [mail/README.md](mail/README.md) |
+| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与 RPM 仍未分节点份额，因此保留 N > 1 的生产入口限制（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
+| `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流（Valkey 共享，故障退回各节点的进程内桶），见 [mail/README.md](mail/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。
 
@@ -71,7 +71,7 @@
 
 ## 凭证加密
 
-`secret.LoadMaster(path)` 在启动阶段读一次主密钥文件：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用（否则变量未设定的错误会报两遍），加载失败同样不启动。返回的 `MasterKeys` 只在读取它的函数内保留明文，只经两个方法交出结果：`Keyring()` 是信封加密的密钥环，数据库检查随后给它活动写版本；`LoginKey()` 是 HKDF-SHA256 从文件最高已分发版本派生的登录键，标签 `axiom kv login v1`，与数据库选定的信封写版本无关，也不随 API key 的哈希密钥轮换。`serve` 因此在 `loadConsole` 读一次，`openCheckedDatabase` 用同一个环做 `CheckRing`：启动期间替换文件不会让核对过的版本和登录键来自两次不同的读取。`secret.Load(path)` 是只需要密钥环的调用方（如 `axiom keyring`）的简写，内部同样只读一次。
+`secret.LoadMaster(path)` 在启动阶段读一次主密钥文件：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用（否则变量未设定的错误会报两遍），加载失败同样不启动。返回的 `MasterKeys` 只在读取它的函数内保留明文，只经方法交出结果：`Keyring()` 是信封加密的密钥环，数据库检查随后给它活动写版本；`LoginKey()` 是 HKDF-SHA256 从文件最高已分发版本派生的登录键，标签 `axiom kv login v1`，与数据库选定的信封写版本无关，也不随 API key 的哈希密钥轮换；`DeriveKey(label)` 用同一快照派生邮件键等专用键。`serve` 因此在 `loadConsole` 读一次，`openCheckedDatabase` 用同一个环做 `CheckRing`：启动期间替换文件不会让核对过的版本和登录键、邮件键来自两次不同的读取。`secret.Load(path)` 是只需要密钥环的调用方（如 `axiom keyring`）的简写，内部同样只读一次。
 
 `serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥、供应商凭证和支付商户配置的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
@@ -150,7 +150,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 接口约定
 
-控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
+控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。PR 和列车还对照目标分支跑 `just api-compat`：目标分支里已有的结构（组件、操作里内联的请求和响应体，以及它们嵌套的对象）不得新增必填字段。滚动发布时，新页面会读到不返回这个字段的旧节点，旧页面写到新节点时也不带它；字段保持可选，生成的类型就会逼两边处理它缺失的情况。确实可以必填时（例如旧节点都已下线），在这个结构上用 `x-axiom-newly-required` 按字段写明理由。新加的结构不受限制。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
 
 | 约定 | 内容 | 检查 |
 |---|---|---|

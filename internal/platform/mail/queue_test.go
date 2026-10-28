@@ -14,8 +14,11 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/kv"
+	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/secret"
 )
 
 // syncBuffer collects the mailer's log lines. The worker runs on the queue's goroutines, so the test may read the
@@ -163,9 +166,15 @@ func (w *queueWorld) queued(t *testing.T, scope pg.Scope) []string {
 // register registers a mailer that talks to the fake server instead of a real SMTP host, and returns it.
 func (w *queueWorld) register(t *testing.T, server *fakeServer) *Mailer {
 	t.Helper()
+	return w.registerWith(t, server, nil, nil)
+}
+
+// registerWith registers a mailer with the shared store and master-key snapshot a deployment gives it.
+func (w *queueWorld) registerWith(t *testing.T, server *fakeServer, cache *kv.Client, master *secret.MasterKeys) *Mailer {
+	t.Helper()
 	mailer, err := Register(t.Context(), w.db, w.queue, Config{
 		Host: "127.0.0.1", Port: 587, From: netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"},
-	}, slog.New(slog.NewTextHandler(w.logs, nil)))
+	}, cache, master, slog.New(slog.NewTextHandler(w.logs, nil)))
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -231,6 +240,71 @@ func TestMailerRetriesTransientFailure(t *testing.T) {
 		t.Errorf("the outbox holds %v; want the message kept for the retry", got)
 	}
 	checkJobKeepsTheMessageOut(t, w, reply)
+}
+
+// TestMailerSnoozesARecipientAnotherNodeAdmitted: the worker asks the shared store, so a recipient another node just
+// messaged is snoozed rather than sent, without spending an attempt, and its message stays in the outbox for the retry.
+func TestMailerSnoozesARecipientAnotherNodeAdmitted(t *testing.T) {
+	t.Parallel()
+	w := newQueueWorld(t)
+	server := startTLSServer(t, nil)
+	shared := kvtest.New(t)
+	namespace := kvtest.Namespace()
+	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKeys(t))
+	// Another node of the same deployment admits the recipient before this node's job runs.
+	other := sharedThrottle(shared.OpenIn(t, namespace, kv.Deps{}), testMailKey(t))
+	if !other.allow(t.Context(), welcome.To) {
+		t.Fatal("the recipient was already throttled")
+	}
+	w.start(t)
+
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
+	attempt := w.waitForJob(t, "scheduled")
+	if attempt != 0 {
+		t.Errorf("the snoozed job holds attempt %d; want none spent", attempt)
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 1 {
+		t.Errorf("the outbox holds %v; want the message kept for the snoozed retry", got)
+	}
+	select {
+	case got := <-server.messages:
+		t.Errorf("the server accepted %q while the recipient was throttled", got.payload)
+	default:
+	}
+}
+
+// TestMailerSnoozesAfterTheSharedStoreGoesAway: an admission made through the shared store is held locally; if the
+// store goes away before the next message, the worker snoozes instead of sending again, without spending an attempt.
+func TestMailerSnoozesAfterTheSharedStoreGoesAway(t *testing.T) {
+	t.Parallel()
+	w := newQueueWorld(t)
+	server := startTLSServer(t, nil)
+	shared := kvtest.New(t)
+	namespace := kvtest.Namespace()
+	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKeys(t))
+	// A first message on this node is admitted through the shared store, which also records the interval locally.
+	if !mailer.sender.throttle.allow(t.Context(), welcome.To) {
+		t.Fatal("the recipient was already throttled")
+	}
+	// The store goes away before the queued message runs.
+	mailer.sender.throttle.cache = deadCache(t, time.Now)
+	w.start(t)
+
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
+	attempt := w.waitForJob(t, "scheduled")
+	if attempt != 0 {
+		t.Errorf("the snoozed job holds attempt %d; want none spent", attempt)
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 1 {
+		t.Errorf("the outbox holds %v; want the message kept for the snoozed retry", got)
+	}
+	select {
+	case got := <-server.messages:
+		t.Errorf("the server accepted %q while the recipient's shared admission was still cooling", got.payload)
+	default:
+	}
 }
 
 func TestMailerCancelsPermanentFailure(t *testing.T) {
@@ -365,7 +439,7 @@ func TestRegisterWithoutSettings(t *testing.T) {
 	t.Parallel()
 	var logs syncBuffer
 	// A node without SMTP settings has no queue to register on: email is disabled before the queue is touched.
-	mailer, err := Register(t.Context(), nil, nil, Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
+	mailer, err := Register(t.Context(), nil, nil, Config{}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}

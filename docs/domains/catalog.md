@@ -48,6 +48,7 @@
 ### 目录基线
 
 - **内容**：上下文长度、最大输出、输入输出类型、能力、支持的参数、知识截止时间、参考价；以及计费要用的：上游可能报告哪些计费项和服务等级（按输入输出类型、工具和厂商提供的服务等级确定，审核时确认），各调用格式的流里是否显示推理进度、单张图片和单页文件的最大输入 token 数、单个文件的最大页数、最快输出速度（每秒 token），计费据此检查上架门槛、决定能否分段预留、算输入上界和超额额度（见[计费的「预留与结算」](billing.md#预留与结算)）。
+- **服务端工具默认次数**：`model.spec.max_uses` 是管理员经 `UpdateSpec` 修改的数据，键为 `web_search`、`code_execution`，值为 1 … 10¹⁰ 的整数；未写或 null 表示没有默认。报价优先用请求上限，否则用这份数据；没有任何上限仍拒绝。只有确认该模型的所有可路由端点都保证此上界时才填写，不能把搜索结果条数当作调用次数。现有 JSON 规格可直接存储，不需要迁移。
 - **数据集**：
   - OpenRouter 的模型接口：每个模型的价格和规格，无需 key 即可读取（OpenRouter 网站的定价页，2026-10）；
   - models.dev：开源模型数据库，用 `tiers` 表达分档价格（models.dev，2026-10）；
@@ -130,6 +131,8 @@
 | 管理接口一个操作一个入口，请求原样带目录的 `Op`（`Idempotency-Key` 即 `op_key`、`reason`）和 `rev`、`base`；上架和下线合成一个「改状态」入口；改动返回改后的整个模型 | 幂等、乐观并发和审核的形状在[管理操作](../../internal/catalog/README.md#管理操作)里已经定了，接口不另造一层；返回整个模型让页面少读一次，也不会读到别人在两次请求之间的改动。接口见 `api/admin.yaml`，约定见 [platform 的「接口约定」](../../internal/platform/README.md#接口约定) |
 | 价目表在契约里是带类型的结构，与 `ParseSchedule` 的规范形式一一对应 | 前端能直接按计费项生成表单；入口的校验挡掉写错的价，但「价目表是否合法」仍以 `ParseSchedule` 为准，两边不一致时以它为准并报 422 |
 | 请求写法的键写进规格、值照厂商文档，缺了拒绝而不是按 Claude 的通例补 | 同一代 Claude 里思考方式、采样、强制调用工具、中途系统消息各不相同（Haiku 5.5 拒绝非默认采样却接受强制调用工具），按名字前缀猜一个默认，换一代就悄悄错；数据文件逐型号写出，经 `UpdateSpec` 留审计，缺键由 `check` 在发布前发现 |
+
+服务端工具次数采用可选的规格数据，不给所有模型批量补常量：2026-10-28 查阅 [OpenRouter 服务端工具循环](https://openrouter.ai/docs/guides/features/server-tools#tool-call-limits)，共享 `max_tool_calls` 默认及最大均为 30；这可作为确实经过该循环的端点的默认依据（为每项预留 30 次会偏多）。[Anthropic web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) 明确没有默认上限，[code execution](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool) 文档也未给出调用次数默认上限，因此不能把 OpenRouter 的 30 自动套到原生工具。管理员必须在规格更新理由中记录端点依据和日期。未采用全局硬编码默认：无法由管理员修正，且会把没有上界的上游错误声明为有界。
 
 ## 待定问题
 

@@ -8,7 +8,9 @@
 // asks for one on every change. The surfaces share the session operations and a few schemas by being written twice, so
 // what two contracts both define under one name must be the same definition.
 //
-// usage: go run -C tools ./checkapi <repository root>
+// Given the base's contracts too, it also fails when a schema newly requires a property (compat.go).
+//
+// usage: go run -C tools ./checkapi <repository root> [<directory of the base's api/*.yaml>]
 package main
 
 import (
@@ -36,8 +38,8 @@ const (
 var levels = []string{"any", "pending_mfa", "signed_in", "mfa"}
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: checkapi <repository root>")
+	if len(os.Args) != 2 && len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: checkapi <repository root> [<directory of the base's api/*.yaml>]")
 		os.Exit(2)
 	}
 	files, err := readContracts(filepath.Join(os.Args[1], "api"))
@@ -46,6 +48,14 @@ func main() {
 		os.Exit(2)
 	}
 	problems := check(files)
+	if len(os.Args) == 3 {
+		base, err := readContracts(os.Args[2])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		problems = append(problems, newlyRequired(base, files)...)
+	}
 	for _, problem := range problems {
 		fmt.Println(problem)
 	}

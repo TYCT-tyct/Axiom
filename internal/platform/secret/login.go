@@ -20,14 +20,24 @@ const (
 // hash key as that rotates (internal/platform/kv/README.md「键」).
 type LoginKey [loginKeyLen]byte
 
-// LoginKey derives the login key from the snapshot's highest version.
-func (m *MasterKeys) LoginKey() (LoginKey, error) {
+// DeriveKey derives a 32-byte HMAC key from the snapshot's highest version under label. Each caller keeps its own
+// label, so one snapshot can serve the login and mail keys without either following the other's rotation.
+func (m *MasterKeys) DeriveKey(label string) ([32]byte, error) {
 	master := m.keys[m.latest]
-	derived, err := hkdf.Key(sha256.New, master[:], nil, loginLabel, loginKeyLen)
+	derived, err := hkdf.Key(sha256.New, master[:], nil, label, 32)
 	if err != nil {
-		return LoginKey{}, fmt.Errorf("secret: derive the login key: %w", err)
+		return [32]byte{}, fmt.Errorf("secret: derive a key: %w", err)
 	}
-	var key LoginKey
+	var key [32]byte
 	copy(key[:], derived)
 	return key, nil
+}
+
+// LoginKey derives the login key from the snapshot's highest version.
+func (m *MasterKeys) LoginKey() (LoginKey, error) {
+	key, err := m.DeriveKey(loginLabel)
+	if err != nil {
+		return LoginKey{}, err
+	}
+	return LoginKey(key), nil
 }

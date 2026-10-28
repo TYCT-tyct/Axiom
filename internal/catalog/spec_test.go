@@ -155,3 +155,39 @@ func TestDialect(t *testing.T) {
 		})
 	}
 }
+
+func TestSpecServerToolBounds(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		bad  bool
+	}{
+		{`{}`, false},
+		{`{"max_uses":null}`, false},
+		{`{"max_uses":{}}`, false},
+		{`{"max_uses":{"web_search":30,"code_execution":2}}`, false},
+		{`{"max_uses":{"web_search":0}}`, true},
+		{`{"max_uses":{"web_search":-1}}`, true},
+		{`{"max_uses":{"web_search":10000000001}}`, true},
+		{`{"max_uses":{"web_search":1.5}}`, true},
+		{`{"max_uses":{"web_search":"30"}}`, true},
+		{`{"max_uses":{"input":1}}`, true},
+		{`{"max_uses":{"web_fetch":1}}`, true},
+		{`{"max_uses":{"web_search":1,"web_search":2}}`, true},
+	} {
+		s, err := parseSpec([]byte(tc.body))
+		if (err != nil) != tc.bad {
+			t.Errorf("parseSpec(%s) = %v", tc.body, err)
+		}
+		if !tc.bad && strings.Contains(tc.body, `"web_search":30`) {
+			m := Model{toolUses: s.toolUses}
+			got := m.ToolUses()
+			if got[ItemWebSearch] != 30 || got[ItemCodeExecution] != 2 {
+				t.Fatalf("ToolUses = %v", got)
+			}
+			got[ItemWebSearch] = 1
+			if m.ToolUses()[ItemWebSearch] != 30 {
+				t.Fatal("caller changed the snapshot")
+			}
+		}
+	}
+}
