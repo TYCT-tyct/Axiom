@@ -415,11 +415,13 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
 			"totp_key_version", "totp_last_step", "mfa_enabled_at",
 		},
-		"members":         nil,
-		"platform_grants": {"revoked_at"},
-		"api_keys":        {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":        {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
-		"recovery_codes":  {"used_at"},
+		"members":                 nil,
+		"platform_grants":         {"revoked_at"},
+		"api_keys":                {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
+		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
+		"recovery_codes":          {"used_at"},
+		"password_reset_requests": {"id", "email", "language", "expires_at"},
+		"password_reset_tokens":   {"used_at"},
 	}
 	// Generated columns are left out: the database refuses to set them before it looks at privileges.
 	for _, column := range texts(t, db, platform, `SELECT table_name || ' ' || column_name FROM information_schema.columns
@@ -491,7 +493,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "api_keys", "members", "platform_grants", "recovery_codes", "roles", "sessions", "site_domains",
+		"accounts", "api_keys", "members", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "sessions", "site_domains",
 		"site_settings", "sites", "tiers", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"

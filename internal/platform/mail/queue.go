@@ -171,3 +171,6 @@ func (m *Mailer) forget(ctx context.Context, job *river.Job[sendArgs], to string
 		m.logger.ErrorContext(ctx, forgetFailedEvent, "job_id", job.ID, "attempt", job.Attempt, "to", to, "err", err)
 	}
 }
+
+// Configured reports whether this node can enqueue mail, without sending a message.
+func (m *Mailer) Configured() bool { return m.sender != nil }

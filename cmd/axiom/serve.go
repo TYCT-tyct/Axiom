@@ -181,7 +181,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	}
 	syncCtx, cancelSync := context.WithCancel(ctx)
 	defer cancelSync()
-	queue, recorder, err := startBackground(syncCtx, db, console.master, cfg.smtp, exit, prices, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, cfg.smtp, exit, prices, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	// The heartbeat is deleted on every way out, so a restart is not refused for a row that only a crash would leave. It
 	// runs once the listeners have drained and nothing prechecks any more, and before the database closes.
 	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
-	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache)
+	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache, recovery)
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ type nodeRoutes struct {
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
-	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client,
+	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client, recovery *accounts.PasswordRecovery,
 ) (nodeRoutes, error) {
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
@@ -347,7 +347,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
+		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -393,17 +393,22 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 // the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Keyring, exit *egress.Client,
 	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger,
-) (*pg.Queue, error) {
+) (*pg.Queue, *accounts.PasswordRecovery, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
 	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
-	if _, err := mail.Register(ctx, db, queue, smtp, logger); err != nil {
-		return nil, err
+	mailer, err := mail.Register(ctx, db, queue, smtp, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	recovery, err := accounts.RegisterPasswordRecovery(db, queue, mailer)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
 	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
@@ -412,7 +417,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 			DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger,
 			Meter: tel.Metrics.Meter("axiom/catalog"),
 		}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
@@ -420,18 +425,18 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
 	if err := billing.RegisterExpire(billing.ExpireConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). The module has no channel compiled in yet, so it is opened with none and the
@@ -440,15 +445,15 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return queue, nil
+	return queue, recovery, nil
 }
 
 // stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
@@ -515,14 +520,14 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, smtp mail.Config, exit *egress.Client,
 	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
-) (*pg.Queue, *observability.Recorder, error) {
+) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, err := startSync(ctx, db, smtp, keys, exit, prices, tel, logger)
+	queue, recovery, err := startSync(ctx, db, smtp, keys, exit, prices, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return queue, recorder, nil
+	return queue, recorder, recovery, nil
 }
 
 // startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not
