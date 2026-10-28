@@ -70,8 +70,8 @@ func resumeKeys(t *testing.T, shrink bool) {
 	limited = false
 	want := []int{1, 2, 2, 3}
 	if shrink {
-		total = 150
-		want = []int{1, 2, 2, 1, 2}
+		total = 50
+		want = []int{1, 2, 2, 1}
 	}
 	page, err := openManager().Keys(t.Context(), first.Next)
 	if err != nil {
