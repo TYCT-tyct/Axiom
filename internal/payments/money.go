@@ -54,3 +54,12 @@ func digits(currency platform.Currency) int {
 	}
 	return 2
 }
+
+// ParseOrderID reads an order's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.
+func ParseOrderID(s string) (OrderID, error) {
+	id, err := orderPrefix.Decode(s)
+	if err != nil {
+		return OrderID{}, ErrNotFound
+	}
+	return OrderID(id), nil
+}
