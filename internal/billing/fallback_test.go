@@ -100,7 +100,7 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 		{"a free model's uses", free, "usage.server_tool_use.web_fetch_requests", "2", false, 100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := priceSegments(tc.s, f, []Segment{unknown(t, 50, tc.field, tc.value)}, tc.waived)
+			p, err := priceSegments(tc.s, f, []Segment{unknown(t, 50, tc.field, tc.value)}, tc.waived, 0)
 			if err != nil || p.price != tc.want || !p.estimated {
 				t.Errorf("priceSegments = %+v, %v; want %d estimated", p, err, tc.want)
 			}
@@ -137,7 +137,7 @@ func TestPriceSegmentsPricesATierTheListLacks(t *testing.T) {
 		{"two samplings, each charged", false, []Segment{usage(map[catalog.Item]int64{in: 50}), tokens}, 50 + 90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := priceSegments(s, f, tc.segments, tc.waived)
+			p, err := priceSegments(s, f, tc.segments, tc.waived, 0)
 			if err != nil || p.price != tc.want || !p.estimated {
 				t.Errorf("priceSegments = %+v, %v; want %d estimated", p, err, tc.want)
 			}
@@ -164,7 +164,7 @@ func TestPriceSegmentsSaturates(t *testing.T) {
 		if name == "just inside" {
 			want = 9223372035e9
 		}
-		if p, err := priceSegments(s, f, segments, false); err != nil || p.price != want || !p.estimated {
+		if p, err := priceSegments(s, f, segments, false, 0); err != nil || p.price != want || !p.estimated {
 			t.Errorf("%s: priceSegments = %+v, %v; want %d estimated", name, p, err, want)
 		}
 	}
@@ -180,7 +180,7 @@ func TestFillPricesPerUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := priceSegments(s, f, []Segment{{Usage: u, Reported: ^catalog.ItemSet(0)}}, false)
+	p, err := priceSegments(s, f, []Segment{{Usage: u, Reported: ^catalog.ItemSet(0)}}, false, 0)
 	if want := int64(70 + 2*10 + 3*50); err != nil || p.price != want || p.estimated {
 		t.Errorf("priceSegments = %+v, %v; want %d, not estimated", p, err, want)
 	}

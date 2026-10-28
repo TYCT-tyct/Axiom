@@ -245,7 +245,7 @@ func TestSortAndPerformance(t *testing.T) {
 // checkLimits checks the limits an entry carries are its endpoint's, as the helper endpoint has them.
 func checkLimits(t *testing.T, i int, e routing.Entry) {
 	t.Helper()
-	if e.Limits.ContextLength != 1_000_000 || e.Limits.OutputSpeed != 100 || e.Limits.Reports != 1<<catalog.ItemCacheRead {
+	if e.Limits.ID != e.Model || e.Limits.ContextLength != 1_000_000 || e.Limits.OutputSpeed != 100 || e.Limits.Reports != 1<<catalog.ItemCacheRead {
 		t.Errorf("entry %d limits: %+v", i, e.Limits)
 	}
 }

@@ -226,7 +226,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
-		dialect: spec.dialect,
+		dialect: spec.dialect, toolUses: spec.toolUses,
 	}, nil
 }
 
@@ -245,12 +245,13 @@ func priceFromRow(row CatalogReferencePrice) (ReferencePrice, error) {
 // the model offers. The rest of the baseline is the spec's own business. Nil members are left out, not zeroed: absent
 // and false or zero are different claims.
 type specJSON struct {
-	Items     *[]string `json:"items"`
-	Tiers     *[]string `json:"tiers"`
-	Context   *int64    `json:"context_length"`
-	MaxOutput *int64    `json:"max_output_tokens"`
-	Streams   *bool     `json:"streams"`
-	Abilities *[]string `json:"abilities"`
+	Items     *[]string        `json:"items"`
+	Tiers     *[]string        `json:"tiers"`
+	Context   *int64           `json:"context_length"`
+	MaxOutput *int64           `json:"max_output_tokens"`
+	Streams   *bool            `json:"streams"`
+	Abilities *[]string        `json:"abilities"`
+	MaxUses   map[string]int64 `json:"max_uses"`
 
 	DialectKeys
 }
@@ -268,6 +269,7 @@ type DialectKeys struct {
 }
 
 type spec struct {
+	toolUses   map[Item]int64
 	reportable Reportable
 	declared   bool // both lists are present, possibly empty
 	serving    Serving
@@ -291,11 +293,16 @@ func parseSpec(raw []byte) (spec, error) {
 	if err != nil {
 		return spec{}, err
 	}
+	toolUses, err := parseToolUses(w.MaxUses)
+	if err != nil {
+		return spec{}, err
+	}
 	dialect, err := parseDialect(w.DialectKeys)
 	if err != nil {
 		return spec{}, err
 	}
 	return spec{
+		toolUses:   toolUses,
 		reportable: reportable,
 		serving:    serving,
 		dialect:    dialect,
@@ -303,6 +310,22 @@ func parseSpec(raw []byte) (spec, error) {
 		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
 		abilities:  w.Abilities != nil,
 	}, nil
+}
+
+// parseToolUses accepts bounds only for server tools billing can quote. An absent bound stays absent.
+func parseToolUses(w map[string]int64) (map[Item]int64, error) {
+	var uses map[Item]int64
+	if len(w) > 0 {
+		uses = make(map[Item]int64, len(w))
+	}
+	for name, n := range w {
+		it, err := ParseItem(name)
+		if err != nil || (it != ItemWebSearch && it != ItemCodeExecution) || n <= 0 || n > 1e10 {
+			return nil, fmt.Errorf("spec max_uses: %s must name a supported server tool with an integer from 1 to 10000000000", name)
+		}
+		uses[it] = n
+	}
+	return uses, nil
 }
 
 // parseReportable reads the billing items and service tiers the spec declares, if it declares them.
