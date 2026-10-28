@@ -284,7 +284,7 @@ func TestAlertQuietDispatchAndDisabledMail(t *testing.T) {
 	persistAlert(t, db, "1", false)
 	alertCycle(t, db, now)
 	q := db.NewQueue(quiet, platformScope, nil)
-	m, err := mail.Register(t.Context(), db, q, mail.Config{}, quiet)
+	m, err := mail.Register(t.Context(), db, q, mail.Config{}, nil, nil, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestRescuedMailDiscardPersistsFailedReceiptAndSignal(t *testing.T) {
 	persistAlert(t, db, "1", false)
 	events := alertCycle(t, db, time.Now())
 	q := db.NewQueue(quiet, platformScope, nil)
-	m, err := mail.Register(t.Context(), db, q, mail.Config{}, quiet)
+	m, err := mail.Register(t.Context(), db, q, mail.Config{}, nil, nil, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}

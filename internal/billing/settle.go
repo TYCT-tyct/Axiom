@@ -116,6 +116,7 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err 
 		if err != nil {
 			return err
 		}
+		c.quotes = h.quotes
 		f, err = c.settle(ctx, tx, o)
 		seen, owed, charged = c.seen, c.owed, c.charged
 		return err
@@ -231,7 +232,7 @@ func (c *locked) price(last AttemptResult) (priced, error) {
 		return priced{}, err
 	}
 	waived := waivable(last)
-	p, err := priceSegments(s, f, last.Segments, waived)
+	p, err := priceSegments(s, f, last.Segments, waived, c.quotes[last.Entry].tiers)
 	p.waived = waived
 	return p, err
 }
@@ -271,7 +272,7 @@ const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCo
 // report or the schedule cannot price, or any usage protocol could not map, make the charge estimated; usage protocol
 // could not map, and an item the schedule prices nowhere, are charged at their fallback prices
 // (docs/domains/billing.md「价目表缺项」).
-func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool) (priced, error) {
+func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool, tiers catalog.ServiceTierSet) (priced, error) {
 	var p priced
 	total := platform.Exact{}
 	charged := ^catalog.ItemSet(0)
@@ -280,6 +281,10 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	}
 	for _, seg := range segments {
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
+		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
+			cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
+			p.estimated = true
+		}
 		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), perUseOnly)
 		}
@@ -402,44 +407,6 @@ func (c *locked) pricing(entry int) (catalog.Schedule, fallbacks, error) {
 	return s, f, err
 }
 
-// noteAttempts notes the unknown fields of every attempt that ran, not only the charged one: a model whose upstream
-// reported one leaves routing however its attempt ended. An attempt known not to have run used nothing.
-func (c *locked) noteAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
-	for _, at := range o.Attempts {
-		if at.Result == NotExecuted {
-			continue
-		}
-		if err := c.noteUnknown(ctx, tx, at.Entry, at.Segments); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// noteUnknown records each field of segments protocol could not map against the entry's model, whichever attempt
-// reported it. The first time the model shows a field it leaves routing (「价目表缺项」), and seen collects it for the
-// alert once the transaction commits.
-func (c *locked) noteUnknown(ctx context.Context, tx pg.Tx, entry int, segments []Segment) error {
-	for _, seg := range segments {
-		for _, u := range seg.Usage.Unknown() {
-			if entry < 0 || entry >= len(c.row.Models) || entry >= len(c.row.Fallbacks) || c.row.Fallbacks[entry] == "" {
-				return ErrNoAttempt // admission locks a model on every kept entry, and only kept entries are attempted
-			}
-			model := c.row.Models[entry]
-			n, err := queries.NoteUnknownItem(ctx, tx, NoteUnknownItemParams{
-				ModelID: model, Field: u.Field, RequestID: c.id, SiteID: c.row.SiteID, AccountID: c.row.AccountID,
-			})
-			if err != nil {
-				return fmt.Errorf("billing: note the unknown item %s: %w", u.Field, err)
-			}
-			if n == 1 {
-				c.seen = append(c.seen, UnknownItem{Model: catalog.ModelID(model), Field: u.Field, Request: c.id})
-			}
-		}
-	}
-	return nil
-}
-
 func int32p(n int) *int32 {
 	i := int32(n) //nolint:gosec // G115: an attempt or route index, a few at most
 	return &i
@@ -508,6 +475,7 @@ func decodeUsage(b []byte) ([]Segment, error) {
 
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
+	quotes    []quote // only Settle brings usage, always with the original Hold, including after cleanup
 	cost      platform.Exact
 	costKnown bool
 	b         *Billing
