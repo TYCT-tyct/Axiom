@@ -22,6 +22,7 @@ const scenes: Scene[] = [
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },
   { name: "overview", signedIn: true, open: (page) => goto(page, "") },
   { name: "balance", signedIn: true, open: (page) => goto(page, "balance") },
+  { name: "statement", signedIn: true, open: (page) => goto(page, "statement") },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },

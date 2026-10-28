@@ -384,6 +384,8 @@ class Flaky(unittest.TestCase):
                  ([job("go-test", "failure", 7)], 7),
                  ([job("build", "failure")], None),  # no test failed: nothing a flaky entry could excuse
                  ([job("go-test", "failure"), job("web", "failure")], None),
+                 ([job("go-test", "failure"), job("e2e (1/2)", "failure")], None),
+                 ([job("go-test", "failure"), job("e2e (2/2)", "failure")], None),
                  ([job("go-test", "success"), job("build", "success")], None)]
         for jobs, expected in cases:
             with self.subTest(jobs=[(j["name"], j["conclusion"]) for j in jobs]):

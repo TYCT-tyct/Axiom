@@ -23,6 +23,7 @@ type responsesStream struct {
 	webSearch, hasResponse bool
 	report                 *openAIUsage
 	reportErr              error
+	topReport              []byte // borrowed from this event; only failures may use it when response.usage is absent
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -46,14 +47,19 @@ var (
 			s.hasResponse = true
 			return walk(&s.reader, s, responseFields)
 		},
-		"code": func(s *responsesStream) error { return s.class(&s.code) }, // the error event's
+		// The error event's own members: its code, and the words and param a client reads (docs/domains/gateway.md
+		// 「错误」). Top-level usage is only a fallback for failure events; response.usage remains authoritative.
+		"code":    func(s *responsesStream) error { return s.class(&s.code, &s.rejection.Code) },
+		"message": func(s *responsesStream) error { return s.textOf(&s.rejection.Message) },
+		"param":   func(s *responsesStream) error { return s.textOf(&s.rejection.Param) },
+		"usage":   (*responsesStream).topUsage,
+		"error":   func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) },
 	}
 	responseFields = map[string]func(*responsesStream) error{
 		"usage":        (*responsesStream).usage,
 		"service_tier": (*responsesStream).serviceTier,
-		"error":        func(s *responsesStream) error { return errorObject(&s.reader, s, responseErrorFields) }, // response.failed's
+		"error":        func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) }, // response.failed's
 	}
-	responseErrorFields = map[string]func(*responsesStream) error{"code": func(s *responsesStream) error { return s.class(&s.code) }}
 	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
@@ -66,22 +72,32 @@ var (
 func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
 	s.index, s.itemBytes, s.webSearch, s.hasResponse, s.report, s.reportErr = -1, 0, false, false, nil, nil
+	s.topReport = nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	switch s.e.name {
 	case "response.failed", "error":
+		if s.report == nil && len(s.topReport) > 0 {
+			s.readUsage(s.topReport)
+		}
+		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
+		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
+		if s.report != nil {
+			s.meter(m, true)
+		}
 		return event{}, s.errorEvent(s.e.name)
 	case "response.created":
 		s.created = true
 	case "response.completed", "response.incomplete":
 		s.e.role, s.e.ends, s.e.final = ending, true, true
 	}
+	s.topReport = nil
 	if err := s.settle(); err != nil {
 		return event{}, err
 	}
 	if s.report != nil {
-		s.meter(m)
+		s.meter(m, false)
 		s.report = nil
 	}
 	if s.hasResponse {
@@ -120,7 +136,7 @@ func (s *responsesStream) settle() error {
 
 func (s *responsesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.items, s.report, s.reportErr = nil, nil, nil
+	s.items, s.report, s.reportErr, s.topReport = nil, nil, nil, nil
 }
 
 func (s *responsesStream) eventType() error {
@@ -194,12 +210,32 @@ func (s *responsesStream) usage() error {
 	if err != nil {
 		return err
 	}
-	s.report, s.e.usage = &openAIUsage{}, true
-	s.reportErr = jsonx.Unmarshal(v, s.report)
+	s.readUsage(v)
 	return nil
 }
 
-func (s *responsesStream) meter(m *meter) {
+func (s *responsesStream) readUsage(v []byte) {
+	s.report, s.e.usage = &openAIUsage{}, true
+	s.reportErr = jsonx.Unmarshal(v, s.report)
+}
+
+// topUsage keeps an offset-backed view until the event type is known, without allocating or decoding a normal
+// event's nonstandard usage. A separately decoded report would add allocations and make member order matter.
+func (s *responsesStream) topUsage() error {
+	v, err := s.dec.ReadValue()
+	if err != nil {
+		return err
+	}
+	if v.Kind() != 'n' {
+		to := int(s.dec.InputOffset())
+		s.topReport = s.e.data[to-len(v) : to]
+	}
+	return nil
+}
+
+// meter maps the usage just read onto billing items. final is set for the usage of the event that ended the stream:
+// what it states is charged as it is rather than estimated (meter.take).
+func (s *responsesStream) meter(m *meter, final bool) {
 	if s.reportErr != nil {
 		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
 		return
@@ -209,24 +245,42 @@ func (s *responsesStream) meter(m *meter) {
 		m.invalid = err
 		return
 	}
-	m.report(r, nil)
+	m.take(r, nil, final)
 }
 
 // failure appends response.failed, with our error type at its top level (docs/domains/gateway.md「错误」), or, before
-// response.created, the error event, which is the only failure a stream may start with.
+// response.created, the error event, which is the only failure a stream may start with. The code and param of a refusal
+// are the upstream's own, as a 4xx answer gives them: it is the same error either way.
 func (s *responsesStream) failure(dst []byte, e Error, u catalog.Usage, cost string) []byte {
 	name := "response.failed"
+	code, param := errorTypes[e.Type].name, ""
+	if r := e.Rejection; r != nil {
+		if r.Code != "" {
+			code = r.Code
+		}
+		if r.Param != "" {
+			param = r.Param
+		}
+	}
 	data := fmt.Appendf(nil, `{"type":%q,"sequence_number":%d,`, name, s.seq+1)
 	if s.created {
 		data = append(data, `"response":{"id":`+s.id+`,"object":"response","status":"failed","model":`+s.model+
-			`,"output":[],"error":{"code":"`+errorTypes[e.Type].name+`","message":`...)
-		data = append(appendQuoted(data, e.message()), `},"usage":`...)
+			`,"output":[],"error":{"code":`...)
+		data = append(appendQuoted(data, code), `,"message":`...)
+		data = appendQuoted(data, e.message())
+		data = append(data, `},"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 		data = append(data, '}')
 	} else {
 		name = "error"
-		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":"%s","param":null,"message":`, s.seq+1,
-			errorTypes[e.Type].name)
+		data = fmt.Appendf(nil, `{"type":"error","sequence_number":%d,"code":`, s.seq+1)
+		data = append(appendQuoted(data, code), `,"param":`...)
+		if param == "" {
+			data = append(data, "null"...)
+		} else {
+			data = appendQuoted(data, param)
+		}
+		data = append(data, `,"message":`...)
 		data = append(appendQuoted(data, e.message()), `,"usage":`...)
 		data = appendOpenAIUsage(data, responsesNames, u, cost)
 	}

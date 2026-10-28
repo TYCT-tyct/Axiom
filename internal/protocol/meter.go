@@ -53,10 +53,12 @@ func (r *usageReport) sortUnknown() {
 // input in later events, and a smaller count makes the usage invalid (README.md「转发」). tier starts as the request's.
 type meter struct {
 	usageReport
-	compactions []Segment
-	final       bool // the format's last usage event has come
-	invalid     error
-	scratch     map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
+	compactions        []Segment
+	final              bool            // the format's last usage event has come
+	trusted            catalog.ItemSet // items explicitly stated in a terminal failure frame
+	trustedCompactions bool            // compactions explicitly listed by that frame
+	invalid            error
+	scratch            map[catalog.Item]int64 // reused, so building a catalog.Usage allocates only the map's first time
 }
 
 // The meter is kept through the settlement, so what it holds is bounded and charged up front as meterMemory: at most
@@ -90,6 +92,16 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	m.sortUnknown()
 	if compactions != nil {
 		m.compact(compactions)
+	}
+}
+
+// take marks only the items and compactions explicitly reported by a terminal failure as final. Earlier output
+// counts remain lower bounds; previously final input stays final (docs/domains/billing.md「用量来源与暂估」).
+func (m *meter) take(r usageReport, compactions []usageReport, final bool) {
+	m.report(r, compactions)
+	if final {
+		m.trusted |= r.seen
+		m.trustedCompactions = compactions != nil
 	}
 }
 
@@ -189,14 +201,14 @@ func (m *meter) compact(compactions []usageReport) {
 	}
 }
 
-// progress is the reply's counts reported so far, and which of them are final: the input side once reported,
-// everything after the last usage event; none when the usage is invalid.
+// progress is the reply's counts reported so far, and which of them are final: the input side once reported, what the
+// frame that ended the stream stated, everything after the format's last usage event; none when the usage is invalid.
 func (m *meter) progress() (Segment, catalog.ItemSet) {
 	u, err := m.usage(m.usageReport)
 	if err != nil && m.invalid == nil {
 		m.invalid = err
 	}
-	final := m.seen & catalog.InputSide // the input is read before the reply starts, so its first report is final
+	final := m.seen & (catalog.InputSide | m.trusted) // the input is read before the reply starts, so its first report is final
 	switch {
 	case m.invalid != nil:
 		return Segment{Usage: u}, 0
@@ -212,7 +224,7 @@ func (m *meter) result() Usage {
 	reply, final := m.progress()
 	reply.Reported = final
 	u := Usage{Segments: append([]Segment{reply}, m.compactions...), Invalid: m.invalid}
-	if !m.final || u.Invalid != nil { // compactions come with the last usage event
+	if !m.final && !m.trustedCompactions || u.Invalid != nil {
 		for i := range u.Segments[1:] {
 			u.Segments[1+i].Reported = 0
 		}
