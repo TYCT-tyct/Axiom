@@ -61,13 +61,16 @@ var formats = map[string]upstream{
 		},
 		check: streamcheck.Messages, events: true,
 		ids: positions("/message/id", "/content_block/id", "/content_block/tool_use_id", "/request_id",
-			"/messages/*/content/*/id", "/messages/*/content/*/tool_use_id"),
+			"/messages/*/content/*/id", "/messages/*/content/*/tool_use_id",
+			"/container", "/container/id", "/message/container/id", "/delta/container/id"),
 	},
 	"responses": {
 		path: "/responses", endpoint: "/v1/responses", baseVar: "OPENAI_BASE_URL", keyVar: "OPENAI_API_KEY",
 		auth: bearer, check: streamcheck.Responses, events: true,
 		ids: positions("/response/id", "/response/previous_response_id", "/response/output/*/id", "/response/output/*/call_id",
-			"/item/id", "/item/call_id", "/item_id", "/previous_response_id", "/input/*/id", "/input/*/call_id"),
+			"/item/id", "/item/call_id", "/item_id", "/previous_response_id", "/input/*/id", "/input/*/call_id",
+			"/conversation", "/conversation/id", "/response/conversation/id",
+			"/item/container_id", "/response/output/*/container_id", "/input/*/container_id", "/tools/*/container"),
 	},
 	"chat": {
 		path: "/chat/completions", endpoint: "/v1/chat/completions", baseVar: "OPENAI_BASE_URL", keyVar: "OPENAI_API_KEY",
@@ -108,23 +111,57 @@ var idleTimeout = 10 * time.Minute
 
 var errIdle = errors.New("the upstream sent nothing for too long")
 
-func main() {
-	if len(os.Args) != 5 {
-		fmt.Fprintln(os.Stderr, "usage: record <testdata dir> <format> <scenario> <request file>")
-		os.Exit(2)
+func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
+
+func run(args []string, stderr io.Writer) int {
+	if len(args) != 4 {
+		fmt.Fprintln(stderr, "usage: record <testdata dir> <format> <scenario> <request file>") //nolint:errcheck // stderr is the final error channel
+		return 2
 	}
 	getenv, err := dotenv(".env")
 	if err == nil {
-		err = record(context.Background(), getenv, os.Args[1], os.Args[2], os.Args[3], os.Args[4])
+		err = record(context.Background(), getenv, args[0], args[1], args[2], args[3])
+	} else {
+		getenv = os.Getenv
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "record:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "record:", redactError(err, getenv)) //nolint:errcheck // stderr is the final error channel
+		return 1
 	}
+	return 0
+}
+
+// redactedError keeps errors.Is/As useful while its printable text never includes a credential.
+type redactedError struct {
+	error
+	text string
+}
+
+func (e redactedError) Error() string { return e.text }
+func (e redactedError) Unwrap() error { return e.error }
+
+func redactError(err error, getenv func(string) string) error {
+	if err == nil {
+		return nil
+	}
+	text := err.Error()
+	for _, name := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"} {
+		if key := getenv(name); key != "" {
+			text = strings.ReplaceAll(text, key, "[REDACTED]")
+		}
+	}
+	text = keyLike.ReplaceAllStringFunc(text, func(match string) string {
+		return match[:strings.Index(match, "sk-")] + "[REDACTED]"
+	})
+	if text == err.Error() {
+		return err
+	}
+	return redactedError{err, text}
 }
 
 // record writes testdata/<format>/<scenario>/ from one call, or nothing.
 func record(ctx context.Context, getenv func(string) string, testdata, format, scenario, requestFile string) (err error) {
+	defer func() { err = redactError(err, getenv) }()
 	up, ok := formats[format]
 	if !ok {
 		return fmt.Errorf("unknown format %q: want messages, responses or chat", format)
@@ -212,6 +249,7 @@ func send(ctx context.Context, up upstream, base, key string, request []byte) ([
 	if err != nil {
 		return nil, err
 	}
+	idle.Reset(idleTimeout)
 	stream, err := io.ReadAll(io.LimitReader(idleReader{resp.Body, idle}, maxStream+1))
 	switch err = errors.Join(err, resp.Body.Close()); {
 	case err != nil:

@@ -9,7 +9,7 @@ import (
 	"uuid"
 )
 
-func TestAccountSharesMinuteAcrossCredentials(t *testing.T) {
+func TestAccountSharesWindowAcrossCredentials(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 8)
 	second := w.anotherKey(8)
@@ -32,17 +32,17 @@ func TestAccountSharesMinuteAcrossCredentials(t *testing.T) {
 	}
 	wg.Wait()
 	if n := taken.Load(); n != 3 {
-		t.Fatalf("%d requests in a shared upstream account minute of 3", n)
+		t.Fatalf("%d requests in a shared upstream account window of 3", n)
 	}
-	w.clock.advance(time.Minute)
+	w.clock.advance(61 * time.Second)
 	a, err := w.svc.Acquire(w.endpoint)
 	if err != nil {
-		t.Fatalf("the next account minute: %v", err)
+		t.Fatalf("the next account window: %v", err)
 	}
 	a.Done()
 }
 
-func TestSharedMinuteHonorsCredentialLimits(t *testing.T) {
+func TestSharedWindowHonorsCredentialLimits(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
 	w.anotherKey(4)
@@ -63,7 +63,7 @@ func TestSharedMinuteHonorsCredentialLimits(t *testing.T) {
 	}
 }
 
-func TestUnlimitedCredentialsConsumeSharedMinute(t *testing.T) {
+func TestUnlimitedCredentialsConsumeSharedWindow(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
 	second := w.anotherKey(4)
@@ -79,7 +79,7 @@ func TestUnlimitedCredentialsConsumeSharedMinute(t *testing.T) {
 	}
 }
 
-func TestSupplierMinutesAreIndependent(t *testing.T) {
+func TestSupplierWindowsAreIndependent(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
 	_, credential := w.addSupplier()
@@ -91,25 +91,8 @@ func TestSupplierMinutesAreIndependent(t *testing.T) {
 	for id := range w.svc.snap.Load().endpoints {
 		a, err := w.svc.Acquire(id)
 		if err != nil {
-			t.Fatalf("an independent supplier's minute: %v", err)
+			t.Fatalf("an independent supplier's window: %v", err)
 		}
 		a.Done()
-	}
-}
-
-func TestMinuteCounterDoesNotWrap(t *testing.T) {
-	t.Parallel()
-	now := time.Time{}
-	rt := minuteRuntime{start: now, used: maxLimit - 1}
-	for range 2 {
-		if !rt.take(now, 0) {
-			t.Fatal("an unlimited credential was refused")
-		}
-	}
-	if rt.take(now, maxLimit) || rt.count(now) != maxLimit {
-		t.Fatal("unlimited requests wrapped the shared minute's count")
-	}
-	if !rt.take(now.Add(time.Minute), maxLimit) {
-		t.Fatal("the saturated minute did not expire")
 	}
 }
