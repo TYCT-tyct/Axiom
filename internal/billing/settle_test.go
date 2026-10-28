@@ -490,3 +490,11 @@ func TestSettleBalanceExtremes(t *testing.T) {
 		t.Errorf("Settle = %+v, %v; want 70 charged", f, err)
 	}
 }
+
+func TestLedgerPoliciesPassAudit(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	if err := b.app.Check(t.Context(), Migrations()); err != nil {
+		t.Fatal(err)
+	}
+}

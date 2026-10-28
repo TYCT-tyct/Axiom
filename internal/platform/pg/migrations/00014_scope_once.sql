@@ -1,16 +1,17 @@
+-- +goose NO TRANSACTION
 -- +goose Up
 
 -- The SELECT belongs in each policy, outside any row-dependent function: it becomes an InitPlan, so parsing is
 -- independent of row count and the planner estimates the platform branch as a boolean parameter, not a text equality.
-CREATE FUNCTION platform.allowed_sites() RETURNS uuid[]
+CREATE OR REPLACE FUNCTION platform.allowed_sites() RETURNS uuid[]
     LANGUAGE sql STABLE PARALLEL SAFE
     RETURN coalesce(nullif(current_setting('axiom.scope_sites', true), '')::uuid[], '{}');
 
-CREATE FUNCTION platform.allowed_accounts() RETURNS uuid[]
+CREATE OR REPLACE FUNCTION platform.allowed_accounts() RETURNS uuid[]
     LANGUAGE sql STABLE PARALLEL SAFE
     RETURN coalesce(nullif(current_setting('axiom.scope_accounts', true), '')::uuid[], '{}');
 
-CREATE FUNCTION platform.home_site() RETURNS uuid
+CREATE OR REPLACE FUNCTION platform.home_site() RETURNS uuid
     LANGUAGE sql STABLE PARALLEL SAFE
     RETURN nullif(current_setting('axiom.scope_home', true), '')::uuid;
 

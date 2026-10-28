@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,19 +21,19 @@ const (
 
 // seedForPlans fills the table as the superuser: one heavy account and 100 light ones over eight hours.
 // Every 1200th call is of the model "rare" and from the application "codex", all of them the heavy account's; the others are of "m" and "cli" (a dense one); "absent" matches nothing.
-func seedForPlans(t *testing.T, database pgtest.Database, count int) {
+func seedForPlans(t *testing.T, database pgtest.Database) {
 	t.Helper()
-	if err := pgtest.Run(t.Context(), database.Superuser, fmt.Sprintf(`INSERT INTO observability.call_log (id, at, site_id, account_id,
+	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
 			workspace_id, key_id, ip, client_app, request_class, used_tools, has_image, has_file, model, endpoint_id,
 			attempt_count, usage, service_tier, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms,
 			consent_version, training_allowed)
-		SELECT uuidv7(), now() - make_interval(secs => n * 30000.0 / %d), '00000000-0000-4000-8000-0000000000ff',
-			CASE WHEN n %% 2 = 0 THEN '`+heavyAccount+`'::uuid
-				ELSE ('00000000-0000-4000-8000-' || lpad((n %% 200 + 2)::text, 12, '0'))::uuid END,
-			uuidv7(), uuidv7(), '203.0.113.7', CASE WHEN n %% 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
-			false, CASE WHEN n %% 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), 1, '{}', 'standard', 1, 1,
+		SELECT uuidv7(), now() - make_interval(secs => n / 4.0), '00000000-0000-4000-8000-0000000000ff',
+			CASE WHEN n % 2 = 0 THEN '`+heavyAccount+`'::uuid
+				ELSE ('00000000-0000-4000-8000-' || lpad((n % 200 + 2)::text, 12, '0'))::uuid END,
+			uuidv7(), uuidv7(), '203.0.113.7', CASE WHEN n % 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
+			false, CASE WHEN n % 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), 1, '{}', 'standard', 1, 1,
 			'USD', false, 1, 0, 'v', true
-		FROM generate_series(1, %d) n`, count, count), "ANALYZE observability.call_log"); err != nil {
+		FROM generate_series(1, 120000) n`, "ANALYZE observability.call_log"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -159,7 +158,7 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
-	seedForPlans(t, database, 120000)
+	seedForPlans(t, database)
 	heavy, light := uuid.MustParse(heavyAccount), uuid.MustParse(lightAccount)
 	since, until := window()
 	base := func(account uuid.UUID) OwnQuery { return OwnQuery{Account: account, Since: since, Until: until} }
@@ -211,7 +210,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 func TestFilteredListsReturnTheMatches(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
-	seedForPlans(t, database, 120000)
+	seedForPlans(t, database)
 	heavy := uuid.MustParse(heavyAccount)
 	for name, c := range map[string]struct {
 		q    OwnQuery
@@ -247,7 +246,7 @@ func TestFilteredListsReturnTheMatches(t *testing.T) {
 func TestListIsPlannedForItsValues(t *testing.T) {
 	t.Parallel()
 	_, database := openDBWithURL(t)
-	seedForPlans(t, database, 120000)
+	seedForPlans(t, database)
 	generic, err := pg.Open(t.Context(), database.App+"&plan_cache_mode=force_generic_plan")
 	if err != nil {
 		t.Fatal(err)

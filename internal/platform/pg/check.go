@@ -49,7 +49,7 @@ var schemaAudits = []audit{
 		"tables without forced row-level security and policies",
 	},
 	// Legacy row-dependent helpers parse settings for every candidate row. Policy-level InitPlans retain isolation
-	// while keeping filtered scans and ordered pages bounded; catch missed partitions and new policies using the old form.
+	// while avoiding repeated parsing and severe RLS underestimates; catch missed partitions and policies using the old form.
 	{
 		`SELECT coalesce(string_agg(DISTINCT p.polrelid::regclass::text || '.' || p.polname, ', '), '')
 		FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid

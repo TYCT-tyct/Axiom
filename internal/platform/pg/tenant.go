@@ -76,7 +76,7 @@ func lookTenant(ctx context.Context, tx pgx.Tx, query string, key uuid.UUID) (bo
 
 // setTenantScope limits the transaction to the tenant the lookup named: the account's rows when the row belongs to an
 // account, the site's rows otherwise. The narrower of the two is enough, because the policies of the tables that carry
-// these columns compare them with the same scope in_scope reads.
+// these columns compare them with the arrays read by platform.allowed_sites and platform.allowed_accounts.
 func setTenantScope(ctx context.Context, tx pgx.Tx, site, account string) error {
 	siteID, err := uuid.Parse(site)
 	if err != nil {

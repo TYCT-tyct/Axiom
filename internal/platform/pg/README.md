@@ -42,25 +42,23 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 
 原来三种范围的深页均为 Bitmap Heap Scan + Sort，分别估 6、63、72 行，实际扫描 24,999 行；InitPlan 均为倒序 Index Scan，估 1188 行，实际在 101 行停止。全被过滤的全表扫描由 1681.702 降到 405.041 ms（4.15 倍）；与同方案全部命中的 427.449 ms 接近，消除了逐行解析使过滤额外变贵的问题。空范围下的分页仍需检查查询指定账户的全部候选行：没有可返回的行就不能提前凑满一页；这不属于命中分页的有界读取承诺。
 
-不选直接布尔值转换：只解决有序计划，解析数组的成本仍随被检查行数增长，而且 PostgreSQL 的布尔转换会把 `yes`、`true` 等原来不放行的值当成平台范围。不选只强制 custom plan：上述具体值计划已经退化；`enable_sort = off` 只能保护逐个调用的查询，且不能解决全表过滤成本。不选 support function / 扩展：增加部署权限和平台依赖；扩展统计不能消除逐行解析。不把标量子查询放进 `platform.in_scope`：#122 已测得阻止 SQL 函数内联，从约 2 秒退化至 15 秒。保留旧的 `in_scope`、`sees_site` 供旧节点与显式函数调用兼容，新策略不再引用它们；`pg.Check` 拒绝策略重新依赖这两个逐行函数。
+不选直接布尔值转换：只解决有序计划，解析数组的成本仍随被检查行数增长，而且 PostgreSQL 的布尔转换会把 `yes`、`true` 等原来不放行的值当成平台范围。不选只强制 custom plan：上述具体值计划已经退化；`enable_sort = off` 只能保护逐个调用的查询，且不能解决全表过滤成本。不选 support function / 扩展：增加部署权限和平台依赖；扩展统计不能消除逐行解析。不把标量子查询放进 `platform.in_scope`：#122 已测得阻止 SQL 函数内联，从约 2 秒退化至 15 秒。保留原迁移创建的 `in_scope`、`sees_site`，让 `pg.Check` 能通过函数依赖识别尚未转换或重新引入的逐行策略；新策略不再调用它们。旧 Go 节点不直接调用这两个函数。
 
-**真实查询的补充取舍**：只改策略通过了编号交易的分页（平台和账户范围，首页 / 深页 407 / 407–408 块），但真实查询仍有两类未覆盖的行为：
+**真实查询的补充取舍**：只改策略通过了编号交易的分页（平台和账户范围，首页 / 深页 407 / 407–408 块），但真实查询仍有以下限制：
 
-- 历史交易的 `account_id` 与 `seq IS NULL` 强相关。超过 200 万笔的真实账本里，历史账户首页仍为 bitmap，流水页 1010 块、深页 614 块；InitPlan 不会修复账户与历史状态的独立性假设。保留 #405 的 `enable_sort = off`，并让分配重放在 `loadAllocation` 中每次加载设置一次，后续各页共用。它只作用于这些要求按现有索引取有界页的读取，不改全库开关，也不承诺精确行数。扩展统计仍需持续采样、ANALYZE，并不能消除参数化计划的所有低估；在冻结的历史分支上强制已有索引顺序更直接。
-- 调用记录 200 万行、深 75 万行时，计划的游标虽然在 Index Cond 中，仍触碰 9623 块，首页仅 6 块。原始查询与额外加入等价标量界限 `at <= cursor.at` 的查询都读 9623 块，且平台、账户范围及三个筛选索引形态相同。后者没有效果，已撤回；没有把 Index Scan 的计划形状当作有界读取的证明。此处尚未解决，根因待查；`TestListDeepPagesReadInIndexOrder` 保留失败断言，#408 不能关闭。custom plan 保留。
+- 历史交易的 `account_id` 与 `seq IS NULL` 强相关。超过 200 万笔的真实账本里，历史账户首页仍为 bitmap，流水页 1010 块、深页 614 块；InitPlan 不会修复账户与历史状态的独立性假设。保留 #405 的 `enable_sort = off`，并让分配重放在 `loadAllocation` 中每次加载设置一次，后续各页共用。`SET LOCAL` 持续到调用方事务提交或回滚，包括重放后的写入和其他模块在同一事务中的后续查询；退款接口的调用约定见 [billing](../../billing/README.md#额度批次的分配与到期)。它不改全库开关，也不承诺精确行数。扩展统计仍需持续采样、ANALYZE，并不能消除参数化计划的所有低估；在冻结的历史分支上强制已有索引顺序更直接。
+- 调用记录深页仍可能触碰随历史增长的索引块，详见 [#408](https://github.com/TYCT-tyct/Axiom/issues/408)。
 
-范围的逐行成本与极低估计由策略 InitPlan 统一处理；账本条件自身的相关性由读取入口的排序设置处理。调用记录的深页读取量仍是已知阻断，停止继续尝试查询变体。
+范围的逐行成本与极低估计由策略 InitPlan 统一处理；账本条件自身的相关性由读取入口的事务内排序设置处理。
 
-平台迁移固定为 `00014`，各模块用新迁移 `ALTER POLICY`，不改已合并迁移，不重写数据，不改变命令、角色或终态条件。observability 按分区树改父表和每个现有分区。锁等待沿用迁移入口的期限，事务失败整份迁移回滚，重跑由 goose 接续。旧程序继续使用原有事务设置，数据库的新策略也对它生效；回滚程序无需回滚策略。
-
-选择依据为上述测量与既有隔离不变量。负责人授权原文「遇到问题自己解决问题和判断最优而不是问我。」记录于 [#309 的授权评论](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)，本次按授权决定实现；不声称负责人事先选定某个表达式。独立深度评审由任务流水线安排，仍是合并条件。
+平台的范围迁移为 `00014`，各模块用新迁移 `ALTER POLICY`，不改已合并迁移，不重写数据，不改变命令、角色或终态条件。observability 按分区树改父表和每个现有分区，分区树的 DO 块仍是一个原子语句。范围迁移均用 `NO TRANSACTION`，每条顶层语句结束就释放表锁，避免等后一个表时阻塞前一个表的访问。锁等待沿用迁移入口的期限；失败前的语句保留，goose 不登记整份迁移完成。函数用 `CREATE OR REPLACE`，策略用可重复执行的 `ALTER POLICY`，失败后重跑安全；新旧策略边界等价，部分完成也不扩大权限。旧程序继续使用原有事务设置，数据库的新策略也对它生效；回滚程序无需回滚策略。
 
 ## 验证
 
 复现实验：`flock /tmp/axiom-remote-check.lock python3 internal/platform/pg/testdata/compare-scope.py --output scope-comparison.json`。JSON 保留完整计划，计时只作证据，不作 CI 门槛。
 
-`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本和调用记录的计划测试检查平台和账户范围、首页与深页的索引顺序及块预算；账本 EXPLAIN 在实际读取入口设置了有序扫描后进行。
+`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的既有计划测试覆盖首页及紧随其后的页。`TestScopeMigrationReleasesLocksAndResumes` 验证等待后一个表时已释放前一个表的锁，并在锁超时后重跑成功。
 
 PostgreSQL 官方说明：无关联的单行子查询可以成为每次执行只运行一次的 [InitPlan](https://www.postgresql.org/docs/18/using-explain.html)；[函数易变性](https://www.postgresql.org/docs/18/xfunc-volatility.html)决定计划复用时能否把结果折叠为常量。查证日期：2026-10-28。
 
-最终账本计划证据（超过 200 万笔、2000 个噪声账户，平台 / 账户两种范围）：`Movements` 首页 407、深页 407–408 块，`LegacyMovements` 405 / 406 块，`ReplayThrough` 编号账户 4 / 4 块；历史账户的冻结前缀一次读取为 109–414 块。`StatementPage` 编号账户 612 / 613 块，历史账户 672 / 614 块，100 和 200 行的页都按索引顺序读取。调用记录深页的失败不影响已通过的范围解析与账本计划证据，但阻止本设计整体宣称完成。
+真实账本计划证据（超过 200 万笔、2000 个噪声账户，平台 / 账户两种范围）：`Movements` 首页 407、深页 407–408 块，`LegacyMovements` 405 / 406 块，`ReplayThrough` 编号账户 4 / 4 块；历史账户的冻结前缀一次读取为 109–414 块。`StatementPage` 编号账户 612 / 613 块，历史账户 672 / 614 块，100 和 200 行的页都按索引顺序读取。

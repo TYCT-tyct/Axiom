@@ -1,3 +1,4 @@
+-- +goose NO TRANSACTION
 -- +goose Up
 
 -- Partitions do not inherit policies: include every existing month and the default partition, as well as each root.

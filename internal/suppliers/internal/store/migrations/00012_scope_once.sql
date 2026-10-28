@@ -1,3 +1,4 @@
+-- +goose NO TRANSACTION
 -- +goose Up
 
 -- Keep command, role, terminal-state and write-check boundaries; only scope reads move into InitPlans.

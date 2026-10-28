@@ -96,7 +96,7 @@
 
 > 已实现：公开数据和平台数据的策略与授权。设计，尚未实现：后台任务角色 `axiom_catalog_job` 和 `catalog.lock_models`。
 
-- **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `(SELECT platform.in_any_scope())`（任意非空范围），写用 `(SELECT platform.in_platform_scope())`。`model` 的读策略另加 `status <> 'draft' OR platform.in_platform_scope()`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
+- **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `(SELECT platform.in_any_scope())`（任意非空范围），写用 `(SELECT platform.in_platform_scope())`。`model` 的读策略另加 `status <> 'draft' OR (SELECT platform.in_platform_scope())`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
 - **平台数据**（其余各表）：读写都用 `(SELECT platform.in_platform_scope())`。
 - 后台任务以 `axiom_catalog_job` 角色执行：由本模块的迁移建立，只授予它要写的表：平台数据表，以及自动发布要写的 `reference_price`、`revision`；任务的事务用 `pg.Tx.SetRole` 切过去。
 - **现在的加锁**：管理操作以 `axiom_app` 执行，它对 `model` 的 `status`、`price_source`、`spec`、`rev` 有 UPDATE 权限，所以直接 `SELECT … FOR UPDATE`（`LockModel`），每个操作只锁一个模型，不需要排序。后台任务角色出现时才需要下面的 `lock_models`。
