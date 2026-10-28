@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
+
 	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pgtest"
 )
@@ -52,6 +54,11 @@ func run(args []string) int {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(),
 		pgtest.ClusterEnv+"="+connection, kvtest.URLEnv+"="+url, kvtest.PasswordFileEnv+"="+passwordFile)
+	// The cluster's connection keeps the command's reaper alive across idle gaps between packages (#411).
+	// A changing session is a test cache input, so only pass it when there is a reaper to keep alive.
+	if !testcontainers.ReadConfig().Config.RyukDisabled {
+		cmd.Env = append(cmd.Env, "TESTCONTAINERS_SESSION_ID="+testcontainers.SessionID())
+	}
 	status := 0
 	if err := cmd.Run(); err != nil {
 		status = 1
